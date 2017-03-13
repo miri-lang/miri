@@ -33,7 +33,7 @@ namespace Primitives
     
 namespace Enumerables
   use Primitives
-  type EnumerableNumeric excends Object
+  type EnumerableNumeric extends Object
     times(expression Expression)
     
 namespace Primitives
