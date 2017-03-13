@@ -24,24 +24,25 @@ namespace Primitives
 namespace Primitives
   // The base type for any numeric object.
   type Numeric extends Object
-    Numeric add(Numeric right)
-    Numeric sub(Numeric right)
-    Numeric neg
-    Numeric mul(Numeric right)
-    Numeric div(Numeric right)
-    Numeric mod(Numeric right)
+    add(right Numeric) Numeric
+    sub(right Numeric) Numeric
+    neg() Numeric
+    mul(right Numeric) Numeric
+    div(right Numeric) Numeric
+    mod(right Numeric) Numeric
     
 namespace Enumerables
+  use Primitives
   type EnumerableNumeric excends Object
-    Void times(Expression expression)
+    times(expression Expression) Void
     
 namespace Primitives
   // The integer number.
   class Int implements Numeric
-    Numeric (Numeric value)
+    (value Numeric) Numeric
       _value = value
       
-    Numeric add(Numeric right)
+    add(right Numeric) Numeric
       _value + right
       ...
 ```
@@ -54,18 +55,18 @@ sum = Int(10)
 ```
 namespace Actors
   class ComplexActor implements Actor:
-    Actor (Bool street)
+    (street Bool) Actor
       _street = street
 
-    Void act
+    act() Void
       Bool(_street)
         .match(True, dance)
         .match(False, sing)
 
-    Void dance
+    dance() Void
       Console().write('I am dancing')
     
-    Void sing
+    sing() Void
       Console().write('I am singing')
 
 ComplexActor(street).act()
