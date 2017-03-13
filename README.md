@@ -15,7 +15,7 @@
 ```
 namespace Primitives
   // The most generic type which is the base to all other types.
-  // Everything comes from Void.
+  // Everything comes from the Void.
   type Void
   
 namespace Primitives
@@ -34,7 +34,7 @@ namespace Primitives
 namespace Enumerables
   use Primitives
   type EnumerableNumeric excends Object
-    times(expression Expression) Void
+    times(expression Expression)
     
 namespace Primitives
   // The integer number.
@@ -54,19 +54,19 @@ sum = Int(10)
 
 ```
 namespace Actors
-  class ComplexActor implements Actor:
+  class ComplexActor implements Actor
     (street Bool) Actor
       _street = street
 
-    act() Void
+    act()
       Bool(_street)
         .match(True, dance)
         .match(False, sing)
 
-    dance() Void
+    dance()
       Console().write('I am dancing')
     
-    sing() Void
+    sing()
       Console().write('I am singing')
 
 ComplexActor(street).act()
