@@ -15,29 +15,33 @@
 ```
 namespace Primitives
   // The most generic type which is the base to all other types.
-  type TObject
+  // Everything comes from Void.
+  type Void
+  
+namespace Primitives
+  type Object extends Void
 
 namespace Primitives
   // The base type for any numeric object.
-  type TNumeric extends TObject
-    TNumeric add(TNumeric right)
-    TNumeric sub(TNumeric right)
-    TNumeric neg
-    TNumeric mul(TNumeric right)
-    TNumeric div(TNumeric right)
-    TNumeric mod(TNumeric right)
+  type Numeric extends Object
+    Numeric add(Numeric right)
+    Numeric sub(Numeric right)
+    Numeric neg
+    Numeric mul(Numeric right)
+    Numeric div(Numeric right)
+    Numeric mod(Numeric right)
     
 namespace Enumerables
-  type TEnumerableNumeric excends TObject
-    TVoid times(TExpression expression)
+  type EnumerableNumeric excends Object
+    Void times(Expression expression)
     
 namespace Primitives
   // The integer number.
-  class Int implements TNumeric
-    TNumeric (TNumeric value)
+  class Int implements Numeric
+    Numeric (Numeric value)
       _value = value
       
-    TNumeric add(TNumeric right)
+    Numeric add(Numeric right)
       _value + right
       ...
 ```
@@ -49,7 +53,7 @@ sum = Int(10)
 
 ```
 namespace Actors
-  class ComplexActor implements TActor:
+  class ComplexActor implements Actor:
     Actor (Bool street)
       _street = street
 
