@@ -2,20 +2,20 @@
 ## Syntax ideas
 ```
 namespace Actors: 
-  class ComplexActor implements Actor:
-    Tag (Bool street):
+  class ComplexActor implements TActor:
+    Actor (Bool street):
       _street = street
 
-    Void Act:
-      If(_street)
-        .Then(dance)
-        .Else(sing)
+    Void act:
+      Bool(_street)
+        .match(True, dance)
+        .match(False, sing)
 
-    Void Dance:
-      Console().Write('I am dancing')
+    Void dance:
+      Console().write('I am dancing')
     
-    Void Sing:
-      Console().Write('I am singing')
+    Void sing:
+      Console().write('I am singing')
 
-ComplexActor(street).Act()
+ComplexActor(street).act()
 ```
