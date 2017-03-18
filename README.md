@@ -20,16 +20,22 @@ namespace Primitives
   
 namespace Primitives
   type Object extends Void
+    is(expected Object) Bool
+  
+namespace Primitives
+  type Comparable extends Void
+    match(expected Comparable, expression Expression) Comparable
 
 namespace Primitives
   // The base type for any numeric object.
-  type Numeric extends Object
+  type Numeric extends Object, Comparable
     add(right Numeric) Numeric
     sub(right Numeric) Numeric
     neg() Numeric
     mul(right Numeric) Numeric
     div(right Numeric) Numeric
     mod(right Numeric) Numeric
+    match(expected Numeric, expression Expression) Numeric
     
 namespace Enumerables
   use Primitives
@@ -52,6 +58,19 @@ sum = Int(10)
 5.times(i => sum = sum.add(10))
 ```
 
+#### Boolean
+```
+5.is(Numeric)
+  True => Console().write('5 is numeric'))
+  False => Console().write('5 is not numeric'))
+5.is_not(Numeric) => Console().write('5 is numeric')
+console = Console()
+'hello'.match()
+  'Hello' => console.write('matches \'Hello\'')
+  'world' => console.write('matches \'world\')
+```
+
+### Examples
 ```
 namespace Actors
   class ComplexActor implements Actor
@@ -59,7 +78,7 @@ namespace Actors
       _street = street
 
     act()
-      Bool(_street)
+      _street
         .match(True, dance)
         .match(False, sing)
 
