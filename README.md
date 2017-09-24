@@ -1,4 +1,4 @@
-# M: pure object-oriented language
+# Miri: pure object-oriented language
 ## Rules
 * Classes always extend types or other classes.
 * Instance variables are prefixed with underscode ``_variable``
