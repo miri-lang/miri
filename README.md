@@ -1,13 +1,13 @@
 # Miri: General Purpose Object-Oriented Language
 ## Goal
-Combine good practices of object-oriented design and enforce them on programming language level. The final product should satisfy definition of a modern general purpose programming language.
+The goal is to combine good practices of object-oriented design and enforce them on programming language level. The final product should satisfy the definition of a modern general purpose programming language.
 
 ## Motivation
-I believe large amount of books and articles on “good software design” is a result of excessive flexibility of modern programming languages. What is the point of giving a knife to a child and then attempting to teach them how to use the knife, after so many cuts?
-Human mind has many faults which result into poor software quality. Experience and knowledge increase software quality, but there’s no easy way to ensure constant delivery of high quality code. Developers get boring, lazy, loose motivation. Product managers don’t really understand why we need “refactoring”.
-The thing is: modern programming languages allow us to cut corners and create bad software. They allow us to act bad. It is that kind of democracy where killing or robbing people is lawful, but frouned upon.
+I believe the large amount of books and articles on “good software design” is a result of the excessive flexibility of modern programming languages. What is the point of giving a knife to a child and then attempting to teach them how to use the knife, after many cuts?
+The human mind has flaws which result in poor software quality. Experience and knowledge increase software quality, but there’s no easy way to ensure constant delivery of high-quality code. Developers get bored, lazy, lose motivation. Product managers don’t really understand why we need “refactoring”.
+The thing is: modern programming languages allow us to cut corners and create bad software. They allow us to act badly. It is that kind of democracy where killing or robbing people is lawful, but it’s frowned upon.
 We all agree such terrible acts should be forbidden by law. Why do we have programming languages which OK with us being bad and then use all kinds of poLINTsmen to control our actions?
-Let us create proper democracy, where bad practices are forbidden. `Miri` will be your linter, cop, guide and book on good software design. If you use this language, you’ll have no chance to do wrong.
+Let us create proper democracy, where bad practices are forbidden. `Miri` will be your linter, cop, guide, and book on good software design. If you use this language, you’ll have no chance to get bad.
 
 ## Rules
 * Classes always extend types or other classes.
