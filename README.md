@@ -40,3 +40,8 @@ run(arguments Array<String>)
   // Creates instance of a Console type, then calls writeLine method.
   Console().writeLine('Hello World!')
 ```
+
+## The Name
+Miri is named after my daughter. It’s her nickname in our family. Her short name is Mira and the full name is Myroslava.
+When she was about 6 month I saw StarTrek for the first time in my life. There was a girl Miri. We already called our daughter like that, so this is just funny coincidence.
+Using girl’s name for programming language doesn’t bother me at all. Things should have value beyond their names. Same applies to people.
