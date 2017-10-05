@@ -23,7 +23,7 @@ Let us create proper democracy, where bad practices are forbidden. `Miri` will b
 ## Syntax
 ### HelloWorld.mi
 
-```
+```csharp
 // Declaration of base types in format: is Type1, Type2, etc.
 is Program
 
