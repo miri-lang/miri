@@ -9,16 +9,25 @@ The thing is: modern programming languages allow us to cut corners and create ba
 We all agree such terrible acts should be forbidden by law. Why do we have programming languages which OK with us being bad and then use all kinds of poLINTsmen to control our actions?
 Let us create proper democracy, where bad practices are forbidden. `Miri` will be your linter, cop, guide, and book on good software design. If you use this language, you’ll have no chance to get bad.
 
-## Rules
-* Classes always extend types or other classes.
-* Instance variables are prefixed with underscode ``_variable``
+## Key Principles
+* Opinionated
+* Object-oriented
+* General purpose
+* Modern
+
+## Features
+* Static typing.
+* Folder structure and file names play key role in namespacing:
+  * Folder name is part of a namespace.
+  * File name is also a type name. Full type name example: `Blog/Users/User` corresponds to `Blog/Users/User.mi` file.
+  * One file describes one type only.
+* No variables. Data structures are immutable.
+* Instance fields are prefixed with underscode: `_field`.
 * Instance variables can’t change.
-* Every function produces new instance.
-* No nil/null references.
-* No conditional or loop structures.
-* No exceptions.
-* Instance is always immutable.
-* Instances are created by class name, however method always operate with types.
+* Generic types.
+* No null/nil reference.
+* Types have destructors.
+* No garbage collection, immediate cleanup.
 
 ## Syntax
 ### HelloWorld.mi
@@ -26,7 +35,7 @@ Let us create proper democracy, where bad practices are forbidden. `Miri` will b
 ```csharp
 // Declaration of modules which are used by this type.
 // Tabulation identifies nested modules.
-uses Global\System
+uses Global/System
   IO
   Collections
   
@@ -42,6 +51,7 @@ run(arguments Array<String>)
 ```
 
 ## The Name
-Miri is named after my daughter. It’s her nickname in our family. Her short name is Mira and the full name is Myroslava.
+Miri is named after my daughter. It’s her nickname in our family. Her short name is Mira and her full name is Myroslava.
 When she was about 6 month I saw StarTrek for the first time in my life. There was a girl Miri. We already called our daughter like that, so this is just funny coincidence.
 Using girl’s name for programming language doesn’t bother me at all. Things should have value beyond their names. Same applies to people.
+My daughter is very opinionated. She has her own way of doing things. This quality is included to Miri language :)
