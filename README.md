@@ -40,14 +40,17 @@ uses Global/System
   Collections
   
 // Declaration of base types in format: is Type1, Type2, etc.
-is Program
+is ConsoleProgram
 
-// Methods and functions.
+// Constructor
+(console Console, arguments Array<String>)
+ _console = console
+ _arguments = arguments
 
 // Runs the program. This method is declared in the Program type.
-run(arguments Array<String>)
+run()
   // Creates instance of a Console type, then calls writeLine method.
-  Console().writeLine('Hello World!')
+  _console.writeLine('Hello World!')
 ```
 
 ## The Name
