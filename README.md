@@ -42,10 +42,9 @@ uses Global/System
 // Declaration of base types in format: is Type1, Type2, etc.
 is ConsoleProgram
 
-// Constructor
-(console Console, arguments Array<String>)
- _console = console
- _arguments = arguments
+// Fields declaration.
+_console Console
+_arguments Array<String>
 
 // Runs the program. This method is declared in the Program type.
 run()
