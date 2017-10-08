@@ -29,8 +29,15 @@ Let us create proper democracy, where bad practices are forbidden. `Miri` will b
 * Types have destructors.
 * No garbage collection, immediate cleanup.
 
-## Syntax
-### HelloWorld.mi
+## Example
+
+### Folder Structure
+HelloWorldApp/
+  Program/
+    _.mi
+    run.mi
+  
+### HelloWorldApp/Program/_.mi
 
 ```csharp
 // Declaration of modules which are used by this type.
@@ -45,11 +52,20 @@ is ConsoleProgram
 // Fields declaration.
 _console Console
 _arguments Array<String>
+```
 
-// Runs the program. This method is declared in the Program type.
-run()
-  // Creates instance of a Console type, then calls writeLine method.
-  _console.writeLine('Hello World!')
+### HelloWorldApp/Program/run.mi
+```csharp
+it: Runs the program. This method is declared in the Program type.
+@arg1 Type1: Possible description of arg1. 
+@arg2 Type2: Possible description of arg2.
+returns Type3: Possible description of return result. 
+
+it: Outputs "Hello World!" to console
+  this()
+ok: _console.containsInBuffer('Hello World!')
+
+_console.writeLine('Hello World!')
 ```
 
 ## The Name
