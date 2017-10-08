@@ -32,10 +32,12 @@ Let us create proper democracy, where bad practices are forbidden. `Miri` will b
 ## Example
 
 ### Folder Structure
+```
 HelloWorldApp/
   Program/
     _.mi
     run.mi
+```
   
 ### HelloWorldApp/Program/_.mi
 
