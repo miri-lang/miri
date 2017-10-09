@@ -31,6 +31,8 @@ Let us create proper democracy, where bad practices are forbidden. `Miri` will b
 
 ## Example
 
+Don’t be scared :) Everything has a reason.
+
 ### Folder Structure
 ```
 HelloWorldApp/
@@ -38,8 +40,26 @@ HelloWorldApp/
     _.mi
     run.mi
 ```
+
+### Essential Code
+#### HelloWorldApp/Program/_.mi
+
+```
+uses Global/System
   
-### HelloWorldApp/Program/_.mi
+is ConsoleProgram
+```
+
+#### HelloWorldApp/Program/run.mi
+```
+_console.writeLine 'Hello World!'
+```
+
+If you wonder why that tiny peace is split in two files, see how Miri programs are actually supposed to look like:
+
+### With All Features Included
+  
+#### HelloWorldApp/Program/_.mi
 
 ```
 it Provides an example of console application in Miri.
@@ -56,12 +76,11 @@ is ConsoleProgram
 
 // Constructors.
 // Instance variables are automatically inferred from parameters.
-(console Console, arguments Array<String>)
 (:forTest, console Console)
   new(console, Array<String>.new)
 ```
 
-### HelloWorldApp/Program/run.mi
+#### HelloWorldApp/Program/run.mi
 ```
 it Runs the program.
 
@@ -75,6 +94,10 @@ check Buffer contains Hello World
 
 _console.writeLine 'Hello World!'
 ```
+
+Unit tests are actually part of each function file. In other languages you would have 2 files, located in two different places, but both implementing or testing same stuff. In Miri TDD is actually part of the language. More than that, the
+tests are then used for documentation of your code as examples.
+So in one file you write documentation, tests and implementation.
 
 ## The Name
 Miri is named after my daughter. It’s her nickname in our family. Her short name is Mira and her full name is Myroslava.
