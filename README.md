@@ -42,10 +42,13 @@ HelloWorldApp/
 ### HelloWorldApp/Program/_.mi
 
 ```
+it Provides an example of console application in Miri.
+
 // Declaration of modules which are used by this type.
 // Tabulation identifies nested modules.
 uses Global/System
   IO
+  IO/Fakes
   Collections
   
 // Declaration of base types in format: is Type1, Type2, etc.
@@ -60,11 +63,7 @@ is ConsoleProgram
 
 ### HelloWorldApp/Program/run.mi
 ```
-uses Global/System
-  Collections
-  IO/Fakes
-
-act Runs the program.
+it Runs the program.
 
 test Outputs "Hello World!" to console
   console = FakeConsole.new
