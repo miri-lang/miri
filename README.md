@@ -55,7 +55,7 @@ is ConsoleProgram
 // it automatically creates fields _console and _arguments.
 default: (console Console, arguments Array<String>)
 forTest: (console Console)
-  default(console, Array<String>())
+  new(:default, console, Array<String>.new)
 ```
 
 ### HelloWorldApp/Program/run.mi
