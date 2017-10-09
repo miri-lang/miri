@@ -41,7 +41,7 @@ HelloWorldApp/
   
 ### HelloWorldApp/Program/_.mi
 
-```csharp
+```ruby
 // Declaration of modules which are used by this type.
 // Tabulation identifies nested modules.
 uses Global/System
@@ -51,27 +51,27 @@ uses Global/System
 // Declaration of base types in format: is Type1, Type2, etc.
 is ConsoleProgram
 
-// Default constructor.
-// it automatically creates fields _console and _arguments.
-default: (console Console, arguments Array<String>)
-forTest: (console Console)
-  new(:default, console, Array<String>.new)
+// Constructors.
+// Instance variables are automatically inferred from parameters.
+(console Console, arguments Array<String>)
+(:forTest, console Console)
+  new(console, Array<String>.new)
 ```
 
 ### HelloWorldApp/Program/run.mi
-```csharp
+```ruby
 uses Global/System
   Collections
   IO/Fakes
 
-it: Runs the program.
+act Runs the program.
 
-test: Outputs "Hello World!" to console
+test Outputs "Hello World!" to console
   console = FakeConsole.new
   new(:forTest, console).run
-check: Buffer must have positive length
+check Buffer must have positive length
   console.hasOutput
-check: Buffer contains Hello World
+check Buffer contains Hello World
   console.containsInBuffer 'Hello World!'
 
 _console.writeLine 'Hello World!'
