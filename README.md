@@ -53,7 +53,9 @@ is ConsoleProgram
 
 // Default constructor.
 // it automatically creates fields _console and _arguments.
-(console Console, arguments Array<String>)
+default: (console Console, arguments Array<String>)
+forTest: (console Console)
+  default(console, Array<String>())
 ```
 
 ### HelloWorldApp/Program/run.mi
@@ -66,10 +68,9 @@ it: Runs the program.
 
 test: Outputs "Hello World!" to console
   console = FakeConsole.new
-  program = new console, Array<String>
-  program.run
+  new(:forTest, console).run
 check: Buffer must have positive length
-  0 < console.bufferLength
+  console.hasOutput
 check: Buffer contains Hello World
   console.containsInBuffer 'Hello World!'
 
