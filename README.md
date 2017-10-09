@@ -58,14 +58,19 @@ is ConsoleProgram
 
 ### HelloWorldApp/Program/run.mi
 ```csharp
-it: Runs the program. This method is declared in the Program type.
-@arg1 Type1: Possible description of arg1. 
-@arg2 Type2: Possible description of arg2.
-returns Type3: Possible description of return result. 
+uses Global/System
+  Collections
+  IO/Fakes
 
-it: Outputs "Hello World!" to console
-  this()
-ok: _console.containsInBuffer('Hello World!')
+it: Runs the program.
+
+test: Outputs "Hello World!" to console
+  console = FakeConsole()
+  this(console, Array<String>()).run()
+check: Buffer must have positive length
+  0 < console.bufferLength()
+check: Buffer contains Hello World
+  console.containsInBuffer('Hello World!')
 
 _console.writeLine('Hello World!')
 ```
