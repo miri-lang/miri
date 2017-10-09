@@ -41,7 +41,7 @@ HelloWorldApp/
   
 ### HelloWorldApp/Program/_.mi
 
-```ruby
+```
 // Declaration of modules which are used by this type.
 // Tabulation identifies nested modules.
 uses Global/System
@@ -59,7 +59,7 @@ is ConsoleProgram
 ```
 
 ### HelloWorldApp/Program/run.mi
-```ruby
+```
 uses Global/System
   Collections
   IO/Fakes
