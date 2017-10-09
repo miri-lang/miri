@@ -51,9 +51,9 @@ uses Global/System
 // Declaration of base types in format: is Type1, Type2, etc.
 is ConsoleProgram
 
-// Fields declaration.
-_console Console
-_arguments Array<String>
+// Default constructor.
+// it automatically creates fields _console and _arguments.
+(console Console, arguments Array<String>)
 ```
 
 ### HelloWorldApp/Program/run.mi
