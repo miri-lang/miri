@@ -65,14 +65,15 @@ uses Global/System
 it: Runs the program.
 
 test: Outputs "Hello World!" to console
-  console = FakeConsole()
-  this(console, Array<String>()).run()
+  console = FakeConsole.new
+  program = new console, Array<String>
+  program.run
 check: Buffer must have positive length
-  0 < console.bufferLength()
+  0 < console.bufferLength
 check: Buffer contains Hello World
-  console.containsInBuffer('Hello World!')
+  console.containsInBuffer 'Hello World!'
 
-_console.writeLine('Hello World!')
+_console.writeLine 'Hello World!'
 ```
 
 ## The Name
