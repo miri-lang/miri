@@ -38,7 +38,6 @@ Let us create proper democracy, where bad practices are forbidden. `Miri` will b
 // Tabulation identifies nested modules.
 uses Global/System
   IO
-  IO/Fakes
   Collections
   
 // Declaration of a base type.
@@ -59,6 +58,8 @@ run()
 
 ### HelloWorldApp/ProgramTest.mi
 ```
+uses Global/System/IO/Fakes
+  
 extends UnitTest
 
 ()
