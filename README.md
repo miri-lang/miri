@@ -31,39 +31,9 @@ Let us create proper democracy, where bad practices are forbidden. `Miri` will b
 
 ## Example
 
-Don’t be scared :) Everything has a reason.
-
-### Folder Structure
-```
-HelloWorldApp/
-  Program/
-    _.mi
-    run.mi
-```
-
-### Essential Code
-#### HelloWorldApp/Program/_.mi
+### HelloWorldApp/Program.mi
 
 ```
-uses Global/System
-  
-is ConsoleProgram
-```
-
-#### HelloWorldApp/Program/run.mi
-```
-_console.writeLine 'Hello World!'
-```
-
-If you wonder why that tiny peace is split in two files, see how Miri programs are actually supposed to look like:
-
-### With All Features Included
-  
-#### HelloWorldApp/Program/_.mi
-
-```
-it Provides an example of console application in Miri.
-
 // Declaration of modules which are used by this type.
 // Tabulation identifies nested modules.
 uses Global/System
@@ -71,33 +41,35 @@ uses Global/System
   IO/Fakes
   Collections
   
-// Declaration of base types in format: is Type1, Type2, etc.
-is ConsoleProgram
+// Declaration of a base type.
+extends ConsoleProgram
+
+// You can also use other types as interfaces:
+// is Program, ConsoleApp, SomethingElse
 
 // Constructors.
 // Instance variables are automatically inferred from parameters.
 (:forTest, console Console)
   new(console, Array<String>.new)
+  
+// Runs the program.
+run()
+  _console.writeLine 'Hello World!'
 ```
 
-#### HelloWorldApp/Program/run.mi
+### HelloWorldApp/ProgramTest.mi
 ```
-it Runs the program.
+extends UnitTest
 
-test Outputs "Hello World!" to console
-  console = FakeConsole.new
-  new(:forTest, console).run
-check Buffer must have positive length
-  console.hasOutput
-check Buffer contains Hello World
-  console.containsInBuffer 'Hello World!'
+()
+  _console = FakeConsole.new
+  _app = new(:forTest, _console)
 
-_console.writeLine 'Hello World!'
+// Outputs "Hello World!" to console.
+testRun()
+  _app.run()
+  assert(_console.containsInBuffer('Hello World!')).is_true()
 ```
-
-Unit tests are actually part of each function file. In other languages you would have 2 files, located in two different places, but both implementing or testing same stuff. In Miri TDD is actually part of the language. More than that, the
-tests are then used for documentation of your code as examples.
-So in one file you write documentation, tests and implementation.
 
 ## The Name
 Miri is named after my daughter. It’s her nickname in our family. Her short name is Mira and her full name is Myroslava.
