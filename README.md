@@ -48,7 +48,7 @@ extends ConsoleProgram
 
 // Constructors.
 // Instance variables are automatically inferred from parameters.
-(:forTest, console Console)
+new(:forTest, console Console)
   new(console, Array<String>.new)
   
 // Runs the program.
@@ -62,7 +62,7 @@ uses Global/System/IO/Fakes
   
 extends UnitTest
 
-()
+new()
   _console = FakeConsole.new
   _app = new(:forTest, _console)
 
