@@ -48,11 +48,11 @@ extends ConsoleProgram
 
 // Constructors.
 // Instance variables are automatically inferred from parameters.
-new(:forTest, console Console)
-  new(console, Array<String>.new)
+new :forTest, console Console
+  new console, Array<String>.new
   
 // Runs the program.
-run()
+run
   _console.writeLine 'Hello World!'
 ```
 
@@ -62,14 +62,16 @@ uses Global/System/IO/Fakes
   
 extends UnitTest
 
-new()
+new
   _console = FakeConsole.new
-  _app = new(:forTest, _console)
+  _app = new :forTest, _console
 
 // Outputs "Hello World!" to console.
-testRun()
-  _app.run()
-  assert(_console.containsInBuffer('Hello World!')).is_true()
+testRun
+  _app.run
+  assert 
+    _console.containsInBuffer 'Hello World!'
+  .is_true
 ```
 
 ## The Name
