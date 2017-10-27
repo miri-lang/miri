@@ -40,11 +40,8 @@ uses Global/System
   IO
   Collections
   
-// Declaration of a base type.
-extends ConsoleProgram
-
-// You can also use other types as interfaces:
-// is Program, ConsoleApp, SomethingElse
+// Implements Program interface.
+is Program
 
 // Constructors.
 // Instance variables are automatically inferred from parameters.
