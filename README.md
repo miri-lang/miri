@@ -46,11 +46,11 @@ is Program
 // Constructors.
 // Instance variables are automatically inferred from parameters.
 new(:forTest, console Console)
-  new(console, Array<String>.new())
+  new(console, Array<String>.new)
   
 // Runs the program.
-run()
-  _console.writeLine('Hello World!')
+run
+  _console.writeLine 'Hello World!'
 ```
 
 ### HelloWorldApp/ProgramTest.mi
@@ -59,15 +59,15 @@ uses Global/System/IO/Fakes
   
 extends UnitTest
 
-new()
-  _console = FakeConsole.new()
+new
+  _console = FakeConsole.new
   _app = new(:forTest, _console)
 
 // Outputs "Hello World!" to console.
-testRun()
-  _app.run()
+testRun
+  _app.run
   assert( 
-    _console.containsInBuffer('Hello World!')
+    _console.containsInBuffer 'Hello World!'
   ).is_true
 ```
 
