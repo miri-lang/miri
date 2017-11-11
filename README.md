@@ -66,9 +66,9 @@ new
 // Outputs "Hello World!" to console.
 testRun
   _app.run
-  assert( 
+  assertTrue( 
     _console.containsInBuffer 'Hello World!'
-  ).is_true
+  )
 ```
 
 ## The Name
