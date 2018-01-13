@@ -33,28 +33,28 @@ Let us create proper democracy, where bad practices are forbidden. `Miri` will b
 
 ### HelloWorldApp/Program.mi
 
-```ruby
-\ Declaration of modules which are used by this type.
-\ Tabulation identifies nested modules.
+```
+Declaration of modules which are used by this type.
+Tabulation identifies nested modules.
 uses Global/System
   IO
   Collections
   
-\ Implements Program interface.
+Implements Program interface.
 is Program
 
-\ Constructors.
-\ Instance variables are automatically inferred from parameters.
+Constructors.
+Instance variables are automatically inferred from parameters.
 (:forTest, console Console)
   (console, Array<String>.new)
   
-\ Runs the program.
+Runs the program.
 run
   _console.writeLine 'Hello World!'
 ```
 
 ### HelloWorldApp/ProgramTest.mi
-```ruby
+```
 uses Global/System/IO/Fakes
   
 extends UnitTest
@@ -63,8 +63,7 @@ new
   _console = FakeConsole()
   _app = (:forTest, _console)
 
-\ Outputs "Hello World!" to console.
-testRun
+Outputs "Hello World!" to console.
   _app.run
   assertTrue( 
     _console.containsInBuffer 'Hello World!'
