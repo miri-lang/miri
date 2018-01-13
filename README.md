@@ -34,13 +34,10 @@ Let us create proper democracy, where bad practices are forbidden. `Miri` will b
 ### HelloWorldApp/Program.mi
 
 ```
-Declaration of modules which are used by this type.
-Tabulation identifies nested modules.
 uses Global/System
   IO
   Collections
   
-Implements Program interface.
 is Program
 
 Constructors.
