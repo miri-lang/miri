@@ -33,19 +33,19 @@ Let us create proper democracy, where bad practices are forbidden. `Miri` will b
 
 ### HelloWorldApp/Program.mi
 
-```
+```miri
 uses Global/System
   IO
   Collections
   
 is Program
 
-Constructors.
-Instance variables are automatically inferred from parameters.
+// Constructors.
+// Instance variables are automatically inferred from parameters.
 (:forTest, console Console)
   (console, Array<String>.new)
   
-Runs the program.
+// Runs the program.
 run
   _console.writeLine 'Hello World!'
 ```
