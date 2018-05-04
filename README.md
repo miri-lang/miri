@@ -44,7 +44,7 @@ is Program
 // Constructors.
 // Instance variables are automatically inferred from parameters.
 (:forTest, console Console)
-  (console, Array<String>.new)
+  (console, Array<String>)
   
 // Runs the program.
 run
