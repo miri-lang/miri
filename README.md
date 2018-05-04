@@ -27,7 +27,8 @@ Let us create proper democracy, where bad practices are forbidden. `Miri` will b
 * Generic types.
 * No null/nil reference.
 * Types have destructors.
-* No garbage collection, immediate cleanup.
+* No garbage collection, immediate cleanup. (not sure)
+* Objects can’t be instantiated inside classes.
 
 ## Example
 
