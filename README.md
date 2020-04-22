@@ -1,19 +1,4 @@
 # Miri: General Purpose Object-Oriented Language
-## Goal
-The goal is to combine good practices of object-oriented design and enforce them on programming language level. The final product should satisfy the definition of a modern general purpose programming language.
-
-## Motivation
-I believe the large amount of books and articles on “good software design” is a result of the excessive flexibility of modern programming languages. What is the point of giving a knife to a child and then attempting to teach them how to use the knife, after many cuts?
-The human mind has flaws which result in poor software quality. Experience and knowledge increase software quality, but there’s no easy way to ensure constant delivery of high-quality code. Developers get bored, lazy, lose motivation. Product managers don’t really understand why we need “refactoring”.
-The thing is: modern programming languages allow us to cut corners and create bad software. They allow us to act badly. It is that kind of democracy where killing or robbing people is lawful, but it’s frowned upon.
-We all agree such terrible acts should be forbidden by law. Why do we have programming languages which OK with us being bad and then use all kinds of poLINTsmen to control our actions?
-Let us create proper democracy, where bad practices are forbidden. `Miri` will be your linter, cop, guide, and book on good software design. If you use this language, you’ll have no chance to get bad.
-
-## Key Principles
-* Opinionated
-* Object-oriented
-* General purpose
-* Modern
 
 ## Features
 * Static typing.
@@ -24,52 +9,43 @@ Let us create proper democracy, where bad practices are forbidden. `Miri` will b
 * No variables. Data structures are immutable.
 * Instance fields are prefixed with underscode: `_field`.
 * Instance variables can’t change.
-* Generic types.
+* Supports generics types.
 * No null/nil reference.
-* Types have destructors.
-* No garbage collection, immediate cleanup. (not sure)
 * Objects can’t be instantiated inside classes.
 
 ## Example
 
-### HelloWorldApp/Program.mi
+### HelloWorldApp/Program.miri
 
-```miri
+```ruby
 uses Global/System
   IO
   Collections
   
 is Program
 
-// Constructors.
-// Instance variables are automatically inferred from parameters.
-(:forTest, console Console)
-  (console, Array<String>)
+// Constructor.
+new(console Console)
+  _console = console
   
 // Runs the program.
 run
-  _console.writeLine 'Hello World!'
+  _console.writeLine('Hello World!')
 ```
 
-### HelloWorldApp/ProgramTest.mi
-```
+### HelloWorldApp/Program.test.miri
+
+```ruby
 uses Global/System/IO/Fakes
   
 extends UnitTest
 
-new
-  _console = FakeConsole()
-  _app = (:forTest, _console)
+setup
+  _console = FakeConsole.new
+  _subject = Program.new(_console)
 
-Outputs "Hello World!" to console.
-  _app.run
-  assertTrue( 
-    _console.containsInBuffer 'Hello World!'
-  )
+describe :run
+  it 'outputs "Hello World!" to console'
+    _subject.run
+    expect(_console.containsInBuffer('Hello World!)).to be_true
 ```
-
-## The Name
-Miri is named after my daughter. It’s her nickname in our family. Her short name is Mira and her full name is Myroslava.
-When she was about 6 month I saw StarTrek for the first time in my life. There was a girl Miri. We already called our daughter like that, so this is just funny coincidence.
-Using girl’s name for programming language doesn’t bother me at all. Things should have value beyond their names. Same applies to people.
-My daughter is very opinionated. She has her own way of doing things. This quality is included to Miri language :)
