@@ -40,12 +40,13 @@ uses Global/System/IO/Fakes
   
 extends UnitTest
 
-setup
+new
   _console = FakeConsole.new
   _subject = Program.new(_console)
 
-describe :run
-  it 'outputs "Hello World!" to console'
-    _subject.run
-    expect(_console.containsInBuffer('Hello World!)).to be_true
+run
+  context 'with default params'
+    it 'outputs "Hello World!" to console'
+      _subject.run
+      expect(_console.containsInBuffer('Hello World!)).to be_true
 ```
