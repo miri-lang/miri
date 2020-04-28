@@ -13,40 +13,45 @@
 * No null/nil reference.
 * Objects can’t be instantiated inside classes.
 
-## Example
+## Examples
 
-### HelloWorldApp/Program.miri
+### Classic Hello World (simple version)
+
+#### HelloWorldApp/Program.miri
 
 ```ruby
-uses Global/System
-  IO
-  Collections
-  
-is Program
+uses global/system
 
-// Constructor.
-new(console Console)
-  _console = console
-  
-// Runs the program.
+extends ConsoleProgram
+
 run
-  _console.writeLine('Hello World!')
+  _console.writeLine 'Hello World!'
 ```
 
-### HelloWorldApp/Program.test.miri
+### Classic Hello World (extended version)
+
+This version also includes unit-test, which in Miri is part of the same function description.
+
+#### HelloWorldApp/Program.miri
 
 ```ruby
-uses Global/System/IO/Fakes
-  
-extends UnitTest
+uses global/types
+uses global/system
+uses global/system/io/fakes
 
-new
-  _console = FakeConsole.new
-  _subject = Program.new(_console)
+extends ConsoleProgram
+
+// Test constructor
+new(:test, args []String)
+  new(FakeConsole.new, args)
 
 run
+  _console.writeLine 'Hello World!'
+
   context 'with default params'
+    setup
+      _subject = new(:test, []String.new)
     it 'outputs "Hello World!" to console'
       _subject.run
-      expect(_console.containsInBuffer('Hello World!)).to be_true
+      expect _console.containsInBuffer('Hello World!)
 ```
