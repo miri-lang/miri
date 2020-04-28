@@ -51,6 +51,7 @@ run
   context 'with default params'
     setup
       _subject = new(:test, []String.new)
+
     it 'outputs "Hello World!" to console'
       _subject.run
       expect _console.containsInBuffer('Hello World!)
