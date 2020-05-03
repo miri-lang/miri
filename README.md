@@ -24,8 +24,9 @@ use /system
 
 extend ConsoleProgram
 
-run
+run Int
   _console.writeLine 'Hello World!'
+  0
 ```
 
 ### Classic Hello World (extended version)
