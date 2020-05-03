@@ -20,13 +20,13 @@
 #### HelloWorldApp/Program.miri
 
 ```ruby
-use /system
+use /system/programs
 
 extend ConsoleProgram
 
-run Int
+run ExitCode
   _console.writeLine 'Hello World!'
-  0
+  ExitCode.default
 ```
 
 ### Classic Hello World (extended version)
@@ -36,6 +36,7 @@ This version also includes unit-test, which in Miri is part of the same function
 #### HelloWorldApp/Program.miri
 
 ```ruby
+use /system/programs
 use /system/types
 use /system/io/fakes
 
@@ -51,14 +52,14 @@ examples
     _subject = new(:test, []String.new)
 
 // runs the program.
-run Int
+run ExitCode
   _console.writeLine 'Hello World!'
-  0
+  ExitCode.default
 
   // Local examples section
   examples
     example 'with default params'
-      expect _subject.run == 0
+      expect _subject.run == ExitCode.default
 
       it 'outputs "Hello World!" to console'
         _subject.run
