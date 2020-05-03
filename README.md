@@ -42,14 +42,14 @@ use /system/io/fakes
 
 extend ConsoleProgram
 
-// Test constructor
-new(:test, args []String) ThisType
-  new(FakeConsole.new, args)
-  
 // Global examples section
 examples
   setup
-    _subject = new(:test, []String.new)
+    _subject = fake([]String.new)
+
+// Fake constructor
+fake(:args []String) ThisType
+  new(FakeConsole.new, args)
 
 // runs the program.
 run ExitCode
