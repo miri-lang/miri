@@ -20,9 +20,9 @@
 #### HelloWorldApp/Program.miri
 
 ```ruby
-uses global/system
+use /system
 
-extends ConsoleProgram
+extend ConsoleProgram
 
 run
   _console.writeLine 'Hello World!'
@@ -35,11 +35,10 @@ This version also includes unit-test, which in Miri is part of the same function
 #### HelloWorldApp/Program.miri
 
 ```ruby
-uses global/types
-uses global/system
-uses global/system/io/fakes
+use /system/types
+use /system/io/fakes
 
-extends ConsoleProgram
+extend ConsoleProgram
 
 // Test constructor
 new(:test, args []String)
@@ -48,11 +47,12 @@ new(:test, args []String)
 run
   _console.writeLine 'Hello World!'
 
-  context 'with default params'
-    setup
-      _subject = new(:test, []String.new)
+  examples
+    example 'with default params'
+      setup
+        _subject = new(:test, []String.new)
 
-    it 'outputs "Hello World!" to console'
-      _subject.run
-      expect _console.containsInBuffer('Hello World!)
+      it 'outputs "Hello World!" to console'
+        _subject.run
+        expect _console.containsInBuffer('Hello World!)
 ```
