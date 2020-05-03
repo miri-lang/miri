@@ -41,7 +41,7 @@ use /system/io/fakes
 extend ConsoleProgram
 
 // Test constructor
-new(:test, args []String)
+new(:test, args []String) ThisType
   new(FakeConsole.new, args)
   
 // Global examples section
@@ -50,13 +50,16 @@ examples
     _subject = new(:test, []String.new)
 
 // runs the program.
-run
+run Int
   _console.writeLine 'Hello World!'
+  0
 
   // Local examples section
   examples
     example 'with default params'
+      expect _subject.run == 0
+
       it 'outputs "Hello World!" to console'
-        buffer = _subject.run
-        expect buffer.contains?('Hello World!')
+        _subject.run
+        expect _console.buffer.contains?('Hello World!')
 ```
