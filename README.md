@@ -58,5 +58,5 @@ run
     example 'with default params'
       it 'outputs "Hello World!" to console'
         buffer = _subject.run
-        expect buffer.contains?('Hello World!)
+        expect buffer.contains?('Hello World!')
 ```
