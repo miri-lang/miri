@@ -38,7 +38,6 @@ This version also includes unit-test, which in Miri is part of the same function
 ```ruby
 use /system/programs
 use /system/types
-use /system/io/fakes
 
 extend ConsoleProgram
 
