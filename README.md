@@ -57,11 +57,10 @@ run ExitCode
   ExitCode.default
 
   // Local examples section
-  examples
-    example 'with default params'
-      expect _subject.run == ExitCode.default
+  example 'with default params'
+    expect _subject.run == ExitCode.default
 
-      it 'outputs "Hello World!" to console'
-        _subject.run
-        expect _console.buffer.contains?('Hello World!')
+    it 'outputs "Hello World!" to console'
+      _subject.run
+      expect _console.buffer.contains?('Hello World!')
 ```
