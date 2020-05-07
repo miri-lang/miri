@@ -50,11 +50,10 @@ run ExitCode
   _console.writeLine 'Hello World!'
   ExitCode.default
 
-  // Local examples section
-  example 'with default params'
+  examples
     expect fake.run == ExitCode.default
 
     it 'outputs "Hello World!" to console'
-      fake.run
-      expect _console.buffer.contains?('Hello World!')
+      after fake.run
+        expect _console.buffer.contains?('Hello World!')
 ```
