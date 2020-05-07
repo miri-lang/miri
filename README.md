@@ -48,7 +48,7 @@ examples
     _subject = fake([]String.new)
 
 // Fake constructor
-fake(:args []String) ThisType
+fake(args []String) ThisType
   new(FakeConsole.new, args)
 
 // runs the program.
