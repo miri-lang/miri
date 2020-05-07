@@ -42,14 +42,9 @@ use /system/io/fakes
 
 extend ConsoleProgram
 
-// Global examples section
-examples
-  setup
-    _subject = fake([]String.new)
-
-// Fake constructor
-fake(args []String) ThisType
-  new(FakeConsole.new, args)
+// Fake constructor, used in the examples.
+fake ThisType
+  new(Console.fake, []String.new)
 
 // runs the program.
 run ExitCode
@@ -58,9 +53,9 @@ run ExitCode
 
   // Local examples section
   example 'with default params'
-    expect _subject.run == ExitCode.default
+    expect fake.run == ExitCode.default
 
     it 'outputs "Hello World!" to console'
-      _subject.run
+      fake.run
       expect _console.buffer.contains?('Hello World!')
 ```
