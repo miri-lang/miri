@@ -20,12 +20,12 @@
 #### HelloWorldApp/Program.miri
 
 ```ruby
-use /system/programs
+/system/programs
 
-extend ConsoleProgram
+extends ConsoleProgram
 
 run ExitCode
-  _console.writeLine 'Hello World!'
+  writeLine 'Hello World!'
   ExitCode.default
 ```
 
@@ -36,10 +36,10 @@ This version also includes unit-test, which in Miri is part of the same function
 #### HelloWorldApp/Program.miri
 
 ```ruby
-use /system/programs
-use /system/types
+/system/programs
+/system/types
 
-extend ConsoleProgram
+extends ConsoleProgram
 
 // Fake constructor, used in the examples.
 fake ThisType
@@ -47,11 +47,11 @@ fake ThisType
 
 // runs the program.
 run ExitCode
-  _console.writeLine 'Hello World!'
+  writeLine 'Hello World!'
   ExitCode.default
 
   examples
     fake.run == ExitCode.default
     fake.run:
-      _console.buffer.contains?('Hello World!')
+      buffer.contains? 'Hello World!'
 ```
