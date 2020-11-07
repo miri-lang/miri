@@ -24,7 +24,7 @@
 
 extends ConsoleProgram
 
-run ExitCode
+run
   writeLine 'Hello World!'
   ExitCode.default
 ```
@@ -46,7 +46,7 @@ fake ThisType
   new(Console.fake, []String.new)
 
 // runs the program.
-run ExitCode
+run
   writeLine 'Hello World!'
   ExitCode.default
 
