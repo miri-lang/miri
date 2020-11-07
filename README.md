@@ -51,7 +51,7 @@ run ExitCode
   ExitCode.default
 
   examples
-    expect fake.run == ExitCode.default
-    after fake.run
-      expect _console.buffer.contains?('Hello World!')
+    fake.run == ExitCode.default
+    fake.run:
+      _console.buffer.contains?('Hello World!')
 ```
