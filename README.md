@@ -17,12 +17,12 @@
 
 ### Classic Hello World (simple version)
 
-#### HelloWorldApp/Program.miri
+#### HelloWorldApp/App.miri
 
 ```ruby
-/system/programs
+/system/apps
 
-extends ConsoleProgram
+extends ConsoleApp
 
 run
   out 'Hello World!'
@@ -33,19 +33,19 @@ run
 
 This version also includes unit-test, which in Miri is part of the same function description.
 
-#### HelloWorldApp/Program.miri
+#### HelloWorldApp/App.miri
 
 ```ruby
-/system/programs
+/system/apps
 /system/types
 
-extends ConsoleProgram
+extends ConsoleApp
 
 // Fake constructor, used in the examples.
 fake ThisType
   new(Console.fake, []String.new)
 
-// runs the program.
+// runs the app.
 run
   out 'Hello World!'
   ExitCode.default
