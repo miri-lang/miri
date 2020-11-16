@@ -25,7 +25,7 @@
 extends ConsoleProgram
 
 run
-  writeLine 'Hello World!'
+  out 'Hello World!'
   ExitCode.default
 ```
 
@@ -47,11 +47,11 @@ fake ThisType
 
 // runs the program.
 run
-  writeLine 'Hello World!'
+  out 'Hello World!'
   ExitCode.default
 
-  examples
+  test
     fake.run == ExitCode.default
-    fake.run:
+    fake.run
       buffer.contains? 'Hello World!'
 ```
