@@ -26,7 +26,7 @@ Balance of speed and quality is the core philosophy of Miri. It’s designed to 
 #### HelloWorldApp/App.miri
 
 ```ruby
-/system/apps
+/sys/apps
 
 extends ConsoleApp
 
@@ -42,16 +42,15 @@ This version also includes unit-test, which in Miri is part of the same function
 #### HelloWorldApp/App.miri
 
 ```ruby
-/system/apps
-/system/types
+/sys/apps
 
 extends ConsoleApp
 
-// Fake constructor, used in the examples.
-fake ThisType
+# Fake constructor, used in the examples.
+fake
   new(Console.fake, []String.new)
 
-// runs the app.
+# runs the app.
 run
   out 'Hello World!'
   ExitCode.default
