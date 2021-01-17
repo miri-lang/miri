@@ -8,6 +8,7 @@ Balance of speed and quality is the core philosophy of Miri. It’s designed to 
 ## Features
 
 * Static typing.
+* Compileable. Tests are part of the compilation.
 * Folder structure and file names play key role in namespacing:
   * Folder name is part of a namespace.
   * File name is also a type name. Full type name example: `Blog/Users/User` corresponds to `Blog/Users/User.mi` file.
@@ -17,7 +18,6 @@ Balance of speed and quality is the core philosophy of Miri. It’s designed to 
 * Instance variables can’t change.
 * Supports generics types.
 * No null/nil reference.
-* Objects can’t be instantiated inside classes.
 
 ## Examples
 
