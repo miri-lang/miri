@@ -1,0 +1,18 @@
+use ./Calc
+
+calc = Calc.new
+
+var x = 5
+var y = 10
+
+var z = calc.add(x, y)
+print('{x} + {y} = {z}', z)
+
+z = calc.sub(x, y)
+print('{x} - {y} = {z}', z)
+
+z = calc.mul(x, y)
+print('{x} * {y} = {z}', z)
+
+z = calc.div(x, y)
+print('{x} / {y} = {z}', z)
