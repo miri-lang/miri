@@ -1,5 +1,6 @@
 mod cli;
 mod version;
+mod lexer;
 
 fn main() {
     let matches = cli::build_cli().get_matches();

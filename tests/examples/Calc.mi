@@ -1,0 +1,8 @@
+add<T numeric>(a T, b T) T: a + b
+
+sub<T numeric>(a T, b T) T: a - b
+
+div<T numeric>(a T, b T) T: a / b
+
+mul<T numeric>(a T, b T) T: a * b
+
