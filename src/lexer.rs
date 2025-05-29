@@ -45,6 +45,7 @@ pub enum Token {
     #[token("/")]           Slash,
     #[token("%")]           Percent,
     #[token(",")]           Comma,
+    #[token("..")]          Range,
     #[token(".")]           Dot,
     #[token("(")]           LParen,
     #[token(")")]           RParen,
@@ -52,6 +53,8 @@ pub enum Token {
     #[token("]")]           RBracket,
     #[token("{")]           LBrace,
     #[token("}")]           RBrace,
+    #[token("|")]           Pipe,
+    #[token("?")]           Try,
 
     // Identifiers and Literals
     #[regex("[a-zA-Z_][a-zA-Z0-9_]*")] Identifier,

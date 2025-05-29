@@ -120,11 +120,11 @@ fn test_keywords_as_parts_of_identifiers() {
 #[test]
 fn test_use() {
     lexer_test(shared::code_blocks::USE_STATEMENT, vec![
-        Token::Use, Token::Dot, Token::Slash, Token::Identifier,
         Token::Use, Token::Identifier,
-        Token::Use, Token::Dot, Token::Dot, Token::Slash, Token::Dot, Token::Dot, Token::Slash, Token::Dot, Token::Dot, Token::Slash, Token::Identifier,
-        Token::Use, Token::Identifier, Token::Comma, Token::Identifier, Token::From, Token::Dot, Token::Slash, Token::Identifier,
-        Token::Use, Token::Dot, Token::Dot, Token::Slash, Token::Identifier, Token::As, Token::Identifier
+        Token::Use, Token::Identifier, Token::Dot, Token::Identifier,
+        Token::Use, Token::Identifier, Token::Dot, Token::Identifier, Token::Dot, Token::Identifier,
+        Token::Use, Token::Identifier, Token::Comma, Token::Identifier, Token::From, Token::Identifier,
+        Token::Use, Token::Identifier, Token::As, Token::Identifier
     ]);
 }
 
@@ -133,7 +133,7 @@ fn test_inline_comments() {
     lexer_test(shared::code_blocks::INLINE_COMMENTS, vec![
         Token::Var, Token::Identifier, Token::Assign, Token::Int,
         Token::Identifier, Token::SingleQuotedString,
-        Token::Use, Token::Dot, Token::Slash, Token::Identifier,
+        Token::Use, Token::Identifier, Token::Dot, Token::Identifier,
         Token::Identifier, Token::Assign, Token::Identifier, Token::Plus, Token::Int
     ]);
 }
@@ -233,7 +233,7 @@ fn test_function() {
                 Token::Indent,
                 Token::Identifier, Token::Identifier,
                 Token::Identifier, Token::Assign, Token::Identifier, Token::Plus, Token::Int,
-                Token::For, Token::Identifier, Token::In, Token::Int, Token::Dot, Token::Dot, Token::Identifier, Token::Colon,
+                Token::For, Token::Identifier, Token::In, Token::Int, Token::Range, Token::Identifier, Token::Colon,
                     Token::Indent,
                     Token::Identifier, Token::Identifier,
                     Token::Dedent,

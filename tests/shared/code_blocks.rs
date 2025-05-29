@@ -1,18 +1,18 @@
 pub const USE_STATEMENT: &str = "
 // Local module 
-use ./Calc
+use Calc
 
 // Global module
-use Math
+use System.Math
 
 // Local module with path
-use ../../../SomeModule
+use MyProject.Path.SomeModule
 
 // Selective import from a module
-use Func1, Func2 from ./Module1
+use func1, func2 from Module1
 
 // Local module with path and alias
-use ../Module2 as M2
+use Module2 as M2
 ";
 
 pub const INLINE_COMMENTS: &str = r#"
@@ -20,7 +20,7 @@ var x = 10 // simple inline comment
 
 print 'Hello' // 👋 this is a friendly comment
 
-use ./Math // import Math // with another comment inside
+use System.Math // use System.Math // with another comment inside
 
 x = x + 1 // math: x becomes x + 1
 "#;
