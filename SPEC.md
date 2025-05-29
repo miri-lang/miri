@@ -267,9 +267,11 @@ result = add(vec1, vec2)
 ## Imports
 
 ```miri
-use ./Math                   // brings Math
-use ./Utils as u             // alias
-use add, sub from ./Ops      // selective
+use System.Math               // brings the system module Math
+use Calc                      // local module, same folder
+use MyProject.Path1.Path2.Lib // local module with a full path
+use Utils as u                // alias
+use add, sub from Ops         // selective
 ```
 
 ---
