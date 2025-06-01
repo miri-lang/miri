@@ -1,6 +1,7 @@
 use logos::Logos;
 
-#[derive(Logos, Debug, PartialEq)]
+
+#[derive(Logos, Debug, PartialEq, Clone)]
 pub enum Token {
     // Keywords
     #[token("use")]        Use,
@@ -75,6 +76,11 @@ pub enum Token {
 
     #[regex("[ \t\r]+", logos::skip)] Whitespace,
 }
+
+// Span type for tracking positions in source code
+pub type Span = std::ops::Range<usize>;
+pub type TokenSpan = (Token, Span);
+
 
 pub struct Lexer<'source> {
     inner: logos::Lexer<'source, Token>,
