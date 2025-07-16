@@ -1,260 +1,94 @@
-use miri::lexer::{Lexer, Token};
-use miri::parser::*;
+use miri::ast::{Program, Literal, IntegerLiteral, FloatLiteral};
+use miri::lexer::{Lexer};
+use miri::parser::Parser;
+
 
 #[test]
-fn test_parse_literal() {
-    // A simple integer
-    let source = "42";
-    let tokens = Lexer::new(source).collect::<Vec<_>>();
-    let result = parse_expr(tokens, source);
-    assert!(result.is_ok());
-    // We'll add more assertions as we develop the AST
+fn test_parse_integer_literal() {
+    parser_test("42", Literal::Integer(IntegerLiteral::I8(42)));
+    parser_test("12345", Literal::Integer(IntegerLiteral::I16(12345)));
+    parser_test("1_234_567_890", Literal::Integer(IntegerLiteral::I32(1234567890)));
+    parser_test("9_223_372_036_854_775_807", Literal::Integer(IntegerLiteral::I64(9223372036854775807)));
+
+    parser_test("0b1_01_010", Literal::Integer(IntegerLiteral::I8(42)));
+    parser_test("0xFF", Literal::Integer(IntegerLiteral::I16(255)));
+    parser_test("0o77", Literal::Integer(IntegerLiteral::I8(63)));
+    parser_test("0o1234567", Literal::Integer(IntegerLiteral::I32(342391)));
 }
 
-// use miri::parser::parse;
-// use miri::ast::*;
+#[test]
+fn test_parse_float_literal() {
+    parser_test("3.14", Literal::Float(FloatLiteral::F32(3.14)));
+    parser_test("1.797693134862315", Literal::Float(FloatLiteral::F64(1.797693134862315)));
 
-// mod shared;
+    parser_test("1_000.0", Literal::Float(FloatLiteral::F32(1_000.0)));
+    parser_test("1_000_000.123456789", Literal::Float(FloatLiteral::F64(1_000_000.123456789)));
+    
+    parser_test("1.0e10", Literal::Float(FloatLiteral::F32(1.0e10)));
+    parser_test("6.67430e-11", Literal::Float(FloatLiteral::F32(6.67430e-11)));
+}
 
-// #[test]
-// fn test_variable_declaration() {
-//     let source = "x = 10";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
+#[test]
+fn test_parse_float_literal_edge_cases() {
+    // Precision edge cases
+    parser_test("3.141592", Literal::Float(FloatLiteral::F32(3.141592))); // fits f32
+    parser_test("3.1415927", Literal::Float(FloatLiteral::F32(3.1415927))); // still fits
+    parser_test("3.14159265", Literal::Float(FloatLiteral::F64(3.14159265))); // too long for f32
 
-// #[test]
-// fn test_mutable_variable() {
-//     let source = "var y = 20";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
+    // Largest and smallest values
+    parser_test("3.4028235e38", Literal::Float(FloatLiteral::F32(3.4028235e38))); // max f32
+    parser_test("1.17549435e-38", Literal::Float(FloatLiteral::F32(1.17549435e-38))); // min normal f32
+    parser_test("1.7976931348623157e308", Literal::Float(FloatLiteral::F64(1.7976931348623157e308))); // max f64
+    parser_test("2.2250738585072014e-308", Literal::Float(FloatLiteral::F64(2.2250738585072014e-308))); // min normal f64
 
-// #[test]
-// fn test_typed_variable() {
-//     let source = "z int = 30";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
+    // Zeros
+    parser_test("0.0", Literal::Float(FloatLiteral::F32(0.0)));
+    parser_test("0.000000", Literal::Float(FloatLiteral::F32(0.0)));
 
-// #[test]
-// fn test_simple_function() {
-//     let source = "square(x int) int:
-//   x * x";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
+    // Underscore formatting
+    parser_test("123_456.789", Literal::Float(FloatLiteral::F32(123_456.789)));
+    parser_test("1_000_000.1234567", Literal::Float(FloatLiteral::F64(1_000_000.1234567)));
+    parser_test("1_000_000.12345678", Literal::Float(FloatLiteral::F64(1_000_000.12345678))); // too long
 
-// #[test]
-// fn test_function_with_multiple_params() {
-//     let source = "add(a int, b int) int:
-//   a + b";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
+    // Scientific notation variants
+    parser_test("1.0e+10", Literal::Float(FloatLiteral::F32(1.0e10)));
+    parser_test("1.0E10", Literal::Float(FloatLiteral::F32(1.0e10)));
+    parser_test("1.0000001e10", Literal::Float(FloatLiteral::F32(1.0000001e10_f32))); // precision edge
+    parser_test("9.999999e+37", Literal::Float(FloatLiteral::F32(9.999999e37))); // edge of f32
 
-// #[test]
-// fn test_function_with_guard() {
-//     let source = "transfer(amount float > 0.0) string:
-//   'Transferred: ' + amount";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
+    // Negative exponent
+    parser_test("1.0e-10", Literal::Float(FloatLiteral::F32(1.0e-10)));
+    parser_test("6.02214076e-23", Literal::Float(FloatLiteral::F64(6.02214076e-23))); // Planck constant
 
-// #[test]
-// fn test_if_statement() {
-//     let source = "if x > 0:
-//   print 'positive'
-// else:
-//   print 'non-positive'";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
+    // Extreme edge underflow
+    parser_test("1e-46", Literal::Float(FloatLiteral::F64(1e-46))); // below f32 subnormal
+    parser_test("1e-39", Literal::Float(FloatLiteral::F32(1e-39))); // subnormal but fits
+}
 
-// #[test]
-// fn test_for_loop() {
-//     let source = "for i in 0..10:
-//   print i";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
+#[test]
+fn test_parse_string_literal() {
+    parser_test("'hello single quote'", Literal::String("hello single quote".to_string()));
+    parser_test("\"hello double quote\"", Literal::String("hello double quote".to_string()));
+}
 
-// #[test]
-// fn test_while_loop() {
-//     let source = "while count > 0:
-//   count = count - 1
-//   print count";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
+#[test]
+fn test_parse_boolean_literal() {
+    parser_test("true", Literal::Boolean(true));
+    parser_test("false", Literal::Boolean(false));
+}
 
-// #[test]
-// fn test_do_while_loop() {
-//     let source = "do:
-//   count = count - 1
-//   print count
-// while count > 0";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
+#[test]
+fn test_parse_symbol_literal() {
+    parser_test(":my_fancy_symbol", Literal::Symbol("my_fancy_symbol".to_string()));
+}
 
-// #[test]
-// fn test_match_statement() {
-//     let source = "match val:
-//   0:
-//     print 'zero'
-//   1 | 2 | 3:
-//     print 'low'
-//   x if x > 10:
-//     print 'large'
-//   default:
-//     print 'other'";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
+fn parser_test<'src>(input: &'src str, _expected_body: Literal) {
+    let mut lexer = Lexer::new(input);
+    let mut parser = Parser::new(&mut lexer, input);
+    let parse_result = parser.parse();
 
-// #[test]
-// fn test_use_statement() {
-//     let source = "use System.Math";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
-
-// #[test]
-// fn test_selective_import() {
-//     let source = "use add, sub from Ops";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
-
-// #[test]
-// fn test_aliased_import() {
-//     let source = "use Utils as u";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
-
-// #[test]
-// fn test_array_literal() {
-//     let source = "arr = [1, 2, 3]";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
-
-// #[test]
-// fn test_dictionary_literal() {
-//     let source = "d = {'a': 1, 'b': 2}";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
-
-// #[test]
-// fn test_array_access() {
-//     let source = "x = arr[0]";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
-
-// #[test]
-// fn test_method_call() {
-//     let source = "result = arr.map:
-//   (x) x * x";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
-
-// #[test]
-// fn test_concurrency() {
-//     let source = "html = await fetch('https://example.com')?";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
-
-// #[test]
-// fn test_async_function() {
-//     let source = "async fetch(url string) Result<string, Error>:
-//   return net.get(url)?";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
-
-// #[test]
-// fn test_parallel_loop() {
-//     let source = "|| for item in collection:
-//   process(item)";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
-
-// #[test]
-// fn test_actor_spawn() {
-//     let source = "counter = spawn Counter.new()
-// counter <- inc()
-// value = await counter <- get()";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
-
-// #[test]
-// fn test_gpu_function() {
-//     let source = "gpu add(a [float], b [float]) [float]:
-//   idx = thread_index()
-//   return a[idx] + b[idx]";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
-
-// #[test]
-// fn test_symbols() {
-//     let source = "status = :active
-// if status == :active:
-//   print 'Active'";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
-
-// #[test]
-// fn test_error_handling() {
-//     let source = "load(path string) Result<string, io::Error>:
-//   return fs.read(path)?";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
-
-// #[test]
-// fn test_calc_example() {
-//     let source = "add<T numeric>(a T, b T) T: a + b
-
-// sub<T numeric>(a T, b T) T: a - b
-
-// div<T numeric>(a T, b T) T: a / b
-
-// mul<T numeric>(a T, b T) T: a * b";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
-
-// #[test]
-// fn test_hello_world() {
-//     let source = "print 'Hello World!'";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
-
-// #[test]
-// fn test_simple_calculations() {
-//     let source = "use Calc
-
-// calc = Calc.new
-
-// var x = 5
-// var y = 10
-
-// var z = calc.add(x, y)
-// print('{x} + {y} = {z}', z)
-
-// z = calc.sub(x, y)
-// print('{x} - {y} = {z}', z)";
-//     let result = parse(source);
-//     assert!(result.is_ok());
-// }
+    let program = parse_result.unwrap();
+    assert_eq!(program, Program {
+        body: _expected_body
+    });
+}
