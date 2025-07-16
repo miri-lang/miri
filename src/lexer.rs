@@ -63,8 +63,11 @@ pub enum Token {
     #[regex("::+[a-zA-Z_][a-zA-Z0-9_]*")] IncorrectSymbol,
     #[regex(r#"'[^'\\]*(?:\\.[^'\\]*)*'"#)] SingleQuotedString,
     #[regex(r#""[^"\\]*(?:\\.[^"\\]*)*""#)] DoubleQuotedString,
+    #[regex("[0-9]+(?:_[0-9]+)*(\\.[0-9]+(?:_[0-9]+)*)?([eE][+-]?[0-9]+(?:_[0-9]+)*)?", priority = 1)] Float,
     #[regex("[0-9]+(?:_[0-9]+)*", priority = 2)] Int,
-    #[regex("[0-9]+(?:_[0-9]+)*(\\.[0-9]+(?:_[0-9]+)*)?", priority = 1)] Float,
+    #[regex("0b[0-1_]+", priority = 2)] BinaryNumber,
+    #[regex("0x[0-9a-fA-F_]+", priority = 2)] HexNumber,
+    #[regex("0o[0-7_]+", priority = 2)] OctalNumber,
 
     // Comments and Whitespace
     #[regex("//.*", logos::skip)] InlineComment,
@@ -85,13 +88,13 @@ pub type TokenSpan = (Token, Span);
 pub struct Lexer<'source> {
     inner: logos::Lexer<'source, Token>,
     source: &'source str,
-    pending_tokens: Vec<(usize, Token, usize)>,
+    pending_tokens: Vec<TokenSpan>,
     indent_stack: Vec<usize>, // stack of indent levels (in spaces)
     eof_handled: bool,
 }
 
 impl<'source> Iterator for Lexer<'source> {
-    type Item = (usize, Token, usize);
+    type Item = TokenSpan;
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(item) = self.pending_tokens.pop() {
@@ -108,7 +111,7 @@ impl<'source> Iterator for Lexer<'source> {
                 
                 // Generate dedent tokens for all remaining indentation levels
                 while self.indent_stack.len() > 1 {
-                    self.pending_tokens.push((source_len, Token::Dedent, source_len));
+                    self.pending_tokens.push((Token::Dedent, source_len..source_len));
                     self.indent_stack.pop();
                 }
                 
@@ -141,7 +144,7 @@ impl<'source> Iterator for Lexer<'source> {
                 self.panic_unsupported_token(&span, src);
                 return None;
             },
-            _ => Some((span.start, unwrapped_token, span.end))
+            _ => Some((unwrapped_token, span))
         }
     }
 }
@@ -223,7 +226,7 @@ impl<'source> Lexer<'source> {
             
             if indent_len > last_indent {
                 // Indentation increase
-                self.pending_tokens.push((i, Token::Indent, i));
+                self.pending_tokens.push((Token::Indent, i..i));
                 self.indent_stack.push(indent_len);
             } else if indent_len < last_indent {
                 // Dedentation - must match a previous indentation level
@@ -243,7 +246,7 @@ impl<'source> Lexer<'source> {
                 
                 // Pop indentation levels and generate Dedent tokens
                 while indent_len < *self.indent_stack.last().unwrap() {
-                    self.pending_tokens.push((i, Token::Dedent, i));
+                    self.pending_tokens.push((Token::Dedent, i..i));
                     self.indent_stack.pop();
                 }
             }
