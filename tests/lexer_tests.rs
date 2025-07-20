@@ -2,8 +2,6 @@ use std::vec;
 
 use miri::lexer::{Lexer, Token};
 
-mod shared;
-
 
 #[test]
 fn test_symbols_and_operators() {
@@ -211,32 +209,92 @@ fn test_keywords_as_parts_of_identifiers() {
 
 #[test]
 fn test_use() {
-    lexer_test(shared::code_blocks::USE_STATEMENT, vec![
-        Token::Use, Token::Identifier,
-        Token::Use, Token::Identifier, Token::Dot, Token::Identifier,
-        Token::Use, Token::Identifier, Token::Dot, Token::Identifier, Token::Dot, Token::Identifier,
-        Token::Use, Token::Identifier, Token::Comma, Token::Identifier, Token::From, Token::Identifier,
-        Token::Use, Token::Identifier, Token::As, Token::Identifier
+    lexer_test("
+// Local module 
+use Calc
+
+// Global module
+use System.Math
+
+// Local module with path
+use MyProject.Path.SomeModule
+
+// Selective import from a module
+use func1, func2 from Module1
+
+// Local module with path and alias
+use Module2 as M2
+", vec![
+        Token::Use, Token::Identifier, Token::ExpressionStatementEnd,
+        Token::Use, Token::Identifier, Token::Dot, Token::Identifier, Token::ExpressionStatementEnd,
+        Token::Use, Token::Identifier, Token::Dot, Token::Identifier, Token::Dot, Token::Identifier, Token::ExpressionStatementEnd,
+        Token::Use, Token::Identifier, Token::Comma, Token::Identifier, Token::From, Token::Identifier, Token::ExpressionStatementEnd,
+        Token::Use, Token::Identifier, Token::As, Token::Identifier, Token::ExpressionStatementEnd,
     ]);
 }
 
 #[test]
 fn test_inline_comments() {
-    lexer_test(shared::code_blocks::INLINE_COMMENTS, vec![
-        Token::Var, Token::Identifier, Token::Assign, Token::Int,
-        Token::Identifier, Token::SingleQuotedString,
-        Token::Use, Token::Identifier, Token::Dot, Token::Identifier,
-        Token::Identifier, Token::Assign, Token::Identifier, Token::Plus, Token::Int
+    lexer_test(r#"
+var x = 10 // simple inline comment
+
+print 'Hello' // 👋 this is a friendly comment
+
+use System.Math // use System.Math // with another comment inside
+
+x = x + 1 // math: x becomes x + 1
+"#, vec![
+        Token::Var, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+        Token::Identifier, Token::SingleQuotedString, Token::ExpressionStatementEnd,
+        Token::Use, Token::Identifier, Token::Dot, Token::Identifier, Token::ExpressionStatementEnd,
+        Token::Identifier, Token::Assign, Token::Identifier, Token::Plus, Token::Int, Token::ExpressionStatementEnd
     ]);
 }
 
 #[test]
 fn test_multiline_comments() {
-    lexer_test(shared::code_blocks::MULTILINE_COMMENTS, vec![
-        Token::Identifier, Token::Assign, Token::DoubleQuotedString,
+    lexer_test(r#"
+/**/
+
+/* This is a single-line comment */
+
+/*****************************************/
+
+/* This is a basic
+multiline comment
+spanning three lines */
+some = "code"
+
+/* Multiline comment with code inside:
+var a = 5
+print 'ignored!'
+*/
+
+func() int: 10 + 10
+
+/***
+/* 
+  /* nested */ 
+*/ 
+***/
+
+/*
+
+  |\_/|
+  ( o.o )   <- Cat!
+  > ^ <
+
+This is a comment with ASCII art.
+
+Symbols: /* nested? */ < > & ^ ~
+*/
+
+print "Hello" /* inline comment */
+"#, vec![
+        Token::Identifier, Token::Assign, Token::DoubleQuotedString, Token::ExpressionStatementEnd,
         Token::Identifier, Token::LParen, Token::RParen, Token::Identifier, Token::Colon,
-            Token::Int, Token::Plus, Token::Int,
-        Token::Identifier, Token::DoubleQuotedString
+            Token::Int, Token::Plus, Token::Int, Token::ExpressionStatementEnd,
+        Token::Identifier, Token::DoubleQuotedString , Token::ExpressionStatementEnd,
     ]);
 }
 
@@ -262,87 +320,190 @@ fn test_comment_with_code_like_content() {
 
 #[test]
 fn test_declaration() {
-    lexer_test(shared::code_blocks::DECLARATION_STATEMENT, vec![
-        Token::Identifier, Token::Assign, Token::Int,
-        Token::Var, Token::Identifier, Token::Assign, Token::Int,
-        Token::Identifier, Token::Identifier, Token::Assign, Token::Int,
-        Token::Identifier, Token::Assign, Token::Float,
-        Token::Identifier, Token::Identifier, Token::Assign, Token::SingleQuotedString,
-        Token::Identifier, Token::Assign, Token::True,
-        Token::Identifier, Token::Assign, Token::Int, Token::Percent, Token::Int, Token::Eq, Token::Int,
-        Token::Identifier, Token::Assign, Token::Identifier, Token::Lt, Token::Identifier, Token::Comma, Token::Identifier, Token::Gt, Token::LParen, Token::RParen,
-        Token::Identifier, Token::Assign, Token::LBracket, Token::Int, Token::Comma, Token::Int, Token::Comma, Token::Int, Token::RBracket,
-        Token::Identifier, Token::LBracket, Token::Identifier, Token::RBracket, Token::Assign, Token::LBracket, Token::Float, Token::Comma, Token::Float, Token::Comma, Token::Float, Token::RBracket,
-        Token::Identifier, Token::Assign, Token::LBrace, Token::Identifier, Token::Colon, Token::SingleQuotedString, Token::Comma, Token::Identifier, Token::Colon, Token::SingleQuotedString, Token::RBrace,
-        Token::Identifier, Token::LBrace, Token::Identifier, Token::Colon, Token::Identifier, Token::RBrace, Token::Assign, Token::LBrace, Token::Identifier, Token::Colon, Token::Int, Token::Comma, Token::Identifier, Token::Colon, Token::Int, Token::RBrace,
+    lexer_test("
+x = 10                                   // inferred
+var y = 20                               // mutable
+z int = 30                               // explicitly typed
+num = 5.0                                // float
+str string = 'Hello'                     // string
+is_active = true                         // boolean
+even = 10 % 2 == 0                       // even number check
+m = Map<string, int>()                   // map declaration
+arr1 = [10, 20, 30]                      // array
+arr2 [float] = [1.0, 2.0, 3.0]           // array with type
+dict1 = {key1: 'A', key2: 'B'}           // dictionary
+dict2 {string: int} = {key1: 1, key2: 2} // dictionary with type
+", vec![
+        Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+        Token::Var, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+        Token::Identifier, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+        Token::Identifier, Token::Assign, Token::Float, Token::ExpressionStatementEnd,
+        Token::Identifier, Token::Identifier, Token::Assign, Token::SingleQuotedString, Token::ExpressionStatementEnd,
+        Token::Identifier, Token::Assign, Token::True, Token::ExpressionStatementEnd,
+        Token::Identifier, Token::Assign, Token::Int, Token::Percent, Token::Int, Token::Eq, Token::Int, Token::ExpressionStatementEnd,
+        Token::Identifier, Token::Assign, Token::Identifier, Token::Lt, Token::Identifier, Token::Comma, Token::Identifier, Token::Gt, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
+        Token::Identifier, Token::Assign, Token::LBracket, Token::Int, Token::Comma, Token::Int, Token::Comma, Token::Int, Token::RBracket, Token::ExpressionStatementEnd,
+        Token::Identifier, Token::LBracket, Token::Identifier, Token::RBracket, Token::Assign, Token::LBracket, Token::Float, Token::Comma, Token::Float, Token::Comma, Token::Float, Token::RBracket, Token::ExpressionStatementEnd,
+        Token::Identifier, Token::Assign, Token::LBrace, Token::Identifier, Token::Colon, Token::SingleQuotedString, Token::Comma, Token::Identifier, Token::Colon, Token::SingleQuotedString, Token::RBrace, Token::ExpressionStatementEnd,
+        Token::Identifier, Token::LBrace, Token::Identifier, Token::Colon, Token::Identifier, Token::RBrace, Token::Assign, Token::LBrace, Token::Identifier, Token::Colon, Token::Int, Token::Comma, Token::Identifier, Token::Colon, Token::Int, Token::RBrace, Token::ExpressionStatementEnd,
     ]);
 }
 
 #[test]
-fn test_function() {
-    lexer_test(shared::code_blocks::FUNCTION_STATEMENT, vec![
+fn test_function_with_no_params() {
+    lexer_test("
+// Function with no parameters
+fancy_print():
+  print \"Hello, World!\"
+", vec![
         Token::Identifier, Token::LParen, Token::RParen, Token::Colon,
             Token::Indent,
-            Token::Identifier, Token::DoubleQuotedString,
+            Token::Identifier, Token::DoubleQuotedString, Token::ExpressionStatementEnd,
             Token::Dedent,
-        
+    ]);
+}
+
+#[test]
+fn test_function_with_params() {
+    lexer_test("
+/* Function with parameters */
+square(x int) int:
+  x * x
+
+/* Another function example */
+add(a int, b int) int:
+  a + b
+", vec![
         Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon,
             Token::Indent,
-            Token::Identifier, Token::Star, Token::Identifier,
+            Token::Identifier, Token::Star, Token::Identifier, Token::ExpressionStatementEnd,
             Token::Dedent,
 
         Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::Comma, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon,
             Token::Indent,
-            Token::Identifier, Token::Plus, Token::Identifier,
+            Token::Identifier, Token::Plus, Token::Identifier, Token::ExpressionStatementEnd,
             Token::Dedent,
+    ]);
+}
 
-        Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::Comma, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon, Token::Identifier, Token::Star, Token::Identifier, 
+#[test]
+fn test_inline_function() {
+    lexer_test("
+// Inline function
+multiply(a int, b int) int: a * b
+", vec![
+        Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::Comma, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon, Token::Identifier, Token::Star, Token::Identifier, Token::ExpressionStatementEnd
+    ]);
+}
 
-        Token::Identifier, Token::Assign, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon, Token::Identifier, Token::Star, Token::Identifier,
+#[test]
+fn test_lambda_function() {
+    lexer_test("
+// Lambda function
+f = (x int) int: x * x
+", vec![
+        Token::Identifier, Token::Assign, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon, Token::Identifier, Token::Star, Token::Identifier, Token::ExpressionStatementEnd
+    ]);
+}
 
+#[test]
+fn test_multiline_lambda_function() {
+    lexer_test("
+// Multiline lambda function
+f1 = (a float, b float):
+  print a + b
+  print a - b
+", vec![
         Token::Identifier, Token::Assign, Token::LParen, Token::Identifier, Token::Identifier, Token::Comma, Token::Identifier, Token::Identifier, Token::RParen, Token::Colon,
             Token::Indent,
-            Token::Identifier, Token::Identifier, Token::Plus, Token::Identifier,
-            Token::Identifier, Token::Identifier, Token::Minus, Token::Identifier,
+            Token::Identifier, Token::Identifier, Token::Plus, Token::Identifier, Token::ExpressionStatementEnd,
+            Token::Identifier, Token::Identifier, Token::Minus, Token::Identifier, Token::ExpressionStatementEnd,
             Token::Dedent,
+    ]);
+}
 
-        Token::Identifier,
-        Token::Identifier, Token::Int,
-        Token::Identifier, Token::Float, Token::Comma, Token::Float,
+#[test]
+fn test_function_calls_without_parentheses() {
+    lexer_test("
+// Calls without parentheses
+fancy_print
+f 10
+f1 5.0, 3.0
+", vec![
+        Token::Identifier, Token::ExpressionStatementEnd,
+        Token::Identifier, Token::Int, Token::ExpressionStatementEnd,
+        Token::Identifier, Token::Float, Token::Comma, Token::Float, Token::ExpressionStatementEnd
+    ]);
+}
 
-        Token::Identifier, Token::LParen, Token::RParen,
-        Token::Identifier, Token::LParen, Token::Int, Token::RParen,
-        Token::Identifier, Token::LParen, Token::Float, Token::Comma, Token::Float, Token::RParen,
+#[test]
+fn test_function_calls_with_parentheses() {
+    lexer_test("
+// Call with parentheses
+fancy_print()
+f(10)
+f1(5.0, 3.0)
+", vec![
+        Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
+        Token::Identifier, Token::LParen, Token::Int, Token::RParen, Token::ExpressionStatementEnd,
+        Token::Identifier, Token::LParen, Token::Float, Token::Comma, Token::Float, Token::RParen, Token::ExpressionStatementEnd,
+    ]);
+}
 
+#[test]
+fn test_function_call_with_codeblock() {
+    lexer_test("
+// Code block
+y = arr.map:
+  (x int) x * 2
+", vec![
         Token::Identifier, Token::Assign, Token::Identifier, Token::Dot, Token::Identifier, Token::Colon,
             Token::Indent,
-            Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Star, Token::Int,
+            Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Star, Token::Int, Token::ExpressionStatementEnd,
             Token::Dedent,
+    ]);
+}
 
+#[test]
+fn test_nested_function() {
+    lexer_test("
+// Nested function
+nested_func(a int) int:
+  inner_func(x int) int:
+    print x
+    res = x + 1
+    for i in 0..x:
+      print i
+    print res
+  inner_func(a)
+
+nested_func(5)
+
+", vec![
         Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon,
             Token::Indent,
             Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon,
                 Token::Indent,
-                Token::Identifier, Token::Identifier,
-                Token::Identifier, Token::Assign, Token::Identifier, Token::Plus, Token::Int,
+                Token::Identifier, Token::Identifier, Token::ExpressionStatementEnd,
+                Token::Identifier, Token::Assign, Token::Identifier, Token::Plus, Token::Int, Token::ExpressionStatementEnd,
                 Token::For, Token::Identifier, Token::In, Token::Int, Token::Range, Token::Identifier, Token::Colon,
                     Token::Indent,
-                    Token::Identifier, Token::Identifier,
+                    Token::Identifier, Token::Identifier, Token::ExpressionStatementEnd,
                     Token::Dedent,
-                Token::Identifier, Token::Identifier,
+                Token::Identifier, Token::Identifier, Token::ExpressionStatementEnd,
                 Token::Dedent,
-            Token::Identifier, Token::LParen, Token::Identifier, Token::RParen,
+            Token::Identifier, Token::LParen, Token::Identifier, Token::RParen, Token::ExpressionStatementEnd,
             Token::Dedent,
 
-        Token::Identifier, Token::LParen, Token::Int, Token::RParen,
+        Token::Identifier, Token::LParen, Token::Int, Token::RParen, Token::ExpressionStatementEnd
     ]);
 }
 
 #[test]
 fn test_windows_line_endings() {
     lexer_test("line1\r\nline2\r\n", vec![
-        Token::Identifier,
-        Token::Identifier,
+        Token::Identifier, Token::ExpressionStatementEnd,
+        Token::Identifier, Token::ExpressionStatementEnd
     ]);
 }
 
@@ -408,7 +569,7 @@ func(10,
 ", vec![
         Token::Identifier, Token::LParen, Token::Int, Token::Comma,            
             Token::DoubleQuotedString, Token::Comma,
-            Token::Int, Token::RParen,
+            Token::Int, Token::RParen, Token::ExpressionStatementEnd
     ]);
 }
 
@@ -429,13 +590,13 @@ func(10,
             Token::Int, Token::Comma,
             Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon,
                 Token::Indent,
-                Token::Identifier, Token::Identifier,
+                Token::Identifier, Token::Identifier, Token::ExpressionStatementEnd,
                 Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon,
                     Token::Indent,
-                    Token::Identifier, Token::Identifier,
-                    Token::Return, Token::Identifier, Token::Plus, Token::Int,
+                    Token::Identifier, Token::Identifier, Token::ExpressionStatementEnd,
+                    Token::Return, Token::Identifier, Token::Plus, Token::Int, Token::ExpressionStatementEnd,
                     Token::Dedent,
-                Token::Return, Token::Identifier, Token::Plus, Token::Identifier, Token::LParen, Token::Int, Token::RParen, Token::RParen,
+                Token::Return, Token::Identifier, Token::Plus, Token::Identifier, Token::LParen, Token::Int, Token::RParen, Token::RParen, Token::ExpressionStatementEnd,
                 Token::Dedent,
     ]);
 }
@@ -452,7 +613,7 @@ func(
         Token::Identifier, Token::LParen,
             Token::Int, Token::Comma,
             Token::Int,
-        Token::RParen,
+        Token::RParen, Token::ExpressionStatementEnd
     ]);
 }
 
@@ -468,12 +629,12 @@ func():
 ", vec![
         Token::Identifier, Token::LParen, Token::RParen, Token::Colon,
             Token::Indent,
-            Token::Identifier,
+            Token::Identifier, Token::ExpressionStatementEnd,
             Token::Identifier, Token::Colon,
                 Token::Indent,
-                Token::Identifier,
+                Token::Identifier, Token::ExpressionStatementEnd,
                 Token::Dedent,
-            Token::Identifier,
+            Token::Identifier, Token::ExpressionStatementEnd,
             Token::Dedent,
     ]);
 }
@@ -493,12 +654,12 @@ statement5
             Token::Indent,
             Token::Identifier, Token::Colon,
                 Token::Indent,
-                Token::Identifier,
+                Token::Identifier, Token::ExpressionStatementEnd,
                 Token::Dedent,
-            Token::Identifier,
+            Token::Identifier, Token::ExpressionStatementEnd,
             Token::Dedent,
 
-        Token::Identifier,
+        Token::Identifier, Token::ExpressionStatementEnd,
     ]);
 }
 
@@ -512,20 +673,39 @@ func():
 back_to_root
 ", vec![
         Token::Identifier, Token::LParen, Token::RParen, Token::Colon,
-        Token::Indent,
-        Token::Identifier, Token::LParen, Token::RParen, Token::Colon,
-        Token::Indent,
-        Token::Identifier, Token::LParen, Token::RParen, Token::Colon,
-        Token::Indent,
-        Token::Identifier,
-        Token::Dedent, Token::Dedent, Token::Dedent,
-        Token::Identifier,
+            Token::Indent,
+            Token::Identifier, Token::LParen, Token::RParen, Token::Colon,
+                Token::Indent,
+                Token::Identifier, Token::LParen, Token::RParen, Token::Colon,
+                    Token::Indent,
+                    Token::Identifier, Token::ExpressionStatementEnd,
+                    Token::Dedent,
+                Token::Dedent,
+            Token::Dedent,
+        Token::Identifier, Token::ExpressionStatementEnd
     ]);
 }
 
 #[test]
 fn test_indent_dedent_comments() {
-    lexer_test(shared::code_blocks::INDENT_DEDENT_COMMENTS, vec![]);
+    lexer_test("
+     // this is just a comment
+
+// still a comment
+
+  /*
+    /* and this is another comment 
+      */
+*/
+
+
+  // Comment 1
+    // Comment 2
+        // Comment 3
+      // Comment 4
+        // Comment 5
+// Comment 6
+", vec![]);
 }
 
 #[test]
