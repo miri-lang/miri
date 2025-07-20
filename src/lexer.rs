@@ -91,12 +91,42 @@ pub struct Lexer<'source> {
     pending_tokens: Vec<TokenSpan>,
     indent_stack: Vec<usize>, // stack of indent levels (in spaces)
     eof_handled: bool,
+    paren_stack: Vec<usize>, // stack of parenthesis levels
+    bracket_stack: Vec<usize>, // stack of square bracket levels
+    curly_brace_stack: Vec<usize>, // stack of curly brace levels
+    previous_tokens: Vec<TokenSpan>, // keeps track of previous tokens, primarily for indentation handling
 }
 
 impl<'source> Iterator for Lexer<'source> {
     type Item = TokenSpan;
 
     fn next(&mut self) -> Option<Self::Item> {
+        let item = self.generate_token();
+        if item.is_some() {
+            self.memorize_token(item.clone().unwrap());
+        }
+        item
+    }
+}
+
+impl<'source> Lexer<'source> {
+    const MAX_PREVIOUS_TOKENS: usize = 5;
+
+    pub fn new(source: &'source str) -> Self {
+        Lexer {
+            inner: Token::lexer(source),
+            source: source,
+            pending_tokens: Vec::new(),
+            indent_stack: vec![0],
+            eof_handled: false,
+            paren_stack: Vec::new(),
+            bracket_stack: Vec::new(),
+            curly_brace_stack: Vec::new(),
+            previous_tokens: Vec::new(),
+        }
+    }
+
+    fn generate_token(&mut self) -> Option<TokenSpan> {
         if let Some(item) = self.pending_tokens.pop() {
             return Some(item);
         }
@@ -144,19 +174,31 @@ impl<'source> Iterator for Lexer<'source> {
                 self.panic_unsupported_token(&span, src);
                 return None;
             },
+            Token::LParen => {
+                self.paren_stack.push(self.inner.span().start);
+                return Some((Token::LParen, span));
+            },
+            Token::RParen => {
+                self.paren_stack.pop();
+                return Some((Token::RParen, span));
+            },
+            Token::LBracket => {
+                self.bracket_stack.push(self.inner.span().start);
+                return Some((Token::LBracket, span));
+            },
+            Token::RBracket => {
+                self.bracket_stack.pop();
+                return Some((Token::RBracket, span));
+            },
+            Token::LBrace => {
+                self.curly_brace_stack.push(self.inner.span().start);
+                return Some((Token::LBrace, span));
+            },
+            Token::RBrace => {
+                self.curly_brace_stack.pop();
+                return Some((Token::RBrace, span));
+            },
             _ => Some((unwrapped_token, span))
-        }
-    }
-}
-
-impl<'source> Lexer<'source> {
-    pub fn new(source: &'source str) -> Self {
-        Lexer {
-            inner: Token::lexer(source), // Newline ensures we have the last dedent token at the end
-            source: source,
-            pending_tokens: Vec::new(),
-            indent_stack: vec![0],
-            eof_handled: false,
         }
     }
 
@@ -225,9 +267,20 @@ impl<'source> Lexer<'source> {
             let last_indent = *self.indent_stack.last().unwrap();
             
             if indent_len > last_indent {
-                // Indentation increase
-                self.pending_tokens.push((Token::Indent, i..i));
-                self.indent_stack.push(indent_len);
+                // If we are not inside parentheses or brackets, treat as an indentation increase
+                if self.paren_stack.is_empty() && self.bracket_stack.is_empty() && self.curly_brace_stack.is_empty() {
+                    if !self.prev_tokens_match_block_start() {
+                        let line_num = src[..self.inner.span().start].matches('\n').count() + 1;
+                        panic!("[Lexer] Unexpected indentation at line {}. Only `:` can precede an indented block.", line_num);
+                    }
+                    // Indentation increase
+                    self.push_indent(i, indent_len);
+                } else {
+                    if self.paren_stack.len() > 0 && self.prev_tokens_match_function_declaration() {
+                        // If this is a function declaration within function arguments, treat as an indentation increase
+                        self.push_indent(i, indent_len);
+                    }
+                }
             } else if indent_len < last_indent {
                 // Dedentation - must match a previous indentation level
                 let mut found_matching_indent = false;
@@ -246,8 +299,7 @@ impl<'source> Lexer<'source> {
                 
                 // Pop indentation levels and generate Dedent tokens
                 while indent_len < *self.indent_stack.last().unwrap() {
-                    self.pending_tokens.push((Token::Dedent, i..i));
-                    self.indent_stack.pop();
+                    self.push_dedent(i);
                 }
             }
         }
@@ -271,5 +323,49 @@ impl<'source> Lexer<'source> {
         let invalid_part = &src[span.clone()].trim();
         panic!("[Lexer] Unsupported token '{}' in line '{}'", invalid_part, snippet);
     }
+
+    fn memorize_token(&mut self, token: TokenSpan) {
+        self.previous_tokens.push(token);
+        if self.previous_tokens.len() > Self::MAX_PREVIOUS_TOKENS {
+            self.previous_tokens.remove(0); // Keep only the limited amount tokens
+        }
+    }
+
+    fn matches_previous_tokens(&self, tokens: &Vec<Token>) -> bool {
+        if tokens.len() > Self::MAX_PREVIOUS_TOKENS {
+            panic!("[Lexer] BUG: Trying to match {} previous tokens, but only {} allowed", tokens.len(), Self::MAX_PREVIOUS_TOKENS);
+        }
+
+        if self.previous_tokens.len() < tokens.len() {
+            return false;
+        }
+        for (i, token) in tokens.iter().enumerate() {
+            if self.previous_tokens[self.previous_tokens.len() - tokens.len() + i].0 != *token {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn prev_tokens_match_block_start(&self) -> bool {
+        self.matches_previous_tokens(&vec![Token::Colon])
+    }
+
+    fn prev_tokens_match_function_declaration(&self) -> bool {
+        self.matches_previous_tokens(&vec![Token::RParen, Token::Identifier, Token::Colon]) ||
+            self.matches_previous_tokens(&vec![Token::RParen, Token::Colon])
+    }
+
+    fn push_indent(&mut self, i: usize, indent_len: usize) {
+        self.pending_tokens.push((Token::Indent, i..i));
+        self.indent_stack.push(indent_len);
+    }
+
+    fn push_dedent(&mut self, i: usize) {
+        self.pending_tokens.push((Token::Dedent, i..i));
+        self.indent_stack.pop();
+    }
+
+
 }
 

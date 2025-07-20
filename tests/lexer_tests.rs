@@ -1,3 +1,5 @@
+use std::vec;
+
 use miri::lexer::{Lexer, Token};
 
 mod shared;
@@ -398,30 +400,58 @@ func():
 
 #[test]
 fn test_indent_dedent_func() {
-    lexer_test(shared::code_blocks::INDENT_DEDENT_FUNC, vec![
-        Token::Identifier, Token::LParen, Token::Int, Token::Comma, Token::DoubleQuotedString, Token::Comma, Token::Int, Token::RParen,
-        
-        Token::Identifier, Token::LParen, Token::Int, Token::Comma,
-            Token::Indent,
+    lexer_test("
+// Indented call
+func(10,
+     \"hello\",
+     50)
+", vec![
+        Token::Identifier, Token::LParen, Token::Int, Token::Comma,            
             Token::DoubleQuotedString, Token::Comma,
             Token::Int, Token::RParen,
-        Token::Dedent,
+    ]);
+}
 
+#[test]
+fn test_indent_dedent_func_nested() {
+    lexer_test("
+// Indented call with nested indentation
+func(10,
+     50,
+     nested_func(x int) int:
+       print x
+       another_func(y int) int:
+         print y
+         return y + 1
+       return x + another_func(1))
+", vec![
         Token::Identifier, Token::LParen, Token::Int, Token::Comma,
-            Token::Indent,
             Token::Int, Token::Comma,
             Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon,
                 Token::Indent,
                 Token::Identifier, Token::Identifier,
-                Token::Return, Token::Identifier, Token::Plus, Token::Int, Token::RParen,
+                Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon,
+                    Token::Indent,
+                    Token::Identifier, Token::Identifier,
+                    Token::Return, Token::Identifier, Token::Plus, Token::Int,
+                    Token::Dedent,
+                Token::Return, Token::Identifier, Token::Plus, Token::Identifier, Token::LParen, Token::Int, Token::RParen, Token::RParen,
                 Token::Dedent,
-            Token::Dedent,
+    ]);
+}
 
+#[test]
+fn test_indent_dedent_func_arg_new_lines() {
+    lexer_test("
+// Indented call with all arguments on new lines
+func(
+  10,
+  50
+)    
+", vec![
         Token::Identifier, Token::LParen,
-            Token::Indent,
             Token::Int, Token::Comma,
             Token::Int,
-            Token::Dedent,
         Token::RParen,
     ]);
 }
@@ -432,14 +462,14 @@ fn test_empty_lines_preserve_indentation_context() {
 func():
     statement1
 
-    statement2
+    statement2:
         nested
     statement3
 ", vec![
         Token::Identifier, Token::LParen, Token::RParen, Token::Colon,
             Token::Indent,
             Token::Identifier,
-            Token::Identifier,
+            Token::Identifier, Token::Colon,
                 Token::Indent,
                 Token::Identifier,
                 Token::Dedent,
@@ -451,17 +481,17 @@ func():
 #[test]
 fn test_empty_lines_dont_prevent_dedent() {
     lexer_test("
-statement1
-  statement2
+statement1:
+  statement2:
     statement3
   statement4
 
 statement5
 
 ", vec![
-        Token::Identifier,
+        Token::Identifier, Token::Colon,
             Token::Indent,
-            Token::Identifier,
+            Token::Identifier, Token::Colon,
                 Token::Indent,
                 Token::Identifier,
                 Token::Dedent,
@@ -496,6 +526,15 @@ back_to_root
 #[test]
 fn test_indent_dedent_comments() {
     lexer_test(shared::code_blocks::INDENT_DEDENT_COMMENTS, vec![]);
+}
+
+#[test]
+#[should_panic(expected = "Unexpected indentation")]
+fn test_indent_dedent_unexpected() {
+    lexer_test("
+        42
+        'Hello'
+    ", vec![]);
 }
 
 #[test]

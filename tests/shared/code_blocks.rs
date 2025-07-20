@@ -131,29 +131,6 @@ nested_func(5)
 
 ";
 
-pub const INDENT_DEDENT_FUNC: &str = "
-// Normal call
-func(10, \"hello\", 50)
-
-// Indented call
-func(10,
-     \"hello\",
-     50)
-
-// Indented call with nested indentation
-func(10,
-     50,
-     nested_func(x int) int:
-       print x
-       return x + 1)
-
-// Indented call with all arguments on new lines
-func(
-  10,
-  50
-)
-";
-
 pub const INDENT_DEDENT_COMMENTS: &str = "
       // this is just a comment
 

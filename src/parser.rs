@@ -28,8 +28,66 @@ impl<'source> Parser<'source> {
             ;
     */
     fn program(&mut self) -> Result<Program, &'source str> {
+        let statements = self.statement_list()?;
+        Ok(Program { body: statements })
+    }
+
+    /*
+        StatementList
+            : Statement
+            | StatementList Statement
+            ;
+    */
+    fn statement_list(&mut self) -> Result<Vec<Statement>, &'source str> {
+        let mut statements = Vec::new();
+        
+        while self._lookahead.is_some() {
+            let statement = self.statement()?;
+            statements.push(statement);
+        }
+
+        Ok(statements)
+    }
+
+    /*
+        Statement
+            : ExpressionStatement
+            ;
+    */
+    fn statement(&mut self) -> Result<Statement, &'source str> {
+        // Ignore indentation tokens
+        // TODO: This is temporary until we handle indentation properly!
+        while let Some((token, _)) = &self._lookahead {
+            if *token == Token::Indent || *token == Token::Dedent {
+                self._lookahead = self.lexer.next();
+            } else {
+                break;
+            }
+        }
+
+        let statement = self.expression_statement()?;
+        Ok(statement)
+    }
+
+    /*
+        ExpressionStatement
+            : Expression EXPRESSION_END
+            ;
+    */
+    fn expression_statement(&mut self) -> Result<Statement, &'source str> {
+        let expression = self.expression()?;
+        // self.eat(EXPRESSION_END);
+        Ok(Statement::Expression(expression))
+    }
+
+    /*
+        Expression
+            : Literal
+            ;
+    */
+    fn expression(&mut self) -> Result<Expression, &'source str> {
         let literal = self.literal()?;
-        Ok(Program { body: literal })
+        Ok(Expression::Literal(literal))
     }
 
     /*
@@ -42,7 +100,7 @@ impl<'source> Parser<'source> {
             ;
     */
     fn literal(&mut self) -> Result<Literal, &'source str> {
-        match self._lookahead {
+        match &self._lookahead {
             Some((Token::Int, _)) => self.integer_literal(&Token::Int),
             Some((Token::BinaryNumber, _)) => self.integer_literal(&Token::BinaryNumber),
             Some((Token::HexNumber, _)) => self.integer_literal(&Token::HexNumber),
@@ -53,7 +111,12 @@ impl<'source> Parser<'source> {
             Some((Token::DoubleQuotedString, _)) => self.string_literal(&Token::DoubleQuotedString),
             Some((Token::SingleQuotedString, _)) => self.string_literal(&Token::SingleQuotedString),
             Some((Token::Symbol, _)) => self.symbol_literal(),
-            _ => Err("Unsupported literal"),
+            Some((token, span)) => {
+                let token_text = &self.source[span.start..span.end];
+                println!("Unexpected token: {:?} with value: '{}'", token, token_text);
+                Err("Unsupported literal")
+            },
+            None => Err("Unexpected end of input"),
         }
     }
 
