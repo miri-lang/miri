@@ -76,6 +76,7 @@ pub enum Token {
 
     Indent,
     Dedent,
+    ExpressionStatementEnd, // Used to mark the end of an expression statement (one code line)
 
     #[regex("[ \t\r]+", logos::skip)] Whitespace,
 }
@@ -90,6 +91,7 @@ pub struct Lexer<'source> {
     source: &'source str,
     pending_tokens: Vec<TokenSpan>,
     indent_stack: Vec<usize>, // stack of indent levels (in spaces)
+    indent_level: usize, // current indent level
     eof_handled: bool,
     paren_stack: Vec<usize>, // stack of parenthesis levels
     bracket_stack: Vec<usize>, // stack of square bracket levels
@@ -118,6 +120,7 @@ impl<'source> Lexer<'source> {
             source: source,
             pending_tokens: Vec::new(),
             indent_stack: vec![0],
+            indent_level: 0,
             eof_handled: false,
             paren_stack: Vec::new(),
             bracket_stack: Vec::new(),
@@ -167,7 +170,14 @@ impl<'source> Lexer<'source> {
                 return self.next();
             },
             Token::Newline => {
-                self.parse_newline();
+                if self.have_previous_tokens() {
+                    self.parse_newline();
+
+                    if self.is_expression_statement_end() {
+                        // If this is an expression statement end, return ExpressionStatementEnd token
+                        self.pending_tokens.push((Token::ExpressionStatementEnd, span));
+                    }
+                }
                 return self.next();
             },
             Token::IncorrectSymbol => {
@@ -268,7 +278,7 @@ impl<'source> Lexer<'source> {
             
             if indent_len > last_indent {
                 // If we are not inside parentheses or brackets, treat as an indentation increase
-                if self.paren_stack.is_empty() && self.bracket_stack.is_empty() && self.curly_brace_stack.is_empty() {
+                if self.is_outside_paired_tokens() {
                     if !self.prev_tokens_match_block_start() {
                         let line_num = src[..self.inner.span().start].matches('\n').count() + 1;
                         panic!("[Lexer] Unexpected indentation at line {}. Only `:` can precede an indented block.", line_num);
@@ -331,6 +341,10 @@ impl<'source> Lexer<'source> {
         }
     }
 
+    fn have_previous_tokens(&self) -> bool {
+        !self.previous_tokens.is_empty()
+    }
+
     fn matches_previous_tokens(&self, tokens: &Vec<Token>) -> bool {
         if tokens.len() > Self::MAX_PREVIOUS_TOKENS {
             panic!("[Lexer] BUG: Trying to match {} previous tokens, but only {} allowed", tokens.len(), Self::MAX_PREVIOUS_TOKENS);
@@ -346,9 +360,16 @@ impl<'source> Lexer<'source> {
         }
         true
     }
+    
+    fn match_previous_token(&self, token: Token) -> bool {
+        if self.previous_tokens.is_empty() {
+            return false;
+        }
+        self.previous_tokens.last().unwrap().0 == token
+    }
 
     fn prev_tokens_match_block_start(&self) -> bool {
-        self.matches_previous_tokens(&vec![Token::Colon])
+        self.match_previous_token(Token::Colon)
     }
 
     fn prev_tokens_match_function_declaration(&self) -> bool {
@@ -359,13 +380,27 @@ impl<'source> Lexer<'source> {
     fn push_indent(&mut self, i: usize, indent_len: usize) {
         self.pending_tokens.push((Token::Indent, i..i));
         self.indent_stack.push(indent_len);
+        self.indent_level += 1;
     }
 
     fn push_dedent(&mut self, i: usize) {
         self.pending_tokens.push((Token::Dedent, i..i));
         self.indent_stack.pop();
+        self.indent_level -= 1;
     }
 
+    fn is_outside_paired_tokens(&self) -> bool {
+        self.paren_stack.is_empty() && self.bracket_stack.is_empty() && self.curly_brace_stack.is_empty()
+    }
 
+    fn is_inside_code_block(&self) -> bool {
+        self.indent_level > 0
+    }
+
+    fn is_expression_statement_end(&self) -> bool {
+        (self.is_outside_paired_tokens() || self.is_inside_code_block()) && 
+            !self.prev_tokens_match_block_start() && 
+            !self.match_previous_token(Token::ExpressionStatementEnd)
+    }
 }
 

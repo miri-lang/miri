@@ -1,3 +1,5 @@
+use std::vec;
+
 use crate::lexer::{Lexer, Token, TokenSpan};
 use crate::ast::*;
 
@@ -24,7 +26,7 @@ impl<'source> Parser<'source> {
 
     /*
         Program
-            : Literal
+            : StatementList
             ;
     */
     fn program(&mut self) -> Result<Program, &'source str> {
@@ -39,7 +41,7 @@ impl<'source> Parser<'source> {
             ;
     */
     fn statement_list(&mut self) -> Result<Vec<Statement>, &'source str> {
-        let mut statements = Vec::new();
+        let mut statements = vec![self.statement()?];
         
         while self._lookahead.is_some() {
             let statement = self.statement()?;
@@ -55,16 +57,6 @@ impl<'source> Parser<'source> {
             ;
     */
     fn statement(&mut self) -> Result<Statement, &'source str> {
-        // Ignore indentation tokens
-        // TODO: This is temporary until we handle indentation properly!
-        while let Some((token, _)) = &self._lookahead {
-            if *token == Token::Indent || *token == Token::Dedent {
-                self._lookahead = self.lexer.next();
-            } else {
-                break;
-            }
-        }
-
         let statement = self.expression_statement()?;
         Ok(statement)
     }
@@ -76,7 +68,7 @@ impl<'source> Parser<'source> {
     */
     fn expression_statement(&mut self) -> Result<Statement, &'source str> {
         let expression = self.expression()?;
-        // self.eat(EXPRESSION_END);
+        self.eat(&Token::ExpressionStatementEnd)?;
         Ok(Statement::Expression(expression))
     }
 
@@ -275,6 +267,11 @@ impl<'source> Parser<'source> {
         let token = &self._lookahead;
 
         if token.is_none() {
+            if token_type == &Token::ExpressionStatementEnd {
+                // Special case for end of expression
+                self._lookahead = None;
+                return Ok((Token::ExpressionStatementEnd, 0..0));
+            }
             return Err("Unexpected end of input");
         }
 
