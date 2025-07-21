@@ -1,4 +1,4 @@
-use miri::ast::{Expression, FloatLiteral, IntegerLiteral, Literal, Program, Statement};
+use miri::ast::{AstFactory, BinaryOp, Expression, FloatLiteral, IntegerLiteral, Literal, Program, Statement};
 use miri::lexer::{Lexer};
 use miri::parser::Parser;
 
@@ -85,17 +85,124 @@ fn test_parse_symbol_literal() {
 #[test]
 fn test_parse_expressions() {
     parse_test("
-42
-'Hello'
+123
+'Hello World'
 ", vec![
-        Statement::Expression(Expression::Literal(Literal::Integer(IntegerLiteral::I8(42)))),
-        Statement::Expression(Expression::Literal(Literal::String("Hello".to_string())))
+        Statement::Expression(
+            Expression::Literal(Literal::Integer(IntegerLiteral::I8(123)))
+        ),
+        Statement::Expression(
+            Expression::Literal(Literal::String("Hello World".to_string()))
+        )
     ]);
 }
 
+// #[test]
+// fn test_parse_block() {
+//     parse_test("
+// f:
+//     123
+//     'Hello World'
+// ", vec![
+//         Statement::Block(vec![
+//             Statement::Expression(
+//                 Expression::Literal(Literal::Integer(IntegerLiteral::I8(123)))
+//             ),
+//             Statement::Expression(
+//                 Expression::Literal(Literal::String("Hello World".to_string()))
+//             )
+//         ])
+//     ]);
+// }
+
+#[test]
+fn test_parse_binary_expression() {
+    parse_test("
+123 + 456
+", vec![
+        Statement::Expression(
+            Expression::Binary(
+                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(123)))),
+                BinaryOp::Add,
+                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I16(456))))
+            )
+        )
+    ]);
+}
+
+#[test]
+fn test_parse_chained_binary_expression() {
+    parse_test("
+123 + 456 - 789
+", vec![
+        Statement::Expression(
+            Expression::Binary(
+                Box::new(Expression::Binary(
+                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(123)))),
+                    BinaryOp::Add,
+                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I16(456))))
+                )),
+                BinaryOp::Sub,
+                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I16(789))))
+            )
+        )
+    ]);
+}
+
+#[test]
+fn test_parse_chained_multiply_expression() {
+    parse_test("
+2 + 2 * 2
+", vec![
+        Statement::Expression(
+            Expression::Binary(
+                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(2)))),
+                BinaryOp::Add,
+                Box::new(Expression::Binary(
+                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(2)))),
+                    BinaryOp::Mul,
+                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(2))))
+                ))
+            )
+        )
+    ]);
+}
+
+
+#[test]
+fn test_parse_multiply_with_parentheses_expression() {
+    parse_test("
+(2 + 2) * 2
+", vec![
+        Statement::Expression(
+            Expression::Binary(
+                Box::new(Expression::Binary(
+                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(2)))),
+                    BinaryOp::Add,
+                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(2))))
+                )),
+                BinaryOp::Mul,
+                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(2))))
+            )
+        )
+    ]);
+}
+
+#[test]
+fn test_parse_simple_parentheses_expression() {
+    parse_test("
+(123)
+", vec![
+        Statement::Expression(
+            Expression::Literal(Literal::Integer(IntegerLiteral::I8(123)))
+        )
+    ]);
+}
+
+
 fn parse_test<'src>(input: &'src str, _expected_body: Vec<Statement>) {
     let mut lexer = Lexer::new(input);
-    let mut parser = Parser::new(&mut lexer, input);
+    let mut parser = Parser::new(&mut lexer, input, AstFactory::new());
     let parse_result = parser.parse();
 
     let program = parse_result.unwrap();

@@ -5,7 +5,7 @@ use miri::lexer::{Lexer, Token};
 
 #[test]
 fn test_symbols_and_operators() {
-    lexer_test(": => -> <- || == != >= <= > < = + - * / % , . ( ) [ ] { }", vec![
+    lexer_test(": => -> <- || == != >= <= > < = + - * / % , . ( ) [ ] { } | &", vec![
         Token::Colon,
         Token::FatArrow,
         Token::Arrow,
@@ -31,6 +31,8 @@ fn test_symbols_and_operators() {
         Token::RBracket,
         Token::LBrace,
         Token::RBrace,
+        Token::Pipe,
+        Token::Ampersand,
     ]);
 }
 
