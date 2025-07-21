@@ -55,6 +55,7 @@ pub enum Token {
     #[token("{")]           LBrace,
     #[token("}")]           RBrace,
     #[token("|")]           Pipe,
+    #[token("&")]           Ampersand,
     #[token("?")]           Try,
 
     // Identifiers and Literals

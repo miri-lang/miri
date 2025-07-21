@@ -10,7 +10,7 @@ pub struct Program {
 #[derive(Debug, PartialEq)]
 pub enum Statement {
     Expression(Expression),
-    // Other statement types can be added here
+    Block(Vec<Statement>),
 }
 
 /// Represents an expression
@@ -21,6 +21,8 @@ pub enum Expression {
     
     // Variables, fields and indexing
     Identifier(String),
+
+    Binary(Box<Expression>, BinaryOp, Box<Expression>),
 
     // FieldAccess(Box<Expr>, String), // expr.field
     // Index(Box<Expr>, Box<Expr>),    // expr[index]
@@ -52,6 +54,18 @@ pub enum Expression {
     // // Other
     // Symbol(String),
     // Try(Box<Expr>), // expr?
+}
+
+/// Represents a binary operator
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum BinaryOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    BitwiseOr,
+    BitwiseAnd,
 }
 
 /// Represents a literal value
@@ -116,12 +130,6 @@ pub enum FloatLiteral {
 //     // Other statements
 //     Block(Block),
 //     Expr(Box<Expr>),
-// }
-
-// /// Represents a block of statements
-// #[derive(Debug, PartialEq)]
-// pub struct Block {
-//     pub statements: Vec<Stmt>,
 // }
 
 // /// Represents a match arm in a match expression
@@ -206,3 +214,72 @@ pub enum FloatLiteral {
 //         }
 //     }
 // }
+
+
+pub struct AstFactory;
+
+impl AstFactory {
+    pub fn new() -> Self {
+        AstFactory {}
+    }
+
+    pub fn create_program(&self, statements: Vec<Statement>) -> Program {
+        Program { body: statements }
+    }
+
+    pub fn create_expression_statement(&self, expression: Expression) -> Statement {
+        Statement::Expression(expression)
+    }
+
+    pub fn create_block(&self, statements: Vec<Statement>) -> Statement {
+        Statement::Block(statements)
+    }
+
+    pub fn create_literal_expression(&self, literal: Literal) -> Expression {
+        Expression::Literal(literal)
+    }
+
+    pub fn create_i8_literal(&self, value: i8) -> Literal {
+        Literal::Integer(IntegerLiteral::I8(value))
+    }
+
+    pub fn create_i16_literal(&self, value: i16) -> Literal {
+        Literal::Integer(IntegerLiteral::I16(value))
+    }
+
+    pub fn create_i32_literal(&self, value: i32) -> Literal {
+        Literal::Integer(IntegerLiteral::I32(value))
+    }
+
+    pub fn create_i64_literal(&self, value: i64) -> Literal {
+        Literal::Integer(IntegerLiteral::I64(value))
+    }
+
+    pub fn create_i128_literal(&self, value: i128) -> Literal {
+        Literal::Integer(IntegerLiteral::I128(value))
+    }
+
+    pub fn create_f32_literal(&self, value: f32) -> Literal {
+        Literal::Float(FloatLiteral::F32(value))
+    }
+
+    pub fn create_f64_literal(&self, value: f64) -> Literal {
+        Literal::Float(FloatLiteral::F64(value))
+    }
+
+    pub fn create_string_literal(&self, value: String) -> Literal {
+        Literal::String(value)
+    }
+
+    pub fn create_boolean_literal(&self, value: bool) -> Literal {
+        Literal::Boolean(value)
+    }
+
+    pub fn create_symbol_literal(&self, value: String) -> Literal {
+        Literal::Symbol(value)
+    }
+
+    pub fn create_binary_expression(&self, left: Expression, op: BinaryOp, right: Expression) -> Expression {
+        Expression::Binary(Box::new(left), op, Box::new(right))
+    }
+}
