@@ -24,6 +24,8 @@ pub enum Expression {
 
     Binary(Box<Expression>, BinaryOp, Box<Expression>),
 
+    Assignment(Box<LeftHandSideExpression>, AssignmentOp, Box<Expression>),
+
     // FieldAccess(Box<Expr>, String), // expr.field
     // Index(Box<Expr>, Box<Expr>),    // expr[index]
     
@@ -56,6 +58,13 @@ pub enum Expression {
     // Try(Box<Expr>), // expr?
 }
 
+/// Represents a left-hand side expression, which can be an identifier or a more complex expression
+#[derive(Debug, Clone, PartialEq)]
+pub enum LeftHandSideExpression {
+    Identifier(String),
+    // Other possible left-hand side expression types (e.g., fields, array elements) can be added here
+}
+
 /// Represents a binary operator
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum BinaryOp {
@@ -66,6 +75,18 @@ pub enum BinaryOp {
     Mod,
     BitwiseOr,
     BitwiseAnd,
+    BitwiseXor,
+}
+
+/// Represents an assignment operator
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum AssignmentOp {
+    Assign,
+    AssignAdd,
+    AssignSub,
+    AssignMul,
+    AssignDiv,
+    AssignMod,
 }
 
 /// Represents a literal value
@@ -281,5 +302,21 @@ impl AstFactory {
 
     pub fn create_binary_expression(&self, left: Expression, op: BinaryOp, right: Expression) -> Expression {
         Expression::Binary(Box::new(left), op, Box::new(right))
+    }
+
+    pub fn create_assignment_expression(&self, left: LeftHandSideExpression, op: AssignmentOp, right: Expression) -> Expression {
+        Expression::Assignment(Box::new(left), op, Box::new(right))
+    }
+
+    pub fn create_left_hand_side_expression(&self, expression: Expression) -> LeftHandSideExpression {
+        match expression {
+            Expression::Identifier(name) => LeftHandSideExpression::Identifier(name),
+            // Other left-hand side expression types can be added here in the future
+            _ => panic!("Unsupported left-hand side expression type"),
+        }
+    }
+
+    pub fn create_identifier_expression(&self, name: String) -> Expression {
+        Expression::Identifier(name)
     }
 }
