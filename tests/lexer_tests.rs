@@ -45,6 +45,50 @@ fn test_symbols_and_operators() {
 }
 
 #[test]
+fn test_keywords() {
+    keyword_test("use", Token::Use);
+    keyword_test("async", Token::Async);
+    keyword_test("await", Token::Await);
+    keyword_test("spawn", Token::Spawn);
+    keyword_test("gpu", Token::Gpu);
+    keyword_test("if", Token::If);
+    keyword_test("else", Token::Else);
+    keyword_test("match", Token::Match);
+    keyword_test("default", Token::Default);
+    keyword_test("return", Token::Return);
+    keyword_test("while", Token::While);
+    keyword_test("do", Token::Do);
+    keyword_test("for", Token::For);
+    keyword_test("in", Token::In);
+    keyword_test("let", Token::Let);
+    keyword_test("var", Token::Var);
+    keyword_test("or", Token::Or);
+    keyword_test("and", Token::And);
+    keyword_test("not", Token::Not);
+    keyword_test("true", Token::True);
+    keyword_test("false", Token::False);
+    keyword_test("from", Token::From);
+    keyword_test("as", Token::As);
+    keyword_test("break", Token::Break);
+    keyword_test("continue", Token::Continue);
+}
+
+fn keyword_test(keyword: &str, expected: Token) {
+    lexer_test(
+        format!("{keyword} {keyword}() {keyword}.blah blah.{keyword} {keyword}blah blah{keyword} blah_{keyword} \"{keyword}\" /* {keyword} */").as_str(),
+        vec![
+        expected.clone(),
+        expected.clone(), Token::LParen, Token::RParen,
+        expected.clone(), Token::Dot, Token::Identifier,
+        Token::Identifier, Token::Dot, expected.clone(),
+        Token::Identifier,
+        Token::Identifier,
+        Token::Identifier,
+        Token::DoubleQuotedString,
+    ]);
+}
+
+#[test]
 fn test_literals_and_identifiers() {
     lexer_test("hello :name 'world' \"test\" 123 123_456 3.14 1_000.5_0", vec![
         Token::Identifier,
@@ -248,14 +292,14 @@ fn test_inline_comments() {
     lexer_test(r#"
 var x = 10 // simple inline comment
 
-print 'Hello' // 👋 this is a friendly comment
+print('Hello') // 👋 this is a friendly comment
 
 use System.Math // use System.Math // with another comment inside
 
 x = x + 1 // math: x becomes x + 1
 "#, vec![
         Token::Var, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
-        Token::Identifier, Token::SingleQuotedString, Token::ExpressionStatementEnd,
+        Token::Identifier, Token::LParen, Token::SingleQuotedString, Token::RParen, Token::ExpressionStatementEnd,
         Token::Use, Token::Identifier, Token::Dot, Token::Identifier, Token::ExpressionStatementEnd,
         Token::Identifier, Token::Assign, Token::Identifier, Token::Plus, Token::Int, Token::ExpressionStatementEnd
     ]);
@@ -273,11 +317,11 @@ fn test_multiline_comments() {
 /* This is a basic
 multiline comment
 spanning three lines */
-some = "code"
+let some = "code"
 
 /* Multiline comment with code inside:
 var a = 5
-print 'ignored!'
+print('ignored!')
 */
 
 func() int: 10 + 10
@@ -299,12 +343,12 @@ This is a comment with ASCII art.
 Symbols: /* nested? */ < > & ^ ~
 */
 
-print "Hello" /* inline comment */
+print("Hello") /* inline comment */
 "#, vec![
-        Token::Identifier, Token::Assign, Token::DoubleQuotedString, Token::ExpressionStatementEnd,
+        Token::Let, Token::Identifier, Token::Assign, Token::DoubleQuotedString, Token::ExpressionStatementEnd,
         Token::Identifier, Token::LParen, Token::RParen, Token::Identifier, Token::Colon,
             Token::Int, Token::Plus, Token::Int, Token::ExpressionStatementEnd,
-        Token::Identifier, Token::DoubleQuotedString , Token::ExpressionStatementEnd,
+        Token::Identifier, Token::LParen, Token::DoubleQuotedString, Token::RParen, Token::ExpressionStatementEnd,
     ]);
 }
 
@@ -331,31 +375,31 @@ fn test_comment_with_code_like_content() {
 #[test]
 fn test_declaration() {
     lexer_test("
-x = 10                                   // inferred
-var y = 20                               // mutable
-z int = 30                               // explicitly typed
-num = 5.0                                // float
-str string = 'Hello'                     // string
-is_active = true                         // boolean
-even = 10 % 2 == 0                       // even number check
-m = Map<string, int>()                   // map declaration
-arr1 = [10, 20, 30]                      // array
-arr2 [float] = [1.0, 2.0, 3.0]           // array with type
-dict1 = {key1: 'A', key2: 'B'}           // dictionary
-dict2 {string: int} = {key1: 1, key2: 2} // dictionary with type
+let x = 10                                   // inferred
+var y = 20                                   // mutable
+let z int = 30                               // explicitly typed
+let num = 5.0                                // float
+let str string = 'Hello'                     // string
+let is_active = true                         // boolean
+let even = 10 % 2 == 0                       // even number check
+let m = Map<string, int>()                   // map declaration
+let arr1 = [10, 20, 30]                      // array
+let arr2 [float] = [1.0, 2.0, 3.0]           // array with type
+let dict1 = {key1: 'A', key2: 'B'}           // dictionary
+let dict2 {string: int} = {key1: 1, key2: 2} // dictionary with type
 ", vec![
-        Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+        Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
         Token::Var, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
-        Token::Identifier, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
-        Token::Identifier, Token::Assign, Token::Float, Token::ExpressionStatementEnd,
-        Token::Identifier, Token::Identifier, Token::Assign, Token::SingleQuotedString, Token::ExpressionStatementEnd,
-        Token::Identifier, Token::Assign, Token::True, Token::ExpressionStatementEnd,
-        Token::Identifier, Token::Assign, Token::Int, Token::Percent, Token::Int, Token::Eq, Token::Int, Token::ExpressionStatementEnd,
-        Token::Identifier, Token::Assign, Token::Identifier, Token::Lt, Token::Identifier, Token::Comma, Token::Identifier, Token::Gt, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
-        Token::Identifier, Token::Assign, Token::LBracket, Token::Int, Token::Comma, Token::Int, Token::Comma, Token::Int, Token::RBracket, Token::ExpressionStatementEnd,
-        Token::Identifier, Token::LBracket, Token::Identifier, Token::RBracket, Token::Assign, Token::LBracket, Token::Float, Token::Comma, Token::Float, Token::Comma, Token::Float, Token::RBracket, Token::ExpressionStatementEnd,
-        Token::Identifier, Token::Assign, Token::LBrace, Token::Identifier, Token::Colon, Token::SingleQuotedString, Token::Comma, Token::Identifier, Token::Colon, Token::SingleQuotedString, Token::RBrace, Token::ExpressionStatementEnd,
-        Token::Identifier, Token::LBrace, Token::Identifier, Token::Colon, Token::Identifier, Token::RBrace, Token::Assign, Token::LBrace, Token::Identifier, Token::Colon, Token::Int, Token::Comma, Token::Identifier, Token::Colon, Token::Int, Token::RBrace, Token::ExpressionStatementEnd,
+        Token::Let, Token::Identifier, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+        Token::Let, Token::Identifier, Token::Assign, Token::Float, Token::ExpressionStatementEnd,
+        Token::Let, Token::Identifier, Token::Identifier, Token::Assign, Token::SingleQuotedString, Token::ExpressionStatementEnd,
+        Token::Let, Token::Identifier, Token::Assign, Token::True, Token::ExpressionStatementEnd,
+        Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::Percent, Token::Int, Token::Eq, Token::Int, Token::ExpressionStatementEnd,
+        Token::Let, Token::Identifier, Token::Assign, Token::Identifier, Token::Lt, Token::Identifier, Token::Comma, Token::Identifier, Token::Gt, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
+        Token::Let, Token::Identifier, Token::Assign, Token::LBracket, Token::Int, Token::Comma, Token::Int, Token::Comma, Token::Int, Token::RBracket, Token::ExpressionStatementEnd,
+        Token::Let, Token::Identifier, Token::LBracket, Token::Identifier, Token::RBracket, Token::Assign, Token::LBracket, Token::Float, Token::Comma, Token::Float, Token::Comma, Token::Float, Token::RBracket, Token::ExpressionStatementEnd,
+        Token::Let, Token::Identifier, Token::Assign, Token::LBrace, Token::Identifier, Token::Colon, Token::SingleQuotedString, Token::Comma, Token::Identifier, Token::Colon, Token::SingleQuotedString, Token::RBrace, Token::ExpressionStatementEnd,
+        Token::Let, Token::Identifier, Token::LBrace, Token::Identifier, Token::Colon, Token::Identifier, Token::RBrace, Token::Assign, Token::LBrace, Token::Identifier, Token::Colon, Token::Int, Token::Comma, Token::Identifier, Token::Colon, Token::Int, Token::RBrace, Token::ExpressionStatementEnd,
     ]);
 }
 
@@ -364,11 +408,11 @@ fn test_function_with_no_params() {
     lexer_test("
 // Function with no parameters
 fancy_print():
-  print \"Hello, World!\"
+  print(\"Hello, World!\")
 ", vec![
         Token::Identifier, Token::LParen, Token::RParen, Token::Colon,
             Token::Indent,
-            Token::Identifier, Token::DoubleQuotedString, Token::ExpressionStatementEnd,
+            Token::Identifier, Token::LParen, Token::DoubleQuotedString, Token::RParen, Token::ExpressionStatementEnd,
             Token::Dedent,
     ]);
 }
@@ -410,9 +454,9 @@ multiply(a int, b int) int: a * b
 fn test_lambda_function() {
     lexer_test("
 // Lambda function
-f = (x int) int: x * x
+let f = (x int) int: x * x
 ", vec![
-        Token::Identifier, Token::Assign, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon, Token::Identifier, Token::Star, Token::Identifier, Token::ExpressionStatementEnd
+        Token::Let, Token::Identifier, Token::Assign, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon, Token::Identifier, Token::Star, Token::Identifier, Token::ExpressionStatementEnd
     ]);
 }
 
@@ -420,29 +464,15 @@ f = (x int) int: x * x
 fn test_multiline_lambda_function() {
     lexer_test("
 // Multiline lambda function
-f1 = (a float, b float):
-  print a + b
-  print a - b
+let f1 = (a float, b float):
+  print(a + b)
+  print(a - b)
 ", vec![
-        Token::Identifier, Token::Assign, Token::LParen, Token::Identifier, Token::Identifier, Token::Comma, Token::Identifier, Token::Identifier, Token::RParen, Token::Colon,
+        Token::Let, Token::Identifier, Token::Assign, Token::LParen, Token::Identifier, Token::Identifier, Token::Comma, Token::Identifier, Token::Identifier, Token::RParen, Token::Colon,
             Token::Indent,
-            Token::Identifier, Token::Identifier, Token::Plus, Token::Identifier, Token::ExpressionStatementEnd,
-            Token::Identifier, Token::Identifier, Token::Minus, Token::Identifier, Token::ExpressionStatementEnd,
+            Token::Identifier, Token::LParen, Token::Identifier, Token::Plus, Token::Identifier, Token::RParen, Token::ExpressionStatementEnd,
+            Token::Identifier, Token::LParen, Token::Identifier, Token::Minus, Token::Identifier, Token::RParen, Token::ExpressionStatementEnd,
             Token::Dedent,
-    ]);
-}
-
-#[test]
-fn test_function_calls_without_parentheses() {
-    lexer_test("
-// Calls without parentheses
-fancy_print
-f 10
-f1 5.0, 3.0
-", vec![
-        Token::Identifier, Token::ExpressionStatementEnd,
-        Token::Identifier, Token::Int, Token::ExpressionStatementEnd,
-        Token::Identifier, Token::Float, Token::Comma, Token::Float, Token::ExpressionStatementEnd
     ]);
 }
 
@@ -464,10 +494,10 @@ f1(5.0, 3.0)
 fn test_function_call_with_codeblock() {
     lexer_test("
 // Code block
-y = arr.map:
+let y = arr.map():
   (x int) x * 2
 ", vec![
-        Token::Identifier, Token::Assign, Token::Identifier, Token::Dot, Token::Identifier, Token::Colon,
+        Token::Let, Token::Identifier, Token::Assign, Token::Identifier, Token::Dot, Token::Identifier, Token::LParen, Token::RParen, Token::Colon,
             Token::Indent,
             Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Star, Token::Int, Token::ExpressionStatementEnd,
             Token::Dedent,
@@ -480,11 +510,11 @@ fn test_nested_function() {
 // Nested function
 nested_func(a int) int:
   inner_func(x int) int:
-    print x
-    res = x + 1
+    print(x)
+    let res = x + 1
     for i in 0..x:
-      print i
-    print res
+      print(i)
+    print(res)
   inner_func(a)
 
 nested_func(5)
@@ -494,13 +524,13 @@ nested_func(5)
             Token::Indent,
             Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon,
                 Token::Indent,
-                Token::Identifier, Token::Identifier, Token::ExpressionStatementEnd,
-                Token::Identifier, Token::Assign, Token::Identifier, Token::Plus, Token::Int, Token::ExpressionStatementEnd,
+                Token::Identifier, Token::LParen, Token::Identifier, Token::RParen, Token::ExpressionStatementEnd,
+                Token::Let, Token::Identifier, Token::Assign, Token::Identifier, Token::Plus, Token::Int, Token::ExpressionStatementEnd,
                 Token::For, Token::Identifier, Token::In, Token::Int, Token::Range, Token::Identifier, Token::Colon,
                     Token::Indent,
-                    Token::Identifier, Token::Identifier, Token::ExpressionStatementEnd,
+                    Token::Identifier, Token::LParen, Token::Identifier, Token::RParen, Token::ExpressionStatementEnd,
                     Token::Dedent,
-                Token::Identifier, Token::Identifier, Token::ExpressionStatementEnd,
+                Token::Identifier, Token::LParen, Token::Identifier, Token::RParen, Token::ExpressionStatementEnd,
                 Token::Dedent,
             Token::Identifier, Token::LParen, Token::Identifier, Token::RParen, Token::ExpressionStatementEnd,
             Token::Dedent,
@@ -537,8 +567,8 @@ func():
      two_spaces():
       one_space():
     four_spaces():
-      print \"Hello\"
-  print \"World\"    
+      print(\"Hello\")
+  print(\"World\")
 ", vec![]);
 }
 
@@ -550,7 +580,7 @@ func():
 \ttab():
 \t\t\ttab():
 \t\ttab():
-print \"Hello\"
+print(\"Hello\")
 ", vec![]);
 }
 
@@ -561,11 +591,11 @@ fn test_uneven_indent_spaces_tabs() {
 // Mixed tabs and spaces
 func():
 \t\t\ttab():
-\t\t\t print \"Hello\"
-  print \"World\"
+\t\t\t print(\"Hello\")
+  print(\"World\")
   \t\t\ttab():
-    print \"Indented with tabs\"
-  print \"Dedented with spaces\"
+    print(\"Indented with tabs\")
+  print(\"Dedented with spaces\")
 ", vec![]);
 }
 
@@ -590,9 +620,9 @@ fn test_indent_dedent_func_nested() {
 func(10,
      50,
      nested_func(x int) int:
-       print x
+       print(x)
        another_func(y int) int:
-         print y
+         print(y)
          return y + 1
        return x + another_func(1))
 ", vec![
@@ -600,10 +630,10 @@ func(10,
             Token::Int, Token::Comma,
             Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon,
                 Token::Indent,
-                Token::Identifier, Token::Identifier, Token::ExpressionStatementEnd,
+                Token::Identifier, Token::LParen, Token::Identifier, Token::RParen, Token::ExpressionStatementEnd,
                 Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon,
                     Token::Indent,
-                    Token::Identifier, Token::Identifier, Token::ExpressionStatementEnd,
+                    Token::Identifier, Token::LParen, Token::Identifier, Token::RParen, Token::ExpressionStatementEnd,
                     Token::Return, Token::Identifier, Token::Plus, Token::Int, Token::ExpressionStatementEnd,
                     Token::Dedent,
                 Token::Return, Token::Identifier, Token::Plus, Token::Identifier, Token::LParen, Token::Int, Token::RParen, Token::RParen, Token::ExpressionStatementEnd,

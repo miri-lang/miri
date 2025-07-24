@@ -63,9 +63,109 @@ impl<'source> Parser<'source> {
     fn statement(&mut self) -> Result<Statement, &'source str> {
         let statement = match &self._lookahead {
             Some((Token::Indent, _)) => self.block_statement()?,
+            Some((Token::Let, _)) | Some((Token::Var, _)) => self.variable_statement()?,
             _ => self.expression_statement()?,
         };
         Ok(statement)
+    }
+
+    /*
+        VariableStatement
+            : LetVariableDeclaration
+            | VarVariableDeclaration
+            ;
+    */
+    fn variable_statement(&mut self) -> Result<Statement, &'source str> {
+        match &self._lookahead {
+            Some((Token::Let, _)) => self.let_variable_declaration(),
+            Some((Token::Var, _)) => self.var_variable_declaration(),
+            _ => Err("Expected variable declaration"),
+        }
+    }
+
+    /*
+        LetVariableDeclaration
+            : 'let' VariableDeclarationList EXPRESSION_END
+            ;
+    */
+    fn let_variable_declaration(&mut self) -> Result<Statement, &'source str> {
+        self.eat_token(&Token::Let)?;
+        let declarations = self.variable_declaration_list(&VariableDeclarationType::Immutable)?;
+        self.eat_token(&Token::ExpressionStatementEnd)?;
+        Ok(self._ast_factory.create_variable_statement(declarations))
+    }
+
+
+    /*
+        VarVariableDeclaration
+            : 'var' VariableDeclarationList EXPRESSION_END
+            ;
+    */
+    fn var_variable_declaration(&mut self) -> Result<Statement, &'source str> {
+        self.eat_token(&Token::Var)?;
+        let declarations = self.variable_declaration_list(&VariableDeclarationType::Mutable)?;
+        self.eat_token(&Token::ExpressionStatementEnd)?;
+        Ok(self._ast_factory.create_variable_statement(declarations))
+    }
+
+    /*
+        VariableDeclarationList
+            : VariableDeclaration
+            | VariableDeclarationList ',' VariableDeclaration
+            ;
+    */
+    fn variable_declaration_list(&mut self, declaration_type: &VariableDeclarationType) -> Result<Vec<VariableDeclaration>, &'source str> {
+        let mut declarations = vec![self.variable_declaration(declaration_type)?];
+
+        while self.match_lookahead_type(|t| t == &Token::Comma) {
+            self.eat_token(&Token::Comma)?;
+            declarations.push(self.variable_declaration(declaration_type)?);
+        }
+
+        Ok(declarations)
+    }
+
+    /*
+        VariableDeclaration
+            : IDENTIFIER
+            | IDENTIFIER TYPE
+            | IDENTIFIER '=' Expression
+            | IDENTIFIER TYPE '=' Expression
+            ;
+    */
+    fn variable_declaration(&mut self, declaration_type: &VariableDeclarationType) -> Result<VariableDeclaration, &'source str> {
+        let identifier = self.identifier()?;
+
+        let mut name = String::new();
+        if let Expression::Identifier(id) = identifier {
+            name = id;
+        } else {
+            return Err("Expected identifier for variable declaration");
+        }
+
+        let typ = match &self._lookahead {
+            Some((Token::Identifier, _)) => {
+                // If the next token is an identifier, it might be a type
+                let token = self.eat_token(&Token::Identifier)?;
+                Some(self.source[token.1.start..token.1.end].to_string())
+            },
+            _ => None,
+        };
+
+        let initializer = match &self._lookahead {
+            Some((Token::Assign, _)) => {
+                self.eat_token(&Token::Assign)?;
+                Some(self.expression()?)
+            },
+            _ => None
+        };
+
+        Ok(VariableDeclaration {
+            name,
+            typ,
+            initializer,
+            declaration_type: declaration_type.clone(),
+        })
     }
 
     /*
