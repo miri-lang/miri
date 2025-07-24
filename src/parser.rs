@@ -96,12 +96,72 @@ impl<'source> Parser<'source> {
 
     /*
         Expression
-            : Literal
+            : AssignmentExpression
             ;
     */
     fn expression(&mut self) -> Result<Expression, &'source str> {
-        let expression = self.additive_expression()?;
+        let expression = self.assignment_expression()?;
         Ok(expression)
+    }
+
+    /*
+        AssignmentExpression
+            : AdditiveExpression
+            | LeftHandSideExpression ASSIGNMENT_OPERATOR AssignmentExpression
+            ;
+    */
+    fn assignment_expression(&mut self) -> Result<Expression, &'source str> {
+        let left = self.additive_expression()?;
+
+        if !self.lookahead_is_assignment_op() {
+            return Ok(left);
+        }
+
+        let op = match self.eat_binary_op(is_assignment_op) {
+            Ok(token) => match token.0 {
+                Token::Assign => AssignmentOp::Assign,
+                Token::AssignAdd => AssignmentOp::AssignAdd,
+                Token::AssignSub => AssignmentOp::AssignSub,
+                Token::AssignMul => AssignmentOp::AssignMul,
+                Token::AssignDiv => AssignmentOp::AssignDiv,
+                Token::AssignMod => AssignmentOp::AssignMod,
+                _ => panic!("Unexpected assignment operator: {:?}", token.0),
+            },
+            Err(err) => return Err(err),
+        };
+        let right = self.assignment_expression()?;
+        let assignment_expression = self._ast_factory.create_assignment_expression(
+            self._ast_factory.create_left_hand_side_expression(left),
+            op,
+            right,
+        );
+
+        Ok(assignment_expression)
+    }
+
+    /*
+        LeftHandSideExpression
+            : Identifier
+            ;
+    */
+    fn left_hand_side_expression(&mut self) -> Result<Expression, &'source str> {
+        self.identifier()
+    }
+
+    /*
+        Identifier
+            : IDENTIFIER
+            ;
+    */
+    fn identifier(&mut self) -> Result<Expression, &'source str> {
+        match &self._lookahead {
+            Some((Token::Identifier, _)) => {
+                let token = self.eat_token(&Token::Identifier)?;
+                let name = &self.source[token.1.start..token.1.end];                
+                Ok(self._ast_factory.create_identifier_expression(name.to_string()))
+            },
+            _ => Err("Expected identifier"),
+        }
     }
 
     /*
@@ -111,26 +171,12 @@ impl<'source> Parser<'source> {
             ;
     */
     fn additive_expression(&mut self) -> Result<Expression, &'source str> {
-        let mut left = self.multiplicative_expression()?;
-
-        while self.lookahead_is_binary_op(is_additive_op) {
-            let op = match self.eat_binary_op(is_additive_op) {
-                Ok(token) => match token.0 {
-                    Token::Plus => BinaryOp::Add,
-                    Token::Minus => BinaryOp::Sub,
-                    _ => panic!("Unexpected additive operator: {:?}", token.0),
-                },
-                Err(err) => return Err(err),
-            };
-
-            let right = self.multiplicative_expression()?;
-
-            left = self._ast_factory.create_binary_expression(left, op, right);
-        }
-
-        Ok(left)
+        self.binary_expression(
+            Self::multiplicative_expression,
+            is_additive_op,
+            Self::eat_additive_op
+        )
     }
-
 
     /*
         MultiplicativeExpression
@@ -139,39 +185,52 @@ impl<'source> Parser<'source> {
             ;
     */
     fn multiplicative_expression(&mut self) -> Result<Expression, &'source str> {
-        let mut left = self.primary_expression()?;
+        self.binary_expression(
+            Self::primary_expression,
+            is_multiplicative_op,
+            Self::eat_multiplicative_op
+        )
+    }
 
-        while self.lookahead_is_binary_op(is_multiplicative_op) {
-            let op = match self.eat_binary_op(is_multiplicative_op) {
-                Ok(token) => match token.0 {
-                    Token::Star => BinaryOp::Mul,
-                    Token::Slash => BinaryOp::Div,
-                    Token::Percent => BinaryOp::Mod,
-                    Token::Pipe => BinaryOp::BitwiseOr,
-                    Token::Ampersand => BinaryOp::BitwiseAnd,
-                    _ => panic!("Unexpected binary operator: {:?}", token.0),
-                },
-                Err(err) => return Err(err),
+    fn binary_expression<F, G>(&mut self,
+            mut create_branch: F,
+            op_predicate: fn(&Token) -> bool,
+            mut eat_op: G) -> Result<Expression, &'source str> 
+    where
+        F: FnMut(&mut Self) -> Result<Expression, &'source str>,
+        G: FnMut(&mut Self) -> Result<BinaryOp, Result<Expression, &'source str>>,
+    {
+        let mut left = create_branch(self)?;
+
+        while self.match_lookahead_type(op_predicate) {
+            let op = match eat_op(self) {
+                Ok(value) => value,
+                Err(value) => return value,
             };
 
-            let right = self.primary_expression()?;
+            let right = create_branch(self)?;
 
             left = self._ast_factory.create_binary_expression(left, op, right);
         }
 
         Ok(left)
     }
-
+    
     /*
         PrimaryExpression
             : Literal
             | ParenthesizedExpression
+            | LeftHandSideExpression
             ;
     */
     fn primary_expression(&mut self) -> Result<Expression, &'source str> {
+        if self.lookahead_is_literal() {
+            return self.literal_expression();
+        }
+
         match &self._lookahead {
             Some((Token::LParen, _)) => self.parenthesized_expression(),
-            _ => self.literal_expression(),
+            _ => self.left_hand_side_expression(),
         }
     }
 
@@ -408,19 +467,63 @@ impl<'source> Parser<'source> {
         self.eat(|t| match_token(t))
     }
 
-    fn lookahead_is_binary_op(&self, match_token: fn(&Token) -> bool) -> bool {
+    fn match_lookahead_type(&self, match_token: fn(&Token) -> bool) -> bool {
         if let Some((token, _)) = &self._lookahead {
             match_token(token)
         } else {
             false
         }
     }
+
+    fn lookahead_is_assignment_op(&self) -> bool {
+        self.match_lookahead_type(is_assignment_op)
+    }
+
+    fn lookahead_is_literal(&self) -> bool {
+        self.match_lookahead_type(is_literal)
+    }
+
+    fn eat_additive_op(&mut self) -> Result<BinaryOp, Result<Expression, &'source str>> {
+        let op = match self.eat_binary_op(is_additive_op) {
+            Ok(token) => match token.0 {
+                Token::Plus => BinaryOp::Add,
+                Token::Minus => BinaryOp::Sub,
+                Token::Pipe => BinaryOp::BitwiseOr,
+                Token::Ampersand => BinaryOp::BitwiseAnd,
+                Token::Caret => BinaryOp::BitwiseXor,
+                _ => panic!("Unexpected additive operator: {:?}", token.0),
+            },
+            Err(err) => return Err(Err(err)),
+        };
+        Ok(op)
+    }
+
+    fn eat_multiplicative_op(&mut self) -> Result<BinaryOp, Result<Expression, &'source str>> {
+        let op = match self.eat_binary_op(is_multiplicative_op) {
+            Ok(token) => match token.0 {
+                Token::Star => BinaryOp::Mul,
+                Token::Slash => BinaryOp::Div,
+                Token::Percent => BinaryOp::Mod,
+                _ => panic!("Unexpected multiplicative operator: {:?}", token.0),
+            },
+            Err(err) => return Err(Err(err)),
+        };
+        Ok(op)
+    }
 }
 
 fn is_additive_op(token: &Token) -> bool {
-    matches!(token, Token::Plus | Token::Minus)
+    matches!(token, Token::Plus | Token::Minus | Token::Pipe | Token::Ampersand | Token::Caret)
 }
 
 fn is_multiplicative_op(token: &Token) -> bool {
-    matches!(token, Token::Star | Token::Slash | Token::Percent | Token::Pipe | Token::Ampersand)
+    matches!(token, Token::Star | Token::Slash | Token::Percent)
+}
+
+fn is_assignment_op(token: &Token) -> bool {
+    matches!(token, Token::Assign | Token::AssignAdd | Token::AssignSub | Token::AssignMul | Token::AssignDiv | Token::AssignMod)
+}
+
+fn is_literal(token: &Token) -> bool {
+    matches!(token, Token::Int | Token::BinaryNumber | Token::HexNumber | Token::OctalNumber | Token::Float | Token::True | Token::False | Token::DoubleQuotedString | Token::SingleQuotedString | Token::Symbol)
 }
