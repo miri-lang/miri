@@ -11,6 +11,7 @@ pub struct Program {
 pub enum Statement {
     Expression(Expression),
     Block(Vec<Statement>),
+    Variable(Vec<VariableDeclaration>),
 }
 
 /// Represents an expression
@@ -56,6 +57,22 @@ pub enum Expression {
     // // Other
     // Symbol(String),
     // Try(Box<Expr>), // expr?
+}
+
+/// Represents the type of a variable
+#[derive(Debug, Clone, PartialEq)]
+pub enum VariableDeclarationType {
+    Mutable,
+    Immutable,
+}
+
+/// Represents a variable declaration
+#[derive(Debug, Clone, PartialEq)]
+pub struct VariableDeclaration {
+    pub name: String,
+    pub typ: Option<String>, // Type can be specified, e.g., "i32", "String"
+    pub initializer: Option<Expression>, // Optional initializer expression
+    pub declaration_type: VariableDeclarationType, // Whether the variable is mutable
 }
 
 /// Represents a left-hand side expression, which can be an identifier or a more complex expression
@@ -318,5 +335,9 @@ impl AstFactory {
 
     pub fn create_identifier_expression(&self, name: String) -> Expression {
         Expression::Identifier(name)
+    }
+
+    pub fn create_variable_statement(&self, declarations: Vec<VariableDeclaration>) -> Statement {
+        Statement::Variable(declarations)
     }
 }

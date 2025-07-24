@@ -1,13 +1,4 @@
-use miri::ast::{AssignmentOp,
-    AstFactory,
-    BinaryOp,
-    Expression,
-    FloatLiteral,
-    IntegerLiteral,
-    LeftHandSideExpression,
-    Literal,
-    Program,
-    Statement};
+use miri::ast::{AssignmentOp, AstFactory, BinaryOp, Expression, FloatLiteral, IntegerLiteral, LeftHandSideExpression, Literal, Program, Statement, VariableDeclaration, VariableDeclarationType};
 use miri::lexer::{Lexer};
 use miri::parser::Parser;
 
@@ -323,6 +314,147 @@ fn test_parse_increment_chained_assignment_expression() {
     );
 }
 
+#[test]
+fn test_parse_variable_declaration() {
+    parse_variable_declaration_test(
+        "let x = 5",
+        vec![VariableDeclaration {
+            name: "x".into(),
+            typ: None,
+            initializer: Some(Expression::Literal(Literal::Integer(IntegerLiteral::I8(5)))),
+            declaration_type: VariableDeclarationType::Immutable,
+        }]
+    );
+}
+
+#[test]
+fn test_parse_typed_variable_declaration() {
+    parse_variable_declaration_test(
+        "let x int = 5",
+        vec![VariableDeclaration {
+            name: "x".into(),
+            typ: Some("int".into()),
+            initializer: Some(Expression::Literal(Literal::Integer(IntegerLiteral::I8(5)))),
+            declaration_type: VariableDeclarationType::Immutable,
+        }]
+    );
+}
+
+#[test]
+fn test_parse_typed_variable_declaration_no_initializer() {
+    parse_variable_declaration_test(
+        "let x float",
+        vec![VariableDeclaration {
+            name: "x".into(),
+            typ: Some("float".into()),
+            initializer: None,
+            declaration_type: VariableDeclarationType::Immutable,
+        }]
+    );
+}
+
+#[test]
+fn test_parse_variable_declaration_no_initializer() {
+    parse_variable_declaration_test(
+        "let x",
+        vec![VariableDeclaration {
+            name: "x".into(),
+            typ: None,
+            initializer: None,
+            declaration_type: VariableDeclarationType::Immutable,
+        }]
+    );
+}
+
+#[test]
+fn test_parse_mutable_variable_declaration() {
+    parse_variable_declaration_test(
+        "var text = \"Hello, World!\"",
+        vec![VariableDeclaration {
+            name: "text".into(),
+            typ: None,
+            initializer: Some(Expression::Literal(Literal::String("Hello, World!".to_string()))),
+            declaration_type: VariableDeclarationType::Mutable,
+        }]
+    );
+}
+
+#[test]
+fn test_parse_multiple_variable_declaration_no_initializer() {
+    parse_variable_declaration_test(
+        "let x, y, z",
+        vec![VariableDeclaration {
+            name: "x".into(),
+            typ: None,
+            initializer: None,
+            declaration_type: VariableDeclarationType::Immutable,
+        },
+        VariableDeclaration {
+            name: "y".into(),
+            typ: None,
+            initializer: None,
+            declaration_type: VariableDeclarationType::Immutable,
+        },
+        VariableDeclaration {
+            name: "z".into(),
+            typ: None,
+            initializer: None,
+            declaration_type: VariableDeclarationType::Immutable,
+        }]
+    );
+}
+
+#[test]
+fn test_parse_multiple_variable_declaration_mixed_initializer() {
+    parse_variable_declaration_test(
+        "let x, y = 10, z",
+        vec![VariableDeclaration {
+            name: "x".into(),
+            typ: None,
+            initializer: None,
+            declaration_type: VariableDeclarationType::Immutable,
+        },
+        VariableDeclaration {
+            name: "y".into(),
+            typ: None,
+            initializer: Some(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10)))),
+            declaration_type: VariableDeclarationType::Immutable,
+        },
+        VariableDeclaration {
+            name: "z".into(),
+            typ: None,
+            initializer: None,
+            declaration_type: VariableDeclarationType::Immutable,
+        }]
+    );
+}
+
+#[test]
+fn test_parse_variable_declaration_and_assignment() {
+    parse_test("
+var bar = 100
+let foo = bar = 200
+",
+        vec![
+            Statement::Variable(vec![VariableDeclaration {
+                name: "bar".into(),
+                typ: None,
+                initializer: Some(Expression::Literal(Literal::Integer(IntegerLiteral::I8(100)))),
+                declaration_type: VariableDeclarationType::Mutable,
+            }]),
+            Statement::Variable(vec![VariableDeclaration {
+                name: "foo".into(),
+                typ: None,
+                initializer: Some(Expression::Assignment(
+                    Box::new(LeftHandSideExpression::Identifier("bar".into())),
+                    AssignmentOp::Assign,
+                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I16(200))))
+                )),
+                declaration_type: VariableDeclarationType::Immutable,
+            }])
+        ]
+    );
+}
 
 fn parse_test<'src>(input: &'src str, _expected_body: Vec<Statement>) {
     let mut lexer = Lexer::new(input);
@@ -333,6 +465,12 @@ fn parse_test<'src>(input: &'src str, _expected_body: Vec<Statement>) {
     assert_eq!(program, Program {
         body: _expected_body
     });
+}
+
+fn parse_variable_declaration_test(input: &str, expected: Vec<VariableDeclaration>) {
+    parse_test(input, vec![
+        Statement::Variable(expected)
+    ]);
 }
 
 fn parse_literal_test(input: &str, expected: Literal) {

@@ -27,6 +27,8 @@ pub enum Token {
     #[token("false")]      False,
     #[token("from")]       From,
     #[token("as")]         As,
+    #[token("break")]      Break,
+    #[token("continue")]   Continue,
 
     // Symbols and Operators
     #[token(":")]           Colon,
