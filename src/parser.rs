@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2017–2025 Viacheslav Shynkarenko
+
 use std::vec;
 
 use crate::lexer::{Lexer, Token, TokenSpan};
@@ -58,12 +61,16 @@ impl<'source> Parser<'source> {
         Statement
             : ExpressionStatement
             | BlockStatement
+            | VariableStatement
+            | IfStatement
             ;
     */
     fn statement(&mut self) -> Result<Statement, &'source str> {
         let statement = match &self._lookahead {
             Some((Token::Indent, _)) => self.block_statement()?,
             Some((Token::Let, _)) | Some((Token::Var, _)) => self.variable_statement()?,
+            Some((Token::If, _)) => self.if_statement(IfStatementType::If)?,
+            Some((Token::Unless, _)) => self.if_statement(IfStatementType::Unless)?,
             _ => self.expression_statement()?,
         };
         Ok(statement)
@@ -136,7 +143,7 @@ impl<'source> Parser<'source> {
     fn variable_declaration(&mut self, declaration_type: &VariableDeclarationType) -> Result<VariableDeclaration, &'source str> {
         let identifier = self.identifier()?;
 
-        let mut name = String::new();
+        let name;
         if let Expression::Identifier(id) = identifier {
             name = id;
         } else {
@@ -167,6 +174,39 @@ impl<'source> Parser<'source> {
             declaration_type: declaration_type.clone(),
         })
     }
+
+    /*
+        IfStatement
+            : 'if' Expression ':' ExpressionStatement EXPRESSION_END ('else' ExpressionStatement EXPRESSION_END)?
+            | 'if' Expression EXPRESSION_END BlockStatement ('else' EXPRESSION_END BlockStatement)?
+            ;
+    */
+    fn if_statement(&mut self, if_statement_type: IfStatementType) -> Result<Statement, &'source str> {
+        if if_statement_type == IfStatementType::Unless {
+            self.eat_token(&Token::Unless)?;
+        } else {
+            self.eat_token(&Token::If)?;
+        }
+        let condition = self.expression()?;
+
+        self.try_eat_colon();
+        self.try_eat_expression_end();
+
+        let then_block = self.statement()?;
+
+        let else_block = if let Some((Token::Else, _)) = &self._lookahead {
+            self.eat_token(&Token::Else)?;
+            self.try_eat_colon();
+            self.try_eat_expression_end();
+
+            Some(self.statement()?)
+        } else {
+            None
+        };
+
+        Ok(self._ast_factory.create_if_statement(condition, then_block, else_block, if_statement_type))
+    }
+
 
     /*
         ExpressionStatement
@@ -206,12 +246,12 @@ impl<'source> Parser<'source> {
 
     /*
         AssignmentExpression
-            : AdditiveExpression
+            : LogicalOrExpression
             | LeftHandSideExpression ASSIGNMENT_OPERATOR AssignmentExpression
             ;
     */
     fn assignment_expression(&mut self) -> Result<Expression, &'source str> {
-        let left = self.additive_expression()?;
+        let left = self.logical_or_expression()?;
 
         if !self.lookahead_is_assignment_op() {
             return Ok(left);
@@ -237,6 +277,74 @@ impl<'source> Parser<'source> {
         );
 
         Ok(assignment_expression)
+    }
+
+    /*
+        x > y
+        x < y
+        x >= y
+        x <= y
+
+        RelationalExpression
+            : AdditiveExpression
+            | AdditiveExpression RELATIONAL_OPERATOR RelationalExpression
+            ;
+    */
+    fn relational_expression(&mut self) -> Result<Expression, &'source str> {
+        self.binary_expression(
+            Self::additive_expression,
+            is_relational_op,
+            Self::eat_relational_op
+        )
+    }
+
+    /*
+        x == y
+        x != y
+
+        EqualityExpression
+            : RelationalExpression EQUALITY_OPERATOR EqualityExpression
+            | RelationalExpression
+            ;
+    */
+    fn equality_expression(&mut self) -> Result<Expression, &'source str> {
+        self.binary_expression(
+            Self::relational_expression,
+            is_equality_op,
+            Self::eat_equality_op
+        )
+    }
+
+    /*
+        x and y
+    
+        LogicalAndExpression
+            : EqualityExpression AND LogicalAndExpression
+            | EqualityExpression
+            ;
+    */
+    fn logical_and_expression(&mut self) -> Result<Expression, &'source str> {
+        self.logical_expression(
+            Self::equality_expression,
+            is_logical_and_op,
+            Self::eat_logical_and_op
+        )
+    }
+
+    /*
+        x or y
+    
+        LogicalOrExpression
+            : LogicalAndExpression OR LogicalOrExpression
+            | LogicalOrExpression
+            ;
+    */
+    fn logical_or_expression(&mut self) -> Result<Expression, &'source str> {
+        self.logical_expression(
+            Self::logical_and_expression,
+            is_logical_or_op,
+            Self::eat_logical_or_op
+        )
     }
 
     /*
@@ -292,13 +400,16 @@ impl<'source> Parser<'source> {
         )
     }
 
-    fn binary_expression<F, G>(&mut self,
+    fn generic_binary_expression<F, G, E>(&mut self,
             mut create_branch: F,
             op_predicate: fn(&Token) -> bool,
-            mut eat_op: G) -> Result<Expression, &'source str> 
+            mut eat_op: G,
+            mut create_expression: E
+        ) -> Result<Expression, &'source str> 
     where
         F: FnMut(&mut Self) -> Result<Expression, &'source str>,
         G: FnMut(&mut Self) -> Result<BinaryOp, Result<Expression, &'source str>>,
+        E: FnMut(&mut Self, Expression, BinaryOp, Expression) -> Expression,
     {
         let mut left = create_branch(self)?;
 
@@ -310,10 +421,48 @@ impl<'source> Parser<'source> {
 
             let right = create_branch(self)?;
 
-            left = self._ast_factory.create_binary_expression(left, op, right);
+            left = create_expression(self, left, op, right);
         }
 
         Ok(left)
+    }
+
+    fn binary_expression<F, G>(&mut self,
+            create_branch: F,
+            op_predicate: fn(&Token) -> bool,
+            eat_op: G
+        ) -> Result<Expression, &'source str> 
+    where
+        F: FnMut(&mut Self) -> Result<Expression, &'source str>,
+        G: FnMut(&mut Self) -> Result<BinaryOp, Result<Expression, &'source str>>,
+    {
+        self.generic_binary_expression(
+            create_branch,
+            op_predicate,
+            eat_op,
+            |parser, left, op, right| {
+                parser._ast_factory.create_binary_expression(left, op, right)
+            }
+        )
+    }
+
+    fn logical_expression<F, G>(&mut self,
+            create_branch: F,
+            op_predicate: fn(&Token) -> bool,
+            eat_op: G
+        ) -> Result<Expression, &'source str> 
+    where
+        F: FnMut(&mut Self) -> Result<Expression, &'source str>,
+        G: FnMut(&mut Self) -> Result<BinaryOp, Result<Expression, &'source str>>,
+    {
+        self.generic_binary_expression(
+            create_branch,
+            op_predicate,
+            eat_op,
+            |parser, left, op, right| {
+                parser._ast_factory.create_logical_expression(left, op, right)
+            }
+        )
     }
     
     /*
@@ -583,6 +732,14 @@ impl<'source> Parser<'source> {
         self.match_lookahead_type(is_literal)
     }
 
+    fn lookahead_is_colon(&self) -> bool {
+        self.match_lookahead_type(is_colon)
+    }
+
+    fn lookahead_is_expression_end(&self) -> bool {
+        self.match_lookahead_type(is_expression_end)
+    }
+
     fn eat_additive_op(&mut self) -> Result<BinaryOp, Result<Expression, &'source str>> {
         let op = match self.eat_binary_op(is_additive_op) {
             Ok(token) => match token.0 {
@@ -592,6 +749,54 @@ impl<'source> Parser<'source> {
                 Token::Ampersand => BinaryOp::BitwiseAnd,
                 Token::Caret => BinaryOp::BitwiseXor,
                 _ => panic!("Unexpected additive operator: {:?}", token.0),
+            },
+            Err(err) => return Err(Err(err)),
+        };
+        Ok(op)
+    }
+
+    fn eat_relational_op(&mut self) -> Result<BinaryOp, Result<Expression, &'source str>> {
+        let op = match self.eat_binary_op(is_relational_op) {
+            Ok(token) => match token.0 {
+                Token::LessThan => BinaryOp::LessThan,
+                Token::LessThanEqual => BinaryOp::LessThanEqual,
+                Token::GreaterThanEqual => BinaryOp::GreaterThanEqual,
+                Token::GreaterThan => BinaryOp::GreaterThan,
+                _ => panic!("Unexpected relational operator: {:?}", token.0),
+            },
+            Err(err) => return Err(Err(err)),
+        };
+        Ok(op)
+    }
+
+    fn eat_equality_op(&mut self) -> Result<BinaryOp, Result<Expression, &'source str>> {
+        let op = match self.eat_binary_op(is_equality_op) {
+            Ok(token) => match token.0 {
+                Token::Equal => BinaryOp::Equal,
+                Token::NotEqual => BinaryOp::NotEqual,
+                _ => panic!("Unexpected equality operator: {:?}", token.0),
+            },
+            Err(err) => return Err(Err(err)),
+        };
+        Ok(op)
+    }
+
+    fn eat_logical_and_op(&mut self) -> Result<BinaryOp, Result<Expression, &'source str>> {
+        let op = match self.eat_binary_op(is_logical_and_op) {
+            Ok(token) => match token.0 {
+                Token::And => BinaryOp::And,
+                _ => panic!("Unexpected logical AND operator: {:?}", token.0),
+            },
+            Err(err) => return Err(Err(err)),
+        };
+        Ok(op)
+    }
+
+    fn eat_logical_or_op(&mut self) -> Result<BinaryOp, Result<Expression, &'source str>> {
+        let op = match self.eat_binary_op(is_logical_or_op) {
+            Ok(token) => match token.0 {
+                Token::Or => BinaryOp::Or,
+                _ => panic!("Unexpected logical OR operator: {:?}", token.0),
             },
             Err(err) => return Err(Err(err)),
         };
@@ -610,10 +815,46 @@ impl<'source> Parser<'source> {
         };
         Ok(op)
     }
+
+    fn eat_expression_end(&mut self) -> Result<TokenSpan, &'source str> {
+        self.eat_token(&Token::ExpressionStatementEnd)
+    }
+
+    fn try_eat_expression_end(&mut self) {
+        if self.lookahead_is_expression_end() {
+            let _ = self.eat_expression_end();
+        }
+    }
+
+    fn eat_colon(&mut self) -> Result<TokenSpan, &'source str> {
+        self.eat_token(&Token::Colon)
+    }
+
+    fn try_eat_colon(&mut self) {
+        if self.lookahead_is_colon() {
+            let _ = self.eat_colon();
+        }
+    }
 }
 
 fn is_additive_op(token: &Token) -> bool {
     matches!(token, Token::Plus | Token::Minus | Token::Pipe | Token::Ampersand | Token::Caret)
+}
+
+fn is_relational_op(token: &Token) -> bool {
+    matches!(token, Token::LessThan | Token::LessThanEqual | Token::GreaterThanEqual | Token::GreaterThan)
+}
+
+fn is_equality_op(token: &Token) -> bool {
+    matches!(token, Token::Equal | Token::NotEqual)
+}
+
+fn is_logical_and_op(token: &Token) -> bool {
+    matches!(token, Token::And)
+}
+
+fn is_logical_or_op(token: &Token) -> bool {
+    matches!(token, Token::Or)
 }
 
 fn is_multiplicative_op(token: &Token) -> bool {
@@ -626,4 +867,12 @@ fn is_assignment_op(token: &Token) -> bool {
 
 fn is_literal(token: &Token) -> bool {
     matches!(token, Token::Int | Token::BinaryNumber | Token::HexNumber | Token::OctalNumber | Token::Float | Token::True | Token::False | Token::DoubleQuotedString | Token::SingleQuotedString | Token::Symbol)
+}
+
+fn is_colon(token: &Token) -> bool {
+    matches!(token, Token::Colon)
+}
+
+fn is_expression_end(token: &Token) -> bool {
+    matches!(token, Token::ExpressionStatementEnd)
 }

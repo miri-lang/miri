@@ -1,5 +1,5 @@
-use crate::lexer::Span;
-
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2017–2025 Viacheslav Shynkarenko
 
 /// Represents a fully parsed Miri program
 #[derive(Debug, PartialEq)]
@@ -7,11 +7,19 @@ pub struct Program {
     pub body: Vec<Statement>,
 }
 
-#[derive(Debug, PartialEq)]
+/// Represents the type of an if statement
+#[derive(Debug, Clone, PartialEq)]
+pub enum IfStatementType {
+    If,
+    Unless,
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub enum Statement {
     Expression(Expression),
     Block(Vec<Statement>),
     Variable(Vec<VariableDeclaration>),
+    If(Box<Expression>, Box<Statement>, Option<Box<Statement>>, IfStatementType), // condition, then_block, else_block, type
 }
 
 /// Represents an expression
@@ -24,6 +32,8 @@ pub enum Expression {
     Identifier(String),
 
     Binary(Box<Expression>, BinaryOp, Box<Expression>),
+
+    Logical(Box<Expression>, BinaryOp, Box<Expression>),
 
     Assignment(Box<LeftHandSideExpression>, AssignmentOp, Box<Expression>),
 
@@ -93,6 +103,17 @@ pub enum BinaryOp {
     BitwiseOr,
     BitwiseAnd,
     BitwiseXor,
+    Equal,
+    NotEqual,
+    LessThan,
+    LessThanEqual,
+    GreaterThan,
+    GreaterThanEqual,
+    Not,
+    And,
+    Or,
+    Range, // Represents a range operator (e.g., `1..10`)
+    In,   // Represents the `in` operator for membership tests
 }
 
 /// Represents an assignment operator
@@ -321,6 +342,10 @@ impl AstFactory {
         Expression::Binary(Box::new(left), op, Box::new(right))
     }
 
+    pub fn create_logical_expression(&self, left: Expression, op: BinaryOp, right: Expression) -> Expression {
+        Expression::Logical(Box::new(left), op, Box::new(right))
+    }
+
     pub fn create_assignment_expression(&self, left: LeftHandSideExpression, op: AssignmentOp, right: Expression) -> Expression {
         Expression::Assignment(Box::new(left), op, Box::new(right))
     }
@@ -339,5 +364,9 @@ impl AstFactory {
 
     pub fn create_variable_statement(&self, declarations: Vec<VariableDeclaration>) -> Statement {
         Statement::Variable(declarations)
+    }
+
+    pub fn create_if_statement(&self, condition: Expression, then_block: Statement, else_block: Option<Statement>, if_statement_type: IfStatementType) -> Statement {
+        Statement::If(Box::new(condition), Box::new(then_block), else_block.map(Box::new), if_statement_type)
     }
 }
