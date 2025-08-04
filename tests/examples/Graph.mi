@@ -1,0 +1,55 @@
+// extend BasicGraph
+// implement IBasicGraph
+
+// Define the graph as an adjacency list
+private let _graph map[string, list[string]]
+
+def init
+    // Initialize the graph
+    _graph = {
+        'A': ['B', 'C'],
+        'B': ['D', 'E'],
+        'C': ['F'],
+        'D': [],
+        'E': ['F'],
+        'F': ['G'],
+        'G': []
+    }
+
+def traverse
+    // Example runs
+    puts "BFS Traversal: #{bfs('A').join(', ')}"
+    puts "DFS Iterative Traversal: #{dfs_iterative('A').join(', ')}"
+    puts "DFS Recursive Traversal: #{dfs_recursive('A').join(', ')}"
+
+// Breadth-First Search (BFS)
+private def bfs(start_node string) string[]
+    var visited = []
+    var queue = [start_node]
+
+    until queue.empty?
+        node = queue.pop(0)
+        unless node in visited
+            visited.append(node)
+            queue.extend(_graph[node])
+    visited
+
+// Depth-First Search (Iterative)
+private def dfs_iterative(start_node string) string[]
+    var visited = []
+    var stack = [start_node]
+
+    until stack.empty?
+        node = stack.pop
+        unless node in visited
+            visited.append(node)
+            // Reverse the children to simulate recursive call order
+            stack.extend(reversed(_graph[node]))
+    visited
+
+// Depth-First Search (Recursive)
+private def dfs_recursive(start_node string, visited=[]) string[]
+    unless start_node in visited
+        visited.append(start_node)
+        for neighbor in _graph[start_node]: dfs_recursive(neighbor, visited)
+    visited

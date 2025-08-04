@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2017–2025 Viacheslav Shynkarenko
+
 use logos::Logos;
 
 
@@ -5,18 +8,22 @@ use logos::Logos;
 pub enum Token {
     // Keywords
     #[token("use")]        Use,
+    #[token("def")]        Def,
     #[token("async")]      Async,
     #[token("await")]      Await,
     #[token("spawn")]      Spawn,
     #[token("gpu")]        Gpu,
     #[token("if")]         If,
+    #[token("unless")]     Unless,
     #[token("else")]       Else,
     #[token("match")]      Match,
     #[token("default")]    Default,
     #[token("return")]     Return,
     #[token("while")]      While,
+    #[token("until")]      Until,
     #[token("do")]         Do,
     #[token("for")]        For,
+    #[token("forever")]    Forever,
     #[token("in")]         In,
     #[token("let")]        Let,
     #[token("var")]        Var,
@@ -36,12 +43,12 @@ pub enum Token {
     #[token("->")]          Arrow,
     #[token("<-")]          LeftArrow,
     #[token("||")]          Parallel,
-    #[token("==")]          Eq,
-    #[token("!=")]          Neq,
-    #[token(">=")]          Gte,
-    #[token("<=")]          Lte,
-    #[token(">")]           Gt,
-    #[token("<")]           Lt,
+    #[token("==")]          Equal,
+    #[token("!=")]          NotEqual,
+    #[token(">=")]          GreaterThanEqual,
+    #[token("<=")]          LessThanEqual,
+    #[token(">")]           GreaterThan,
+    #[token("<")]           LessThan,
     #[token("=")]           Assign,
     #[token("+=")]          AssignAdd,
     #[token("-=")]          AssignSub,
@@ -183,11 +190,6 @@ impl<'source> Lexer<'source> {
             Token::Newline => {
                 if self.have_previous_tokens() {
                     self.parse_newline();
-
-                    if self.is_expression_statement_end() {
-                        // If this is an expression statement end, return ExpressionStatementEnd token
-                        self.pending_tokens.push((Token::ExpressionStatementEnd, span));
-                    }
                 }
                 return self.next();
             },
@@ -218,6 +220,15 @@ impl<'source> Lexer<'source> {
             Token::RBrace => {
                 self.curly_brace_stack.pop();
                 return Some((Token::RBrace, span));
+            },
+            Token::Else => {
+                // Add an ExpressionStatementEnd token if the previous token is not a Dedent or ExpressionStatementEnd
+                // This is to ensure that the inline if/else block is treated as a separate statement
+                if self.have_previous_tokens() && !self.match_previous_token(Token::Dedent) && !self.match_previous_token(Token::ExpressionStatementEnd) {
+                    self.pending_tokens.push((Token::Else, span.clone()));
+                    return Some((Token::ExpressionStatementEnd, span));
+                }
+                return Some((Token::Else, span));
             },
             _ => Some((unwrapped_token, span))
         }
@@ -275,7 +286,7 @@ impl<'source> Lexer<'source> {
                     break;
                 },
                 "\n" | "\r" => {
-                    found_newline = indent_len == 0; // Only consider it a newline if no indentation
+                    found_newline = true;
                     break;
                 },
                 _ => break
@@ -290,10 +301,6 @@ impl<'source> Lexer<'source> {
             if indent_len > last_indent {
                 // If we are not inside parentheses or brackets, treat as an indentation increase
                 if self.is_outside_paired_tokens() {
-                    if !self.prev_tokens_match_block_start() {
-                        let line_num = src[..self.inner.span().start].matches('\n').count() + 1;
-                        panic!("[Lexer] Unexpected indentation at line {}. Only `:` can precede an indented block.", line_num);
-                    }
                     // Indentation increase
                     self.push_indent(i, indent_len);
                 } else {
@@ -323,6 +330,11 @@ impl<'source> Lexer<'source> {
                     self.push_dedent(i);
                 }
             }
+
+            if self.is_expression_statement_end() {
+                // If this is an expression statement end, return ExpressionStatementEnd token
+                self.pending_tokens.push((Token::ExpressionStatementEnd, i..i));
+            }
         }
 
         let bump_len = i - self.inner.span().start - 1;
@@ -330,16 +342,20 @@ impl<'source> Lexer<'source> {
     }
 
     fn panic_unsupported_token(&mut self, span: &std::ops::Range<usize>, src: &str) {
-        let mut start = span.start;
-        while start > 0 && src[start - 1..].chars().next().unwrap() != '\n' {
-            start -= 1;
-        }
-    
-        let mut end = span.end;
-        while end < src.len() && src[end..].chars().next().unwrap() != '\n' {
-            end += 1;
-        }
-    
+        // Find the start of the line containing the error.
+        // We search backwards from the start of the span for a newline.
+        let start = src[..span.start]
+            .rfind('\n')
+            .map(|i| i + 1) // The line starts after the newline
+            .unwrap_or(0); // Or at the beginning of the string if no newline is found
+
+        // Find the end of the line.
+        // We search forwards from the end of the span for a newline.
+        let end = src[span.end..]
+            .find('\n')
+            .map(|i| span.end + i) // The line ends at the newline
+            .unwrap_or_else(|| src.len()); // Or at the end of the string
+
         let snippet = &src[start..end].trim();
         let invalid_part = &src[span.clone()].trim();
         panic!("[Lexer] Unsupported token '{}' in line '{}'", invalid_part, snippet);
@@ -379,13 +395,9 @@ impl<'source> Lexer<'source> {
         self.previous_tokens.last().unwrap().0 == token
     }
 
-    fn prev_tokens_match_block_start(&self) -> bool {
-        self.match_previous_token(Token::Colon)
-    }
-
     fn prev_tokens_match_function_declaration(&self) -> bool {
-        self.matches_previous_tokens(&vec![Token::RParen, Token::Identifier, Token::Colon]) ||
-            self.matches_previous_tokens(&vec![Token::RParen, Token::Colon])
+        self.matches_previous_tokens(&vec![Token::RParen, Token::Identifier]) ||
+            self.matches_previous_tokens(&vec![Token::RParen])
     }
 
     fn push_indent(&mut self, i: usize, indent_len: usize) {
@@ -410,7 +422,6 @@ impl<'source> Lexer<'source> {
 
     fn is_expression_statement_end(&self) -> bool {
         (self.is_outside_paired_tokens() || self.is_inside_code_block()) && 
-            !self.prev_tokens_match_block_start() && 
             !self.match_previous_token(Token::ExpressionStatementEnd)
     }
 }

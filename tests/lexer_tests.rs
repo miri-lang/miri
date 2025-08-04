@@ -1,7 +1,20 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2017–2025 Viacheslav Shynkarenko
+
 use std::vec;
 
 use miri::lexer::{Lexer, Token};
 
+
+#[test]
+fn test_empty_input() {
+    lexer_test("", vec![]);
+}
+
+#[test]
+fn test_whitespace_only() {
+    lexer_test("   \t  \n  \r\n  ", vec![]);
+}
 
 #[test]
 fn test_symbols_and_operators() {
@@ -11,12 +24,12 @@ fn test_symbols_and_operators() {
         Token::Arrow,
         Token::LeftArrow,
         Token::Parallel,
-        Token::Eq,
-        Token::Neq,
-        Token::Gte,
-        Token::Lte,
-        Token::Gt,
-        Token::Lt,
+        Token::Equal,
+        Token::NotEqual,
+        Token::GreaterThanEqual,
+        Token::LessThanEqual,
+        Token::GreaterThan,
+        Token::LessThan,
         Token::Assign,
         Token::Plus,
         Token::Minus,
@@ -45,18 +58,72 @@ fn test_symbols_and_operators() {
 }
 
 #[test]
+fn test_operators_without_spaces() {
+    lexer_test("a+=b*=c/=d%=e==f!=g>=h<=i", vec![
+        Token::Identifier, Token::AssignAdd,
+        Token::Identifier, Token::AssignMul,
+        Token::Identifier, Token::AssignDiv,
+        Token::Identifier, Token::AssignMod,
+        Token::Identifier, Token::Equal,
+        Token::Identifier, Token::NotEqual,
+        Token::Identifier, Token::GreaterThanEqual,
+        Token::Identifier, Token::LessThanEqual,
+        Token::Identifier,
+    ]);
+}
+
+#[test]
+fn test_complex_assignment_chains() {
+    lexer_test("a = b = c += d *= e", vec![
+        Token::Identifier, Token::Assign,
+        Token::Identifier, Token::Assign,
+        Token::Identifier, Token::AssignAdd,
+        Token::Identifier, Token::AssignMul,
+        Token::Identifier,
+    ]);
+}
+
+#[test]
+fn test_very_long_identifier() {
+    let long_name = "a".repeat(1000);
+    lexer_test(&long_name, vec![Token::Identifier]);
+}
+
+#[test]
+fn test_number_identifier_boundaries() {
+    lexer_test("123abc abc123 123.456def", vec![
+        Token::Int, Token::Identifier,
+        Token::Identifier,
+        Token::Float, Token::Def,
+    ]);
+}
+
+#[test]
+#[should_panic(expected = "Unsupported token")]
+fn test_unicode_identifiers() {
+    lexer_test("café naïve résumé", vec![
+        Token::Identifier,
+        Token::Identifier,
+        Token::Identifier,
+    ]);
+}
+
+#[test]
 fn test_keywords() {
     keyword_test("use", Token::Use);
+    keyword_test("def", Token::Def);
     keyword_test("async", Token::Async);
     keyword_test("await", Token::Await);
     keyword_test("spawn", Token::Spawn);
     keyword_test("gpu", Token::Gpu);
     keyword_test("if", Token::If);
-    keyword_test("else", Token::Else);
+    keyword_test("unless", Token::Unless);
+    keyword_test("forever", Token::Forever);
     keyword_test("match", Token::Match);
     keyword_test("default", Token::Default);
     keyword_test("return", Token::Return);
     keyword_test("while", Token::While);
+    keyword_test("until", Token::Until);
     keyword_test("do", Token::Do);
     keyword_test("for", Token::For);
     keyword_test("in", Token::In);
@@ -81,6 +148,22 @@ fn keyword_test(keyword: &str, expected: Token) {
         expected.clone(), Token::LParen, Token::RParen,
         expected.clone(), Token::Dot, Token::Identifier,
         Token::Identifier, Token::Dot, expected.clone(),
+        Token::Identifier,
+        Token::Identifier,
+        Token::Identifier,
+        Token::DoubleQuotedString,
+    ]);
+}
+
+#[test]
+fn test_else_keyword() {
+    lexer_test(
+        format!("else else() else.blah blah.else blah blahelse blah_else \"else\" /* else */").as_str(),
+        vec![
+        Token::Else,
+        Token::ExpressionStatementEnd, Token::Else, Token::LParen, Token::RParen,
+        Token::ExpressionStatementEnd, Token::Else, Token::Dot, Token::Identifier,
+        Token::Identifier, Token::Dot, Token::ExpressionStatementEnd, Token::Else,
         Token::Identifier,
         Token::Identifier,
         Token::Identifier,
@@ -127,8 +210,32 @@ fn test_multiline_strings() {
 }
 
 #[test]
+fn test_mixed_quotes_in_strings() {
+    lexer_test(r#"'string with "double" quotes' "string with 'single' quotes""#, vec![
+        Token::SingleQuotedString,
+        Token::DoubleQuotedString,
+    ]);
+}
+
+#[test]
+fn test_unicode_strings() {
+    lexer_test(r#""Hello 世界" "🚀 rocket""#, vec![
+        Token::DoubleQuotedString,
+        Token::DoubleQuotedString,
+    ]);
+}
+
+#[test]
+fn test_string_escape_sequences() {
+    lexer_test(r#"'line1\nline2\ttab' "quote\"inside""#, vec![
+        Token::SingleQuotedString,
+        Token::DoubleQuotedString,
+    ]);
+}
+
+#[test]
 fn test_number_edge_cases() {
-    lexer_test("0 00 1_000_000 0.0 .5 5. -19 1.0e10 6.67430e-11", vec![
+    lexer_test("0 00 1_000_000 0.0 .5 5. -19 1.0e10 6.67430e-11 1E10 1e-5 1.5E+3 1.5e-10 1_000e10", vec![
         Token::Int,
         Token::Int,
         Token::Int,
@@ -136,8 +243,37 @@ fn test_number_edge_cases() {
         Token::Dot, Token::Int,  // .5 should be parsed as . and 5
         Token::Int, Token::Dot,  // 5. should be parsed as 5 and .,
         Token::Minus, Token::Int, // -19 should be parsed as Minus and 19
-        Token::Float, // Scientific notation
-        Token::Float, // Scientific notation
+        // Scientific notation
+        Token::Float,
+        Token::Float,
+        Token::Float,
+        Token::Float,
+        Token::Float,
+        Token::Float,
+        Token::Float,
+    ]);
+}
+
+#[test]
+fn test_float_precision_boundaries() {
+    lexer_test("3.4028235e38 1.7976931348623157e308", vec![
+        Token::Float, // f32 max
+        Token::Float, // f64 max
+    ]);
+}
+
+#[test]
+fn test_integer_overflow_edge_cases() {
+    lexer_test("9223372036854775807 9223372036854775808", vec![
+        Token::Int, // i64::MAX
+        Token::Int, // Should still tokenize, even if out of i64 range
+    ]);
+}
+
+#[test]
+fn test_very_large_numbers() {
+    lexer_test("999999999999999999999999999999", vec![
+        Token::Int, // Should tokenize even if unparseable
     ]);
 }
 
@@ -253,6 +389,15 @@ fn test_invalid_symbol_syntax() {
 }
 
 #[test]
+fn test_symbols_with_numbers() {
+    lexer_test(":symbol123 :test_2 :_private", vec![
+        Token::Symbol,
+        Token::Symbol,
+        Token::Symbol,
+    ]);
+}
+
+#[test]
 fn test_keywords_as_parts_of_identifiers() {
     lexer_test("if_condition use_case return_value", vec![
         Token::Identifier,  // should not be parsed as "if"
@@ -324,7 +469,7 @@ var a = 5
 print('ignored!')
 */
 
-func() int: 10 + 10
+def func() int: 10 + 10
 
 /***
 /* 
@@ -346,7 +491,7 @@ Symbols: /* nested? */ < > & ^ ~
 print("Hello") /* inline comment */
 "#, vec![
         Token::Let, Token::Identifier, Token::Assign, Token::DoubleQuotedString, Token::ExpressionStatementEnd,
-        Token::Identifier, Token::LParen, Token::RParen, Token::Identifier, Token::Colon,
+        Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::Identifier, Token::Colon,
             Token::Int, Token::Plus, Token::Int, Token::ExpressionStatementEnd,
         Token::Identifier, Token::LParen, Token::DoubleQuotedString, Token::RParen, Token::ExpressionStatementEnd,
     ]);
@@ -373,6 +518,20 @@ fn test_comment_with_code_like_content() {
 }
 
 #[test]
+fn test_comment_at_eof() {
+    lexer_test("code // comment with no newline", vec![
+        Token::Identifier,
+    ]);
+}
+
+#[test]
+fn test_nested_comments_with_strings() {
+    lexer_test(r#"/* outer /* "string inside comment" */ outer */ code"#, vec![
+        Token::Identifier,
+    ]);
+}
+
+#[test]
 fn test_declaration() {
     lexer_test("
 let x = 10                                   // inferred
@@ -394,8 +553,8 @@ let dict2 {string: int} = {key1: 1, key2: 2} // dictionary with type
         Token::Let, Token::Identifier, Token::Assign, Token::Float, Token::ExpressionStatementEnd,
         Token::Let, Token::Identifier, Token::Identifier, Token::Assign, Token::SingleQuotedString, Token::ExpressionStatementEnd,
         Token::Let, Token::Identifier, Token::Assign, Token::True, Token::ExpressionStatementEnd,
-        Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::Percent, Token::Int, Token::Eq, Token::Int, Token::ExpressionStatementEnd,
-        Token::Let, Token::Identifier, Token::Assign, Token::Identifier, Token::Lt, Token::Identifier, Token::Comma, Token::Identifier, Token::Gt, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
+        Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::Percent, Token::Int, Token::Equal, Token::Int, Token::ExpressionStatementEnd,
+        Token::Let, Token::Identifier, Token::Assign, Token::Identifier, Token::LessThan, Token::Identifier, Token::Comma, Token::Identifier, Token::GreaterThan, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
         Token::Let, Token::Identifier, Token::Assign, Token::LBracket, Token::Int, Token::Comma, Token::Int, Token::Comma, Token::Int, Token::RBracket, Token::ExpressionStatementEnd,
         Token::Let, Token::Identifier, Token::LBracket, Token::Identifier, Token::RBracket, Token::Assign, Token::LBracket, Token::Float, Token::Comma, Token::Float, Token::Comma, Token::Float, Token::RBracket, Token::ExpressionStatementEnd,
         Token::Let, Token::Identifier, Token::Assign, Token::LBrace, Token::Identifier, Token::Colon, Token::SingleQuotedString, Token::Comma, Token::Identifier, Token::Colon, Token::SingleQuotedString, Token::RBrace, Token::ExpressionStatementEnd,
@@ -407,12 +566,12 @@ let dict2 {string: int} = {key1: 1, key2: 2} // dictionary with type
 fn test_function_with_no_params() {
     lexer_test("
 // Function with no parameters
-fancy_print():
-  print(\"Hello, World!\")
+def fancy_print
+  print \"Hello, World!\"
 ", vec![
-        Token::Identifier, Token::LParen, Token::RParen, Token::Colon,
+        Token::Def, Token::Identifier, Token::ExpressionStatementEnd,
             Token::Indent,
-            Token::Identifier, Token::LParen, Token::DoubleQuotedString, Token::RParen, Token::ExpressionStatementEnd,
+            Token::Identifier, Token::DoubleQuotedString, Token::ExpressionStatementEnd,
             Token::Dedent,
     ]);
 }
@@ -421,19 +580,19 @@ fancy_print():
 fn test_function_with_params() {
     lexer_test("
 /* Function with parameters */
-square(x int) int:
+def square(x int) int
   x * x
 
 /* Another function example */
-add(a int, b int) int:
+def add(a int, b int) int
   a + b
 ", vec![
-        Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon,
+        Token::Def, Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::ExpressionStatementEnd,
             Token::Indent,
             Token::Identifier, Token::Star, Token::Identifier, Token::ExpressionStatementEnd,
             Token::Dedent,
 
-        Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::Comma, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon,
+        Token::Def, Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::Comma, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::ExpressionStatementEnd,
             Token::Indent,
             Token::Identifier, Token::Plus, Token::Identifier, Token::ExpressionStatementEnd,
             Token::Dedent,
@@ -444,9 +603,9 @@ add(a int, b int) int:
 fn test_inline_function() {
     lexer_test("
 // Inline function
-multiply(a int, b int) int: a * b
+def multiply(a int, b int) int: a * b
 ", vec![
-        Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::Comma, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon, Token::Identifier, Token::Star, Token::Identifier, Token::ExpressionStatementEnd
+        Token::Def, Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::Comma, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon, Token::Identifier, Token::Star, Token::Identifier, Token::ExpressionStatementEnd
     ]);
 }
 
@@ -464,11 +623,11 @@ let f = (x int) int: x * x
 fn test_multiline_lambda_function() {
     lexer_test("
 // Multiline lambda function
-let f1 = (a float, b float):
+let f1 = (a float, b float)
   print(a + b)
   print(a - b)
 ", vec![
-        Token::Let, Token::Identifier, Token::Assign, Token::LParen, Token::Identifier, Token::Identifier, Token::Comma, Token::Identifier, Token::Identifier, Token::RParen, Token::Colon,
+        Token::Let, Token::Identifier, Token::Assign, Token::LParen, Token::Identifier, Token::Identifier, Token::Comma, Token::Identifier, Token::Identifier, Token::RParen, Token::ExpressionStatementEnd,
             Token::Indent,
             Token::Identifier, Token::LParen, Token::Identifier, Token::Plus, Token::Identifier, Token::RParen, Token::ExpressionStatementEnd,
             Token::Identifier, Token::LParen, Token::Identifier, Token::Minus, Token::Identifier, Token::RParen, Token::ExpressionStatementEnd,
@@ -491,13 +650,27 @@ f1(5.0, 3.0)
 }
 
 #[test]
+fn test_function_calls_without_parentheses() {
+    lexer_test("
+// Call without parentheses
+fancy_print
+f 10
+f1 5.0, 3.0
+", vec![
+        Token::Identifier, Token::ExpressionStatementEnd,
+        Token::Identifier, Token::Int, Token::ExpressionStatementEnd,
+        Token::Identifier, Token::Float, Token::Comma, Token::Float, Token::ExpressionStatementEnd,
+    ]);
+}
+
+#[test]
 fn test_function_call_with_codeblock() {
     lexer_test("
 // Code block
-let y = arr.map():
+let y = arr.map
   (x int) x * 2
 ", vec![
-        Token::Let, Token::Identifier, Token::Assign, Token::Identifier, Token::Dot, Token::Identifier, Token::LParen, Token::RParen, Token::Colon,
+        Token::Let, Token::Identifier, Token::Assign, Token::Identifier, Token::Dot, Token::Identifier, Token::ExpressionStatementEnd,
             Token::Indent,
             Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Star, Token::Int, Token::ExpressionStatementEnd,
             Token::Dedent,
@@ -508,25 +681,24 @@ let y = arr.map():
 fn test_nested_function() {
     lexer_test("
 // Nested function
-nested_func(a int) int:
-  inner_func(x int) int:
+def nested_func(a int) int
+  def inner_func(x int) int
     print(x)
     let res = x + 1
-    for i in 0..x:
+    for i in 0..x
       print(i)
     print(res)
   inner_func(a)
 
 nested_func(5)
-
 ", vec![
-        Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon,
+        Token::Def, Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::ExpressionStatementEnd,
             Token::Indent,
-            Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon,
+            Token::Def, Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::ExpressionStatementEnd,
                 Token::Indent,
                 Token::Identifier, Token::LParen, Token::Identifier, Token::RParen, Token::ExpressionStatementEnd,
                 Token::Let, Token::Identifier, Token::Assign, Token::Identifier, Token::Plus, Token::Int, Token::ExpressionStatementEnd,
-                Token::For, Token::Identifier, Token::In, Token::Int, Token::Range, Token::Identifier, Token::Colon,
+                Token::For, Token::Identifier, Token::In, Token::Int, Token::Range, Token::Identifier, Token::ExpressionStatementEnd,
                     Token::Indent,
                     Token::Identifier, Token::LParen, Token::Identifier, Token::RParen, Token::ExpressionStatementEnd,
                     Token::Dedent,
@@ -549,8 +721,8 @@ fn test_windows_line_endings() {
 
 #[test]
 fn test_mixed_whitespace_types() {
-    lexer_test("func():\n\t  mixed_indent", vec![
-        Token::Identifier, Token::LParen, Token::RParen, Token::Colon,
+    lexer_test("def func()\n\t  mixed_indent", vec![
+        Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
             Token::Indent,
             Token::Identifier,
             Token::Dedent,
@@ -562,11 +734,11 @@ fn test_mixed_whitespace_types() {
 fn test_uneven_indent_spaces() {
     lexer_test("
 // Uneven spaces
-func():
-   three_spaces():
-     two_spaces():
+def func()
+   def three_spaces()
+     def two_spaces()
       one_space():
-    four_spaces():
+    def four_spaces()
       print(\"Hello\")
   print(\"World\")
 ", vec![]);
@@ -576,10 +748,10 @@ func():
 #[should_panic(expected = "Indentation error")]
 fn test_uneven_indent_tabs() {
     lexer_test("
-func():
-\ttab():
-\t\t\ttab():
-\t\ttab():
+def func()
+\tdef tab()
+\t\t\tdef tab()
+\t\tdef tab()
 print(\"Hello\")
 ", vec![]);
 }
@@ -589,11 +761,11 @@ print(\"Hello\")
 fn test_uneven_indent_spaces_tabs() {
     lexer_test("
 // Mixed tabs and spaces
-func():
-\t\t\ttab():
+def func()
+\t\t\tdef tab()
 \t\t\t print(\"Hello\")
   print(\"World\")
-  \t\t\ttab():
+  \t\t\tdef tab()
     print(\"Indented with tabs\")
   print(\"Dedented with spaces\")
 ", vec![]);
@@ -619,19 +791,19 @@ fn test_indent_dedent_func_nested() {
 // Indented call with nested indentation
 func(10,
      50,
-     nested_func(x int) int:
+     def nested_func(x int) int
        print(x)
-       another_func(y int) int:
+       def another_func(y int) int
          print(y)
          return y + 1
        return x + another_func(1))
 ", vec![
         Token::Identifier, Token::LParen, Token::Int, Token::Comma,
             Token::Int, Token::Comma,
-            Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon,
+            Token::Def, Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::ExpressionStatementEnd,
                 Token::Indent,
                 Token::Identifier, Token::LParen, Token::Identifier, Token::RParen, Token::ExpressionStatementEnd,
-                Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon,
+                Token::Def, Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::ExpressionStatementEnd,
                     Token::Indent,
                     Token::Identifier, Token::LParen, Token::Identifier, Token::RParen, Token::ExpressionStatementEnd,
                     Token::Return, Token::Identifier, Token::Plus, Token::Int, Token::ExpressionStatementEnd,
@@ -660,17 +832,17 @@ func(
 #[test]
 fn test_empty_lines_preserve_indentation_context() {
     lexer_test("
-func():
+def func()
     statement1
 
-    statement2:
+    statement2
         nested
     statement3
 ", vec![
-        Token::Identifier, Token::LParen, Token::RParen, Token::Colon,
+        Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
             Token::Indent,
             Token::Identifier, Token::ExpressionStatementEnd,
-            Token::Identifier, Token::Colon,
+            Token::Identifier, Token::ExpressionStatementEnd,
                 Token::Indent,
                 Token::Identifier, Token::ExpressionStatementEnd,
                 Token::Dedent,
@@ -682,17 +854,17 @@ func():
 #[test]
 fn test_empty_lines_dont_prevent_dedent() {
     lexer_test("
-statement1:
-  statement2:
+statement1
+  statement2
     statement3
   statement4
 
 statement5
 
 ", vec![
-        Token::Identifier, Token::Colon,
+        Token::Identifier, Token::ExpressionStatementEnd,
             Token::Indent,
-            Token::Identifier, Token::Colon,
+            Token::Identifier, Token::ExpressionStatementEnd,
                 Token::Indent,
                 Token::Identifier, Token::ExpressionStatementEnd,
                 Token::Dedent,
@@ -706,17 +878,17 @@ statement5
 #[test]
 fn test_multiple_dedent_levels() {
     lexer_test("
-func():
-    level1():
-        level2():
+def func()
+    def level1()
+        def level2()
             level3
 back_to_root
 ", vec![
-        Token::Identifier, Token::LParen, Token::RParen, Token::Colon,
+        Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
             Token::Indent,
-            Token::Identifier, Token::LParen, Token::RParen, Token::Colon,
+            Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
                 Token::Indent,
-                Token::Identifier, Token::LParen, Token::RParen, Token::Colon,
+                Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
                     Token::Indent,
                     Token::Identifier, Token::ExpressionStatementEnd,
                     Token::Dedent,
@@ -749,12 +921,270 @@ fn test_indent_dedent_comments() {
 }
 
 #[test]
-#[should_panic(expected = "Unexpected indentation")]
-fn test_indent_dedent_unexpected() {
+fn test_indentation_within_brackets_is_ignored() {
     lexer_test("
-        42
-        'Hello'
-    ", vec![]);
+let x = [
+    1,
+    2,
+]
+", vec![
+        Token::Let, Token::Identifier, Token::Assign, Token::LBracket,
+        Token::Int, Token::Comma,
+        Token::Int, Token::Comma,
+        Token::RBracket, Token::ExpressionStatementEnd,
+    ]);
+}
+
+#[test]
+fn test_indentation_within_braces_is_ignored() {
+    lexer_test("
+let y = {
+    'key': 'value',
+    'another': 123
+}
+", vec![
+        Token::Let, Token::Identifier, Token::Assign, Token::LBrace,
+        Token::SingleQuotedString, Token::Colon, Token::SingleQuotedString, Token::Comma,
+        Token::SingleQuotedString, Token::Colon, Token::Int,
+        Token::RBrace, Token::ExpressionStatementEnd,
+    ]);
+}
+
+#[test]
+fn test_indented_line_with_only_a_comment() {
+    lexer_test("
+def my_func()
+    // This line is just a comment.
+    let x = 1
+", vec![
+        Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
+            Token::Indent,
+            Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+            Token::Dedent,
+    ]);
+}
+
+#[test]
+fn test_indented_line_with_multiple_inline_comments() {
+    lexer_test("
+def my_func()
+    // This line is just a comment.
+    // Another comment
+    let x = 1
+", vec![
+        Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
+            Token::Indent,
+            Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+            Token::Dedent,
+    ]);
+}
+
+#[test]
+fn test_indented_line_with_multiline_comment() {
+    lexer_test("
+def my_func()
+    /*
+        This line is just a comment.
+        It spans multiple lines.
+        // and it has inline comments too.
+        /* even nested comments */
+    */
+    let x = 1
+", vec![
+        Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
+            Token::Indent,
+            Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+            Token::Dedent,
+    ]);
+}
+
+#[test]
+fn test_indent_after_inline_comment() {
+    lexer_test("
+def my_func() // comment
+    let x = 1
+", vec![
+        Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
+        Token::Indent,
+        Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+        Token::Dedent,
+    ]);
+}
+
+#[test]
+fn test_dedent_to_zero_after_empty_line_with_spaces() {
+    lexer_test("
+def func()
+    let x = 1
+   
+// The line above has spaces, but is empty of tokens.
+// This should dedent correctly.
+let y = 2
+", vec![
+        Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
+        Token::Indent,
+        Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+        Token::Dedent,
+        Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+    ]);
+}
+
+#[test]
+fn test_dedent_to_zero_after_empty_line_with_tabs() {
+    lexer_test("
+def func()
+\t\tlet x = 1
+\t
+// This should dedent correctly.
+let y = 2
+", vec![
+        Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
+        Token::Indent,
+        Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+        Token::Dedent,
+        Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+    ]);
+}
+
+#[test]
+fn test_dedent_to_inconsistent_level() {
+    lexer_test("
+def func()
+    let level1 = 1
+      let level2 = 2
+   // This dedent is to an invalid level, but we should handle it gracefully.
+", vec![
+        Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
+            Token::Indent,
+            Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+                Token::Indent, // This is an inconsistent indentation level
+                Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+                Token::Dedent,
+            Token::Dedent,
+    ]);
+}
+
+#[test]
+fn test_file_starting_with_indentation_and_comment() {
+    lexer_test("
+    // File starts with an indented comment
+let x = 1
+", vec![
+        Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+    ]);
+}
+
+// TODO: Not sure we need to care about unexpected indentation in the lexer.
+// #[test]
+// #[should_panic(expected = "Unexpected indentation")]
+// fn test_indent_dedent_unexpected() {
+//     lexer_test("
+//         42
+//         'Hello'
+// ", vec![]);
+// }
+
+// #[test]
+// #[should_panic(expected = "Unexpected indentation")]
+// fn test_indent_dedent_unexpected_inner() {
+//     lexer_test("
+// 42
+//         'Hello'
+//     ", vec![]);
+// }
+
+#[test]
+fn test_if_statement() {
+    lexer_test("
+if x
+    x = 10
+else
+    x = 20
+    ", vec![
+        Token::If, Token::Identifier, Token::ExpressionStatementEnd,
+            Token::Indent,
+            Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+            Token::Dedent,
+        Token::Else, Token::ExpressionStatementEnd,
+            Token::Indent,
+            Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+            Token::Dedent,
+    ]);
+}
+
+#[test]
+fn test_if_block_else_inline() {
+    lexer_test("
+if x
+    x = 10
+else: x = 20
+", vec![
+        Token::If, Token::Identifier, Token::ExpressionStatementEnd,
+            Token::Indent,
+            Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+            Token::Dedent,
+        Token::Else, Token::Colon, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+    ]);
+}
+
+#[test]
+fn test_if_inline_else_block() {
+    lexer_test("
+if x: x = 10
+else
+    x = 20
+", vec![
+        Token::If, Token::Identifier, Token::Colon, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+        Token::Else, Token::ExpressionStatementEnd,
+            Token::Indent,
+            Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+            Token::Dedent,
+    ]);
+}
+
+#[test]
+fn test_if_statement_with_assignment() {
+    lexer_test("
+let y = if x > 10
+    10
+else
+    20
+    ", vec![
+        Token::Let, Token::Identifier, Token::Assign, Token::If, Token::Identifier, Token::GreaterThan, Token::Int, Token::ExpressionStatementEnd,
+            Token::Indent,
+            Token::Int, Token::ExpressionStatementEnd,
+            Token::Dedent,
+        Token::Else, Token::ExpressionStatementEnd,
+            Token::Indent,
+            Token::Int, Token::ExpressionStatementEnd,
+            Token::Dedent,
+    ]);
+}
+
+#[test]
+fn test_if_statement_inline() {
+    lexer_test("
+if x: x = 10 else: x = 20
+", vec![
+        Token::If, Token::Identifier, Token::Colon,
+            Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+        Token::Else, Token::Colon,
+            Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+    ]);
+}
+
+#[test]
+fn test_if_statement_inline_with_assignment() {
+    lexer_test("
+let x = 50
+let y = if x % 2 == 0: x * x else: x / x
+", vec![
+        Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+        Token::Let, Token::Identifier, Token::Assign, Token::If, Token::Identifier, Token::Percent, Token::Int, Token::Equal, Token::Int, Token::Colon,
+            Token::Identifier, Token::Star, Token::Identifier, Token::ExpressionStatementEnd,
+        Token::Else, Token::Colon,
+            Token::Identifier, Token::Slash, Token::Identifier, Token::ExpressionStatementEnd,
+    ]);
 }
 
 #[test]
@@ -769,9 +1199,9 @@ fn test_large_nested_structure() {
     let mut expected = Vec::new();
     
     for i in 0..100 {
-        input.push_str(&format!("level{}():\n", i));
+        input.push_str(&format!("def level{}()\n", i));
         input.push_str(&"    ".repeat(i + 1));
-        expected.extend([Token::Identifier, Token::LParen, Token::RParen, Token::Colon, Token::Indent]);
+        expected.extend([Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd, Token::Indent]);
     }
     
     for _ in 0..100 {

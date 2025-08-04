@@ -1,8 +1,8 @@
-add<T numeric>(a T, b T) T: a + b
+add(a, b): a + b
 
-sub<T numeric>(a T, b T) T: a - b
+sub(a, b): a - b
 
-div<T numeric>(a T, b T) T: a / b
+div(a, b): a / b
 
-mul<T numeric>(a T, b T) T: a * b
+mul(a, b): a * b
 
