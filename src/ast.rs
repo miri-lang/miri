@@ -16,6 +16,7 @@ pub enum IfStatementType {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Statement {
+    Empty, // Represents an empty statement, e.g., when a block is empty
     Expression(Expression),
     Block(Vec<Statement>),
     Variable(Vec<VariableDeclaration>),
@@ -34,6 +35,8 @@ pub enum Expression {
     Binary(Box<Expression>, BinaryOp, Box<Expression>),
 
     Logical(Box<Expression>, BinaryOp, Box<Expression>),
+
+    Unary(UnaryOp, Box<Expression>),
 
     Assignment(Box<LeftHandSideExpression>, AssignmentOp, Box<Expression>),
 
@@ -114,6 +117,17 @@ pub enum BinaryOp {
     Or,
     Range, // Represents a range operator (e.g., `1..10`)
     In,   // Represents the `in` operator for membership tests
+}
+
+/// Represents a unary operator
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum UnaryOp {
+    Negate, // - operator
+    Not,
+    Plus, // + operator (unary plus)
+    BitwiseNot, // ~ operator
+    Decrement, // -- operator
+    Increment, // ++ operator
 }
 
 /// Represents an assignment operator
@@ -226,54 +240,6 @@ pub enum FloatLiteral {
 //     Result(Box<TypeExpr>, Box<TypeExpr>),
 // }
 
-// /// Represents a binary operator
-// #[derive(Debug, PartialEq, Clone, Copy)]
-// pub enum BinaryOp {
-//     Add, Sub, Mul, Div, Mod,
-//     Eq, Neq, Lt, Lte, Gt, Gte,
-//     And, Or,
-//     Range,
-//     In,
-// }
-
-// /// Represents a unary operator
-// #[derive(Debug, PartialEq, Clone, Copy)]
-// pub enum UnaryOp {
-//     Neg, Not,
-// }
-
-// // Display implementations for error reporting
-// impl fmt::Display for BinaryOp {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//         match self {
-//             BinaryOp::Add => write!(f, "+"),
-//             BinaryOp::Sub => write!(f, "-"),
-//             BinaryOp::Mul => write!(f, "*"),
-//             BinaryOp::Div => write!(f, "/"),
-//             BinaryOp::Mod => write!(f, "%"),
-//             BinaryOp::Eq => write!(f, "=="),
-//             BinaryOp::Neq => write!(f, "!="),
-//             BinaryOp::Lt => write!(f, "<"),
-//             BinaryOp::Lte => write!(f, "<="),
-//             BinaryOp::Gt => write!(f, ">"),
-//             BinaryOp::Gte => write!(f, ">="),
-//             BinaryOp::And => write!(f, "and"),
-//             BinaryOp::Or => write!(f, "or"),
-//             BinaryOp::Range => write!(f, ".."),
-//             BinaryOp::In => write!(f, "in"),
-//         }
-//     }
-// }
-
-// impl fmt::Display for UnaryOp {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//         match self {
-//             UnaryOp::Neg => write!(f, "-"),
-//             UnaryOp::Not => write!(f, "not"),
-//         }
-//     }
-// }
-
 
 pub struct AstFactory;
 
@@ -368,5 +334,9 @@ impl AstFactory {
 
     pub fn create_if_statement(&self, condition: Expression, then_block: Statement, else_block: Option<Statement>, if_statement_type: IfStatementType) -> Statement {
         Statement::If(Box::new(condition), Box::new(then_block), else_block.map(Box::new), if_statement_type)
+    }
+
+    pub fn create_unary_expression(&self, op: UnaryOp, operand: Expression) -> Expression {
+        Expression::Unary(op, Box::new(operand))
     }
 }
