@@ -66,6 +66,10 @@ impl<'source> Parser<'source> {
             ;
     */
     fn statement(&mut self) -> Result<Statement, &'source str> {
+        if self._lookahead.is_none() {
+            return Ok(Statement::Empty);
+        }
+
         let statement = match &self._lookahead {
             Some((Token::Indent, _)) => self.block_statement()?,
             Some((Token::Let, _)) | Some((Token::Var, _)) => self.variable_statement()?,
@@ -192,14 +196,40 @@ impl<'source> Parser<'source> {
         self.try_eat_colon();
         self.try_eat_expression_end();
 
-        let then_block = self.statement()?;
+        let then_block = if self._lookahead.is_none() || self.lookahead_is_else() {
+            Statement::Empty // If there's no else block, we can treat the then block as empty
+        } else {
+            self.statement()?
+        };
 
-        let else_block = if let Some((Token::Else, _)) = &self._lookahead {
+        let else_block = if self.lookahead_is_else() {
             self.eat_token(&Token::Else)?;
-            self.try_eat_colon();
-            self.try_eat_expression_end();
-
-            Some(self.statement()?)
+            if self.lookahead_is_colon() {
+                let _ = self.eat_colon();
+                if self._lookahead.is_none() {
+                    None
+                } else {
+                    if self.lookahead_is_expression_end() {
+                        // Empty else branch e.g. `else: // nothing`
+                        let _ = self.eat_expression_end();
+                        None
+                    } else {
+                        Some(self.statement()?)
+                    }
+                }
+            } else {
+                if self.lookahead_is_expression_end() {
+                    let _ = self.eat_expression_end();
+                    if self.lookahead_is_indent() {
+                        Some(self.block_statement()?)
+                    } else {
+                        // No valid block after else
+                        None
+                    }
+                } else {
+                    Some(self.statement()?)
+                }
+            }
         } else {
             None
         };
@@ -349,11 +379,11 @@ impl<'source> Parser<'source> {
 
     /*
         LeftHandSideExpression
-            : Identifier
+            : PrimaryExpression
             ;
     */
     fn left_hand_side_expression(&mut self) -> Result<Expression, &'source str> {
-        self.identifier()
+        self.primary_expression()
     }
 
     /*
@@ -388,13 +418,13 @@ impl<'source> Parser<'source> {
 
     /*
         MultiplicativeExpression
-            : PrimaryExpression
-            | MultiplicativeExpression MULTIPLICATIVE_OPERATOR PrimaryExpression
+            : UnaryExpression
+            | MultiplicativeExpression MULTIPLICATIVE_OPERATOR UnaryExpression
             ;
     */
     fn multiplicative_expression(&mut self) -> Result<Expression, &'source str> {
         self.binary_expression(
-            Self::primary_expression,
+            Self::unary_expression,
             is_multiplicative_op,
             Self::eat_multiplicative_op
         )
@@ -464,12 +494,37 @@ impl<'source> Parser<'source> {
             }
         )
     }
-    
+
+    /*
+        UnaryExpression
+            : LeftHandSideExpression
+            | ADDITIVE_OPERATOR UnaryExpression
+            | NOT UnaryExpression
+            ;
+    */
+    fn unary_expression(&mut self) -> Result<Expression, &'source str> {
+        match &self._lookahead {
+            Some((Token::Plus, _)) => self.create_unary_expression(&Token::Plus, UnaryOp::Plus),
+            Some((Token::Minus, _)) => self.create_unary_expression(&Token::Minus, UnaryOp::Negate),
+            Some((Token::Not, _)) => self.create_unary_expression(&Token::Not, UnaryOp::Not),
+            Some((Token::Tilde, _)) => self.create_unary_expression(&Token::Tilde, UnaryOp::BitwiseNot),
+            Some((Token::Decrement, _)) => self.create_unary_expression(&Token::Decrement, UnaryOp::Decrement),
+            Some((Token::Increment, _)) => self.create_unary_expression(&Token::Increment, UnaryOp::Increment),
+            _ => self.left_hand_side_expression(),
+        }
+    }
+
+    fn create_unary_expression(&mut self, token: &Token, op: UnaryOp) -> Result<Expression, &'source str> {
+        self.eat_token(token)?;
+        let operand = self.unary_expression()?;
+        Ok(self._ast_factory.create_unary_expression(op, operand))
+    }
+
     /*
         PrimaryExpression
             : Literal
             | ParenthesizedExpression
-            | LeftHandSideExpression
+            | Identifier
             ;
     */
     fn primary_expression(&mut self) -> Result<Expression, &'source str> {
@@ -479,6 +534,7 @@ impl<'source> Parser<'source> {
 
         match &self._lookahead {
             Some((Token::LParen, _)) => self.parenthesized_expression(),
+            Some((Token::Identifier, _)) => self.identifier(),
             _ => self.left_hand_side_expression(),
         }
     }
@@ -740,6 +796,14 @@ impl<'source> Parser<'source> {
         self.match_lookahead_type(is_expression_end)
     }
 
+    fn lookahead_is_else(&self) -> bool {
+        self.match_lookahead_type(is_else)
+    }
+
+    fn lookahead_is_indent(&self) -> bool {
+        self.match_lookahead_type(is_indent)
+    }
+
     fn eat_additive_op(&mut self) -> Result<BinaryOp, Result<Expression, &'source str>> {
         let op = match self.eat_binary_op(is_additive_op) {
             Ok(token) => match token.0 {
@@ -875,4 +939,12 @@ fn is_colon(token: &Token) -> bool {
 
 fn is_expression_end(token: &Token) -> bool {
     matches!(token, Token::ExpressionStatementEnd)
+}
+
+fn is_else(token: &Token) -> bool {
+    matches!(token, Token::Else)
+}
+
+fn is_indent(token: &Token) -> bool {
+    matches!(token, Token::Indent)
 }

@@ -56,7 +56,9 @@ pub enum Token {
     #[token("/=")]          AssignDiv,
     #[token("%=")]          AssignMod,
     #[token("+")]           Plus,
+    #[token("++")]          Increment,
     #[token("-")]           Minus,
+    #[token("--")]          Decrement,
     #[token("*")]           Star,
     #[token("/")]           Slash,
     #[token("%")]           Percent,
@@ -74,6 +76,7 @@ pub enum Token {
     #[token("&")]           Ampersand,
     #[token("^")]           Caret,
     #[token("?")]           Try,
+    #[token("~")]           Tilde,
 
     // Identifiers and Literals
     #[regex("[a-zA-Z_][a-zA-Z0-9_]*")] Identifier,

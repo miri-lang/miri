@@ -18,7 +18,7 @@ fn test_whitespace_only() {
 
 #[test]
 fn test_symbols_and_operators() {
-    lexer_test(": => -> <- || == != >= <= > < = + - * / % , . ( ) [ ] { } | & ^ .. ..= += -= *= /= %=", vec![
+    lexer_test(": => -> <- || == != >= <= > < = + - * / % , . ( ) [ ] { } | & ^ .. ..= += -= *= /= %= ~ -- ++", vec![
         Token::Colon,
         Token::FatArrow,
         Token::Arrow,
@@ -54,6 +54,9 @@ fn test_symbols_and_operators() {
         Token::AssignMul,
         Token::AssignDiv,
         Token::AssignMod,
+        Token::Tilde,
+        Token::Decrement,
+        Token::Increment,
     ]);
 }
 
@@ -1184,6 +1187,50 @@ let y = if x % 2 == 0: x * x else: x / x
             Token::Identifier, Token::Star, Token::Identifier, Token::ExpressionStatementEnd,
         Token::Else, Token::Colon,
             Token::Identifier, Token::Slash, Token::Identifier, Token::ExpressionStatementEnd,
+    ]);
+}
+
+#[test]
+fn test_if_with_empty_block() {
+    lexer_test("
+if x
+    // empty then
+else
+    x = 1
+", vec![
+        Token::If, Token::Identifier, Token::ExpressionStatementEnd,
+        Token::Else, Token::ExpressionStatementEnd,
+            Token::Indent,
+            Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+            Token::Dedent,
+    ]);
+}
+
+#[test]
+fn test_if_with_empty_block_no_else() {
+    lexer_test("
+if x
+    // TODO
+", vec![
+        Token::If, Token::Identifier, Token::ExpressionStatementEnd,
+    ]);
+}
+
+#[test]
+fn test_if_with_empty_else_block_with_followup() {
+    lexer_test("
+if x
+    x = 1
+else
+    // empty else
+x = 2
+", vec![
+        Token::If, Token::Identifier, Token::ExpressionStatementEnd,
+            Token::Indent,
+            Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+            Token::Dedent,
+        Token::Else, Token::ExpressionStatementEnd,
+        Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
     ]);
 }
 
