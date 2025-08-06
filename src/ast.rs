@@ -14,6 +14,13 @@ pub enum IfStatementType {
     Unless,
 }
 
+/// Represents the type of a while statement
+#[derive(Debug, Clone, PartialEq)]
+pub enum WhileStatementType {
+    While,
+    Until,
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub enum Statement {
     Empty, // Represents an empty statement, e.g., when a block is empty
@@ -21,6 +28,7 @@ pub enum Statement {
     Block(Vec<Statement>),
     Variable(Vec<VariableDeclaration>),
     If(Box<Expression>, Box<Statement>, Option<Box<Statement>>, IfStatementType), // condition, then_block, else_block, type
+    While(Box<Expression>, Box<Statement>, WhileStatementType), // condition, then_block, type
 }
 
 /// Represents an expression
@@ -39,6 +47,8 @@ pub enum Expression {
     Unary(UnaryOp, Box<Expression>),
 
     Assignment(Box<LeftHandSideExpression>, AssignmentOp, Box<Expression>),
+
+    Conditional(Box<Expression>, Box<Expression>, Option<Box<Expression>>), // condition, then_expr, else_expr
 
     // FieldAccess(Box<Expr>, String), // expr.field
     // Index(Box<Expr>, Box<Expr>),    // expr[index]
@@ -333,10 +343,31 @@ impl AstFactory {
     }
 
     pub fn create_if_statement(&self, condition: Expression, then_block: Statement, else_block: Option<Statement>, if_statement_type: IfStatementType) -> Statement {
-        Statement::If(Box::new(condition), Box::new(then_block), else_block.map(Box::new), if_statement_type)
+        Statement::If(
+            Box::new(condition),
+            Box::new(then_block),
+            else_block.map(Box::new),
+            if_statement_type
+        )
     }
 
     pub fn create_unary_expression(&self, op: UnaryOp, operand: Expression) -> Expression {
         Expression::Unary(op, Box::new(operand))
+    }
+
+    pub fn create_while_statement(&self, condition: Expression, body: Statement, while_statement_type: WhileStatementType) -> Statement {
+        Statement::While(
+            Box::new(condition),
+            Box::new(body),
+            while_statement_type
+        )
+    }
+
+    pub fn create_conditional_expression(&self, then: Expression, condition: Expression, else_branch: Option<Expression>) -> Expression {
+        Expression::Conditional(
+            Box::new(then),
+            Box::new(condition),
+            else_branch.map(Box::new)
+        )
     }
 }

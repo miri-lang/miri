@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
+use std::vec;
+
 use miri::ast::*;
 use miri::lexer::{Lexer};
 use miri::parser::Parser;
@@ -565,9 +567,6 @@ else
     )
     );
 }
-
-// TODO: if with assignment
-// let x = 10 if y > 5 else 20
 
 #[test]
 fn test_parse_if_expression_no_else() {
@@ -1183,6 +1182,108 @@ fn test_unary_expression_decrement() {
     parse_unary_expression_test("--x", UnaryOp::Decrement, Expression::Identifier("x".into()));
 }
 
+#[test]
+fn test_unary_expression_precedence() {
+    parse_test("-x * -2", vec![
+        Statement::Expression(Expression::Binary(
+            Box::new(Expression::Unary(UnaryOp::Negate, Box::new(Expression::Identifier("x".into())))),
+            BinaryOp::Mul,
+            Box::new(Expression::Unary(UnaryOp::Negate, Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(2))))))
+        ))
+    ]);
+}
+
+#[test]
+fn test_while_expression() {
+    parse_while_test("
+while x > 0
+    x -= 1
+",
+    Expression::Binary(
+        Box::new(Expression::Identifier("x".into())),
+        BinaryOp::GreaterThan,
+        Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(0))))
+    ),
+    Statement::Block(vec![
+        Statement::Expression(Expression::Assignment(
+            Box::new(LeftHandSideExpression::Identifier("x".into())),
+            AssignmentOp::AssignSub,
+            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(1))))
+        ))
+    ])
+    );
+}
+
+#[test]
+fn test_while_expression_inline() {
+    parse_while_test("
+while x > 0: x -= 1
+",
+    Expression::Binary(
+        Box::new(Expression::Identifier("x".into())),
+        BinaryOp::GreaterThan,
+        Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(0))))
+    ),
+    Statement::Expression(Expression::Assignment(
+        Box::new(LeftHandSideExpression::Identifier("x".into())),
+        AssignmentOp::AssignSub,
+        Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(1))))
+    ))
+    );
+}
+
+#[test]
+fn test_parse_conditional_expression() {
+    parse_test("
+let x = 10 if y > 5 else 20
+",
+    vec![
+        Statement::Variable(vec![VariableDeclaration {
+            name: "x".into(),
+            typ: None,
+            initializer: Some(Expression::Conditional(
+                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10)))),
+                Box::new(Expression::Binary(
+                    Box::new(Expression::Identifier("y".into())),
+                    BinaryOp::GreaterThan,
+                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(5))))
+                )),
+                Some(Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(20)))))
+            )),
+            declaration_type: VariableDeclarationType::Immutable,
+        }])
+    ]
+    )
+}
+
+#[test]
+fn test_parse_conditional_expression_no_else() {
+    parse_test("
+var x = 100 if y % 2 == 0
+",
+    vec![
+        Statement::Variable(vec![VariableDeclaration {
+            name: "x".into(),
+            typ: None,
+            initializer: Some(Expression::Conditional(
+                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(100)))),
+                Box::new(Expression::Binary(
+                    Box::new(Expression::Binary(
+                        Box::new(Expression::Identifier("y".into())),
+                        BinaryOp::Mod,
+                        Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(2))))
+                    )),
+                    BinaryOp::Equal,
+                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(0))))
+                )),
+                None
+            )),
+            declaration_type: VariableDeclarationType::Mutable,
+        }])
+    ]
+    )
+}
+
 
 fn parse_test<'src>(input: &'src str, _expected_body: Vec<Statement>) {
     let mut lexer = Lexer::new(input);
@@ -1242,4 +1343,15 @@ fn parse_unary_expression_test(input: &str, op: UnaryOp, right: Expression) {
     parse_test(input, vec![
         Statement::Expression(Expression::Unary(op, Box::new(right)))
     ]);
+}
+
+fn parse_while_expression_test(input: &str, condition: Expression, then_block: Statement, while_statement_type: WhileStatementType) {
+    parse_test(input, vec![
+        Statement::While(Box::new(condition), Box::new(then_block), while_statement_type)
+    ]);
+}
+
+fn parse_while_test(input: &str, condition: Expression, then_block: Statement) {
+    parse_while_expression_test(input, condition.clone(), then_block.clone(), WhileStatementType::While);
+    parse_while_expression_test(input.replace("while", "until").as_str(), condition, then_block, WhileStatementType::Until);
 }
