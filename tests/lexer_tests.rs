@@ -1235,6 +1235,15 @@ x = 2
 }
 
 #[test]
+fn test_conditional_expression() {
+    lexer_test("
+let x = 10 if y > 5 else 20
+", vec![
+        Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::If, Token::Identifier, Token::GreaterThan, Token::Int, Token::Else, Token::Int, Token::ExpressionStatementEnd,
+    ]);
+}
+
+#[test]
 #[should_panic(expected = "Unsupported token")]
 fn test_invalid_characters() {
     lexer_test("valid @ invalid", vec![]);

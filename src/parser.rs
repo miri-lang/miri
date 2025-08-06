@@ -63,6 +63,8 @@ impl<'source> Parser<'source> {
             | BlockStatement
             | VariableStatement
             | IfStatement
+            | IterationStatement
+            | EmptyStatement
             ;
     */
     fn statement(&mut self) -> Result<Statement, &'source str> {
@@ -75,6 +77,9 @@ impl<'source> Parser<'source> {
             Some((Token::Let, _)) | Some((Token::Var, _)) => self.variable_statement()?,
             Some((Token::If, _)) => self.if_statement(IfStatementType::If)?,
             Some((Token::Unless, _)) => self.if_statement(IfStatementType::Unless)?,
+            Some((Token::While, _)) => self.while_statement(WhileStatementType::While)?,
+            Some((Token::Until, _)) => self.while_statement(WhileStatementType::Until)?,
+            // Some((Token::For, _)) => self.for_statement()?,
             _ => self.expression_statement()?,
         };
         Ok(statement)
@@ -237,7 +242,34 @@ impl<'source> Parser<'source> {
         Ok(self._ast_factory.create_if_statement(condition, then_block, else_block, if_statement_type))
     }
 
+    /*
+        WhileStatement
+            : 'while' Expression ':' ExpressionStatement EXPRESSION_END
+            | 'while' Expression EXPRESSION_END BlockStatement
+            | 'until' Expression ':' ExpressionStatement EXPRESSION_END
+            | 'until' Expression EXPRESSION_END BlockStatement
+            ;
+    */
+    fn while_statement(&mut self, while_statement_type: WhileStatementType) -> Result<Statement, &'source str> {
+        if while_statement_type == WhileStatementType::Until {
+            self.eat_token(&Token::Until)?;
+        } else {
+            self.eat_token(&Token::While)?;
+        }
+        let condition = self.expression()?;
 
+        self.try_eat_colon();
+        self.try_eat_expression_end();
+
+        let then_block = if self._lookahead.is_none() || self.lookahead_is_else() {
+            Statement::Empty // If there's no else block, we can treat the then block as empty
+        } else {
+            self.statement()?
+        };
+
+        Ok(self._ast_factory.create_while_statement(condition, then_block, while_statement_type))
+    }
+    
     /*
         ExpressionStatement
             : Expression EXPRESSION_END
@@ -266,11 +298,39 @@ impl<'source> Parser<'source> {
 
     /*
         Expression
-            : AssignmentExpression
+            : ConditionalExpression
             ;
     */
     fn expression(&mut self) -> Result<Expression, &'source str> {
-        let expression = self.assignment_expression()?;
+        let expression = self.conditional_expression()?;
+        Ok(expression)
+    }
+
+    /*
+        ConditionalExpression
+            : AssignmentExpression
+            | AssignmentExpression 'if' Expression ('else' Expression)
+            ;
+    */
+    fn conditional_expression(&mut self) -> Result<Expression, &'source str> {
+        let mut expression = self.assignment_expression()?;
+
+        if self.match_lookahead_type(|t| t == &Token::If) {
+            self.eat_token(&Token::If)?;
+            let condition = self.expression()?;
+
+            self.try_eat_expression_end();
+
+            let else_branch = if self.match_lookahead_type(|t| t == &Token::Else) {
+                self.eat_token(&Token::Else)?;
+                Some(self.expression()?)
+            } else {
+                None
+            };
+
+            expression = self._ast_factory.create_conditional_expression(expression, condition, else_branch);
+        }
+
         Ok(expression)
     }
 
@@ -528,6 +588,10 @@ impl<'source> Parser<'source> {
             ;
     */
     fn primary_expression(&mut self) -> Result<Expression, &'source str> {
+        if self._lookahead.is_none() {
+            return Err("Unexpected end of input");
+        }
+
         if self.lookahead_is_literal() {
             return self.literal_expression();
         }
@@ -535,7 +599,11 @@ impl<'source> Parser<'source> {
         match &self._lookahead {
             Some((Token::LParen, _)) => self.parenthesized_expression(),
             Some((Token::Identifier, _)) => self.identifier(),
-            _ => self.left_hand_side_expression(),
+            _ => {
+                // TODO: this error message should be more descriptive
+                Err("Unsupported token")
+                // was: self.left_hand_side_expression()
+            }
         }
     }
 
