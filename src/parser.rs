@@ -310,27 +310,38 @@ impl<'source> Parser<'source> {
         ConditionalExpression
             : AssignmentExpression
             | AssignmentExpression 'if' Expression ('else' Expression)
+            | AssignmentExpression 'unless' Expression ('else' Expression)
             ;
     */
     fn conditional_expression(&mut self) -> Result<Expression, &'source str> {
         let mut expression = self.assignment_expression()?;
 
-        if self.match_lookahead_type(|t| t == &Token::If) {
-            self.eat_token(&Token::If)?;
-            let condition = self.expression()?;
+        let conditional_token = match &self._lookahead {
+            Some((Token::If, _)) => Token::If,
+            Some((Token::Unless, _)) => Token::Unless,
+            _ => return Ok(expression),
+        };
 
-            self.try_eat_expression_end();
+        let if_statement_type = if conditional_token == Token::If {
+            IfStatementType::If
+        } else {
+            IfStatementType::Unless
+        };
 
-            let else_branch = if self.match_lookahead_type(|t| t == &Token::Else) {
-                self.eat_token(&Token::Else)?;
-                Some(self.expression()?)
-            } else {
-                None
-            };
+        self.eat_token(&conditional_token)?;
+        let condition = self.expression()?;
 
-            expression = self._ast_factory.create_conditional_expression(expression, condition, else_branch);
-        }
+        self.try_eat_expression_end();
 
+        let else_branch = if self.match_lookahead_type(|t| t == &Token::Else) {
+            self.eat_token(&Token::Else)?;
+            Some(self.expression()?)
+        } else {
+            None
+        };
+
+        expression = self._ast_factory.create_conditional_expression(expression, condition, else_branch, if_statement_type);
+        
         Ok(expression)
     }
 

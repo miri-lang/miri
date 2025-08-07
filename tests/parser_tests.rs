@@ -9,6 +9,21 @@ use miri::parser::Parser;
 
 
 #[test]
+fn test_parse_empty_program() {
+    parse_test("", vec![Statement::Empty]);
+}
+
+#[test]
+fn test_parse_program_with_only_comments_and_whitespace() {
+    parse_test("
+// This is a comment
+    // This is an indented comment
+
+/* Another comment */
+", vec![Statement::Empty]);
+}
+
+#[test]
 fn test_parse_integer_literal() {
     parse_integer_test("42", IntegerLiteral::I8(42));
     parse_integer_test("12345", IntegerLiteral::I16(12345));
@@ -206,6 +221,42 @@ fn test_parse_simple_parentheses_expression() {
             Expression::Literal(Literal::Integer(IntegerLiteral::I8(123)))
         )
     ]);
+}
+
+#[test]
+#[should_panic(expected = "Unsupported token")]
+fn test_parse_consecutive_operators() {
+    // Two binary operators in a row is invalid.
+    parse_test("5 + * 2", vec![]);
+}
+
+#[test]
+#[should_panic(expected = "Unexpected token type")]
+fn test_parse_mismatched_parentheses() {
+    // Mismatched brackets should be a syntax error.
+    parse_test("(5 + 2]", vec![]);
+}
+
+#[test]
+#[should_panic(expected = "Unexpected end of input")]
+fn test_parse_incomplete_expression() {
+    // The parser should error on an incomplete binary expression.
+    parse_test("5 +", vec![]);
+}
+
+#[test]
+#[should_panic(expected = "Unsupported left-hand side expression type")]
+fn test_parse_invalid_assignment_target() {
+    // The left-hand side of an assignment must be a valid target (e.g., identifier).
+    // An expression like `x + 1` is not a valid target.
+    parse_test("x + 1 = 10", vec![]);
+}
+
+#[test]
+#[should_panic(expected = "Expected identifier")]
+fn test_parse_invalid_variable_declaration() {
+    // A literal cannot be a variable name.
+    parse_test("let 123 = 456", vec![]);
 }
 
 #[test]
@@ -1233,6 +1284,47 @@ while x > 0: x -= 1
 }
 
 #[test]
+fn test_while_loop_containing_if_statement() {
+    parse_while_test("
+while x < 10
+    if x % 2 == 0
+        x += 1
+    else
+        x += 2
+",
+    Expression::Binary(
+        Box::new(Expression::Identifier("x".into())),
+        BinaryOp::LessThan,
+        Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10))))
+    ),
+    Statement::Block(vec![
+        Statement::If(
+            Box::new(Expression::Binary(
+                Box::new(Expression::Binary(
+                    Box::new(Expression::Identifier("x".into())),
+                    BinaryOp::Mod,
+                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(2))))
+                )),
+                BinaryOp::Equal,
+                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(0))))
+            )),
+            Box::new(Statement::Block(vec![Statement::Expression(Expression::Assignment(
+                Box::new(LeftHandSideExpression::Identifier("x".into())),
+                AssignmentOp::AssignAdd,
+                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(1))))
+            ))])),
+            Some(Box::new(Statement::Block(vec![Statement::Expression(Expression::Assignment(
+                Box::new(LeftHandSideExpression::Identifier("x".into())),
+                AssignmentOp::AssignAdd,
+                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(2))))
+            ))]))),
+            IfStatementType::If
+        )
+    ])
+    );
+}
+
+#[test]
 fn test_parse_conditional_expression() {
     parse_test("
 let x = 10 if y > 5 else 20
@@ -1248,7 +1340,8 @@ let x = 10 if y > 5 else 20
                     BinaryOp::GreaterThan,
                     Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(5))))
                 )),
-                Some(Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(20)))))
+                Some(Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(20))))),
+                IfStatementType::If
             )),
             declaration_type: VariableDeclarationType::Immutable,
         }])
@@ -1276,12 +1369,93 @@ var x = 100 if y % 2 == 0
                     BinaryOp::Equal,
                     Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(0))))
                 )),
-                None
+                None,
+                IfStatementType::If
             )),
             declaration_type: VariableDeclarationType::Mutable,
         }])
     ]
     )
+}
+
+#[test]
+fn test_parse_conditional_expression_with_unless() {
+    parse_test("
+var x = 1 unless y
+",
+    vec![
+        Statement::Variable(vec![VariableDeclaration {
+            name: "x".into(),
+            typ: None,
+            initializer: Some(Expression::Conditional(
+                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(1)))),
+                Box::new(Expression::Identifier("y".into())),
+                None,
+                IfStatementType::Unless
+            )),
+            declaration_type: VariableDeclarationType::Mutable,
+        }])
+    ]
+    )
+}
+
+#[test]
+fn test_conditional_expression_as_if_condition() {
+    // Using a ternary-style if as the condition for a statement-style if.
+    parse_if_expression_test("
+if a if b else c
+    x = 1
+",
+    Expression::Conditional(
+        Box::new(Expression::Identifier("a".into())),
+        Box::new(Expression::Identifier("b".into())),
+        Some(Box::new(Expression::Identifier("c".into()))),
+        IfStatementType::If
+    ),
+    Statement::Block(vec![
+        Statement::Expression(Expression::Assignment(
+            Box::new(LeftHandSideExpression::Identifier("x".into())),
+            AssignmentOp::Assign,
+            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(1))))
+        ))
+    ]),
+    None,
+        IfStatementType::If
+    );
+}
+
+#[test]
+fn test_precedence_of_bitwise_and_equality() {
+    // Equality (==) has lower precedence than bitwise AND (&).
+    // This should parse as `(x & 10) == 10`.
+    parse_test("x & 10 == 10", vec![
+        Statement::Expression(Expression::Binary(
+            Box::new(Expression::Binary(
+                Box::new(Expression::Identifier("x".into())),
+                BinaryOp::BitwiseAnd,
+                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10))))
+            )),
+            BinaryOp::Equal,
+            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10))))
+        ))
+    ]);
+}
+
+#[test]
+fn test_precedence_of_logical_and_or() {
+    // `and` has higher precedence than `or`.
+    // This should parse as `(true and false) or true`.
+    parse_test("true and false or true", vec![
+        Statement::Expression(Expression::Logical(
+            Box::new(Expression::Logical(
+                Box::new(Expression::Literal(Literal::Boolean(true))),
+                BinaryOp::And,
+                Box::new(Expression::Literal(Literal::Boolean(false)))
+            )),
+            BinaryOp::Or,
+            Box::new(Expression::Literal(Literal::Boolean(true)))
+        ))
+    ]);
 }
 
 
