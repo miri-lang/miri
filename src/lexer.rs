@@ -86,9 +86,9 @@ pub enum Token {
     #[regex(r#""[^"\\]*(?:\\.[^"\\]*)*""#)] DoubleQuotedString,
     #[regex("[0-9]+(?:_[0-9]+)*(\\.[0-9]+(?:_[0-9]+)*)?([eE][+-]?[0-9]+(?:_[0-9]+)*)?", priority = 1)] Float,
     #[regex("[0-9]+(?:_[0-9]+)*", priority = 2)] Int,
-    #[regex("0b[0-1_]+", priority = 2)] BinaryNumber,
-    #[regex("0x[0-9a-fA-F_]+", priority = 2)] HexNumber,
-    #[regex("0o[0-7_]+", priority = 2)] OctalNumber,
+    #[regex("0[bB][0-1_]+", priority = 2)] BinaryNumber,
+    #[regex("0[xX][0-9a-fA-F_]+", priority = 2)] HexNumber,
+    #[regex("0[oO][0-7_]+", priority = 2)] OctalNumber,
 
     // Comments and Whitespace
     #[regex("//.*", logos::skip)] InlineComment,
@@ -117,7 +117,7 @@ pub struct Lexer<'source> {
     paren_stack: Vec<usize>, // stack of parenthesis levels
     bracket_stack: Vec<usize>, // stack of square bracket levels
     curly_brace_stack: Vec<usize>, // stack of curly brace levels
-    previous_tokens: Vec<TokenSpan>, // keeps track of previous tokens, primarily for indentation handling
+    previous_tokens: Vec<Token>, // keeps track of previous tokens, primarily for indentation handling
 }
 
 impl<'source> Iterator for Lexer<'source> {
@@ -125,15 +125,15 @@ impl<'source> Iterator for Lexer<'source> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let item = self.generate_token();
-        if item.is_some() {
-            self.memorize_token(item.clone().unwrap());
+        if let Some((ref token, _)) = item {
+            self.memorize_token(token.clone());
         }
         item
     }
 }
 
 impl<'source> Lexer<'source> {
-    const MAX_PREVIOUS_TOKENS: usize = 5;
+    const MAX_PREVIOUS_TOKENS: usize = 3;
 
     pub fn new(source: &'source str) -> Self {
         Lexer {
@@ -364,7 +364,7 @@ impl<'source> Lexer<'source> {
         panic!("[Lexer] Unsupported token '{}' in line '{}'", invalid_part, snippet);
     }
 
-    fn memorize_token(&mut self, token: TokenSpan) {
+    fn memorize_token(&mut self, token: Token) {
         self.previous_tokens.push(token);
         if self.previous_tokens.len() > Self::MAX_PREVIOUS_TOKENS {
             self.previous_tokens.remove(0); // Keep only the limited amount tokens
@@ -383,19 +383,13 @@ impl<'source> Lexer<'source> {
         if self.previous_tokens.len() < tokens.len() {
             return false;
         }
-        for (i, token) in tokens.iter().enumerate() {
-            if self.previous_tokens[self.previous_tokens.len() - tokens.len() + i].0 != *token {
-                return false;
-            }
-        }
-        true
+
+        let start_index = self.previous_tokens.len() - tokens.len();
+        &self.previous_tokens[start_index..] == tokens
     }
     
     fn match_previous_token(&self, token: Token) -> bool {
-        if self.previous_tokens.is_empty() {
-            return false;
-        }
-        self.previous_tokens.last().unwrap().0 == token
+        self.previous_tokens.last().map_or(false, |t| *t == token)
     }
 
     fn prev_tokens_match_function_declaration(&self) -> bool {

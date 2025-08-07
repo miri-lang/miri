@@ -87,6 +87,18 @@ fn test_complex_assignment_chains() {
 }
 
 #[test]
+fn test_ambiguous_operator_sequences() {
+    // Should be parsed as -- and -
+    lexer_test("---", vec![Token::Decrement, Token::Minus]);
+    // Should be parsed as ++ and +
+    lexer_test("+++", vec![Token::Increment, Token::Plus]);
+    // Should be parsed as .. and .
+    lexer_test("...", vec![Token::Range, Token::Dot]);
+    // Should be parsed as two separate Pipe tokens, not one Parallel
+    lexer_test("a | | b", vec![Token::Identifier, Token::Pipe, Token::Pipe, Token::Identifier]);
+}
+
+#[test]
 fn test_very_long_identifier() {
     let long_name = "a".repeat(1000);
     lexer_test(&long_name, vec![Token::Identifier]);
@@ -237,6 +249,24 @@ fn test_string_escape_sequences() {
 }
 
 #[test]
+fn test_string_with_uncommon_escapes() {
+    // Test escapes for backslash and different quote types
+    lexer_test(r#""a \\ b" 'c \' d' "e \" f""#, vec![
+        Token::DoubleQuotedString,
+        Token::SingleQuotedString,
+        Token::DoubleQuotedString,
+    ]);
+}
+
+#[test]
+#[should_panic(expected = "Unsupported token")]
+fn test_unclosed_string_literal() {
+    // An unclosed string should likely be tokenized up to the end of the line
+    // and not consume the rest of the file.
+    lexer_test("'unclosed string", vec![]);
+}
+
+#[test]
 fn test_number_edge_cases() {
     lexer_test("0 00 1_000_000 0.0 .5 5. -19 1.0e10 6.67430e-11 1E10 1e-5 1.5E+3 1.5e-10 1_000e10", vec![
         Token::Int,
@@ -372,6 +402,27 @@ fn test_invalid_octal() {
         Token::OctalNumber,
         Token::Identifier,
         Token::Identifier,
+    ]);
+}
+
+#[test]
+fn test_numbers_starting_with_dot() {
+    // TODO: Should this be allowed? Works in Python, but not in Rust.
+    lexer_test(".123", vec![Token::Dot, Token::Int]);
+}
+
+#[test]
+fn test_numbers_ending_with_dot() {
+    // TODO: Should this be allowed? Works in Python and Rust.
+    lexer_test("123.", vec![Token::Int, Token::Dot]);
+}
+
+#[test]
+fn test_hex_octal_binary_case_insensitivity() {
+    lexer_test("0X1A 0B101 0O77", vec![
+        Token::HexNumber,
+        Token::BinaryNumber,
+        Token::OctalNumber,
     ]);
 }
 
@@ -1077,6 +1128,28 @@ let x = 1
     ]);
 }
 
+#[test]
+fn test_indentation_rules_after_nested_brackets() {
+    lexer_test("
+let x = [
+    1, // Indentation is ignored here
+    {
+        'a': 2 // And here
+    },
+    3
+]
+// Indentation should apply again here
+let y = 1
+", vec![
+        Token::Let, Token::Identifier, Token::Assign, Token::LBracket,
+        Token::Int, Token::Comma,
+        Token::LBrace, Token::SingleQuotedString, Token::Colon, Token::Int, Token::RBrace, Token::Comma,
+        Token::Int,
+        Token::RBracket, Token::ExpressionStatementEnd,
+        Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+    ]);
+}
+
 // TODO: Not sure we need to care about unexpected indentation in the lexer.
 // #[test]
 // #[should_panic(expected = "Unexpected indentation")]
@@ -1239,7 +1312,19 @@ fn test_conditional_expression() {
     lexer_test("
 let x = 10 if y > 5 else 20
 ", vec![
-        Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::If, Token::Identifier, Token::GreaterThan, Token::Int, Token::Else, Token::Int, Token::ExpressionStatementEnd,
+        Token::Let, Token::Identifier, Token::Assign, Token::Int,
+        Token::If, Token::Identifier, Token::GreaterThan, Token::Int, Token::ExpressionStatementEnd,
+        Token::Else, Token::Int, Token::ExpressionStatementEnd,
+    ]);
+}
+
+#[test]
+fn test_conditional_expression_no_else() {
+    lexer_test("
+let x = 10 if y > 5
+", vec![
+        Token::Let, Token::Identifier, Token::Assign, Token::Int,
+        Token::If, Token::Identifier, Token::GreaterThan, Token::Int, Token::ExpressionStatementEnd,
     ]);
 }
 
