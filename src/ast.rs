@@ -48,7 +48,7 @@ pub enum Expression {
 
     Assignment(Box<LeftHandSideExpression>, AssignmentOp, Box<Expression>),
 
-    Conditional(Box<Expression>, Box<Expression>, Option<Box<Expression>>), // condition, then_expr, else_expr
+    Conditional(Box<Expression>, Box<Expression>, Option<Box<Expression>>, IfStatementType), // condition, then_expr, else_expr
 
     // FieldAccess(Box<Expr>, String), // expr.field
     // Index(Box<Expr>, Box<Expr>),    // expr[index]
@@ -363,11 +363,12 @@ impl AstFactory {
         )
     }
 
-    pub fn create_conditional_expression(&self, then: Expression, condition: Expression, else_branch: Option<Expression>) -> Expression {
+    pub fn create_conditional_expression(&self, then: Expression, condition: Expression, else_branch: Option<Expression>, if_statement_type: IfStatementType) -> Expression {
         Expression::Conditional(
             Box::new(then),
             Box::new(condition),
-            else_branch.map(Box::new)
+            else_branch.map(Box::new),
+            if_statement_type
         )
     }
 }
