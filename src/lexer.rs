@@ -151,89 +151,91 @@ impl<'source> Lexer<'source> {
     }
 
     fn generate_token(&mut self) -> Option<TokenSpan> {
-        if let Some(item) = self.pending_tokens.pop() {
-            return Some(item);
-        }
-
-        let next_result = self.inner.next();
-
-        // Handle EOF - generate remaining dedent tokens
-        if next_result.is_none() {
-            if !self.eof_handled {
-                self.eof_handled = true;
-                let source_len = self.source.len();
-                
-                // Generate dedent tokens for all remaining indentation levels
-                while self.indent_stack.len() > 1 {
-                    self.pending_tokens.push((Token::Dedent, source_len..source_len));
-                    self.indent_stack.pop();
-                }
-                
-                // Return the first pending dedent token if any
-                return self.pending_tokens.pop();
+        loop {
+            if let Some(item) = self.pending_tokens.pop() {
+                return Some(item);
             }
-            return None;
-        }
 
-        let token = next_result.unwrap();
-        let span = self.inner.span();
-        let src = self.inner.source();
+            let next_result = self.inner.next();
 
-        if token.is_err() {
-            self.panic_unsupported_token(&span, src);
-            return None;
-        }
-
-        let unwrapped_token = token.unwrap();
-        match unwrapped_token {
-            Token::MultilineComment => {
-                self.parse_nested_comment();
-                return self.next();
-            },
-            Token::Newline => {
-                if self.have_previous_tokens() {
-                    self.parse_newline();
+            // Handle EOF - generate remaining dedent tokens
+            if next_result.is_none() {
+                if !self.eof_handled {
+                    self.eof_handled = true;
+                    let source_len = self.source.len();
+                    
+                    // Generate dedent tokens for all remaining indentation levels
+                    while self.indent_stack.len() > 1 {
+                        self.pending_tokens.push((Token::Dedent, source_len..source_len));
+                        self.indent_stack.pop();
+                    }
+                    
+                    // Return the first pending dedent token if any
+                    return self.pending_tokens.pop();
                 }
-                return self.next();
-            },
-            Token::IncorrectSymbol => {
+                return None;
+            }
+
+            let token = next_result.unwrap();
+            let span = self.inner.span();
+            let src = self.inner.source();
+
+            if token.is_err() {
                 self.panic_unsupported_token(&span, src);
                 return None;
-            },
-            Token::LParen => {
-                self.paren_stack.push(self.inner.span().start);
-                return Some((Token::LParen, span));
-            },
-            Token::RParen => {
-                self.paren_stack.pop();
-                return Some((Token::RParen, span));
-            },
-            Token::LBracket => {
-                self.bracket_stack.push(self.inner.span().start);
-                return Some((Token::LBracket, span));
-            },
-            Token::RBracket => {
-                self.bracket_stack.pop();
-                return Some((Token::RBracket, span));
-            },
-            Token::LBrace => {
-                self.curly_brace_stack.push(self.inner.span().start);
-                return Some((Token::LBrace, span));
-            },
-            Token::RBrace => {
-                self.curly_brace_stack.pop();
-                return Some((Token::RBrace, span));
-            },
-            Token::Else => {
-                // Add an ExpressionStatementEnd token if the previous token is not a Dedent or ExpressionStatementEnd
-                // This is to ensure that the inline if/else block is treated as a separate statement
-                if self.have_previous_tokens() && !self.match_previous_token(Token::Dedent) && !self.match_previous_token(Token::ExpressionStatementEnd) {
-                    self.pending_tokens.push((Token::Else, span.clone()));
-                    return Some((Token::ExpressionStatementEnd, span));
-                }
-                return Some((Token::Else, span));
-            },
-            _ => Some((unwrapped_token, span))
+            }
+
+            let unwrapped_token = token.unwrap();
+            match unwrapped_token {
+                Token::MultilineComment => {
+                    self.parse_nested_comment();
+                    continue;
+                },
+                Token::Newline => {
+                    if self.have_previous_tokens() {
+                        self.parse_newline();
+                    }
+                    continue;
+                },
+                Token::IncorrectSymbol => {
+                    self.panic_unsupported_token(&span, src);
+                    return None;
+                },
+                Token::LParen => {
+                    self.paren_stack.push(self.inner.span().start);
+                    return Some((Token::LParen, span));
+                },
+                Token::RParen => {
+                    self.paren_stack.pop();
+                    return Some((Token::RParen, span));
+                },
+                Token::LBracket => {
+                    self.bracket_stack.push(self.inner.span().start);
+                    return Some((Token::LBracket, span));
+                },
+                Token::RBracket => {
+                    self.bracket_stack.pop();
+                    return Some((Token::RBracket, span));
+                },
+                Token::LBrace => {
+                    self.curly_brace_stack.push(self.inner.span().start);
+                    return Some((Token::LBrace, span));
+                },
+                Token::RBrace => {
+                    self.curly_brace_stack.pop();
+                    return Some((Token::RBrace, span));
+                },
+                Token::Else => {
+                    // Add an ExpressionStatementEnd token if the previous token is not a Dedent or ExpressionStatementEnd
+                    // This is to ensure that the inline if/else block is treated as a separate statement
+                    if self.have_previous_tokens() && !self.match_previous_token(Token::Dedent) && !self.match_previous_token(Token::ExpressionStatementEnd) {
+                        self.pending_tokens.push((Token::Else, span.clone()));
+                        return Some((Token::ExpressionStatementEnd, span));
+                    }
+                    return Some((Token::Else, span));
+                },
+                _ => return Some((unwrapped_token, span))
+            }
         }
     }
 
