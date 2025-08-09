@@ -3,7 +3,7 @@
 
 use std::vec;
 
-use miri::lexer::{Lexer, Token};
+use miri::{lexer::{Lexer, Token}, syntax_error::SyntaxErrorKind};
 
 
 #[test]
@@ -114,13 +114,8 @@ fn test_number_identifier_boundaries() {
 }
 
 #[test]
-#[should_panic(expected = "Unsupported token")]
 fn test_unicode_identifiers() {
-    lexer_test("café naïve résumé", vec![
-        Token::Identifier,
-        Token::Identifier,
-        Token::Identifier,
-    ]);
+    lexer_error_test("café naïve résumé", SyntaxErrorKind::InvalidToken);
 }
 
 #[test]
@@ -259,11 +254,10 @@ fn test_string_with_uncommon_escapes() {
 }
 
 #[test]
-#[should_panic(expected = "Unsupported token")]
 fn test_unclosed_string_literal() {
     // An unclosed string should likely be tokenized up to the end of the line
     // and not consume the rest of the file.
-    lexer_test("'unclosed string", vec![]);
+    lexer_error_test("'unclosed string", SyntaxErrorKind::InvalidToken);
 }
 
 #[test]
@@ -437,9 +431,8 @@ fn test_symbol_identifier_boundaries() {
 }
 
 #[test]
-#[should_panic(expected = "Unsupported token")]
 fn test_invalid_symbol_syntax() {
-    lexer_test("valid ::invalid", vec![]);
+    lexer_error_test("valid ::invalid", SyntaxErrorKind::InvalidToken);
 }
 
 #[test]
@@ -559,9 +552,8 @@ fn test_deeply_nested_comments() {
 }
 
 #[test]
-#[should_panic(expected = "Unclosed multiline comment")]
 fn test_unclosed_nested_comment() {
-    lexer_test("/* outer /* inner */ still open", vec![]);
+    lexer_error_test("/* outer /* inner */ still open", SyntaxErrorKind::UnclosedMultilineComment);
 }
 
 #[test]
@@ -784,9 +776,8 @@ fn test_mixed_whitespace_types() {
 }
 
 #[test]
-#[should_panic(expected = "Indentation error")]
 fn test_uneven_indent_spaces() {
-    lexer_test("
+    lexer_error_test("
 // Uneven spaces
 def func()
    def three_spaces()
@@ -795,25 +786,23 @@ def func()
     def four_spaces()
       print(\"Hello\")
   print(\"World\")
-", vec![]);
+", SyntaxErrorKind::IndentationMismatch);
 }
 
 #[test]
-#[should_panic(expected = "Indentation error")]
 fn test_uneven_indent_tabs() {
-    lexer_test("
+    lexer_error_test("
 def func()
 \tdef tab()
 \t\t\tdef tab()
 \t\tdef tab()
 print(\"Hello\")
-", vec![]);
+", SyntaxErrorKind::IndentationMismatch);
 }
 
 #[test]
-#[should_panic(expected = "Indentation error")]
 fn test_uneven_indent_spaces_tabs() {
-    lexer_test("
+    lexer_error_test("
 // Mixed tabs and spaces
 def func()
 \t\t\tdef tab()
@@ -822,7 +811,7 @@ def func()
   \t\t\tdef tab()
     print(\"Indented with tabs\")
   print(\"Dedented with spaces\")
-", vec![]);
+", SyntaxErrorKind::IndentationMismatch);
 }
 
 #[test]
@@ -1329,9 +1318,8 @@ let x = 10 if y > 5
 }
 
 #[test]
-#[should_panic(expected = "Unsupported token")]
 fn test_invalid_characters() {
-    lexer_test("valid @ invalid", vec![]);
+    lexer_error_test("valid @ invalid", SyntaxErrorKind::InvalidToken);
 }
 
 #[test]
@@ -1354,7 +1342,16 @@ fn test_large_nested_structure() {
 
 fn lexer_test(input: &str, expected: Vec<Token>) {
     let lexer = Lexer::new(input);
-    let tokens: Vec<Token> = lexer.map(|(token, _span)| token).collect();
+    let tokens: Vec<Token> = lexer.map(|result| result.unwrap().0).collect();
     assert_eq!(tokens, expected);
 }
 
+fn lexer_error_test(input: &str, expected_kind: SyntaxErrorKind) {
+    let lexer = Lexer::new(input);
+    let results: Vec<_> = lexer.collect();
+
+    let error = results.iter().find_map(|res| res.as_ref().err().cloned());
+
+    assert!(error.is_some(), "Expected a lexer error, but it succeeded without errors.");
+    assert_eq!(error.unwrap().kind, expected_kind, "Lexer produced an error of the wrong kind.");
+}

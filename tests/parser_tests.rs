@@ -6,6 +6,7 @@ use std::vec;
 use miri::ast::*;
 use miri::lexer::{Lexer};
 use miri::parser::Parser;
+use miri::syntax_error::SyntaxErrorKind;
 
 
 #[test]
@@ -224,39 +225,52 @@ fn test_parse_simple_parentheses_expression() {
 }
 
 #[test]
-#[should_panic(expected = "Unsupported token")]
 fn test_parse_consecutive_operators() {
     // Two binary operators in a row is invalid.
-    parse_test("5 + * 2", vec![]);
+    parse_error_test(
+        "5 + * 2", 
+        SyntaxErrorKind::UnexpectedToken { 
+            expected: "literal, parenthesized expression or identifier".into(), 
+            found: "*".into() 
+        }
+    );
 }
 
 #[test]
-#[should_panic(expected = "Unexpected token type")]
 fn test_parse_mismatched_parentheses() {
     // Mismatched brackets should be a syntax error.
-    parse_test("(5 + 2]", vec![]);
+    parse_error_test(
+        "(5 + 2]", 
+        SyntaxErrorKind::UnexpectedToken { 
+            expected: "a different token".into(),
+            found: "RBracket".into() 
+        }
+    );
 }
 
 #[test]
-#[should_panic(expected = "Unexpected end of input")]
 fn test_parse_incomplete_expression() {
     // The parser should error on an incomplete binary expression.
-    parse_test("5 +", vec![]);
+    parse_error_test(
+        "5 +", 
+        SyntaxErrorKind::UnexpectedEOF
+    );
 }
 
 #[test]
-#[should_panic(expected = "Unsupported left-hand side expression type")]
 fn test_parse_invalid_assignment_target() {
     // The left-hand side of an assignment must be a valid target (e.g., identifier).
     // An expression like `x + 1` is not a valid target.
-    parse_test("x + 1 = 10", vec![]);
+    parse_error_test("x + 1 = 10", SyntaxErrorKind::InvalidLeftHandSideExpression);
 }
 
 #[test]
-#[should_panic(expected = "Expected identifier")]
 fn test_parse_invalid_variable_declaration() {
     // A literal cannot be a variable name.
-    parse_test("let 123 = 456", vec![]);
+    parse_error_test("let 123 = 456", SyntaxErrorKind::UnexpectedToken {
+        expected: "identifier".into(),
+        found: "int".into(),
+    });
 }
 
 #[test]
@@ -1468,6 +1482,15 @@ fn parse_test<'src>(input: &'src str, _expected_body: Vec<Statement>) {
     assert_eq!(program, Program {
         body: _expected_body
     }, "Parsing failed for input: {}", input);
+}
+
+fn parse_error_test<'src>(input: &'src str, _expected_error: SyntaxErrorKind) {
+    let mut lexer = Lexer::new(input);
+    let mut parser = Parser::new(&mut lexer, input, AstFactory::new());
+    let parse_result = parser.parse();
+
+    assert!(parse_result.is_err());
+    assert_eq!(parse_result.unwrap_err().kind, _expected_error);
 }
 
 fn parse_variable_declaration_test(input: &str, expected: Vec<VariableDeclaration>) {

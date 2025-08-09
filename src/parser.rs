@@ -3,7 +3,8 @@
 
 use std::vec;
 
-use crate::lexer::{Lexer, Token, TokenSpan};
+use crate::lexer::{token_to_string, Lexer, Token, TokenSpan};
+use crate::syntax_error::{Span, SyntaxError, SyntaxErrorKind};
 use crate::ast::*;
 
 
@@ -24,8 +25,8 @@ impl<'source> Parser<'source> {
         }
     }
 
-    pub fn parse(&mut self) -> Result<Program, &'source str> {
-        self._lookahead = self.lexer.next();
+    pub fn parse(&mut self) -> Result<Program, SyntaxError> {
+        self._lookahead = self.lexer.next().transpose()?;
         self.program()
     }
 
@@ -34,7 +35,7 @@ impl<'source> Parser<'source> {
             : StatementList
             ;
     */
-    fn program(&mut self) -> Result<Program, &'source str> {
+    fn program(&mut self) -> Result<Program, SyntaxError> {
         let statements = self.statement_list()?;
         Ok(self._ast_factory.create_program(statements))
     }
@@ -45,7 +46,7 @@ impl<'source> Parser<'source> {
             | StatementList Statement
             ;
     */
-    fn statement_list(&mut self) -> Result<Vec<Statement>, &'source str> {
+    fn statement_list(&mut self) -> Result<Vec<Statement>, SyntaxError> {
         let mut statements = vec![self.statement()?];
 
         // Continue parsing statements until we hit a Dedent or end of input
@@ -67,7 +68,7 @@ impl<'source> Parser<'source> {
             | EmptyStatement
             ;
     */
-    fn statement(&mut self) -> Result<Statement, &'source str> {
+    fn statement(&mut self) -> Result<Statement, SyntaxError> {
         if self._lookahead.is_none() {
             return Ok(Statement::Empty);
         }
@@ -87,39 +88,19 @@ impl<'source> Parser<'source> {
 
     /*
         VariableStatement
-            : LetVariableDeclaration
-            | VarVariableDeclaration
-            ;
-    */
-    fn variable_statement(&mut self) -> Result<Statement, &'source str> {
-        match &self._lookahead {
-            Some((Token::Let, _)) => self.let_variable_declaration(),
-            Some((Token::Var, _)) => self.var_variable_declaration(),
-            _ => Err("Expected variable declaration"),
-        }
-    }
-
-    /*
-        LetVariableDeclaration
             : 'let' VariableDeclarationList EXPRESSION_END
+            | 'var' VariableDeclarationList EXPRESSION_END
             ;
     */
-    fn let_variable_declaration(&mut self) -> Result<Statement, &'source str> {
-        self.eat_token(&Token::Let)?;
-        let declarations = self.variable_declaration_list(&VariableDeclarationType::Immutable)?;
-        self.eat_token(&Token::ExpressionStatementEnd)?;
-        Ok(self._ast_factory.create_variable_statement(declarations))
-    }
+    fn variable_statement(&mut self) -> Result<Statement, SyntaxError> {
+        let (token, variable_declaration_type) = match &self._lookahead {
+            Some((Token::Let, _)) => (Token::Let, VariableDeclarationType::Immutable),
+            Some((Token::Var, _)) => (Token::Var, VariableDeclarationType::Mutable),
+            _ => Err(self.error_unexpected_lookahead_token("let or var"))?,
+        };
 
-
-    /*
-        VarVariableDeclaration
-            : 'var' VariableDeclarationList EXPRESSION_END
-            ;
-    */
-    fn var_variable_declaration(&mut self) -> Result<Statement, &'source str> {
-        self.eat_token(&Token::Var)?;
-        let declarations = self.variable_declaration_list(&VariableDeclarationType::Mutable)?;
+        self.eat_token(&token)?;
+        let declarations = self.variable_declaration_list(&variable_declaration_type)?;
         self.eat_token(&Token::ExpressionStatementEnd)?;
         Ok(self._ast_factory.create_variable_statement(declarations))
     }
@@ -130,7 +111,7 @@ impl<'source> Parser<'source> {
             | VariableDeclarationList ',' VariableDeclaration
             ;
     */
-    fn variable_declaration_list(&mut self, declaration_type: &VariableDeclarationType) -> Result<Vec<VariableDeclaration>, &'source str> {
+    fn variable_declaration_list(&mut self, declaration_type: &VariableDeclarationType) -> Result<Vec<VariableDeclaration>, SyntaxError> {
         let mut declarations = vec![self.variable_declaration(declaration_type)?];
 
         while self.match_lookahead_type(|t| t == &Token::Comma) {
@@ -149,14 +130,16 @@ impl<'source> Parser<'source> {
             | IDENTIFIER TYPE '=' Expression
             ;
     */
-    fn variable_declaration(&mut self, declaration_type: &VariableDeclarationType) -> Result<VariableDeclaration, &'source str> {
+    fn variable_declaration(&mut self, declaration_type: &VariableDeclarationType) -> Result<VariableDeclaration, SyntaxError> {
         let identifier = self.identifier()?;
 
         let name;
         if let Expression::Identifier(id) = identifier {
             name = id;
         } else {
-            return Err("Expected identifier for variable declaration");
+            return Err(
+                self.error_unexpected_token("identifier", format!("{:?}", identifier).as_str())
+            );
         }
 
         let typ = match &self._lookahead {
@@ -190,7 +173,7 @@ impl<'source> Parser<'source> {
             | 'if' Expression EXPRESSION_END BlockStatement ('else' EXPRESSION_END BlockStatement)?
             ;
     */
-    fn if_statement(&mut self, if_statement_type: IfStatementType) -> Result<Statement, &'source str> {
+    fn if_statement(&mut self, if_statement_type: IfStatementType) -> Result<Statement, SyntaxError> {
         if if_statement_type == IfStatementType::Unless {
             self.eat_token(&Token::Unless)?;
         } else {
@@ -250,7 +233,7 @@ impl<'source> Parser<'source> {
             | 'until' Expression EXPRESSION_END BlockStatement
             ;
     */
-    fn while_statement(&mut self, while_statement_type: WhileStatementType) -> Result<Statement, &'source str> {
+    fn while_statement(&mut self, while_statement_type: WhileStatementType) -> Result<Statement, SyntaxError> {
         if while_statement_type == WhileStatementType::Until {
             self.eat_token(&Token::Until)?;
         } else {
@@ -275,7 +258,7 @@ impl<'source> Parser<'source> {
             : Expression EXPRESSION_END
             ;
     */
-    fn expression_statement(&mut self) -> Result<Statement, &'source str> {
+    fn expression_statement(&mut self) -> Result<Statement, SyntaxError> {
         let expression = self.expression()?;
         self.eat_token(&Token::ExpressionStatementEnd)?;
         Ok(self._ast_factory.create_expression_statement(expression))
@@ -286,7 +269,7 @@ impl<'source> Parser<'source> {
             : Indent OptionalStatementList Dedent
             ;
     */
-    fn block_statement(&mut self) -> Result<Statement, &'source str> {
+    fn block_statement(&mut self) -> Result<Statement, SyntaxError> {
         self.eat_token(&Token::Indent)?;
         let body = match &self._lookahead {
             Some((Token::Dedent, _)) => vec![], // Empty block
@@ -301,7 +284,7 @@ impl<'source> Parser<'source> {
             : ConditionalExpression
             ;
     */
-    fn expression(&mut self) -> Result<Expression, &'source str> {
+    fn expression(&mut self) -> Result<Expression, SyntaxError> {
         let expression = self.conditional_expression()?;
         Ok(expression)
     }
@@ -313,7 +296,7 @@ impl<'source> Parser<'source> {
             | AssignmentExpression 'unless' Expression ('else' Expression)
             ;
     */
-    fn conditional_expression(&mut self) -> Result<Expression, &'source str> {
+    fn conditional_expression(&mut self) -> Result<Expression, SyntaxError> {
         let mut expression = self.assignment_expression()?;
 
         let conditional_token = match &self._lookahead {
@@ -351,7 +334,7 @@ impl<'source> Parser<'source> {
             | LeftHandSideExpression ASSIGNMENT_OPERATOR AssignmentExpression
             ;
     */
-    fn assignment_expression(&mut self) -> Result<Expression, &'source str> {
+    fn assignment_expression(&mut self) -> Result<Expression, SyntaxError> {
         let left = self.logical_or_expression()?;
 
         if !self.lookahead_is_assignment_op() {
@@ -366,13 +349,25 @@ impl<'source> Parser<'source> {
                 Token::AssignMul => AssignmentOp::AssignMul,
                 Token::AssignDiv => AssignmentOp::AssignDiv,
                 Token::AssignMod => AssignmentOp::AssignMod,
-                _ => panic!("Unexpected assignment operator: {:?}", token.0),
+                _ => return Err(
+                    self.error_unexpected_operator(token, "=, +=, -=, *=, /=, %=")
+                ),
             },
             Err(err) => return Err(err),
         };
+
+        let left = match left {
+            Expression::Identifier(name) => LeftHandSideExpression::Identifier(name),
+            // Other left-hand side expression types can be added here in the future
+            _ => return Err(
+                self.error_invalid_left_hand_side_expression()
+            ),
+        };
+
         let right = self.assignment_expression()?;
+
         let assignment_expression = self._ast_factory.create_assignment_expression(
-            self._ast_factory.create_left_hand_side_expression(left),
+            left,
             op,
             right,
         );
@@ -391,7 +386,7 @@ impl<'source> Parser<'source> {
             | AdditiveExpression RELATIONAL_OPERATOR RelationalExpression
             ;
     */
-    fn relational_expression(&mut self) -> Result<Expression, &'source str> {
+    fn relational_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.binary_expression(
             Self::additive_expression,
             is_relational_op,
@@ -408,7 +403,7 @@ impl<'source> Parser<'source> {
             | RelationalExpression
             ;
     */
-    fn equality_expression(&mut self) -> Result<Expression, &'source str> {
+    fn equality_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.binary_expression(
             Self::relational_expression,
             is_equality_op,
@@ -424,7 +419,7 @@ impl<'source> Parser<'source> {
             | EqualityExpression
             ;
     */
-    fn logical_and_expression(&mut self) -> Result<Expression, &'source str> {
+    fn logical_and_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.logical_expression(
             Self::equality_expression,
             is_logical_and_op,
@@ -440,7 +435,7 @@ impl<'source> Parser<'source> {
             | LogicalOrExpression
             ;
     */
-    fn logical_or_expression(&mut self) -> Result<Expression, &'source str> {
+    fn logical_or_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.logical_expression(
             Self::logical_and_expression,
             is_logical_or_op,
@@ -453,7 +448,7 @@ impl<'source> Parser<'source> {
             : PrimaryExpression
             ;
     */
-    fn left_hand_side_expression(&mut self) -> Result<Expression, &'source str> {
+    fn left_hand_side_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.primary_expression()
     }
 
@@ -462,14 +457,16 @@ impl<'source> Parser<'source> {
             : IDENTIFIER
             ;
     */
-    fn identifier(&mut self) -> Result<Expression, &'source str> {
+    fn identifier(&mut self) -> Result<Expression, SyntaxError> {
         match &self._lookahead {
             Some((Token::Identifier, _)) => {
                 let token = self.eat_token(&Token::Identifier)?;
                 let name = &self.source[token.1.start..token.1.end];                
                 Ok(self._ast_factory.create_identifier_expression(name.to_string()))
             },
-            _ => Err("Expected identifier"),
+            _ => Err(
+                self.error_unexpected_lookahead_token("identifier")
+            ),
         }
     }
 
@@ -479,7 +476,7 @@ impl<'source> Parser<'source> {
             | AdditiveExpression ADDITIVE_OPERATOR MultiplicativeExpression
             ;
     */
-    fn additive_expression(&mut self) -> Result<Expression, &'source str> {
+    fn additive_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.binary_expression(
             Self::multiplicative_expression,
             is_additive_op,
@@ -493,7 +490,7 @@ impl<'source> Parser<'source> {
             | MultiplicativeExpression MULTIPLICATIVE_OPERATOR UnaryExpression
             ;
     */
-    fn multiplicative_expression(&mut self) -> Result<Expression, &'source str> {
+    fn multiplicative_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.binary_expression(
             Self::unary_expression,
             is_multiplicative_op,
@@ -506,10 +503,10 @@ impl<'source> Parser<'source> {
             op_predicate: fn(&Token) -> bool,
             mut eat_op: G,
             mut create_expression: E
-        ) -> Result<Expression, &'source str> 
+        ) -> Result<Expression, SyntaxError> 
     where
-        F: FnMut(&mut Self) -> Result<Expression, &'source str>,
-        G: FnMut(&mut Self) -> Result<BinaryOp, Result<Expression, &'source str>>,
+        F: FnMut(&mut Self) -> Result<Expression, SyntaxError>,
+        G: FnMut(&mut Self) -> Result<BinaryOp, Result<Expression, SyntaxError>>,
         E: FnMut(&mut Self, Expression, BinaryOp, Expression) -> Expression,
     {
         let mut left = create_branch(self)?;
@@ -532,10 +529,10 @@ impl<'source> Parser<'source> {
             create_branch: F,
             op_predicate: fn(&Token) -> bool,
             eat_op: G
-        ) -> Result<Expression, &'source str> 
+        ) -> Result<Expression, SyntaxError> 
     where
-        F: FnMut(&mut Self) -> Result<Expression, &'source str>,
-        G: FnMut(&mut Self) -> Result<BinaryOp, Result<Expression, &'source str>>,
+        F: FnMut(&mut Self) -> Result<Expression, SyntaxError>,
+        G: FnMut(&mut Self) -> Result<BinaryOp, Result<Expression, SyntaxError>>,
     {
         self.generic_binary_expression(
             create_branch,
@@ -551,10 +548,10 @@ impl<'source> Parser<'source> {
             create_branch: F,
             op_predicate: fn(&Token) -> bool,
             eat_op: G
-        ) -> Result<Expression, &'source str> 
+        ) -> Result<Expression, SyntaxError> 
     where
-        F: FnMut(&mut Self) -> Result<Expression, &'source str>,
-        G: FnMut(&mut Self) -> Result<BinaryOp, Result<Expression, &'source str>>,
+        F: FnMut(&mut Self) -> Result<Expression, SyntaxError>,
+        G: FnMut(&mut Self) -> Result<BinaryOp, Result<Expression, SyntaxError>>,
     {
         self.generic_binary_expression(
             create_branch,
@@ -573,7 +570,7 @@ impl<'source> Parser<'source> {
             | NOT UnaryExpression
             ;
     */
-    fn unary_expression(&mut self) -> Result<Expression, &'source str> {
+    fn unary_expression(&mut self) -> Result<Expression, SyntaxError> {
         match &self._lookahead {
             Some((Token::Plus, _)) => self.create_unary_expression(&Token::Plus, UnaryOp::Plus),
             Some((Token::Minus, _)) => self.create_unary_expression(&Token::Minus, UnaryOp::Negate),
@@ -585,7 +582,7 @@ impl<'source> Parser<'source> {
         }
     }
 
-    fn create_unary_expression(&mut self, token: &Token, op: UnaryOp) -> Result<Expression, &'source str> {
+    fn create_unary_expression(&mut self, token: &Token, op: UnaryOp) -> Result<Expression, SyntaxError> {
         self.eat_token(token)?;
         let operand = self.unary_expression()?;
         Ok(self._ast_factory.create_unary_expression(op, operand))
@@ -598,9 +595,9 @@ impl<'source> Parser<'source> {
             | Identifier
             ;
     */
-    fn primary_expression(&mut self) -> Result<Expression, &'source str> {
+    fn primary_expression(&mut self) -> Result<Expression, SyntaxError> {
         if self._lookahead.is_none() {
-            return Err("Unexpected end of input");
+            return Err(self.error_eof());
         }
 
         if self.lookahead_is_literal() {
@@ -610,11 +607,9 @@ impl<'source> Parser<'source> {
         match &self._lookahead {
             Some((Token::LParen, _)) => self.parenthesized_expression(),
             Some((Token::Identifier, _)) => self.identifier(),
-            _ => {
-                // TODO: this error message should be more descriptive
-                Err("Unsupported token")
-                // was: self.left_hand_side_expression()
-            }
+            _ => Err(
+                self.error_unexpected_lookahead_token("literal, parenthesized expression or identifier")
+            ),
         }
     }
 
@@ -623,7 +618,7 @@ impl<'source> Parser<'source> {
             : '(' Expression ')'
             ;
     */
-    fn parenthesized_expression(&mut self) -> Result<Expression, &'source str> {
+    fn parenthesized_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.eat_token(&Token::LParen)?;
         let expression = self.expression()?;
         self.eat_token(&Token::RParen)?;
@@ -635,7 +630,7 @@ impl<'source> Parser<'source> {
             : Literal
             ;
     */
-    fn literal_expression(&mut self) -> Result<Expression, &'source str> {
+    fn literal_expression(&mut self) -> Result<Expression, SyntaxError> {
         let literal = self.literal()?;
         Ok(self._ast_factory.create_literal_expression(literal))
     }
@@ -649,7 +644,7 @@ impl<'source> Parser<'source> {
             : SymbolLiteral
             ;
     */
-    fn literal(&mut self) -> Result<Literal, &'source str> {
+    fn literal(&mut self) -> Result<Literal, SyntaxError> {
         match &self._lookahead {
             Some((Token::Int, _)) => self.integer_literal(&Token::Int),
             Some((Token::BinaryNumber, _)) => self.integer_literal(&Token::BinaryNumber),
@@ -663,10 +658,15 @@ impl<'source> Parser<'source> {
             Some((Token::Symbol, _)) => self.symbol_literal(),
             Some((token, span)) => {
                 let token_text = &self.source[span.start..span.end];
-                println!("Unexpected token: {:?} with value: '{}'", token, token_text);
-                Err("Unsupported literal")
+                Err(
+                    self.error_unexpected_token_with_span(
+                        "a valid literal", 
+                        &format!("{:?} with value '{}'", token, token_text),
+                        span.clone()
+                    )
+                )
             },
-            None => Err("Unexpected end of input"),
+            None => Err(self.error_eof()),
         }
     }
 
@@ -675,27 +675,55 @@ impl<'source> Parser<'source> {
             : INT
             ;
     */
-    fn integer_literal(&mut self, token_type: &Token) -> Result<Literal, &'source str> {
+    fn integer_literal(&mut self, token_type: &Token) -> Result<Literal, SyntaxError> {
         match self.eat_token(token_type) {
             Ok(token) => {
                 let str_value = &self.source[token.1.start..token.1.end].replace("_", ""); // Remove underscores
                 
                 // Parse the value based on the token type
                 let value = match token_type {
-                    Token::Int => str_value.parse::<i128>().map_err(|_| "Invalid integer literal")?,
+                    Token::Int => str_value.parse::<i128>().map_err(|_| {
+                        SyntaxError::new(
+                            SyntaxErrorKind::InvalidIntegerLiteral,
+                            token.1.start..token.1.end
+                        )
+                    })?,
                     Token::BinaryNumber => {
                         // Strip "0b" prefix and parse as base 2
-                        i128::from_str_radix(&str_value[2..], 2).map_err(|_| "Invalid binary literal")?
+                        i128::from_str_radix(&str_value[2..], 2).map_err(|_| {
+                            SyntaxError::new(
+                                SyntaxErrorKind::InvalidBinaryLiteral,
+                                token.1.start..token.1.end
+                            )
+                        })?
                     },
                     Token::HexNumber => {
                         // Strip "0x" prefix and parse as base 16
-                        i128::from_str_radix(&str_value[2..], 16).map_err(|_| "Invalid hex literal")?
+                        i128::from_str_radix(&str_value[2..], 16).map_err(|_| {
+                            SyntaxError::new(
+                                SyntaxErrorKind::InvalidHexLiteral,
+                                token.1.start..token.1.end
+                            )
+                        })?
                     },
                     Token::OctalNumber => {
                         // Strip "0o" prefix and parse as base 8
-                        i128::from_str_radix(&str_value[2..], 8).map_err(|_| "Invalid octal literal")?
+                        i128::from_str_radix(&str_value[2..], 8).map_err(|_| {
+                            SyntaxError::new(
+                                SyntaxErrorKind::InvalidOctalLiteral,
+                                token.1.start..token.1.end
+                            )
+                        })?
                     },
-                    _ => return Err("Unexpected token type for integer literal"),
+                    _ => return Err(
+                        SyntaxError::new(
+                            SyntaxErrorKind::UnexpectedToken {
+                                expected: "integer literal".to_string(),
+                                found: format!("{:?}", token_type),
+                            },
+                            token.1.start..token.1.end
+                        )
+                    ),
                 };
                 
                 let literal = match value {
@@ -704,7 +732,12 @@ impl<'source> Parser<'source> {
                     v if v >= i32::MIN as i128 && v <= i32::MAX as i128 => self._ast_factory.create_i32_literal(v as i32),
                     v if v >= i64::MIN as i128 && v <= i64::MAX as i128 => self._ast_factory.create_i64_literal(v as i64),
                     v if v >= i128::MIN && v <= i128::MAX => self._ast_factory.create_i128_literal(v),
-                    _ => return Err("Integer literal out of range"),
+                    _ => return Err(
+                        SyntaxError::new(
+                            SyntaxErrorKind::IntegerLiteralOverflow,
+                            token.1.start..token.1.end
+                        )
+                    ),
                 };
                 Ok(literal)
             },
@@ -717,11 +750,16 @@ impl<'source> Parser<'source> {
             : FLOAT
             ;
     */
-    fn float_literal(&mut self) -> Result<Literal, &'source str> {
+    fn float_literal(&mut self) -> Result<Literal, SyntaxError> {
         match self.eat_token(&Token::Float) {
             Ok(token) => {
                 let str_value = &self.source[token.1.start..token.1.end].replace("_", ""); // Remove underscores
-                let f32_value = str_value.parse::<f32>().map_err(|_| "Invalid float literal")?;
+                let f32_value = str_value.parse::<f32>().map_err(|_| {
+                    SyntaxError::new(
+                        SyntaxErrorKind::InvalidFloatLiteral,
+                        token.1.start..token.1.end
+                    )
+                })?;
                 let uses_exponent = str_value.contains('e') || str_value.contains('E');
                 let f32_str = if uses_exponent {
                     // Count digits after the decimal in the significand (before 'e')
@@ -759,7 +797,12 @@ impl<'source> Parser<'source> {
                     Ok(self._ast_factory.create_f32_literal(f32_value))
                 } else {
                     // Otherwise, parse as f64
-                    let f64_value = str_value.parse::<f64>().map_err(|_| "Invalid float literal")?;
+                    let f64_value = str_value.parse::<f64>().map_err(|_| {
+                        SyntaxError::new(
+                            SyntaxErrorKind::InvalidFloatLiteral,
+                            token.1.start..token.1.end
+                        )
+                    })?;
                     Ok(self._ast_factory.create_f64_literal(f64_value))
                 }
             },
@@ -773,7 +816,7 @@ impl<'source> Parser<'source> {
             : SingleQuotedString
             ;
     */
-    fn string_literal(&mut self, token_type: &Token) -> Result<Literal, &'source str> {
+    fn string_literal(&mut self, token_type: &Token) -> Result<Literal, SyntaxError> {
         match self.eat_token(token_type) {
             Ok(token) => {
                 let str_value = &self.source[token.1.start + 1..token.1.end - 1]; // Remove quotes
@@ -790,14 +833,19 @@ impl<'source> Parser<'source> {
             : FALSE
             ;
     */
-    fn boolean_literal(&mut self, token_type: &Token) -> Result<Literal, &'source str> {
+    fn boolean_literal(&mut self, token_type: &Token) -> Result<Literal, SyntaxError> {
         match self.eat_token(token_type) {
             Ok(token) => {
                 let str_value = &self.source[token.1.start..token.1.end];
                 let literal = match str_value {
                     "true" => self._ast_factory.create_boolean_literal(true),
                     "false" => self._ast_factory.create_boolean_literal(false),
-                    _ => return Err("Invalid boolean literal"),
+                    _ => return Err(
+                        SyntaxError::new(
+                            SyntaxErrorKind::InvalidBooleanLiteral,
+                            token.1.start..token.1.end
+                        )
+                    ),
                 };
                 Ok(literal)
             },
@@ -810,7 +858,7 @@ impl<'source> Parser<'source> {
             : SYMBOL
             ;
     */
-    fn symbol_literal(&mut self) -> Result<Literal, &'source str> {
+    fn symbol_literal(&mut self) -> Result<Literal, SyntaxError> {
         match self.eat_token(&Token::Symbol) {
             Ok(token) => {
                 let str_value = &self.source[token.1.start + 1..token.1.end]; // Remove leading colon
@@ -821,33 +869,43 @@ impl<'source> Parser<'source> {
         }
     }
 
-    fn eat(&mut self, expected: impl Fn(&Token) -> bool) -> Result<TokenSpan, &'source str> {
+    fn eat(&mut self, expected: impl Fn(&Token) -> bool) -> Result<TokenSpan, SyntaxError> {
         let token = &self._lookahead;
 
-        if token.is_none() {
-            if expected(&Token::ExpressionStatementEnd) {
-                // Special case for end of expression
-                self._lookahead = None;
-                return Ok((Token::ExpressionStatementEnd, 0..0));
-            }
-            return Err("Unexpected end of input");
-        }
-
         match token {
-            Some((t, span)) if expected(t) => {
+            Some((ref t, ref span)) if expected(t) => {
                 let result = (t.clone(), span.clone());
-                self._lookahead = self.lexer.next();
+                self._lookahead = self.lexer.next().transpose()?;
                 Ok(result)
             },
-            _ => Err("Unexpected token type"),
+            Some((found, _)) => {
+                Err(
+                    SyntaxError::new(
+                    SyntaxErrorKind::UnexpectedToken {
+                        expected: "a different token".to_string(), // NOTE: This could be improved
+                        found: format!("{:?}", found),
+                    },
+                    self.source.len()..self.source.len()
+                    )
+                )
+            },
+            None => {
+                if expected(&Token::ExpressionStatementEnd) {
+                    // Special case for end of expression
+                    self._lookahead = None;
+                    return Ok((Token::ExpressionStatementEnd, 0..0));
+                }
+
+                Err(self.error_eof())
+            },
         }
     }
 
-    fn eat_token(&mut self, expected: &Token) -> Result<TokenSpan, &'source str> {
+    fn eat_token(&mut self, expected: &Token) -> Result<TokenSpan, SyntaxError> {
         self.eat(|t| t == expected)
     }
 
-    fn eat_binary_op(&mut self, match_token: fn(&Token) -> bool) -> Result<TokenSpan, &'source str> {
+    fn eat_binary_op(&mut self, match_token: fn(&Token) -> bool) -> Result<TokenSpan, SyntaxError> {
         self.eat(|t| match_token(t))
     }
 
@@ -883,7 +941,11 @@ impl<'source> Parser<'source> {
         self.match_lookahead_type(is_indent)
     }
 
-    fn eat_additive_op(&mut self) -> Result<BinaryOp, Result<Expression, &'source str>> {
+    fn lookahead_as_string(&self) -> String {
+        self._lookahead.as_ref().map_or("end of file".to_string(), |(t, _)| token_to_string(t))
+    }
+
+    fn eat_additive_op(&mut self) -> Result<BinaryOp, Result<Expression, SyntaxError>> {
         let op = match self.eat_binary_op(is_additive_op) {
             Ok(token) => match token.0 {
                 Token::Plus => BinaryOp::Add,
@@ -891,75 +953,87 @@ impl<'source> Parser<'source> {
                 Token::Pipe => BinaryOp::BitwiseOr,
                 Token::Ampersand => BinaryOp::BitwiseAnd,
                 Token::Caret => BinaryOp::BitwiseXor,
-                _ => panic!("Unexpected additive operator: {:?}", token.0),
+                _ => return Err(
+                    Err(self.error_unexpected_operator(token, "+, -, |, &, ^"))
+                ),
             },
             Err(err) => return Err(Err(err)),
         };
         Ok(op)
     }
 
-    fn eat_relational_op(&mut self) -> Result<BinaryOp, Result<Expression, &'source str>> {
+    fn eat_relational_op(&mut self) -> Result<BinaryOp, Result<Expression, SyntaxError>> {
         let op = match self.eat_binary_op(is_relational_op) {
             Ok(token) => match token.0 {
                 Token::LessThan => BinaryOp::LessThan,
                 Token::LessThanEqual => BinaryOp::LessThanEqual,
                 Token::GreaterThanEqual => BinaryOp::GreaterThanEqual,
                 Token::GreaterThan => BinaryOp::GreaterThan,
-                _ => panic!("Unexpected relational operator: {:?}", token.0),
+                _ => return Err(
+                    Err(self.error_unexpected_operator(token, "<, <=, >, >="))
+                ),
             },
             Err(err) => return Err(Err(err)),
         };
         Ok(op)
     }
 
-    fn eat_equality_op(&mut self) -> Result<BinaryOp, Result<Expression, &'source str>> {
+    fn eat_equality_op(&mut self) -> Result<BinaryOp, Result<Expression, SyntaxError>> {
         let op = match self.eat_binary_op(is_equality_op) {
             Ok(token) => match token.0 {
                 Token::Equal => BinaryOp::Equal,
                 Token::NotEqual => BinaryOp::NotEqual,
-                _ => panic!("Unexpected equality operator: {:?}", token.0),
+                _ => return Err(
+                    Err(self.error_unexpected_operator(token, "=, !="))
+                ),
             },
             Err(err) => return Err(Err(err)),
         };
         Ok(op)
     }
 
-    fn eat_logical_and_op(&mut self) -> Result<BinaryOp, Result<Expression, &'source str>> {
+    fn eat_logical_and_op(&mut self) -> Result<BinaryOp, Result<Expression, SyntaxError>> {
         let op = match self.eat_binary_op(is_logical_and_op) {
             Ok(token) => match token.0 {
                 Token::And => BinaryOp::And,
-                _ => panic!("Unexpected logical AND operator: {:?}", token.0),
+                _ => return Err(
+                    Err(self.error_unexpected_operator(token, "and"))
+                ),
             },
             Err(err) => return Err(Err(err)),
         };
         Ok(op)
     }
 
-    fn eat_logical_or_op(&mut self) -> Result<BinaryOp, Result<Expression, &'source str>> {
+    fn eat_logical_or_op(&mut self) -> Result<BinaryOp, Result<Expression, SyntaxError>> {
         let op = match self.eat_binary_op(is_logical_or_op) {
             Ok(token) => match token.0 {
                 Token::Or => BinaryOp::Or,
-                _ => panic!("Unexpected logical OR operator: {:?}", token.0),
+                _ => return Err(
+                    Err(self.error_unexpected_operator(token, "or"))
+                ),
             },
             Err(err) => return Err(Err(err)),
         };
         Ok(op)
     }
 
-    fn eat_multiplicative_op(&mut self) -> Result<BinaryOp, Result<Expression, &'source str>> {
+    fn eat_multiplicative_op(&mut self) -> Result<BinaryOp, Result<Expression, SyntaxError>> {
         let op = match self.eat_binary_op(is_multiplicative_op) {
             Ok(token) => match token.0 {
                 Token::Star => BinaryOp::Mul,
                 Token::Slash => BinaryOp::Div,
                 Token::Percent => BinaryOp::Mod,
-                _ => panic!("Unexpected multiplicative operator: {:?}", token.0),
+                _ => return Err(
+                    Err(self.error_unexpected_operator(token, "*, /, %"))
+                ),
             },
             Err(err) => return Err(Err(err)),
         };
         Ok(op)
     }
 
-    fn eat_expression_end(&mut self) -> Result<TokenSpan, &'source str> {
+    fn eat_expression_end(&mut self) -> Result<TokenSpan, SyntaxError> {
         self.eat_token(&Token::ExpressionStatementEnd)
     }
 
@@ -969,7 +1043,7 @@ impl<'source> Parser<'source> {
         }
     }
 
-    fn eat_colon(&mut self) -> Result<TokenSpan, &'source str> {
+    fn eat_colon(&mut self) -> Result<TokenSpan, SyntaxError> {
         self.eat_token(&Token::Colon)
     }
 
@@ -977,6 +1051,48 @@ impl<'source> Parser<'source> {
         if self.lookahead_is_colon() {
             let _ = self.eat_colon();
         }
+    }
+
+    fn error_unexpected_operator(&self, token: TokenSpan, expected: &str) -> SyntaxError {
+        SyntaxError::new(
+            SyntaxErrorKind::UnexpectedToken {
+                expected: expected.to_string(),
+                found: self.lookahead_as_string(),
+            },
+            token.1.start..token.1.end
+        )
+    }
+
+    fn error_unexpected_token(&self, expected: &str, found: &str) -> SyntaxError {
+        self.error_unexpected_token_with_span(expected, found, self.source.len()..self.source.len())
+    }
+
+    fn error_unexpected_token_with_span(&self, expected: &str, found: &str, span: Span) -> SyntaxError {
+        SyntaxError::new(
+            SyntaxErrorKind::UnexpectedToken {
+                expected: expected.to_string(),
+                found: found.to_string(),
+            },
+            span
+        )
+    }
+
+    fn error_unexpected_lookahead_token(&self, expected: &str) -> SyntaxError {
+        self.error_unexpected_token(expected, &self.lookahead_as_string())
+    }
+
+    fn error_eof(&self) -> SyntaxError {
+        SyntaxError::new(
+            SyntaxErrorKind::UnexpectedEOF,
+            self.source.len()..self.source.len()
+        )
+    }
+
+    fn error_invalid_left_hand_side_expression(&self) -> SyntaxError {
+        SyntaxError::new(
+            SyntaxErrorKind::InvalidLeftHandSideExpression,
+            self.source.len()..self.source.len()
+        )
     }
 }
 
