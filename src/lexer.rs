@@ -3,6 +3,8 @@
 
 use logos::Logos;
 
+use crate::syntax_error::{Span, SyntaxError, SyntaxErrorKind};
+
 
 #[derive(Logos, Debug, PartialEq, Clone)]
 pub enum Token {
@@ -102,8 +104,6 @@ pub enum Token {
     #[regex("[ \t\r]+", logos::skip)] Whitespace,
 }
 
-// Span type for tracking positions in source code
-pub type Span = std::ops::Range<usize>;
 pub type TokenSpan = (Token, Span);
 
 
@@ -121,11 +121,11 @@ pub struct Lexer<'source> {
 }
 
 impl<'source> Iterator for Lexer<'source> {
-    type Item = TokenSpan;
+    type Item = Result<TokenSpan, SyntaxError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let item = self.generate_token();
-        if let Some((ref token, _)) = item {
+        if let Some(Ok((token, _))) = &item {
             self.memorize_token(token.clone());
         }
         item
@@ -150,96 +150,107 @@ impl<'source> Lexer<'source> {
         }
     }
 
-    fn generate_token(&mut self) -> Option<TokenSpan> {
+    fn generate_token(&mut self) -> Option<Result<TokenSpan, SyntaxError>> {
         loop {
             if let Some(item) = self.pending_tokens.pop() {
-                return Some(item);
+                return Some(Ok(item));
             }
 
-            let next_result = self.inner.next();
-
-            // Handle EOF - generate remaining dedent tokens
-            if next_result.is_none() {
-                if !self.eof_handled {
-                    self.eof_handled = true;
-                    let source_len = self.source.len();
-                    
-                    // Generate dedent tokens for all remaining indentation levels
-                    while self.indent_stack.len() > 1 {
-                        self.pending_tokens.push((Token::Dedent, source_len..source_len));
-                        self.indent_stack.pop();
-                    }
-                    
-                    // Return the first pending dedent token if any
-                    return self.pending_tokens.pop();
+            let token = match self.inner.next() {
+                Some(Ok(t)) => t,
+                Some(Err(_)) => {
+                    // This is where logos itself detects an error.
+                    return Some(
+                        Err(
+                            SyntaxError::new(
+                                SyntaxErrorKind::InvalidToken, self.inner.span()
+                            )
+                        )
+                    );
                 }
-                return None;
-            }
+                None => {
+                    if !self.eof_handled {
+                        self.eof_handled = true;
+                        let source_len = self.source.len();
+                        
+                        // Generate dedent tokens for all remaining indentation levels
+                        while self.indent_stack.len() > 1 {
+                            self.pending_tokens.push((Token::Dedent, source_len..source_len));
+                            self.indent_stack.pop();
+                        }
+                        
+                        // Return the first pending dedent token if any
+                        return self.pending_tokens.pop().map(Ok);
+                    }
+                    return None;
+                }
+            };
 
-            let token = next_result.unwrap();
             let span = self.inner.span();
-            let src = self.inner.source();
 
-            if token.is_err() {
-                self.panic_unsupported_token(&span, src);
-                return None;
-            }
-
-            let unwrapped_token = token.unwrap();
-            match unwrapped_token {
+            match token {
                 Token::MultilineComment => {
-                    self.parse_nested_comment();
+                    if let Err(e) = self.parse_nested_comment() {
+                        return Some(Err(e));
+                    }
                     continue;
                 },
                 Token::Newline => {
                     if self.have_previous_tokens() {
-                        self.parse_newline();
+                        if let Err(e) = self.parse_newline() {
+                            return Some(Err(e));
+                        }
                     }
                     continue;
                 },
                 Token::IncorrectSymbol => {
-                    self.panic_unsupported_token(&span, src);
-                    return None;
+                    return Some(
+                        Err(
+                            SyntaxError::new(
+                                SyntaxErrorKind::InvalidToken, self.inner.span()
+                            )
+                        )
+                    );
                 },
                 Token::LParen => {
                     self.paren_stack.push(self.inner.span().start);
-                    return Some((Token::LParen, span));
+                    return Some(Ok((Token::LParen, span)));
                 },
                 Token::RParen => {
                     self.paren_stack.pop();
-                    return Some((Token::RParen, span));
+                    return Some(Ok((Token::RParen, span)));
                 },
                 Token::LBracket => {
                     self.bracket_stack.push(self.inner.span().start);
-                    return Some((Token::LBracket, span));
+                    return Some(Ok((Token::LBracket, span)));
                 },
                 Token::RBracket => {
                     self.bracket_stack.pop();
-                    return Some((Token::RBracket, span));
+                    return Some(Ok((Token::RBracket, span)));
                 },
                 Token::LBrace => {
                     self.curly_brace_stack.push(self.inner.span().start);
-                    return Some((Token::LBrace, span));
+                    return Some(Ok((Token::LBrace, span)));
                 },
                 Token::RBrace => {
                     self.curly_brace_stack.pop();
-                    return Some((Token::RBrace, span));
+                    return Some(Ok((Token::RBrace, span)));
                 },
                 Token::Else => {
                     // Add an ExpressionStatementEnd token if the previous token is not a Dedent or ExpressionStatementEnd
                     // This is to ensure that the inline if/else block is treated as a separate statement
                     if self.have_previous_tokens() && !self.match_previous_token(Token::Dedent) && !self.match_previous_token(Token::ExpressionStatementEnd) {
                         self.pending_tokens.push((Token::Else, span.clone()));
-                        return Some((Token::ExpressionStatementEnd, span));
+                        return Some(Ok((Token::ExpressionStatementEnd, span)));
                     }
-                    return Some((Token::Else, span));
+                    return Some(Ok((Token::Else, span)));
                 },
-                _ => return Some((unwrapped_token, span))
+                _ => return Some(Ok((token, span)))
             }
         }
     }
 
-    fn parse_nested_comment(&mut self) {
+    fn parse_nested_comment(&mut self) -> Result<(), SyntaxError> {
         let src = self.inner.source();
         let mut depth = 1;
         let mut i = self.inner.span().end;
@@ -257,18 +268,22 @@ impl<'source> Lexer<'source> {
                     if depth == 0 {
                         let bump_len = i - self.inner.span().start - 2;
                         self.inner.bump(bump_len);
-                        return;
+                        return Ok(());
                     }
                 }
                 _ => i += 1,
             }
         }
     
-        panic!("Unclosed multiline comment starting at {}", self.inner.span().start);
+        Err(
+            SyntaxError::new(
+                SyntaxErrorKind::UnclosedMultilineComment, self.inner.span()
+            )
+        )
     }
-    
-    fn parse_newline(&mut self) {
-        let src = self.inner.source();    
+
+    fn parse_newline(&mut self) -> Result<(), SyntaxError> {
+        let src = self.inner.source();
         let mut i = self.inner.span().end;
         let mut indent_len: usize = 0;
         let mut found_comment = false;
@@ -326,8 +341,11 @@ impl<'source> Lexer<'source> {
                 }
                 
                 if !found_matching_indent {
-                    let line_num = src[..i].matches('\n').count() + 1;
-                    panic!("[Lexer] Indentation error: unindent does not match any outer indentation level at line {}", line_num);
+                    return Err(
+                        SyntaxError::new(
+                            SyntaxErrorKind::IndentationMismatch, i..i
+                        )
+                    );
                 }
                 
                 // Pop indentation levels and generate Dedent tokens
@@ -344,26 +362,8 @@ impl<'source> Lexer<'source> {
 
         let bump_len = i - self.inner.span().start - 1;
         self.inner.bump(bump_len);
-    }
 
-    fn panic_unsupported_token(&mut self, span: &std::ops::Range<usize>, src: &str) {
-        // Find the start of the line containing the error.
-        // We search backwards from the start of the span for a newline.
-        let start = src[..span.start]
-            .rfind('\n')
-            .map(|i| i + 1) // The line starts after the newline
-            .unwrap_or(0); // Or at the beginning of the string if no newline is found
-
-        // Find the end of the line.
-        // We search forwards from the end of the span for a newline.
-        let end = src[span.end..]
-            .find('\n')
-            .map(|i| span.end + i) // The line ends at the newline
-            .unwrap_or_else(|| src.len()); // Or at the end of the string
-
-        let snippet = &src[start..end].trim();
-        let invalid_part = &src[span.clone()].trim();
-        panic!("[Lexer] Unsupported token '{}' in line '{}'", invalid_part, snippet);
+        Ok(())
     }
 
     fn memorize_token(&mut self, token: Token) {
@@ -425,3 +425,47 @@ impl<'source> Lexer<'source> {
     }
 }
 
+pub fn token_to_string(token: &Token) -> String {
+    match token {
+        Token::Colon => ":".into(),
+        Token::FatArrow => "=>".into(),
+        Token::Arrow => "->".into(),
+        Token::LeftArrow => "<-".into(),
+        Token::Parallel => "||".into(),
+        Token::Equal => "==".into(),
+        Token::NotEqual => "!=".into(),
+        Token::GreaterThanEqual => ">=".into(),
+        Token::LessThanEqual => "<=".into(),
+        Token::GreaterThan => ">".into(),
+        Token::LessThan => "<".into(),
+        Token::Assign => "=".into(),
+        Token::AssignAdd => "+=".into(),
+        Token::AssignSub => "-=".into(),
+        Token::AssignMul => "*=".into(),
+        Token::AssignDiv => "/=".into(),
+        Token::AssignMod => "%=".into(),
+        Token::Plus => "+".into(),
+        Token::Increment => "++".into(),
+        Token::Minus => "-".into(),
+        Token::Decrement => "--".into(),
+        Token::Star => "*".into(),
+        Token::Slash => "/".into(),
+        Token::Percent => "%".into(),
+        Token::Comma => ",".into(),
+        Token::Range => "..".into(),
+        Token::RangeInclusive => "..=".into(),
+        Token::Dot => ".".into(),
+        Token::LParen => "(".into(),
+        Token::RParen => ")".into(),
+        Token::LBracket => "[".into(),
+        Token::RBracket => "]".into(),
+        Token::LBrace => "{".into(),
+        Token::RBrace => "}".into(),
+        Token::Pipe => "|".into(),
+        Token::Ampersand => "&".into(),
+        Token::Caret => "^".into(),
+        Token::Try => "?".into(),
+        Token::Tilde => "~".into(),
+        _ => format!("{:?}", token).to_lowercase(),
+    }
+}

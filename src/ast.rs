@@ -326,14 +326,6 @@ impl AstFactory {
         Expression::Assignment(Box::new(left), op, Box::new(right))
     }
 
-    pub fn create_left_hand_side_expression(&self, expression: Expression) -> LeftHandSideExpression {
-        match expression {
-            Expression::Identifier(name) => LeftHandSideExpression::Identifier(name),
-            // Other left-hand side expression types can be added here in the future
-            _ => panic!("Unsupported left-hand side expression type"),
-        }
-    }
-
     pub fn create_identifier_expression(&self, name: String) -> Expression {
         Expression::Identifier(name)
     }
