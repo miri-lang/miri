@@ -8,10 +8,13 @@ use miri::lexer::{Lexer};
 use miri::parser::Parser;
 use miri::syntax_error::SyntaxErrorKind;
 
+pub mod ast_builder;
+use ast_builder::*;
+
 
 #[test]
 fn test_parse_empty_program() {
-    parse_test("", vec![Statement::Empty]);
+    parse_test("", empty_program());
 }
 
 #[test]
@@ -21,86 +24,86 @@ fn test_parse_program_with_only_comments_and_whitespace() {
     // This is an indented comment
 
 /* Another comment */
-", vec![Statement::Empty]);
+", empty_program());
 }
 
 #[test]
 fn test_parse_integer_literal() {
-    parse_integer_test("42", IntegerLiteral::I8(42));
-    parse_integer_test("12345", IntegerLiteral::I16(12345));
-    parse_integer_test("1_234_567_890", IntegerLiteral::I32(1234567890));
-    parse_integer_test("9_223_372_036_854_775_807", IntegerLiteral::I64(9223372036854775807));
+    parse_integer_test("42", int(42));
+    parse_integer_test("12345", int(12345));
+    parse_integer_test("1_234_567_890", int(1234567890));
+    parse_integer_test("9_223_372_036_854_775_807", int(9223372036854775807));
 
-    parse_integer_test("0b1_01_010", IntegerLiteral::I8(42));
-    parse_integer_test("0xFF", IntegerLiteral::I16(255));
-    parse_integer_test("0o77", IntegerLiteral::I8(63));
-    parse_integer_test("0o1234567", IntegerLiteral::I32(342391));
+    parse_integer_test("0b1_01_010", int(42));
+    parse_integer_test("0xFF", int(255));
+    parse_integer_test("0o77", int(63));
+    parse_integer_test("0o1234567", int(342391));
 }
 
 #[test]
 fn test_parse_float_literal() {
-    parse_float_test("3.14", FloatLiteral::F32(3.14));
-    parse_float_test("1.797693134862315", FloatLiteral::F64(1.797693134862315));
+    parse_float_test("3.14", float32(3.14));
+    parse_float_test("1.797693134862315", float64(1.797693134862315));
 
-    parse_float_test("1_000.0", FloatLiteral::F32(1_000.0));
-    parse_float_test("1_000_000.123456789", FloatLiteral::F64(1_000_000.123456789));
+    parse_float_test("1_000.0", float32(1_000.0));
+    parse_float_test("1_000_000.123456789", float64(1_000_000.123456789));
 
-    parse_float_test("1.0e10", FloatLiteral::F32(1.0e10));
-    parse_float_test("6.67430e-11", FloatLiteral::F32(6.67430e-11));
+    parse_float_test("1.0e10", float32(1.0e10));
+    parse_float_test("6.67430e-11", float32(6.67430e-11));
 }
 
 #[test]
 fn test_parse_float_literal_edge_cases() {
     // Precision edge cases
-    parse_float_test("3.141592", FloatLiteral::F32(3.141592)); // fits f32
-    parse_float_test("3.1415927", FloatLiteral::F32(3.1415927)); // still fits
-    parse_float_test("3.14159265", FloatLiteral::F64(3.14159265)); // too long for f32
+    parse_float_test("3.141592", float32(3.141592)); // fits f32
+    parse_float_test("3.1415927", float32(3.1415927)); // still fits
+    parse_float_test("3.14159265", float64(3.14159265)); // too long for f32
 
     // Largest and smallest values
-    parse_float_test("3.4028235e38", FloatLiteral::F32(3.4028235e38)); // max f32
-    parse_float_test("1.17549435e-38", FloatLiteral::F32(1.17549435e-38)); // min normal f32
-    parse_float_test("1.7976931348623157e308", FloatLiteral::F64(1.7976931348623157e308)); // max f64
-    parse_float_test("2.2250738585072014e-308", FloatLiteral::F64(2.2250738585072014e-308)); // min normal f64
+    parse_float_test("3.4028235e38", float32(3.4028235e38)); // max f32
+    parse_float_test("1.17549435e-38", float32(1.17549435e-38)); // min normal f32
+    parse_float_test("1.7976931348623157e308", float64(1.7976931348623157e308)); // max f64
+    parse_float_test("2.2250738585072014e-308", float64(2.2250738585072014e-308)); // min normal f64
 
     // Zeros
-    parse_float_test("0.0", FloatLiteral::F32(0.0));
-    parse_float_test("0.000000", FloatLiteral::F32(0.0));
+    parse_float_test("0.0", float32(0.0));
+    parse_float_test("0.000000", float32(0.0));
 
     // Underscore formatting
-    parse_float_test("123_456.789", FloatLiteral::F32(123_456.789));
-    parse_float_test("1_000_000.1234567", FloatLiteral::F64(1_000_000.1234567));
-    parse_float_test("1_000_000.12345678", FloatLiteral::F64(1_000_000.12345678)); // too long
+    parse_float_test("123_456.789", float32(123_456.789));
+    parse_float_test("1_000_000.1234567", float64(1_000_000.1234567));
+    parse_float_test("1_000_000.12345678", float64(1_000_000.12345678)); // too long
 
     // Scientific notation variants
-    parse_float_test("1.0e+10", FloatLiteral::F32(1.0e+10));
-    parse_float_test("1.0E10", FloatLiteral::F32(1.0E10));
-    parse_float_test("1.0000001e10", FloatLiteral::F32(1.0000001e10_f32)); // precision edge
-    parse_float_test("9.999999e+37", FloatLiteral::F32(9.999999e37)); // edge of f32
+    parse_float_test("1.0e+10", float32(1.0e+10));
+    parse_float_test("1.0E10", float32(1.0E10));
+    parse_float_test("1.0000001e10", float32(1.0000001e10_f32)); // precision edge
+    parse_float_test("9.999999e+37", float32(9.999999e37)); // edge of f32
 
     // Negative exponent
-    parse_float_test("1.0e-10", FloatLiteral::F32(1.0e-10));
-    parse_float_test("6.02214076e-23", FloatLiteral::F64(6.02214076e-23)); // Planck constant
+    parse_float_test("1.0e-10", float32(1.0e-10));
+    parse_float_test("6.02214076e-23", float64(6.02214076e-23)); // Planck constant
 
     // Extreme edge underflow
-    parse_float_test("1e-46", FloatLiteral::F64(1e-46)); // below f32 subnormal
-    parse_float_test("1e-39", FloatLiteral::F32(1e-39)); // subnormal but fits
+    parse_float_test("1e-46", float64(1e-46)); // below f32 subnormal
+    parse_float_test("1e-39", float32(1e-39)); // subnormal but fits
 }
 
 #[test]
 fn test_parse_string_literal() {
-    parse_literal_test("'hello single quote'", Literal::String("hello single quote".to_string()));
-    parse_literal_test("\"hello double quote\"", Literal::String("hello double quote".to_string()));
+    parse_literal_test("'hello single quote'", string("hello single quote"));
+    parse_literal_test("\"hello double quote\"", string("hello double quote"));
 }
 
 #[test]
 fn test_parse_boolean_literal() {
-    parse_literal_test("true", Literal::Boolean(true));
-    parse_literal_test("false", Literal::Boolean(false));
+    parse_literal_test("true", boolean(true));
+    parse_literal_test("false", boolean(false));
 }
 
 #[test]
 fn test_parse_symbol_literal() {
-    parse_literal_test(":my_fancy_symbol", Literal::Symbol("my_fancy_symbol".to_string()));
+    parse_literal_test(":my_fancy_symbol", symbol("my_fancy_symbol"));
 }
 
 #[test]
@@ -109,11 +112,11 @@ fn test_parse_expressions() {
 123
 'Hello World'
 ", vec![
-        Statement::Expression(
-            Expression::Literal(Literal::Integer(IntegerLiteral::I8(123)))
+        expression_statement(
+            int_literal(123)
         ),
-        Statement::Expression(
-            Expression::Literal(Literal::String("Hello World".to_string()))
+        expression_statement(
+            string_literal("Hello World")
         )
     ]);
 }
@@ -122,9 +125,9 @@ fn test_parse_expressions() {
 fn test_parse_binary_expression() {
     parse_binary_expression_test(
         "123 + 456",
-        Expression::Literal(Literal::Integer(IntegerLiteral::I8(123))),
+        int_literal(123),
         BinaryOp::Add,
-        Expression::Literal(Literal::Integer(IntegerLiteral::I16(456)))
+        int_literal(456)
     );
 }
 
@@ -132,41 +135,40 @@ fn test_parse_binary_expression() {
 fn test_parse_chained_binary_expression() {
     parse_binary_expression_test(
         "123 + 456 - 789",
-        Expression::Binary(
-            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(123)))),
+        binary(
+            int_literal(123),
             BinaryOp::Add,
-            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I16(456))))
+            int_literal(456)
         ),
         BinaryOp::Sub,
-        Expression::Literal(Literal::Integer(IntegerLiteral::I16(789)))
+        int_literal(789)
     );
 }
 
 #[test]
 fn test_parse_chained_multiply_expression() {
-    parse_binary_expression_test(
-        "2 + 2 * 2",
-        Expression::Literal(Literal::Integer(IntegerLiteral::I8(2))),
-        BinaryOp::Add,
-        Expression::Binary(
-            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(2)))),
-            BinaryOp::Mul,
-            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(2))))
+    parse_test("2 + 2 * 2", vec![
+        expression_statement(
+            binary(
+                int_literal(2),
+                BinaryOp::Add,
+                binary(int_literal(2), BinaryOp::Mul, int_literal(2))
+            )
         )
-    );
+    ]);
 }
 
 #[test]
 fn test_parse_bitwise_and_expression() {
     parse_binary_expression_test(
         "1 + 2 & 2",
-        Expression::Binary(
-            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(1)))),
+        binary(
+            int_literal(1),
             BinaryOp::Add,
-            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(2))))
+            int_literal(2)
         ),
         BinaryOp::BitwiseAnd,
-        Expression::Literal(Literal::Integer(IntegerLiteral::I8(2)))
+        int_literal(2)
     );
 }
 
@@ -174,13 +176,13 @@ fn test_parse_bitwise_and_expression() {
 fn test_parse_bitwise_or_expression() {
     parse_binary_expression_test(
         "1 + 2 | 2",
-        Expression::Binary(
-            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(1)))),
+        binary(
+            int_literal(1),
             BinaryOp::Add,
-            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(2))))
+            int_literal(2)
         ),
         BinaryOp::BitwiseOr,
-        Expression::Literal(Literal::Integer(IntegerLiteral::I8(2)))
+        int_literal(2)
     );
 }
 
@@ -188,13 +190,13 @@ fn test_parse_bitwise_or_expression() {
 fn test_parse_bitwise_xor_expression() {
     parse_binary_expression_test(
         "1 + 2 ^ 2",
-        Expression::Binary(
-            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(1)))),
+        binary(
+            int_literal(1),
             BinaryOp::Add,
-            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(2))))
+            int_literal(2)
         ),
         BinaryOp::BitwiseXor,
-        Expression::Literal(Literal::Integer(IntegerLiteral::I8(2)))
+        int_literal(2)
     );
 }
 
@@ -203,13 +205,13 @@ fn test_parse_bitwise_xor_expression() {
 fn test_parse_multiply_with_parentheses_expression() {
     parse_binary_expression_test(
         "(2 + 2) * 2",
-        Expression::Binary(
-            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(2)))),
+        binary(
+            int_literal(2),
             BinaryOp::Add,
-            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(2))))
+            int_literal(2)
         ),
         BinaryOp::Mul,
-        Expression::Literal(Literal::Integer(IntegerLiteral::I8(2)))
+        int_literal(2)
     );
 }
 
@@ -218,8 +220,8 @@ fn test_parse_simple_parentheses_expression() {
     parse_test("
 (123)
 ", vec![
-        Statement::Expression(
-            Expression::Literal(Literal::Integer(IntegerLiteral::I8(123)))
+        expression_statement(
+            int_literal(123)
         )
     ]);
 }
@@ -277,9 +279,9 @@ fn test_parse_invalid_variable_declaration() {
 fn test_parse_assignment_expression() {
     parse_assignment_expression_test(
         "x = 123", 
-        LeftHandSideExpression::Identifier("x".into()), 
+        lhs_expression("x".into()), 
         AssignmentOp::Assign, 
-        Expression::Literal(Literal::Integer(IntegerLiteral::I8(123)))
+        int_literal(123)
     );
 }
 
@@ -288,12 +290,12 @@ fn test_parse_assignment_expression() {
 fn test_parse_chained_assignment_expression() {
     parse_assignment_expression_test(
         "x = y = 123", 
-        LeftHandSideExpression::Identifier("x".into()), 
+        lhs_expression("x".into()), 
         AssignmentOp::Assign, 
-        Expression::Assignment(
-            Box::new(LeftHandSideExpression::Identifier("y".into())),
+        assign(
+            lhs_expression("y".into()),
             AssignmentOp::Assign,
-            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(123))))
+            int_literal(123)
         )
     );
 }
@@ -302,9 +304,9 @@ fn test_parse_chained_assignment_expression() {
 fn test_parse_increment_assignment_expression() {
     parse_assignment_expression_test(
         "x += 100", 
-        LeftHandSideExpression::Identifier("x".into()), 
+        lhs_expression("x".into()), 
         AssignmentOp::AssignAdd,
-        Expression::Literal(Literal::Integer(IntegerLiteral::I8(100)))
+        int_literal(100)
     );
 }
 
@@ -312,9 +314,9 @@ fn test_parse_increment_assignment_expression() {
 fn test_parse_decrement_assignment_expression() {
     parse_assignment_expression_test(
         "x -= 200", 
-        LeftHandSideExpression::Identifier("x".into()), 
+        lhs_expression("x".into()), 
         AssignmentOp::AssignSub,
-        Expression::Literal(Literal::Integer(IntegerLiteral::I16(200)))
+        int_literal(200)
     );
 }
 
@@ -322,9 +324,9 @@ fn test_parse_decrement_assignment_expression() {
 fn test_parse_multiplication_assignment_expression() {
     parse_assignment_expression_test(
         "x *= 10", 
-        LeftHandSideExpression::Identifier("x".into()), 
+        lhs_expression("x".into()), 
         AssignmentOp::AssignMul,
-        Expression::Literal(Literal::Integer(IntegerLiteral::I8(10)))
+        int_literal(10)
     );
 }
 
@@ -332,9 +334,9 @@ fn test_parse_multiplication_assignment_expression() {
 fn test_parse_division_assignment_expression() {
     parse_assignment_expression_test(
         "x /= 10", 
-        LeftHandSideExpression::Identifier("x".into()), 
+        lhs_expression("x".into()), 
         AssignmentOp::AssignDiv,
-        Expression::Literal(Literal::Integer(IntegerLiteral::I8(10)))
+        int_literal(10)
     );
 }
 
@@ -342,9 +344,9 @@ fn test_parse_division_assignment_expression() {
 fn test_parse_modulo_assignment_expression() {
     parse_assignment_expression_test(
         "x %= 10", 
-        LeftHandSideExpression::Identifier("x".into()), 
+        lhs_expression("x".into()), 
         AssignmentOp::AssignMod,
-        Expression::Literal(Literal::Integer(IntegerLiteral::I8(10)))
+        int_literal(10)
     );
 }
 
@@ -352,16 +354,16 @@ fn test_parse_modulo_assignment_expression() {
 fn test_parse_increment_chained_assignment_expression() {
     parse_assignment_expression_test(
         "x = y = z += 100",
-        LeftHandSideExpression::Identifier("x".into()),
+        lhs_expression("x".into()),
         AssignmentOp::Assign,
-        Expression::Assignment(
-            Box::new(LeftHandSideExpression::Identifier("y".into())),
+        assign(
+            lhs_expression("y".into()),
             AssignmentOp::Assign,
-            Box::new(Expression::Assignment(
-                Box::new(LeftHandSideExpression::Identifier("z".into())),
+            assign(
+                lhs_expression("z".into()),
                 AssignmentOp::AssignAdd,
-                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(100))))
-            ))
+                int_literal(100)
+            )
         )
     );
 }
@@ -370,12 +372,9 @@ fn test_parse_increment_chained_assignment_expression() {
 fn test_parse_variable_declaration() {
     parse_variable_declaration_test(
         "let x = 5",
-        vec![VariableDeclaration {
-            name: "x".into(),
-            typ: None,
-            initializer: Some(Expression::Literal(Literal::Integer(IntegerLiteral::I8(5)))),
-            declaration_type: VariableDeclarationType::Immutable,
-        }]
+        vec![
+            let_variable("x", None, Some(int_literal(5)))
+        ]
     );
 }
 
@@ -383,12 +382,9 @@ fn test_parse_variable_declaration() {
 fn test_parse_typed_variable_declaration() {
     parse_variable_declaration_test(
         "let x int = 5",
-        vec![VariableDeclaration {
-            name: "x".into(),
-            typ: Some("int".into()),
-            initializer: Some(Expression::Literal(Literal::Integer(IntegerLiteral::I8(5)))),
-            declaration_type: VariableDeclarationType::Immutable,
-        }]
+        vec![
+            let_variable("x", Some("int".into()), Some(int_literal(5)))
+        ]
     );
 }
 
@@ -396,12 +392,9 @@ fn test_parse_typed_variable_declaration() {
 fn test_parse_typed_variable_declaration_no_initializer() {
     parse_variable_declaration_test(
         "let x float",
-        vec![VariableDeclaration {
-            name: "x".into(),
-            typ: Some("float".into()),
-            initializer: None,
-            declaration_type: VariableDeclarationType::Immutable,
-        }]
+        vec![
+            let_variable("x", Some("float".into()), None)
+        ]
     );
 }
 
@@ -409,12 +402,9 @@ fn test_parse_typed_variable_declaration_no_initializer() {
 fn test_parse_variable_declaration_no_initializer() {
     parse_variable_declaration_test(
         "let x",
-        vec![VariableDeclaration {
-            name: "x".into(),
-            typ: None,
-            initializer: None,
-            declaration_type: VariableDeclarationType::Immutable,
-        }]
+        vec![
+            let_variable("x", None, None)
+        ]
     );
 }
 
@@ -422,12 +412,9 @@ fn test_parse_variable_declaration_no_initializer() {
 fn test_parse_mutable_variable_declaration() {
     parse_variable_declaration_test(
         "var text = \"Hello, World!\"",
-        vec![VariableDeclaration {
-            name: "text".into(),
-            typ: None,
-            initializer: Some(Expression::Literal(Literal::String("Hello, World!".to_string()))),
-            declaration_type: VariableDeclarationType::Mutable,
-        }]
+        vec![
+            var("text", None, Some(string_literal("Hello, World!")))
+        ]
     );
 }
 
@@ -435,24 +422,11 @@ fn test_parse_mutable_variable_declaration() {
 fn test_parse_multiple_variable_declaration_no_initializer() {
     parse_variable_declaration_test(
         "let x, y, z",
-        vec![VariableDeclaration {
-            name: "x".into(),
-            typ: None,
-            initializer: None,
-            declaration_type: VariableDeclarationType::Immutable,
-        },
-        VariableDeclaration {
-            name: "y".into(),
-            typ: None,
-            initializer: None,
-            declaration_type: VariableDeclarationType::Immutable,
-        },
-        VariableDeclaration {
-            name: "z".into(),
-            typ: None,
-            initializer: None,
-            declaration_type: VariableDeclarationType::Immutable,
-        }]
+        vec![
+            let_variable("x", None, None),
+            let_variable("y", None, None),
+            let_variable("z", None, None)
+        ]
     );
 }
 
@@ -460,24 +434,11 @@ fn test_parse_multiple_variable_declaration_no_initializer() {
 fn test_parse_multiple_variable_declaration_mixed_initializer() {
     parse_variable_declaration_test(
         "let x, y = 10, z",
-        vec![VariableDeclaration {
-            name: "x".into(),
-            typ: None,
-            initializer: None,
-            declaration_type: VariableDeclarationType::Immutable,
-        },
-        VariableDeclaration {
-            name: "y".into(),
-            typ: None,
-            initializer: Some(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10)))),
-            declaration_type: VariableDeclarationType::Immutable,
-        },
-        VariableDeclaration {
-            name: "z".into(),
-            typ: None,
-            initializer: None,
-            declaration_type: VariableDeclarationType::Immutable,
-        }]
+        vec![
+            let_variable("x", None, None),
+            let_variable("y", None, Some(int_literal(10))),
+            let_variable("z", None, None)
+        ]
     );
 }
 
@@ -488,22 +449,12 @@ var bar = 100
 let foo = bar = 200
 ",
         vec![
-            Statement::Variable(vec![VariableDeclaration {
-                name: "bar".into(),
-                typ: None,
-                initializer: Some(Expression::Literal(Literal::Integer(IntegerLiteral::I8(100)))),
-                declaration_type: VariableDeclarationType::Mutable,
-            }]),
-            Statement::Variable(vec![VariableDeclaration {
-                name: "foo".into(),
-                typ: None,
-                initializer: Some(Expression::Assignment(
-                    Box::new(LeftHandSideExpression::Identifier("bar".into())),
-                    AssignmentOp::Assign,
-                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I16(200))))
-                )),
-                declaration_type: VariableDeclarationType::Immutable,
-            }])
+            variable_statement(
+                vec![var("bar", None, Some(int_literal(100)))]
+            ),
+            variable_statement(
+                vec![let_variable("foo", None, Some(assign(lhs_expression("bar"), AssignmentOp::Assign, int_literal(200))))]
+            )
         ]
     );
 }
@@ -516,28 +467,27 @@ if x
 else
     x = 20
 ",
-    Expression::Identifier("x".into()),
-    Statement::Block(vec![
-        Statement::Expression(
-            Expression::Assignment(
-                Box::new(LeftHandSideExpression::Identifier("x".into())),
+    identifier("x".into()),
+    block(vec![
+        expression_statement(
+            assign(
+                lhs_expression("x"),
                 AssignmentOp::Assign,
-                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10))))
+                int_literal(10)
             )
         )
     ]),
     Some(
-        Statement::Block(vec![
-            Statement::Expression(
-                Expression::Assignment(
-                    Box::new(LeftHandSideExpression::Identifier("x".into())),
+        block(vec![
+            expression_statement(
+                assign(
+                    lhs_expression("x"),
                     AssignmentOp::Assign,
-                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(20))))
+                    int_literal(20)
                 )
             )
         ]),
-    )
-    );
+    ));
 }
 
 #[test]
@@ -548,31 +498,15 @@ if x > 5
 else
     x = 20
 ",
-    Expression::Binary(
-        Box::new(Expression::Identifier("x".into())),
-        BinaryOp::GreaterThan,
-        Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(5))))
-    ),
-    Statement::Block(vec![
-        Statement::Expression(
-            Expression::Assignment(
-                Box::new(LeftHandSideExpression::Identifier("x".into())),
-                AssignmentOp::Assign,
-                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10))))
-            )
-        )
+    binary(identifier("x"), BinaryOp::GreaterThan, int_literal(5)),
+    block(vec![
+        expression_statement(assign(lhs_expression("x"), AssignmentOp::Assign, int_literal(10)))
     ]),
-    Some(
-        Statement::Block(vec![
-            Statement::Expression(
-                Expression::Assignment(
-                    Box::new(LeftHandSideExpression::Identifier("x".into())),
-                    AssignmentOp::Assign,
-                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(20))))
-                )
-            )
-        ]),
-    )
+        Some(
+            block(vec![
+                expression_statement(assign(lhs_expression("x"), AssignmentOp::Assign, int_literal(20)))
+            ])
+        )
     );
 }
 
@@ -583,22 +517,22 @@ if x
     x = 10
 else: x = 20
 ",
-    Expression::Identifier("x".into()),
-    Statement::Block(vec![
-        Statement::Expression(
-            Expression::Assignment(
-                Box::new(LeftHandSideExpression::Identifier("x".into())),
+    identifier("x".into()),
+    block(vec![
+        expression_statement(
+            assign(
+                lhs_expression("x"),
                 AssignmentOp::Assign,
-                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10))))
+                int_literal(10)
             )
         )
     ]),
     Some(
-        Statement::Expression(
-            Expression::Assignment(
-                Box::new(LeftHandSideExpression::Identifier("x".into())),
+        expression_statement(
+            assign(
+                lhs_expression("x"),
                 AssignmentOp::Assign,
-                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(20))))
+                int_literal(20)
             )
         )
     ));
@@ -611,26 +545,25 @@ if x: x = 10
 else
     x = 20
 ",
-    Expression::Identifier("x".into()),
-    Statement::Expression(
-        Expression::Assignment(
-            Box::new(LeftHandSideExpression::Identifier("x".into())),
+    identifier("x".into()),
+    expression_statement(
+        assign(
+            lhs_expression("x"),
             AssignmentOp::Assign,
-            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10))))
+            int_literal(10)
         )
     ),
     Some(
-        Statement::Block(vec![
-            Statement::Expression(
-                Expression::Assignment(
-                    Box::new(LeftHandSideExpression::Identifier("x".into())),
+        block(vec![
+            expression_statement(
+                assign(
+                    lhs_expression("x".into()),
                     AssignmentOp::Assign,
-                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(20))))
+                    int_literal(20)
                 )
             )
         ]),
-    )
-    );
+    ));
 }
 
 #[test]
@@ -639,13 +572,13 @@ fn test_parse_if_expression_no_else() {
 if x
     x = 10
 ",
-    Expression::Identifier("x".into()),
+    identifier("x".into()),
     Statement::Block(vec![
-        Statement::Expression(
-            Expression::Assignment(
-                Box::new(LeftHandSideExpression::Identifier("x".into())),
+        expression_statement(
+            assign(
+                lhs_expression("x".into()),
                 AssignmentOp::Assign,
-                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10))))
+                int_literal(10)
             )
         )
     ]),
@@ -668,71 +601,62 @@ else
     else
         x = 40
 ",
-    Expression::Identifier("x".into()),
-    Statement::Block(vec![
-        Statement::If(
-            Box::new(Expression::Identifier("y".into())),
-            Box::new(
-                Statement::Block(vec![
-                    Statement::Expression(
-                        Expression::Assignment(
-                            Box::new(LeftHandSideExpression::Identifier("x".into())),
+    identifier("x".into()),
+    block(vec![
+        if_statement(
+            identifier("y".into()),
+            block(vec![
+                expression_statement(
+                    assign(
+                        lhs_expression("x".into()),
+                        AssignmentOp::Assign,
+                        int_literal(10)
+                    )
+                )
+            ]),
+            Some(
+                block(vec![
+                    expression_statement(
+                        assign(
+                            lhs_expression("x".into()),
                             AssignmentOp::Assign,
-                            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10))))
+                            int_literal(20)
                         )
                     )
                 ])
-            ),
-            Some(Box::new(
-                Statement::Block(vec![
-                    Statement::Expression(
-                        Expression::Assignment(
-                            Box::new(LeftHandSideExpression::Identifier("x".into())),
-                            AssignmentOp::Assign,
-                            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(20))))
-                        )
-                    )
-                ])
-            )),
-            IfStatementType::If
+            )
         )
     ]),
     Some(
-        Statement::Block(vec![
-            Statement::If(
-                Box::new(Expression::Identifier("z".into())),
-                Box::new(
-                    Statement::Block(vec![
-                        Statement::If(
-                            Box::new(Expression::Identifier("w".into())),
-                            Box::new(
-                                Statement::Block(vec![
-                                    Statement::Expression(
-                                        Expression::Assignment(
-                                            Box::new(LeftHandSideExpression::Identifier("x".into())),
-                                            AssignmentOp::Assign,
-                                            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(30))))
-                                        )
-                                    )
-                                ])
-                            ),
-                            None,
-                            IfStatementType::If
-                        )
-                    ])
-                ),
-                Some(Box::new(
-                    Statement::Block(vec![
-                        Statement::Expression(
-                            Expression::Assignment(
-                                Box::new(LeftHandSideExpression::Identifier("x".into())),
+        block(vec![
+            if_statement(
+                identifier("z".into()),
+                block(vec![
+                    if_statement(
+                        identifier("w".into()),
+                        block(vec![
+                            expression_statement(
+                                assign(
+                                    lhs_expression("x".into()),
+                                    AssignmentOp::Assign,
+                                    int_literal(30)
+                                )
+                            )
+                        ]),
+                        None
+                    )
+                ]),
+                Some(
+                    block(vec![
+                        expression_statement(
+                            assign(
+                                lhs_expression("x".into()),
                                 AssignmentOp::Assign,
-                                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(40))))
+                                int_literal(40)
                             )
                         )
                     ])
-                )),
-                IfStatementType::If
+                )
             )
         ])
     ), 
@@ -745,20 +669,20 @@ fn test_parse_if_expression_inline() {
     parse_if_test("
 if x: x = 10 else: x = 20
 ",
-    Expression::Identifier("x".into()),
-    Statement::Expression(
-        Expression::Assignment(
-            Box::new(LeftHandSideExpression::Identifier("x".into())),
+    identifier("x".into()),
+    expression_statement(
+        assign(
+            lhs_expression("x".into()),
             AssignmentOp::Assign,
-            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10)))) 
+            int_literal(10)
         )
     ),
     Some(
-            Statement::Expression(
-                Expression::Assignment(
-                    Box::new(LeftHandSideExpression::Identifier("x".into())),
+            expression_statement(
+                assign(
+                    lhs_expression("x".into()),
                     AssignmentOp::Assign,
-                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(20))))
+                    int_literal(20)
                 )
             )
         )
@@ -771,20 +695,20 @@ fn test_parse_if_mixed_inline() {
 if x: x = 10
 else: x = 20
 ",
-    Expression::Identifier("x".into()),
-    Statement::Expression(
-        Expression::Assignment(
-            Box::new(LeftHandSideExpression::Identifier("x".into())),
+    identifier("x".into()),
+    expression_statement(
+        assign(
+            lhs_expression("x".into()),
             AssignmentOp::Assign,
-            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10)))) 
+            int_literal(10) 
         )
     ),
     Some(
-            Statement::Expression(
-                Expression::Assignment(
-                    Box::new(LeftHandSideExpression::Identifier("x".into())),
+            expression_statement(
+                assign(
+                    lhs_expression("x".into()),
                     AssignmentOp::Assign,
-                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(20))))
+                    int_literal(20)
                 )
             )
         )
@@ -797,43 +721,37 @@ fn test_parse_if_expression_inline_nested() {
 // This is crazy, but should work
 if x: if y: x = 10 else: if z: x = 20 else: x = 30
 ",
-    Expression::Identifier("x".into()),
-    Statement::If(
-        Box::new(Expression::Identifier("y".into())),
-        Box::new(
-            Statement::Expression(
-                Expression::Assignment(
-                    Box::new(LeftHandSideExpression::Identifier("x".into())),
-                    AssignmentOp::Assign,
-                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10))))
-                )
+    identifier("x".into()),
+    if_statement(
+    identifier("y".into()),
+        expression_statement(
+            assign(
+                lhs_expression("x".into()),
+                AssignmentOp::Assign,
+                int_literal(10)
             )
         ),
-        Some(Box::new(
-            Statement::If(
-                Box::new(Expression::Identifier("z".into())),
-                Box::new(
-                    Statement::Expression(
-                        Expression::Assignment(
-                            Box::new(LeftHandSideExpression::Identifier("x".into())),
+        Some(
+            if_statement(
+                identifier("z".into()),
+                expression_statement(
+                    assign(
+                        lhs_expression("x".into()),
+                        AssignmentOp::Assign,
+                        int_literal(20)
+                    )
+                ),
+                Some(
+                    expression_statement(
+                        assign(
+                            lhs_expression("x".into()),
                             AssignmentOp::Assign,
-                            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(20))))
+                            int_literal(30)
                         )
                     )
                 ),
-                Some(Box::new(
-                    Statement::Expression(
-                        Expression::Assignment(
-                            Box::new(LeftHandSideExpression::Identifier("x".into())),
-                            AssignmentOp::Assign,
-                            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(30))))
-                        )
-                    )
-                )),
-                IfStatementType::If
             )
-        )),
-        IfStatementType::If
+        ),
     ),
     None,
     IfStatementType::If
@@ -845,12 +763,12 @@ fn test_parse_if_expression_inline_no_else() {
     parse_if_test("
 if x: x = 10
 ",
-    Expression::Identifier("x".into()),
-    Statement::Expression(
-        Expression::Assignment(
-            Box::new(LeftHandSideExpression::Identifier("x".into())),
+    identifier("x".into()),
+    expression_statement(
+        assign(
+            lhs_expression("x".into()),
             AssignmentOp::Assign,
-            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10))))
+            int_literal(10)
         )
     ),
     None
@@ -862,20 +780,20 @@ fn test_parse_if_expression_precedence() {
     parse_if_test("
 if x + 10 <= 20: x = 10
 ",
-    Expression::Binary(
-        Box::new(Expression::Binary(
-            Box::new(Expression::Identifier("x".into())),
+    binary(
+        binary(
+            identifier("x".into()),
             BinaryOp::Add,
-            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10))))
-        )),
+            int_literal(10)
+        ),
         BinaryOp::LessThanEqual,
-        Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(20))))
+        int_literal(20)
     ),
-    Statement::Expression(
-        Expression::Assignment(
-            Box::new(LeftHandSideExpression::Identifier("x".into())),
+    expression_statement(
+        assign(
+            lhs_expression("x".into()),
             AssignmentOp::Assign,
-            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10))))
+            int_literal(10)
         )
     ),
     None
@@ -892,40 +810,43 @@ else if x > 5
 else
     y = 3
 ",
-    Expression::Binary(
-        Box::new(Expression::Identifier("x".into())),
+    binary(
+        identifier("x".into()),
         BinaryOp::GreaterThan,
-        Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10))))
+        int_literal(10)
     ),
-    Statement::Block(vec![
-        Statement::Expression(Expression::Assignment(
-            Box::new(LeftHandSideExpression::Identifier("y".into())),
+    block(vec![
+        expression_statement(assign(
+            lhs_expression("y".into()),
             AssignmentOp::Assign,
-            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(1))))
+            int_literal(1)
         ))
     ]),
     Some(
-        Statement::If(
-            Box::new(Expression::Binary(
-                Box::new(Expression::Identifier("x".into())),
+        if_statement(
+            binary(
+                identifier("x".into()),
                 BinaryOp::GreaterThan,
-                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(5))))
-            )),
-            Box::new(Statement::Block(vec![
-                Statement::Expression(Expression::Assignment(
-                    Box::new(LeftHandSideExpression::Identifier("y".into())),
-                    AssignmentOp::Assign,
-                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(2))))
-                ))
+                int_literal(5)
+            ),
+            block(vec![
+                expression_statement(
+                    assign(
+                        lhs_expression("y".into()),
+                        AssignmentOp::Assign,
+                        int_literal(2)
+                    )
+                )
+            ]),
+            Some(block(vec![
+                expression_statement(
+                    assign(
+                        lhs_expression("y".into()),
+                        AssignmentOp::Assign,
+                        int_literal(3)
+                    )
+                )
             ])),
-            Some(Box::new(Statement::Block(vec![
-                Statement::Expression(Expression::Assignment(
-                    Box::new(LeftHandSideExpression::Identifier("y".into())),
-                    AssignmentOp::Assign,
-                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(3))))
-                ))
-            ]))),
-            IfStatementType::If
         )
     ),
     IfStatementType::If
@@ -940,25 +861,15 @@ if x
 else
     var z = 20
 ",
-    Expression::Identifier("x".into()),
-    Statement::Block(vec![
-        Statement::Variable(vec![
-            VariableDeclaration {
-                name: "y".into(),
-                typ: None,
-                initializer: Some(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10)))),
-                declaration_type: VariableDeclarationType::Immutable,
-            }
+    identifier("x".into()),
+    block(vec![
+        variable_statement(vec![
+            let_variable("y".into(), None, Some(int_literal(10)))
         ])
     ]),
-    Some(Statement::Block(vec![
-        Statement::Variable(vec![
-            VariableDeclaration {
-                name: "z".into(),
-                typ: None,
-                initializer: Some(Expression::Literal(Literal::Integer(IntegerLiteral::I8(20)))),
-                declaration_type: VariableDeclarationType::Mutable,
-            }
+    Some(block(vec![
+        variable_statement(vec![
+            var("z".into(), None, Some(int_literal(20))),
         ])
     ]))
     );
@@ -970,33 +881,35 @@ fn test_parse_if_with_complex_logical_condition() {
 if (x > 10 and y < 5) or z == 1
     x = 1
 ",
-    Expression::Logical(
-        Box::new(Expression::Logical(
-            Box::new(Expression::Binary(
-                Box::new(Expression::Identifier("x".into())),
+    logical(
+        logical(
+            binary(
+                identifier("x".into()),
                 BinaryOp::GreaterThan,
-                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10))))
-            )),
+                int_literal(10)
+            ),
             BinaryOp::And,
-            Box::new(Expression::Binary(
-                Box::new(Expression::Identifier("y".into())),
+            binary(
+                identifier("y".into()),
                 BinaryOp::LessThan,
-                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(5))))
-            ))
-        )),
+                int_literal(5)
+            )
+        ),
         BinaryOp::Or,
-        Box::new(Expression::Binary(
-            Box::new(Expression::Identifier("z".into())),
+        binary(
+            identifier("z".into()),
             BinaryOp::Equal,
-            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(1))))
-        ))
+            int_literal(1)
+        )
     ),
-    Statement::Block(vec![
-        Statement::Expression(Expression::Assignment(
-            Box::new(LeftHandSideExpression::Identifier("x".into())),
-            AssignmentOp::Assign,
-            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(1))))
-        ))
+    block(vec![
+        expression_statement(
+            assign(
+                lhs_expression("x".into()),
+                AssignmentOp::Assign,
+                int_literal(1)
+            )
+        )
     ]),
     None
     );
@@ -1010,13 +923,13 @@ if x
 else
     x = 1
 ",
-    Expression::Identifier("x".into()),
-    Statement::Empty,
-    Some(Statement::Block(vec![
-        Statement::Expression(Expression::Assignment(
-            Box::new(LeftHandSideExpression::Identifier("x".into())),
+    identifier("x".into()),
+    empty_statement(),
+    Some(block(vec![
+        expression_statement(assign(
+            lhs_expression("x".into()),
             AssignmentOp::Assign,
-            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(1))))
+            int_literal(1)
         ))
     ]))
     );
@@ -1028,8 +941,8 @@ fn test_parse_if_with_empty_block_no_else() {
 if x
     // TODO
 ",
-    Expression::Identifier("x".into()),
-    Statement::Empty,
+    identifier("x".into()),
+    empty_statement(),
     None
     );
 }
@@ -1042,13 +955,15 @@ if x
 else
     // empty else
 ",
-    Expression::Identifier("x".into()),
-    Statement::Block(vec![
-        Statement::Expression(Expression::Assignment(
-            Box::new(LeftHandSideExpression::Identifier("x".into())),
-            AssignmentOp::Assign,
-            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(1))))
-        ))
+    identifier("x".into()),
+    block(vec![
+        expression_statement(
+            assign(
+                lhs_expression("x".into()),
+                AssignmentOp::Assign,
+                int_literal(1)
+            )
+        )
     ]),
     None
     );
@@ -1064,23 +979,26 @@ else
 x = 2
 ",
         vec![
-            Statement::If(
-                Box::new(Expression::Identifier("x".into())),
-                Box::new(Statement::Block(vec![
-                    Statement::Expression(Expression::Assignment(
-                        Box::new(LeftHandSideExpression::Identifier("x".into())),
-                        AssignmentOp::Assign,
-                        Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(1))))
-                    ))
-                ])),
+            if_statement(
+                identifier("x".into()),
+                block(vec![
+                    expression_statement(
+                        assign(
+                            lhs_expression("x".into()),
+                            AssignmentOp::Assign,
+                            int_literal(1)
+                        )
+                    )
+                ]),
                 None,
-                IfStatementType::If
             ),
-            Statement::Expression(Expression::Assignment(
-                Box::new(LeftHandSideExpression::Identifier("x".into())),
-                AssignmentOp::Assign,
-                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(2))))
-            ))
+            expression_statement(
+                assign(
+                    lhs_expression("x".into()),
+                    AssignmentOp::Assign,
+                    int_literal(2)
+                )
+            )
         ]
     );
 }
@@ -1094,23 +1012,26 @@ else: // empty else
 x = 2
 ",
         vec![
-            Statement::If(
-                Box::new(Expression::Identifier("x".into())),
-                Box::new(Statement::Block(vec![
-                    Statement::Expression(Expression::Assignment(
-                        Box::new(LeftHandSideExpression::Identifier("x".into())),
-                        AssignmentOp::Assign,
-                        Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(1))))
-                    ))
-                ])),
-                None,
-                IfStatementType::If
+            if_statement(
+                Expression::Identifier("x".into()),
+                block(vec![
+                    expression_statement(
+                        assign(
+                            lhs_expression("x".into()),
+                            AssignmentOp::Assign,
+                            int_literal(1)
+                        )
+                    )
+                ]),
+                None
             ),
-            Statement::Expression(Expression::Assignment(
-                Box::new(LeftHandSideExpression::Identifier("x".into())),
-                AssignmentOp::Assign,
-                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(2))))
-            ))
+            expression_statement(
+                assign(
+                    lhs_expression("x".into()),
+                    AssignmentOp::Assign,
+                    int_literal(2)
+                )
+            )
         ]
     );
 }
@@ -1121,15 +1042,17 @@ fn test_equality_expression() {
 x > 10 == false
 ",
         vec![
-            Statement::Expression(Expression::Binary(
-                Box::new(Expression::Binary(
-                    Box::new(Expression::Identifier("x".into())),
-                    BinaryOp::GreaterThan,
-                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10))))
-                )),
-                BinaryOp::Equal,
-                Box::new(Expression::Literal(Literal::Boolean(false)))
-            ))
+            expression_statement(
+                binary(
+                    binary(
+                        identifier("x".into()),
+                        BinaryOp::GreaterThan,
+                        int_literal(10)
+                    ),
+                    BinaryOp::Equal,
+                    boolean_literal(false)
+                )
+            )
         ]
     );
 }
@@ -1140,15 +1063,17 @@ fn test_equality_expression_not_equal() {
 x >= 8 != true
 ",
         vec![
-            Statement::Expression(Expression::Binary(
-                Box::new(Expression::Binary(
-                    Box::new(Expression::Identifier("x".into())),
-                    BinaryOp::GreaterThanEqual,
-                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(8))))
-                )),
-                BinaryOp::NotEqual,
-                Box::new(Expression::Literal(Literal::Boolean(true)))
-            ))
+            expression_statement(
+                binary(
+                    binary(
+                        identifier("x".into()),
+                        BinaryOp::GreaterThanEqual,
+                        int_literal(8)
+                    ),
+                    BinaryOp::NotEqual,
+                    boolean_literal(true)
+                )
+            )
         ]
     );
 }
@@ -1159,19 +1084,21 @@ fn test_logical_expression() {
 x > 10 and y <= 8
 ",
         vec![
-            Statement::Expression(Expression::Logical(
-                Box::new(Expression::Binary(
-                    Box::new(Expression::Identifier("x".into())),
-                    BinaryOp::GreaterThan,
-                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10))))
-                )),
-                BinaryOp::And,
-                Box::new(Expression::Binary(
-                    Box::new(Expression::Identifier("y".into())),
-                    BinaryOp::LessThanEqual,
-                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(8))))
-                ))
-            ))
+            expression_statement(
+                logical(
+                    binary(
+                        identifier("x".into()),
+                        BinaryOp::GreaterThan,
+                        int_literal(10)
+                    ),
+                    BinaryOp::And,
+                    binary(
+                        identifier("y".into()),
+                        BinaryOp::LessThanEqual,
+                        int_literal(8)
+                    )
+                )
+            )
         ]
     );
 }
@@ -1182,34 +1109,26 @@ fn test_logical_expression_and_precedence() {
 x > 1 and y <= 2 or y == 10
 ",
         vec![
-            Statement::Expression(
-                Expression::Logical(
-                    Box::new(
-                        Expression::Logical(
-                            Box::new(
-                                Expression::Binary(
-                                    Box::new(Expression::Identifier("x".into())),
-                                    BinaryOp::GreaterThan,
-                                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(1))))
-                                )
-                            ),
-                            BinaryOp::And,
-                            Box::new(
-                                Expression::Binary(
-                                    Box::new(Expression::Identifier("y".into())),
-                                    BinaryOp::LessThanEqual,
-                                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(2))))
-                                )
-                            )
+            expression_statement(
+                logical(
+                    logical(
+                        binary(
+                            identifier("x".into()),
+                            BinaryOp::GreaterThan,
+                            int_literal(1)
+                        ),
+                        BinaryOp::And,
+                        binary(
+                            identifier("y".into()),
+                            BinaryOp::LessThanEqual,
+                            int_literal(2)
                         )
                     ),
                     BinaryOp::Or,
-                    Box::new(
-                        Expression::Binary(
-                            Box::new(Expression::Identifier("y".into())),
-                            BinaryOp::Equal,
-                            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10))))
-                        )
+                    binary(
+                        identifier("y".into()),
+                        BinaryOp::Equal,
+                        int_literal(10)
                     )
                 )
             )
@@ -1219,42 +1138,44 @@ x > 1 and y <= 2 or y == 10
 
 #[test]
 fn test_unary_expression_negate() {
-    parse_unary_expression_test("-x", UnaryOp::Negate, Expression::Identifier("x".into()));
+    parse_unary_expression_test("-x", UnaryOp::Negate, identifier("x".into()));
 }
 
 #[test]
 fn test_unary_expression_plus() {
-    parse_unary_expression_test("+x", UnaryOp::Plus, Expression::Identifier("x".into()));
+    parse_unary_expression_test("+x", UnaryOp::Plus, identifier("x".into()));
 }
 
 #[test]
 fn test_unary_expression_not() {
-    parse_unary_expression_test("not x", UnaryOp::Not, Expression::Identifier("x".into()));
+    parse_unary_expression_test("not x", UnaryOp::Not, identifier("x".into()));
 }
 
 #[test]
 fn test_unary_expression_bitwise_not() {
-    parse_unary_expression_test("~x", UnaryOp::BitwiseNot, Expression::Identifier("x".into()));
+    parse_unary_expression_test("~x", UnaryOp::BitwiseNot, identifier("x".into()));
 }
 
 #[test]
 fn test_unary_expression_increment() {
-    parse_unary_expression_test("++x", UnaryOp::Increment, Expression::Identifier("x".into()));
+    parse_unary_expression_test("++x", UnaryOp::Increment, identifier("x".into()));
 }
 
 #[test]
 fn test_unary_expression_decrement() {
-    parse_unary_expression_test("--x", UnaryOp::Decrement, Expression::Identifier("x".into()));
+    parse_unary_expression_test("--x", UnaryOp::Decrement, identifier("x".into()));
 }
 
 #[test]
 fn test_unary_expression_precedence() {
     parse_test("-x * -2", vec![
-        Statement::Expression(Expression::Binary(
-            Box::new(Expression::Unary(UnaryOp::Negate, Box::new(Expression::Identifier("x".into())))),
-            BinaryOp::Mul,
-            Box::new(Expression::Unary(UnaryOp::Negate, Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(2))))))
-        ))
+        expression_statement(
+            binary(
+                unary(UnaryOp::Negate, identifier("x".into())),
+                BinaryOp::Mul,
+                unary(UnaryOp::Negate, int_literal(2))
+            )
+        )
     ]);
 }
 
@@ -1264,17 +1185,19 @@ fn test_while_expression() {
 while x > 0
     x -= 1
 ",
-    Expression::Binary(
-        Box::new(Expression::Identifier("x".into())),
+    binary(
+        identifier("x".into()),
         BinaryOp::GreaterThan,
-        Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(0))))
+        int_literal(0)
     ),
-    Statement::Block(vec![
-        Statement::Expression(Expression::Assignment(
-            Box::new(LeftHandSideExpression::Identifier("x".into())),
-            AssignmentOp::AssignSub,
-            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(1))))
-        ))
+    block(vec![
+        expression_statement(
+            assign(
+                lhs_expression("x"),
+                AssignmentOp::AssignSub,
+                int_literal(1)
+            )
+        )
     ])
     );
 }
@@ -1284,16 +1207,18 @@ fn test_while_expression_inline() {
     parse_while_test("
 while x > 0: x -= 1
 ",
-    Expression::Binary(
-        Box::new(Expression::Identifier("x".into())),
+    binary(
+        identifier("x".into()),
         BinaryOp::GreaterThan,
-        Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(0))))
+        int_literal(0)
     ),
-    Statement::Expression(Expression::Assignment(
-        Box::new(LeftHandSideExpression::Identifier("x".into())),
-        AssignmentOp::AssignSub,
-        Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(1))))
-    ))
+    expression_statement(
+        assign(
+            lhs_expression("x"),
+            AssignmentOp::AssignSub,
+            int_literal(1)
+            )
+        )
     );
 }
 
@@ -1306,33 +1231,42 @@ while x < 10
     else
         x += 2
 ",
-    Expression::Binary(
-        Box::new(Expression::Identifier("x".into())),
+    binary(
+        identifier("x".into()),
         BinaryOp::LessThan,
-        Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10))))
+        int_literal(10)
     ),
-    Statement::Block(vec![
-        Statement::If(
-            Box::new(Expression::Binary(
-                Box::new(Expression::Binary(
-                    Box::new(Expression::Identifier("x".into())),
+    block(vec![
+        if_statement(
+            binary(
+                binary(
+                    identifier("x".into()),
                     BinaryOp::Mod,
-                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(2))))
-                )),
+                    int_literal(2)
+                ),
                 BinaryOp::Equal,
-                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(0))))
-            )),
-            Box::new(Statement::Block(vec![Statement::Expression(Expression::Assignment(
-                Box::new(LeftHandSideExpression::Identifier("x".into())),
-                AssignmentOp::AssignAdd,
-                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(1))))
-            ))])),
-            Some(Box::new(Statement::Block(vec![Statement::Expression(Expression::Assignment(
-                Box::new(LeftHandSideExpression::Identifier("x".into())),
-                AssignmentOp::AssignAdd,
-                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(2))))
-            ))]))),
-            IfStatementType::If
+                int_literal(0)
+            ),
+            block(vec![
+                expression_statement(
+                    assign(
+                        lhs_expression("x"),
+                        AssignmentOp::AssignAdd,
+                        int_literal(1)
+                    )
+                )
+            ]),
+            Some(
+                block(vec![
+                    expression_statement(
+                        assign(
+                            lhs_expression("x"),
+                            AssignmentOp::AssignAdd,
+                            int_literal(2)
+                        )
+                    )
+                ])
+            )
         )
     ])
     );
@@ -1344,21 +1278,23 @@ fn test_parse_conditional_expression() {
 let x = 10 if y > 5 else 20
 ",
     vec![
-        Statement::Variable(vec![VariableDeclaration {
-            name: "x".into(),
-            typ: None,
-            initializer: Some(Expression::Conditional(
-                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10)))),
-                Box::new(Expression::Binary(
-                    Box::new(Expression::Identifier("y".into())),
-                    BinaryOp::GreaterThan,
-                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(5))))
-                )),
-                Some(Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(20))))),
-                IfStatementType::If
-            )),
-            declaration_type: VariableDeclarationType::Immutable,
-        }])
+        variable_statement(vec![
+            let_variable(
+                "x".into(),
+                None,
+                Some(
+                    if_conditional(
+                        int_literal(10),
+                        binary(
+                            identifier("y".into()),
+                            BinaryOp::GreaterThan,
+                            int_literal(5)
+                        ),
+                        Some(int_literal(20)),
+                    )
+                )
+            )
+        ])
     ]
     )
 }
@@ -1369,27 +1305,28 @@ fn test_parse_conditional_expression_no_else() {
 var x = 100 if y % 2 == 0
 ",
     vec![
-        Statement::Variable(vec![VariableDeclaration {
-            name: "x".into(),
-            typ: None,
-            initializer: Some(Expression::Conditional(
-                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(100)))),
-                Box::new(Expression::Binary(
-                    Box::new(Expression::Binary(
-                        Box::new(Expression::Identifier("y".into())),
-                        BinaryOp::Mod,
-                        Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(2))))
-                    )),
-                    BinaryOp::Equal,
-                    Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(0))))
-                )),
+        variable_statement(vec![
+            var(
+                "x".into(),
                 None,
-                IfStatementType::If
-            )),
-            declaration_type: VariableDeclarationType::Mutable,
-        }])
-    ]
-    )
+                Some(
+                    if_conditional(
+                        int_literal(100),
+                        binary(
+                            binary(
+                                identifier("y".into()),
+                                BinaryOp::Mod,
+                                int_literal(2)
+                            ),
+                            BinaryOp::Equal,
+                            int_literal(0)
+                        ),
+                        None,
+                    )
+                ),
+            )
+        ])
+    ]);
 }
 
 #[test]
@@ -1398,19 +1335,20 @@ fn test_parse_conditional_expression_with_unless() {
 var x = 1 unless y
 ",
     vec![
-        Statement::Variable(vec![VariableDeclaration {
-            name: "x".into(),
-            typ: None,
-            initializer: Some(Expression::Conditional(
-                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(1)))),
-                Box::new(Expression::Identifier("y".into())),
+        variable_statement(vec![
+            var(
+                "x".into(),
                 None,
-                IfStatementType::Unless
-            )),
-            declaration_type: VariableDeclarationType::Mutable,
-        }])
-    ]
-    )
+                Some(
+                    unless_conditional(
+                        int_literal(1),
+                        identifier("y".into()),
+                        None
+                    )
+                )
+            )
+        ])
+    ])
 }
 
 #[test]
@@ -1420,20 +1358,21 @@ fn test_conditional_expression_as_if_condition() {
 if a if b else c
     x = 1
 ",
-    Expression::Conditional(
-        Box::new(Expression::Identifier("a".into())),
-        Box::new(Expression::Identifier("b".into())),
-        Some(Box::new(Expression::Identifier("c".into()))),
-        IfStatementType::If
-    ),
-    Statement::Block(vec![
-        Statement::Expression(Expression::Assignment(
-            Box::new(LeftHandSideExpression::Identifier("x".into())),
-            AssignmentOp::Assign,
-            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(1))))
-        ))
-    ]),
-    None,
+        if_conditional(
+            identifier("a".into()),
+            identifier("b".into()),
+            Some(identifier("c".into())),
+        ),
+        block(vec![
+            expression_statement(
+                assign(
+                    lhs_expression("x"),
+                    AssignmentOp::Assign,
+                    int_literal(1)
+                )
+            )
+        ]),
+        None,
         IfStatementType::If
     );
 }
@@ -1443,15 +1382,17 @@ fn test_precedence_of_bitwise_and_equality() {
     // Equality (==) has lower precedence than bitwise AND (&).
     // This should parse as `(x & 10) == 10`.
     parse_test("x & 10 == 10", vec![
-        Statement::Expression(Expression::Binary(
-            Box::new(Expression::Binary(
-                Box::new(Expression::Identifier("x".into())),
-                BinaryOp::BitwiseAnd,
-                Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10))))
-            )),
-            BinaryOp::Equal,
-            Box::new(Expression::Literal(Literal::Integer(IntegerLiteral::I8(10))))
-        ))
+        expression_statement(
+            binary(
+                binary(
+                    identifier("x".into()),
+                    BinaryOp::BitwiseAnd,
+                    int_literal(10)
+                ),
+                BinaryOp::Equal,
+                int_literal(10)
+            )
+        )
     ]);
 }
 
@@ -1460,15 +1401,17 @@ fn test_precedence_of_logical_and_or() {
     // `and` has higher precedence than `or`.
     // This should parse as `(true and false) or true`.
     parse_test("true and false or true", vec![
-        Statement::Expression(Expression::Logical(
-            Box::new(Expression::Logical(
-                Box::new(Expression::Literal(Literal::Boolean(true))),
-                BinaryOp::And,
-                Box::new(Expression::Literal(Literal::Boolean(false)))
-            )),
-            BinaryOp::Or,
-            Box::new(Expression::Literal(Literal::Boolean(true)))
-        ))
+        expression_statement(
+            logical(
+                logical(
+                    boolean_literal(true),
+                    BinaryOp::And,
+                    boolean_literal(false)
+                ),
+                BinaryOp::Or,
+                boolean_literal(true)
+            )
+        )
     ]);
 }
 
