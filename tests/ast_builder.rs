@@ -119,6 +119,10 @@ pub fn unless_conditional(cond: Expression, then: Expression, else_b: Option<Exp
     conditional(cond, then, else_b, IfStatementType::Unless)
 }
 
+pub fn range(start: Expression, end: Option<Expression>, range_type: RangeExpressionType) -> Expression {
+    Expression::Range(Box::new(start), Box::new(end), range_type)
+}
+
 // === Statement Builders ===
 
 pub fn variable_statement(declarations: Vec<VariableDeclaration>) -> Statement {
