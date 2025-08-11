@@ -21,6 +21,15 @@ pub enum WhileStatementType {
     Until,
 }
 
+/// Represents the type of a range expression
+#[derive(Debug, Clone, PartialEq)]
+pub enum RangeExpressionType {
+    Exclusive, // Represents a range like `1..10`
+    Inclusive, // Represents a range like `1..=10`
+    // TODO: Step,      // Represents a range with a step, e.g., `1..10:2`
+    IterableObject, // Represents an iterable object, e.g. a string, or a collection
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub enum Statement {
     Empty, // Represents an empty statement, e.g., when a block is empty
@@ -29,6 +38,7 @@ pub enum Statement {
     Variable(Vec<VariableDeclaration>),
     If(Box<Expression>, Box<Statement>, Option<Box<Statement>>, IfStatementType), // condition, then_block, else_block, type
     While(Box<Expression>, Box<Statement>, WhileStatementType), // condition, then_block, type
+    For(Vec<VariableDeclaration>, Box<Expression>, Box<Statement>), // variable_declarations, iterable, body
 }
 
 /// Represents an expression
@@ -49,6 +59,8 @@ pub enum Expression {
     Assignment(Box<LeftHandSideExpression>, AssignmentOp, Box<Expression>),
 
     Conditional(Box<Expression>, Box<Expression>, Option<Box<Expression>>, IfStatementType), // condition, then_expr, else_expr
+
+    Range(Box<Expression>, Box<Option<Expression>>, RangeExpressionType), // start, end, range_type
 
     // FieldAccess(Box<Expr>, String), // expr.field
     // Index(Box<Expr>, Box<Expr>),    // expr[index]
@@ -330,6 +342,10 @@ impl AstFactory {
         Expression::Identifier(name)
     }
 
+    pub fn create_range_expression(&self, start: Expression, end: Option<Expression>, range_type: RangeExpressionType) -> Expression {
+        Expression::Range(Box::new(start), Box::new(end), range_type)
+    }
+
     pub fn create_variable_statement(&self, declarations: Vec<VariableDeclaration>) -> Statement {
         Statement::Variable(declarations)
     }
@@ -362,5 +378,9 @@ impl AstFactory {
             else_branch.map(Box::new),
             if_statement_type
         )
+    }
+
+    pub fn create_for_statement(&self, variable_declarations: Vec<VariableDeclaration>, iterable: Expression, body: Statement) -> Statement {
+        Statement::For(variable_declarations, Box::new(iterable), Box::new(body))
     }
 }

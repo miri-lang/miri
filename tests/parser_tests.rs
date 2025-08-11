@@ -1415,6 +1415,79 @@ fn test_precedence_of_logical_and_or() {
     ]);
 }
 
+#[test]
+fn test_for_loop() {
+    parse_for_test("
+for x in 1..=5
+    y = x
+",
+    vec![
+        let_variable("x".into(), None, None)
+    ],
+    range(
+        int_literal(1),
+        Some(int_literal(5)),
+        RangeExpressionType::Inclusive
+    ),
+    block(vec![
+        expression_statement(
+            assign(
+                lhs_expression("y"),
+                AssignmentOp::Assign,
+                identifier("x".into())
+            )
+        )
+    ])
+    );
+}
+
+#[test]
+fn test_for_loop_inline() {
+    parse_for_test("
+for x in 1..5: y = x
+",
+    vec![
+        let_variable("x".into(), None, None)
+    ],
+    range(
+        int_literal(1),
+        Some(int_literal(5)),
+        RangeExpressionType::Exclusive
+    ),
+    expression_statement(
+        assign(
+            lhs_expression("y"),
+            AssignmentOp::Assign,
+            identifier("x".into())
+        )
+    )
+    );
+}
+
+#[test]
+fn test_for_loop_hashmap() {
+    parse_for_test("
+for k, v in hash: y = k + v
+",
+    vec![
+        let_variable("k".into(), None, None),
+        let_variable("v".into(), None, None)
+    ],
+    range(identifier("hash".into()), None, RangeExpressionType::IterableObject),
+    expression_statement(
+        assign(
+            lhs_expression("y"),
+            AssignmentOp::Assign,
+            binary(
+                identifier("k".into()),
+                BinaryOp::Add,
+                identifier("v".into())
+            )
+        )
+    )
+    );
+}
+
 
 fn parse_test<'src>(input: &'src str, _expected_body: Vec<Statement>) {
     let mut lexer = Lexer::new(input);
@@ -1494,4 +1567,10 @@ fn parse_while_expression_test(input: &str, condition: Expression, then_block: S
 fn parse_while_test(input: &str, condition: Expression, then_block: Statement) {
     parse_while_expression_test(input, condition.clone(), then_block.clone(), WhileStatementType::While);
     parse_while_expression_test(input.replace("while", "until").as_str(), condition, then_block, WhileStatementType::Until);
+}
+
+fn parse_for_test(input: &str, variable_declarations: Vec<VariableDeclaration>, iterable: Expression, body: Statement) {
+    parse_test(input, vec![
+        Statement::For(variable_declarations, Box::new(iterable), Box::new(body))
+    ]);
 }

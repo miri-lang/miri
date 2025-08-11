@@ -80,7 +80,7 @@ impl<'source> Parser<'source> {
             Some((Token::Unless, _)) => self.if_statement(IfStatementType::Unless)?,
             Some((Token::While, _)) => self.while_statement(WhileStatementType::While)?,
             Some((Token::Until, _)) => self.while_statement(WhileStatementType::Until)?,
-            // Some((Token::For, _)) => self.for_statement()?,
+            Some((Token::For, _)) => self.for_statement()?,
             _ => self.expression_statement()?,
         };
         Ok(statement)
@@ -100,7 +100,7 @@ impl<'source> Parser<'source> {
         };
 
         self.eat_token(&token)?;
-        let declarations = self.variable_declaration_list(&variable_declaration_type)?;
+        let declarations = self.variable_declaration_list(&variable_declaration_type, true)?;
         self.eat_token(&Token::ExpressionStatementEnd)?;
         Ok(self._ast_factory.create_variable_statement(declarations))
     }
@@ -111,12 +111,12 @@ impl<'source> Parser<'source> {
             | VariableDeclarationList ',' VariableDeclaration
             ;
     */
-    fn variable_declaration_list(&mut self, declaration_type: &VariableDeclarationType) -> Result<Vec<VariableDeclaration>, SyntaxError> {
-        let mut declarations = vec![self.variable_declaration(declaration_type)?];
+    fn variable_declaration_list(&mut self, declaration_type: &VariableDeclarationType, accept_initializer: bool) -> Result<Vec<VariableDeclaration>, SyntaxError> {
+        let mut declarations = vec![self.variable_declaration(declaration_type, accept_initializer)?];
 
         while self.match_lookahead_type(|t| t == &Token::Comma) {
             self.eat_token(&Token::Comma)?;
-            declarations.push(self.variable_declaration(declaration_type)?);
+            declarations.push(self.variable_declaration(declaration_type, accept_initializer)?);
         }
 
         Ok(declarations)
@@ -130,7 +130,7 @@ impl<'source> Parser<'source> {
             | IDENTIFIER TYPE '=' Expression
             ;
     */
-    fn variable_declaration(&mut self, declaration_type: &VariableDeclarationType) -> Result<VariableDeclaration, SyntaxError> {
+    fn variable_declaration(&mut self, declaration_type: &VariableDeclarationType, accept_initializer: bool) -> Result<VariableDeclaration, SyntaxError> {
         let identifier = self.identifier()?;
 
         let name;
@@ -151,13 +151,19 @@ impl<'source> Parser<'source> {
             _ => None,
         };
 
-        let initializer = match &self._lookahead {
-            Some((Token::Assign, _)) => {
-                self.eat_token(&Token::Assign)?;
-                Some(self.expression()?)
-            },
-            _ => None
-        };
+        let initializer;
+        if accept_initializer {
+            initializer = match &self._lookahead {
+                Some((Token::Assign, _)) => {
+                    self.eat_token(&Token::Assign)?;
+                    Some(self.expression()?)
+                },
+                _ => None
+            };
+        }
+        else {
+            initializer = None;
+        }
 
         Ok(VariableDeclaration {
             name,
@@ -244,13 +250,107 @@ impl<'source> Parser<'source> {
         self.try_eat_colon();
         self.try_eat_expression_end();
 
-        let then_block = if self._lookahead.is_none() || self.lookahead_is_else() {
+        let then_block = if self._lookahead.is_none() {
             Statement::Empty // If there's no else block, we can treat the then block as empty
         } else {
             self.statement()?
         };
 
         Ok(self._ast_factory.create_while_statement(condition, then_block, while_statement_type))
+    }
+
+    /*
+        RangeBoundaryExpression
+            : Identifier
+            | StringLiteral
+            | IntegerLiteral
+            ;
+    */
+    fn range_boundary_expression(&mut self) -> Result<Expression, SyntaxError> {
+        match &self._lookahead {
+            Some((Token::Identifier, _)) => {
+                let identifier = self.identifier()?;
+                Ok(identifier)
+            },
+            _ => {
+                let err = self.error_unexpected_lookahead_token("an identifier, a string or a number");
+                if self.lookahead_is_literal() {
+                    let literal = match &self._lookahead {
+                        Some((Token::DoubleQuotedString, _)) => self.string_literal(&Token::DoubleQuotedString)?,
+                        Some((Token::SingleQuotedString, _)) => self.string_literal(&Token::SingleQuotedString)?,
+                        Some((Token::Int, _)) => self.integer_literal(&Token::Int)?,
+                        Some((Token::BinaryNumber, _)) => self.integer_literal(&Token::BinaryNumber)?,
+                        Some((Token::HexNumber, _)) => self.integer_literal(&Token::HexNumber)?,
+                        Some((Token::OctalNumber, _)) => self.integer_literal(&Token::OctalNumber)?,
+                        _ => return Err(err),
+                    };
+                    Ok(self._ast_factory.create_literal_expression(literal))
+                } else {
+                    Err(err)
+                }
+            }
+        }
+    }
+
+    /*
+        RangeExpression
+            : RangeBoundaryExpression
+            | RangeBoundaryExpression .. RangeBoundaryExpression
+            | RangeBoundaryExpression ..= RangeBoundaryExpression
+            ;
+    */
+    fn range_expression(&mut self) -> Result<Expression, SyntaxError> {
+        let start = self.range_boundary_expression()?;
+        let end: Option<Expression>;
+        let range_type;
+
+        match &self._lookahead {
+            Some((Token::Range, _)) => {
+                self.eat_token(&Token::Range)?;
+                range_type = RangeExpressionType::Exclusive;
+                end = Some(self.range_boundary_expression()?);
+            },
+            Some((Token::RangeInclusive, _)) => {
+                self.eat_token(&Token::RangeInclusive)?;
+                range_type = RangeExpressionType::Inclusive;
+                end = Some(self.range_boundary_expression()?);
+            },
+            _ => {
+                range_type = RangeExpressionType::IterableObject;
+                end = None;
+            }
+        };
+
+        Ok(self._ast_factory.create_range_expression(start, end, range_type))
+    }
+
+    /*
+        ForStatement
+            : 'for' VariableDeclarationList 'in' RangeExpression ':' ExpressionStatement EXPRESSION_END
+            | 'for' VariableDeclarationList 'in' RangeExpression EXPRESSION_END BlockStatement
+            ;
+    */
+    fn for_statement(&mut self) -> Result<Statement, SyntaxError> {
+        self.eat_token(&Token::For)?;
+
+        // For loop has immutable variable declarations without initializers
+        let variable_declarations = self.variable_declaration_list(
+            &VariableDeclarationType::Immutable,
+            false
+        )?;
+        self.eat_token(&Token::In)?;
+        let iterable = self.range_expression()?;
+
+        self.try_eat_colon();
+        self.try_eat_expression_end();
+
+        let body = if self._lookahead.is_none() {
+            Statement::Empty // If there's no else block, we can treat the then block as empty
+        } else {
+            self.statement()?
+        };
+
+        Ok(self._ast_factory.create_for_statement(variable_declarations, iterable, body))
     }
     
     /*
