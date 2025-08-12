@@ -60,10 +60,19 @@ impl SyntaxError {
                 "Unclosed String Literal",
                 "String literals must be closed with a matching quote.".to_string(),
             ),
-            SyntaxErrorKind::UnexpectedToken { ref expected, ref found } => (
-                    "Unexpected Token",
-                    format!("Expected {expected}, but found {found} instead."),
-            ),
+            SyntaxErrorKind::UnexpectedToken { ref expected, ref found } => {
+                if expected.is_empty() {
+                    (
+                        "Unexpected Token",
+                        format!("The token '{found}' is not expected in this context."),
+                    )
+                } else {
+                    (
+                        "Unexpected Token",
+                        format!("Expected {expected}, but found '{found}' instead."),
+                    )
+                }
+            },
             SyntaxErrorKind::UnexpectedEOF => (
                 "Unexpected End of File",
                 "The file ended abruptly. An expression or statement may be incomplete.".to_string(),

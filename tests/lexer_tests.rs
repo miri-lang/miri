@@ -1323,6 +1323,34 @@ fn test_invalid_characters() {
 }
 
 #[test]
+fn test_while_loop_nested_empty() {
+    lexer_test("
+while x > 0
+    while y < 5
+        // nested body
+", vec![
+        Token::While, Token::Identifier, Token::GreaterThan, Token::Int, Token::ExpressionStatementEnd,
+            Token::Indent,
+            Token::While, Token::Identifier, Token::LessThan, Token::Int, Token::ExpressionStatementEnd,
+            Token::Dedent
+    ]);
+}
+
+#[test]
+fn test_for_loop_nested_empty() {
+    lexer_test("
+for i in 1..3
+    for c in \"ab\"
+        // nested body
+", vec![
+        Token::For, Token::Identifier, Token::In, Token::Int, Token::Range, Token::Int, Token::ExpressionStatementEnd,
+            Token::Indent,
+            Token::For, Token::Identifier, Token::In, Token::DoubleQuotedString, Token::ExpressionStatementEnd,
+            Token::Dedent
+    ]);
+}
+
+#[test]
 fn test_large_nested_structure() {
     let mut input = String::new();
     let mut expected = Vec::new();

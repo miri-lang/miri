@@ -19,6 +19,7 @@ pub enum IfStatementType {
 pub enum WhileStatementType {
     While,
     Until,
+    Forever, // Endless loop
 }
 
 /// Represents the type of a range expression
