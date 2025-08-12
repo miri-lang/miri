@@ -244,8 +244,8 @@ fn test_parse_mismatched_parentheses() {
     parse_error_test(
         "(5 + 2]", 
         SyntaxErrorKind::UnexpectedToken { 
-            expected: "a different token".into(),
-            found: "RBracket".into() 
+            expected: "".into(),
+            found: "]".into() 
         }
     );
 }
@@ -948,6 +948,26 @@ if x
 }
 
 #[test]
+fn test_parse_if_nested_empty() {
+    parse_if_expression_test("
+if x
+    if y
+        // TODO
+",
+    identifier("x".into()),
+    block(vec![
+        if_statement(
+            identifier("y".into()),
+            empty_statement(),
+            None
+        )
+    ]),
+    None,
+    IfStatementType::If
+    );
+}
+
+#[test]
 fn test_parse_if_with_empty_else_block() {
     parse_if_test("
 if x
@@ -1180,7 +1200,7 @@ fn test_unary_expression_precedence() {
 }
 
 #[test]
-fn test_while_expression() {
+fn test_while_loop() {
     parse_while_test("
 while x > 0
     x -= 1
@@ -1203,7 +1223,83 @@ while x > 0
 }
 
 #[test]
-fn test_while_expression_inline() {
+fn test_while_loop_empty() {
+    parse_while_test("
+while x > 0
+    // TODO
+",
+    binary(
+        identifier("x".into()),
+        BinaryOp::GreaterThan,
+        int_literal(0)
+    ),
+    empty_statement()
+    );
+}
+
+#[test]
+fn test_while_loop_nested() {
+    parse_while_expression_test("
+while x > 0
+    while y < 5
+        y += 1
+",
+    binary(
+        identifier("x".into()),
+        BinaryOp::GreaterThan,
+        int_literal(0)
+    ),
+    block(vec![
+        while_statement(
+            binary(
+                identifier("y".into()),
+                BinaryOp::LessThan,
+                int_literal(5)
+            ),
+            block(vec![
+                expression_statement(
+                    assign(
+                        lhs_expression("y"),
+                        AssignmentOp::AssignAdd,
+                        int_literal(1)
+                    )
+                )
+            ])
+        )
+    ]),
+    WhileStatementType::While
+    );
+}
+
+
+#[test]
+fn test_while_loop_nested_empty() {
+    parse_while_expression_test("
+while x > 0
+    while y < 5
+        // TODO
+",
+    binary(
+        identifier("x".into()),
+        BinaryOp::GreaterThan,
+        int_literal(0)
+    ),
+    block(vec![
+        while_statement(
+            binary(
+                identifier("y".into()),
+                BinaryOp::LessThan,
+                int_literal(5)
+            ),
+            empty_statement()
+        )
+    ]),
+    WhileStatementType::While
+    );
+}
+
+#[test]
+fn test_while_loop_inline() {
     parse_while_test("
 while x > 0: x -= 1
 ",
@@ -1486,6 +1582,213 @@ for k, v in hash: y = k + v
         )
     )
     );
+}
+
+#[test]
+fn test_for_loop_string() {
+    parse_for_test("
+for ch in \"hello\": y = ch
+",
+    vec![
+        let_variable("ch".into(), None, None),
+    ],
+    range(
+        string_literal("hello"),
+        None,
+        RangeExpressionType::IterableObject
+    ),
+    expression_statement(
+        assign(
+            lhs_expression("y"),
+            AssignmentOp::Assign,
+            identifier("ch".into())
+        )
+    )
+    );
+}
+
+#[test]
+fn test_nested_for_loop() {
+    parse_for_test("
+for i in 1..3
+    for c in \"ab\"
+        // nested body
+",
+        vec![let_variable("i".into(), None, None)],
+        range(int_literal(1), Some(int_literal(3)), RangeExpressionType::Exclusive),
+        block(vec![
+            for_statement(
+                vec![let_variable("c".into(), None, None)],
+                range(string_literal("ab"), None, RangeExpressionType::IterableObject),
+                empty_statement()
+            )
+        ])
+    );
+}
+
+#[test]
+fn test_for_loop_nested_inline() {
+    parse_for_test("
+for i in 1..3: for c in \"ab\": // nested body
+",
+        vec![let_variable("i".into(), None, None)],
+        range(int_literal(1), Some(int_literal(3)), RangeExpressionType::Exclusive),
+        for_statement(
+                vec![let_variable("c".into(), None, None)],
+                range(string_literal("ab"), None, RangeExpressionType::IterableObject),
+                empty_statement()
+            )
+    );
+}
+
+#[test]
+fn test_for_loop_with_typed_variable() {
+    parse_for_test("
+for i int in 1..=10: // do something
+",
+        vec![let_variable("i".into(), Some("int".into()), None)],
+        range(int_literal(1), Some(int_literal(10)), RangeExpressionType::Inclusive),
+        empty_statement()
+    );
+}
+
+#[test]
+fn test_for_loop_with_empty_body() {
+    parse_for_test("
+for item in my_list
+    // This loop is intentionally empty
+",
+        vec![let_variable("item".into(), None, None)],
+        range(identifier("my_list".into()), None, RangeExpressionType::IterableObject),
+        empty_statement()
+    );
+}
+
+#[test]
+fn test_error_for_loop_variable_with_initializer() {
+    // The parser should reject initializers on loop variables.
+    parse_error_test(
+        "for x = 10 in 1..5",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "".to_string(),
+            found: "=".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_error_for_loop_missing_in_keyword() {
+    parse_error_test(
+        "for x 1..5",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "".to_string(),
+            found: "int".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_error_for_loop_with_complex_iterable() {
+    // The current parser only supports simple identifiers or literals in ranges.
+    parse_error_test(
+        "for x in (get_items())",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "an identifier, a string or a number".to_string(),
+            found: "(".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_forever_loop() {
+    parse_test("
+forever
+    x
+", vec![
+        forever_statement(
+            block(vec![
+                expression_statement(identifier("x".into()))
+            ])
+        )
+    ]);
+}
+
+#[test]
+fn test_forever_loop_with_comment() {
+    parse_test("
+forever // This is an infinite loop
+    x
+", vec![
+        forever_statement(
+            block(vec![
+                expression_statement(identifier("x".into()))
+            ])
+        )
+    ]);
+}
+
+#[test]
+fn test_forever_loop_with_empty_body_and_comment() {
+    parse_test("
+forever
+    // This is an infinite loop
+", vec![
+        forever_statement(
+            empty_statement()
+        )
+    ]);
+}
+
+#[test]
+fn test_forever_loop_nested_with_empty_body_and_comment() {
+    parse_test("
+forever
+    forever
+        // This is an infinite loop
+", vec![
+        forever_statement(
+            block(vec![
+                forever_statement(
+                    empty_statement()
+                )
+            ])
+        )
+    ]);
+}
+
+#[test]
+fn test_forever_loop_inline() {
+    parse_test("
+forever: x
+", vec![
+        forever_statement(
+            expression_statement(identifier("x".into()))
+        )
+    ]);
+}
+
+#[test]
+fn test_forever_loop_inline_with_empty_body_and_comment() {
+    parse_test("
+forever: // This is an infinite loop
+", vec![
+        forever_statement(
+            empty_statement()
+        )
+    ]);
+}
+
+#[test]
+fn test_forever_loop_inline_nested_with_empty_body_and_comment() {
+    parse_test("
+forever: forever: // This is an infinite loop
+", vec![
+        forever_statement(
+            forever_statement(
+                empty_statement()
+            )
+        )
+    ]);
 }
 
 

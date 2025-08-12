@@ -140,3 +140,23 @@ pub fn block(stmts: Vec<Statement>) -> Statement {
 pub fn if_statement(cond: Expression, then: Statement, else_b: Option<Statement>) -> Statement {
     Statement::If(Box::new(cond), Box::new(then), else_b.map(Box::new), IfStatementType::If)
 }
+
+pub fn while_statement(cond: Expression, body: Statement) -> Statement {
+    Statement::While(Box::new(cond), Box::new(body), WhileStatementType::While)
+}
+
+pub fn until_statement(cond: Expression, body: Statement) -> Statement {
+    Statement::While(Box::new(cond), Box::new(body), WhileStatementType::Until)
+}
+
+pub fn forever_statement(body: Statement) -> Statement {
+    Statement::While(Box::new(Expression::Literal(Literal::Boolean(true))), Box::new(body), WhileStatementType::Forever)
+}
+
+pub fn for_statement(
+    variable_declarations: Vec<VariableDeclaration>,
+    iterable: Expression,
+    body: Statement,
+) -> Statement {
+    Statement::For(variable_declarations, Box::new(iterable), Box::new(body))
+}

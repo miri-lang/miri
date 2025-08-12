@@ -80,6 +80,7 @@ impl<'source> Parser<'source> {
             Some((Token::Unless, _)) => self.if_statement(IfStatementType::Unless)?,
             Some((Token::While, _)) => self.while_statement(WhileStatementType::While)?,
             Some((Token::Until, _)) => self.while_statement(WhileStatementType::Until)?,
+            Some((Token::Forever, _)) => self.while_statement(WhileStatementType::Forever)?,
             Some((Token::For, _)) => self.for_statement()?,
             _ => self.expression_statement()?,
         };
@@ -190,7 +191,7 @@ impl<'source> Parser<'source> {
         self.try_eat_colon();
         self.try_eat_expression_end();
 
-        let then_block = if self._lookahead.is_none() || self.lookahead_is_else() {
+        let then_block = if self._lookahead.is_none() || self.lookahead_is_else() || self.lookahead_is_dedent() {
             Statement::Empty // If there's no else block, we can treat the then block as empty
         } else {
             self.statement()?
@@ -237,20 +238,29 @@ impl<'source> Parser<'source> {
             | 'while' Expression EXPRESSION_END BlockStatement
             | 'until' Expression ':' ExpressionStatement EXPRESSION_END
             | 'until' Expression EXPRESSION_END BlockStatement
+            | 'forever' ':' ExpressionStatement EXPRESSION_END
+            | 'forever' EXPRESSION_END BlockStatement
             ;
     */
     fn while_statement(&mut self, while_statement_type: WhileStatementType) -> Result<Statement, SyntaxError> {
+        let condition;
         if while_statement_type == WhileStatementType::Until {
             self.eat_token(&Token::Until)?;
+            condition = self.expression()?;
+        } else if while_statement_type == WhileStatementType::Forever {
+            self.eat_token(&Token::Forever)?;
+            condition = self._ast_factory.create_literal_expression(
+                self._ast_factory.create_boolean_literal(true)
+            );
         } else {
             self.eat_token(&Token::While)?;
+            condition = self.expression()?;
         }
-        let condition = self.expression()?;
 
         self.try_eat_colon();
         self.try_eat_expression_end();
 
-        let then_block = if self._lookahead.is_none() {
+        let then_block = if self._lookahead.is_none() || self.lookahead_is_dedent() {
             Statement::Empty // If there's no else block, we can treat the then block as empty
         } else {
             self.statement()?
@@ -344,7 +354,7 @@ impl<'source> Parser<'source> {
         self.try_eat_colon();
         self.try_eat_expression_end();
 
-        let body = if self._lookahead.is_none() {
+        let body = if self._lookahead.is_none() || self.lookahead_is_dedent() {
             Statement::Empty // If there's no else block, we can treat the then block as empty
         } else {
             self.statement()?
@@ -982,8 +992,8 @@ impl<'source> Parser<'source> {
                 Err(
                     SyntaxError::new(
                     SyntaxErrorKind::UnexpectedToken {
-                        expected: "a different token".to_string(), // NOTE: This could be improved
-                        found: format!("{:?}", found),
+                        expected: "".to_string(), // NOTE: This could be improved
+                        found: token_to_string(found),
                     },
                     self.source.len()..self.source.len()
                     )
@@ -1039,6 +1049,10 @@ impl<'source> Parser<'source> {
 
     fn lookahead_is_indent(&self) -> bool {
         self.match_lookahead_type(is_indent)
+    }
+
+    fn lookahead_is_dedent(&self) -> bool {
+        self.match_lookahead_type(is_dedent)
     }
 
     fn lookahead_as_string(&self) -> String {
@@ -1242,4 +1256,8 @@ fn is_else(token: &Token) -> bool {
 
 fn is_indent(token: &Token) -> bool {
     matches!(token, Token::Indent)
+}
+
+fn is_dedent(token: &Token) -> bool {
+    matches!(token, Token::Dedent)
 }
