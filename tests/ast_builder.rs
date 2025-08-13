@@ -160,3 +160,29 @@ pub fn for_statement(
 ) -> Statement {
     Statement::For(variable_declarations, Box::new(iterable), Box::new(body))
 }
+
+pub fn return_statement(expr: Option<Expression>) -> Statement {
+    Statement::Return(Box::new(expr))
+}
+
+pub fn guard(op: GuardOp, expr: Expression) -> Expression {
+    Expression::Guard(op, Box::new(expr))
+}
+
+pub fn def(
+    name: String,
+    parameters: Vec<Parameter>,
+    return_type: Option<String>,
+    body: Statement,
+) -> Statement {
+    Statement::FunctionDeclaration(
+        name,
+        parameters,
+        return_type,
+        Box::new(body)
+    )
+}
+
+pub fn parameter(name: String, typ: Option<String>, guard: Option<Expression>) -> Parameter {
+    Parameter { name, typ, guard }
+}

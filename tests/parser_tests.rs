@@ -244,7 +244,7 @@ fn test_parse_mismatched_parentheses() {
     parse_error_test(
         "(5 + 2]", 
         SyntaxErrorKind::UnexpectedToken { 
-            expected: "".into(),
+            expected: ")".into(),
             found: "]".into() 
         }
     );
@@ -1670,7 +1670,7 @@ fn test_error_for_loop_variable_with_initializer() {
     parse_error_test(
         "for x = 10 in 1..5",
         SyntaxErrorKind::UnexpectedToken {
-            expected: "".to_string(),
+            expected: "in".to_string(),
             found: "=".to_string(),
         }
     );
@@ -1681,7 +1681,7 @@ fn test_error_for_loop_missing_in_keyword() {
     parse_error_test(
         "for x 1..5",
         SyntaxErrorKind::UnexpectedToken {
-            expected: "".to_string(),
+            expected: "in".to_string(),
             found: "int".to_string(),
         }
     );
@@ -1788,6 +1788,228 @@ forever: forever: // This is an infinite loop
                 empty_statement()
             )
         )
+    ]);
+}
+
+#[test]
+fn test_function_declaration() {
+    parse_test("
+def square(x int)
+    x * x
+", vec![
+        def("square".into(), 
+            vec![
+                parameter("x".into(), Some("int".into()), None)
+            ],
+            None,
+            block(vec![
+                expression_statement(
+                    binary(
+                        identifier("x".into()),
+                        BinaryOp::Mul,
+                        identifier("x".into())
+                    )
+                )
+            ])
+        )
+    ]);
+}
+
+#[test]
+fn test_function_declaration_with_guard() {
+    parse_test("
+def square(x int > 0)
+    x * x
+", vec![
+        def("square".into(), 
+            vec![
+                parameter("x".into(), Some("int".into()), Some(guard(GuardOp::GreaterThan, int_literal(0))))
+            ],
+            None,
+            block(vec![
+                expression_statement(
+                    binary(
+                        identifier("x".into()),
+                        BinaryOp::Mul,
+                        identifier("x".into())
+                    )
+                )
+            ])
+        )
+    ]);
+}
+
+#[test]
+fn test_inline_function_declaration_with_guard() {
+    parse_test("
+def square(x int > 0) int: x * x
+", vec![
+        def("square".into(), 
+            vec![
+                parameter("x".into(), Some("int".into()), Some(guard(GuardOp::GreaterThan, int_literal(0)))),
+            ],
+            Some("int".into()),
+            expression_statement(
+                binary(
+                    identifier("x".into()),
+                    BinaryOp::Mul,
+                    identifier("x".into())
+                )
+            )
+        )
+    ]);
+}
+
+#[test]
+fn test_function_no_parameters() {
+    parse_test("
+def get_answer() int: 42
+", vec![
+        def(
+            "get_answer".into(),
+            vec![], // No parameters
+            Some("int".into()),
+            expression_statement(int_literal(42))
+        )
+    ]);
+}
+
+#[test]
+fn test_function_multiple_parameters() {
+    parse_test("
+def add(a int, b int)
+    return a + b
+", vec![
+        def(
+            "add".into(),
+            vec![
+                parameter("a".into(), Some("int".into()), None),
+                parameter("b".into(), Some("int".into()), None),
+            ],
+            None,
+            block(vec![
+                return_statement(
+                    Some(binary(identifier("a".into()), BinaryOp::Add, identifier("b".into())))
+                )
+            ])
+        )
+    ]);
+}
+
+#[test]
+fn test_function_untyped_parameter() {
+    parse_test("
+def process(data)
+    // do something
+", vec![
+        def(
+            "process".into(),
+            vec![
+                parameter("data".into(), None, None)
+            ],
+            None,
+            empty_statement()
+        )
+    ]);
+}
+
+#[test]
+fn test_function_empty_body_block() {
+    parse_test("
+def no_op()
+    // This function does nothing
+", vec![
+        def(
+            "no_op".into(),
+            vec![],
+            None,
+            empty_statement()
+        )
+    ]);
+}
+
+#[test]
+fn test_function_empty_body_inline() {
+    parse_test("
+def no_op_inline(): // This function also does nothing
+", vec![
+        def(
+            "no_op_inline".into(),
+            vec![],
+            None,
+            empty_statement()
+        )
+    ]);
+}
+
+#[test]
+fn test_error_function_missing_name() {
+    parse_error_test(
+        "def () int: 42",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "function name".to_string(),
+            found: "(".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_error_function_missing_parens() {
+    parse_error_test(
+        "def my_func int: 42",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "(".to_string(),
+            found: "identifier".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_error_function_invalid_parameter() {
+    parse_error_test(
+        "def my_func(123)",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "identifier".to_string(),
+            found: "int".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_error_function_trailing_comma_in_params() {
+    parse_error_test(
+        "def my_func(a, )",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "identifier".to_string(),
+            found: ")".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_return_statement() {
+    parse_test("
+return 42
+", vec![
+        return_statement(Some(int_literal(42)))
+    ]);
+}
+
+#[test]
+fn test_return_statement_with_expression() {
+    parse_test("
+return 42 + x
+", vec![
+        return_statement(Some(binary(int_literal(42), BinaryOp::Add, identifier("x".into()))))
+    ]);
+}
+
+#[test]
+fn test_empty_return_statement() {
+    parse_test("
+return
+", vec![
+        return_statement(None)
     ]);
 }
 

@@ -31,15 +31,33 @@ pub enum RangeExpressionType {
     IterableObject, // Represents an iterable object, e.g. a string, or a collection
 }
 
+/// Represents a parameter in a function declaration
+#[derive(Debug, Clone, PartialEq)]
+pub struct Parameter {
+    pub name: String,
+    pub typ: Option<String>, // Type can be specified, e.g., "i32", "String"
+    pub guard: Option<Expression>, // Optional guard expression
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub enum Statement {
     Empty, // Represents an empty statement, e.g., when a block is empty
+
     Expression(Expression),
+
     Block(Vec<Statement>),
+
     Variable(Vec<VariableDeclaration>),
+
     If(Box<Expression>, Box<Statement>, Option<Box<Statement>>, IfStatementType), // condition, then_block, else_block, type
+
     While(Box<Expression>, Box<Statement>, WhileStatementType), // condition, then_block, type
+
     For(Vec<VariableDeclaration>, Box<Expression>, Box<Statement>), // variable_declarations, iterable, body
+
+    FunctionDeclaration(String, Vec<Parameter>, Option<String>, Box<Statement>), // name, parameters, return type, body
+
+    Return(Box<Option<Expression>>), // Optional return expression
 }
 
 /// Represents an expression
@@ -62,6 +80,8 @@ pub enum Expression {
     Conditional(Box<Expression>, Box<Expression>, Option<Box<Expression>>, IfStatementType), // condition, then_expr, else_expr
 
     Range(Box<Expression>, Box<Option<Expression>>, RangeExpressionType), // start, end, range_type
+
+    Guard(GuardOp, Box<Expression>), // guard operator and expression
 
     // FieldAccess(Box<Expr>, String), // expr.field
     // Index(Box<Expr>, Box<Expr>),    // expr[index]
@@ -140,6 +160,19 @@ pub enum BinaryOp {
     Or,
     Range, // Represents a range operator (e.g., `1..10`)
     In,   // Represents the `in` operator for membership tests
+}
+
+/// Represents a guard operator
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum GuardOp {
+    NotEqual,
+    LessThan,
+    LessThanEqual,
+    GreaterThan,
+    GreaterThanEqual,
+    Not,
+    NotIn,
+    In,
 }
 
 /// Represents a unary operator
@@ -383,5 +416,17 @@ impl AstFactory {
 
     pub fn create_for_statement(&self, variable_declarations: Vec<VariableDeclaration>, iterable: Expression, body: Statement) -> Statement {
         Statement::For(variable_declarations, Box::new(iterable), Box::new(body))
+    }
+
+    pub fn create_function_declaration(&self, name: String, parameters: Vec<Parameter>, return_type: Option<String>, body: Statement) -> Statement {
+        Statement::FunctionDeclaration(name, parameters, return_type, Box::new(body))
+    }
+
+    pub fn create_return_statement(&self, optional_expression: Option<Expression>) -> Statement {
+        Statement::Return(Box::new(optional_expression))
+    }
+
+    pub fn create_guard_expression(&self, op: GuardOp, expr: Expression) -> Expression {
+        Expression::Guard(op, Box::new(expr))
     }
 }
