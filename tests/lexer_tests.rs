@@ -166,9 +166,19 @@ fn keyword_test(keyword: &str, expected: Token) {
 }
 
 #[test]
+fn test_in_keyword() {
+    lexer_test(
+        "in not",
+        vec![
+        Token::In,
+        Token::Not,
+    ]);
+}
+
+#[test]
 fn test_else_keyword() {
     lexer_test(
-        format!("else else() else.blah blah.else blah blahelse blah_else \"else\" /* else */").as_str(),
+        "else else() else.blah blah.else blah blahelse blah_else \"else\" /* else */",
         vec![
         Token::Else,
         Token::ExpressionStatementEnd, Token::Else, Token::LParen, Token::RParen,

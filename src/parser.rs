@@ -64,7 +64,11 @@ impl<'source> Parser<'source> {
             | BlockStatement
             | VariableStatement
             | IfStatement
-            | IterationStatement
+            | WhileStatement
+            | ForStatement
+            | ForeverStatement
+            | FunctionDeclaration
+            | ReturnStatement
             | EmptyStatement
             ;
     */
@@ -82,6 +86,8 @@ impl<'source> Parser<'source> {
             Some((Token::Until, _)) => self.while_statement(WhileStatementType::Until)?,
             Some((Token::Forever, _)) => self.while_statement(WhileStatementType::Forever)?,
             Some((Token::For, _)) => self.for_statement()?,
+            Some((Token::Def, _)) => self.function_declaration()?,
+            Some((Token::Return, _)) => self.return_statement()?,
             _ => self.expression_statement()?,
         };
         Ok(statement)
@@ -355,14 +361,160 @@ impl<'source> Parser<'source> {
         self.try_eat_expression_end();
 
         let body = if self._lookahead.is_none() || self.lookahead_is_dedent() {
-            Statement::Empty // If there's no else block, we can treat the then block as empty
+            Statement::Empty
         } else {
             self.statement()?
         };
 
         Ok(self._ast_factory.create_for_statement(variable_declarations, iterable, body))
     }
-    
+
+    /*
+        FunctionDeclaration
+            : 'def' Identifier '(' ParameterList ')' [ReturnType] EXPRESSION_END BlockStatement
+            | 'def' Identifier '(' ParameterList ')' [ReturnType] ':' ExpressionStatement EXPRESSION_END
+            ;
+    */
+    fn function_declaration(&mut self) -> Result<Statement, SyntaxError> {
+        self.eat_token(&Token::Def)?;
+
+        let name = match &self._lookahead {
+            Some((Token::Identifier, _)) => {
+                let token = self.eat_token(&Token::Identifier)?;
+                self.source[token.1.start..token.1.end].to_string()
+            },
+            _ => return Err(self.error_unexpected_lookahead_token("function name")),
+        };
+
+        self.eat_token(&Token::LParen)?;
+        let parameters =  if self.lookahead_is_rparen() {
+            vec![]
+        } else {
+            self.parameter_list()?
+        };
+        self.eat_token(&Token::RParen)?;
+
+        let return_type = match &self._lookahead {
+            Some((Token::Identifier, _)) => {
+                // If the next token is an identifier, it might be a type
+                let token = self.eat_token(&Token::Identifier)?;
+                Some(self.source[token.1.start..token.1.end].to_string())
+            },
+            _ => None,
+        };
+
+        self.try_eat_colon();
+        self.try_eat_expression_end();
+
+        let body = if self._lookahead.is_none() || self.lookahead_is_dedent() {
+            Statement::Empty
+        } else {
+            self.statement()?
+        };
+
+        Ok(self._ast_factory.create_function_declaration(name, parameters, return_type, body))
+    }
+
+    /*
+        ParameterList
+            : Parameter
+            | ParameterList ',' Parameter
+            ;
+    */
+    fn parameter_list(&mut self) -> Result<Vec<Parameter>, SyntaxError> {
+        let mut parameters = vec![self.parameter()?];
+
+        while self.match_lookahead_type(|t| t == &Token::Comma) {
+            self.eat_token(&Token::Comma)?;
+            parameters.push(self.parameter()?);
+        }
+
+        Ok(parameters)
+    }
+
+    /*
+        Parameter
+            : Identifier [Type] [Guard]
+            ;
+    */
+    fn parameter(&mut self) -> Result<Parameter, SyntaxError> {
+        let identifier = self.identifier()?;
+
+        let name;
+        if let Expression::Identifier(id) = identifier {
+            name = id;
+        } else {
+            return Err(
+                self.error_unexpected_token("identifier", format!("{:?}", identifier).as_str())
+            );
+        }
+
+        let typ = match &self._lookahead {
+            Some((Token::Identifier, _)) => {
+                // If the next token is an identifier, it might be a type
+                let token = self.eat_token(&Token::Identifier)?;
+                Some(self.source[token.1.start..token.1.end].to_string())
+            },
+            _ => None,
+        };
+
+        let guard = if self._lookahead.is_some() && self.lookahead_is_guard() {
+            Some(self.guard_expression()?)
+        } else {
+            None
+        };
+
+        Ok(Parameter { name, typ, guard })
+    }
+
+    /*
+        GuardExpression
+            : '>' Expression
+            | '>=' Expression
+            | '<' Expression
+            | '<=' Expression
+            | 'in' Expression
+            | 'not' Expression
+            | 'not in' Expression
+            ;
+    */
+    fn guard_expression(&mut self) -> Result<Expression, SyntaxError> {
+        let mut guard_op = match &self._lookahead {
+            Some((Token::GreaterThan, _)) => GuardOp::GreaterThan,
+            Some((Token::GreaterThanEqual, _)) => GuardOp::GreaterThanEqual,
+            Some((Token::LessThan, _)) => GuardOp::LessThan,
+            Some((Token::LessThanEqual, _)) => GuardOp::LessThanEqual,
+            Some((Token::In, _)) => GuardOp::In,
+            Some((Token::Not, _)) => GuardOp::Not,
+            _ => return Err(self.error_unexpected_lookahead_token("guard operator")),
+        };
+
+        self.eat(is_guard, "guard operator")?;
+        if self._lookahead.is_some() && self.lookahead_is_in() {
+            self.eat_token(&Token::In)?;
+            guard_op = GuardOp::NotIn;
+        }
+
+        let expression = self.expression()?;
+        Ok(self._ast_factory.create_guard_expression(guard_op, expression))
+    }
+
+    /*
+        ReturnStatement
+            : 'return' Expression EXPRESSION_END
+            ;
+    */
+    fn return_statement(&mut self) -> Result<Statement, SyntaxError> {
+        self.eat_token(&Token::Return)?;
+        let expression = if self.lookahead_is_expression_end() {
+            None
+        } else {
+            Some(self.expression()?)
+        };
+        self.eat_token(&Token::ExpressionStatementEnd)?;
+        Ok(self._ast_factory.create_return_statement(expression))
+    }
+
     /*
         ExpressionStatement
             : Expression EXPRESSION_END
@@ -979,7 +1131,7 @@ impl<'source> Parser<'source> {
         }
     }
 
-    fn eat(&mut self, expected: impl Fn(&Token) -> bool) -> Result<TokenSpan, SyntaxError> {
+    fn eat(&mut self, expected: impl Fn(&Token) -> bool, expected_str: &str) -> Result<TokenSpan, SyntaxError> {
         let token = &self._lookahead;
 
         match token {
@@ -992,7 +1144,7 @@ impl<'source> Parser<'source> {
                 Err(
                     SyntaxError::new(
                     SyntaxErrorKind::UnexpectedToken {
-                        expected: "".to_string(), // NOTE: This could be improved
+                        expected: expected_str.to_string(),
                         found: token_to_string(found),
                     },
                     self.source.len()..self.source.len()
@@ -1012,11 +1164,11 @@ impl<'source> Parser<'source> {
     }
 
     fn eat_token(&mut self, expected: &Token) -> Result<TokenSpan, SyntaxError> {
-        self.eat(|t| t == expected)
+        self.eat(|t| t == expected, &token_to_string(expected))
     }
 
     fn eat_binary_op(&mut self, match_token: fn(&Token) -> bool) -> Result<TokenSpan, SyntaxError> {
-        self.eat(|t| match_token(t))
+        self.eat(|t| match_token(t), "binary operator")
     }
 
     fn match_lookahead_type(&self, match_token: fn(&Token) -> bool) -> bool {
@@ -1057,6 +1209,18 @@ impl<'source> Parser<'source> {
 
     fn lookahead_as_string(&self) -> String {
         self._lookahead.as_ref().map_or("end of file".to_string(), |(t, _)| token_to_string(t))
+    }
+
+    fn lookahead_is_guard(&self) -> bool {
+        self.match_lookahead_type(is_guard)
+    }
+
+    fn lookahead_is_in(&self) -> bool {
+        self.match_lookahead_type(is_in)
+    }
+
+    fn lookahead_is_rparen(&self) -> bool {
+        self.match_lookahead_type(is_rparen)
     }
 
     fn eat_additive_op(&mut self) -> Result<BinaryOp, Result<Expression, SyntaxError>> {
@@ -1260,4 +1424,16 @@ fn is_indent(token: &Token) -> bool {
 
 fn is_dedent(token: &Token) -> bool {
     matches!(token, Token::Dedent)
+}
+
+fn is_guard(token: &Token) -> bool {
+    matches!(token, Token::GreaterThan | Token::GreaterThanEqual | Token::LessThan | Token::LessThanEqual | Token::In | Token::Not | Token::NotEqual)
+}
+
+fn is_in(token: &Token) -> bool {
+    matches!(token, Token::In)
+}
+
+fn is_rparen(token: &Token) -> bool {
+    matches!(token, Token::RParen)
 }
