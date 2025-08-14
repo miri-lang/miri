@@ -279,7 +279,7 @@ fn test_parse_invalid_variable_declaration() {
 fn test_parse_assignment_expression() {
     parse_assignment_expression_test(
         "x = 123", 
-        lhs_expression("x".into()), 
+        lhs_identifier("x".into()), 
         AssignmentOp::Assign, 
         int_literal(123)
     );
@@ -290,10 +290,10 @@ fn test_parse_assignment_expression() {
 fn test_parse_chained_assignment_expression() {
     parse_assignment_expression_test(
         "x = y = 123", 
-        lhs_expression("x".into()), 
+        lhs_identifier("x".into()), 
         AssignmentOp::Assign, 
         assign(
-            lhs_expression("y".into()),
+            lhs_identifier("y".into()),
             AssignmentOp::Assign,
             int_literal(123)
         )
@@ -304,7 +304,7 @@ fn test_parse_chained_assignment_expression() {
 fn test_parse_increment_assignment_expression() {
     parse_assignment_expression_test(
         "x += 100", 
-        lhs_expression("x".into()), 
+        lhs_identifier("x".into()), 
         AssignmentOp::AssignAdd,
         int_literal(100)
     );
@@ -314,7 +314,7 @@ fn test_parse_increment_assignment_expression() {
 fn test_parse_decrement_assignment_expression() {
     parse_assignment_expression_test(
         "x -= 200", 
-        lhs_expression("x".into()), 
+        lhs_identifier("x".into()), 
         AssignmentOp::AssignSub,
         int_literal(200)
     );
@@ -324,7 +324,7 @@ fn test_parse_decrement_assignment_expression() {
 fn test_parse_multiplication_assignment_expression() {
     parse_assignment_expression_test(
         "x *= 10", 
-        lhs_expression("x".into()), 
+        lhs_identifier("x".into()), 
         AssignmentOp::AssignMul,
         int_literal(10)
     );
@@ -334,7 +334,7 @@ fn test_parse_multiplication_assignment_expression() {
 fn test_parse_division_assignment_expression() {
     parse_assignment_expression_test(
         "x /= 10", 
-        lhs_expression("x".into()), 
+        lhs_identifier("x".into()), 
         AssignmentOp::AssignDiv,
         int_literal(10)
     );
@@ -344,7 +344,7 @@ fn test_parse_division_assignment_expression() {
 fn test_parse_modulo_assignment_expression() {
     parse_assignment_expression_test(
         "x %= 10", 
-        lhs_expression("x".into()), 
+        lhs_identifier("x".into()), 
         AssignmentOp::AssignMod,
         int_literal(10)
     );
@@ -354,13 +354,13 @@ fn test_parse_modulo_assignment_expression() {
 fn test_parse_increment_chained_assignment_expression() {
     parse_assignment_expression_test(
         "x = y = z += 100",
-        lhs_expression("x".into()),
+        lhs_identifier("x".into()),
         AssignmentOp::Assign,
         assign(
-            lhs_expression("y".into()),
+            lhs_identifier("y".into()),
             AssignmentOp::Assign,
             assign(
-                lhs_expression("z".into()),
+                lhs_identifier("z".into()),
                 AssignmentOp::AssignAdd,
                 int_literal(100)
             )
@@ -453,7 +453,7 @@ let foo = bar = 200
                 vec![var("bar", None, Some(int_literal(100)))]
             ),
             variable_statement(
-                vec![let_variable("foo", None, Some(assign(lhs_expression("bar"), AssignmentOp::Assign, int_literal(200))))]
+                vec![let_variable("foo", None, Some(assign(lhs_identifier("bar"), AssignmentOp::Assign, int_literal(200))))]
             )
         ]
     );
@@ -471,7 +471,7 @@ else
     block(vec![
         expression_statement(
             assign(
-                lhs_expression("x"),
+                lhs_identifier("x"),
                 AssignmentOp::Assign,
                 int_literal(10)
             )
@@ -481,7 +481,7 @@ else
         block(vec![
             expression_statement(
                 assign(
-                    lhs_expression("x"),
+                    lhs_identifier("x"),
                     AssignmentOp::Assign,
                     int_literal(20)
                 )
@@ -500,11 +500,11 @@ else
 ",
     binary(identifier("x"), BinaryOp::GreaterThan, int_literal(5)),
     block(vec![
-        expression_statement(assign(lhs_expression("x"), AssignmentOp::Assign, int_literal(10)))
+        expression_statement(assign(lhs_identifier("x"), AssignmentOp::Assign, int_literal(10)))
     ]),
         Some(
             block(vec![
-                expression_statement(assign(lhs_expression("x"), AssignmentOp::Assign, int_literal(20)))
+                expression_statement(assign(lhs_identifier("x"), AssignmentOp::Assign, int_literal(20)))
             ])
         )
     );
@@ -521,7 +521,7 @@ else: x = 20
     block(vec![
         expression_statement(
             assign(
-                lhs_expression("x"),
+                lhs_identifier("x"),
                 AssignmentOp::Assign,
                 int_literal(10)
             )
@@ -530,7 +530,7 @@ else: x = 20
     Some(
         expression_statement(
             assign(
-                lhs_expression("x"),
+                lhs_identifier("x"),
                 AssignmentOp::Assign,
                 int_literal(20)
             )
@@ -548,7 +548,7 @@ else
     identifier("x".into()),
     expression_statement(
         assign(
-            lhs_expression("x"),
+            lhs_identifier("x"),
             AssignmentOp::Assign,
             int_literal(10)
         )
@@ -557,7 +557,7 @@ else
         block(vec![
             expression_statement(
                 assign(
-                    lhs_expression("x".into()),
+                    lhs_identifier("x".into()),
                     AssignmentOp::Assign,
                     int_literal(20)
                 )
@@ -576,7 +576,7 @@ if x
     Statement::Block(vec![
         expression_statement(
             assign(
-                lhs_expression("x".into()),
+                lhs_identifier("x".into()),
                 AssignmentOp::Assign,
                 int_literal(10)
             )
@@ -608,7 +608,7 @@ else
             block(vec![
                 expression_statement(
                     assign(
-                        lhs_expression("x".into()),
+                        lhs_identifier("x".into()),
                         AssignmentOp::Assign,
                         int_literal(10)
                     )
@@ -618,7 +618,7 @@ else
                 block(vec![
                     expression_statement(
                         assign(
-                            lhs_expression("x".into()),
+                            lhs_identifier("x".into()),
                             AssignmentOp::Assign,
                             int_literal(20)
                         )
@@ -637,7 +637,7 @@ else
                         block(vec![
                             expression_statement(
                                 assign(
-                                    lhs_expression("x".into()),
+                                    lhs_identifier("x".into()),
                                     AssignmentOp::Assign,
                                     int_literal(30)
                                 )
@@ -650,7 +650,7 @@ else
                     block(vec![
                         expression_statement(
                             assign(
-                                lhs_expression("x".into()),
+                                lhs_identifier("x".into()),
                                 AssignmentOp::Assign,
                                 int_literal(40)
                             )
@@ -672,7 +672,7 @@ if x: x = 10 else: x = 20
     identifier("x".into()),
     expression_statement(
         assign(
-            lhs_expression("x".into()),
+            lhs_identifier("x".into()),
             AssignmentOp::Assign,
             int_literal(10)
         )
@@ -680,7 +680,7 @@ if x: x = 10 else: x = 20
     Some(
             expression_statement(
                 assign(
-                    lhs_expression("x".into()),
+                    lhs_identifier("x".into()),
                     AssignmentOp::Assign,
                     int_literal(20)
                 )
@@ -698,7 +698,7 @@ else: x = 20
     identifier("x".into()),
     expression_statement(
         assign(
-            lhs_expression("x".into()),
+            lhs_identifier("x".into()),
             AssignmentOp::Assign,
             int_literal(10) 
         )
@@ -706,7 +706,7 @@ else: x = 20
     Some(
             expression_statement(
                 assign(
-                    lhs_expression("x".into()),
+                    lhs_identifier("x".into()),
                     AssignmentOp::Assign,
                     int_literal(20)
                 )
@@ -726,7 +726,7 @@ if x: if y: x = 10 else: if z: x = 20 else: x = 30
     identifier("y".into()),
         expression_statement(
             assign(
-                lhs_expression("x".into()),
+                lhs_identifier("x".into()),
                 AssignmentOp::Assign,
                 int_literal(10)
             )
@@ -736,7 +736,7 @@ if x: if y: x = 10 else: if z: x = 20 else: x = 30
                 identifier("z".into()),
                 expression_statement(
                     assign(
-                        lhs_expression("x".into()),
+                        lhs_identifier("x".into()),
                         AssignmentOp::Assign,
                         int_literal(20)
                     )
@@ -744,7 +744,7 @@ if x: if y: x = 10 else: if z: x = 20 else: x = 30
                 Some(
                     expression_statement(
                         assign(
-                            lhs_expression("x".into()),
+                            lhs_identifier("x".into()),
                             AssignmentOp::Assign,
                             int_literal(30)
                         )
@@ -766,7 +766,7 @@ if x: x = 10
     identifier("x".into()),
     expression_statement(
         assign(
-            lhs_expression("x".into()),
+            lhs_identifier("x".into()),
             AssignmentOp::Assign,
             int_literal(10)
         )
@@ -791,7 +791,7 @@ if x + 10 <= 20: x = 10
     ),
     expression_statement(
         assign(
-            lhs_expression("x".into()),
+            lhs_identifier("x".into()),
             AssignmentOp::Assign,
             int_literal(10)
         )
@@ -817,7 +817,7 @@ else
     ),
     block(vec![
         expression_statement(assign(
-            lhs_expression("y".into()),
+            lhs_identifier("y".into()),
             AssignmentOp::Assign,
             int_literal(1)
         ))
@@ -832,7 +832,7 @@ else
             block(vec![
                 expression_statement(
                     assign(
-                        lhs_expression("y".into()),
+                        lhs_identifier("y".into()),
                         AssignmentOp::Assign,
                         int_literal(2)
                     )
@@ -841,7 +841,7 @@ else
             Some(block(vec![
                 expression_statement(
                     assign(
-                        lhs_expression("y".into()),
+                        lhs_identifier("y".into()),
                         AssignmentOp::Assign,
                         int_literal(3)
                     )
@@ -905,7 +905,7 @@ if (x > 10 and y < 5) or z == 1
     block(vec![
         expression_statement(
             assign(
-                lhs_expression("x".into()),
+                lhs_identifier("x".into()),
                 AssignmentOp::Assign,
                 int_literal(1)
             )
@@ -927,7 +927,7 @@ else
     empty_statement(),
     Some(block(vec![
         expression_statement(assign(
-            lhs_expression("x".into()),
+            lhs_identifier("x".into()),
             AssignmentOp::Assign,
             int_literal(1)
         ))
@@ -979,7 +979,7 @@ else
     block(vec![
         expression_statement(
             assign(
-                lhs_expression("x".into()),
+                lhs_identifier("x".into()),
                 AssignmentOp::Assign,
                 int_literal(1)
             )
@@ -1004,7 +1004,7 @@ x = 2
                 block(vec![
                     expression_statement(
                         assign(
-                            lhs_expression("x".into()),
+                            lhs_identifier("x".into()),
                             AssignmentOp::Assign,
                             int_literal(1)
                         )
@@ -1014,7 +1014,7 @@ x = 2
             ),
             expression_statement(
                 assign(
-                    lhs_expression("x".into()),
+                    lhs_identifier("x".into()),
                     AssignmentOp::Assign,
                     int_literal(2)
                 )
@@ -1037,7 +1037,7 @@ x = 2
                 block(vec![
                     expression_statement(
                         assign(
-                            lhs_expression("x".into()),
+                            lhs_identifier("x".into()),
                             AssignmentOp::Assign,
                             int_literal(1)
                         )
@@ -1047,7 +1047,7 @@ x = 2
             ),
             expression_statement(
                 assign(
-                    lhs_expression("x".into()),
+                    lhs_identifier("x".into()),
                     AssignmentOp::Assign,
                     int_literal(2)
                 )
@@ -1213,7 +1213,7 @@ while x > 0
     block(vec![
         expression_statement(
             assign(
-                lhs_expression("x"),
+                lhs_identifier("x"),
                 AssignmentOp::AssignSub,
                 int_literal(1)
             )
@@ -1259,7 +1259,7 @@ while x > 0
             block(vec![
                 expression_statement(
                     assign(
-                        lhs_expression("y"),
+                        lhs_identifier("y"),
                         AssignmentOp::AssignAdd,
                         int_literal(1)
                     )
@@ -1310,7 +1310,7 @@ while x > 0: x -= 1
     ),
     expression_statement(
         assign(
-            lhs_expression("x"),
+            lhs_identifier("x"),
             AssignmentOp::AssignSub,
             int_literal(1)
             )
@@ -1346,7 +1346,7 @@ while x < 10
             block(vec![
                 expression_statement(
                     assign(
-                        lhs_expression("x"),
+                        lhs_identifier("x"),
                         AssignmentOp::AssignAdd,
                         int_literal(1)
                     )
@@ -1356,7 +1356,7 @@ while x < 10
                 block(vec![
                     expression_statement(
                         assign(
-                            lhs_expression("x"),
+                            lhs_identifier("x"),
                             AssignmentOp::AssignAdd,
                             int_literal(2)
                         )
@@ -1462,7 +1462,7 @@ if a if b else c
         block(vec![
             expression_statement(
                 assign(
-                    lhs_expression("x"),
+                    lhs_identifier("x"),
                     AssignmentOp::Assign,
                     int_literal(1)
                 )
@@ -1528,7 +1528,7 @@ for x in 1..=5
     block(vec![
         expression_statement(
             assign(
-                lhs_expression("y"),
+                lhs_identifier("y"),
                 AssignmentOp::Assign,
                 identifier("x".into())
             )
@@ -1552,7 +1552,7 @@ for x in 1..5: y = x
     ),
     expression_statement(
         assign(
-            lhs_expression("y"),
+            lhs_identifier("y"),
             AssignmentOp::Assign,
             identifier("x".into())
         )
@@ -1572,7 +1572,7 @@ for k, v in hash: y = k + v
     range(identifier("hash".into()), None, RangeExpressionType::IterableObject),
     expression_statement(
         assign(
-            lhs_expression("y"),
+            lhs_identifier("y"),
             AssignmentOp::Assign,
             binary(
                 identifier("k".into()),
@@ -1599,7 +1599,7 @@ for ch in \"hello\": y = ch
     ),
     expression_statement(
         assign(
-            lhs_expression("y"),
+            lhs_identifier("y"),
             AssignmentOp::Assign,
             identifier("ch".into())
         )
@@ -2010,6 +2010,74 @@ fn test_empty_return_statement() {
 return
 ", vec![
         return_statement(None)
+    ]);
+}
+
+#[test]
+fn test_member_expression() {
+    parse_test("
+obj.prop
+", vec![
+        expression_statement(
+            member(identifier("obj".into()), identifier("prop").into())
+        )
+    ]);
+}
+
+#[test]
+fn test_assign_to_member_expression() {
+    parse_test("
+obj.prop = 1
+", vec![
+        expression_statement(
+            assign(
+                lhs_member(identifier("obj".into()), identifier("prop").into()),
+                AssignmentOp::Assign,
+                int_literal(1)
+            )
+        )
+    ]);
+}
+
+#[test]
+fn test_assign_to_index_expression() {
+    parse_test("
+obj['prop'] = 1
+", vec![
+        expression_statement(
+            assign(
+                lhs_index(identifier("obj".into()), string_literal("prop".into())),
+                AssignmentOp::Assign,
+                int_literal(1)
+            )
+        )
+    ]);
+}
+
+#[test]
+fn test_assign_to_chained_member_expression() {
+    parse_test("
+obj.a.b['prop'][0] = 1.0
+", vec![
+        expression_statement(
+            assign(
+                lhs_index(
+                    index(
+                        member(
+                            member(
+                                identifier("obj".into()),
+                                identifier("a".into())
+                            ),
+                            identifier("b".into())
+                        ),
+                        string_literal("prop".into())
+                    ),
+                    int_literal(0)
+                ),
+                AssignmentOp::Assign,
+                float32_literal(1.0)
+            )
+        )
     ]);
 }
 

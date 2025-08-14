@@ -619,7 +619,9 @@ impl<'source> Parser<'source> {
         };
 
         let left = match left {
-            Expression::Identifier(name) => LeftHandSideExpression::Identifier(name),
+            Expression::Identifier(_) => self._ast_factory.create_left_hand_side_identifier(left),
+            Expression::Member(_, _) => self._ast_factory.create_left_hand_side_member(left),
+            Expression::Index(_, _) => self._ast_factory.create_left_hand_side_index(left),
             // Other left-hand side expression types can be added here in the future
             _ => return Err(
                 self.error_invalid_left_hand_side_expression()
@@ -707,11 +709,40 @@ impl<'source> Parser<'source> {
 
     /*
         LeftHandSideExpression
-            : PrimaryExpression
+            : MemberExpression
             ;
     */
     fn left_hand_side_expression(&mut self) -> Result<Expression, SyntaxError> {
-        self.primary_expression()
+        self.member_expression()
+    }
+
+    /*
+        MemberExpression
+            : PrimaryExpression
+            | MemberExpression '.' Identifier
+            | MemberExpression '[' Expression ']'
+    */
+    fn member_expression(&mut self) -> Result<Expression, SyntaxError> {
+        let mut object = self.primary_expression()?;
+
+        while self.lookahead_is_member_expression_boundary() {
+            match &self._lookahead {
+                Some((Token::Dot, _)) => {
+                    self.eat_token(&Token::Dot)?;
+                    let property = self.identifier()?;
+                    object = self._ast_factory.create_member_expression(object, property);
+                },
+                Some((Token::LBracket, _)) => {
+                    self.eat_token(&Token::LBracket)?;
+                    let index = self.expression()?;
+                    self.eat_token(&Token::RBracket)?;
+                    object = self._ast_factory.create_index_expression(object, index);
+                },
+                _ => break,
+            }
+        }
+
+        Ok(object)
     }
 
     /*
@@ -1223,6 +1254,10 @@ impl<'source> Parser<'source> {
         self.match_lookahead_type(is_rparen)
     }
 
+    fn lookahead_is_member_expression_boundary(&self) -> bool {
+        self.match_lookahead_type(is_member_expression_boundary)
+    }
+
     fn eat_additive_op(&mut self) -> Result<BinaryOp, Result<Expression, SyntaxError>> {
         let op = match self.eat_binary_op(is_additive_op) {
             Ok(token) => match token.0 {
@@ -1436,4 +1471,8 @@ fn is_in(token: &Token) -> bool {
 
 fn is_rparen(token: &Token) -> bool {
     matches!(token, Token::RParen)
+}
+
+fn is_member_expression_boundary(token: &Token) -> bool {
+    matches!(token, Token::LBracket | Token::Dot)
 }

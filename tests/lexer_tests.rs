@@ -1378,6 +1378,16 @@ fn test_large_nested_structure() {
     lexer_test(&input, expected);
 }
 
+#[test]
+fn test_index_member_assignment() {
+    lexer_test("
+obj['prop'] = 1
+", vec![
+        Token::Identifier, Token::LBracket, Token::SingleQuotedString, Token::RBracket, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+    ]);
+}
+
+
 fn lexer_test(input: &str, expected: Vec<Token>) {
     let lexer = Lexer::new(input);
     let tokens: Vec<Token> = lexer.map(|result| result.unwrap().0).collect();

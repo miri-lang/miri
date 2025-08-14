@@ -63,10 +63,8 @@ pub enum Statement {
 /// Represents an expression
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
-    // Literals
     Literal(Literal),
     
-    // Variables, fields and indexing
     Identifier(String),
 
     Binary(Box<Expression>, BinaryOp, Box<Expression>),
@@ -83,9 +81,10 @@ pub enum Expression {
 
     Guard(GuardOp, Box<Expression>), // guard operator and expression
 
-    // FieldAccess(Box<Expr>, String), // expr.field
-    // Index(Box<Expr>, Box<Expr>),    // expr[index]
-    
+    Member(Box<Expression>, Box<Expression>), // object.property
+
+    Index(Box<Expression>, Box<Expression>), // object[index]
+
     // // Function calls
     // Call(Box<Expr>, Vec<Expr>), // function, args
     // MethodCall(Box<Expr>, String, Vec<Expr>), // object, method, args
@@ -134,8 +133,11 @@ pub struct VariableDeclaration {
 /// Represents a left-hand side expression, which can be an identifier or a more complex expression
 #[derive(Debug, Clone, PartialEq)]
 pub enum LeftHandSideExpression {
-    Identifier(String),
-    // Other possible left-hand side expression types (e.g., fields, array elements) can be added here
+    Identifier(Box<Expression>),
+
+    Member(Box<Expression>), // object.property
+
+    Index(Box<Expression>), // object[index]
 }
 
 /// Represents a binary operator
@@ -428,5 +430,25 @@ impl AstFactory {
 
     pub fn create_guard_expression(&self, op: GuardOp, expr: Expression) -> Expression {
         Expression::Guard(op, Box::new(expr))
+    }
+
+    pub fn create_member_expression(&self, object: Expression, property: Expression) -> Expression {
+        Expression::Member(Box::new(object), Box::new(property))
+    }
+
+    pub fn create_index_expression(&self, object: Expression, index: Expression) -> Expression {
+        Expression::Index(Box::new(object), Box::new(index))
+    }
+
+    pub fn create_left_hand_side_identifier(&self, identifier: Expression) -> LeftHandSideExpression {
+        LeftHandSideExpression::Identifier(Box::new(identifier))
+    }
+
+    pub fn create_left_hand_side_member(&self, member: Expression) -> LeftHandSideExpression {
+        LeftHandSideExpression::Member(Box::new(member))
+    }
+
+    pub fn create_left_hand_side_index(&self, index: Expression) -> LeftHandSideExpression {
+        LeftHandSideExpression::Index(Box::new(index))
     }
 }

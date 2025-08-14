@@ -85,10 +85,6 @@ pub fn assign(left: LeftHandSideExpression, op: AssignmentOp, right: Expression)
     Expression::Assignment(Box::new(left), op, Box::new(right))
 }
 
-pub fn lhs_expression(name: &str) -> LeftHandSideExpression {
-    LeftHandSideExpression::Identifier(name.into())
-}
-
 pub fn let_variable(name: &str, typ: Option<String>, init: Option<Expression>) -> VariableDeclaration {
     VariableDeclaration {
         name: name.into(),
@@ -121,6 +117,26 @@ pub fn unless_conditional(cond: Expression, then: Expression, else_b: Option<Exp
 
 pub fn range(start: Expression, end: Option<Expression>, range_type: RangeExpressionType) -> Expression {
     Expression::Range(Box::new(start), Box::new(end), range_type)
+}
+
+pub fn member(object: Expression, property: Expression) -> Expression {
+    Expression::Member(Box::new(object), Box::new(property))
+}
+
+pub fn index(object: Expression, index: Expression) -> Expression {
+    Expression::Index(Box::new(object), Box::new(index))
+}
+
+pub fn lhs_identifier(name: &str) -> LeftHandSideExpression {
+    LeftHandSideExpression::Identifier(Box::new(identifier(name)))
+}
+
+pub fn lhs_member(object: Expression, property: Expression) -> LeftHandSideExpression {
+    LeftHandSideExpression::Member(Box::new(member(object, property)))
+}
+
+pub fn lhs_index(object: Expression, idx: Expression) -> LeftHandSideExpression {
+    LeftHandSideExpression::Index(Box::new(index(object, idx)))
 }
 
 // === Statement Builders ===
