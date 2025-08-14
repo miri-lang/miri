@@ -2081,6 +2081,54 @@ obj.a.b['prop'][0] = 1.0
     ]);
 }
 
+#[test]
+fn test_function_call() {
+    parse_test("
+print(\"Hello\")
+", vec![
+        expression_statement(
+            call(
+                identifier("print".into()),
+                vec![string_literal("Hello".into())]
+            )
+        )
+    ]);
+}
+
+#[test]
+fn test_chained_function_call() {
+    parse_test("
+func(0)()
+", vec![
+        expression_statement(
+            call(
+                call(
+                    identifier("func".into()),
+                    vec![int_literal(0)]
+                ),
+                vec![]
+            )
+        )
+    ]);
+}
+
+#[test]
+fn test_member_function_call() {
+    parse_test("
+coordinates.compute(x, y, z)
+", vec![
+        expression_statement(
+            call(
+                member(
+                    identifier("coordinates".into()), 
+                    identifier("compute".into())
+                ),
+                vec![identifier("x".into()), identifier("y".into()), identifier("z".into())]
+            )
+        )
+    ]);
+}
+
 
 fn parse_test<'src>(input: &'src str, _expected_body: Vec<Statement>) {
     let mut lexer = Lexer::new(input);

@@ -139,6 +139,10 @@ pub fn lhs_index(object: Expression, idx: Expression) -> LeftHandSideExpression 
     LeftHandSideExpression::Index(Box::new(index(object, idx)))
 }
 
+pub fn call(callee: Expression, args: Vec<Expression>) -> Expression {
+    Expression::Call(Box::new(callee), args)
+}
+
 // === Statement Builders ===
 
 pub fn variable_statement(declarations: Vec<VariableDeclaration>) -> Statement {
