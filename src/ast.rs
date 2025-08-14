@@ -85,10 +85,8 @@ pub enum Expression {
 
     Index(Box<Expression>, Box<Expression>), // object[index]
 
-    // // Function calls
-    // Call(Box<Expr>, Vec<Expr>), // function, args
-    // MethodCall(Box<Expr>, String, Vec<Expr>), // object, method, args
-    
+    Call(Box<Expression>, Vec<Expression>), // function, args
+
     // // Operators
     // Binary(Box<Expr>, BinaryOp, Box<Expr>),
     // Unary(UnaryOp, Box<Expr>),
@@ -450,5 +448,9 @@ impl AstFactory {
 
     pub fn create_left_hand_side_index(&self, index: Expression) -> LeftHandSideExpression {
         LeftHandSideExpression::Index(Box::new(index))
+    }
+
+    pub fn create_call_expression(&self, callee: Expression, args: Vec<Expression>) -> Expression {
+        Expression::Call(Box::new(callee), args)
     }
 }

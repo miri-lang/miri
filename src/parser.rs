@@ -709,11 +709,82 @@ impl<'source> Parser<'source> {
 
     /*
         LeftHandSideExpression
-            : MemberExpression
+            : CallMemberExpression
             ;
     */
     fn left_hand_side_expression(&mut self) -> Result<Expression, SyntaxError> {
-        self.member_expression()
+        self.call_member_expression()
+    }
+
+    /*
+        CallMemberExpression
+            : MemberExpression
+            | CallExpression
+    */
+    fn call_member_expression(&mut self) -> Result<Expression, SyntaxError> {
+        let member = self.member_expression()?;
+
+        match &self._lookahead {
+            Some((Token::LParen, _)) => self.call_expression(member),
+            _ => Ok(member),
+        }
+    }
+
+    /*
+        CallExpression
+            : Callee Arguments
+
+
+        Callee
+            : MemberExpression
+            | CallExpression
+            ;
+    */
+    fn call_expression(&mut self, callee: Expression) -> Result<Expression, SyntaxError> {
+        let args = self.arguments()?;
+        let call_expression = self._ast_factory.create_call_expression(callee, args);
+
+        // Chained call
+        match &self._lookahead {
+            Some((Token::LParen, _)) => self.call_expression(call_expression),
+            _ => Ok(call_expression),
+        }
+    }
+
+    /*
+        Arguments
+            : '(' ')'
+            | '(' ArgumentList ')'
+    */
+    fn arguments(&mut self) -> Result<Vec<Expression>, SyntaxError> {
+        self.eat_token(&Token::LParen)?;
+
+        let argument_list = if self.lookahead_is_rparen() {
+            vec![]
+        } else {
+            self.argument_list()?
+        };
+
+        self.eat_token(&Token::RParen)?;
+        Ok(argument_list)
+    }
+
+    /*
+        ArgumentList
+            : AssignmentExpression
+            | ArgumentList ',' AssignmentExpression
+    */
+    fn argument_list(&mut self) -> Result<Vec<Expression>, SyntaxError> {
+        let mut args = Vec::new();
+
+        args.push(self.assignment_expression()?);
+
+        while self.lookahead_is_comma() {
+            self.eat_token(&Token::Comma)?;
+            args.push(self.assignment_expression()?);
+        }
+
+        Ok(args)
     }
 
     /*
@@ -1222,6 +1293,10 @@ impl<'source> Parser<'source> {
         self.match_lookahead_type(is_colon)
     }
 
+    fn lookahead_is_comma(&self) -> bool {
+        self.match_lookahead_type(is_comma)
+    }
+
     fn lookahead_is_expression_end(&self) -> bool {
         self.match_lookahead_type(is_expression_end)
     }
@@ -1443,6 +1518,10 @@ fn is_literal(token: &Token) -> bool {
 
 fn is_colon(token: &Token) -> bool {
     matches!(token, Token::Colon)
+}
+
+fn is_comma(token: &Token) -> bool {
+    matches!(token, Token::Comma)
 }
 
 fn is_expression_end(token: &Token) -> bool {
