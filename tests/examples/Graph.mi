@@ -28,7 +28,7 @@ private def bfs(start_node string) string[]
     var visited = []
     var queue = [start_node]
 
-    until queue.empty?
+    until queue.is_empty
         node = queue.pop(0)
         unless node in visited
             visited.append(node)
@@ -40,7 +40,7 @@ private def dfs_iterative(start_node string) string[]
     var visited = []
     var stack = [start_node]
 
-    until stack.empty?
+    until stack.is_empty
         node = stack.pop
         unless node in visited
             visited.append(node)

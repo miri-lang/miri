@@ -383,7 +383,7 @@ fn test_parse_typed_variable_declaration() {
     parse_variable_declaration_test(
         "let x int = 5",
         vec![
-            let_variable("x", Some("int".into()), opt_expr(int_literal(5)))
+            let_variable("x", opt_expr(typ(Type::Int)), opt_expr(int_literal(5)))
         ]
     );
 }
@@ -393,7 +393,7 @@ fn test_parse_typed_variable_declaration_no_initializer() {
     parse_variable_declaration_test(
         "let x float",
         vec![
-            let_variable("x", Some("float".into()), None)
+            let_variable("x", opt_expr(typ(Type::Float)), None)
         ]
     );
 }
@@ -1646,7 +1646,7 @@ fn test_for_loop_with_typed_variable() {
     parse_for_test("
 for i int in 1..=10: // do something
 ",
-        vec![let_variable("i".into(), Some("int".into()), None)],
+        vec![let_variable("i".into(), opt_expr(typ(Type::Int)), None)],
         range(int_literal(1), opt_expr(int_literal(10)), RangeExpressionType::Inclusive),
         empty_statement()
     );
@@ -1799,7 +1799,7 @@ def square(x int)
 ", vec![
         def("square".into(), 
             vec![
-                parameter("x".into(), Some("int".into()), None)
+                parameter("x".into(), opt_expr(typ(Type::Int)), None)
             ],
             None,
             block(vec![
@@ -1823,7 +1823,7 @@ def square(x int > 0)
 ", vec![
         def("square".into(), 
             vec![
-                parameter("x".into(), Some("int".into()), opt_expr(guard(GuardOp::GreaterThan, int_literal(0))))
+                parameter("x".into(), opt_expr(typ(Type::Int)), opt_expr(guard(GuardOp::GreaterThan, int_literal(0))))
             ],
             None,
             block(vec![
@@ -1846,9 +1846,9 @@ def square(x int > 0) int: x * x
 ", vec![
         def("square".into(), 
             vec![
-                parameter("x".into(), Some("int".into()), opt_expr(guard(GuardOp::GreaterThan, int_literal(0)))),
+                parameter("x".into(), opt_expr(typ(Type::Int)), opt_expr(guard(GuardOp::GreaterThan, int_literal(0)))),
             ],
-            Some("int".into()),
+            opt_expr(typ(Type::Int)),
             expression_statement(
                 binary(
                     identifier("x".into()),
@@ -1868,7 +1868,7 @@ def get_answer() int: 42
         def(
             "get_answer".into(),
             vec![], // No parameters
-            Some("int".into()),
+            opt_expr(typ(Type::Int)),
             expression_statement(int_literal(42))
         )
     ]);
@@ -1883,8 +1883,8 @@ def add(a int, b int)
         def(
             "add".into(),
             vec![
-                parameter("a".into(), Some("int".into()), None),
-                parameter("b".into(), Some("int".into()), None),
+                parameter("a".into(), opt_expr(typ(Type::Int)), None),
+                parameter("b".into(), opt_expr(typ(Type::Int)), None),
             ],
             None,
             block(vec![
@@ -2168,6 +2168,273 @@ use System.Math as M
     ]);
 }
 
+#[test]
+fn test_parse_list_type_in_variable() {
+    parse_type_test(
+        "[int]",
+        typ(Type::List(Box::new(typ(Type::Int))))
+    );
+}
+
+#[test]
+fn test_parse_nullable_map_type_in_parameter() {
+    parse_test("
+def process_data(data {string: bool}?)
+    // body
+", vec![
+        def(
+            "process_data".into(),
+            vec![
+                parameter(
+                    "data".into(),
+                    opt_expr(
+                        null_typ(
+                            Type::Map(
+                                Box::new(typ(Type::String)),
+                                Box::new(typ(Type::Boolean))
+                            ),
+                        )
+                    ),
+                    None
+                )
+            ],
+            None,
+            empty_statement()
+        )
+    ]);
+}
+
+#[test]
+fn test_parse_tuple_type_as_return_type() {
+    parse_test("
+def get_coordinates() (float, float?, float)?
+    // body
+", vec![
+        def(
+            "get_coordinates".into(),
+            vec![],
+            opt_expr(
+                null_typ(
+                    Type::Tuple(vec![
+                        typ(Type::Float),
+                        null_typ(Type::Float),
+                        typ(Type::Float),
+                    ]),
+                )
+            ),
+            empty_statement()
+        )
+    ]);
+}
+
+#[test]
+fn test_parse_generic_result_type() {
+    parse_type_test(
+        "result<int, string>", 
+        typ(
+            Type::Result(
+                Box::new(typ(Type::Int)), 
+                Box::new(typ(Type::String))
+            )
+        )
+    );
+}
+
+#[test]
+fn test_parse_generic_custom_type_with_nesting() {
+    parse_test("
+def get_data() MyContainer<[int]?, future<string>>
+    // body
+", vec![
+        def(
+            "get_data".into(),
+            vec![],
+            opt_expr(
+                typ(
+                    Type::Custom(
+                        "MyContainer".to_string(),
+                        Some(vec![
+                            null_typ(Type::List(Box::new(typ(Type::Int)))), // [int]?
+                            typ(Type::Future(Box::new(typ(Type::String)))) // future<string>
+                        ])
+                    )
+                )
+            ),
+            empty_statement()
+        )
+    ]);
+}
+
+#[test]
+fn test_parse_set_type() {
+    parse_type_test(
+        "{i64}", 
+        typ(Type::Set(Box::new(typ(Type::I64))))
+    );
+}
+
+#[test]
+fn test_error_unclosed_list_type() {
+    parse_error_test(
+        "let my_list [int",
+        SyntaxErrorKind::UnexpectedEOF
+    );
+}
+
+#[test]
+fn test_error_malformed_map_type() {
+    parse_error_test(
+        "let my_map {string, int}",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "}".to_string(),
+            found: ",".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_error_incomplete_generic_type() {
+    parse_error_test(
+        "let my_generic MyType<int,",
+        SyntaxErrorKind::InvalidTypeDeclaration {
+            expected: "Generic type".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_error_empty_generic_parameters() {
+    parse_error_test(
+        "let my_generic MyType<>",
+        SyntaxErrorKind::InvalidTypeDeclaration {
+            expected: "Generic type".to_string()
+        }
+    );
+}
+
+#[test]
+fn test_deeply_nested_collection_type() {
+    parse_type_test(
+        "[[{string: (int?, bool)}]?]?",
+        null_typ( // The outer list is nullable: `[...]`?
+            Type::List(Box::new(
+                null_typ( // The inner list is nullable: `[{...}]?`
+                    Type::List(Box::new(
+                        typ(Type::Map( // The map itself is not nullable
+                            Box::new(typ(Type::String)),
+                            Box::new(typ(Type::Tuple(vec![
+                                null_typ(Type::Int), // int?
+                                typ(Type::Boolean)
+                            ])))
+                        ))
+                    ))
+                )
+            ))
+        )
+    );
+}
+
+#[test]
+fn test_unit_type_tuple() {
+    parse_error_test(
+        "let u ()",
+        SyntaxErrorKind::InvalidTypeDeclaration {
+            expected: "Tuple element type".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_single_element_tuple_type() {
+    parse_type_test(
+        "(string)",
+        typ(Type::Tuple(vec![typ(Type::String)]))
+    );
+}
+
+#[test]
+fn test_simple_nullable_built_in_type() {
+    parse_type_test(
+        "int?",
+        null_typ(Type::Int)
+    );
+}
+
+#[test]
+fn test_error_trailing_comma_in_tuple_type() {
+    parse_error_test(
+        "let x (int, )",
+        SyntaxErrorKind::InvalidTypeDeclaration {
+            expected: "Tuple element type".to_string()
+        }
+    );
+}
+
+#[test]
+fn test_error_map_missing_value_type() {
+    parse_error_test(
+        "let x {string:}",
+        SyntaxErrorKind::InvalidTypeDeclaration {
+            expected: "Map value type".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_error_result_type_missing_parameter() {
+    parse_error_test(
+        "let x result<int>",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: ",".to_string(),
+            found: ">".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_error_double_nullable() {
+    parse_error_test(
+        "let x int??",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "end of expression".to_string(),
+            found: "?".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_primitive_types() {
+    let type_map = vec![
+        ("int", Type::Int),
+        ("i8", Type::I8),
+        ("i16", Type::I16),
+        ("i32", Type::I32),
+        ("i64", Type::I64),
+        ("i128", Type::I128),
+        ("u8", Type::U8),
+        ("u16", Type::U16),
+        ("u32", Type::U32),
+        ("u64", Type::U64),
+        ("u128", Type::U128),
+        ("float", Type::Float),
+        ("f32", Type::F32),
+        ("f64", Type::F64),
+        ("string", Type::String),
+        ("bool", Type::Boolean),
+        ("symbol", Type::Symbol),
+        ("result<int, string>", Type::Result(Box::new(typ(Type::Int)), Box::new(typ(Type::String)))),
+        ("list<float>", Type::List(Box::new(typ(Type::Float)))),
+        ("map<string, int>", Type::Map(Box::new(typ(Type::String)), Box::new(typ(Type::Int)))),
+        ("set<string>", Type::Set(Box::new(typ(Type::String)))),
+        ("future<string>", Type::Future(Box::new(typ(Type::String)))),
+        ("tuple<string, int, float>", Type::Tuple(vec![typ(Type::String), typ(Type::Int), typ(Type::Float)]))
+    ];
+    for (name, mapped_type) in type_map {
+        parse_type_test(name, typ(mapped_type.clone()));
+        parse_type_test(format!("{}?", name).as_str(), null_typ(mapped_type.clone()));
+    }
+}
+
 
 fn parse_test<'src>(input: &'src str, _expected_body: Vec<Statement>) {
     let mut lexer = Lexer::new(input);
@@ -2252,5 +2519,16 @@ fn parse_while_test(input: &str, condition: Expression, then_block: Statement) {
 fn parse_for_test(input: &str, variable_declarations: Vec<VariableDeclaration>, iterable: Expression, body: Statement) {
     parse_test(input, vec![
         Statement::For(variable_declarations, Box::new(iterable), Box::new(body))
+    ]);
+}
+
+fn parse_type_test(type_str: &str, expected: Expression) {
+    let input = format!("let x {}", type_str);
+    parse_variable_declaration_test(&input, vec![
+        let_variable(
+            "x",
+            opt_expr(expected),
+            None
+        )
     ]);
 }

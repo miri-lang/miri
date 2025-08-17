@@ -18,7 +18,7 @@ fn test_whitespace_only() {
 
 #[test]
 fn test_symbols_and_operators() {
-    lexer_test(": => -> <- || == != >= <= > < = + - * / % , . ( ) [ ] { } | & ^ .. ..= += -= *= /= %= ~ -- ++", vec![
+    lexer_test(": => -> <- || == != >= <= > < = + - * / % , . ( ) [ ] { } | & ^ .. ..= += -= *= /= %= ~ -- ++ ?", vec![
         Token::Colon,
         Token::FatArrow,
         Token::Arrow,
@@ -57,6 +57,7 @@ fn test_symbols_and_operators() {
         Token::Tilde,
         Token::Decrement,
         Token::Increment,
+        Token::QuestionMark,
     ]);
 }
 

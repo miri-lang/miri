@@ -77,7 +77,7 @@ pub enum Token {
     #[token("|")]           Pipe,
     #[token("&")]           Ampersand,
     #[token("^")]           Caret,
-    #[token("?")]           Try,
+    #[token("?")]           QuestionMark,
     #[token("~")]           Tilde,
 
     // Identifiers and Literals
@@ -464,8 +464,9 @@ pub fn token_to_string(token: &Token) -> String {
         Token::Pipe => "|".into(),
         Token::Ampersand => "&".into(),
         Token::Caret => "^".into(),
-        Token::Try => "?".into(),
+        Token::QuestionMark => "?".into(),
         Token::Tilde => "~".into(),
+        Token::ExpressionStatementEnd => "end of expression".into(),
         _ => format!("{:?}", token).to_lowercase(),
     }
 }

@@ -123,7 +123,7 @@ impl<'source> Parser<'source> {
     fn variable_declaration_list(&mut self, declaration_type: &VariableDeclarationType, accept_initializer: bool) -> Result<Vec<VariableDeclaration>, SyntaxError> {
         let mut declarations = vec![self.variable_declaration(declaration_type, accept_initializer)?];
 
-        while self.match_lookahead_type(|t| t == &Token::Comma) {
+        while self.lookahead_is_comma() {
             self.eat_token(&Token::Comma)?;
             declarations.push(self.variable_declaration(declaration_type, accept_initializer)?);
         }
@@ -151,13 +151,9 @@ impl<'source> Parser<'source> {
             );
         }
 
-        let typ = match &self._lookahead {
-            Some((Token::Identifier, _)) => {
-                // If the next token is an identifier, it might be a type
-                let token = self.eat_token(&Token::Identifier)?;
-                Some(self.source[token.1.start..token.1.end].to_string())
-            },
-            _ => None,
+        let typ = match self.type_expression()? {
+            Some(typ) => Some(Box::new(typ)),
+            None => None,
         };
 
         let initializer;
@@ -396,13 +392,9 @@ impl<'source> Parser<'source> {
         };
         self.eat_token(&Token::RParen)?;
 
-        let return_type = match &self._lookahead {
-            Some((Token::Identifier, _)) => {
-                // If the next token is an identifier, it might be a type
-                let token = self.eat_token(&Token::Identifier)?;
-                Some(self.source[token.1.start..token.1.end].to_string())
-            },
-            _ => None,
+        let return_type = match self.type_expression()? {
+            Some(typ) => Some(Box::new(typ)),
+            None => None,
         };
 
         self.try_eat_colon();
@@ -426,7 +418,7 @@ impl<'source> Parser<'source> {
     fn parameter_list(&mut self) -> Result<Vec<Parameter>, SyntaxError> {
         let mut parameters = vec![self.parameter()?];
 
-        while self.match_lookahead_type(|t| t == &Token::Comma) {
+        while self.lookahead_is_comma() {
             self.eat_token(&Token::Comma)?;
             parameters.push(self.parameter()?);
         }
@@ -436,7 +428,7 @@ impl<'source> Parser<'source> {
 
     /*
         Parameter
-            : Identifier [Type] [Guard]
+            : Identifier [TypeExpression] [Guard]
             ;
     */
     fn parameter(&mut self) -> Result<Parameter, SyntaxError> {
@@ -451,13 +443,9 @@ impl<'source> Parser<'source> {
             );
         }
 
-        let typ = match &self._lookahead {
-            Some((Token::Identifier, _)) => {
-                // If the next token is an identifier, it might be a type
-                let token = self.eat_token(&Token::Identifier)?;
-                Some(self.source[token.1.start..token.1.end].to_string())
-            },
-            _ => None,
+        let typ = match self.type_expression()? {
+            Some(typ) => Some(Box::new(typ)),
+            None => None,
         };
 
         let guard = if self._lookahead.is_some() && self.lookahead_is_guard() {
@@ -515,6 +503,198 @@ impl<'source> Parser<'source> {
         };
         self.eat_token(&Token::ExpressionStatementEnd)?;
         Ok(self._ast_factory.create_return_statement(expression))
+    }
+
+    /*
+        TypeExpression
+            : Identifier ('<' TypeExpression ',' TypeExpression* '>')? '?'?
+            | '[' TypeExpression ']' '?'?
+            | '(' TypeExpression ',' TypeExpression* ')' '?'?
+            | '{' TypeExpression '}' '?'?
+            | '{' TypeExpression ':' TypeExpression* '}' '?'?
+            ;
+    */
+    pub fn type_expression(&mut self) -> Result<Option<Expression>, SyntaxError> {
+        if self._lookahead.is_none() {
+            return Ok(None);
+        }
+
+        let typ: Type;
+         
+        match &self._lookahead {
+            Some((Token::Identifier, _)) => {
+                let type_name = self.identifier_to_type_name()?;
+                typ = self.type_name_to_type(type_name)?;
+            },
+            Some((Token::LBracket, _)) => {
+                self.eat_token(&Token::LBracket)?;
+                let element_type = self.element_type_expression("List element type")?;
+                self.eat_token(&Token::RBracket)?;
+                typ = Type::List(Box::new(element_type));
+            },
+            Some((Token::LParen, _)) => {
+                let elements = self.multiple_element_type_expressions(
+                    "Tuple element type", 
+                    &Token::LParen, 
+                    &Token::RParen
+                )?;
+                typ = Type::Tuple(elements);
+            },
+            Some((Token::LBrace, _)) => {
+                self.eat_token(&Token::LBrace)?;
+                let key_type = self.element_type_expression("Map key type")?;
+                if self.match_lookahead_type(|t| t == &Token::Colon) {
+                    self.eat_token(&Token::Colon)?;
+                    let value_type = self.element_type_expression("Map value type")?;
+                    self.eat_token(&Token::RBrace)?;
+                    typ = Type::Map(Box::new(key_type), Box::new(value_type));
+                } else {
+                    self.eat_token(&Token::RBrace)?;
+                    typ = Type::Set(Box::new(key_type));
+                }
+            },
+            _ => return Ok(None),
+        }
+
+        let is_nullable = if self.match_lookahead_type(|t| t == &Token::QuestionMark) {
+            self.eat_token(&Token::QuestionMark)?;
+            true
+        } else {
+            false
+        };
+
+        Ok(Some(self._ast_factory.create_type_expression(typ, is_nullable)))
+    }
+
+    fn type_name_to_type(&mut self, type_name: String) -> Result<Type, SyntaxError> {
+        Ok(match type_name.as_str() {
+            "int" => Type::Int,
+            "i8" => Type::I8,
+            "i16" => Type::I16,
+            "i32" => Type::I32,
+            "i64" => Type::I64,
+            "i128" => Type::I128,
+            "u8" => Type::U8,
+            "u16" => Type::U16,
+            "u32" => Type::U32,
+            "u64" => Type::U64,
+            "u128" => Type::U128,
+            "float" => Type::Float,
+            "f32" => Type::F32,
+            "f64" => Type::F64,
+            "string" => Type::String,
+            "bool" => Type::Boolean,
+            "symbol" => Type::Symbol,
+            "result" => {
+                self.generic_two_types_expression(
+                    "Ok result type", 
+                    "Error result type", 
+                    |a, b| Type::Result(a, b)
+                )?
+            },
+            "map" => {
+                self.generic_two_types_expression(
+                    "Map key type",
+                    "Map value type",
+                    |a, b| Type::Map(a, b)
+                )?
+            },
+            "future" => {
+                self.generic_one_type_expression(
+                    "Future result type",
+                    |inner| Type::Future(inner)
+                )?
+            }
+            "list" => {
+                self.generic_one_type_expression(
+                    "List element type",
+                    |inner| Type::List(inner)
+                )?
+            }
+            "set" => {
+                self.generic_one_type_expression(
+                    "Set element type",
+                    |inner| Type::Set(inner)
+                )?
+            },
+            "tuple" => {
+                let inner = self.multiple_element_type_expressions(
+                    "Tuple item type",
+                    &Token::LessThan,
+                    &Token::GreaterThan
+                )?;
+                Type::Tuple(inner)
+            }
+            _ => {
+                match &self._lookahead {
+                    Some((Token::LessThan, _)) => {
+                        let inner = self.multiple_element_type_expressions(
+                            "Generic type",
+                            &Token::LessThan,
+                            &Token::GreaterThan
+                        )?;
+                        Type::Custom(type_name, Some(inner))
+                    },
+                    _ => Type::Custom(type_name, None),
+                }
+            },
+        })
+    }
+    
+    fn identifier_to_type_name(&mut self) -> Result<String, SyntaxError> {
+        Ok(match self.identifier()? {
+            Expression::Identifier(id) => id,
+            _ => return Err(
+                self.error_unexpected_token("identifier", format!("{:?}", self._lookahead).as_str())
+            ),
+        })
+    }
+    
+    fn element_type_expression(&mut self, expected: &str) -> Result<Expression, SyntaxError> {
+        let element_type = match self.type_expression()? {
+            Some(typ) => typ,
+            None => return Err(
+                self.error_invalid_type_declaration(expected)
+            ),
+        };
+        Ok(element_type)
+    }
+
+    fn multiple_element_type_expressions(&mut self, expected: &str, left_token: &Token, right_token: &Token) -> Result<Vec<Expression>, SyntaxError> {
+        self.eat_token(left_token)?;
+
+        let element_type = self.element_type_expression(expected)?;
+        let mut elements = vec![element_type];
+        while self.lookahead_is_comma() {
+            self.eat_token(&Token::Comma)?;
+            let element_type = self.element_type_expression(expected)?;
+            elements.push(element_type);
+        }
+
+        self.eat_token(right_token)?;
+
+        Ok(elements)
+    }
+
+    fn generic_one_type_expression<F>(&mut self, expected: &str, create_type: F) -> Result<Type, SyntaxError> 
+        where F: FnOnce(Box<Expression>) -> Type
+    {
+        self.eat_token(&Token::LessThan)?;
+        let inner_type = self.element_type_expression(expected)?;
+        self.eat_token(&Token::GreaterThan)?;
+        Ok(create_type(Box::new(inner_type)))
+    }
+
+    fn generic_two_types_expression<F>(&mut self, expected_a: &str, expected_b: &str, create_type: F) -> Result<Type, SyntaxError> 
+        where F: FnOnce(Box<Expression>, Box<Expression>) -> Type
+    {
+        self.eat_token(&Token::LessThan)?;
+        let a_type = self.element_type_expression(expected_a)?;
+        self.eat_token(&Token::Comma)?;
+        let b_type = self.element_type_expression(expected_b)?;
+        self.eat_token(&Token::GreaterThan)?;
+
+        Ok(create_type(Box::new(a_type), Box::new(b_type)))
     }
 
     /*
@@ -1513,6 +1693,13 @@ impl<'source> Parser<'source> {
     fn error_invalid_left_hand_side_expression(&self) -> SyntaxError {
         SyntaxError::new(
             SyntaxErrorKind::InvalidLeftHandSideExpression,
+            self.source.len()..self.source.len()
+        )
+    }
+
+    fn error_invalid_type_declaration(&self, expected: &str) -> SyntaxError {
+        SyntaxError::new(
+            SyntaxErrorKind::InvalidTypeDeclaration { expected: expected.to_string() },
             self.source.len()..self.source.len()
         )
     }
