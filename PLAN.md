@@ -7,24 +7,40 @@ Develop Miri incrementally with a focus on delivering an early **Minimum Lovable
 
 ### **Phase 1: Research & Planning (Month 1-2)**
 **Goal:** Establish a solid technical foundation and ensure feasibility before starting development.
-- ✅ Define **core syntax**, type system, and programming model.
-- ✅ Research Rust-based compiler development (LLVM integration, parsing, code generation).
-- ✅ Establish **development environment** (repository, CI/CD pipeline, build tools).
-- ✅ Identify and document key differentiators vs. Rust, C++, and Python.
-- ✅ Engage with early adopters to gather feedback on proposed features.
+- [x] Define **core syntax**, type system, and programming model.
+- [x] Research Rust-based compiler development (LLVM integration, parsing, code generation).
+- [x] Establish **development environment** (repository, CI/CD pipeline, build tools).
+- [x] Identify and document key differentiators vs. Rust, C++, and Python.
 
 **Deliverable:** A detailed specification document, initial roadmap, and repository setup.
+
+Done ✅
 
 ---
 
 ### **Phase 2: MLP Compiler Prototype (Month 3-5)**
 **Goal:** Build a functional, minimal version of the language.
-- ✅ Implement **lexical analysis and parsing**.
-- ✅ Create an **AST (Abstract Syntax Tree)** representation.
-- ✅ Implement a basic **type checker** (static type system enforcement).
-- ✅ Introduce a simple **REPL** (interactive shell for experimentation).
-- ✅ Compile basic expressions to LLVM IR for execution.
-- ✅ Create unit tests for core language features.
+- [x] Implement **lexical analysis and parsing**.
+  - [ ] use
+  - [ ] type expression
+  - [ ] async/await
+  - [ ] gpu
+  - [ ] parallel
+  - [ ] lambda, function as variables and parameters
+  - [ ] extend/implement
+  - [ ] private/protected
+  - [ ] array
+  - [ ] tuple
+  - [ ] hashmap
+  - [ ] regex
+  - [ ] function declarations without parentheses
+  - [ ] function calls without parentheses
+  - [ ] match / pattern matching
+- [x] Create an **AST (Abstract Syntax Tree)** representation.
+- [] Implement a basic **type checker** (static type system enforcement).
+- [] Introduce a simple **REPL** (interactive shell for experimentation).
+- [] Compile basic expressions to LLVM IR for execution.
+- [] Create unit tests for core language features.
 
 **Deliverable:** A working prototype capable of interpreting and compiling simple programs.
 

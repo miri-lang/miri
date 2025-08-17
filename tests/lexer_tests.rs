@@ -475,16 +475,12 @@ use System.Math
 // Local module with path
 use MyProject.Path.SomeModule
 
-// Selective import from a module
-use func1, func2 from Module1
-
 // Local module with path and alias
 use Module2 as M2
 ", vec![
         Token::Use, Token::Identifier, Token::ExpressionStatementEnd,
         Token::Use, Token::Identifier, Token::Dot, Token::Identifier, Token::ExpressionStatementEnd,
         Token::Use, Token::Identifier, Token::Dot, Token::Identifier, Token::Dot, Token::Identifier, Token::ExpressionStatementEnd,
-        Token::Use, Token::Identifier, Token::Comma, Token::Identifier, Token::From, Token::Identifier, Token::ExpressionStatementEnd,
         Token::Use, Token::Identifier, Token::As, Token::Identifier, Token::ExpressionStatementEnd,
     ]);
 }
