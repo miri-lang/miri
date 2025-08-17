@@ -36,7 +36,7 @@ pub enum RangeExpressionType {
 pub struct Parameter {
     pub name: String,
     pub typ: Option<String>, // Type can be specified, e.g., "i32", "String"
-    pub guard: Option<Expression>, // Optional guard expression
+    pub guard: Option<Box<Expression>>, // Optional guard expression
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -57,7 +57,9 @@ pub enum Statement {
 
     FunctionDeclaration(String, Vec<Parameter>, Option<String>, Box<Statement>), // name, parameters, return type, body
 
-    Return(Box<Option<Expression>>), // Optional return expression
+    Return(Option<Box<Expression>>), // Optional return expression
+
+    Use(Box<Expression>, Option<Box<Expression>>),
 }
 
 /// Represents an expression
@@ -77,7 +79,7 @@ pub enum Expression {
 
     Conditional(Box<Expression>, Box<Expression>, Option<Box<Expression>>, IfStatementType), // condition, then_expr, else_expr
 
-    Range(Box<Expression>, Box<Option<Expression>>, RangeExpressionType), // start, end, range_type
+    Range(Box<Expression>, Option<Box<Expression>>, RangeExpressionType), // start, end, range_type
 
     Guard(GuardOp, Box<Expression>), // guard operator and expression
 
@@ -86,6 +88,8 @@ pub enum Expression {
     Index(Box<Expression>, Box<Expression>), // object[index]
 
     Call(Box<Expression>, Vec<Expression>), // function, args
+
+    ImportPath(Vec<Expression>), // Represents an import path, e.g., `use a.b.c`
 
     // // Operators
     // Binary(Box<Expr>, BinaryOp, Box<Expr>),
@@ -124,7 +128,7 @@ pub enum VariableDeclarationType {
 pub struct VariableDeclaration {
     pub name: String,
     pub typ: Option<String>, // Type can be specified, e.g., "i32", "String"
-    pub initializer: Option<Expression>, // Optional initializer expression
+    pub initializer: Option<Box<Expression>>, // Optional initializer expression
     pub declaration_type: VariableDeclarationType, // Whether the variable is mutable
 }
 
@@ -278,14 +282,6 @@ pub enum FloatLiteral {
 //     Default,
 // }
 
-// /// Represents a function parameter
-// #[derive(Debug, PartialEq)]
-// pub struct Parameter {
-//     pub name: String,
-//     pub typ: TypeExpr,
-//     pub guard: Option<Box<Expr>>,
-// }
-
 // /// Represents a type expression
 // #[derive(Debug, PartialEq)]
 // pub enum TypeExpr {
@@ -376,8 +372,8 @@ impl AstFactory {
         Expression::Identifier(name)
     }
 
-    pub fn create_range_expression(&self, start: Expression, end: Option<Expression>, range_type: RangeExpressionType) -> Expression {
-        Expression::Range(Box::new(start), Box::new(end), range_type)
+    pub fn create_range_expression(&self, start: Expression, end: Option<Box<Expression>>, range_type: RangeExpressionType) -> Expression {
+        Expression::Range(Box::new(start), end, range_type)
     }
 
     pub fn create_variable_statement(&self, declarations: Vec<VariableDeclaration>) -> Statement {
@@ -422,8 +418,8 @@ impl AstFactory {
         Statement::FunctionDeclaration(name, parameters, return_type, Box::new(body))
     }
 
-    pub fn create_return_statement(&self, optional_expression: Option<Expression>) -> Statement {
-        Statement::Return(Box::new(optional_expression))
+    pub fn create_return_statement(&self, optional_expression: Option<Box<Expression>>) -> Statement {
+        Statement::Return(optional_expression)
     }
 
     pub fn create_guard_expression(&self, op: GuardOp, expr: Expression) -> Expression {
@@ -453,4 +449,16 @@ impl AstFactory {
     pub fn create_call_expression(&self, callee: Expression, args: Vec<Expression>) -> Expression {
         Expression::Call(Box::new(callee), args)
     }
+
+    pub fn create_import_path_expression(&self, segments: Vec<Expression>) -> Expression {
+        Expression::ImportPath(segments)
+    }
+
+    pub fn create_use_statement(&self, path: Expression, alias: Option<Box<Expression>>) -> Statement {
+        Statement::Use(Box::new(path), alias)
+    }
+}
+
+pub fn opt_expr(expr: Expression) -> Option<Box<Expression>> {
+    Some(Box::new(expr))
 }

@@ -85,7 +85,7 @@ pub fn assign(left: LeftHandSideExpression, op: AssignmentOp, right: Expression)
     Expression::Assignment(Box::new(left), op, Box::new(right))
 }
 
-pub fn let_variable(name: &str, typ: Option<String>, init: Option<Expression>) -> VariableDeclaration {
+pub fn let_variable(name: &str, typ: Option<String>, init: Option<Box<Expression>>) -> VariableDeclaration {
     VariableDeclaration {
         name: name.into(),
         typ,
@@ -94,7 +94,7 @@ pub fn let_variable(name: &str, typ: Option<String>, init: Option<Expression>) -
     }
 }
 
-pub fn var(name: &str, typ: Option<String>, init: Option<Expression>) -> VariableDeclaration {
+pub fn var(name: &str, typ: Option<String>, init: Option<Box<Expression>>) -> VariableDeclaration {
     VariableDeclaration {
         name: name.into(),
         typ,
@@ -115,8 +115,8 @@ pub fn unless_conditional(cond: Expression, then: Expression, else_b: Option<Exp
     conditional(cond, then, else_b, IfStatementType::Unless)
 }
 
-pub fn range(start: Expression, end: Option<Expression>, range_type: RangeExpressionType) -> Expression {
-    Expression::Range(Box::new(start), Box::new(end), range_type)
+pub fn range(start: Expression, end: Option<Box<Expression>>, range_type: RangeExpressionType) -> Expression {
+    Expression::Range(Box::new(start), end, range_type)
 }
 
 pub fn member(object: Expression, property: Expression) -> Expression {
@@ -181,8 +181,8 @@ pub fn for_statement(
     Statement::For(variable_declarations, Box::new(iterable), Box::new(body))
 }
 
-pub fn return_statement(expr: Option<Expression>) -> Statement {
-    Statement::Return(Box::new(expr))
+pub fn return_statement(expr: Option<Box<Expression>>) -> Statement {
+    Statement::Return(expr)
 }
 
 pub fn guard(op: GuardOp, expr: Expression) -> Expression {
@@ -203,6 +203,15 @@ pub fn def(
     )
 }
 
-pub fn parameter(name: String, typ: Option<String>, guard: Option<Expression>) -> Parameter {
+pub fn parameter(name: String, typ: Option<String>, guard: Option<Box<Expression>>) -> Parameter {
     Parameter { name, typ, guard }
+}
+
+pub fn import_path(path: &str) -> Expression {
+    let segments: Vec<Expression> = path.split(".").map(|s| identifier(s.trim())).collect();
+    Expression::ImportPath(segments)
+}
+
+pub fn use_statement(import_path: Expression, alias: Option<Box<Expression>>) -> Statement {
+    Statement::Use(Box::new(import_path), alias)
 }

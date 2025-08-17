@@ -69,6 +69,7 @@ impl<'source> Parser<'source> {
             | ForeverStatement
             | FunctionDeclaration
             | ReturnStatement
+            | UseStatement
             | EmptyStatement
             ;
     */
@@ -88,6 +89,7 @@ impl<'source> Parser<'source> {
             Some((Token::For, _)) => self.for_statement()?,
             Some((Token::Def, _)) => self.function_declaration()?,
             Some((Token::Return, _)) => self.return_statement()?,
+            Some((Token::Use, _)) => self.use_statement()?,
             _ => self.expression_statement()?,
         };
         Ok(statement)
@@ -163,7 +165,7 @@ impl<'source> Parser<'source> {
             initializer = match &self._lookahead {
                 Some((Token::Assign, _)) => {
                     self.eat_token(&Token::Assign)?;
-                    Some(self.expression()?)
+                    opt_expr(self.expression()?)
                 },
                 _ => None
             };
@@ -317,19 +319,19 @@ impl<'source> Parser<'source> {
     */
     fn range_expression(&mut self) -> Result<Expression, SyntaxError> {
         let start = self.range_boundary_expression()?;
-        let end: Option<Expression>;
+        let end: Option<Box<Expression>>;
         let range_type;
 
         match &self._lookahead {
             Some((Token::Range, _)) => {
                 self.eat_token(&Token::Range)?;
                 range_type = RangeExpressionType::Exclusive;
-                end = Some(self.range_boundary_expression()?);
+                end = opt_expr(self.range_boundary_expression()?);
             },
             Some((Token::RangeInclusive, _)) => {
                 self.eat_token(&Token::RangeInclusive)?;
                 range_type = RangeExpressionType::Inclusive;
-                end = Some(self.range_boundary_expression()?);
+                end = opt_expr(self.range_boundary_expression()?);
             },
             _ => {
                 range_type = RangeExpressionType::IterableObject;
@@ -459,7 +461,7 @@ impl<'source> Parser<'source> {
         };
 
         let guard = if self._lookahead.is_some() && self.lookahead_is_guard() {
-            Some(self.guard_expression()?)
+            opt_expr(self.guard_expression()?)
         } else {
             None
         };
@@ -509,10 +511,42 @@ impl<'source> Parser<'source> {
         let expression = if self.lookahead_is_expression_end() {
             None
         } else {
-            Some(self.expression()?)
+            opt_expr(self.expression()?)
         };
         self.eat_token(&Token::ExpressionStatementEnd)?;
         Ok(self._ast_factory.create_return_statement(expression))
+    }
+
+    /*
+        UseStatement
+            : 'use' ImportPathExpression ( 'as' Identifier )?
+            ;
+    */
+    fn use_statement(&mut self) -> Result<Statement, SyntaxError> {
+        self.eat_token(&Token::Use)?;
+        let import_path = self.import_path_expression()?;
+        let alias = if self.match_lookahead_type(|t| t == &Token::As) {
+            self.eat_token(&Token::As)?;
+            opt_expr(self.identifier()?)
+        } else {
+            None
+        };
+        self.eat_token(&Token::ExpressionStatementEnd)?;
+        Ok(self._ast_factory.create_use_statement(import_path, alias))
+    }
+
+    /*
+        ImportPathExpression
+            : Identifier ('.' Identifier)*
+            ;
+    */
+    fn import_path_expression(&mut self) -> Result<Expression, SyntaxError> {
+        let mut segments = vec![self.identifier()?];
+        while self.match_lookahead_type(|t| t == &Token::Dot) {
+            self.eat_token(&Token::Dot)?;
+            segments.push(self.identifier()?);
+        }
+        Ok(self._ast_factory.create_import_path_expression(segments))
     }
 
     /*

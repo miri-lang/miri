@@ -373,7 +373,7 @@ fn test_parse_variable_declaration() {
     parse_variable_declaration_test(
         "let x = 5",
         vec![
-            let_variable("x", None, Some(int_literal(5)))
+            let_variable("x", None, opt_expr(int_literal(5)))
         ]
     );
 }
@@ -383,7 +383,7 @@ fn test_parse_typed_variable_declaration() {
     parse_variable_declaration_test(
         "let x int = 5",
         vec![
-            let_variable("x", Some("int".into()), Some(int_literal(5)))
+            let_variable("x", Some("int".into()), opt_expr(int_literal(5)))
         ]
     );
 }
@@ -413,7 +413,7 @@ fn test_parse_mutable_variable_declaration() {
     parse_variable_declaration_test(
         "var text = \"Hello, World!\"",
         vec![
-            var("text", None, Some(string_literal("Hello, World!")))
+            var("text", None, opt_expr(string_literal("Hello, World!")))
         ]
     );
 }
@@ -436,7 +436,7 @@ fn test_parse_multiple_variable_declaration_mixed_initializer() {
         "let x, y = 10, z",
         vec![
             let_variable("x", None, None),
-            let_variable("y", None, Some(int_literal(10))),
+            let_variable("y", None, opt_expr(int_literal(10))),
             let_variable("z", None, None)
         ]
     );
@@ -450,10 +450,10 @@ let foo = bar = 200
 ",
         vec![
             variable_statement(
-                vec![var("bar", None, Some(int_literal(100)))]
+                vec![var("bar", None, opt_expr(int_literal(100)))]
             ),
             variable_statement(
-                vec![let_variable("foo", None, Some(assign(lhs_identifier("bar"), AssignmentOp::Assign, int_literal(200))))]
+                vec![let_variable("foo", None, opt_expr(assign(lhs_identifier("bar"), AssignmentOp::Assign, int_literal(200))))]
             )
         ]
     );
@@ -864,12 +864,12 @@ else
     identifier("x".into()),
     block(vec![
         variable_statement(vec![
-            let_variable("y".into(), None, Some(int_literal(10)))
+            let_variable("y".into(), None, opt_expr(int_literal(10)))
         ])
     ]),
     Some(block(vec![
         variable_statement(vec![
-            var("z".into(), None, Some(int_literal(20))),
+            var("z".into(), None, opt_expr(int_literal(20))),
         ])
     ]))
     );
@@ -1378,7 +1378,7 @@ let x = 10 if y > 5 else 20
             let_variable(
                 "x".into(),
                 None,
-                Some(
+                opt_expr(
                     if_conditional(
                         int_literal(10),
                         binary(
@@ -1405,7 +1405,7 @@ var x = 100 if y % 2 == 0
             var(
                 "x".into(),
                 None,
-                Some(
+                opt_expr(
                     if_conditional(
                         int_literal(100),
                         binary(
@@ -1435,7 +1435,7 @@ var x = 1 unless y
             var(
                 "x".into(),
                 None,
-                Some(
+                opt_expr(
                     unless_conditional(
                         int_literal(1),
                         identifier("y".into()),
@@ -1522,7 +1522,7 @@ for x in 1..=5
     ],
     range(
         int_literal(1),
-        Some(int_literal(5)),
+        opt_expr(int_literal(5)),
         RangeExpressionType::Inclusive
     ),
     block(vec![
@@ -1547,7 +1547,7 @@ for x in 1..5: y = x
     ],
     range(
         int_literal(1),
-        Some(int_literal(5)),
+        opt_expr(int_literal(5)),
         RangeExpressionType::Exclusive
     ),
     expression_statement(
@@ -1615,7 +1615,7 @@ for i in 1..3
         // nested body
 ",
         vec![let_variable("i".into(), None, None)],
-        range(int_literal(1), Some(int_literal(3)), RangeExpressionType::Exclusive),
+        range(int_literal(1), opt_expr(int_literal(3)), RangeExpressionType::Exclusive),
         block(vec![
             for_statement(
                 vec![let_variable("c".into(), None, None)],
@@ -1632,7 +1632,7 @@ fn test_for_loop_nested_inline() {
 for i in 1..3: for c in \"ab\": // nested body
 ",
         vec![let_variable("i".into(), None, None)],
-        range(int_literal(1), Some(int_literal(3)), RangeExpressionType::Exclusive),
+        range(int_literal(1), opt_expr(int_literal(3)), RangeExpressionType::Exclusive),
         for_statement(
                 vec![let_variable("c".into(), None, None)],
                 range(string_literal("ab"), None, RangeExpressionType::IterableObject),
@@ -1647,7 +1647,7 @@ fn test_for_loop_with_typed_variable() {
 for i int in 1..=10: // do something
 ",
         vec![let_variable("i".into(), Some("int".into()), None)],
-        range(int_literal(1), Some(int_literal(10)), RangeExpressionType::Inclusive),
+        range(int_literal(1), opt_expr(int_literal(10)), RangeExpressionType::Inclusive),
         empty_statement()
     );
 }
@@ -1823,7 +1823,7 @@ def square(x int > 0)
 ", vec![
         def("square".into(), 
             vec![
-                parameter("x".into(), Some("int".into()), Some(guard(GuardOp::GreaterThan, int_literal(0))))
+                parameter("x".into(), Some("int".into()), opt_expr(guard(GuardOp::GreaterThan, int_literal(0))))
             ],
             None,
             block(vec![
@@ -1846,7 +1846,7 @@ def square(x int > 0) int: x * x
 ", vec![
         def("square".into(), 
             vec![
-                parameter("x".into(), Some("int".into()), Some(guard(GuardOp::GreaterThan, int_literal(0)))),
+                parameter("x".into(), Some("int".into()), opt_expr(guard(GuardOp::GreaterThan, int_literal(0)))),
             ],
             Some("int".into()),
             expression_statement(
@@ -1889,7 +1889,7 @@ def add(a int, b int)
             None,
             block(vec![
                 return_statement(
-                    Some(binary(identifier("a".into()), BinaryOp::Add, identifier("b".into())))
+                    opt_expr(binary(identifier("a".into()), BinaryOp::Add, identifier("b".into())))
                 )
             ])
         )
@@ -1991,7 +1991,7 @@ fn test_return_statement() {
     parse_test("
 return 42
 ", vec![
-        return_statement(Some(int_literal(42)))
+        return_statement(opt_expr(int_literal(42)))
     ]);
 }
 
@@ -2000,7 +2000,7 @@ fn test_return_statement_with_expression() {
     parse_test("
 return 42 + x
 ", vec![
-        return_statement(Some(binary(int_literal(42), BinaryOp::Add, identifier("x".into()))))
+        return_statement(opt_expr(binary(int_literal(42), BinaryOp::Add, identifier("x".into()))))
     ]);
 }
 
@@ -2125,6 +2125,45 @@ coordinates.compute(x, y, z)
                 ),
                 vec![identifier("x".into()), identifier("y".into()), identifier("z".into())]
             )
+        )
+    ]);
+}
+
+#[test]
+fn test_use_statement_local_module() {
+    parse_test("
+// Local module 
+use Calc
+", vec![
+        use_statement(
+            import_path("Calc".into()),
+            None
+        )
+    ]);
+}
+
+#[test]
+fn test_use_statement_multiple_segments() {
+    parse_test("
+// Local module with path
+use MyProject.Path.SomeModule
+", vec![
+        use_statement(
+            import_path("MyProject.Path.SomeModule".into()),
+            None
+        )
+    ]);
+}
+
+#[test]
+fn test_use_statement_alias() {
+    parse_test("
+// Module with path
+use System.Math as M
+", vec![
+        use_statement(
+            import_path("System.Math".into()),
+            opt_expr(identifier("M".into()))
         )
     ]);
 }
