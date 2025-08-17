@@ -35,7 +35,7 @@ pub enum RangeExpressionType {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Parameter {
     pub name: String,
-    pub typ: Option<String>, // Type can be specified, e.g., "i32", "String"
+    pub typ: Option<Box<Expression>>, // Type can be specified, e.g., "i32", "String"
     pub guard: Option<Box<Expression>>, // Optional guard expression
 }
 
@@ -55,7 +55,7 @@ pub enum Statement {
 
     For(Vec<VariableDeclaration>, Box<Expression>, Box<Statement>), // variable_declarations, iterable, body
 
-    FunctionDeclaration(String, Vec<Parameter>, Option<String>, Box<Statement>), // name, parameters, return type, body
+    FunctionDeclaration(String, Vec<Parameter>, Option<Box<Expression>>, Box<Statement>), // name, parameters, return type, body
 
     Return(Option<Box<Expression>>), // Optional return expression
 
@@ -90,6 +90,8 @@ pub enum Expression {
     Call(Box<Expression>, Vec<Expression>), // function, args
 
     ImportPath(Vec<Expression>), // Represents an import path, e.g., `use a.b.c`
+
+    Type(Box<Type>, bool), // Represents a type expression, e.g., `i32`, `string`, etc.
 
     // // Operators
     // Binary(Box<Expr>, BinaryOp, Box<Expr>),
@@ -127,7 +129,7 @@ pub enum VariableDeclarationType {
 #[derive(Debug, Clone, PartialEq)]
 pub struct VariableDeclaration {
     pub name: String,
-    pub typ: Option<String>, // Type can be specified, e.g., "i32", "String"
+    pub typ: Option<Box<Expression>>, // Type can be specified, e.g., "i32", "String"
     pub initializer: Option<Box<Expression>>, // Optional initializer expression
     pub declaration_type: VariableDeclarationType, // Whether the variable is mutable
 }
@@ -233,11 +235,36 @@ pub enum FloatLiteral {
     F64(f64),
 }
 
-// /// Represents a fully parsed Miri program
-// #[derive(Debug, PartialEq)]
-// pub struct Program {
-//     pub statements: Vec<Stmt>,
-// }
+/// Represents a type expression
+#[derive(Debug, Clone, PartialEq)]
+pub enum Type {
+    Int,
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    Float,
+    F32,
+    F64,
+    String,
+    Boolean,
+    Symbol,
+    List(Box<Expression>),                      // [i32]
+    Map(Box<Expression>, Box<Expression>),      // {string: i32}
+    Tuple(Vec<Expression>),                     // (i32, String)
+    Set(Box<Expression>),                       // {i32}
+    Result(Box<Expression>, Box<Expression>),   // result<i32, String>
+    Future(Box<Expression>),                    // future<i32>
+
+    Custom(String, Option<Vec<Expression>>),    // a custom type, e.g., MyStruct<T, U>
+}
+
 
 // /// Represents a statement in the Miri language
 // #[derive(Debug, PartialEq)]
@@ -280,16 +307,6 @@ pub enum FloatLiteral {
 //     Identifier(String),
 //     Multiple(Vec<Pattern>), // For patterns like "1 | 2 | 3"
 //     Default,
-// }
-
-// /// Represents a type expression
-// #[derive(Debug, PartialEq)]
-// pub enum TypeExpr {
-//     Simple(String),
-//     Array(Box<TypeExpr>),
-//     Dict(Box<TypeExpr>, Box<TypeExpr>),
-//     Generic(String, Vec<TypeExpr>),
-//     Result(Box<TypeExpr>, Box<TypeExpr>),
 // }
 
 
@@ -414,7 +431,7 @@ impl AstFactory {
         Statement::For(variable_declarations, Box::new(iterable), Box::new(body))
     }
 
-    pub fn create_function_declaration(&self, name: String, parameters: Vec<Parameter>, return_type: Option<String>, body: Statement) -> Statement {
+    pub fn create_function_declaration(&self, name: String, parameters: Vec<Parameter>, return_type: Option<Box<Expression>>, body: Statement) -> Statement {
         Statement::FunctionDeclaration(name, parameters, return_type, Box::new(body))
     }
 
@@ -456,6 +473,10 @@ impl AstFactory {
 
     pub fn create_use_statement(&self, path: Expression, alias: Option<Box<Expression>>) -> Statement {
         Statement::Use(Box::new(path), alias)
+    }
+
+    pub fn create_type_expression(&self, inner: Type, is_nullable: bool) -> Expression {
+        Expression::Type(Box::new(inner), is_nullable)
     }
 }
 

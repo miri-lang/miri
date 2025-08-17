@@ -21,17 +21,22 @@ Done ✅
 ### **Phase 2: MLP Compiler Prototype (Month 3-5)**
 **Goal:** Build a functional, minimal version of the language.
 - [x] Implement **lexical analysis and parsing**.
-  - [ ] use
-  - [ ] type expression
+  - [x] use
+  - [x] type expression
+  - [ ] generic functions
+  - [ ] generic classes
+  - [ ] enums
+  - [ ] structs
   - [ ] async/await
   - [ ] gpu
   - [ ] parallel
   - [ ] lambda, function as variables and parameters
-  - [ ] extend/implement
+  - [ ] extend/implement/include
   - [ ] private/protected
-  - [ ] array
+  - [ ] list
   - [ ] tuple
-  - [ ] hashmap
+  - [ ] map
+  - [ ] set
   - [ ] regex
   - [ ] function declarations without parentheses
   - [ ] function calls without parentheses

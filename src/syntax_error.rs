@@ -22,6 +22,7 @@ pub enum SyntaxErrorKind {
     UnexpectedToken { expected: String, found: String },
     UnexpectedOperator { expected: String, found: String },
     UnexpectedEOF,
+    InvalidTypeDeclaration { expected: String },
     InvalidLeftHandSideExpression,
     InvalidAssignmentTarget,
     IntegerLiteralOverflow,
@@ -120,6 +121,10 @@ impl SyntaxError {
             SyntaxErrorKind::InvalidLeftHandSideExpression => (
                 "Invalid Left-Hand Side Expression",
                 "The left-hand side expression is not valid. Ensure it is a valid identifier or property.".to_string(),
+            ),
+            SyntaxErrorKind::InvalidTypeDeclaration { ref expected } => (
+                "Invalid Type Declaration",
+                format!("The type expression is not correct. Expected: {expected}."),
             ),
         };
 

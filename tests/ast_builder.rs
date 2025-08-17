@@ -85,7 +85,7 @@ pub fn assign(left: LeftHandSideExpression, op: AssignmentOp, right: Expression)
     Expression::Assignment(Box::new(left), op, Box::new(right))
 }
 
-pub fn let_variable(name: &str, typ: Option<String>, init: Option<Box<Expression>>) -> VariableDeclaration {
+pub fn let_variable(name: &str, typ: Option<Box<Expression>>, init: Option<Box<Expression>>) -> VariableDeclaration {
     VariableDeclaration {
         name: name.into(),
         typ,
@@ -94,7 +94,7 @@ pub fn let_variable(name: &str, typ: Option<String>, init: Option<Box<Expression
     }
 }
 
-pub fn var(name: &str, typ: Option<String>, init: Option<Box<Expression>>) -> VariableDeclaration {
+pub fn var(name: &str, typ: Option<Box<Expression>>, init: Option<Box<Expression>>) -> VariableDeclaration {
     VariableDeclaration {
         name: name.into(),
         typ,
@@ -192,7 +192,7 @@ pub fn guard(op: GuardOp, expr: Expression) -> Expression {
 pub fn def(
     name: String,
     parameters: Vec<Parameter>,
-    return_type: Option<String>,
+    return_type: Option<Box<Expression>>,
     body: Statement,
 ) -> Statement {
     Statement::FunctionDeclaration(
@@ -203,7 +203,7 @@ pub fn def(
     )
 }
 
-pub fn parameter(name: String, typ: Option<String>, guard: Option<Box<Expression>>) -> Parameter {
+pub fn parameter(name: String, typ: Option<Box<Expression>>, guard: Option<Box<Expression>>) -> Parameter {
     Parameter { name, typ, guard }
 }
 
@@ -214,4 +214,12 @@ pub fn import_path(path: &str) -> Expression {
 
 pub fn use_statement(import_path: Expression, alias: Option<Box<Expression>>) -> Statement {
     Statement::Use(Box::new(import_path), alias)
+}
+
+pub fn typ(t: Type) -> Expression {
+    Expression::Type(Box::new(t), false)
+}
+
+pub fn null_typ(t: Type) -> Expression {
+    Expression::Type(Box::new(t), true)
 }
