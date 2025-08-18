@@ -2,7 +2,7 @@ extends BasicGraph
 implements IBasicGraph
 includes Mod1
 
-type T, U extends Serializable
+type T, U extends Serializable, X implements IGraph, P includes Mod2
 type F is map<string, int>
 
 enum Status

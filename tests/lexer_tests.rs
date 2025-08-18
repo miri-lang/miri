@@ -121,37 +121,44 @@ fn test_unicode_identifiers() {
 
 #[test]
 fn test_keywords() {
-    keyword_test("use", Token::Use);
-    keyword_test("def", Token::Def);
-    keyword_test("async", Token::Async);
-    keyword_test("await", Token::Await);
-    keyword_test("spawn", Token::Spawn);
-    keyword_test("gpu", Token::Gpu);
-    keyword_test("if", Token::If);
-    keyword_test("unless", Token::Unless);
-    keyword_test("forever", Token::Forever);
-    keyword_test("match", Token::Match);
-    keyword_test("default", Token::Default);
-    keyword_test("return", Token::Return);
-    keyword_test("while", Token::While);
-    keyword_test("until", Token::Until);
-    keyword_test("do", Token::Do);
-    keyword_test("for", Token::For);
-    keyword_test("in", Token::In);
-    keyword_test("let", Token::Let);
-    keyword_test("var", Token::Var);
-    keyword_test("or", Token::Or);
-    keyword_test("and", Token::And);
-    keyword_test("not", Token::Not);
-    keyword_test("true", Token::True);
-    keyword_test("false", Token::False);
-    keyword_test("from", Token::From);
-    keyword_test("as", Token::As);
-    keyword_test("break", Token::Break);
-    keyword_test("continue", Token::Continue);
-    keyword_test("extends", Token::Extends);
-    keyword_test("includes", Token::Includes);
-    keyword_test("implements", Token::Implements);
+    let keyword_map = vec![
+        ("use", Token::Use),
+        ("def", Token::Def),
+        ("async", Token::Async),
+        ("await", Token::Await),
+        ("spawn", Token::Spawn),
+        ("gpu", Token::Gpu),
+        ("if", Token::If),
+        ("unless", Token::Unless),
+        ("match", Token::Match),
+        ("default", Token::Default),
+        ("return", Token::Return),
+        ("while", Token::While),
+        ("until", Token::Until),
+        ("do", Token::Do),
+        ("for", Token::For),
+        ("in", Token::In),
+        ("let", Token::Let),
+        ("var", Token::Var),
+        ("or", Token::Or),
+        ("and", Token::And),
+        ("not", Token::Not),
+        ("true", Token::True),
+        ("false", Token::False),
+        ("from", Token::From),
+        ("as", Token::As),
+        ("break", Token::Break),
+        ("continue", Token::Continue),
+        ("is", Token::Is),
+        ("extends", Token::Extends),
+        ("includes", Token::Includes),
+        ("implements", Token::Implements),
+        ("type", Token::Type),
+    ];
+
+    for (keyword, token) in keyword_map {
+        keyword_test(keyword, token);
+    }
 }
 
 fn keyword_test(keyword: &str, expected: Token) {

@@ -60,6 +60,8 @@ pub enum Statement {
     Return(Option<Box<Expression>>), // Optional return expression
 
     Use(Box<Expression>, Option<Box<Expression>>),
+
+    Type(Vec<Expression>) // type X, Y, Z extends A
 }
 
 /// Represents an expression
@@ -94,6 +96,8 @@ pub enum Expression {
     Type(Box<Type>, bool), // Represents a type expression, e.g., `i32`, `string`, etc.
 
     GenericType(Box<Expression>, Option<Box<Expression>>), // Represents a generic type, e.g., <T is MyClass>
+
+    TypeDeclaration(Box<Expression>, TypeDeclarationKind, Option<Box<Expression>>), // T extends SomeClass
 
     // // Operators
     // Binary(Box<Expr>, BinaryOp, Box<Expr>),
@@ -267,6 +271,16 @@ pub enum Type {
     Custom(String, Option<Vec<Expression>>),    // a custom type, e.g., MyStruct<T, U>
 }
 
+
+/// Represents a type declaration kind
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypeDeclarationKind {
+    None,
+    Is,
+    Extends,
+    Implements,
+    Includes,
+}
 
 // /// Represents a statement in the Miri language
 // #[derive(Debug, PartialEq)]
@@ -483,6 +497,14 @@ impl AstFactory {
 
     pub fn create_generic_type_expression(&self, name: Expression, constraint: Option<Box<Expression>>) -> Expression {
         Expression::GenericType(Box::new(name), constraint)
+    }
+
+    pub fn create_type_declaration(&self, name: Expression, kind: TypeDeclarationKind, type_expr: Option<Box<Expression>>) -> Expression {
+        Expression::TypeDeclaration(Box::new(name), kind, type_expr)
+    }
+
+    pub fn create_type_statement(&self, declarations: Vec<Expression>) -> Statement {
+        Statement::Type(declarations)
     }
 }
 
