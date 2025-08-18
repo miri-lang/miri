@@ -94,6 +94,7 @@ impl<'source> Parser<'source> {
             Some((Token::Type, _)) => self.type_statement()?,
             Some((Token::Break, _)) => self.break_statement()?,
             Some((Token::Continue, _)) => self.continue_statement()?,
+            Some((Token::Enum, _)) => self.enum_statement()?,
             _ => self.expression_statement()?,
         };
         Ok(statement)
@@ -573,6 +574,69 @@ impl<'source> Parser<'source> {
         self.eat_token(&Token::Continue)?;
         self.eat_token(&Token::ExpressionStatementEnd)?;
         Ok(self._ast_factory.create_continue_statement())
+    }
+
+    /*
+        EnumStatement
+            : 'enum' Identifier: EnumValue (',' EnumValue)*
+            | 'enum' Identifier INDENT EnumValue EXPRESSION_END (EnumValue EXPRESSION_END)* DEDENT
+            ;
+    */
+    fn enum_statement(&mut self) -> Result<Statement, SyntaxError> {
+        self.eat_token(&Token::Enum)?;
+
+        let name = self.identifier()?;
+
+        let mut values = vec![];
+
+        match &self._lookahead {
+            Some((Token::Colon, _)) => {
+                self.eat_token(&Token::Colon)?;
+
+                values.push(self.enum_value_expression()?);
+
+                while self.lookahead_is_comma() {
+                    self.eat_token(&Token::Comma)?;
+                    values.push(self.enum_value_expression()?);
+                }
+
+                self.eat_expression_end()?;
+            }
+            Some((Token::ExpressionStatementEnd, _)) => {
+                self.eat_expression_end()?;
+                if self._lookahead.is_none() || !self.lookahead_is_indent() {
+                    return Err(self.error_unexpected_lookahead_token("an indentation for block enums"));
+                }
+                self.eat_token(&Token::Indent)?;
+                while !self.lookahead_is_dedent() {
+                    values.push(self.enum_value_expression()?);
+                    self.eat_token(&Token::ExpressionStatementEnd)?;
+                }
+                self.eat_token(&Token::Dedent)?;
+            },
+            _ => return Err(
+                self.error_unexpected_lookahead_token("either a colon for inline enums or an indentation for block enums")
+            ),
+        };
+
+        Ok(self._ast_factory.create_enum_statement(name, values))
+    }
+
+    /*
+        EnumValue
+            : Identifier
+            | Identifier '(' TypeExpression (',' TypeExpression)* ')'
+            ;
+    */
+    pub fn enum_value_expression(&mut self) -> Result<Expression, SyntaxError> {
+        let identifier = self.identifier()?;
+        let types = if self.match_lookahead_type(|t| t == &Token::LParen) {
+            self.multiple_element_type_expressions("Enum value type", &Token::LParen, &Token::RParen)?
+        } else {
+            vec![]
+        };
+
+        Ok(self._ast_factory.create_enum_value_expression(identifier, types))
     }
 
     /*

@@ -65,7 +65,9 @@ pub enum Statement {
 
     Use(Box<Expression>, Option<Box<Expression>>),
 
-    Type(Vec<Expression>) // type X, Y, Z extends A
+    Type(Vec<Expression>), // type X, Y, Z extends A
+
+    Enum(Box<Expression>, Vec<Expression>) // enum Colors: Red, Green, Blue(string)
 }
 
 /// Represents an expression
@@ -102,6 +104,8 @@ pub enum Expression {
     GenericType(Box<Expression>, Option<Box<Expression>>), // Represents a generic type, e.g., <T is MyClass>
 
     TypeDeclaration(Box<Expression>, TypeDeclarationKind, Option<Box<Expression>>), // T extends SomeClass
+
+    EnumValue(Box<Expression>, Vec<Expression>), // Represents an enum value, e.g., Ok, Err(string)
 
     // // Operators
     // Binary(Box<Expr>, BinaryOp, Box<Expr>),
@@ -517,6 +521,14 @@ impl AstFactory {
 
     pub fn create_continue_statement(&self) -> Statement {
         Statement::Continue
+    }
+
+    pub fn create_enum_value_expression(&self, identifier: Expression, types: Vec<Expression>) -> Expression {
+        Expression::EnumValue(Box::new(identifier), types)
+    }
+
+    pub fn create_enum_statement(&self, name: Expression, values: Vec<Expression>) -> Statement {
+        Statement::Enum(Box::new(name), values)
     }
 }
 

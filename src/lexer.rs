@@ -43,6 +43,7 @@ pub enum Token {
     #[token("includes")]   Includes,
     #[token("implements")] Implements,
     #[token("type")]       Type,
+    #[token("enum")]       Enum,
 
     // Symbols and Operators
     #[token(":")]           Colon,

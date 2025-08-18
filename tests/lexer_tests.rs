@@ -154,6 +154,7 @@ fn test_keywords() {
         ("includes", Token::Includes),
         ("implements", Token::Implements),
         ("type", Token::Type),
+        ("enum", Token::Enum),
     ];
 
     for (keyword, token) in keyword_map {
