@@ -48,6 +48,7 @@ pub enum Token {
 
     // Symbols and Operators
     #[token(":")]           Colon,
+    #[token("::")]          DoubleColon,
     #[token("=>")]          FatArrow,
     #[token("->")]          Arrow,
     #[token("<-")]          LeftArrow,
@@ -90,7 +91,6 @@ pub enum Token {
     // Identifiers and Literals
     #[regex("[a-zA-Z_][a-zA-Z0-9_]*")] Identifier,
     #[regex(":[a-zA-Z_][a-zA-Z0-9_]*")] Symbol,
-    #[regex("::+[a-zA-Z_][a-zA-Z0-9_]*")] IncorrectSymbol,
     #[regex(r#"'[^'\\]*(?:\\.[^'\\]*)*'"#)] SingleQuotedString,
     #[regex(r#""[^"\\]*(?:\\.[^"\\]*)*""#)] DoubleQuotedString,
     #[regex("[0-9]+(?:_[0-9]+)*(\\.[0-9]+(?:_[0-9]+)*)?([eE][+-]?[0-9]+(?:_[0-9]+)*)?", priority = 1)] Float,
@@ -209,15 +209,6 @@ impl<'source> Lexer<'source> {
                         }
                     }
                     continue;
-                },
-                Token::IncorrectSymbol => {
-                    return Some(
-                        Err(
-                            SyntaxError::new(
-                                SyntaxErrorKind::InvalidToken, self.inner.span()
-                            )
-                        )
-                    );
                 },
                 Token::LParen => {
                     self.paren_stack.push(self.inner.span().start);
@@ -435,6 +426,7 @@ impl<'source> Lexer<'source> {
 pub fn token_to_string(token: &Token) -> String {
     match token {
         Token::Colon => ":".into(),
+        Token::DoubleColon => "::".into(),
         Token::FatArrow => "=>".into(),
         Token::Arrow => "->".into(),
         Token::LeftArrow => "<-".into(),

@@ -27,8 +27,8 @@ Done ✅
   - [x] generic classes
   - [x] break/continue
   - [x] enums
-  - [ ] structs
-  - [ ] using enums, structs and functions from other modules e.g. Http::Status.Ok, Http::get
+  - [x] structs
+  - [x] using enums, structs and functions from other modules e.g. Http::Status.Ok, Http::get
   - [ ] async/await
   - [ ] gpu
   - [ ] parallel

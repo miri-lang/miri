@@ -6,7 +6,7 @@ use std::vec;
 use miri::ast::*;
 use miri::lexer::{Lexer};
 use miri::parser::Parser;
-use miri::syntax_error::SyntaxErrorKind;
+use miri::syntax_error::{SyntaxError, SyntaxErrorKind};
 
 pub mod ast_builder;
 use ast_builder::*;
@@ -1065,7 +1065,7 @@ x = 2
 ",
         vec![
             if_statement(
-                Expression::Identifier("x".into()),
+                identifier("x".into()),
                 block(vec![
                     expression_statement(
                         assign(
@@ -3236,13 +3236,134 @@ fn test_very_long_chain_of_binary_operators() {
     parse_program(&long_expr);
 }
 
+#[test]
+fn test_namespaced_function_call() {
+    parse_test("Http::new(url)", vec![
+        expression_statement(
+            call(
+                class_identifier("Http::new"),
+                vec![identifier("url")]
+            )
+        )
+    ]);
+}
 
-fn parse_program<'src>(input: &'src str) -> Program {
+#[test]
+fn test_namespaced_enum_access() {
+    parse_test("let status = Http::Status.Ok", vec![
+        variable_statement(vec![
+            let_variable(
+                "status",
+                None,
+                opt_expr(member(
+                    class_identifier("Http::Status"),
+                    identifier("Ok")
+                ))
+            )
+        ])
+    ]);
+}
+
+#[test]
+fn test_namespaced_type_in_variable_declaration() {
+    parse_variable_declaration_test(
+        "let client Http::Client",
+        vec![
+            let_variable(
+                "client",
+                opt_expr(typ(Type::Custom("Http::Client".into(), None))),
+                None
+            )
+        ]
+    );
+}
+
+#[test]
+fn test_namespaced_type_in_function_return() {
+    parse_test("def get_status() Http::Status: Http::Status.Ok", vec![
+        def(
+            "get_status".into(),
+            None,
+            vec![],
+            opt_expr(typ(Type::Custom("Http::Status".into(), None))),
+            expression_statement(
+                member(
+                    class_identifier("Http::Status"),
+                    identifier("Ok")
+                )
+            )
+        )
+    ]);
+}
+
+#[test]
+fn test_namespaced_type_in_function_parameter() {
+    parse_test("def set_status(s Http::Status): _status = s", vec![
+        def(
+            "set_status".into(),
+            None,
+            vec![
+                parameter(
+                    "s".into(),
+                    opt_expr(typ(Type::Custom("Http::Status".into(), None))),
+                    None
+                )
+            ],
+            None,
+            expression_statement(
+                assign(
+                    lhs_identifier("_status"),
+                    AssignmentOp::Assign,
+                    identifier("s")
+                )
+            )
+        )
+    ]);
+}
+
+#[test]
+fn test_error_namespaced_variable_declaration() {
+    // A variable name cannot be namespaced.
+    parse_error_test(
+        "let Http::x = 1",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "a simple identifier".to_string(),
+            found: "Http::x".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_error_namespaced_parameter_name() {
+    // A function parameter name cannot be namespaced.
+    parse_error_test(
+        "def my_func(Http::p int)",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "a simple identifier".to_string(),
+            found: "Http::p".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_error_namespaced_assignment_target() {
+    // A namespaced identifier like `Http::Status` is a value, not a variable,
+    // so it cannot be the direct target of an assignment.
+    parse_error_test(
+        "Http::Status = 'new_status'",
+        SyntaxErrorKind::InvalidLeftHandSideExpression
+    );
+}
+
+fn parse(input: &str) -> Result<Program, SyntaxError> {
     let mut lexer = Lexer::new(input);
     let mut parser = Parser::new(&mut lexer, input, AstFactory::new());
-    let parse_result = parser.parse();
+    
+    parser.parse()
+}
 
-    parse_result.unwrap()
+fn parse_program<'src>(input: &'src str) -> Program {
+    parse(input).unwrap()
 }
 
 fn parse_test<'src>(input: &'src str, _expected_body: Vec<Statement>) {
@@ -3253,10 +3374,7 @@ fn parse_test<'src>(input: &'src str, _expected_body: Vec<Statement>) {
 }
 
 fn parse_error_test<'src>(input: &'src str, _expected_error: SyntaxErrorKind) {
-    let mut lexer = Lexer::new(input);
-    let mut parser = Parser::new(&mut lexer, input, AstFactory::new());
-    let parse_result = parser.parse();
-
+    let parse_result = parse(input);
     assert!(parse_result.is_err());
     assert_eq!(parse_result.unwrap_err().kind, _expected_error);
 }
