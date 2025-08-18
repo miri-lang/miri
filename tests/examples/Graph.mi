@@ -1,11 +1,26 @@
-// extend BasicGraph
-// implement IBasicGraph
-// include Mod1
+extends BasicGraph
+implements IBasicGraph
+includes Mod1
+
+type T, U extends Serializable
+type F is map<string, int>
+
+enum Status
+    Ok
+    Error
+
+enum Code: C1, C2
+
+struct Coordinates
+    x int
+    y int
+
+struct 3dCoordinates: x int, y int, z int
 
 // Define the graph as an adjacency list
-private let _graph map[string, list[string]]
+private let _graph map<string, list<string>>
 
-def init
+def new
     // Initialize the graph
     _graph = {
         'A': ['B', 'C'],
@@ -17,6 +32,9 @@ def init
         'G': []
     }
 
+def graph: _graph
+def graph=(val): _graph = val
+
 def traverse
     // Example runs
     puts "BFS Traversal: #{bfs('A').join(', ')}"
@@ -24,7 +42,7 @@ def traverse
     puts "DFS Recursive Traversal: #{dfs_recursive('A').join(', ')}"
 
 // Breadth-First Search (BFS)
-private def bfs(start_node string) string[]
+private def bfs(start_node string) [string]
     var visited = []
     var queue = [start_node]
 
@@ -36,7 +54,7 @@ private def bfs(start_node string) string[]
     visited
 
 // Depth-First Search (Iterative)
-private def dfs_iterative(start_node string) string[]
+private def dfs_iterative(start_node string) [string]
     var visited = []
     var stack = [start_node]
 

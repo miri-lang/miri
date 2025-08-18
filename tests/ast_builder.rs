@@ -191,12 +191,14 @@ pub fn guard(op: GuardOp, expr: Expression) -> Expression {
 
 pub fn def(
     name: String,
+    generic_types: Option<Vec<Expression>>,
     parameters: Vec<Parameter>,
     return_type: Option<Box<Expression>>,
     body: Statement,
 ) -> Statement {
     Statement::FunctionDeclaration(
         name,
+        generic_types,
         parameters,
         return_type,
         Box::new(body)
@@ -214,6 +216,10 @@ pub fn import_path(path: &str) -> Expression {
 
 pub fn use_statement(import_path: Expression, alias: Option<Box<Expression>>) -> Statement {
     Statement::Use(Box::new(import_path), alias)
+}
+
+pub fn generic_type(name: &str, constraint: Option<Box<Expression>>) -> Expression {
+    Expression::GenericType(Box::new(identifier(name)), constraint)
 }
 
 pub fn typ(t: Type) -> Expression {

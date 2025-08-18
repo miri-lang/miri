@@ -55,7 +55,7 @@ pub enum Statement {
 
     For(Vec<VariableDeclaration>, Box<Expression>, Box<Statement>), // variable_declarations, iterable, body
 
-    FunctionDeclaration(String, Vec<Parameter>, Option<Box<Expression>>, Box<Statement>), // name, parameters, return type, body
+    FunctionDeclaration(String, Option<Vec<Expression>>, Vec<Parameter>, Option<Box<Expression>>, Box<Statement>), // name, generic_types, parameters, return type, body
 
     Return(Option<Box<Expression>>), // Optional return expression
 
@@ -92,6 +92,8 @@ pub enum Expression {
     ImportPath(Vec<Expression>), // Represents an import path, e.g., `use a.b.c`
 
     Type(Box<Type>, bool), // Represents a type expression, e.g., `i32`, `string`, etc.
+
+    GenericType(Box<Expression>, Option<Box<Expression>>), // Represents a generic type, e.g., <T is MyClass>
 
     // // Operators
     // Binary(Box<Expr>, BinaryOp, Box<Expr>),
@@ -431,8 +433,8 @@ impl AstFactory {
         Statement::For(variable_declarations, Box::new(iterable), Box::new(body))
     }
 
-    pub fn create_function_declaration(&self, name: String, parameters: Vec<Parameter>, return_type: Option<Box<Expression>>, body: Statement) -> Statement {
-        Statement::FunctionDeclaration(name, parameters, return_type, Box::new(body))
+    pub fn create_function_declaration(&self, name: String, generic_types: Option<Vec<Expression>>, parameters: Vec<Parameter>, return_type: Option<Box<Expression>>, body: Statement) -> Statement {
+        Statement::FunctionDeclaration(name, generic_types, parameters, return_type, Box::new(body))
     }
 
     pub fn create_return_statement(&self, optional_expression: Option<Box<Expression>>) -> Statement {
@@ -477,6 +479,10 @@ impl AstFactory {
 
     pub fn create_type_expression(&self, inner: Type, is_nullable: bool) -> Expression {
         Expression::Type(Box::new(inner), is_nullable)
+    }
+
+    pub fn create_generic_type_expression(&self, name: Expression, constraint: Option<Box<Expression>>) -> Expression {
+        Expression::GenericType(Box::new(name), constraint)
     }
 }
 

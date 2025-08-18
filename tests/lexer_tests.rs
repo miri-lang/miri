@@ -149,6 +149,9 @@ fn test_keywords() {
     keyword_test("as", Token::As);
     keyword_test("break", Token::Break);
     keyword_test("continue", Token::Continue);
+    keyword_test("extends", Token::Extends);
+    keyword_test("includes", Token::Includes);
+    keyword_test("implements", Token::Implements);
 }
 
 fn keyword_test(keyword: &str, expected: Token) {

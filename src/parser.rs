@@ -369,8 +369,8 @@ impl<'source> Parser<'source> {
 
     /*
         FunctionDeclaration
-            : 'def' Identifier '(' ParameterList ')' [ReturnType] EXPRESSION_END BlockStatement
-            | 'def' Identifier '(' ParameterList ')' [ReturnType] ':' ExpressionStatement EXPRESSION_END
+            : 'def' Identifier [GenericTypesDeclaration] '(' ParameterList ')' [ReturnType] EXPRESSION_END BlockStatement
+            | 'def' Identifier [GenericTypesDeclaration] '(' ParameterList ')' [ReturnType] ':' ExpressionStatement EXPRESSION_END
             ;
     */
     fn function_declaration(&mut self) -> Result<Statement, SyntaxError> {
@@ -382,6 +382,12 @@ impl<'source> Parser<'source> {
                 self.source[token.1.start..token.1.end].to_string()
             },
             _ => return Err(self.error_unexpected_lookahead_token("function name")),
+        };
+
+        let generic_types = if self.lookahead_is_less_than() {
+            Some(self.generic_types_declaration()?)
+        } else {
+            None
         };
 
         self.eat_token(&Token::LParen)?;
@@ -406,7 +412,45 @@ impl<'source> Parser<'source> {
             self.statement()?
         };
 
-        Ok(self._ast_factory.create_function_declaration(name, parameters, return_type, body))
+        Ok(self._ast_factory.create_function_declaration(name, generic_types, parameters, return_type, body))
+    }
+
+    /*
+        GenericTypesDeclaration
+            : '<' GenericType (',' GenericType)* '>'
+            ;
+    */
+    fn generic_types_declaration(&mut self) -> Result<Vec<Expression>, SyntaxError> {
+        self.eat_token(&Token::LessThan)?;
+
+        let mut types = vec![self.generic_type()?];
+        while self.lookahead_is_comma() {
+            self.eat_token(&Token::Comma)?;
+            types.push(self.generic_type()?);
+        }
+
+        self.eat_token(&Token::GreaterThan)?;
+        Ok(types)
+    }
+
+    /*
+        GenericType
+            : Identifier ('extends' | 'implements' | 'includes' TypeExpression)?
+            ;
+    */
+    fn generic_type(&mut self) -> Result<Expression, SyntaxError> {
+        let identifier = self.identifier()?;
+        if self._lookahead.is_none() || !self.lookahead_is_inheritance_modifier() {
+            return Ok(self._ast_factory.create_generic_type_expression(identifier, None));
+        }
+
+        self.eat(is_inheritance_modifier, "extends, includes or implements")?;
+        let typ = match self.type_expression()? {
+            Some(typ) => Some(Box::new(typ)),
+            None => None,
+        };
+
+        Ok(self._ast_factory.create_generic_type_expression(identifier, typ))
     }
 
     /*
@@ -1543,8 +1587,16 @@ impl<'source> Parser<'source> {
         self.match_lookahead_type(is_rparen)
     }
 
+    fn lookahead_is_less_than(&self) -> bool {
+        self.match_lookahead_type(is_less_than)
+    }
+
     fn lookahead_is_member_expression_boundary(&self) -> bool {
         self.match_lookahead_type(is_member_expression_boundary)
+    }
+
+    fn lookahead_is_inheritance_modifier(&self) -> bool {
+        self.match_lookahead_type(is_inheritance_modifier)
     }
 
     fn eat_additive_op(&mut self) -> Result<BinaryOp, Result<Expression, SyntaxError>> {
@@ -1773,6 +1825,14 @@ fn is_rparen(token: &Token) -> bool {
     matches!(token, Token::RParen)
 }
 
+fn is_less_than(token: &Token) -> bool {
+    matches!(token, Token::LessThan)
+}
+
 fn is_member_expression_boundary(token: &Token) -> bool {
     matches!(token, Token::LBracket | Token::Dot)
+}
+
+fn is_inheritance_modifier(token: &Token) -> bool {
+    matches!(token, Token::Extends | Token::Includes | Token::Implements)
 }

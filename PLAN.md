@@ -23,8 +23,9 @@ Done ✅
 - [x] Implement **lexical analysis and parsing**.
   - [x] use
   - [x] type expression
-  - [ ] generic functions
+  - [x] generic functions
   - [ ] generic classes
+  - [ ] break/continue
   - [ ] enums
   - [ ] structs
   - [ ] async/await
@@ -41,6 +42,7 @@ Done ✅
   - [ ] function declarations without parentheses
   - [ ] function calls without parentheses
   - [ ] match / pattern matching
+  - [ ] string interpolation
 - [x] Create an **AST (Abstract Syntax Tree)** representation.
 - [] Implement a basic **type checker** (static type system enforcement).
 - [] Introduce a simple **REPL** (interactive shell for experimentation).
