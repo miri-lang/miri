@@ -70,6 +70,7 @@ impl<'source> Parser<'source> {
             | FunctionDeclaration
             | ReturnStatement
             | UseStatement
+            | TypeStatement
             | EmptyStatement
             ;
     */
@@ -90,6 +91,7 @@ impl<'source> Parser<'source> {
             Some((Token::Def, _)) => self.function_declaration()?,
             Some((Token::Return, _)) => self.return_statement()?,
             Some((Token::Use, _)) => self.use_statement()?,
+            Some((Token::Type, _)) => self.type_statement()?,
             _ => self.expression_statement()?,
         };
         Ok(statement)
@@ -757,6 +759,62 @@ impl<'source> Parser<'source> {
         };
         self.eat_token(&Token::ExpressionStatementEnd)?;
         Ok(self._ast_factory.create_use_statement(import_path, alias))
+    }
+
+
+    /*
+        TypeStatement
+            : 'type' TypeDeclaration, (',' TypeDeclaration)*
+            ;
+    */
+    fn type_statement(&mut self) -> Result<Statement, SyntaxError> {
+        self.eat_token(&Token::Type)?;
+        let mut declarations = vec![self.type_declaration()?];
+
+        while self.lookahead_is_comma() {
+            self.eat_token(&Token::Comma)?;
+            declarations.push(self.type_declaration()?);
+        }
+
+        self.eat_token(&Token::ExpressionStatementEnd)?;
+        Ok(self._ast_factory.create_type_statement(declarations))
+    }
+
+    /*
+        TypeDeclaration
+            : Identifier ('is' | 'extends' | 'implements' | 'includes') TypeExpression
+            ;
+    */
+    fn type_declaration(&mut self) -> Result<Expression, SyntaxError> {
+        let name = self.identifier()?;
+        let kind = match self._lookahead {
+            Some((Token::Is, _)) => {
+                self.eat_token(&Token::Is)?;
+                TypeDeclarationKind::Is
+            }
+            Some((Token::Extends, _)) => {
+                self.eat_token(&Token::Extends)?;
+                TypeDeclarationKind::Extends
+            }
+            Some((Token::Implements, _)) => {
+                self.eat_token(&Token::Implements)?;
+                TypeDeclarationKind::Implements
+            }
+            Some((Token::Includes, _)) => {
+                self.eat_token(&Token::Includes)?;
+                TypeDeclarationKind::Includes
+            },
+            Some((Token::Comma, _)) | Some((Token::ExpressionStatementEnd, _)) => {
+                // If we see a comma or the end of the statement, it means this is a continuation of a type declaration list
+                return Ok(self._ast_factory.create_type_declaration(name, TypeDeclarationKind::None, None));
+            }
+            _ => return Err(self.error_unexpected_token("is, implements, includes or extends", &self.lookahead_as_string())),
+        };
+        let type_expr = match self.type_expression()? {
+            Some(typ) => Some(Box::new(typ)),
+            None => None,
+        };
+        Ok(self._ast_factory.create_type_declaration(name, kind, type_expr))
     }
 
     /*

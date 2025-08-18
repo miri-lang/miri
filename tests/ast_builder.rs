@@ -229,3 +229,11 @@ pub fn typ(t: Type) -> Expression {
 pub fn null_typ(t: Type) -> Expression {
     Expression::Type(Box::new(t), true)
 }
+
+pub fn type_declaration(name: &str, kind: TypeDeclarationKind, type_expr: Option<Box<Expression>>) -> Expression {
+    Expression::TypeDeclaration(Box::new(identifier(name)), kind, type_expr)
+}
+
+pub fn type_statement(declarations: Vec<Expression>) -> Statement {
+    Statement::Type(declarations)
+}
