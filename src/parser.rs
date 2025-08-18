@@ -137,6 +137,20 @@ impl<'source> Parser<'source> {
         Ok(declarations)
     }
 
+    fn parse_simple_identifier(&mut self) -> Result<String, SyntaxError> {
+        let identifier_expr = self.identifier()?;
+        if let Expression::Identifier(id, class_opt) = identifier_expr {
+            if let Some(class) = class_opt {
+                // A simple identifier cannot be namespaced.
+                return Err(self.error_unexpected_token("a simple identifier", &format!("{}::{}", class, id)));
+            }
+            Ok(id)
+        } else {
+            // This case should ideally not be reachable if identifier() works correctly
+            Err(self.error_unexpected_token("identifier", &format!("{:?}", identifier_expr)))
+        }
+    }
+
     /*
         VariableDeclaration
             : IDENTIFIER
@@ -146,20 +160,7 @@ impl<'source> Parser<'source> {
             ;
     */
     fn variable_declaration(&mut self, declaration_type: &VariableDeclarationType, accept_initializer: bool) -> Result<VariableDeclaration, SyntaxError> {
-        let identifier = self.identifier()?;
-
-        let name;
-        if let Expression::Identifier(id, class) = identifier {
-            if class.is_some() {
-                // A variable name cannot be namespaced.
-                return Err(self.error_unexpected_token("a simple identifier", &format!("{}::{}", class.unwrap(), id)));
-            }
-            name = id;
-        } else {
-            return Err(
-                self.error_unexpected_token("identifier", format!("{:?}", identifier).as_str())
-            );
-        }
+        let name = self.parse_simple_identifier()?;
 
         let typ = match self.type_expression()? {
             Some(typ) => Some(Box::new(typ)),
@@ -486,20 +487,7 @@ impl<'source> Parser<'source> {
             ;
     */
     fn parameter(&mut self) -> Result<Parameter, SyntaxError> {
-        let identifier = self.identifier()?;
-
-        let name;
-        if let Expression::Identifier(id, class) = identifier {
-            if class.is_some() {
-                // A parameter name cannot be namespaced.
-                return Err(self.error_unexpected_token("a simple identifier", &format!("{}::{}", class.unwrap(), id)));
-            }
-            name = id;
-        } else {
-            return Err(
-                self.error_unexpected_token("identifier", format!("{:?}", identifier).as_str())
-            );
-        }
+        let name = self.parse_simple_identifier()?;
 
         let typ = match self.type_expression()? {
             Some(typ) => Some(Box::new(typ)),
@@ -585,6 +573,48 @@ impl<'source> Parser<'source> {
         Ok(self._ast_factory.create_continue_statement())
     }
 
+    fn parse_declaration_block<F, C>(
+        &mut self,
+        item_parser: F,
+        creator: C,
+        name: Expression,
+        inline_error: &str,
+        block_error: &str,
+    ) -> Result<Statement, SyntaxError>
+    where
+        F: Fn(&mut Self) -> Result<Expression, SyntaxError>,
+        C: Fn(&mut Self, Expression, Vec<Expression>) -> Statement,
+    {
+        let mut items = vec![];
+
+        match &self._lookahead {
+            Some((Token::Colon, _)) => { // Inline form
+                self.eat_token(&Token::Colon)?;
+                items.push(item_parser(self)?);
+                while self.lookahead_is_comma() {
+                    self.eat_token(&Token::Comma)?;
+                    items.push(item_parser(self)?);
+                }
+                self.eat_expression_end()?;
+            }
+            Some((Token::ExpressionStatementEnd, _)) => { // Block form
+                self.eat_expression_end()?;
+                if !self.lookahead_is_indent() {
+                    return Err(self.error_unexpected_lookahead_token(block_error));
+                }
+                self.eat_token(&Token::Indent)?;
+                while !self.lookahead_is_dedent() {
+                    items.push(item_parser(self)?);
+                    self.eat_token(&Token::ExpressionStatementEnd)?;
+                }
+                self.eat_token(&Token::Dedent)?;
+            },
+            _ => return Err(self.error_unexpected_lookahead_token(inline_error)),
+        };
+
+        Ok(creator(self, name, items))
+    }
+
     /*
         EnumStatement
             : 'enum' Identifier: EnumValue (',' EnumValue)*
@@ -593,42 +623,14 @@ impl<'source> Parser<'source> {
     */
     fn enum_statement(&mut self) -> Result<Statement, SyntaxError> {
         self.eat_token(&Token::Enum)?;
-
         let name = self.identifier()?;
-
-        let mut values = vec![];
-
-        match &self._lookahead {
-            Some((Token::Colon, _)) => {
-                self.eat_token(&Token::Colon)?;
-
-                values.push(self.enum_value_expression()?);
-
-                while self.lookahead_is_comma() {
-                    self.eat_token(&Token::Comma)?;
-                    values.push(self.enum_value_expression()?);
-                }
-
-                self.eat_expression_end()?;
-            }
-            Some((Token::ExpressionStatementEnd, _)) => {
-                self.eat_expression_end()?;
-                if self._lookahead.is_none() || !self.lookahead_is_indent() {
-                    return Err(self.error_unexpected_lookahead_token("an indentation for block enums"));
-                }
-                self.eat_token(&Token::Indent)?;
-                while !self.lookahead_is_dedent() {
-                    values.push(self.enum_value_expression()?);
-                    self.eat_token(&Token::ExpressionStatementEnd)?;
-                }
-                self.eat_token(&Token::Dedent)?;
-            },
-            _ => return Err(
-                self.error_unexpected_lookahead_token("either a colon for inline enums or an indentation for block enums")
-            ),
-        };
-
-        Ok(self._ast_factory.create_enum_statement(name, values))
+        self.parse_declaration_block(
+            Self::enum_value_expression,
+            |p, n, v| p._ast_factory.create_enum_statement(n, v),
+            name,
+            "either a colon for inline enums or an indentation for block enums",
+            "an indentation for block enums",
+        )
     }
 
     /*
@@ -656,42 +658,14 @@ impl<'source> Parser<'source> {
     */
     fn struct_statement(&mut self) -> Result<Statement, SyntaxError> {
         self.eat_token(&Token::Struct)?;
-
         let name = self.identifier()?;
-
-        let mut members = vec![];
-
-        match &self._lookahead {
-            Some((Token::Colon, _)) => {
-                self.eat_token(&Token::Colon)?;
-
-                members.push(self.struct_member_expression()?);
-
-                while self.lookahead_is_comma() {
-                    self.eat_token(&Token::Comma)?;
-                    members.push(self.struct_member_expression()?);
-                }
-
-                self.eat_expression_end()?;
-            }
-            Some((Token::ExpressionStatementEnd, _)) => {
-                self.eat_expression_end()?;
-                if self._lookahead.is_none() || !self.lookahead_is_indent() {
-                    return Err(self.error_unexpected_lookahead_token("an indentation for block structs"));
-                }
-                self.eat_token(&Token::Indent)?;
-                while !self.lookahead_is_dedent() {
-                    members.push(self.struct_member_expression()?);
-                    self.eat_token(&Token::ExpressionStatementEnd)?;
-                }
-                self.eat_token(&Token::Dedent)?;
-            },
-            _ => return Err(
-                self.error_unexpected_lookahead_token("either a colon for inline structs or an indentation for block structs")
-            ),
-        };
-
-        Ok(self._ast_factory.create_struct_statement(name, members))
+        self.parse_declaration_block(
+            Self::struct_member_expression,
+            |p, n, m| p._ast_factory.create_struct_statement(n, m),
+            name,
+            "either a colon for inline structs or an indentation for block structs",
+            "an indentation for block structs",
+        )
     }
 
     /*
