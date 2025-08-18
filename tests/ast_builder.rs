@@ -237,3 +237,11 @@ pub fn type_declaration(name: &str, kind: TypeDeclarationKind, type_expr: Option
 pub fn type_statement(declarations: Vec<Expression>) -> Statement {
     Statement::Type(declarations)
 }
+
+pub fn break_statement() -> Statement {
+    Statement::Break
+}
+
+pub fn continue_statement() -> Statement {
+    Statement::Continue
+}

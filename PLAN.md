@@ -24,7 +24,7 @@ Done ✅
   - [x] use
   - [x] type expression
   - [x] generic functions
-  - [ ] generic classes
+  - [x] generic classes
   - [ ] break/continue
   - [ ] enums
   - [ ] structs
