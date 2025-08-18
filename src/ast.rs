@@ -43,6 +43,10 @@ pub struct Parameter {
 pub enum Statement {
     Empty, // Represents an empty statement, e.g., when a block is empty
 
+    Break,
+
+    Continue,
+
     Expression(Expression),
 
     Block(Vec<Statement>),
@@ -505,6 +509,14 @@ impl AstFactory {
 
     pub fn create_type_statement(&self, declarations: Vec<Expression>) -> Statement {
         Statement::Type(declarations)
+    }
+
+    pub fn create_break_statement(&self) -> Statement {
+        Statement::Break
+    }
+
+    pub fn create_continue_statement(&self) -> Statement {
+        Statement::Continue
     }
 }
 

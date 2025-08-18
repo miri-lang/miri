@@ -92,6 +92,8 @@ impl<'source> Parser<'source> {
             Some((Token::Return, _)) => self.return_statement()?,
             Some((Token::Use, _)) => self.use_statement()?,
             Some((Token::Type, _)) => self.type_statement()?,
+            Some((Token::Break, _)) => self.break_statement()?,
+            Some((Token::Continue, _)) => self.continue_statement()?,
             _ => self.expression_statement()?,
         };
         Ok(statement)
@@ -549,6 +551,28 @@ impl<'source> Parser<'source> {
         };
         self.eat_token(&Token::ExpressionStatementEnd)?;
         Ok(self._ast_factory.create_return_statement(expression))
+    }
+
+    /*
+        BreakStatement
+            : 'break' EXPRESSION_END
+            ;
+    */
+    fn break_statement(&mut self) -> Result<Statement, SyntaxError> {
+        self.eat_token(&Token::Break)?;
+        self.eat_token(&Token::ExpressionStatementEnd)?;
+        Ok(self._ast_factory.create_break_statement())
+    }
+
+    /*
+        ContinueStatement
+            : 'continue' EXPRESSION_END
+            ;
+    */
+    fn continue_statement(&mut self) -> Result<Statement, SyntaxError> {
+        self.eat_token(&Token::Continue)?;
+        self.eat_token(&Token::ExpressionStatementEnd)?;
+        Ok(self._ast_factory.create_continue_statement())
     }
 
     /*

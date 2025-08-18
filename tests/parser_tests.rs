@@ -2679,6 +2679,154 @@ fn test_error_type_statement_missing_identifier() {
     );
 }
 
+#[test]
+fn test_break_in_for_loop() {
+    parse_test("
+for i in 1..10
+    if i == 5
+        break
+", vec![
+        for_statement(
+            vec![let_variable("i", None, None)],
+            range(int_literal(1), opt_expr(int_literal(10)), RangeExpressionType::Exclusive),
+            block(vec![
+                if_statement(
+                    binary(identifier("i"), BinaryOp::Equal, int_literal(5)),
+                    block(vec![break_statement()]),
+                    None
+                )
+            ])
+        )
+    ]);
+}
+
+#[test]
+fn test_continue_in_while_loop() {
+    parse_test("
+while x > 0
+    if x == 1
+        continue
+    x -= 1
+", vec![
+        while_statement(
+            binary(identifier("x"), BinaryOp::GreaterThan, int_literal(0)),
+            block(vec![
+                if_statement(
+                    binary(identifier("x"), BinaryOp::Equal, int_literal(1)),
+                    block(vec![continue_statement()]),
+                    None
+                ),
+                expression_statement(
+                    assign(
+                        lhs_identifier("x"),
+                        AssignmentOp::AssignSub,
+                        int_literal(1)
+                    )
+                )
+            ])
+        )
+    ]);
+}
+
+#[test]
+fn test_break_in_forever_loop() {
+    parse_test("
+forever
+    print('running')
+    break
+", vec![
+        forever_statement(
+            block(vec![
+                expression_statement(
+                    call(identifier("print"), vec![string_literal("running")])
+                ),
+                break_statement()
+            ])
+        )
+    ]);
+}
+
+#[test]
+fn test_break_in_nested_loop() {
+    parse_test("
+for i in 1..3
+    for j in 1..3
+        if j == 2
+            break // breaks inner loop only
+", vec![
+        for_statement(
+            vec![let_variable("i", None, None)],
+            range(int_literal(1), opt_expr(int_literal(3)), RangeExpressionType::Exclusive),
+            block(vec![
+                for_statement(
+                    vec![let_variable("j", None, None)],
+                    range(int_literal(1), opt_expr(int_literal(3)), RangeExpressionType::Exclusive),
+                    block(vec![
+                        if_statement(
+                            binary(identifier("j"), BinaryOp::Equal, int_literal(2)),
+                            block(vec![break_statement()]),
+                            None
+                        )
+                    ])
+                )
+            ])
+        )
+    ]);
+}
+
+#[test]
+fn test_continue_in_nested_loop() {
+    parse_test("
+while a
+    while b
+        continue // continues inner loop only
+", vec![
+        while_statement(
+            identifier("a"),
+            block(vec![
+                while_statement(
+                    identifier("b"),
+                    block(vec![continue_statement()])
+                )
+            ])
+        )
+    ]);
+}
+
+#[test]
+fn test_error_break_with_value() {
+    parse_error_test(
+        "for x in y: break 1",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "end of expression".to_string(),
+            found: "int".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_error_continue_with_value() {
+    parse_error_test(
+        "while true: continue false",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "end of expression".to_string(),
+            found: "false".to_string(),
+        }
+    );
+}
+
+// Note: `break` or `continue` outside a loop is a *semantic* error, not a *syntactic* one.
+// The parser should successfully parse it, and a later analysis pass would reject it.
+#[test]
+fn test_parse_break_outside_loop() {
+    parse_test("break", vec![break_statement()]);
+}
+
+#[test]
+fn test_parse_continue_outside_loop() {
+    parse_test("continue", vec![continue_statement()]);
+}
+
 
 fn parse_test<'src>(input: &'src str, _expected_body: Vec<Statement>) {
     let mut lexer = Lexer::new(input);
