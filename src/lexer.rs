@@ -38,6 +38,9 @@ pub enum Token {
     #[token("as")]         As,
     #[token("break")]      Break,
     #[token("continue")]   Continue,
+    #[token("extends")]    Extends,
+    #[token("includes")]   Includes,
+    #[token("implements")] Implements,
 
     // Symbols and Operators
     #[token(":")]           Colon,

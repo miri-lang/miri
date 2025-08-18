@@ -1797,7 +1797,8 @@ fn test_function_declaration() {
 def square(x int)
     x * x
 ", vec![
-        def("square".into(), 
+        def("square".into(),
+            None,
             vec![
                 parameter("x".into(), opt_expr(typ(Type::Int)), None)
             ],
@@ -1821,7 +1822,8 @@ fn test_function_declaration_with_guard() {
 def square(x int > 0)
     x * x
 ", vec![
-        def("square".into(), 
+        def("square".into(),
+            None,
             vec![
                 parameter("x".into(), opt_expr(typ(Type::Int)), opt_expr(guard(GuardOp::GreaterThan, int_literal(0))))
             ],
@@ -1845,6 +1847,7 @@ fn test_inline_function_declaration_with_guard() {
 def square(x int > 0) int: x * x
 ", vec![
         def("square".into(), 
+            None,
             vec![
                 parameter("x".into(), opt_expr(typ(Type::Int)), opt_expr(guard(GuardOp::GreaterThan, int_literal(0)))),
             ],
@@ -1867,6 +1870,7 @@ def get_answer() int: 42
 ", vec![
         def(
             "get_answer".into(),
+            None,
             vec![], // No parameters
             opt_expr(typ(Type::Int)),
             expression_statement(int_literal(42))
@@ -1882,6 +1886,7 @@ def add(a int, b int)
 ", vec![
         def(
             "add".into(),
+            None,
             vec![
                 parameter("a".into(), opt_expr(typ(Type::Int)), None),
                 parameter("b".into(), opt_expr(typ(Type::Int)), None),
@@ -1904,6 +1909,7 @@ def process(data)
 ", vec![
         def(
             "process".into(),
+            None,
             vec![
                 parameter("data".into(), None, None)
             ],
@@ -1921,6 +1927,7 @@ def no_op()
 ", vec![
         def(
             "no_op".into(),
+            None,
             vec![],
             None,
             empty_statement()
@@ -1935,6 +1942,7 @@ def no_op_inline(): // This function also does nothing
 ", vec![
         def(
             "no_op_inline".into(),
+            None,
             vec![],
             None,
             empty_statement()
@@ -1982,6 +1990,125 @@ fn test_error_function_trailing_comma_in_params() {
         SyntaxErrorKind::UnexpectedToken {
             expected: "identifier".to_string(),
             found: ")".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_function_with_single_generic_type() {
+    parse_test("
+def my_func<T>()
+    // body
+", vec![
+        def(
+            "my_func".into(),
+            Some(vec![generic_type("T", None)]),
+            vec![],
+            None,
+            empty_statement()
+        )
+    ]);
+}
+
+#[test]
+fn test_function_with_multiple_generic_types() {
+    parse_test("
+def my_func<K, V>()
+    // body
+", vec![
+        def(
+            "my_func".into(),
+            Some(vec![
+                generic_type("K", None),
+                generic_type("V", None)
+            ]),
+            vec![],
+            None,
+            empty_statement()
+        )
+    ]);
+}
+
+#[test]
+fn test_function_with_constrained_generic_type() {
+    parse_test("
+def my_func<T extends SomeClass>()
+    // body
+", vec![
+        def(
+            "my_func".into(),
+            Some(vec![
+                generic_type("T", opt_expr(typ(Type::Custom("SomeClass".into(), None))))
+            ]),
+            vec![],
+            None,
+            empty_statement()
+        )
+    ]);
+}
+
+#[test]
+fn test_function_with_mixed_generic_types() {
+    parse_test("
+def my_func<K, V extends SomeTrait>()
+    // body
+", vec![
+        def(
+            "my_func".into(),
+            Some(vec![
+                generic_type("K", None),
+                generic_type("V", opt_expr(typ(Type::Custom("SomeTrait".into(), None))))
+            ]),
+            vec![],
+            None,
+            empty_statement()
+        )
+    ]);
+}
+
+#[test]
+fn test_function_using_generic_types() {
+    parse_test("
+def process<T>(data T) T: data
+", vec![
+        def(
+            "process".into(),
+            Some(vec![generic_type("T", None)]),
+            vec![
+                parameter("data".into(), opt_expr(typ(Type::Custom("T".into(), None))), None)
+            ],
+            opt_expr(typ(Type::Custom("T".into(), None))),
+            expression_statement(identifier("data"))
+        )
+    ]);
+}
+
+#[test]
+fn test_error_function_unclosed_generics() {
+    parse_error_test(
+        "def my_func<T",
+        SyntaxErrorKind::UnexpectedEOF
+    );
+}
+
+#[test]
+fn test_error_function_empty_generics() {
+    parse_error_test(
+        "def my_func<>()",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "identifier".to_string(),
+            found: ">".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_error_function_trailing_comma_in_generics() {
+    parse_error_test(
+        "def my_func<T,>()",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "identifier".to_string(),
+            found: ">".to_string(),
         }
     );
 }
@@ -2184,6 +2311,7 @@ def process_data(data {string: bool}?)
 ", vec![
         def(
             "process_data".into(),
+            None,
             vec![
                 parameter(
                     "data".into(),
@@ -2212,6 +2340,7 @@ def get_coordinates() (float, float?, float)?
 ", vec![
         def(
             "get_coordinates".into(),
+            None,
             vec![],
             opt_expr(
                 null_typ(
@@ -2248,6 +2377,7 @@ def get_data() MyContainer<[int]?, future<string>>
 ", vec![
         def(
             "get_data".into(),
+            None,
             vec![],
             opt_expr(
                 typ(
