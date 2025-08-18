@@ -1298,6 +1298,18 @@ if x
 }
 
 #[test]
+fn test_if_with_comment_in_empty_block() {
+    lexer_test("
+if x
+    // This block is empty
+let y = 1
+", vec![
+        Token::If, Token::Identifier, Token::ExpressionStatementEnd,
+        Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+    ]);
+}
+
+#[test]
 fn test_if_with_empty_else_block_with_followup() {
     lexer_test("
 if x

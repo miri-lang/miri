@@ -948,6 +948,38 @@ if x
 }
 
 #[test]
+fn test_comment_in_empty_block() {
+    // An indented block containing only a comment should parse as an empty block.
+    parse_test("
+if x
+    // This block is empty
+let y = 1
+", vec![
+        if_statement(
+            identifier("x"),
+            empty_statement(),
+            None
+        ),
+        variable_statement(vec![
+            let_variable("y", None, opt_expr(int_literal(1)))
+        ])
+    ]);
+}
+
+#[test]
+fn test_error_if_statement_as_condition() {
+    // An `if` statement is not an expression and cannot be a condition.
+    // The parser should expect an expression and fail on the block/inline body.
+    parse_error_test(
+        "if if x: 1",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "literal, parenthesized expression or identifier".to_string(),
+            found: "if".to_string(),
+        }
+    );
+}
+
+#[test]
 fn test_parse_if_nested_empty() {
     parse_if_expression_test("
 if x
@@ -1053,6 +1085,18 @@ x = 2
                 )
             )
         ]
+    );
+}
+
+#[test]
+fn test_error_dangling_else() {
+    // An `else` without a preceding `if` is a syntax error.
+    parse_error_test(
+        "else: print('error')",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "literal, parenthesized expression or identifier".to_string(), // Or a more specific expectation
+            found: "else".to_string(),
+        }
     );
 }
 
@@ -1695,6 +1739,18 @@ fn test_error_for_loop_with_complex_iterable() {
         SyntaxErrorKind::UnexpectedToken {
             expected: "an identifier, a string or a number".to_string(),
             found: "(".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_error_invalid_item_in_for_loop_declaration() {
+    // `for x, y+1 in items` is invalid because `y+1` is not a valid declaration target.
+    parse_error_test(
+        "for x, y + 1 in items",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "in".to_string(),
+            found: "+".to_string(),
         }
     );
 }
@@ -3087,13 +3143,110 @@ fn test_error_struct_trailing_comma_inline() {
     );
 }
 
+#[test]
+fn test_precedence_of_unary_not_and_logical_and() {
+    // `not` should have higher precedence than `and`.
+    // This should parse as `(not a) and b`.
+    parse_test("not a and b", vec![
+        expression_statement(
+            logical(
+                unary(UnaryOp::Not, identifier("a")),
+                BinaryOp::And,
+                identifier("b")
+            )
+        )
+    ]);
+}
 
-fn parse_test<'src>(input: &'src str, _expected_body: Vec<Statement>) {
+#[test]
+fn test_precedence_of_member_access_and_unary_negation() {
+    // Member access `.` has higher precedence than unary `-`.
+    // This should parse as `-(a.b)`.
+    parse_test("-a.b", vec![
+        expression_statement(
+            unary(
+                UnaryOp::Negate,
+                member(identifier("a"), identifier("b"))
+            )
+        )
+    ]);
+}
+
+#[test]
+fn test_precedence_of_assignment_and_conditional_expression() {
+    // The conditional expression has higher precedence than assignment.
+    // This should parse as `x = (1 if y else 2)`.
+    parse_test("x = 1 if y else 2", vec![
+        expression_statement(
+            assign(
+                lhs_identifier("x"),
+                AssignmentOp::Assign,
+                if_conditional(
+                    int_literal(1),
+                    identifier("y"),
+                    Some(int_literal(2))
+                )
+            )
+        )
+    ]);
+}
+
+#[test]
+fn test_chained_calls_and_member_access() {
+    // `a.b(c).d` should parse as `((a.b)(c)).d`
+    parse_test("a.b(c).d", vec![
+        expression_statement(
+            member(
+                call(
+                    member(identifier("a"), identifier("b")),
+                    vec![identifier("c")]
+                ),
+                identifier("d")
+            )
+        )
+    ]);
+}
+
+#[test]
+fn test_comment_between_function_name_and_params() {
+    // This is unusual but should be syntactically valid.
+    parse_test("
+def my_func /* comment */ (a int)
+    // body
+", vec![
+        def(
+            "my_func".into(),
+            None,
+            vec![parameter("a".into(), opt_expr(typ(Type::Int)), None)],
+            None,
+            empty_statement()
+        )
+    ]);
+}
+
+#[test]
+fn test_very_long_chain_of_binary_operators() {
+    // Stress test the loop-based expression parsing to ensure it doesn't have performance issues
+    // or stack overflows (which it shouldn't, but this is a good sanity check).
+
+    // We don't need to build the full AST here, just confirm it parses without crashing.
+    // A more dedicated test could build the deeply nested tree if desired.
+    // For now, we just check that `parser.parse()` returns Ok.
+    let long_expr = "1 + ".repeat(500) + "1";
+    parse_program(&long_expr);
+}
+
+
+fn parse_program<'src>(input: &'src str) -> Program {
     let mut lexer = Lexer::new(input);
     let mut parser = Parser::new(&mut lexer, input, AstFactory::new());
     let parse_result = parser.parse();
 
-    let program = parse_result.unwrap();
+    parse_result.unwrap()
+}
+
+fn parse_test<'src>(input: &'src str, _expected_body: Vec<Statement>) {
+    let program = parse_program(input);
     assert_eq!(program, Program {
         body: _expected_body
     }, "Parsing failed for input: {}", input);
