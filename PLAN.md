@@ -25,7 +25,7 @@ Done ✅
   - [x] type expression
   - [x] generic functions
   - [x] generic classes
-  - [ ] break/continue
+  - [x] break/continue
   - [ ] enums
   - [ ] structs
   - [ ] async/await

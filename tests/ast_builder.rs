@@ -245,3 +245,11 @@ pub fn break_statement() -> Statement {
 pub fn continue_statement() -> Statement {
     Statement::Continue
 }
+
+pub fn enum_statement(name: Expression, values: Vec<Expression>) -> Statement {
+    Statement::Enum(Box::new(name), values)
+}
+
+pub fn enum_value(name: &str, types: Vec<Expression>) -> Expression {
+    Expression::EnumValue(Box::new(identifier(name)), types)
+}
