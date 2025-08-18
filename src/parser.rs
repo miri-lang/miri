@@ -149,7 +149,11 @@ impl<'source> Parser<'source> {
         let identifier = self.identifier()?;
 
         let name;
-        if let Expression::Identifier(id) = identifier {
+        if let Expression::Identifier(id, class) = identifier {
+            if class.is_some() {
+                // A variable name cannot be namespaced.
+                return Err(self.error_unexpected_token("a simple identifier", &format!("{}::{}", class.unwrap(), id)));
+            }
             name = id;
         } else {
             return Err(
@@ -485,7 +489,11 @@ impl<'source> Parser<'source> {
         let identifier = self.identifier()?;
 
         let name;
-        if let Expression::Identifier(id) = identifier {
+        if let Expression::Identifier(id, class) = identifier {
+            if class.is_some() {
+                // A parameter name cannot be namespaced.
+                return Err(self.error_unexpected_token("a simple identifier", &format!("{}::{}", class.unwrap(), id)));
+            }
             name = id;
         } else {
             return Err(
@@ -838,9 +846,10 @@ impl<'source> Parser<'source> {
     
     fn identifier_to_type_name(&mut self) -> Result<String, SyntaxError> {
         Ok(match self.identifier()? {
-            Expression::Identifier(id) => id,
+            Expression::Identifier(id, Some(class)) => format!("{}::{}", class, id), // Reconstruct the full path
+            Expression::Identifier(id, None) => id,
             _ => return Err(
-                self.error_unexpected_token("identifier", format!("{:?}", self._lookahead).as_str())
+                self.error_unexpected_token("identifier", &self.lookahead_as_string())
             ),
         })
     }
@@ -1083,8 +1092,14 @@ impl<'source> Parser<'source> {
             Err(err) => return Err(err),
         };
 
-        let left = match left {
-            Expression::Identifier(_) => self._ast_factory.create_left_hand_side_identifier(left),
+        let left = match &left {
+            Expression::Identifier(_, class) => {
+                if class.is_some() {
+                    // A left-hand side identifier cannot be namespaced.
+                    return Err(self.error_invalid_left_hand_side_expression());
+                }
+                self._ast_factory.create_left_hand_side_identifier(left)
+            },
             Expression::Member(_, _) => self._ast_factory.create_left_hand_side_member(left),
             Expression::Index(_, _) => self._ast_factory.create_left_hand_side_index(left),
             // Other left-hand side expression types can be added here in the future
@@ -1259,14 +1274,24 @@ impl<'source> Parser<'source> {
     /*
         Identifier
             : IDENTIFIER
+            | IDENTIFIER '::' IDENTIFIER
             ;
     */
     fn identifier(&mut self) -> Result<Expression, SyntaxError> {
         match &self._lookahead {
             Some((Token::Identifier, _)) => {
                 let token = self.eat_token(&Token::Identifier)?;
-                let name = &self.source[token.1.start..token.1.end];                
-                Ok(self._ast_factory.create_identifier_expression(name.to_string()))
+                let (name, class) = match &self._lookahead {
+                    Some((Token::DoubleColon, _)) => {
+                        
+                        self.eat_token(&Token::DoubleColon)?;
+                        let second_token = self.eat_token(&Token::Identifier)?;
+
+                        (self.source[second_token.1.start..second_token.1.end].to_string(), Some(self.source[token.1.start..token.1.end].to_string()))
+                    },
+                    _ => (self.source[token.1.start..token.1.end].to_string(), None),
+                };
+                Ok(self._ast_factory.create_identifier_expression(name.to_string(), class))
             },
             _ => Err(
                 self.error_unexpected_lookahead_token("identifier")

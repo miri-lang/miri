@@ -77,7 +77,7 @@ pub enum Statement {
 pub enum Expression {
     Literal(Literal),
     
-    Identifier(String),
+    Identifier(String, Option<String>), // name, optional class e.g. x or Http::Status
 
     Binary(Box<Expression>, BinaryOp, Box<Expression>),
 
@@ -413,8 +413,8 @@ impl AstFactory {
         Expression::Assignment(Box::new(left), op, Box::new(right))
     }
 
-    pub fn create_identifier_expression(&self, name: String) -> Expression {
-        Expression::Identifier(name)
+    pub fn create_identifier_expression(&self, name: String, class: Option<String>) -> Expression {
+        Expression::Identifier(name, class)
     }
 
     pub fn create_range_expression(&self, start: Expression, end: Option<Box<Expression>>, range_type: RangeExpressionType) -> Expression {

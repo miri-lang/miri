@@ -454,11 +454,6 @@ fn test_symbol_identifier_boundaries() {
 }
 
 #[test]
-fn test_invalid_symbol_syntax() {
-    lexer_error_test("valid ::invalid", SyntaxErrorKind::InvalidToken);
-}
-
-#[test]
 fn test_symbols_with_numbers() {
     lexer_test(":symbol123 :test_2 :_private", vec![
         Token::Symbol,
@@ -1405,6 +1400,15 @@ fn test_index_member_assignment() {
 obj['prop'] = 1
 ", vec![
         Token::Identifier, Token::LBracket, Token::SingleQuotedString, Token::RBracket, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+    ]);
+}
+
+#[test]
+fn test_namespaced_function_call() {
+    lexer_test("
+Http::new(url)
+", vec![
+        Token::Identifier, Token::DoubleColon, Token::Identifier, Token::LParen, Token::Identifier, Token::RParen, Token::ExpressionStatementEnd
     ]);
 }
 

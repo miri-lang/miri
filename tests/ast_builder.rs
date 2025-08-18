@@ -13,7 +13,15 @@ pub fn empty_program() -> Vec<Statement> {
 }
 
 pub fn identifier(name: &str) -> Expression {
-    Expression::Identifier(name.into())
+    Expression::Identifier(name.into(), None)
+}
+
+pub fn class_identifier(name: &str) -> Expression {
+    let parts = name.split("::").collect::<Vec<&str>>();
+    let class = parts[0].to_string();
+    let id_name = parts[1].to_string();
+
+    Expression::Identifier(id_name, Some(class))
 }
 
 pub fn int(val: i128) -> IntegerLiteral {
