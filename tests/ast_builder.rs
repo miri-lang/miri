@@ -253,3 +253,11 @@ pub fn enum_statement(name: Expression, values: Vec<Expression>) -> Statement {
 pub fn enum_value(name: &str, types: Vec<Expression>) -> Expression {
     Expression::EnumValue(Box::new(identifier(name)), types)
 }
+
+pub fn struct_statement(name: Expression, members: Vec<Expression>) -> Statement {
+    Statement::Struct(Box::new(name), members)
+}
+
+pub fn struct_member(name: &str, typ: Expression) -> Expression {
+    Expression::StructMember(Box::new(identifier(name)), Box::new(typ))
+}
