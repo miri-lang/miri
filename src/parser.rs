@@ -184,6 +184,35 @@ impl<'source> Parser<'source> {
         })
     }
 
+    fn statement_body(&mut self) -> Result<Statement, SyntaxError> {
+        if self.lookahead_is_colon() {
+            self.eat_token(&Token::Colon)?;
+
+            if self._lookahead.is_none() || self.lookahead_is_expression_end() || self.lookahead_is_dedent() || self.lookahead_is_else() {
+                if self.lookahead_is_expression_end() {
+                    self.eat_token(&Token::ExpressionStatementEnd)?;
+                }
+                // If the next token abruptly ends the statement, we can treat the body as empty
+                return Ok(Statement::Empty);
+            }
+
+            return self.statement();
+        }
+        
+        if self.lookahead_is_expression_end() {
+            self.eat_token(&Token::ExpressionStatementEnd)?;
+
+            if !self.lookahead_is_indent() {
+                // If the next token abruptly ends the statement, we can treat the body as empty
+                return Ok(Statement::Empty);
+            }
+
+            return self.statement();
+        }
+
+        return Err(self.error_unexpected_lookahead_token("a colon or an expression end"));
+    }
+
     /*
         IfStatement
             : 'if' Expression ':' ExpressionStatement EXPRESSION_END ('else' ExpressionStatement EXPRESSION_END)?
@@ -197,15 +226,7 @@ impl<'source> Parser<'source> {
             self.eat_token(&Token::If)?;
         }
         let condition = self.expression()?;
-
-        self.try_eat_colon();
-        self.try_eat_expression_end();
-
-        let then_block = if self._lookahead.is_none() || self.lookahead_is_else() || self.lookahead_is_dedent() {
-            Statement::Empty // If there's no else block, we can treat the then block as empty
-        } else {
-            self.statement()?
-        };
+        let then_block = self.statement_body()?;
 
         let else_block = if self.lookahead_is_else() {
             self.eat_token(&Token::Else)?;
@@ -267,14 +288,7 @@ impl<'source> Parser<'source> {
             condition = self.expression()?;
         }
 
-        self.try_eat_colon();
-        self.try_eat_expression_end();
-
-        let then_block = if self._lookahead.is_none() || self.lookahead_is_dedent() {
-            Statement::Empty // If there's no else block, we can treat the then block as empty
-        } else {
-            self.statement()?
-        };
+        let then_block = self.statement_body()?;
 
         Ok(self._ast_factory.create_while_statement(condition, then_block, while_statement_type))
     }
@@ -361,14 +375,7 @@ impl<'source> Parser<'source> {
         self.eat_token(&Token::In)?;
         let iterable = self.range_expression()?;
 
-        self.try_eat_colon();
-        self.try_eat_expression_end();
-
-        let body = if self._lookahead.is_none() || self.lookahead_is_dedent() {
-            Statement::Empty
-        } else {
-            self.statement()?
-        };
+        let body = self.statement_body()?;
 
         Ok(self._ast_factory.create_for_statement(variable_declarations, iterable, body))
     }
@@ -409,14 +416,7 @@ impl<'source> Parser<'source> {
             None => None,
         };
 
-        self.try_eat_colon();
-        self.try_eat_expression_end();
-
-        let body = if self._lookahead.is_none() || self.lookahead_is_dedent() {
-            Statement::Empty
-        } else {
-            self.statement()?
-        };
+        let body = self.statement_body()?;
 
         Ok(self._ast_factory.create_function_declaration(name, generic_types, parameters, return_type, body))
     }
@@ -1008,23 +1008,23 @@ impl<'source> Parser<'source> {
 
     /*
         Expression
-            : ConditionalExpression
+            : AssignmentExpression
             ;
     */
     fn expression(&mut self) -> Result<Expression, SyntaxError> {
-        let expression = self.conditional_expression()?;
+        let expression = self.assignment_expression()?;
         Ok(expression)
     }
 
     /*
         ConditionalExpression
-            : AssignmentExpression
-            | AssignmentExpression 'if' Expression ('else' Expression)
-            | AssignmentExpression 'unless' Expression ('else' Expression)
+            : LogicalOrExpression
+            | LogicalOrExpression 'if' Expression ('else' Expression)
+            | LogicalOrExpression 'unless' Expression ('else' Expression)
             ;
     */
     fn conditional_expression(&mut self) -> Result<Expression, SyntaxError> {
-        let mut expression = self.assignment_expression()?;
+        let mut expression = self.logical_or_expression()?;
 
         let conditional_token = match &self._lookahead {
             Some((Token::If, _)) => Token::If,
@@ -1057,12 +1057,12 @@ impl<'source> Parser<'source> {
 
     /*
         AssignmentExpression
-            : LogicalOrExpression
+            : ConditionalExpression
             | LeftHandSideExpression ASSIGNMENT_OPERATOR AssignmentExpression
             ;
     */
     fn assignment_expression(&mut self) -> Result<Expression, SyntaxError> {
-        let left = self.logical_or_expression()?;
+        let left = self.conditional_expression()?;
 
         if !self.lookahead_is_assignment_op() {
             return Ok(left);
@@ -1183,37 +1183,41 @@ impl<'source> Parser<'source> {
 
     /*
         CallMemberExpression
-            : MemberExpression
-            | CallExpression
-    */
-    fn call_member_expression(&mut self) -> Result<Expression, SyntaxError> {
-        let member = self.member_expression()?;
-
-        match &self._lookahead {
-            Some((Token::LParen, _)) => self.call_expression(member),
-            _ => Ok(member),
-        }
-    }
-
-    /*
-        CallExpression
-            : Callee Arguments
-
-
-        Callee
-            : MemberExpression
-            | CallExpression
+            : PrimaryExpression
+            | CallMemberExpression '.' Identifier
+            | CallMemberExpression '[' Expression ']'
+            | CallMemberExpression Arguments
             ;
     */
-    fn call_expression(&mut self, callee: Expression) -> Result<Expression, SyntaxError> {
-        let args = self.arguments()?;
-        let call_expression = self._ast_factory.create_call_expression(callee, args);
+    fn call_member_expression(&mut self) -> Result<Expression, SyntaxError> {
+        let mut expression = self.primary_expression()?;
 
-        // Chained call
-        match &self._lookahead {
-            Some((Token::LParen, _)) => self.call_expression(call_expression),
-            _ => Ok(call_expression),
+        loop {
+            if !self.lookahead_is_member_expression_boundary() {
+                break;
+            }
+
+            expression = match &self._lookahead {
+                Some((Token::Dot, _)) => {
+                    self.eat_token(&Token::Dot)?;
+                    let property = self.identifier()?;
+                    self._ast_factory.create_member_expression(expression, property)
+                },
+                Some((Token::LBracket, _)) => {
+                    self.eat_token(&Token::LBracket)?;
+                    let index = self.expression()?;
+                    self.eat_token(&Token::RBracket)?;
+                    self._ast_factory.create_index_expression(expression, index)
+                },
+                Some((Token::LParen, _)) => {
+                    let args = self.arguments()?;
+                    self._ast_factory.create_call_expression(expression, args)
+                },
+                _ => break,
+            };
         }
+
+        Ok(expression)
     }
 
     /*
@@ -1250,35 +1254,6 @@ impl<'source> Parser<'source> {
         }
 
         Ok(args)
-    }
-
-    /*
-        MemberExpression
-            : PrimaryExpression
-            | MemberExpression '.' Identifier
-            | MemberExpression '[' Expression ']'
-    */
-    fn member_expression(&mut self) -> Result<Expression, SyntaxError> {
-        let mut object = self.primary_expression()?;
-
-        while self.lookahead_is_member_expression_boundary() {
-            match &self._lookahead {
-                Some((Token::Dot, _)) => {
-                    self.eat_token(&Token::Dot)?;
-                    let property = self.identifier()?;
-                    object = self._ast_factory.create_member_expression(object, property);
-                },
-                Some((Token::LBracket, _)) => {
-                    self.eat_token(&Token::LBracket)?;
-                    let index = self.expression()?;
-                    self.eat_token(&Token::RBracket)?;
-                    object = self._ast_factory.create_index_expression(object, index);
-                },
-                _ => break,
-            }
-        }
-
-        Ok(object)
     }
 
     /*
@@ -1908,12 +1883,6 @@ impl<'source> Parser<'source> {
         self.eat_token(&Token::Colon)
     }
 
-    fn try_eat_colon(&mut self) {
-        if self.lookahead_is_colon() {
-            let _ = self.eat_colon();
-        }
-    }
-
     fn error_unexpected_operator(&self, token: TokenSpan, expected: &str) -> SyntaxError {
         SyntaxError::new(
             SyntaxErrorKind::UnexpectedToken {
@@ -2044,7 +2013,7 @@ fn is_less_than(token: &Token) -> bool {
 }
 
 fn is_member_expression_boundary(token: &Token) -> bool {
-    matches!(token, Token::LBracket | Token::Dot)
+    matches!(token, Token::LBracket | Token::Dot | Token::LParen)
 }
 
 fn is_inheritance_modifier(token: &Token) -> bool {
