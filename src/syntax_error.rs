@@ -33,6 +33,8 @@ pub enum SyntaxErrorKind {
     InvalidFloatLiteral,
     InvalidStringLiteral,
     InvalidBooleanLiteral,
+
+    MissingStructMemberType
 }
 
 impl SyntaxError {
@@ -125,6 +127,10 @@ impl SyntaxError {
             SyntaxErrorKind::InvalidTypeDeclaration { ref expected } => (
                 "Invalid Type Declaration",
                 format!("The type expression is not correct. Expected: {expected}."),
+            ),
+            SyntaxErrorKind::MissingStructMemberType => (
+                "Missing Struct Member Type",
+                "Struct members must have a type declaration.".to_string(),
             ),
         };
 

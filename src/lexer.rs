@@ -44,6 +44,7 @@ pub enum Token {
     #[token("implements")] Implements,
     #[token("type")]       Type,
     #[token("enum")]       Enum,
+    #[token("struct")]     Struct,
 
     // Symbols and Operators
     #[token(":")]           Colon,

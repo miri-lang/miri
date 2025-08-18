@@ -95,6 +95,7 @@ impl<'source> Parser<'source> {
             Some((Token::Break, _)) => self.break_statement()?,
             Some((Token::Continue, _)) => self.continue_statement()?,
             Some((Token::Enum, _)) => self.enum_statement()?,
+            Some((Token::Struct, _)) => self.struct_statement()?,
             _ => self.expression_statement()?,
         };
         Ok(statement)
@@ -637,6 +638,66 @@ impl<'source> Parser<'source> {
         };
 
         Ok(self._ast_factory.create_enum_value_expression(identifier, types))
+    }
+
+    /*
+        StructStatement
+            : 'struct' Identifier: StructMember (',' StructMember)*
+            | 'struct' Identifier INDENT StructMember EXPRESSION_END (StructMember EXPRESSION_END)* DEDENT
+            ;
+    */
+    fn struct_statement(&mut self) -> Result<Statement, SyntaxError> {
+        self.eat_token(&Token::Struct)?;
+
+        let name = self.identifier()?;
+
+        let mut members = vec![];
+
+        match &self._lookahead {
+            Some((Token::Colon, _)) => {
+                self.eat_token(&Token::Colon)?;
+
+                members.push(self.struct_member_expression()?);
+
+                while self.lookahead_is_comma() {
+                    self.eat_token(&Token::Comma)?;
+                    members.push(self.struct_member_expression()?);
+                }
+
+                self.eat_expression_end()?;
+            }
+            Some((Token::ExpressionStatementEnd, _)) => {
+                self.eat_expression_end()?;
+                if self._lookahead.is_none() || !self.lookahead_is_indent() {
+                    return Err(self.error_unexpected_lookahead_token("an indentation for block structs"));
+                }
+                self.eat_token(&Token::Indent)?;
+                while !self.lookahead_is_dedent() {
+                    members.push(self.struct_member_expression()?);
+                    self.eat_token(&Token::ExpressionStatementEnd)?;
+                }
+                self.eat_token(&Token::Dedent)?;
+            },
+            _ => return Err(
+                self.error_unexpected_lookahead_token("either a colon for inline structs or an indentation for block structs")
+            ),
+        };
+
+        Ok(self._ast_factory.create_struct_statement(name, members))
+    }
+
+    /*
+        StructMember
+            : Identifier TypeExpression
+            ;
+    */
+    fn struct_member_expression(&mut self) -> Result<Expression, SyntaxError> {
+        let name = self.identifier()?;
+        let typ = self.type_expression()?;
+        if typ.is_none() {
+            return Err(self.error_missing_struct_member_type());
+        }
+        Ok(self._ast_factory.create_struct_member_expression(name, typ.unwrap()))
     }
 
     /*
@@ -1898,6 +1959,13 @@ impl<'source> Parser<'source> {
     fn error_invalid_type_declaration(&self, expected: &str) -> SyntaxError {
         SyntaxError::new(
             SyntaxErrorKind::InvalidTypeDeclaration { expected: expected.to_string() },
+            self.source.len()..self.source.len()
+        )
+    }
+
+    fn error_missing_struct_member_type(&self) -> SyntaxError {
+        SyntaxError::new(
+            SyntaxErrorKind::MissingStructMemberType,
             self.source.len()..self.source.len()
         )
     }

@@ -67,7 +67,9 @@ pub enum Statement {
 
     Type(Vec<Expression>), // type X, Y, Z extends A
 
-    Enum(Box<Expression>, Vec<Expression>) // enum Colors: Red, Green, Blue(string)
+    Enum(Box<Expression>, Vec<Expression>), // enum Colors: Red, Green, Blue(string)
+
+    Struct(Box<Expression>, Vec<Expression>) // struct Point: x int, y int
 }
 
 /// Represents an expression
@@ -106,6 +108,8 @@ pub enum Expression {
     TypeDeclaration(Box<Expression>, TypeDeclarationKind, Option<Box<Expression>>), // T extends SomeClass
 
     EnumValue(Box<Expression>, Vec<Expression>), // Represents an enum value, e.g., Ok, Err(string)
+
+    StructMember(Box<Expression>, Box<Expression>), // Represents a struct member, e.g., `x int`
 
     // // Operators
     // Binary(Box<Expr>, BinaryOp, Box<Expr>),
@@ -529,6 +533,14 @@ impl AstFactory {
 
     pub fn create_enum_statement(&self, name: Expression, values: Vec<Expression>) -> Statement {
         Statement::Enum(Box::new(name), values)
+    }
+
+    pub fn create_struct_member_expression(&self, name: Expression, typ: Expression) -> Expression {
+        Expression::StructMember(Box::new(name), Box::new(typ))
+    }
+
+    pub fn create_struct_statement(&self, name: Expression, members: Vec<Expression>) -> Statement {
+        Statement::Struct(Box::new(name), members)
     }
 }
 
