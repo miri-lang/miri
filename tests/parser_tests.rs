@@ -374,7 +374,8 @@ fn test_parse_variable_declaration() {
         "let x = 5",
         vec![
             let_variable("x", None, opt_expr(int_literal(5)))
-        ]
+        ],
+        MemberVisibility::Public
     );
 }
 
@@ -384,7 +385,8 @@ fn test_parse_typed_variable_declaration() {
         "let x int = 5",
         vec![
             let_variable("x", opt_expr(typ(Type::Int)), opt_expr(int_literal(5)))
-        ]
+        ],
+        MemberVisibility::Public
     );
 }
 
@@ -394,7 +396,8 @@ fn test_parse_typed_variable_declaration_no_initializer() {
         "let x float",
         vec![
             let_variable("x", opt_expr(typ(Type::Float)), None)
-        ]
+        ],
+        MemberVisibility::Public
     );
 }
 
@@ -404,7 +407,8 @@ fn test_parse_variable_declaration_no_initializer() {
         "let x",
         vec![
             let_variable("x", None, None)
-        ]
+        ],
+        MemberVisibility::Public
     );
 }
 
@@ -414,7 +418,8 @@ fn test_parse_mutable_variable_declaration() {
         "var text = \"Hello, World!\"",
         vec![
             var("text", None, opt_expr(string_literal("Hello, World!")))
-        ]
+        ],
+        MemberVisibility::Public
     );
 }
 
@@ -426,7 +431,8 @@ fn test_parse_multiple_variable_declaration_no_initializer() {
             let_variable("x", None, None),
             let_variable("y", None, None),
             let_variable("z", None, None)
-        ]
+        ],
+        MemberVisibility::Public
     );
 }
 
@@ -438,7 +444,8 @@ fn test_parse_multiple_variable_declaration_mixed_initializer() {
             let_variable("x", None, None),
             let_variable("y", None, opt_expr(int_literal(10))),
             let_variable("z", None, None)
-        ]
+        ],
+        MemberVisibility::Public
     );
 }
 
@@ -450,10 +457,12 @@ let foo = bar = 200
 ",
         vec![
             variable_statement(
-                vec![var("bar", None, opt_expr(int_literal(100)))]
+                vec![var("bar", None, opt_expr(int_literal(100)))],
+                MemberVisibility::Public
             ),
             variable_statement(
-                vec![let_variable("foo", None, opt_expr(assign(lhs_identifier("bar"), AssignmentOp::Assign, int_literal(200))))]
+                vec![let_variable("foo", None, opt_expr(assign(lhs_identifier("bar"), AssignmentOp::Assign, int_literal(200))))],
+                MemberVisibility::Public
             )
         ]
     );
@@ -864,13 +873,13 @@ else
     identifier("x".into()),
     block(vec![
         variable_statement(vec![
-            let_variable("y".into(), None, opt_expr(int_literal(10)))
-        ])
+            let_variable("y".into(), None, opt_expr(int_literal(10))),
+        ], MemberVisibility::Public)
     ]),
     Some(block(vec![
         variable_statement(vec![
             var("z".into(), None, opt_expr(int_literal(20))),
-        ])
+        ], MemberVisibility::Public)
     ]))
     );
 }
@@ -962,7 +971,7 @@ let y = 1
         ),
         variable_statement(vec![
             let_variable("y", None, opt_expr(int_literal(1)))
-        ])
+        ], MemberVisibility::Public)
     ]);
 }
 
@@ -1434,7 +1443,7 @@ let x = 10 if y > 5 else 20
                     )
                 )
             )
-        ])
+        ], MemberVisibility::Public)
     ]
     )
 }
@@ -1465,7 +1474,7 @@ var x = 100 if y % 2 == 0
                     )
                 ),
             )
-        ])
+        ], MemberVisibility::Public)
     ]);
 }
 
@@ -1487,7 +1496,7 @@ var x = 1 unless y
                     )
                 )
             )
-        ])
+        ], MemberVisibility::Public)
     ])
 }
 
@@ -1853,22 +1862,17 @@ fn test_function_declaration() {
 def square(x int)
     x * x
 ", vec![
-        def("square".into(),
-            None,
-            vec![
-                parameter("x".into(), opt_expr(typ(Type::Int)), None)
-            ],
-            None,
-            block(vec![
-                expression_statement(
-                    binary(
-                        identifier("x".into()),
-                        BinaryOp::Mul,
-                        identifier("x".into())
-                    )
+        def("square").params(vec![
+            parameter("x".into(), opt_expr(typ(Type::Int)), None)
+        ]).body(block(vec![
+            expression_statement(
+                binary(
+                    identifier("x".into()),
+                    BinaryOp::Mul,
+                    identifier("x".into())
                 )
-            ])
-        )
+            )
+        ]))
     ]);
 }
 
@@ -1878,13 +1882,11 @@ fn test_function_declaration_with_guard() {
 def square(x int > 0)
     x * x
 ", vec![
-        def("square".into(),
-            None,
-            vec![
+        def("square")
+            .params(vec![
                 parameter("x".into(), opt_expr(typ(Type::Int)), opt_expr(guard(GuardOp::GreaterThan, int_literal(0))))
-            ],
-            None,
-            block(vec![
+            ])
+            .body(block(vec![
                 expression_statement(
                     binary(
                         identifier("x".into()),
@@ -1892,8 +1894,7 @@ def square(x int > 0)
                         identifier("x".into())
                     )
                 )
-            ])
-        )
+            ]))
     ]);
 }
 
@@ -1902,20 +1903,18 @@ fn test_inline_function_declaration_with_guard() {
     parse_test("
 def square(x int > 0) int: x * x
 ", vec![
-        def("square".into(), 
-            None,
-            vec![
-                parameter("x".into(), opt_expr(typ(Type::Int)), opt_expr(guard(GuardOp::GreaterThan, int_literal(0)))),
-            ],
-            opt_expr(typ(Type::Int)),
-            expression_statement(
+        def("square")
+            .params(vec![
+                parameter("x".into(), opt_expr(typ(Type::Int)), opt_expr(guard(GuardOp::GreaterThan, int_literal(0))))
+            ])
+            .return_type(typ(Type::Int))
+            .body(expression_statement(
                 binary(
                     identifier("x".into()),
                     BinaryOp::Mul,
                     identifier("x".into())
                 )
-            )
-        )
+            ))
     ]);
 }
 
@@ -1924,13 +1923,9 @@ fn test_function_no_parameters() {
     parse_test("
 def get_answer() int: 42
 ", vec![
-        def(
-            "get_answer".into(),
-            None,
-            vec![], // No parameters
-            opt_expr(typ(Type::Int)),
-            expression_statement(int_literal(42))
-        )
+        def("get_answer")
+            .return_type(typ(Type::Int))
+            .body(expression_statement(int_literal(42)))
     ]);
 }
 
@@ -1940,20 +1935,16 @@ fn test_function_multiple_parameters() {
 def add(a int, b int)
     return a + b
 ", vec![
-        def(
-            "add".into(),
-            None,
-            vec![
+        def("add")
+            .params(vec![
                 parameter("a".into(), opt_expr(typ(Type::Int)), None),
                 parameter("b".into(), opt_expr(typ(Type::Int)), None),
-            ],
-            None,
-            block(vec![
+            ])
+            .body(block(vec![
                 return_statement(
                     opt_expr(binary(identifier("a".into()), BinaryOp::Add, identifier("b".into())))
                 )
-            ])
-        )
+            ]))
     ]);
 }
 
@@ -1963,15 +1954,11 @@ fn test_function_untyped_parameter() {
 def process(data)
     // do something
 ", vec![
-        def(
-            "process".into(),
-            None,
-            vec![
+        def("process")
+            .params(vec![
                 parameter("data".into(), None, None)
-            ],
-            None,
-            empty_statement()
-        )
+            ])
+            .body(empty_statement())
     ]);
 }
 
@@ -1981,13 +1968,8 @@ fn test_function_empty_body_block() {
 def no_op()
     // This function does nothing
 ", vec![
-        def(
-            "no_op".into(),
-            None,
-            vec![],
-            None,
-            empty_statement()
-        )
+        def("no_op")
+            .body(empty_statement())
     ]);
 }
 
@@ -1996,13 +1978,8 @@ fn test_function_empty_body_inline() {
     parse_test("
 def no_op_inline(): // This function also does nothing
 ", vec![
-        def(
-            "no_op_inline".into(),
-            None,
-            vec![],
-            None,
-            empty_statement()
-        )
+        def("no_op_inline")
+            .body(empty_statement())
     ]);
 }
 
@@ -2056,13 +2033,9 @@ fn test_function_with_single_generic_type() {
 def my_func<T>()
     // body
 ", vec![
-        def(
-            "my_func".into(),
-            Some(vec![generic_type("T", None)]),
-            vec![],
-            None,
-            empty_statement()
-        )
+        def("my_func").generics(vec![generic_type("T", None)])
+            .params(vec![])
+            .body(empty_statement())
     ]);
 }
 
@@ -2072,16 +2045,12 @@ fn test_function_with_multiple_generic_types() {
 def my_func<K, V>()
     // body
 ", vec![
-        def(
-            "my_func".into(),
-            Some(vec![
-                generic_type("K", None),
-                generic_type("V", None)
-            ]),
-            vec![],
-            None,
-            empty_statement()
-        )
+        def("my_func").generics(vec![
+            generic_type("K", None),
+            generic_type("V", None)
+        ])
+        .params(vec![])
+        .body(empty_statement())
     ]);
 }
 
@@ -2091,15 +2060,11 @@ fn test_function_with_constrained_generic_type() {
 def my_func<T extends SomeClass>()
     // body
 ", vec![
-        def(
-            "my_func".into(),
-            Some(vec![
-                generic_type("T", opt_expr(typ(Type::Custom("SomeClass".into(), None))))
-            ]),
-            vec![],
-            None,
-            empty_statement()
-        )
+        def("my_func").generics(vec![
+            generic_type("T", opt_expr(typ(Type::Custom("SomeClass".into(), None))))
+        ])
+        .params(vec![])
+        .body(empty_statement())
     ]);
 }
 
@@ -2109,16 +2074,12 @@ fn test_function_with_mixed_generic_types() {
 def my_func<K, V extends SomeTrait>()
     // body
 ", vec![
-        def(
-            "my_func".into(),
-            Some(vec![
-                generic_type("K", None),
-                generic_type("V", opt_expr(typ(Type::Custom("SomeTrait".into(), None))))
-            ]),
-            vec![],
-            None,
-            empty_statement()
-        )
+        def("my_func").generics(vec![
+            generic_type("K", None),
+            generic_type("V", opt_expr(typ(Type::Custom("SomeTrait".into(), None))))
+        ])
+        .params(vec![])
+        .body(empty_statement())
     ]);
 }
 
@@ -2127,15 +2088,12 @@ fn test_function_using_generic_types() {
     parse_test("
 def process<T>(data T) T: data
 ", vec![
-        def(
-            "process".into(),
-            Some(vec![generic_type("T", None)]),
-            vec![
+        def("process").generics(vec![generic_type("T", None)])
+            .params(vec![
                 parameter("data".into(), opt_expr(typ(Type::Custom("T".into(), None))), None)
-            ],
-            opt_expr(typ(Type::Custom("T".into(), None))),
-            expression_statement(identifier("data"))
-        )
+            ])
+            .return_type(typ(Type::Custom("T".into(), None)))
+            .body(expression_statement(identifier("data")))
     ]);
 }
 
@@ -2365,9 +2323,7 @@ fn test_parse_nullable_map_type_in_parameter() {
 def process_data(data {string: bool}?)
     // body
 ", vec![
-        def(
-            "process_data".into(),
-            None,
+        def("process_data").params(
             vec![
                 parameter(
                     "data".into(),
@@ -2381,10 +2337,8 @@ def process_data(data {string: bool}?)
                     ),
                     None
                 )
-            ],
-            None,
-            empty_statement()
-        )
+            ]
+        ).empty_body()
     ]);
 }
 
@@ -2394,21 +2348,15 @@ fn test_parse_tuple_type_as_return_type() {
 def get_coordinates() (float, float?, float)?
     // body
 ", vec![
-        def(
-            "get_coordinates".into(),
-            None,
-            vec![],
-            opt_expr(
-                null_typ(
-                    Type::Tuple(vec![
-                        typ(Type::Float),
-                        null_typ(Type::Float),
-                        typ(Type::Float),
-                    ]),
-                )
-            ),
-            empty_statement()
-        )
+        def("get_coordinates").return_type(
+            null_typ(
+                Type::Tuple(vec![
+                    typ(Type::Float),
+                    null_typ(Type::Float),
+                    typ(Type::Float),
+                ]),
+            )
+        ).empty_body()
     ]);
 }
 
@@ -2431,23 +2379,17 @@ fn test_parse_generic_custom_type_with_nesting() {
 def get_data() MyContainer<[int]?, future<string>>
     // body
 ", vec![
-        def(
-            "get_data".into(),
-            None,
-            vec![],
-            opt_expr(
-                typ(
-                    Type::Custom(
-                        "MyContainer".to_string(),
-                        Some(vec![
-                            null_typ(Type::List(Box::new(typ(Type::Int)))), // [int]?
-                            typ(Type::Future(Box::new(typ(Type::String)))) // future<string>
-                        ])
-                    )
+        def("get_data").return_type(
+            typ(
+                Type::Custom(
+                    "MyContainer".to_string(),
+                    Some(vec![
+                        null_typ(Type::List(Box::new(typ(Type::Int)))), // [int]?
+                        typ(Type::Future(Box::new(typ(Type::String)))) // future<string>
+                    ])
                 )
-            ),
-            empty_statement()
-        )
+            )
+        ).empty_body()
     ]);
 }
 
@@ -2632,7 +2574,7 @@ type MyInt is int
                 TypeDeclarationKind::Is,
                 opt_expr(typ(Type::Int))
             )
-        ])
+        ], MemberVisibility::Public)
     ]);
 }
 
@@ -2650,7 +2592,7 @@ type UserMap is {string: User?}
                     Box::new(null_typ(Type::Custom("User".into(), None)))
                 )))
             )
-        ])
+        ], MemberVisibility::Public)
     ]);
 }
 
@@ -2662,7 +2604,7 @@ type T, U
         type_statement(vec![
             type_declaration("T", TypeDeclarationKind::None, None),
             type_declaration("U", TypeDeclarationKind::None, None)
-        ])
+        ], MemberVisibility::Public)
     ]);
 }
 
@@ -2677,7 +2619,7 @@ type T extends SomeClass
                 TypeDeclarationKind::Extends,
                 opt_expr(typ(Type::Custom("SomeClass".into(), None)))
             )
-        ])
+        ], MemberVisibility::Public)
     ]);
 }
 
@@ -2698,7 +2640,7 @@ type T, U extends Serializable, X implements IGraph
                 TypeDeclarationKind::Implements,
                 opt_expr(typ(Type::Custom("IGraph".into(), None)))
             )
-        ])
+        ], MemberVisibility::Public)
     ]);
 }
 
@@ -2894,7 +2836,8 @@ enum Colors: Red, Green, Blue
                 enum_value("Red", vec![]),
                 enum_value("Green", vec![]),
                 enum_value("Blue", vec![])
-            ]
+            ],
+            MemberVisibility::Public
         )
     ]);
 }
@@ -2913,7 +2856,8 @@ enum Colors
                 enum_value("Red", vec![]),
                 enum_value("Green", vec![]),
                 enum_value("Blue", vec![])
-            ]
+            ],
+            MemberVisibility::Public
         )
     ]);
 }
@@ -2928,7 +2872,8 @@ enum Message: Write(string), Move(int, int)
             vec![
                 enum_value("Write", vec![typ(Type::String)]),
                 enum_value("Move", vec![typ(Type::Int), typ(Type::Int)])
-            ]
+            ],
+            MemberVisibility::Public
         )
     ]);
 }
@@ -2947,7 +2892,8 @@ enum Event
                 enum_value("Quit", vec![]),
                 enum_value("KeyPress", vec![typ(Type::Int)]),
                 enum_value("Click", vec![typ(Type::Int), typ(Type::Int)])
-            ]
+            ],
+            MemberVisibility::Public
         )
     ]);
 }
@@ -2955,7 +2901,11 @@ enum Event
 #[test]
 fn test_enum_with_single_value() {
     parse_test("enum Status: Ok", vec![
-        enum_statement(identifier("Status"), vec![enum_value("Ok", vec![])])
+        enum_statement(
+            identifier("Status"),
+            vec![enum_value("Ok", vec![])],
+            MemberVisibility::Public
+        )
     ]);
 }
 
@@ -2969,7 +2919,8 @@ enum Data: Point([int]?), Config({string: bool})
             vec![
                 enum_value("Point", vec![null_typ(Type::List(Box::new(typ(Type::Int))))]),
                 enum_value("Config", vec![typ(Type::Map(Box::new(typ(Type::String)), Box::new(typ(Type::Boolean))))])
-            ]
+            ],
+            MemberVisibility::Public
         )
     ]);
 }
@@ -3040,7 +2991,8 @@ struct Point: x int, y int
             vec![
                 struct_member("x", typ(Type::Int)),
                 struct_member("y", typ(Type::Int))
-            ]
+            ],
+            MemberVisibility::Public
         )
     ]);
 }
@@ -3057,7 +3009,8 @@ struct Point
             vec![
                 struct_member("x", typ(Type::Int)),
                 struct_member("y", typ(Type::Int))
-            ]
+            ],
+            MemberVisibility::Public
         )
     ]);
 }
@@ -3076,7 +3029,8 @@ struct UserProfile
                 struct_member("id", typ(Type::String)),
                 struct_member("aliases", null_typ(Type::List(Box::new(typ(Type::String))))),
                 struct_member("preferences", typ(Type::Map(Box::new(typ(Type::String)), Box::new(typ(Type::Boolean)))))
-            ]
+            ],
+            MemberVisibility::Public
         )
     ]);
 }
@@ -3086,7 +3040,8 @@ fn test_struct_with_single_member() {
     parse_test("struct Wrapper: value float", vec![
         struct_statement(
             identifier("Wrapper"),
-            vec![struct_member("value", typ(Type::Float))]
+            vec![struct_member("value", typ(Type::Float))],
+            MemberVisibility::Public
         )
     ]);
 }
@@ -3214,13 +3169,9 @@ fn test_comment_between_function_name_and_params() {
 def my_func /* comment */ (a int)
     // body
 ", vec![
-        def(
-            "my_func".into(),
-            None,
-            vec![parameter("a".into(), opt_expr(typ(Type::Int)), None)],
-            None,
-            empty_statement()
-        )
+        def("my_func").params(
+            vec![parameter("a".into(), opt_expr(typ(Type::Int)), None)]
+        ).empty_body()
     ]);
 }
 
@@ -3260,7 +3211,7 @@ fn test_namespaced_enum_access() {
                     identifier("Ok")
                 ))
             )
-        ])
+        ], MemberVisibility::Public)
     ]);
 }
 
@@ -3274,18 +3225,17 @@ fn test_namespaced_type_in_variable_declaration() {
                 opt_expr(typ(Type::Custom("Http::Client".into(), None))),
                 None
             )
-        ]
+        ],
+        MemberVisibility::Public
     );
 }
 
 #[test]
 fn test_namespaced_type_in_function_return() {
     parse_test("def get_status() Http::Status: Http::Status.Ok", vec![
-        def(
-            "get_status".into(),
-            None,
-            vec![],
-            opt_expr(typ(Type::Custom("Http::Status".into(), None))),
+        def("get_status").return_type(
+            typ(Type::Custom("Http::Status".into(), None)),
+        ).body(
             expression_statement(
                 member(
                     class_identifier("Http::Status"),
@@ -3299,17 +3249,15 @@ fn test_namespaced_type_in_function_return() {
 #[test]
 fn test_namespaced_type_in_function_parameter() {
     parse_test("def set_status(s Http::Status): _status = s", vec![
-        def(
-            "set_status".into(),
-            None,
+        def("set_status").params(
             vec![
                 parameter(
                     "s".into(),
                     opt_expr(typ(Type::Custom("Http::Status".into(), None))),
                     None
                 )
-            ],
-            None,
+            ]
+        ).body(
             expression_statement(
                 assign(
                     lhs_identifier("_status"),
@@ -3361,13 +3309,7 @@ fn test_async_function_declaration() {
 async def my_async_func()
     // body
 ", vec![
-        async_def(
-            "my_async_func".into(),
-            None,
-            vec![],
-            None,
-            empty_statement()
-        )
+        def("my_async_func").set_async().empty_body(),
     ]);
 }
 
@@ -3397,7 +3339,7 @@ fn test_await_in_assignment() {
                     )
                 )
             )
-        ])
+        ], MemberVisibility::Public)
     ]);
 }
 
@@ -3426,11 +3368,7 @@ fn test_parse_await_in_non_async_function() {
 def not_async()
     await something()
 ", vec![
-        def(
-            "not_async".into(),
-            None,
-            vec![],
-            None,
+        def("not_async").body(
             block(vec![
                 expression_statement(
                     unary(
@@ -3442,6 +3380,193 @@ def not_async()
         )
     ]);
 }
+
+#[test]
+fn test_gpu_function_declaration() {
+    parse_test("
+gpu def my_gpu_func()
+    // body
+", vec![
+        def("my_gpu_func").set_gpu().empty_body(),
+    ]);
+}
+
+#[test]
+fn test_async_gpu_function_declaration() {
+    parse_test("
+async gpu def my_async_gpu_func()
+    // body
+", vec![
+        def("my_async_gpu_func").set_async().set_gpu().empty_body(),
+    ]);
+}
+
+#[test]
+fn test_gpu_async_function_declaration_order() {
+    // The order of modifiers should not matter.
+    parse_test("
+gpu async def my_gpu_async_func()
+    // body
+", vec![
+        def("my_gpu_async_func").set_gpu().set_async().empty_body(),
+    ]);
+}
+
+#[test]
+fn test_private_gpu_function_declaration() {
+    parse_test("
+private gpu def my_private_gpu_func()
+    // body
+", vec![
+        def("my_private_gpu_func").set_private().set_gpu().empty_body(),
+    ]);
+}
+
+#[test]
+fn test_all_modifiers_function_declaration() {
+    parse_test("
+private async gpu def my_uber_func()
+    // body
+", vec![
+        def("my_uber_func")
+            .set_private()
+            .set_async()
+            .set_gpu()
+            .empty_body(),
+    ]);
+}
+
+#[test]
+fn test_error_modifier_after_def() {
+    // Modifiers must precede the `def` keyword.
+    parse_error_test(
+        "def gpu my_func()",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "function name".to_string(),
+            found: "gpu".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_public_variable() {
+    parse_variable_declaration_test(
+        "public let x = 1",
+        vec![let_variable("x", None, opt_expr(int_literal(1)))],
+        MemberVisibility::Public
+    );
+}
+
+#[test]
+fn test_private_variable() {
+    parse_variable_declaration_test(
+        "private var y",
+        vec![var("y", None, None)],
+        MemberVisibility::Private
+    );
+}
+
+#[test]
+fn test_protected_function() {
+    parse_test("protected def my_func(): x", vec![
+        def("my_func")
+            .set_protected()
+            .body(
+                expression_statement(identifier("x"))
+            )
+    ]);
+}
+
+#[test]
+fn test_private_async_gpu_function() {
+    parse_test("private async gpu def complex_func(): x", vec![
+        def("complex_func")
+            .set_private()
+            .set_async()
+            .set_gpu()
+            .body(
+                expression_statement(identifier("x"))
+            )
+    ]);
+}
+
+#[test]
+fn test_public_enum() {
+    parse_test("public enum Color: Red", vec![
+        enum_statement(
+            identifier("Color"),
+            vec![enum_value("Red", vec![])],
+            MemberVisibility::Public
+        )
+    ]);
+}
+
+#[test]
+fn test_private_struct() {
+    parse_test("private struct Point: x int", vec![
+        struct_statement(
+            identifier("Point"),
+            vec![struct_member("x", typ(Type::Int))],
+            MemberVisibility::Private
+        )
+    ]);
+}
+
+#[test]
+fn test_protected_type_alias() {
+    parse_test("protected type MyInt is int", vec![
+        type_statement(
+            vec![type_declaration("MyInt", TypeDeclarationKind::Is, opt_expr(typ(Type::Int)))],
+            MemberVisibility::Protected
+        )
+    ]);
+}
+
+#[test]
+fn test_error_modifier_order_function() {
+    // Visibility must come first. `async public` is invalid.
+    parse_error_test(
+        "async public def my_func()",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "def".to_string(),
+            found: "public".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_error_modifier_order_variable() {
+    // This is not a valid statement start.
+    parse_error_test(
+        "let public x = 1",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "identifier".to_string(),
+            found: "public".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_error_double_visibility_modifier() {
+    parse_error_test(
+        "public private def my_func()",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "let, var, async, def, gpu, enum, type or struct".to_string(),
+            found: "private".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_default_visibility_is_public() {
+    // A declaration without an explicit modifier should be public by default.
+    parse_variable_declaration_test(
+        "let x = 1",
+        vec![let_variable("x", None, opt_expr(int_literal(1)))],
+        MemberVisibility::Public
+    );
+}
+
 
 fn parse(input: &str) -> Result<Program, SyntaxError> {
     let mut lexer = Lexer::new(input);
@@ -3467,9 +3592,9 @@ fn parse_error_test<'src>(input: &'src str, _expected_error: SyntaxErrorKind) {
     assert_eq!(parse_result.unwrap_err().kind, _expected_error);
 }
 
-fn parse_variable_declaration_test(input: &str, expected: Vec<VariableDeclaration>) {
+fn parse_variable_declaration_test(input: &str, expected: Vec<VariableDeclaration>, visibility: MemberVisibility) {
     parse_test(input, vec![
-        Statement::Variable(expected)
+        Statement::Variable(expected, visibility)
     ]);
 }
 
@@ -3541,5 +3666,5 @@ fn parse_type_test(type_str: &str, expected: Expression) {
             opt_expr(expected),
             None
         )
-    ]);
+    ], MemberVisibility::Public);
 }

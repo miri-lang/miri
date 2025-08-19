@@ -45,6 +45,9 @@ pub enum Token {
     #[token("type")]       Type,
     #[token("enum")]       Enum,
     #[token("struct")]     Struct,
+    #[token("public")]     Public,
+    #[token("protected")]  Protected,
+    #[token("private")]    Private,
 
     // Symbols and Operators
     #[token(":")]           Colon,

@@ -71,6 +71,10 @@ impl<'source> Parser<'source> {
             | ReturnStatement
             | UseStatement
             | TypeStatement
+            | BreakStatement
+            | ContinueStatement
+            | EnumStatement
+            | StructStatement
             | EmptyStatement
             ;
     */
@@ -80,24 +84,53 @@ impl<'source> Parser<'source> {
         }
 
         let statement = match &self._lookahead {
+            Some((Token::Public, _)) => {
+                self.eat_token(&Token::Public)?;
+                self.class_member_statement(MemberVisibility::Public)?
+            },
+            Some((Token::Protected, _)) => {
+                self.eat_token(&Token::Protected)?;
+                self.class_member_statement(MemberVisibility::Protected)?
+            },
+            Some((Token::Private, _)) => {
+                self.eat_token(&Token::Private)?;
+                self.class_member_statement(MemberVisibility::Private)?
+            },
             Some((Token::Indent, _)) => self.block_statement()?,
-            Some((Token::Let, _)) | Some((Token::Var, _)) => self.variable_statement()?,
+            Some((Token::Let, _)) | Some((Token::Var, _)) => self.variable_statement(MemberVisibility::Public)?,
             Some((Token::If, _)) => self.if_statement(IfStatementType::If)?,
             Some((Token::Unless, _)) => self.if_statement(IfStatementType::Unless)?,
             Some((Token::While, _)) => self.while_statement(WhileStatementType::While)?,
             Some((Token::Until, _)) => self.while_statement(WhileStatementType::Until)?,
             Some((Token::Forever, _)) => self.while_statement(WhileStatementType::Forever)?,
             Some((Token::For, _)) => self.for_statement()?,
-            Some((Token::Async, _)) => self.function_declaration()?,
-            Some((Token::Def, _)) => self.function_declaration()?,
+            Some((Token::Async, _)) | Some((Token::Def, _)) | Some((Token::Gpu, _)) => {
+                self.function_declaration(MemberVisibility::Public)?
+            }
             Some((Token::Return, _)) => self.return_statement()?,
             Some((Token::Use, _)) => self.use_statement()?,
-            Some((Token::Type, _)) => self.type_statement()?,
+            Some((Token::Type, _)) => self.type_statement(MemberVisibility::Public)?,
             Some((Token::Break, _)) => self.break_statement()?,
             Some((Token::Continue, _)) => self.continue_statement()?,
-            Some((Token::Enum, _)) => self.enum_statement()?,
-            Some((Token::Struct, _)) => self.struct_statement()?,
+            Some((Token::Enum, _)) => self.enum_statement(MemberVisibility::Public)?,
+            Some((Token::Struct, _)) => self.struct_statement(MemberVisibility::Public)?,
             _ => self.expression_statement()?,
+        };
+        Ok(statement)
+    }
+
+    fn class_member_statement(&mut self, visibility: MemberVisibility) -> Result<Statement, SyntaxError> {
+        let statement = match &self._lookahead {
+            Some((Token::Let, _)) | Some((Token::Var, _)) => self.variable_statement(visibility)?,
+            Some((Token::Async, _)) | Some((Token::Def, _)) | Some((Token::Gpu, _)) => {
+                self.function_declaration(visibility)?
+            }
+            Some((Token::Enum, _)) => self.enum_statement(visibility)?,
+            Some((Token::Struct, _)) => self.struct_statement(visibility)?,
+            Some((Token::Type, _)) => self.type_statement(visibility)?,
+            _ => {
+                return Err(self.error_unexpected_lookahead_token("let, var, async, def, gpu, enum, type or struct"));
+            }
         };
         Ok(statement)
     }
@@ -108,7 +141,7 @@ impl<'source> Parser<'source> {
             | 'var' VariableDeclarationList EXPRESSION_END
             ;
     */
-    fn variable_statement(&mut self) -> Result<Statement, SyntaxError> {
+    fn variable_statement(&mut self, visibility: MemberVisibility) -> Result<Statement, SyntaxError> {
         let (token, variable_declaration_type) = match &self._lookahead {
             Some((Token::Let, _)) => (Token::Let, VariableDeclarationType::Immutable),
             Some((Token::Var, _)) => (Token::Var, VariableDeclarationType::Mutable),
@@ -118,7 +151,7 @@ impl<'source> Parser<'source> {
         self.eat_token(&token)?;
         let declarations = self.variable_declaration_list(&variable_declaration_type, true)?;
         self.eat_token(&Token::ExpressionStatementEnd)?;
-        Ok(self._ast_factory.create_variable_statement(declarations))
+        Ok(self._ast_factory.create_variable_statement(declarations, visibility))
     }
 
     /*
@@ -388,14 +421,29 @@ impl<'source> Parser<'source> {
 
     /*
         FunctionDeclaration
-            : 'async'? 'def' Identifier [GenericTypesDeclaration] '(' ParameterList ')' [ReturnType] EXPRESSION_END BlockStatement
-            | 'async'? 'def' Identifier [GenericTypesDeclaration] '(' ParameterList ')' [ReturnType] ':' ExpressionStatement EXPRESSION_END
+            : 'async'? 'gpu'? 'def' Identifier [GenericTypesDeclaration] '(' ParameterList ')' [ReturnType] EXPRESSION_END BlockStatement
+            | 'async'? 'gpu'? 'def' Identifier [GenericTypesDeclaration] '(' ParameterList ')' [ReturnType] ':' ExpressionStatement EXPRESSION_END
             ;
     */
-    fn function_declaration(&mut self) -> Result<Statement, SyntaxError> {
-        let is_async = self.match_lookahead_type(|t| t == &Token::Async);
-        if is_async {
-            self.eat_token(&Token::Async)?;
+    fn function_declaration(&mut self, visibility: MemberVisibility) -> Result<Statement, SyntaxError> {
+        let mut properties = FunctionProperties {
+            is_async: false,
+            is_gpu: false,
+            visibility,
+        };
+
+        while self.lookahead_is_function_modifier() {
+            match &self._lookahead {
+                Some((Token::Async, _)) => {
+                    self.eat_token(&Token::Async)?;
+                    properties.is_async = true;
+                },
+                Some((Token::Gpu, _)) => {
+                    self.eat_token(&Token::Gpu)?;
+                    properties.is_gpu = true;
+                }
+                _ => return Err(self.error_unexpected_lookahead_token("function modifier (async or gpu)")),
+            }
         }
 
         self.eat_token(&Token::Def)?;
@@ -428,12 +476,6 @@ impl<'source> Parser<'source> {
         };
 
         let body = self.statement_body()?;
-
-        let properties = FunctionProperties {
-            is_async,
-            is_gpu: false,
-            visibility: MemberVisibility::Public,
-        };
 
         Ok(self._ast_factory.create_function_declaration(name, generic_types, parameters, return_type, body, properties))
     }
@@ -590,12 +632,13 @@ impl<'source> Parser<'source> {
         item_parser: F,
         creator: C,
         name: Expression,
+        visibility: MemberVisibility,
         inline_error: &str,
         block_error: &str,
     ) -> Result<Statement, SyntaxError>
     where
         F: Fn(&mut Self) -> Result<Expression, SyntaxError>,
-        C: Fn(&mut Self, Expression, Vec<Expression>) -> Statement,
+        C: Fn(&mut Self, Expression, Vec<Expression>, MemberVisibility) -> Statement,
     {
         let mut items = vec![];
 
@@ -624,7 +667,7 @@ impl<'source> Parser<'source> {
             _ => return Err(self.error_unexpected_lookahead_token(inline_error)),
         };
 
-        Ok(creator(self, name, items))
+        Ok(creator(self, name, items, visibility))
     }
 
     /*
@@ -633,13 +676,14 @@ impl<'source> Parser<'source> {
             | 'enum' Identifier INDENT EnumValue EXPRESSION_END (EnumValue EXPRESSION_END)* DEDENT
             ;
     */
-    fn enum_statement(&mut self) -> Result<Statement, SyntaxError> {
+    fn enum_statement(&mut self, visibility: MemberVisibility) -> Result<Statement, SyntaxError> {
         self.eat_token(&Token::Enum)?;
         let name = self.identifier()?;
         self.parse_declaration_block(
             Self::enum_value_expression,
-            |p, n, v| p._ast_factory.create_enum_statement(n, v),
+            |p, n, vals: Vec<Expression>, vis| p._ast_factory.create_enum_statement(n, vals, vis),
             name,
+            visibility,
             "either a colon for inline enums or an indentation for block enums",
             "an indentation for block enums",
         )
@@ -668,13 +712,14 @@ impl<'source> Parser<'source> {
             | 'struct' Identifier INDENT StructMember EXPRESSION_END (StructMember EXPRESSION_END)* DEDENT
             ;
     */
-    fn struct_statement(&mut self) -> Result<Statement, SyntaxError> {
+    fn struct_statement(&mut self, visibility: MemberVisibility) -> Result<Statement, SyntaxError> {
         self.eat_token(&Token::Struct)?;
         let name = self.identifier()?;
         self.parse_declaration_block(
             Self::struct_member_expression,
-            |p, n, m| p._ast_factory.create_struct_statement(n, m),
+            |p, n, m, vis| p._ast_factory.create_struct_statement(n, m, vis),
             name,
+            visibility,
             "either a colon for inline structs or an indentation for block structs",
             "an indentation for block structs",
         )
@@ -911,7 +956,7 @@ impl<'source> Parser<'source> {
             : 'type' TypeDeclaration, (',' TypeDeclaration)*
             ;
     */
-    fn type_statement(&mut self) -> Result<Statement, SyntaxError> {
+    fn type_statement(&mut self, visibility: MemberVisibility) -> Result<Statement, SyntaxError> {
         self.eat_token(&Token::Type)?;
         let mut declarations = vec![self.type_declaration()?];
 
@@ -921,7 +966,7 @@ impl<'source> Parser<'source> {
         }
 
         self.eat_token(&Token::ExpressionStatementEnd)?;
-        Ok(self._ast_factory.create_type_statement(declarations))
+        Ok(self._ast_factory.create_type_statement(declarations, visibility))
     }
 
     /*
@@ -1794,6 +1839,10 @@ impl<'source> Parser<'source> {
         self.match_lookahead_type(is_inheritance_modifier)
     }
 
+    fn lookahead_is_function_modifier(&self) -> bool {
+        self.match_lookahead_type(is_function_modifier)
+    }
+
     fn eat_additive_op(&mut self) -> Result<BinaryOp, Result<Expression, SyntaxError>> {
         let op = match self.eat_binary_op(is_additive_op) {
             Ok(token) => match token.0 {
@@ -2031,4 +2080,8 @@ fn is_member_expression_boundary(token: &Token) -> bool {
 
 fn is_inheritance_modifier(token: &Token) -> bool {
     matches!(token, Token::Extends | Token::Includes | Token::Implements)
+}
+
+fn is_function_modifier(token: &Token) -> bool {
+    matches!(token, Token::Async | Token::Gpu)
 }
