@@ -88,6 +88,7 @@ impl<'source> Parser<'source> {
             Some((Token::Until, _)) => self.while_statement(WhileStatementType::Until)?,
             Some((Token::Forever, _)) => self.while_statement(WhileStatementType::Forever)?,
             Some((Token::For, _)) => self.for_statement()?,
+            Some((Token::Async, _)) => self.function_declaration()?,
             Some((Token::Def, _)) => self.function_declaration()?,
             Some((Token::Return, _)) => self.return_statement()?,
             Some((Token::Use, _)) => self.use_statement()?,
@@ -387,11 +388,16 @@ impl<'source> Parser<'source> {
 
     /*
         FunctionDeclaration
-            : 'def' Identifier [GenericTypesDeclaration] '(' ParameterList ')' [ReturnType] EXPRESSION_END BlockStatement
-            | 'def' Identifier [GenericTypesDeclaration] '(' ParameterList ')' [ReturnType] ':' ExpressionStatement EXPRESSION_END
+            : 'async'? 'def' Identifier [GenericTypesDeclaration] '(' ParameterList ')' [ReturnType] EXPRESSION_END BlockStatement
+            | 'async'? 'def' Identifier [GenericTypesDeclaration] '(' ParameterList ')' [ReturnType] ':' ExpressionStatement EXPRESSION_END
             ;
     */
     fn function_declaration(&mut self) -> Result<Statement, SyntaxError> {
+        let is_async = self.match_lookahead_type(|t| t == &Token::Async);
+        if is_async {
+            self.eat_token(&Token::Async)?;
+        }
+
         self.eat_token(&Token::Def)?;
 
         let name = match &self._lookahead {
@@ -423,7 +429,13 @@ impl<'source> Parser<'source> {
 
         let body = self.statement_body()?;
 
-        Ok(self._ast_factory.create_function_declaration(name, generic_types, parameters, return_type, body))
+        let properties = FunctionProperties {
+            is_async,
+            is_gpu: false,
+            visibility: MemberVisibility::Public,
+        };
+
+        Ok(self._ast_factory.create_function_declaration(name, generic_types, parameters, return_type, body, properties))
     }
 
     /*
@@ -1371,6 +1383,7 @@ impl<'source> Parser<'source> {
             : LeftHandSideExpression
             | ADDITIVE_OPERATOR UnaryExpression
             | NOT UnaryExpression
+            | AWAIT UnaryExpression
             ;
     */
     fn unary_expression(&mut self) -> Result<Expression, SyntaxError> {
@@ -1381,6 +1394,7 @@ impl<'source> Parser<'source> {
             Some((Token::Tilde, _)) => self.create_unary_expression(&Token::Tilde, UnaryOp::BitwiseNot),
             Some((Token::Decrement, _)) => self.create_unary_expression(&Token::Decrement, UnaryOp::Decrement),
             Some((Token::Increment, _)) => self.create_unary_expression(&Token::Increment, UnaryOp::Increment),
+            Some((Token::Await, _)) => self.create_unary_expression(&Token::Await, UnaryOp::Await),
             _ => self.left_hand_side_expression(),
         }
     }

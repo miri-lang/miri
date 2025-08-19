@@ -197,6 +197,24 @@ pub fn guard(op: GuardOp, expr: Expression) -> Expression {
     Expression::Guard(op, Box::new(expr))
 }
 
+pub fn function_declaration(
+    name: String,
+    generic_types: Option<Vec<Expression>>,
+    parameters: Vec<Parameter>,
+    return_type: Option<Box<Expression>>,
+    body: Statement,
+    properties: FunctionProperties
+) -> Statement {
+    Statement::FunctionDeclaration(
+        name,
+        generic_types,
+        parameters,
+        return_type,
+        Box::new(body),
+        properties
+    )
+}
+
 pub fn def(
     name: String,
     generic_types: Option<Vec<Expression>>,
@@ -204,12 +222,38 @@ pub fn def(
     return_type: Option<Box<Expression>>,
     body: Statement,
 ) -> Statement {
-    Statement::FunctionDeclaration(
+    function_declaration(
         name,
         generic_types,
         parameters,
         return_type,
-        Box::new(body)
+        body,
+        FunctionProperties {
+            is_async: false,
+            is_gpu: false,
+            visibility: MemberVisibility::Public,
+        }
+    )
+}
+
+pub fn async_def(
+    name: String,
+    generic_types: Option<Vec<Expression>>,
+    parameters: Vec<Parameter>,
+    return_type: Option<Box<Expression>>,
+    body: Statement,
+) -> Statement {
+    function_declaration(
+        name,
+        generic_types,
+        parameters,
+        return_type,
+        body,
+        FunctionProperties {
+            is_async: true,
+            is_gpu: false,
+            visibility: MemberVisibility::Public,
+        }
     )
 }
 

@@ -29,7 +29,7 @@ Done ✅
   - [x] enums
   - [x] structs
   - [x] using enums, structs and functions from other modules e.g. Http::Status.Ok, Http::get
-  - [ ] async/await
+  - [x] async/await
   - [ ] gpu
   - [ ] parallel
   - [ ] lambda, function as variables and parameters
