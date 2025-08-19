@@ -3355,6 +3355,94 @@ fn test_error_namespaced_assignment_target() {
     );
 }
 
+#[test]
+fn test_async_function_declaration() {
+    parse_test("
+async def my_async_func()
+    // body
+", vec![
+        async_def(
+            "my_async_func".into(),
+            None,
+            vec![],
+            None,
+            empty_statement()
+        )
+    ]);
+}
+
+#[test]
+fn test_await_expression() {
+    parse_test("await some_future()", vec![
+        expression_statement(
+            unary(
+                UnaryOp::Await,
+                call(identifier("some_future"), vec![])
+            )
+        )
+    ]);
+}
+
+#[test]
+fn test_await_in_assignment() {
+    parse_test("let result = await get_data()", vec![
+        variable_statement(vec![
+            let_variable(
+                "result",
+                None,
+                opt_expr(
+                    unary(
+                        UnaryOp::Await,
+                        call(identifier("get_data"), vec![])
+                    )
+                )
+            )
+        ])
+    ]);
+}
+
+#[test]
+fn test_await_precedence_with_member_access() {
+    // `await` has lower precedence than member access (`.`).
+    // This should parse as `await (future.get_value())`.
+    parse_test("await future.get_value()", vec![
+        expression_statement(
+            unary(
+                UnaryOp::Await,
+                call(
+                    member(identifier("future"), identifier("get_value")),
+                    vec![]
+                )
+            )
+        )
+    ]);
+}
+
+// Note: `await` outside an `async` function is a semantic error, not a syntax error.
+// The parser should successfully parse it.
+#[test]
+fn test_parse_await_in_non_async_function() {
+    parse_test("
+def not_async()
+    await something()
+", vec![
+        def(
+            "not_async".into(),
+            None,
+            vec![],
+            None,
+            block(vec![
+                expression_statement(
+                    unary(
+                        UnaryOp::Await,
+                        call(identifier("something"), vec![])
+                    )
+                )
+            ])
+        )
+    ]);
+}
+
 fn parse(input: &str) -> Result<Program, SyntaxError> {
     let mut lexer = Lexer::new(input);
     let mut parser = Parser::new(&mut lexer, input, AstFactory::new());

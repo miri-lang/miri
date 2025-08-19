@@ -39,6 +39,21 @@ pub struct Parameter {
     pub guard: Option<Box<Expression>>, // Optional guard expression
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum MemberVisibility {
+    Public,
+    Protected,
+    Private,
+}
+
+/// Represents the properties of a function declaration
+#[derive(Debug, Clone, PartialEq)]
+pub struct FunctionProperties {
+    pub is_async: bool,
+    pub is_gpu: bool,
+    pub visibility: MemberVisibility,
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub enum Statement {
     Empty, // Represents an empty statement, e.g., when a block is empty
@@ -59,7 +74,7 @@ pub enum Statement {
 
     For(Vec<VariableDeclaration>, Box<Expression>, Box<Statement>), // variable_declarations, iterable, body
 
-    FunctionDeclaration(String, Option<Vec<Expression>>, Vec<Parameter>, Option<Box<Expression>>, Box<Statement>), // name, generic_types, parameters, return type, body
+    FunctionDeclaration(String, Option<Vec<Expression>>, Vec<Parameter>, Option<Box<Expression>>, Box<Statement>, FunctionProperties), // name, generic_types, parameters, return type, body
 
     Return(Option<Box<Expression>>), // Optional return expression
 
@@ -208,6 +223,7 @@ pub enum UnaryOp {
     BitwiseNot, // ~ operator
     Decrement, // -- operator
     Increment, // ++ operator
+    Await,
 }
 
 /// Represents an assignment operator
@@ -459,8 +475,8 @@ impl AstFactory {
         Statement::For(variable_declarations, Box::new(iterable), Box::new(body))
     }
 
-    pub fn create_function_declaration(&self, name: String, generic_types: Option<Vec<Expression>>, parameters: Vec<Parameter>, return_type: Option<Box<Expression>>, body: Statement) -> Statement {
-        Statement::FunctionDeclaration(name, generic_types, parameters, return_type, Box::new(body))
+    pub fn create_function_declaration(&self, name: String, generic_types: Option<Vec<Expression>>, parameters: Vec<Parameter>, return_type: Option<Box<Expression>>, body: Statement, properties: FunctionProperties) -> Statement {
+        Statement::FunctionDeclaration(name, generic_types, parameters, return_type, Box::new(body), properties)
     }
 
     pub fn create_return_statement(&self, optional_expression: Option<Box<Expression>>) -> Statement {
