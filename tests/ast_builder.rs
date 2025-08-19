@@ -153,8 +153,8 @@ pub fn call(callee: Expression, args: Vec<Expression>) -> Expression {
 
 // === Statement Builders ===
 
-pub fn variable_statement(declarations: Vec<VariableDeclaration>) -> Statement {
-    Statement::Variable(declarations)
+pub fn variable_statement(declarations: Vec<VariableDeclaration>, visibility: MemberVisibility) -> Statement {
+    Statement::Variable(declarations, visibility)
 }
 
 pub fn expression_statement(expr: Expression) -> Statement {
@@ -197,66 +197,6 @@ pub fn guard(op: GuardOp, expr: Expression) -> Expression {
     Expression::Guard(op, Box::new(expr))
 }
 
-pub fn function_declaration(
-    name: String,
-    generic_types: Option<Vec<Expression>>,
-    parameters: Vec<Parameter>,
-    return_type: Option<Box<Expression>>,
-    body: Statement,
-    properties: FunctionProperties
-) -> Statement {
-    Statement::FunctionDeclaration(
-        name,
-        generic_types,
-        parameters,
-        return_type,
-        Box::new(body),
-        properties
-    )
-}
-
-pub fn def(
-    name: String,
-    generic_types: Option<Vec<Expression>>,
-    parameters: Vec<Parameter>,
-    return_type: Option<Box<Expression>>,
-    body: Statement,
-) -> Statement {
-    function_declaration(
-        name,
-        generic_types,
-        parameters,
-        return_type,
-        body,
-        FunctionProperties {
-            is_async: false,
-            is_gpu: false,
-            visibility: MemberVisibility::Public,
-        }
-    )
-}
-
-pub fn async_def(
-    name: String,
-    generic_types: Option<Vec<Expression>>,
-    parameters: Vec<Parameter>,
-    return_type: Option<Box<Expression>>,
-    body: Statement,
-) -> Statement {
-    function_declaration(
-        name,
-        generic_types,
-        parameters,
-        return_type,
-        body,
-        FunctionProperties {
-            is_async: true,
-            is_gpu: false,
-            visibility: MemberVisibility::Public,
-        }
-    )
-}
-
 pub fn parameter(name: String, typ: Option<Box<Expression>>, guard: Option<Box<Expression>>) -> Parameter {
     Parameter { name, typ, guard }
 }
@@ -286,8 +226,8 @@ pub fn type_declaration(name: &str, kind: TypeDeclarationKind, type_expr: Option
     Expression::TypeDeclaration(Box::new(identifier(name)), kind, type_expr)
 }
 
-pub fn type_statement(declarations: Vec<Expression>) -> Statement {
-    Statement::Type(declarations)
+pub fn type_statement(declarations: Vec<Expression>, visibility: MemberVisibility) -> Statement {
+    Statement::Type(declarations, visibility)
 }
 
 pub fn break_statement() -> Statement {
@@ -298,18 +238,96 @@ pub fn continue_statement() -> Statement {
     Statement::Continue
 }
 
-pub fn enum_statement(name: Expression, values: Vec<Expression>) -> Statement {
-    Statement::Enum(Box::new(name), values)
+pub fn enum_statement(name: Expression, values: Vec<Expression>, visibility: MemberVisibility) -> Statement {
+    Statement::Enum(Box::new(name), values, visibility)
 }
 
 pub fn enum_value(name: &str, types: Vec<Expression>) -> Expression {
     Expression::EnumValue(Box::new(identifier(name)), types)
 }
 
-pub fn struct_statement(name: Expression, members: Vec<Expression>) -> Statement {
-    Statement::Struct(Box::new(name), members)
+pub fn struct_statement(name: Expression, members: Vec<Expression>, visibility: MemberVisibility) -> Statement {
+    Statement::Struct(Box::new(name), members, visibility)
 }
 
 pub fn struct_member(name: &str, typ: Expression) -> Expression {
     Expression::StructMember(Box::new(identifier(name)), Box::new(typ))
+}
+
+pub struct FunctionBuilder {
+    name: String,
+    generic_types: Option<Vec<Expression>>,
+    parameters: Vec<Parameter>,
+    return_type: Option<Box<Expression>>,
+    properties: FunctionProperties,
+}
+
+impl FunctionBuilder {
+    pub fn new(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            generic_types: None,
+            parameters: vec![],
+            return_type: None,
+            properties: FunctionProperties {
+                is_async: false,
+                is_gpu: false,
+                visibility: MemberVisibility::Public,
+            },
+        }
+    }
+
+    pub fn generics(mut self, generics: Vec<Expression>) -> Self {
+        self.generic_types = Some(generics);
+        self
+    }
+
+    pub fn params(mut self, params: Vec<Parameter>) -> Self {
+        self.parameters = params;
+        self
+    }
+
+    pub fn return_type(mut self, ret_type: Expression) -> Self {
+        self.return_type = Some(Box::new(ret_type));
+        self
+    }
+
+    pub fn set_async(mut self) -> Self {
+        self.properties.is_async = true;
+        self
+    }
+
+    pub fn set_gpu(mut self) -> Self {
+        self.properties.is_gpu = true;
+        self
+    }
+
+    pub fn set_private(mut self) -> Self {
+        self.properties.visibility = MemberVisibility::Private;
+        self
+    }
+
+    pub fn set_protected(mut self) -> Self {
+        self.properties.visibility = MemberVisibility::Protected;
+        self
+    }
+
+    pub fn body(self, body: Statement) -> Statement {
+        Statement::FunctionDeclaration(
+            self.name,
+            self.generic_types,
+            self.parameters,
+            self.return_type,
+            Box::new(body),
+            self.properties,
+        )
+    }
+
+    pub fn empty_body(self) -> Statement {
+        self.body(empty_statement())
+    }
+}
+
+pub fn def(name: &str) -> FunctionBuilder {
+    FunctionBuilder::new(name)
 }

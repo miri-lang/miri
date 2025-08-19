@@ -66,7 +66,7 @@ pub enum Statement {
 
     Block(Vec<Statement>),
 
-    Variable(Vec<VariableDeclaration>),
+    Variable(Vec<VariableDeclaration>, MemberVisibility),
 
     If(Box<Expression>, Box<Statement>, Option<Box<Statement>>, IfStatementType), // condition, then_block, else_block, type
 
@@ -80,11 +80,11 @@ pub enum Statement {
 
     Use(Box<Expression>, Option<Box<Expression>>),
 
-    Type(Vec<Expression>), // type X, Y, Z extends A
+    Type(Vec<Expression>, MemberVisibility), // type X, Y, Z extends A
 
-    Enum(Box<Expression>, Vec<Expression>), // enum Colors: Red, Green, Blue(string)
+    Enum(Box<Expression>, Vec<Expression>, MemberVisibility), // enum Colors: Red, Green, Blue(string)
 
-    Struct(Box<Expression>, Vec<Expression>) // struct Point: x int, y int
+    Struct(Box<Expression>, Vec<Expression>, MemberVisibility) // struct Point: x int, y int
 }
 
 /// Represents an expression
@@ -437,8 +437,8 @@ impl AstFactory {
         Expression::Range(Box::new(start), end, range_type)
     }
 
-    pub fn create_variable_statement(&self, declarations: Vec<VariableDeclaration>) -> Statement {
-        Statement::Variable(declarations)
+    pub fn create_variable_statement(&self, declarations: Vec<VariableDeclaration>, visibility: MemberVisibility) -> Statement {
+        Statement::Variable(declarations, visibility)
     }
 
     pub fn create_if_statement(&self, condition: Expression, then_block: Statement, else_block: Option<Statement>, if_statement_type: IfStatementType) -> Statement {
@@ -531,8 +531,8 @@ impl AstFactory {
         Expression::TypeDeclaration(Box::new(name), kind, type_expr)
     }
 
-    pub fn create_type_statement(&self, declarations: Vec<Expression>) -> Statement {
-        Statement::Type(declarations)
+    pub fn create_type_statement(&self, declarations: Vec<Expression>, visibility: MemberVisibility) -> Statement {
+        Statement::Type(declarations, visibility)
     }
 
     pub fn create_break_statement(&self) -> Statement {
@@ -547,16 +547,16 @@ impl AstFactory {
         Expression::EnumValue(Box::new(identifier), types)
     }
 
-    pub fn create_enum_statement(&self, name: Expression, values: Vec<Expression>) -> Statement {
-        Statement::Enum(Box::new(name), values)
+    pub fn create_enum_statement(&self, name: Expression, values: Vec<Expression>, visibility: MemberVisibility) -> Statement {
+        Statement::Enum(Box::new(name), values, visibility)
     }
 
     pub fn create_struct_member_expression(&self, name: Expression, typ: Expression) -> Expression {
         Expression::StructMember(Box::new(name), Box::new(typ))
     }
 
-    pub fn create_struct_statement(&self, name: Expression, members: Vec<Expression>) -> Statement {
-        Statement::Struct(Box::new(name), members)
+    pub fn create_struct_statement(&self, name: Expression, members: Vec<Expression>, visibility: MemberVisibility) -> Statement {
+        Statement::Struct(Box::new(name), members, visibility)
     }
 }
 
