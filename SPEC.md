@@ -223,6 +223,9 @@ value = await counter <- get()
 
 ---
 
+arr.as_parallel.map(x: x * x)
+books.as_parallel.each(book: book.read())
+
 ## Parallelism
 
 ### Parallel Loops

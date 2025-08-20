@@ -30,11 +30,10 @@ Done ✅
   - [x] structs
   - [x] using enums, structs and functions from other modules e.g. Http::Status.Ok, Http::get
   - [x] async/await
-  - [ ] gpu
-  - [ ] parallel
+  - [x] gpu
+  - [x] private/protected
   - [ ] lambda, function as variables and parameters
   - [ ] extend/implement/include
-  - [ ] private/protected
   - [ ] list
   - [ ] tuple
   - [ ] map

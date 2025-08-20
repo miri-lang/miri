@@ -126,6 +126,8 @@ pub enum Expression {
 
     StructMember(Box<Expression>, Box<Expression>), // Represents a struct member, e.g., `x int`
 
+    Lambda(Option<Vec<Expression>>, Vec<Parameter>, Option<Box<Expression>>, Box<Statement>, FunctionProperties), // generic_types, parameters, return type, body
+
     // // Operators
     // Binary(Box<Expr>, BinaryOp, Box<Expr>),
     // Unary(UnaryOp, Box<Expr>),
@@ -295,6 +297,7 @@ pub enum Type {
     Set(Box<Expression>),                       // {i32}
     Result(Box<Expression>, Box<Expression>),   // result<i32, String>
     Future(Box<Expression>),                    // future<i32>
+    Function(Option<Vec<Expression>>, Vec<Parameter>, Option<Box<Expression>>), // fn<T>(x int) float
 
     Custom(String, Option<Vec<Expression>>),    // a custom type, e.g., MyStruct<T, U>
 }
@@ -557,6 +560,10 @@ impl AstFactory {
 
     pub fn create_struct_statement(&self, name: Expression, members: Vec<Expression>, visibility: MemberVisibility) -> Statement {
         Statement::Struct(Box::new(name), members, visibility)
+    }
+
+    pub fn create_lambda_expression(&self, generic_types: Option<Vec<Expression>>, parameters: Vec<Parameter>, return_type: Option<Box<Expression>>, body: Statement, properties: FunctionProperties) -> Expression {
+        Expression::Lambda(generic_types, parameters, return_type, Box::new(body), properties)
     }
 }
 

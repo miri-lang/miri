@@ -10,7 +10,7 @@ use crate::syntax_error::{Span, SyntaxError, SyntaxErrorKind};
 pub enum Token {
     // Keywords
     #[token("use")]        Use,
-    #[token("def")]        Def,
+    #[token("fn")]         Fn,
     #[token("async")]      Async,
     #[token("await")]      Await,
     #[token("spawn")]      Spawn,

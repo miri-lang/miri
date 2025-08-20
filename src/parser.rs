@@ -104,7 +104,7 @@ impl<'source> Parser<'source> {
             Some((Token::Until, _)) => self.while_statement(WhileStatementType::Until)?,
             Some((Token::Forever, _)) => self.while_statement(WhileStatementType::Forever)?,
             Some((Token::For, _)) => self.for_statement()?,
-            Some((Token::Async, _)) | Some((Token::Def, _)) | Some((Token::Gpu, _)) => {
+            Some((Token::Async, _)) | Some((Token::Fn, _)) | Some((Token::Gpu, _)) => {
                 self.function_declaration(MemberVisibility::Public)?
             }
             Some((Token::Return, _)) => self.return_statement()?,
@@ -122,7 +122,7 @@ impl<'source> Parser<'source> {
     fn class_member_statement(&mut self, visibility: MemberVisibility) -> Result<Statement, SyntaxError> {
         let statement = match &self._lookahead {
             Some((Token::Let, _)) | Some((Token::Var, _)) => self.variable_statement(visibility)?,
-            Some((Token::Async, _)) | Some((Token::Def, _)) | Some((Token::Gpu, _)) => {
+            Some((Token::Async, _)) | Some((Token::Fn, _)) | Some((Token::Gpu, _)) => {
                 self.function_declaration(visibility)?
             }
             Some((Token::Enum, _)) => self.enum_statement(visibility)?,
@@ -421,8 +421,8 @@ impl<'source> Parser<'source> {
 
     /*
         FunctionDeclaration
-            : 'async'? 'gpu'? 'def' Identifier [GenericTypesDeclaration] '(' ParameterList ')' [ReturnType] EXPRESSION_END BlockStatement
-            | 'async'? 'gpu'? 'def' Identifier [GenericTypesDeclaration] '(' ParameterList ')' [ReturnType] ':' ExpressionStatement EXPRESSION_END
+            : 'async'? 'gpu'? 'fn' Identifier [GenericTypesDeclaration] '(' ParameterList ')' [ReturnType] EXPRESSION_END BlockStatement
+            | 'async'? 'gpu'? 'fn' Identifier [GenericTypesDeclaration] '(' ParameterList ')' [ReturnType] ':' ExpressionStatement EXPRESSION_END
             ;
     */
     fn function_declaration(&mut self, visibility: MemberVisibility) -> Result<Statement, SyntaxError> {
@@ -446,22 +446,68 @@ impl<'source> Parser<'source> {
             }
         }
 
-        self.eat_token(&Token::Def)?;
+        self.eat_token(&Token::Fn)?;
 
         let name = match &self._lookahead {
             Some((Token::Identifier, _)) => {
                 let token = self.eat_token(&Token::Identifier)?;
                 self.source[token.1.start..token.1.end].to_string()
             },
-            _ => return Err(self.error_unexpected_lookahead_token("function name")),
+            Some((Token::LessThan, _)) | Some((Token::LParen, _)) => {
+                // No name, it's a lambda
+                "".to_string()
+            },
+            _ => return Err(self.error_unexpected_lookahead_token("a function name, '(' or '<'")),
         };
 
+        let generic_types = self.generic_types_expression()?;
+        let parameters = self.function_params_expression()?;
+        let return_type = self.return_type_expression()?;
+
+        let body = if name.is_empty() {
+            // This is a lambda expression. Its body parsing is special.
+            if self.lookahead_is_colon() {
+                self.eat_token(&Token::Colon)?;
+                // An inline lambda body is a single expression, not a full statement.
+                // We parse it and wrap it in an ExpressionStatement for the AST.
+                let expr = self.expression()?;
+                self._ast_factory.create_expression_statement(expr)
+            } else {
+                // A block lambda body is a normal block statement, which statement_body handles correctly.
+                self.statement_body()?
+            }
+        } else {
+            // This is a named function. Its body is always a full statement.
+            self.statement_body()?
+        };
+
+        if name.is_empty() {
+            return Ok(
+                self._ast_factory.create_expression_statement(
+                    self._ast_factory.create_lambda_expression(
+                        generic_types,
+                        parameters,
+                        return_type,
+                        body,
+                        properties
+                    )
+                )
+            );
+        }
+
+        Ok(self._ast_factory.create_function_declaration(name, generic_types, parameters, return_type, body, properties))
+    }
+
+    fn generic_types_expression(&mut self) -> Result<Option<Vec<Expression>>, SyntaxError> {
         let generic_types = if self.lookahead_is_less_than() {
             Some(self.generic_types_declaration()?)
         } else {
             None
         };
+        Ok(generic_types)
+    }
 
+    fn function_params_expression(&mut self) -> Result<Vec<Parameter>, SyntaxError> {
         self.eat_token(&Token::LParen)?;
         let parameters =  if self.lookahead_is_rparen() {
             vec![]
@@ -470,14 +516,15 @@ impl<'source> Parser<'source> {
         };
         self.eat_token(&Token::RParen)?;
 
+        Ok(parameters)
+    }
+
+    fn return_type_expression(&mut self) -> Result<Option<Box<Expression>>, SyntaxError> {
         let return_type = match self.type_expression()? {
             Some(typ) => Some(Box::new(typ)),
             None => None,
         };
-
-        let body = self.statement_body()?;
-
-        Ok(self._ast_factory.create_function_declaration(name, generic_types, parameters, return_type, body, properties))
+        Ok(return_type)
     }
 
     /*
@@ -786,6 +833,13 @@ impl<'source> Parser<'source> {
                     self.eat_token(&Token::RBrace)?;
                     typ = Type::Set(Box::new(key_type));
                 }
+            },
+            Some((Token::Fn, _)) => {
+                self.eat_token(&Token::Fn)?;
+                let generic_types = self.generic_types_expression()?;
+                let parameters = self.function_params_expression()?;
+                let return_type = self.return_type_expression()?;
+                typ = Type::Function(generic_types, parameters, return_type);
             },
             _ => return Ok(None),
         }
@@ -1469,9 +1523,39 @@ impl<'source> Parser<'source> {
         match &self._lookahead {
             Some((Token::LParen, _)) => self.parenthesized_expression(),
             Some((Token::Identifier, _)) => self.identifier(),
+            Some((Token::Async, _)) | Some((Token::Fn, _)) | Some((Token::Gpu, _)) => {
+                self.lambda_expression()
+            },
             _ => Err(
-                self.error_unexpected_lookahead_token("literal, parenthesized expression or identifier")
+                self.error_unexpected_lookahead_token("literal, parenthesized expression, identifier or lambda")
             ),
+        }
+    }
+
+    /*
+        LambdaExpression
+            : 'async'? 'gpu'? 'fn' [GenericTypesDeclaration] '(' ParameterList ')' [ReturnType] EXPRESSION_END BlockStatement
+            | 'async'? 'gpu'? 'fn' [GenericTypesDeclaration] '(' ParameterList ')' [ReturnType] ':' ExpressionStatement EXPRESSION_END
+            ;
+    */
+    fn lambda_expression(&mut self) -> Result<Expression, SyntaxError> {
+        let statement = self.function_declaration(MemberVisibility::Public)?;
+        match statement {
+            Statement::FunctionDeclaration(_, generic_types, parameters, return_type, body, properties) => {
+                let lambda = self._ast_factory.create_lambda_expression(
+                    generic_types,
+                    parameters,
+                    return_type,
+                    *body,
+                    properties
+                );
+                Ok(lambda)
+            },
+            Statement::Expression(lambda) => {
+                // If the function declaration was parsed as an expression, return it directly
+                Ok(lambda)
+            },
+            _ => panic!("BUG: Unexpected statement in lambda expression {:?}", statement),
         }
     }
 

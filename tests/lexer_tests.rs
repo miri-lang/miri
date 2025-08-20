@@ -107,10 +107,10 @@ fn test_very_long_identifier() {
 
 #[test]
 fn test_number_identifier_boundaries() {
-    lexer_test("123abc abc123 123.456def", vec![
+    lexer_test("123abc abc123 123.456fn", vec![
         Token::Int, Token::Identifier,
         Token::Identifier,
-        Token::Float, Token::Def,
+        Token::Float, Token::Fn,
     ]);
 }
 
@@ -123,7 +123,7 @@ fn test_unicode_identifiers() {
 fn test_keywords() {
     let keyword_map = vec![
         ("use", Token::Use),
-        ("def", Token::Def),
+        ("fn", Token::Fn),
         ("async", Token::Async),
         ("await", Token::Await),
         ("spawn", Token::Spawn),
@@ -530,7 +530,7 @@ var a = 5
 print('ignored!')
 */
 
-def func() int: 10 + 10
+fn func() int: 10 + 10
 
 /***
 /* 
@@ -552,7 +552,7 @@ Symbols: /* nested? */ < > & ^ ~
 print("Hello") /* inline comment */
 "#, vec![
         Token::Let, Token::Identifier, Token::Assign, Token::DoubleQuotedString, Token::ExpressionStatementEnd,
-        Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::Identifier, Token::Colon,
+        Token::Fn, Token::Identifier, Token::LParen, Token::RParen, Token::Identifier, Token::Colon,
             Token::Int, Token::Plus, Token::Int, Token::ExpressionStatementEnd,
         Token::Identifier, Token::LParen, Token::DoubleQuotedString, Token::RParen, Token::ExpressionStatementEnd,
     ]);
@@ -626,10 +626,10 @@ let dict2 {string: int} = {key1: 1, key2: 2} // dictionary with type
 fn test_function_with_no_params() {
     lexer_test("
 // Function with no parameters
-def fancy_print
+fn fancy_print
   print \"Hello, World!\"
 ", vec![
-        Token::Def, Token::Identifier, Token::ExpressionStatementEnd,
+        Token::Fn, Token::Identifier, Token::ExpressionStatementEnd,
             Token::Indent,
             Token::Identifier, Token::DoubleQuotedString, Token::ExpressionStatementEnd,
             Token::Dedent,
@@ -640,19 +640,19 @@ def fancy_print
 fn test_function_with_params() {
     lexer_test("
 /* Function with parameters */
-def square(x int) int
+fn square(x int) int
   x * x
 
 /* Another function example */
-def add(a int, b int) int
+fn add(a int, b int) int
   a + b
 ", vec![
-        Token::Def, Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::ExpressionStatementEnd,
+        Token::Fn, Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::ExpressionStatementEnd,
             Token::Indent,
             Token::Identifier, Token::Star, Token::Identifier, Token::ExpressionStatementEnd,
             Token::Dedent,
 
-        Token::Def, Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::Comma, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::ExpressionStatementEnd,
+        Token::Fn, Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::Comma, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::ExpressionStatementEnd,
             Token::Indent,
             Token::Identifier, Token::Plus, Token::Identifier, Token::ExpressionStatementEnd,
             Token::Dedent,
@@ -663,9 +663,9 @@ def add(a int, b int) int
 fn test_inline_function() {
     lexer_test("
 // Inline function
-def multiply(a int, b int) int: a * b
+fn multiply(a int, b int) int: a * b
 ", vec![
-        Token::Def, Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::Comma, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon, Token::Identifier, Token::Star, Token::Identifier, Token::ExpressionStatementEnd
+        Token::Fn, Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::Comma, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon, Token::Identifier, Token::Star, Token::Identifier, Token::ExpressionStatementEnd
     ]);
 }
 
@@ -727,13 +727,13 @@ f1 5.0, 3.0
 fn test_function_call_with_codeblock() {
     lexer_test("
 // Code block
-let y = arr.map
-  (x int) x * 2
+let y = arr.map(
+  fn (x int): x * 2
+)
 ", vec![
-        Token::Let, Token::Identifier, Token::Assign, Token::Identifier, Token::Dot, Token::Identifier, Token::ExpressionStatementEnd,
-            Token::Indent,
-            Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Star, Token::Int, Token::ExpressionStatementEnd,
-            Token::Dedent,
+        Token::Let, Token::Identifier, Token::Assign, Token::Identifier, Token::Dot, Token::Identifier, Token::LParen,
+            Token::Fn, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Colon, Token::Identifier, Token::Star, Token::Int,
+        Token::RParen, Token::ExpressionStatementEnd
     ]);
 }
 
@@ -741,8 +741,8 @@ let y = arr.map
 fn test_nested_function() {
     lexer_test("
 // Nested function
-def nested_func(a int) int
-  def inner_func(x int) int
+fn nested_func(a int) int
+  fn inner_func(x int) int
     print(x)
     let res = x + 1
     for i in 0..x
@@ -752,9 +752,9 @@ def nested_func(a int) int
 
 nested_func(5)
 ", vec![
-        Token::Def, Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::ExpressionStatementEnd,
+        Token::Fn, Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::ExpressionStatementEnd,
             Token::Indent,
-            Token::Def, Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::ExpressionStatementEnd,
+            Token::Fn, Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::ExpressionStatementEnd,
                 Token::Indent,
                 Token::Identifier, Token::LParen, Token::Identifier, Token::RParen, Token::ExpressionStatementEnd,
                 Token::Let, Token::Identifier, Token::Assign, Token::Identifier, Token::Plus, Token::Int, Token::ExpressionStatementEnd,
@@ -781,8 +781,8 @@ fn test_windows_line_endings() {
 
 #[test]
 fn test_mixed_whitespace_types() {
-    lexer_test("def func()\n\t  mixed_indent", vec![
-        Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
+    lexer_test("fn func()\n\t  mixed_indent", vec![
+        Token::Fn, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
             Token::Indent,
             Token::Identifier,
             Token::Dedent,
@@ -793,11 +793,11 @@ fn test_mixed_whitespace_types() {
 fn test_uneven_indent_spaces() {
     lexer_error_test("
 // Uneven spaces
-def func()
-   def three_spaces()
-     def two_spaces()
+fn func()
+   fn three_spaces()
+     fn two_spaces()
       one_space():
-    def four_spaces()
+    fn four_spaces()
       print(\"Hello\")
   print(\"World\")
 ", SyntaxErrorKind::IndentationMismatch);
@@ -806,10 +806,10 @@ def func()
 #[test]
 fn test_uneven_indent_tabs() {
     lexer_error_test("
-def func()
-\tdef tab()
-\t\t\tdef tab()
-\t\tdef tab()
+fn func()
+\tfn tab()
+\t\t\tfn tab()
+\t\tfn tab()
 print(\"Hello\")
 ", SyntaxErrorKind::IndentationMismatch);
 }
@@ -818,11 +818,11 @@ print(\"Hello\")
 fn test_uneven_indent_spaces_tabs() {
     lexer_error_test("
 // Mixed tabs and spaces
-def func()
-\t\t\tdef tab()
+fn func()
+\t\t\tfn tab()
 \t\t\t print(\"Hello\")
   print(\"World\")
-  \t\t\tdef tab()
+  \t\t\tfn tab()
     print(\"Indented with tabs\")
   print(\"Dedented with spaces\")
 ", SyntaxErrorKind::IndentationMismatch);
@@ -848,19 +848,19 @@ fn test_indent_dedent_func_nested() {
 // Indented call with nested indentation
 func(10,
      50,
-     def nested_func(x int) int
+     fn nested_func(x int) int
        print(x)
-       def another_func(y int) int
+       fn another_func(y int) int
          print(y)
          return y + 1
        return x + another_func(1))
 ", vec![
         Token::Identifier, Token::LParen, Token::Int, Token::Comma,
             Token::Int, Token::Comma,
-            Token::Def, Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::ExpressionStatementEnd,
+            Token::Fn, Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::ExpressionStatementEnd,
                 Token::Indent,
                 Token::Identifier, Token::LParen, Token::Identifier, Token::RParen, Token::ExpressionStatementEnd,
-                Token::Def, Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::ExpressionStatementEnd,
+                Token::Fn, Token::Identifier, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::ExpressionStatementEnd,
                     Token::Indent,
                     Token::Identifier, Token::LParen, Token::Identifier, Token::RParen, Token::ExpressionStatementEnd,
                     Token::Return, Token::Identifier, Token::Plus, Token::Int, Token::ExpressionStatementEnd,
@@ -889,14 +889,14 @@ func(
 #[test]
 fn test_empty_lines_preserve_indentation_context() {
     lexer_test("
-def func()
+fn func()
     statement1
 
     statement2
         nested
     statement3
 ", vec![
-        Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
+        Token::Fn, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
             Token::Indent,
             Token::Identifier, Token::ExpressionStatementEnd,
             Token::Identifier, Token::ExpressionStatementEnd,
@@ -935,17 +935,17 @@ statement5
 #[test]
 fn test_multiple_dedent_levels() {
     lexer_test("
-def func()
-    def level1()
-        def level2()
+fn func()
+    fn level1()
+        fn level2()
             level3
 back_to_root
 ", vec![
-        Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
+        Token::Fn, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
             Token::Indent,
-            Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
+            Token::Fn, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
                 Token::Indent,
-                Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
+                Token::Fn, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
                     Token::Indent,
                     Token::Identifier, Token::ExpressionStatementEnd,
                     Token::Dedent,
@@ -1010,11 +1010,11 @@ let y = {
 #[test]
 fn test_indented_line_with_only_a_comment() {
     lexer_test("
-def my_func()
+fn my_func()
     // This line is just a comment.
     let x = 1
 ", vec![
-        Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
+        Token::Fn, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
             Token::Indent,
             Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
             Token::Dedent,
@@ -1024,12 +1024,12 @@ def my_func()
 #[test]
 fn test_indented_line_with_multiple_inline_comments() {
     lexer_test("
-def my_func()
+fn my_func()
     // This line is just a comment.
     // Another comment
     let x = 1
 ", vec![
-        Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
+        Token::Fn, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
             Token::Indent,
             Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
             Token::Dedent,
@@ -1039,7 +1039,7 @@ def my_func()
 #[test]
 fn test_indented_line_with_multiline_comment() {
     lexer_test("
-def my_func()
+fn my_func()
     /*
         This line is just a comment.
         It spans multiple lines.
@@ -1048,7 +1048,7 @@ def my_func()
     */
     let x = 1
 ", vec![
-        Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
+        Token::Fn, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
             Token::Indent,
             Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
             Token::Dedent,
@@ -1058,10 +1058,10 @@ def my_func()
 #[test]
 fn test_indent_after_inline_comment() {
     lexer_test("
-def my_func() // comment
+fn my_func() // comment
     let x = 1
 ", vec![
-        Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
+        Token::Fn, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
         Token::Indent,
         Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
         Token::Dedent,
@@ -1071,14 +1071,14 @@ def my_func() // comment
 #[test]
 fn test_dedent_to_zero_after_empty_line_with_spaces() {
     lexer_test("
-def func()
+fn func()
     let x = 1
    
 // The line above has spaces, but is empty of tokens.
 // This should dedent correctly.
 let y = 2
 ", vec![
-        Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
+        Token::Fn, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
         Token::Indent,
         Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
         Token::Dedent,
@@ -1089,13 +1089,13 @@ let y = 2
 #[test]
 fn test_dedent_to_zero_after_empty_line_with_tabs() {
     lexer_test("
-def func()
+fn func()
 \t\tlet x = 1
 \t
 // This should dedent correctly.
 let y = 2
 ", vec![
-        Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
+        Token::Fn, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
         Token::Indent,
         Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
         Token::Dedent,
@@ -1106,12 +1106,12 @@ let y = 2
 #[test]
 fn test_dedent_to_inconsistent_level() {
     lexer_test("
-def func()
+fn func()
     let level1 = 1
       let level2 = 2
    // This dedent is to an invalid level, but we should handle it gracefully.
 ", vec![
-        Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
+        Token::Fn, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
             Token::Indent,
             Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
                 Token::Indent, // This is an inconsistent indentation level
@@ -1382,9 +1382,9 @@ fn test_large_nested_structure() {
     let mut expected = Vec::new();
     
     for i in 0..100 {
-        input.push_str(&format!("def level{}()\n", i));
+        input.push_str(&format!("fn level{}()\n", i));
         input.push_str(&"    ".repeat(i + 1));
-        expected.extend([Token::Def, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd, Token::Indent]);
+        expected.extend([Token::Fn, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd, Token::Indent]);
     }
     
     for _ in 0..100 {
