@@ -3832,6 +3832,145 @@ fn test_error_lambda_with_misplaced_modifier() {
     );
 }
 
+#[test]
+fn test_function_type_with_named_parameters() {
+    parse_type_test(
+        "fn(x int, y string?) bool",
+        typ(Type::Function(
+            None, // no generics
+            vec![
+                parameter("x".into(), opt_expr(typ(Type::Int)), None),
+                parameter("y".into(), opt_expr(null_typ(Type::String)), None),
+            ],
+            opt_expr(typ(Type::Boolean))
+        ))
+    );
+}
+
+#[test]
+fn test_function_type_returning_function_type() {
+    // A function type that returns another function type.
+    // Note: The inner function type must also have named parameters per current parser rules.
+    parse_type_test(
+        "fn() fn(x int) bool",
+        typ(Type::Function(
+            None,
+            vec![],
+            opt_expr(typ(Type::Function(
+                None,
+                vec![parameter("x".into(), opt_expr(typ(Type::Int)), None)],
+                opt_expr(typ(Type::Boolean))
+            )))
+        ))
+    );
+}
+
+#[test]
+fn test_list_of_function_types() {
+    parse_type_test(
+        "[fn(s string) bool]",
+        typ(Type::List(Box::new(
+            typ(Type::Function(
+                None,
+                vec![parameter("s".into(), opt_expr(typ(Type::String)), None)],
+                opt_expr(typ(Type::Boolean))
+            ))
+        )))
+    );
+}
+
+#[test]
+fn test_function_type_with_generics() {
+    parse_type_test(
+        "fn<T>(item T) T",
+        typ(Type::Function(
+            Some(vec![generic_type("T", None)]),
+            vec![parameter("item".into(), opt_expr(typ(Type::Custom("T".into(), None))), None)],
+            opt_expr(typ(Type::Custom("T".into(), None)))
+        ))
+    );
+}
+
+#[test]
+fn test_nullable_parenthesized_function_type() {
+    // The parser will interpret `(fn() int)` as a single-element tuple containing a function type.
+    // The `?` then makes the tuple itself nullable.
+    parse_type_test(
+        "(fn() int)?",
+        null_typ(Type::Tuple(vec![
+            typ(Type::Function(
+                None,
+                vec![],
+                opt_expr(typ(Type::Int))
+            ))
+        ]))
+    );
+}
+
+#[test]
+fn test_function_type_with_type_as_parameter_name() {
+    // Crazy but valid: a function with parameters named 'int' and 'bool' of unspecified types.
+    parse_type_test(
+        "fn(int, bool)",
+        typ(Type::Function(
+            None,
+            vec![
+                parameter("int".into(), None, None),
+                parameter("bool".into(), None, None),
+            ],
+            None
+        ))
+    );
+}
+
+#[test]
+fn test_crazy_nested_function_type() {
+    // A generic function type that takes another function type as a parameter
+    // and returns a nullable function type.
+    parse_type_test(
+        "fn<T>(cb fn(item T) bool, items [T]?) (fn() T)?",
+        typ(Type::Function(
+            Some(vec![generic_type("T", None)]), // generics: <T>
+            vec![ // parameters
+                parameter(
+                    "cb".into(),
+                    opt_expr(typ(Type::Function(
+                        None,
+                        vec![parameter("item".into(), opt_expr(typ(Type::Custom("T".into(), None))), None)],
+                        opt_expr(typ(Type::Boolean))
+                    ))),
+                    None
+                ),
+                parameter(
+                    "items".into(),
+                    opt_expr(null_typ(Type::List(Box::new(typ(Type::Custom("T".into(), None)))))),
+                    None
+                )
+            ],
+            // return type: (fn() T)?
+            opt_expr(null_typ(Type::Tuple(vec![
+                typ(Type::Function(
+                    None,
+                    vec![],
+                    opt_expr(typ(Type::Custom("T".into(), None)))
+                ))
+            ])))
+        ))
+    );
+}
+
+#[test]
+fn test_error_function_type_with_trailing_comma() {
+    parse_error_test(
+        "let x fn(a int,)",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "identifier".to_string(),
+            found: ")".to_string(),
+        }
+    );
+}
+
+
 fn parse(input: &str) -> Result<Program, SyntaxError> {
     let mut lexer = Lexer::new(input);
     let mut parser = Parser::new(&mut lexer, input, AstFactory::new());
