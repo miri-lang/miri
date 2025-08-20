@@ -20,7 +20,7 @@ struct 3dCoordinates: x int, y int, z int
 // Define the graph as an adjacency list
 private let _graph map<string, list<string>>
 
-def new
+fn new
     // Initialize the graph
     _graph = {
         'A': ['B', 'C'],
@@ -32,17 +32,17 @@ def new
         'G': []
     }
 
-def graph: _graph
-def graph=(val): _graph = val
+fn graph: _graph
+fn graph=(val): _graph = val
 
-def traverse
+fn traverse
     // Example runs
     puts "BFS Traversal: #{bfs('A').join(', ')}"
     puts "DFS Iterative Traversal: #{dfs_iterative('A').join(', ')}"
     puts "DFS Recursive Traversal: #{dfs_recursive('A').join(', ')}"
 
 // Breadth-First Search (BFS)
-private def bfs(start_node string) [string]
+private fn bfs(start_node string) [string]
     var visited = []
     var queue = [start_node]
 
@@ -54,7 +54,7 @@ private def bfs(start_node string) [string]
     visited
 
 // Depth-First Search (Iterative)
-private def dfs_iterative(start_node string) [string]
+private fn dfs_iterative(start_node string) [string]
     var visited = []
     var stack = [start_node]
 
@@ -67,7 +67,7 @@ private def dfs_iterative(start_node string) [string]
     visited
 
 // Depth-First Search (Recursive)
-private def dfs_recursive(start_node string, visited=[]) string[]
+private fn dfs_recursive(start_node string, visited=[]) string[]
     unless start_node in visited
         visited.append(start_node)
         for neighbor in _graph[start_node]: dfs_recursive(neighbor, visited)

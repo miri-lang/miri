@@ -312,7 +312,7 @@ impl FunctionBuilder {
         self
     }
 
-    pub fn body(self, body: Statement) -> Statement {
+    pub fn build(self, body: Statement) -> Statement {
         Statement::FunctionDeclaration(
             self.name,
             self.generic_types,
@@ -323,11 +323,29 @@ impl FunctionBuilder {
         )
     }
 
-    pub fn empty_body(self) -> Statement {
-        self.body(empty_statement())
+    pub fn build_empty_body(self) -> Statement {
+        self.build(empty_statement())
+    }
+
+    pub fn build_lambda(self, body: Statement) -> Expression {
+        Expression::Lambda(
+            self.generic_types,
+            self.parameters,
+            self.return_type,
+            Box::new(body),
+            self.properties,
+        )
+    }
+
+    pub fn build_lambda_empty_body(self) -> Expression {
+        self.build_lambda(empty_statement())
     }
 }
 
-pub fn def(name: &str) -> FunctionBuilder {
+pub fn func(name: &str) -> FunctionBuilder {
     FunctionBuilder::new(name)
+}
+
+pub fn lambda() -> FunctionBuilder {
+    FunctionBuilder::new("")
 }
