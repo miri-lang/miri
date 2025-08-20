@@ -77,6 +77,10 @@ pub fn symbol(val: &str) -> Literal {
     Literal::Symbol(val.to_string())
 }
 
+pub fn symbol_literal(val: &str) -> Expression {
+    Expression::Literal(symbol(val))
+}
+
 pub fn binary(left: Expression, op: BinaryOp, right: Expression) -> Expression {
     Expression::Binary(Box::new(left), op, Box::new(right))
 }
@@ -278,6 +282,9 @@ pub fn map(pairs: Vec<(Expression, Expression)>) -> Expression {
     Expression::Map(pairs)
 }
 
+pub fn tuple(elements: Vec<Expression>) -> Expression {
+    Expression::Tuple(elements)
+}
 
 pub struct FunctionBuilder {
     name: String,

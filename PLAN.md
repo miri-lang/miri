@@ -35,8 +35,8 @@ Done ✅
   - [x] lambda, function as variables and parameters
   - [x] extend/implement/include
   - [x] list
-  - [ ] tuple
-  - [ ] map
+  - [x] tuple
+  - [x] map
   - [ ] set
   - [ ] regex
   - [ ] function declarations without parentheses
