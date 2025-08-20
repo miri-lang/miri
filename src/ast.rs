@@ -84,7 +84,13 @@ pub enum Statement {
 
     Enum(Box<Expression>, Vec<Expression>, MemberVisibility), // enum Colors: Red, Green, Blue(string)
 
-    Struct(Box<Expression>, Vec<Expression>, MemberVisibility) // struct Point: x int, y int
+    Struct(Box<Expression>, Vec<Expression>, MemberVisibility), // struct Point: x int, y int
+
+    Extends(Box<Expression>), // extends BaseClass
+
+    Implements(Vec<Expression>), // implements Trait1, Trait2
+
+    Includes(Vec<Expression>), // includes Module1, Module2
 }
 
 /// Represents an expression
@@ -564,6 +570,18 @@ impl AstFactory {
 
     pub fn create_lambda_expression(&self, generic_types: Option<Vec<Expression>>, parameters: Vec<Parameter>, return_type: Option<Box<Expression>>, body: Statement, properties: FunctionProperties) -> Expression {
         Expression::Lambda(generic_types, parameters, return_type, Box::new(body), properties)
+    }
+
+    pub fn create_extends_statement(&self, base: Expression) -> Statement {
+        Statement::Extends(Box::new(base))
+    }
+
+    pub fn create_includes_statement(&self, modules: Vec<Expression>) -> Statement {
+        Statement::Includes(modules)
+    }
+
+    pub fn create_implements_statement(&self, traits: Vec<Expression>) -> Statement {
+        Statement::Implements(traits)
     }
 }
 
