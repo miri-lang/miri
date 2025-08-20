@@ -43,7 +43,7 @@ pub struct Parameter {
 pub enum MemberVisibility {
     Public,
     Protected,
-    Private,
+    Private
 }
 
 /// Represents the properties of a function declaration

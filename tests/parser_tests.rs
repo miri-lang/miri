@@ -2513,7 +2513,7 @@ fn test_error_double_nullable() {
     parse_error_test(
         "let x int??",
         SyntaxErrorKind::UnexpectedToken {
-            expected: "end of expression".to_string(),
+            expected: "newline or end of file".to_string(),
             found: "?".to_string(),
         }
     );
@@ -2785,7 +2785,7 @@ fn test_error_break_with_value() {
     parse_error_test(
         "for x in y: break 1",
         SyntaxErrorKind::UnexpectedToken {
-            expected: "end of expression".to_string(),
+            expected: "newline or end of file".to_string(),
             found: "int".to_string(),
         }
     );
@@ -2796,7 +2796,7 @@ fn test_error_continue_with_value() {
     parse_error_test(
         "while true: continue false",
         SyntaxErrorKind::UnexpectedToken {
-            expected: "end of expression".to_string(),
+            expected: "newline or end of file".to_string(),
             found: "false".to_string(),
         }
     );
@@ -3685,7 +3685,7 @@ fn test_error_lambda_missing_parameter_parens() {
     parse_error_test(
         "let f = fn : 1",
         SyntaxErrorKind::UnexpectedToken {
-            expected: "a function name, '(' or '<'".to_string(),
+            expected: "(".to_string(),
             found: ":".to_string(),
         }
     );
@@ -3750,6 +3750,67 @@ fn get_adder()
 }
 
 #[test]
+fn test_mutiline_lambda_as_parameter() {
+    parse_test("
+func(
+    fn (a, b): a + b,
+    fn (c, d, e)
+        let x = c + d + e
+        print(x)
+        return x
+,
+    [
+        6, 7, 8
+    ], 'Some string'
+)
+", vec![
+        expression_statement(
+            call(
+                identifier("func"),
+                vec![
+                    lambda()
+                        .params(vec![
+                            parameter("a".into(), None, None),
+                            parameter("b".into(), None, None)
+                        ])
+                        .build_lambda(expression_statement(
+                            binary(identifier("a"), BinaryOp::Add, identifier("b"))
+                        )),
+                    lambda()
+                        .params(vec![
+                            parameter("c".into(), None, None),
+                            parameter("d".into(), None, None),
+                            parameter("e".into(), None, None)
+                        ])
+                        .build_lambda(block(vec![
+                            variable_statement(vec![
+                                let_variable("x", None,
+                                    opt_expr(
+                                        binary(
+                                            binary(
+                                                identifier("c"),
+                                                BinaryOp::Add,
+                                                identifier("d")
+                                            ),
+                                            BinaryOp::Add,
+                                            identifier("e")
+                                        )
+                                     )
+                                )],
+                                MemberVisibility::Public
+                            ),
+                            expression_statement(call(identifier("print"), vec![identifier("x")])),
+                            return_statement(opt_expr(identifier("x")))
+                        ])),
+                    list(vec![int_literal(6), int_literal(7), int_literal(8)]),
+                    string_literal("Some string")
+                ]
+            )
+        )
+    ]);
+}
+
+#[test]
 fn test_async_iife_with_await() {
     // An immediately-invoked async lambda that is awaited.
     // This tests the precedence of `await` vs. `()`.
@@ -3802,7 +3863,7 @@ fn test_error_lambda_with_misplaced_modifier() {
     parse_error_test(
         "let f = fn async (): 1",
         SyntaxErrorKind::UnexpectedToken {
-            expected: "a function name, '(' or '<'".to_string(),
+            expected: "(".to_string(),
             found: "async".to_string(),
         }
     );
@@ -4000,7 +4061,7 @@ fn test_error_extends_multiple_classes() {
     parse_error_test(
         "extends Base, Other",
         SyntaxErrorKind::UnexpectedToken {
-            expected: "end of expression".to_string(),
+            expected: "newline or end of file".to_string(),
             found: ",".to_string(),
         }
     );
@@ -4139,6 +4200,32 @@ fn test_nested_lists() {
             let_variable("matrix", None, opt_expr(list(vec![
                 list(vec![int_literal(1), int_literal(2)]),
                 list(vec![int_literal(3), int_literal(4)]),
+            ])))
+        ], MemberVisibility::Public)
+    ]);
+}
+
+#[test]
+fn test_nested_lists_multiline() {
+    parse_test("
+let matrix = [
+    [
+        1,
+        2
+    ],
+    [
+        3, 4
+    ],
+    [5],
+[6,7,8]
+]
+", vec![
+        variable_statement(vec![
+            let_variable("matrix", None, opt_expr(list(vec![
+                list(vec![int_literal(1), int_literal(2)]),
+                list(vec![int_literal(3), int_literal(4)]),
+                list(vec![int_literal(5)]),
+                list(vec![int_literal(6), int_literal(7), int_literal(8)]),
             ])))
         ], MemberVisibility::Public)
     ]);

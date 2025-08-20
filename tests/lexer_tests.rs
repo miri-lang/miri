@@ -1412,6 +1412,16 @@ Http::new(url)
     ]);
 }
 
+#[test]
+fn test_lambda_with_empty_body() {
+    lexer_test("
+let f = fn()
+    // empty body
+", vec![
+        Token::Let, Token::Identifier, Token::Assign, Token::Fn, Token::LParen, Token::RParen, Token::ExpressionStatementEnd
+    ]);
+}
+
 
 fn lexer_test(input: &str, expected: Vec<Token>) {
     let lexer = Lexer::new(input);
