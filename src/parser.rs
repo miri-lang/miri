@@ -338,6 +338,8 @@ impl<'source> Parser<'source> {
             : Identifier
             | StringLiteral
             | IntegerLiteral
+            | ListLiteralExpression
+            | MapLiteralExpression
             ;
     */
     fn range_boundary_expression(&mut self) -> Result<Expression, SyntaxError> {
@@ -349,6 +351,10 @@ impl<'source> Parser<'source> {
             Some((Token::LBracket, _)) => {
                 let list = self.list_literal_expression()?;
                 Ok(list)
+            },
+            Some((Token::LBrace, _)) => {
+                let map = self.map_literal_expression()?;
+                Ok(map)
             },
             _ => {
                 let err = self.error_unexpected_lookahead_token("an identifier, a string or a number");
@@ -1589,6 +1595,7 @@ impl<'source> Parser<'source> {
                 self.lambda_expression()
             },
             Some((Token::LBracket, _)) => self.list_literal_expression(),
+            Some((Token::LBrace, _)) => self.map_literal_expression(),
             _ => Err(
                 self.error_unexpected_lookahead_token("literal, parenthesized expression, identifier or lambda")
             ),
@@ -1614,6 +1621,31 @@ impl<'source> Parser<'source> {
 
         self.eat_token(&Token::RBracket)?;
         Ok(self._ast_factory.create_list_expression(elements))
+    }
+
+    /*
+        MapLiteralExpression
+            : '{' (Expression ':' Expression (',' Expression ':' Expression)* ','? )? '}'
+            ;
+    */
+    fn map_literal_expression(&mut self) -> Result<Expression, SyntaxError> {
+        self.eat_token(&Token::LBrace)?;
+
+        let mut pairs = vec![];
+        while self.match_lookahead_type(|t| t != &Token::RBrace) {
+            let key = self.expression()?;
+            self.eat_token(&Token::Colon)?;
+            let value = self.expression()?;
+            pairs.push((key, value));
+
+            if !self.lookahead_is_comma() {
+                break;
+            }
+            self.eat_token(&Token::Comma)?;
+        }
+
+        self.eat_token(&Token::RBrace)?;
+        Ok(self._ast_factory.create_map_expression(pairs))
     }
 
     /*

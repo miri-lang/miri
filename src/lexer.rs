@@ -469,6 +469,8 @@ pub fn token_to_string(token: &Token) -> String {
         Token::QuestionMark => "?".into(),
         Token::Tilde => "~".into(),
         Token::ExpressionStatementEnd => "end of expression".into(),
+        Token::SingleQuotedString => "string".into(),
+        Token::DoubleQuotedString => "string".into(),
         _ => format!("{:?}", token).to_lowercase(),
     }
 }
