@@ -353,7 +353,7 @@ impl<'source> Parser<'source> {
                 Ok(list)
             },
             Some((Token::LBrace, _)) => {
-                let map = self.map_literal_expression()?;
+                let map = self.brace_expression()?;
                 Ok(map)
             },
             Some((Token::LParen, _)) => {
@@ -1599,9 +1599,9 @@ impl<'source> Parser<'source> {
                 self.lambda_expression()
             },
             Some((Token::LBracket, _)) => self.list_literal_expression(),
-            Some((Token::LBrace, _)) => self.map_literal_expression(),
+            Some((Token::LBrace, _)) => self.brace_expression(),
             _ => Err(
-                self.error_unexpected_lookahead_token("literal, parenthesized expression, identifier or lambda")
+                self.error_unexpected_lookahead_token("literal, parenthesized expression, identifier, lambda, list, map or set")
             ),
         }
     }
@@ -1628,28 +1628,53 @@ impl<'source> Parser<'source> {
     }
 
     /*
-        MapLiteralExpression
-            : '{' (Expression ':' Expression (',' Expression ':' Expression)* ','? )? '}'
+        BraceExpression
+            : MapLiteralExpression
+            | SetLiteralExpression
             ;
     */
-    fn map_literal_expression(&mut self) -> Result<Expression, SyntaxError> {
+    fn brace_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.eat_token(&Token::LBrace)?;
 
-        let mut pairs = vec![];
-        while self.match_lookahead_type(|t| t != &Token::RBrace) {
-            let key = self.expression()?;
-            self.eat_token(&Token::Colon)?;
-            let value = self.expression()?;
-            pairs.push((key, value));
-
-            if !self.lookahead_is_comma() {
-                break;
-            }
-            self.eat_token(&Token::Comma)?;
+        // If the next token is a closing brace, it's an empty map.
+        if self.match_lookahead_type(|t| t == &Token::RBrace) {
+            self.eat_token(&Token::RBrace)?;
+            return Ok(self._ast_factory.create_map_expression(vec![]));
         }
 
-        self.eat_token(&Token::RBrace)?;
-        Ok(self._ast_factory.create_map_expression(pairs))
+        // Parse the first expression.
+        let first_expr = self.expression()?;
+
+        // Look ahead for a colon to distinguish between a map and a set.
+        if self.lookahead_is_colon() {
+            // It's a map.
+            self.eat_token(&Token::Colon)?;
+            let first_value = self.expression()?;
+            let mut pairs = vec![(first_expr, first_value)];
+
+            while self.lookahead_is_comma() {
+                self.eat_token(&Token::Comma)?;
+                if self.match_lookahead_type(|t| t == &Token::RBrace) { break; } // Trailing comma
+                let key = self.expression()?;
+                self.eat_token(&Token::Colon)?;
+                let value = self.expression()?;
+                pairs.push((key, value));
+            }
+            self.eat_token(&Token::RBrace)?;
+            Ok(self._ast_factory.create_map_expression(pairs))
+        } else {
+            // It's a set.
+            let mut elements = vec![first_expr];
+            while self.lookahead_is_comma() {
+                self.eat_token(&Token::Comma)?;
+                if self.match_lookahead_type(|t| t == &Token::RBrace) { 
+                    break;
+                } // Trailing comma
+                elements.push(self.expression()?);
+            }
+            self.eat_token(&Token::RBrace)?;
+            Ok(self._ast_factory.create_set_expression(elements))
+        }
     }
 
     /*

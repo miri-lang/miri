@@ -140,6 +140,9 @@ pub enum Expression {
 
     Tuple(Vec<Expression>), // A tuple literal, e.g., (1, 'a', true)
 
+    Set(Vec<Expression>), // A set literal, e.g., {1, 2, 3}
+
+
     // // Operators
     // Binary(Box<Expr>, BinaryOp, Box<Expr>),
     // Unary(UnaryOp, Box<Expr>),
@@ -600,6 +603,10 @@ impl AstFactory {
 
     pub fn create_tuple_expression(&self, elements: Vec<Expression>) -> Expression {
         Expression::Tuple(elements)
+    }
+
+    pub fn create_set_expression(&self, elements: Vec<Expression>) -> Expression {
+        Expression::Set(elements)
     }
 }
 
