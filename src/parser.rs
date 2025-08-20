@@ -153,7 +153,7 @@ impl<'source> Parser<'source> {
 
         self.eat_token(&token)?;
         let declarations = self.variable_declaration_list(&variable_declaration_type, true)?;
-        self.eat_token(&Token::ExpressionStatementEnd)?;
+        self.eat_statement_end()?;
         Ok(self._ast_factory.create_variable_statement(declarations, visibility))
     }
 
@@ -231,9 +231,7 @@ impl<'source> Parser<'source> {
             self.eat_token(&Token::Colon)?;
 
             if self._lookahead.is_none() || self.lookahead_is_expression_end() || self.lookahead_is_dedent() || self.lookahead_is_else() {
-                if self.lookahead_is_expression_end() {
-                    self.eat_token(&Token::ExpressionStatementEnd)?;
-                }
+                self.try_eat_expression_end();
                 // If the next token abruptly ends the statement, we can treat the body as empty
                 return Ok(Statement::Empty);
             }
@@ -242,7 +240,7 @@ impl<'source> Parser<'source> {
         }
         
         if self.lookahead_is_expression_end() {
-            self.eat_token(&Token::ExpressionStatementEnd)?;
+            self.eat_expression_end()?;
 
             if !self.lookahead_is_indent() {
                 // If the next token abruptly ends the statement, we can treat the body as empty
@@ -655,7 +653,7 @@ impl<'source> Parser<'source> {
         } else {
             opt_expr(self.expression()?)
         };
-        self.eat_token(&Token::ExpressionStatementEnd)?;
+        self.eat_statement_end()?;
         Ok(self._ast_factory.create_return_statement(expression))
     }
 
@@ -666,7 +664,7 @@ impl<'source> Parser<'source> {
     */
     fn break_statement(&mut self) -> Result<Statement, SyntaxError> {
         self.eat_token(&Token::Break)?;
-        self.eat_token(&Token::ExpressionStatementEnd)?;
+        self.eat_statement_end()?;
         Ok(self._ast_factory.create_break_statement())
     }
 
@@ -677,7 +675,7 @@ impl<'source> Parser<'source> {
     */
     fn continue_statement(&mut self) -> Result<Statement, SyntaxError> {
         self.eat_token(&Token::Continue)?;
-        self.eat_token(&Token::ExpressionStatementEnd)?;
+        self.eat_statement_end()?;
         Ok(self._ast_factory.create_continue_statement())
     }
 
@@ -714,7 +712,7 @@ impl<'source> Parser<'source> {
                 self.eat_token(&Token::Indent)?;
                 while !self.lookahead_is_dedent() {
                     items.push(item_parser(self)?);
-                    self.eat_token(&Token::ExpressionStatementEnd)?;
+                    self.try_eat_expression_end();
                 }
                 self.eat_token(&Token::Dedent)?;
             },
@@ -1007,7 +1005,7 @@ impl<'source> Parser<'source> {
         } else {
             None
         };
-        self.eat_token(&Token::ExpressionStatementEnd)?;
+        self.eat_statement_end()?;
         Ok(self._ast_factory.create_use_statement(import_path, alias))
     }
 
@@ -1026,7 +1024,7 @@ impl<'source> Parser<'source> {
             declarations.push(self.type_declaration()?);
         }
 
-        self.eat_token(&Token::ExpressionStatementEnd)?;
+        self.eat_statement_end()?;
         Ok(self._ast_factory.create_type_statement(declarations, visibility))
     }
 
@@ -1051,7 +1049,7 @@ impl<'source> Parser<'source> {
     fn extends_statement(&mut self) -> Result<Statement, SyntaxError> {
         self.eat_token(&Token::Extends)?;
         let base = self.inheritance_identifier()?;
-        self.eat_token(&Token::ExpressionStatementEnd)?;
+        self.eat_statement_end()?;
         Ok(self._ast_factory.create_extends_statement(base))
     }
 
@@ -1067,7 +1065,7 @@ impl<'source> Parser<'source> {
             self.eat_token(&Token::Comma)?;
             trait_names.push(self.inheritance_identifier()?);
         }
-        self.eat_token(&Token::ExpressionStatementEnd)?;
+        self.eat_statement_end()?;
         Ok(self._ast_factory.create_implements_statement(trait_names))
     }
 
@@ -1083,7 +1081,7 @@ impl<'source> Parser<'source> {
             self.eat_token(&Token::Comma)?;
             module_names.push(self.inheritance_identifier()?);
         }
-        self.eat_token(&Token::ExpressionStatementEnd)?;
+        self.eat_statement_end()?;
         Ok(self._ast_factory.create_includes_statement(module_names))
     }
 
@@ -1145,7 +1143,7 @@ impl<'source> Parser<'source> {
     */
     fn expression_statement(&mut self) -> Result<Statement, SyntaxError> {
         let expression = self.expression()?;
-        self.eat_token(&Token::ExpressionStatementEnd)?;
+        self.eat_statement_end()?;
         Ok(self._ast_factory.create_expression_statement(expression))
     }
 
@@ -1199,7 +1197,7 @@ impl<'source> Parser<'source> {
         self.eat_token(&conditional_token)?;
         let condition = self.expression()?;
 
-        self.try_eat_expression_end();
+        self.eat_statement_end()?;
 
         let else_branch = if self.match_lookahead_type(|t| t == &Token::Else) {
             self.eat_token(&Token::Else)?;
@@ -1625,24 +1623,59 @@ impl<'source> Parser<'source> {
             ;
     */
     fn lambda_expression(&mut self) -> Result<Expression, SyntaxError> {
-        let statement = self.function_declaration(MemberVisibility::Public)?;
-        match statement {
-            Statement::FunctionDeclaration(_, generic_types, parameters, return_type, body, properties) => {
-                let lambda = self._ast_factory.create_lambda_expression(
-                    generic_types,
-                    parameters,
-                    return_type,
-                    *body,
-                    properties
-                );
-                Ok(lambda)
-            },
-            Statement::Expression(lambda) => {
-                // If the function declaration was parsed as an expression, return it directly
-                Ok(lambda)
-            },
-            _ => panic!("BUG: Unexpected statement in lambda expression {:?}", statement),
+        let mut properties = FunctionProperties {
+            is_async: false,
+            is_gpu: false,
+            visibility: MemberVisibility::Public
+        };
+
+        while self.lookahead_is_function_modifier() {
+            match &self._lookahead {
+                Some((Token::Async, _)) => {
+                    self.eat_token(&Token::Async)?;
+                    properties.is_async = true;
+                },
+                Some((Token::Gpu, _)) => {
+                    self.eat_token(&Token::Gpu)?;
+                    properties.is_gpu = true;
+                },
+                _ => break,
+            }
         }
+        
+        self.eat_token(&Token::Fn)?;
+
+        let generic_types = self.generic_types_expression()?;
+        let parameters = self.function_params_expression()?;
+        let return_type = self.return_type_expression()?;
+
+        let body_parsing_error = self.error_unexpected_lookahead_token("a colon for an inline body or an indented block for a block body");
+        let body = match &self._lookahead {
+            Some((Token::Colon, _)) => {
+                self.eat_token(&Token::Colon)?;
+                let expr = self.expression()?;
+                self._ast_factory.create_expression_statement(expr)
+            },
+            Some((Token::ExpressionStatementEnd, _)) => {
+                self.eat_expression_end()?;
+                if self.lookahead_is_indent() {
+                    self.block_statement()?
+                } else if self.lookahead_is_dedent() || self._lookahead.is_none() {
+                    Statement::Empty // No body, just an expression end
+                } else {
+                    return Err(body_parsing_error);
+                }
+            },
+            _ => return Err(body_parsing_error),
+        };
+
+        Ok(self._ast_factory.create_lambda_expression(
+            generic_types,
+            parameters,
+            return_type,
+            body,
+            properties,
+        ))
     }
 
     /*
@@ -2109,6 +2142,25 @@ impl<'source> Parser<'source> {
         if self.lookahead_is_expression_end() {
             let _ = self.eat_expression_end();
         }
+    }
+
+    fn eat_statement_end(&mut self) -> Result<(), SyntaxError> {
+        // A statement can be terminated by a newline, or it can be the last
+        // thing in a block. If a newline exists, we consume it. If not,
+        // we do nothing and let the calling parser handle the next token.
+        // We do, however, want to ensure that a statement is only followed
+        // by a valid statement terminator: newline or end of file.
+        match &self._lookahead {
+            Some((Token::ExpressionStatementEnd, _)) => {
+                self.eat_token(&Token::ExpressionStatementEnd)?;
+            },
+            Some((Token::Indent, _)) | Some((Token::Dedent, _)) | None => {},
+            _ => return Err(
+                self.error_unexpected_lookahead_token("newline or end of file")
+            ),
+        }
+
+        Ok(())
     }
 
     fn eat_colon(&mut self) -> Result<TokenSpan, SyntaxError> {
