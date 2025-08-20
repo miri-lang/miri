@@ -114,6 +114,9 @@ impl<'source> Parser<'source> {
             Some((Token::Continue, _)) => self.continue_statement()?,
             Some((Token::Enum, _)) => self.enum_statement(MemberVisibility::Public)?,
             Some((Token::Struct, _)) => self.struct_statement(MemberVisibility::Public)?,
+            Some((Token::Extends, _)) => self.extends_statement()?,
+            Some((Token::Implements, _)) => self.implements_statement()?,
+            Some((Token::Includes, _)) => self.includes_statement()?,
             _ => self.expression_statement()?,
         };
         Ok(statement)
@@ -1021,6 +1024,63 @@ impl<'source> Parser<'source> {
 
         self.eat_token(&Token::ExpressionStatementEnd)?;
         Ok(self._ast_factory.create_type_statement(declarations, visibility))
+    }
+
+    fn inheritance_identifier(&mut self) -> Result<Expression, SyntaxError> {
+        let name = self.identifier()?;
+        match name {
+            Expression::Identifier(_, Some(_)) => {
+                Err(self.error_invalid_inheritance_identifier())
+            },
+            Expression::Identifier(_, None) => {
+                Ok(name)
+            },
+            _ => Err(self.error_unexpected_token("identifier", format!("{:?}", name).as_str()))
+        }
+    }
+
+    /*
+        ExtendsStatement
+            : 'extends' Identifier
+            ;
+    */
+    fn extends_statement(&mut self) -> Result<Statement, SyntaxError> {
+        self.eat_token(&Token::Extends)?;
+        let base = self.inheritance_identifier()?;
+        self.eat_token(&Token::ExpressionStatementEnd)?;
+        Ok(self._ast_factory.create_extends_statement(base))
+    }
+
+    /*
+        ImplementsStatement
+            : 'implements' Identifier (',' Identifier)*
+            ;
+    */
+    fn implements_statement(&mut self) -> Result<Statement, SyntaxError> {
+        self.eat_token(&Token::Implements)?;
+        let mut trait_names = vec![self.inheritance_identifier()?];
+        while self.lookahead_is_comma() {
+            self.eat_token(&Token::Comma)?;
+            trait_names.push(self.inheritance_identifier()?);
+        }
+        self.eat_token(&Token::ExpressionStatementEnd)?;
+        Ok(self._ast_factory.create_implements_statement(trait_names))
+    }
+
+    /*
+        IncludesStatement
+            : 'includes' Identifier (',' Identifier)*
+            ;
+    */
+    fn includes_statement(&mut self) -> Result<Statement, SyntaxError> {
+        self.eat_token(&Token::Includes)?;
+        let mut module_names = vec![self.inheritance_identifier()?];
+        while self.lookahead_is_comma() {
+            self.eat_token(&Token::Comma)?;
+            module_names.push(self.inheritance_identifier()?);
+        }
+        self.eat_token(&Token::ExpressionStatementEnd)?;
+        Ok(self._ast_factory.create_includes_statement(module_names))
     }
 
     /*
@@ -2041,6 +2101,13 @@ impl<'source> Parser<'source> {
 
     fn error_unexpected_token(&self, expected: &str, found: &str) -> SyntaxError {
         self.error_unexpected_token_with_span(expected, found, self.source.len()..self.source.len())
+    }
+
+    fn error_invalid_inheritance_identifier(&self) -> SyntaxError {
+        SyntaxError::new(
+            SyntaxErrorKind::InvalidInheritanceIdentifier,
+            self.source.len()..self.source.len()
+        )
     }
 
     fn error_unexpected_token_with_span(&self, expected: &str, found: &str, span: Span) -> SyntaxError {

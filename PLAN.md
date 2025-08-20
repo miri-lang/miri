@@ -32,8 +32,8 @@ Done ✅
   - [x] async/await
   - [x] gpu
   - [x] private/protected
-  - [ ] lambda, function as variables and parameters
-  - [ ] extend/implement/include
+  - [x] lambda, function as variables and parameters
+  - [x] extend/implement/include
   - [ ] list
   - [ ] tuple
   - [ ] map

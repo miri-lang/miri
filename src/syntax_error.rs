@@ -22,6 +22,7 @@ pub enum SyntaxErrorKind {
     UnexpectedToken { expected: String, found: String },
     UnexpectedOperator { expected: String, found: String },
     UnexpectedEOF,
+
     InvalidTypeDeclaration { expected: String },
     InvalidLeftHandSideExpression,
     InvalidAssignmentTarget,
@@ -33,6 +34,7 @@ pub enum SyntaxErrorKind {
     InvalidFloatLiteral,
     InvalidStringLiteral,
     InvalidBooleanLiteral,
+    InvalidInheritanceIdentifier,
 
     MissingStructMemberType
 }
@@ -131,6 +133,10 @@ impl SyntaxError {
             SyntaxErrorKind::MissingStructMemberType => (
                 "Missing Struct Member Type",
                 "Struct members must have a type declaration.".to_string(),
+            ),
+            SyntaxErrorKind::InvalidInheritanceIdentifier => (
+                "Invalid Inheritance Identifier",
+                "The inheritance identifier is not valid. You can only extend, implement or include a class, imported via the `use` statement. Class members can't be used as inheritance identifiers.".to_string(),
             ),
         };
 

@@ -254,6 +254,19 @@ pub fn struct_member(name: &str, typ: Expression) -> Expression {
     Expression::StructMember(Box::new(identifier(name)), Box::new(typ))
 }
 
+pub fn extends(base: Expression) -> Statement {
+    Statement::Extends(Box::new(base))
+}
+
+pub fn implements(traits: Vec<Expression>) -> Statement {
+    Statement::Implements(traits)
+}
+
+pub fn includes(modules: Vec<Expression>) -> Statement {
+    Statement::Includes(modules)
+}
+
+
 pub struct FunctionBuilder {
     name: String,
     generic_types: Option<Vec<Expression>>,

@@ -3970,6 +3970,99 @@ fn test_error_function_type_with_trailing_comma() {
     );
 }
 
+#[test]
+fn test_extends_statement() {
+    parse_test("extends BaseClass", vec![
+        extends(identifier("BaseClass"))
+    ]);
+}
+
+#[test]
+fn test_extends_statement_namespaced() {
+    // This is not allowed, because you can't define a class within a class.
+    parse_error_test("extends Core::Base", SyntaxErrorKind::InvalidInheritanceIdentifier);
+}
+
+#[test]
+fn test_implements_statement_single() {
+    parse_test("implements ISerializable", vec![
+        implements(vec![identifier("ISerializable")])
+    ]);
+}
+
+#[test]
+fn test_implements_statement_multiple() {
+    parse_test("implements ISerializable, IClickable, IView", vec![
+        implements(vec![
+            identifier("ISerializable"),
+            identifier("IClickable"),
+            identifier("IView")
+        ])
+    ]);
+}
+
+#[test]
+fn test_includes_statement_single() {
+    parse_test("includes Enumerable", vec![
+        includes(vec![identifier("Enumerable")])
+    ]);
+}
+
+#[test]
+fn test_includes_statement_multiple() {
+    parse_test("includes Enumerable, Utils", vec![
+        includes(vec![
+            identifier("Enumerable"),
+            identifier("Utils")
+        ])
+    ]);
+}
+
+#[test]
+fn test_error_extends_multiple_classes() {
+    // `extends` only supports single inheritance.
+    parse_error_test(
+        "extends Base, Other",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "end of expression".to_string(),
+            found: ",".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_error_implements_trailing_comma() {
+    parse_error_test(
+        "implements ISerializable,",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "identifier".to_string(),
+            found: "end of file".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_error_includes_missing_identifier() {
+    parse_error_test(
+        "includes",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "identifier".to_string(),
+            found: "end of file".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_error_extends_with_literal() {
+    parse_error_test(
+        "extends 123",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "identifier".to_string(),
+            found: "int".to_string(),
+        }
+    );
+}
+
 
 fn parse(input: &str) -> Result<Program, SyntaxError> {
     let mut lexer = Lexer::new(input);
