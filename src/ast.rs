@@ -138,6 +138,7 @@ pub enum Expression {
 
     Map(Vec<(Expression, Expression)>), // A map literal, e.g., {'a': 1, 'b': 2}
 
+    Tuple(Vec<Expression>), // A tuple literal, e.g., (1, 'a', true)
 
     // // Operators
     // Binary(Box<Expr>, BinaryOp, Box<Expr>),
@@ -595,6 +596,10 @@ impl AstFactory {
 
     pub fn create_map_expression(&self, pairs: Vec<(Expression, Expression)>) -> Expression {
         Expression::Map(pairs)
+    }
+
+    pub fn create_tuple_expression(&self, elements: Vec<Expression>) -> Expression {
+        Expression::Tuple(elements)
     }
 }
 

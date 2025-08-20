@@ -356,6 +356,10 @@ impl<'source> Parser<'source> {
                 let map = self.map_literal_expression()?;
                 Ok(map)
             },
+            Some((Token::LParen, _)) => {
+                let tuple = self.parenthesized_expression()?;
+                Ok(tuple)
+            },
             _ => {
                 let err = self.error_unexpected_lookahead_token("an identifier, a string or a number");
                 if self.lookahead_is_literal() {
@@ -1714,12 +1718,57 @@ impl<'source> Parser<'source> {
         ParenthesizedExpression
             : '(' Expression ')'
             ;
+        TupleLiteralExpression
+            : '(' (Expression (',' Expression)* ','? )? ')'
+            ;
     */
     fn parenthesized_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.eat_token(&Token::LParen)?;
-        let expression = self.expression()?;
+
+        // Handle the empty tuple `()` case.
+        if self.match_lookahead_type(|t| t == &Token::RParen) {
+            self.eat_token(&Token::RParen)?;
+            return Ok(self._ast_factory.create_tuple_expression(vec![]));
+        }
+
+        let first_expr = self.expression()?;
+
+        if !self.lookahead_is_comma() {
+            self.eat_token(&Token::RParen)?;
+            match first_expr {
+                Expression::Identifier(_, _) 
+                | Expression::Literal(_)
+                | Expression::Member(_, _)
+                | Expression::Call(_, _)
+                | Expression::Index(_, _)
+                | Expression::List(_)
+                | Expression::Map(_)
+                | Expression::Tuple(_) => {
+                    // Treat it as a single element tuple, if the expression can be a tuple element.
+                    return Ok(self._ast_factory.create_tuple_expression(vec![first_expr]))
+                },
+                _ => {
+                    // Otherwise, treat it as a parenthesized expression.
+                    return Ok(first_expr);
+                }
+            }
+        }
+
+        // It's a tuple. Start with the first expression we already parsed.
+        let mut elements = vec![first_expr];
+
+        // Loop through the rest of the comma-separated expressions.
+        while self.lookahead_is_comma() {
+            self.eat_token(&Token::Comma)?;
+            // Handle optional trailing comma before the closing parenthesis.
+            if self.match_lookahead_type(|t| t == &Token::RParen) {
+                break;
+            }
+            elements.push(self.expression()?);
+        }
+
         self.eat_token(&Token::RParen)?;
-        Ok(expression)
+        Ok(self._ast_factory.create_tuple_expression(elements))
     }
 
     /*
