@@ -127,6 +127,10 @@ pub fn range(start: Expression, end: Option<Box<Expression>>, range_type: RangeE
     Expression::Range(Box::new(start), end, range_type)
 }
 
+pub fn iter_obj(start: Expression) -> Expression {
+    Expression::Range(Box::new(start), None, RangeExpressionType::IterableObject)
+}
+
 pub fn member(object: Expression, property: Expression) -> Expression {
     Expression::Member(Box::new(object), Box::new(property))
 }
@@ -268,6 +272,10 @@ pub fn includes(modules: Vec<Expression>) -> Statement {
 
 pub fn list(elements: Vec<Expression>) -> Expression {
     Expression::List(elements)
+}
+
+pub fn map(pairs: Vec<(Expression, Expression)>) -> Expression {
+    Expression::Map(pairs)
 }
 
 

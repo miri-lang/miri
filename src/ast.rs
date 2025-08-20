@@ -136,6 +136,8 @@ pub enum Expression {
 
     List(Vec<Expression>), // A list literal, e.g., [1, 2, 3]
 
+    Map(Vec<(Expression, Expression)>), // A map literal, e.g., {'a': 1, 'b': 2}
+
 
     // // Operators
     // Binary(Box<Expr>, BinaryOp, Box<Expr>),
@@ -589,6 +591,10 @@ impl AstFactory {
 
     pub fn create_list_expression(&self, elements: Vec<Expression>) -> Expression {
         Expression::List(elements)
+    }
+
+    pub fn create_map_expression(&self, pairs: Vec<(Expression, Expression)>) -> Expression {
+        Expression::Map(pairs)
     }
 }
 
