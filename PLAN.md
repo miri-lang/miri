@@ -37,7 +37,7 @@ Done ✅
   - [x] list
   - [x] tuple
   - [x] map
-  - [ ] set
+  - [x] set
   - [ ] regex
   - [ ] function declarations without parentheses
   - [ ] function calls without parentheses

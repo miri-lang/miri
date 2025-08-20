@@ -286,6 +286,10 @@ pub fn tuple(elements: Vec<Expression>) -> Expression {
     Expression::Tuple(elements)
 }
 
+pub fn set(elements: Vec<Expression>) -> Expression {
+    Expression::Set(elements)
+}
+
 pub struct FunctionBuilder {
     name: String,
     generic_types: Option<Vec<Expression>>,

@@ -221,7 +221,7 @@ fn test_parse_consecutive_operators() {
     parse_error_test(
         "5 + * 2", 
         SyntaxErrorKind::UnexpectedToken { 
-            expected: "literal, parenthesized expression, identifier or lambda".into(), 
+            expected: "literal, parenthesized expression, identifier, lambda, list, map or set".into(), 
             found: "*".into() 
         }
     );
@@ -971,7 +971,7 @@ fn test_error_if_statement_as_condition() {
     parse_error_test(
         "if if x: 1",
         SyntaxErrorKind::UnexpectedToken {
-            expected: "literal, parenthesized expression, identifier or lambda".to_string(),
+            expected: "literal, parenthesized expression, identifier, lambda, list, map or set".to_string(),
             found: "if".to_string(),
         }
     );
@@ -1092,7 +1092,7 @@ fn test_error_dangling_else() {
     parse_error_test(
         "else: print('error')",
         SyntaxErrorKind::UnexpectedToken {
-            expected: "literal, parenthesized expression, identifier or lambda".to_string(), // Or a more specific expectation
+            expected: "literal, parenthesized expression, identifier, lambda, list, map or set".to_string(), // Or a more specific expectation
             found: "else".to_string(),
         }
     );
@@ -3645,7 +3645,7 @@ fn test_error_lambda_with_visibility_modifier() {
     parse_error_test(
         "let f = public fn ()",
         SyntaxErrorKind::UnexpectedToken {
-            expected: "literal, parenthesized expression, identifier or lambda".to_string(),
+            expected: "literal, parenthesized expression, identifier, lambda, list, map or set".to_string(),
             found: "public".to_string(),
         }
     );
@@ -3685,7 +3685,7 @@ fn test_error_lambda_with_statement_in_inline_body() {
     parse_error_test(
         "let f = fn (): let x = 1",
         SyntaxErrorKind::UnexpectedToken {
-            expected: "literal, parenthesized expression, identifier or lambda".to_string(),
+            expected: "literal, parenthesized expression, identifier, lambda, list, map or set".to_string(),
             found: "let".to_string(),
         }
     );
@@ -3839,7 +3839,7 @@ fn test_error_return_in_inline_lambda() {
     parse_error_test(
         "let f = fn(): return 1",
         SyntaxErrorKind::UnexpectedToken {
-            expected: "literal, parenthesized expression, identifier or lambda".to_string(),
+            expected: "literal, parenthesized expression, identifier, lambda, list, map or set".to_string(),
             found: "return".to_string(),
         }
     );
@@ -4367,10 +4367,11 @@ fn test_error_unclosed_map() {
 
 #[test]
 fn test_error_map_missing_colon() {
+    // This is invalid syntax. It's not a valid map (due to :) and not a valid set (due to missing value).
     parse_error_test(
         "let m = {'a' 1}",
         SyntaxErrorKind::UnexpectedToken {
-            expected: ":".to_string(),
+            expected: "}".to_string(),
             found: "int".to_string(),
         }
     );
@@ -4580,6 +4581,150 @@ fn test_error_tuple_missing_comma() {
         SyntaxErrorKind::UnexpectedToken {
             expected: ")".to_string(),
             found: "int".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_set_literal_assignment() {
+    parse_test("let s = {1, 2, 3}", vec![
+        variable_statement(vec![
+            let_variable("s", None, opt_expr(set(vec![
+                int_literal(1),
+                int_literal(2),
+                int_literal(3),
+            ])))
+        ], MemberVisibility::Public)
+    ]);
+}
+
+#[test]
+fn test_for_loop_over_set_literal() {
+    parse_test("
+for el in {1, 2, 3}
+    print(el)
+", vec![
+        for_statement(
+            vec![let_variable("el", None, None)],
+            iter_obj(set(vec![
+                int_literal(1), int_literal(2), int_literal(3)
+            ])),
+            block(vec![expression_statement(call(identifier("print"), vec![identifier("el")]))])
+        )
+    ]);
+}
+
+#[test]
+fn test_method_call_on_set_literal() {
+    parse_test("{1, 2, 3}.len()", vec![
+        expression_statement(
+            call(
+                member(
+                    set(vec![int_literal(1), int_literal(2), int_literal(3)]),
+                    identifier("len")
+                ),
+                vec![]
+            )
+        )
+    ]);
+}
+
+#[test]
+fn test_set_of_lambdas() {
+    parse_test("let funcs = {fn(): 1, fn(): 2}", vec![
+        variable_statement(vec![
+            let_variable("funcs", None, opt_expr(set(vec![
+                lambda().build_lambda(expression_statement(int_literal(1))),
+                lambda().build_lambda(expression_statement(int_literal(2))),
+            ])))
+        ], MemberVisibility::Public)
+    ]);
+}
+
+#[test]
+fn test_map_of_values_similar_to_set() {
+    parse_test("let funcs = {func1(): 1, func2(): 2}", vec![
+        variable_statement(vec![
+            let_variable("funcs", None, opt_expr(map(vec![
+                (call(identifier("func1"), vec![]), int_literal(1)),
+                (call(identifier("func2"), vec![]), int_literal(2)),
+            ])))
+        ], MemberVisibility::Public)
+    ]);
+}
+
+#[test]
+fn test_set_with_trailing_comma() {
+    parse_test("let s = {1, 2,}", vec![
+        variable_statement(vec![
+            let_variable("s", None, opt_expr(set(vec![
+                int_literal(1),
+                int_literal(2),
+            ])))
+        ], MemberVisibility::Public)
+    ]);
+}
+
+#[test]
+fn test_nested_sets_and_maps_multiline() {
+    parse_test("
+let data = {
+    'users',
+    {'id': 1, 'name': 'John'},
+    {'id': 2, 'name': 'Jane'},
+}
+", vec![
+        variable_statement(vec![
+            let_variable("data", None, opt_expr(set(vec![
+                string_literal("users"),
+                map(vec![
+                    (string_literal("id"), int_literal(1)),
+                    (string_literal("name"), string_literal("John")),
+                ]),
+                map(vec![
+                    (string_literal("id"), int_literal(2)),
+                    (string_literal("name"), string_literal("Jane")),
+                ]),
+            ])))
+        ], MemberVisibility::Public)
+    ]);
+}
+
+#[test]
+fn test_distinction_empty_is_map() {
+    // An empty `{}` should be parsed as an empty map.
+    parse_test("let empty = {}", vec![
+        variable_statement(vec![
+            let_variable("empty", None, opt_expr(map(vec![])))
+        ], MemberVisibility::Public)
+    ]);
+}
+
+#[test]
+fn test_distinction_single_item_is_set() {
+    parse_test("let s = {'a'}", vec![
+        variable_statement(vec![
+            let_variable("s", None, opt_expr(set(vec![string_literal("a")])))
+        ], MemberVisibility::Public)
+    ]);
+}
+
+#[test]
+fn test_error_unclosed_set() {
+    parse_error_test(
+        "let s = {1, 2",
+        SyntaxErrorKind::UnexpectedEOF
+    );
+}
+
+#[test]
+fn test_error_set_with_colon() {
+    // This is invalid syntax. It's not a valid set (due to :) and not a valid map (due to missing value).
+    parse_error_test(
+        "let s = {1:}",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "literal, parenthesized expression, identifier, lambda, list, map or set".to_string(),
+            found: "}".to_string(),
         }
     );
 }
