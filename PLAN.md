@@ -34,7 +34,7 @@ Done ✅
   - [x] private/protected
   - [x] lambda, function as variables and parameters
   - [x] extend/implement/include
-  - [ ] list
+  - [x] list
   - [ ] tuple
   - [ ] map
   - [ ] set

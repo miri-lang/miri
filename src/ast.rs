@@ -134,6 +134,9 @@ pub enum Expression {
 
     Lambda(Option<Vec<Expression>>, Vec<Parameter>, Option<Box<Expression>>, Box<Statement>, FunctionProperties), // generic_types, parameters, return type, body
 
+    List(Vec<Expression>), // A list literal, e.g., [1, 2, 3]
+
+
     // // Operators
     // Binary(Box<Expr>, BinaryOp, Box<Expr>),
     // Unary(UnaryOp, Box<Expr>),
@@ -582,6 +585,10 @@ impl AstFactory {
 
     pub fn create_implements_statement(&self, traits: Vec<Expression>) -> Statement {
         Statement::Implements(traits)
+    }
+
+    pub fn create_list_expression(&self, elements: Vec<Expression>) -> Expression {
+        Expression::List(elements)
     }
 }
 

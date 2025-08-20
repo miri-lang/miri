@@ -266,6 +266,10 @@ pub fn includes(modules: Vec<Expression>) -> Statement {
     Statement::Includes(modules)
 }
 
+pub fn list(elements: Vec<Expression>) -> Expression {
+    Expression::List(elements)
+}
+
 
 pub struct FunctionBuilder {
     name: String,

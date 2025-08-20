@@ -348,6 +348,10 @@ impl<'source> Parser<'source> {
                 let identifier = self.identifier()?;
                 Ok(identifier)
             },
+            Some((Token::LBracket, _)) => {
+                let list = self.list_literal_expression()?;
+                Ok(list)
+            },
             _ => {
                 let err = self.error_unexpected_lookahead_token("an identifier, a string or a number");
                 if self.lookahead_is_literal() {
@@ -1586,10 +1590,32 @@ impl<'source> Parser<'source> {
             Some((Token::Async, _)) | Some((Token::Fn, _)) | Some((Token::Gpu, _)) => {
                 self.lambda_expression()
             },
+            Some((Token::LBracket, _)) => self.list_literal_expression(),
             _ => Err(
                 self.error_unexpected_lookahead_token("literal, parenthesized expression, identifier or lambda")
             ),
         }
+    }
+
+    /*
+        ListLiteralExpression
+            : '[' (Expression (',' Expression)* ','? )? ']'
+            ;
+    */
+    fn list_literal_expression(&mut self) -> Result<Expression, SyntaxError> {
+        self.eat_token(&Token::LBracket)?;
+
+        let mut elements = vec![];
+        while self.match_lookahead_type(|t| t != &Token::RBracket) {
+            elements.push(self.expression()?);
+            if !self.lookahead_is_comma() {
+                break;
+            }
+            self.eat_token(&Token::Comma)?;
+        }
+
+        self.eat_token(&Token::RBracket)?;
+        Ok(self._ast_factory.create_list_expression(elements))
     }
 
     /*
