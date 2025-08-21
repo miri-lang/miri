@@ -94,6 +94,7 @@ pub enum Token {
     // Identifiers and Literals
     #[regex("[a-zA-Z_][a-zA-Z0-9_]*")] Identifier,
     #[regex(":[a-zA-Z_][a-zA-Z0-9_]*")] Symbol,
+    #[regex(r#"re"([^"\\]|\\.)*"[igmsu]*"#, parse_regex_literal)] Regex(RegexToken),
     #[regex(r#"'[^'\\]*(?:\\.[^'\\]*)*'"#)] SingleQuotedString,
     #[regex(r#""[^"\\]*(?:\\.[^"\\]*)*""#)] DoubleQuotedString,
     #[regex("[0-9]+(?:_[0-9]+)*(\\.[0-9]+(?:_[0-9]+)*)?([eE][+-]?[0-9]+(?:_[0-9]+)*)?", priority = 1)] Float,
@@ -116,6 +117,15 @@ pub enum Token {
 
 pub type TokenSpan = (Token, Span);
 
+#[derive(Debug, PartialEq, Clone)]
+pub struct RegexToken {
+    pub body: String,
+    pub ignore_case: bool,
+    pub global: bool,
+    pub multiline: bool,
+    pub dot_all: bool,
+    pub unicode: bool
+}
 
 pub struct Lexer<'source> {
     inner: logos::Lexer<'source, Token>,
@@ -473,4 +483,41 @@ pub fn token_to_string(token: &Token) -> String {
         Token::DoubleQuotedString => "string".into(),
         _ => format!("{:?}", token).to_lowercase(),
     }
+}
+
+fn parse_regex_literal(lexer: &mut logos::Lexer<Token>) -> Option<RegexToken> {
+    let slice = lexer.slice(); // Example: re"\d+"/ig
+    let without_prefix = &slice[2..]; // remove `re`
+
+    let quote_start = without_prefix.find('"');
+    let quote_end = without_prefix.rfind('"');
+
+    if quote_start.is_none() || quote_end.is_none() || quote_start == quote_end {
+        return None; // Invalid regex literal
+    }
+
+    let regex_body = &without_prefix[quote_start.unwrap() + 1..quote_end.unwrap()];
+    let flags = &without_prefix[quote_end.unwrap() + 1..]; // everything after the final quote
+
+    let mut regex = RegexToken {
+        body: regex_body.to_string(),
+        ignore_case: false,
+        global: false,
+        multiline: false,
+        dot_all: false,
+        unicode: false,
+    };
+
+    for flag in flags.chars() {
+        match flag {
+            'i' => regex.ignore_case = true,
+            'g' => regex.global = true,
+            'm' => regex.multiline = true,
+            's' => regex.dot_all = true,
+            'u' => regex.unicode = true,
+            _ => {}
+        }
+    }
+
+    Some(regex)
 }

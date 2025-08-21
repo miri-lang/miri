@@ -1,6 +1,6 @@
 #![allow(dead_code)] // Allow unused functions, as not all helpers may be used in every test file.
 
-use miri::ast::*;
+use miri::{ast::*, lexer::RegexToken};
 
 // === Expression Builders ===
 
@@ -79,6 +79,18 @@ pub fn symbol(val: &str) -> Literal {
 
 pub fn symbol_literal(val: &str) -> Expression {
     Expression::Literal(symbol(val))
+}
+
+pub fn regex_literal(body: &str, flags: &str) -> Expression {
+    let token = RegexToken {
+        body: body.to_string(),
+        ignore_case: flags.contains('i'),
+        global: flags.contains('g'),
+        multiline: flags.contains('m'),
+        dot_all: flags.contains('s'),
+        unicode: flags.contains('u'),
+    };
+    Expression::Literal(Literal::Regex(token))
 }
 
 pub fn binary(left: Expression, op: BinaryOp, right: Expression) -> Expression {

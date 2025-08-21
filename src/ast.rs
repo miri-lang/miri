@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
+use crate::lexer::RegexToken;
+
 /// Represents a fully parsed Miri program
 #[derive(Debug, PartialEq)]
 pub struct Program {
@@ -262,6 +264,7 @@ pub enum Literal {
     String(String),
     Boolean(bool),
     Symbol(String),
+    Regex(RegexToken),
 }
 
 /// Represents an integer literal value
@@ -607,6 +610,10 @@ impl AstFactory {
 
     pub fn create_set_expression(&self, elements: Vec<Expression>) -> Expression {
         Expression::Set(elements)
+    }
+
+    pub fn create_regex_literal(&self, value: RegexToken) -> Literal {
+        Literal::Regex(value)
     }
 }
 
