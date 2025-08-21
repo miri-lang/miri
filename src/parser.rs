@@ -1827,6 +1827,7 @@ impl<'source> Parser<'source> {
             Some((Token::DoubleQuotedString, _)) => self.string_literal(&Token::DoubleQuotedString),
             Some((Token::SingleQuotedString, _)) => self.string_literal(&Token::SingleQuotedString),
             Some((Token::Symbol, _)) => self.symbol_literal(),
+            Some((Token::Regex(_), _)) => self.regex_literal(),
             Some((token, span)) => {
                 let token_text = &self.source[span.start..span.end];
                 Err(
@@ -2037,6 +2038,21 @@ impl<'source> Parser<'source> {
                 Ok(literal)
             },
             Err(e) => Err(e),
+        }
+    }
+
+    /*
+        RegexLiteral
+            : REGEX
+            ;
+    */
+    fn regex_literal(&mut self) -> Result<Literal, SyntaxError> {
+        let token_span = self.eat(|t| matches!(t, Token::Regex(_)), "regex literal")?;
+        if let (Token::Regex(regex_data), _) = token_span {
+            Ok(self._ast_factory.create_regex_literal(regex_data))
+        } else {
+            // This branch should be unreachable if the predicate in `eat` is correct.
+            unreachable!();
         }
     }
 
@@ -2366,7 +2382,7 @@ fn is_assignment_op(token: &Token) -> bool {
 }
 
 fn is_literal(token: &Token) -> bool {
-    matches!(token, Token::Int | Token::BinaryNumber | Token::HexNumber | Token::OctalNumber | Token::Float | Token::True | Token::False | Token::DoubleQuotedString | Token::SingleQuotedString | Token::Symbol)
+    matches!(token, Token::Int | Token::BinaryNumber | Token::HexNumber | Token::OctalNumber | Token::Float | Token::True | Token::False | Token::DoubleQuotedString | Token::SingleQuotedString | Token::Symbol | Token::Regex(_))
 }
 
 fn is_colon(token: &Token) -> bool {
