@@ -1,0 +1,175 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2017–2025 Viacheslav Shynkarenko
+
+use miri::ast::*;
+use miri::syntax_error::SyntaxErrorKind;
+use super::ast_builder::*;
+use super::utils::*;
+
+
+#[test]
+fn test_inline_enum_simple_values() {
+    parse_test("
+enum Colors: Red, Green, Blue
+", vec![
+        enum_statement(
+            identifier("Colors"),
+            vec![
+                enum_value("Red", vec![]),
+                enum_value("Green", vec![]),
+                enum_value("Blue", vec![])
+            ],
+            MemberVisibility::Public
+        )
+    ]);
+}
+
+#[test]
+fn test_block_enum_simple_values() {
+    parse_test("
+enum Colors
+    Red
+    Green
+    Blue
+", vec![
+        enum_statement(
+            identifier("Colors"),
+            vec![
+                enum_value("Red", vec![]),
+                enum_value("Green", vec![]),
+                enum_value("Blue", vec![])
+            ],
+            MemberVisibility::Public
+        )
+    ]);
+}
+
+#[test]
+fn test_inline_enum_with_typed_values() {
+    parse_test("
+enum Message: Write(string), Move(int, int)
+", vec![
+        enum_statement(
+            identifier("Message"),
+            vec![
+                enum_value("Write", vec![typ(Type::String)]),
+                enum_value("Move", vec![typ(Type::Int), typ(Type::Int)])
+            ],
+            MemberVisibility::Public
+        )
+    ]);
+}
+
+#[test]
+fn test_block_enum_with_mixed_values() {
+    parse_test("
+enum Event
+    Quit
+    KeyPress(int)
+    Click(int, int)
+", vec![
+        enum_statement(
+            identifier("Event"),
+            vec![
+                enum_value("Quit", vec![]),
+                enum_value("KeyPress", vec![typ(Type::Int)]),
+                enum_value("Click", vec![typ(Type::Int), typ(Type::Int)])
+            ],
+            MemberVisibility::Public
+        )
+    ]);
+}
+
+#[test]
+fn test_enum_with_single_value() {
+    parse_test("enum Status: Ok", vec![
+        enum_statement(
+            identifier("Status"),
+            vec![enum_value("Ok", vec![])],
+            MemberVisibility::Public
+        )
+    ]);
+}
+
+#[test]
+fn test_enum_with_complex_value_types() {
+    parse_test("
+enum Data: Point([int]?), Config({string: bool})
+", vec![
+        enum_statement(
+            identifier("Data"),
+            vec![
+                enum_value("Point", vec![null_typ(Type::List(Box::new(typ(Type::Int))))]),
+                enum_value("Config", vec![typ(Type::Map(Box::new(typ(Type::String)), Box::new(typ(Type::Boolean))))])
+            ],
+            MemberVisibility::Public
+        )
+    ]);
+}
+
+#[test]
+fn test_empty_block_enum() {
+    parse_error_test("
+enum EmptyEnum
+    // No values
+
+let x = 0
+", SyntaxErrorKind::UnexpectedToken {
+        expected: "an indentation for block enums".to_string(),
+        found: "let".to_string()
+    });
+}
+
+#[test]
+fn test_error_enum_missing_name() {
+    parse_error_test(
+        "enum: Red, Blue",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "identifier".to_string(),
+            found: ":".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_error_enum_missing_colon_or_indent() {
+    parse_error_test(
+        "enum Colors Red",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "either a colon for inline enums or an indentation for block enums".to_string(),
+            found: "identifier".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_error_enum_empty_inline() {
+    parse_error_test(
+        "enum Colors:",
+        SyntaxErrorKind::UnexpectedToken {
+            expected: "identifier".to_string(),
+            found: "end of file".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_error_enum_malformed_value_type() {
+    parse_error_test(
+        "enum E: V(int,)",
+        SyntaxErrorKind::InvalidTypeDeclaration {
+            expected: "Enum value type".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_public_enum() {
+    parse_test("public enum Color: Red", vec![
+        enum_statement(
+            identifier("Color"),
+            vec![enum_value("Red", vec![])],
+            MemberVisibility::Public
+        )
+    ]);
+}

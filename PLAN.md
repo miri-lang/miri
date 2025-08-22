@@ -39,13 +39,15 @@ Done ✅
   - [x] map
   - [x] set
   - [x] regex
-  - [ ] function declarations without parentheses
-  - [ ] function calls without parentheses
   - [ ] match / pattern matching
   - [ ] string interpolation
+  - [ ] refactor lexer & parser tests (split them in modules)
+  - [ ] identify gaps in tests
+  - [ ] optimize parser
 - [x] Create an **AST (Abstract Syntax Tree)** representation.
+- [ ] Introduce a simple **REPL** (interactive shell for experimentation, for now just returns the AST).
+- [ ] Add simple integration tests (running real programs, without failing)
 - [] Implement a basic **type checker** (static type system enforcement).
-- [] Introduce a simple **REPL** (interactive shell for experimentation).
 - [] Compile basic expressions to LLVM IR for execution.
 - [] Create unit tests for core language features.
 
