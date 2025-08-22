@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2017–2025 Viacheslav Shynkarenko
+
 #![allow(dead_code)] // Allow unused functions, as not all helpers may be used in every test file.
 
 use miri::{ast::*, lexer::RegexToken};
@@ -34,9 +37,12 @@ pub fn int(val: i128) -> IntegerLiteral {
     }
 }
 
-pub fn int_literal(val: i128) -> Expression {
-    let literal = int(val);
-    Expression::Literal(Literal::Integer(literal))
+pub fn int_literal(val: i128) -> Literal {
+    Literal::Integer(int(val))
+}
+
+pub fn int_literal_expression(val: i128) -> Expression {
+    Expression::Literal(int_literal(val))
 }
 
 pub fn float32(val: f32) -> FloatLiteral {
@@ -300,6 +306,10 @@ pub fn tuple(elements: Vec<Expression>) -> Expression {
 
 pub fn set(elements: Vec<Expression>) -> Expression {
     Expression::Set(elements)
+}
+
+pub fn match_expression(subject: Expression, branches: Vec<MatchBranch>) -> Expression {
+    Expression::Match(Box::new(subject), branches)
 }
 
 pub struct FunctionBuilder {

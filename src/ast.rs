@@ -144,6 +144,8 @@ pub enum Expression {
 
     Set(Vec<Expression>), // A set literal, e.g., {1, 2, 3}
 
+    Match(Box<Expression>, Vec<MatchBranch>), // value, branches
+
 
     // // Operators
     // Binary(Box<Expr>, BinaryOp, Box<Expr>),
@@ -331,6 +333,24 @@ pub enum TypeDeclarationKind {
     Includes,
 }
 
+/// Represents a branch in a match expression
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchBranch {
+    pub patterns: Vec<MatchPattern>,
+    pub guard: Option<Box<Expression>>,
+    pub body: Box<Statement>,
+}
+
+/// Represents a pattern in a match expression
+#[derive(Debug, Clone, PartialEq)]
+pub enum MatchPattern {
+    Literal(Literal),
+    Identifier(String),
+    Tuple(Vec<MatchPattern>),
+    Regex(RegexToken),
+    Default,
+}
+
 // /// Represents a statement in the Miri language
 // #[derive(Debug, PartialEq)]
 // pub enum Stmt {
@@ -357,22 +377,6 @@ pub enum TypeDeclarationKind {
 //     Expr(Box<Expr>),
 // }
 
-// /// Represents a match arm in a match expression
-// #[derive(Debug, PartialEq)]
-// pub struct MatchArm {
-//     pub pattern: Pattern,
-//     pub guard: Option<Box<Expr>>,
-//     pub body: Block,
-// }
-
-// /// Represents a pattern in a match expression
-// #[derive(Debug, PartialEq)]
-// pub enum Pattern {
-//     Literal(Literal),
-//     Identifier(String),
-//     Multiple(Vec<Pattern>), // For patterns like "1 | 2 | 3"
-//     Default,
-// }
 
 
 pub struct AstFactory;
@@ -614,6 +618,10 @@ impl AstFactory {
 
     pub fn create_regex_literal(&self, value: RegexToken) -> Literal {
         Literal::Regex(value)
+    }
+
+    pub fn create_match_expression(&self, value: Expression, branches: Vec<MatchBranch>) -> Expression {
+        Expression::Match(Box::new(value), branches)
     }
 }
 

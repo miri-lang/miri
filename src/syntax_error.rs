@@ -36,7 +36,10 @@ pub enum SyntaxErrorKind {
     InvalidBooleanLiteral,
     InvalidInheritanceIdentifier,
 
-    MissingStructMemberType
+    MissingStructMemberType,
+
+    DuplicateMatchPattern,
+    MissingMatchBranches
 }
 
 impl SyntaxError {
@@ -137,6 +140,14 @@ impl SyntaxError {
             SyntaxErrorKind::InvalidInheritanceIdentifier => (
                 "Invalid Inheritance Identifier",
                 "The inheritance identifier is not valid. You can only extend, implement or include a class, imported via the `use` statement. Class members can't be used as inheritance identifiers.".to_string(),
+            ),
+            SyntaxErrorKind::DuplicateMatchPattern => (
+                "Duplicate Match Pattern",
+                "This pattern is a duplicate of a previous pattern in the same match expression.".to_string(),
+            ),
+            SyntaxErrorKind::MissingMatchBranches => (
+                "Missing Match Branches",
+                "Match expressions must have at least one branch.".to_string(),
             ),
         };
 

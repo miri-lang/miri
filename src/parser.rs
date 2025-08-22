@@ -1600,10 +1600,160 @@ impl<'source> Parser<'source> {
             },
             Some((Token::LBracket, _)) => self.list_literal_expression(),
             Some((Token::LBrace, _)) => self.brace_expression(),
+            Some((Token::Match, _)) => self.match_expression(),
             _ => Err(
                 self.error_unexpected_lookahead_token("literal, parenthesized expression, identifier, lambda, list, map or set")
             ),
         }
+    }
+
+    /*
+        MatchExpression
+            : 'match' Expression ':' MatchBranchList
+            | 'match' Expression INDENT MatchBranchList DEDENT
+            ;
+    */
+    fn match_expression(&mut self) -> Result<Expression, SyntaxError> {
+        self.eat_token(&Token::Match)?;
+        let value = self.expression()?;
+        let mut branches = Vec::new();
+
+        if self.lookahead_is_colon() {
+            self.eat_token(&Token::Colon)?;
+            branches.extend(self.match_branch_list(true)?);
+        } else if self.lookahead_is_expression_end() {
+            self.eat_expression_end()?;
+            if self.lookahead_is_indent() {
+                self.eat_token(&Token::Indent)?;
+                branches.extend(self.match_branch_list(false)?);
+                self.eat_token(&Token::Dedent)?;
+            }
+        } else {
+            return Err(self.error_unexpected_lookahead_token("':' for an inline match or a new line for a block match"));
+        }
+
+        if branches.is_empty() {
+            return Err(self.error_missing_match_branches());
+        }
+
+        // TODO: check for duplicate patterns
+
+        Ok(self._ast_factory.create_match_expression(value, branches))
+    }
+
+    /*
+        MatchBranchList
+            : MatchBranch (','? MatchBranch)*
+            ;
+    */
+    fn match_branch_list(&mut self, inline_mode: bool) -> Result<Vec<MatchBranch>, SyntaxError> {
+        let mut branches = vec![self.match_branch()?];
+
+        while (inline_mode && self.lookahead_is_comma()) || (!inline_mode && self._lookahead.is_some() && !self.lookahead_is_dedent()) {
+            if inline_mode {
+                self.eat_token(&Token::Comma)?;
+            }
+            branches.push(self.match_branch()?);
+        }
+
+        Ok(branches)
+    }
+
+    /*
+        MatchBranch
+            : Pattern ('|' Pattern)* ('if' Expression)? (':' Expression | INDENT StatementList DEDENT) EXPRESSION_END
+            ;
+    */
+    fn match_branch(&mut self) -> Result<MatchBranch, SyntaxError> {
+        let mut patterns = vec![self.match_pattern()?];
+        while self.match_lookahead_type(|t| t == &Token::Pipe) {
+            self.eat_token(&Token::Pipe)?;
+            patterns.push(self.match_pattern()?);
+        }
+
+        let guard = if self.match_lookahead_type(|t| t == &Token::If) {
+            self.eat_token(&Token::If)?;
+            Some(Box::new(self.expression()?))
+        } else {
+            None
+        };
+
+        let body_parsing_error = self.error_unexpected_lookahead_token("a colon for an inline body or an indented block for a block body");
+        let body = match &self._lookahead {
+            Some((Token::Colon, _)) => {
+                self.eat_token(&Token::Colon)?;
+                let expr = self.expression()?;
+                self._ast_factory.create_expression_statement(expr)
+            },
+            Some((Token::ExpressionStatementEnd, _)) => {
+                self.eat_expression_end()?;
+                if self.lookahead_is_indent() {
+                    self.block_statement()?
+                } else if self.lookahead_is_dedent() || self._lookahead.is_none() {
+                    Statement::Empty // No body, just an expression end
+                } else {
+                    return Err(body_parsing_error);
+                }
+            },
+            _ => return Err(body_parsing_error),
+        };
+        self.try_eat_expression_end();
+
+        Ok(MatchBranch { patterns, guard, body: Box::new(body) })
+    }
+
+    /*
+        MatchPattern
+            : Literal
+            | Identifier
+            | TuplePattern
+            | 'default'
+            ;
+    */
+    fn match_pattern(&mut self) -> Result<MatchPattern, SyntaxError> {
+        match &self._lookahead {
+            Some((Token::Default, _)) => {
+                self.eat_token(&Token::Default)?;
+                Ok(MatchPattern::Default)
+            },
+            Some((Token::Identifier, _)) => {
+                let name = self.parse_simple_identifier()?;
+                Ok(MatchPattern::Identifier(name))
+            },
+            Some((Token::LParen, _)) => self.tuple_pattern(),
+            Some((Token::Regex(_), _)) => {
+                if let Literal::Regex(regex_token) = self.regex_literal()? {
+                    Ok(MatchPattern::Regex(regex_token))
+                } else {
+                    unreachable!()
+                }
+            }
+            _ if self.lookahead_is_literal() => {
+                let literal = self.literal()?;
+                Ok(MatchPattern::Literal(literal))
+            }
+            _ => Err(self.error_unexpected_lookahead_token("a pattern (literal, identifier, or default)"))
+        }
+    }
+
+    /*
+        TuplePattern
+            : '(' (Pattern (',' Pattern)* ','?)? ')'
+            ;
+    */
+    fn tuple_pattern(&mut self) -> Result<MatchPattern, SyntaxError> {
+        self.eat_token(&Token::LParen)?;
+        let mut patterns = Vec::new();
+        if !self.lookahead_is_rparen() {
+            patterns.push(self.match_pattern()?);
+            while self.lookahead_is_comma() {
+                self.eat_token(&Token::Comma)?;
+                if self.lookahead_is_rparen() { break; } // Allow trailing comma
+                patterns.push(self.match_pattern()?);
+            }
+        }
+        self.eat_token(&Token::RParen)?;
+        Ok(MatchPattern::Tuple(patterns))
     }
 
     /*
@@ -2322,6 +2472,13 @@ impl<'source> Parser<'source> {
 
     fn error_unexpected_lookahead_token(&self, expected: &str) -> SyntaxError {
         self.error_unexpected_token(expected, &self.lookahead_as_string())
+    }
+
+    fn error_missing_match_branches(&self) -> SyntaxError {
+        SyntaxError::new(
+            SyntaxErrorKind::MissingMatchBranches,
+            self.source.len()..self.source.len()
+        )
     }
 
     fn error_eof(&self) -> SyntaxError {
