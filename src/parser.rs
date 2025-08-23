@@ -1288,10 +1288,11 @@ impl<'source> Parser<'source> {
             ;
     */
     fn relational_expression(&mut self) -> Result<Expression, SyntaxError> {
-        self.binary_expression(
+        self._binary_expression(
             Self::additive_expression,
             is_relational_op,
-            Self::eat_relational_op
+            Self::eat_relational_op,
+            |p, l, op, r| p._ast_factory.create_binary_expression(l, op, r)
         )
     }
 
@@ -1305,10 +1306,11 @@ impl<'source> Parser<'source> {
             ;
     */
     fn equality_expression(&mut self) -> Result<Expression, SyntaxError> {
-        self.binary_expression(
+        self._binary_expression(
             Self::relational_expression,
             is_equality_op,
-            Self::eat_equality_op
+            Self::eat_equality_op,
+            |p, l, op, r| p._ast_factory.create_binary_expression(l, op, r)
         )
     }
 
@@ -1321,10 +1323,11 @@ impl<'source> Parser<'source> {
             ;
     */
     fn logical_and_expression(&mut self) -> Result<Expression, SyntaxError> {
-        self.logical_expression(
+        self._binary_expression(
             Self::equality_expression,
             is_logical_and_op,
-            Self::eat_logical_and_op
+            Self::eat_logical_and_op,
+            |p, l, op, r| p._ast_factory.create_logical_expression(l, op, r)
         )
     }
 
@@ -1337,10 +1340,11 @@ impl<'source> Parser<'source> {
             ;
     */
     fn logical_or_expression(&mut self) -> Result<Expression, SyntaxError> {
-        self.logical_expression(
+        self._binary_expression(
             Self::logical_and_expression,
             is_logical_or_op,
-            Self::eat_logical_or_op
+            Self::eat_logical_or_op,
+            |p, l, op, r| p._ast_factory.create_logical_expression(l, op, r)
         )
     }
 
@@ -1463,10 +1467,11 @@ impl<'source> Parser<'source> {
             ;
     */
     fn additive_expression(&mut self) -> Result<Expression, SyntaxError> {
-        self.binary_expression(
+        self._binary_expression(
             Self::multiplicative_expression,
             is_additive_op,
-            Self::eat_additive_op
+            Self::eat_additive_op,
+            |p, l, op, r| p._ast_factory.create_binary_expression(l, op, r)
         )
     }
 
@@ -1477,14 +1482,15 @@ impl<'source> Parser<'source> {
             ;
     */
     fn multiplicative_expression(&mut self) -> Result<Expression, SyntaxError> {
-        self.binary_expression(
+        self._binary_expression(
             Self::unary_expression,
             is_multiplicative_op,
-            Self::eat_multiplicative_op
+            Self::eat_multiplicative_op,
+            |p, l, op, r| p._ast_factory.create_binary_expression(l, op, r)
         )
     }
 
-    fn generic_binary_expression<F, G, E>(&mut self,
+    fn _binary_expression<F, G, E>(&mut self,
             mut create_branch: F,
             op_predicate: fn(&Token) -> bool,
             mut eat_op: G,
@@ -1509,44 +1515,6 @@ impl<'source> Parser<'source> {
         }
 
         Ok(left)
-    }
-
-    fn binary_expression<F, G>(&mut self,
-            create_branch: F,
-            op_predicate: fn(&Token) -> bool,
-            eat_op: G
-        ) -> Result<Expression, SyntaxError> 
-    where
-        F: FnMut(&mut Self) -> Result<Expression, SyntaxError>,
-        G: FnMut(&mut Self) -> Result<BinaryOp, Result<Expression, SyntaxError>>,
-    {
-        self.generic_binary_expression(
-            create_branch,
-            op_predicate,
-            eat_op,
-            |parser, left, op, right| {
-                parser._ast_factory.create_binary_expression(left, op, right)
-            }
-        )
-    }
-
-    fn logical_expression<F, G>(&mut self,
-            create_branch: F,
-            op_predicate: fn(&Token) -> bool,
-            eat_op: G
-        ) -> Result<Expression, SyntaxError> 
-    where
-        F: FnMut(&mut Self) -> Result<Expression, SyntaxError>,
-        G: FnMut(&mut Self) -> Result<BinaryOp, Result<Expression, SyntaxError>>,
-    {
-        self.generic_binary_expression(
-            create_branch,
-            op_predicate,
-            eat_op,
-            |parser, left, op, right| {
-                parser._ast_factory.create_logical_expression(left, op, right)
-            }
-        )
     }
 
     /*
@@ -1636,7 +1604,21 @@ impl<'source> Parser<'source> {
             return Err(self.error_missing_match_branches());
         }
 
-        // TODO: check for duplicate patterns
+        // Check for duplicate (pattern, guard) combinations.
+        // This catches simple duplicates like `1: ... 1: ...` or
+        // `x if x > 10: ... x if x > 10: ...`.
+        // A more complex semantic analysis for overlapping or unreachable
+        // patterns is left to a later compiler stage.
+        let mut seen_pattern_guards = std::collections::HashSet::new();
+        for branch in &branches {
+            for pattern in &branch.patterns {
+                let key = (pattern.clone(), branch.guard.clone());
+                if !seen_pattern_guards.insert(key) {
+                    // This exact pattern and guard combination has been seen before.
+                    return Err(self.error_duplicate_match_pattern());
+                }
+            }
+        }
 
         Ok(self._ast_factory.create_match_expression(value, branches))
     }
@@ -1665,10 +1647,10 @@ impl<'source> Parser<'source> {
             ;
     */
     fn match_branch(&mut self) -> Result<MatchBranch, SyntaxError> {
-        let mut patterns = vec![self.match_pattern()?];
+        let mut patterns = vec![self.pattern()?];
         while self.match_lookahead_type(|t| t == &Token::Pipe) {
             self.eat_token(&Token::Pipe)?;
-            patterns.push(self.match_pattern()?);
+            patterns.push(self.pattern()?);
         }
 
         let guard = if self.match_lookahead_type(|t| t == &Token::If) {
@@ -1689,8 +1671,6 @@ impl<'source> Parser<'source> {
                 self.eat_expression_end()?;
                 if self.lookahead_is_indent() {
                     self.block_statement()?
-                } else if self.lookahead_is_dedent() || self._lookahead.is_none() {
-                    Statement::Empty // No body, just an expression end
                 } else {
                     return Err(body_parsing_error);
                 }
@@ -1703,34 +1683,34 @@ impl<'source> Parser<'source> {
     }
 
     /*
-        MatchPattern
+        Pattern
             : Literal
             | Identifier
             | TuplePattern
             | 'default'
             ;
     */
-    fn match_pattern(&mut self) -> Result<MatchPattern, SyntaxError> {
+    fn pattern(&mut self) -> Result<Pattern, SyntaxError> {
         match &self._lookahead {
             Some((Token::Default, _)) => {
                 self.eat_token(&Token::Default)?;
-                Ok(MatchPattern::Default)
+                Ok(Pattern::Default)
             },
             Some((Token::Identifier, _)) => {
                 let name = self.parse_simple_identifier()?;
-                Ok(MatchPattern::Identifier(name))
+                Ok(Pattern::Identifier(name))
             },
             Some((Token::LParen, _)) => self.tuple_pattern(),
             Some((Token::Regex(_), _)) => {
                 if let Literal::Regex(regex_token) = self.regex_literal()? {
-                    Ok(MatchPattern::Regex(regex_token))
+                    Ok(Pattern::Regex(regex_token))
                 } else {
                     unreachable!()
                 }
             }
             _ if self.lookahead_is_literal() => {
                 let literal = self.literal()?;
-                Ok(MatchPattern::Literal(literal))
+                Ok(Pattern::Literal(literal))
             }
             _ => Err(self.error_unexpected_lookahead_token("a pattern (literal, identifier, or default)"))
         }
@@ -1741,19 +1721,19 @@ impl<'source> Parser<'source> {
             : '(' (Pattern (',' Pattern)* ','?)? ')'
             ;
     */
-    fn tuple_pattern(&mut self) -> Result<MatchPattern, SyntaxError> {
+    fn tuple_pattern(&mut self) -> Result<Pattern, SyntaxError> {
         self.eat_token(&Token::LParen)?;
         let mut patterns = Vec::new();
         if !self.lookahead_is_rparen() {
-            patterns.push(self.match_pattern()?);
+            patterns.push(self.pattern()?);
             while self.lookahead_is_comma() {
                 self.eat_token(&Token::Comma)?;
                 if self.lookahead_is_rparen() { break; } // Allow trailing comma
-                patterns.push(self.match_pattern()?);
+                patterns.push(self.pattern()?);
             }
         }
         self.eat_token(&Token::RParen)?;
-        Ok(MatchPattern::Tuple(patterns))
+        Ok(Pattern::Tuple(patterns))
     }
 
     /*
@@ -2477,6 +2457,13 @@ impl<'source> Parser<'source> {
     fn error_missing_match_branches(&self) -> SyntaxError {
         SyntaxError::new(
             SyntaxErrorKind::MissingMatchBranches,
+            self.source.len()..self.source.len()
+        )
+    }
+
+    fn error_duplicate_match_pattern(&self) -> SyntaxError {
+        SyntaxError::new(
+            SyntaxErrorKind::DuplicateMatchPattern,
             self.source.len()..self.source.len()
         )
     }

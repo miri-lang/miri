@@ -117,7 +117,7 @@ pub enum Token {
 
 pub type TokenSpan = (Token, Span);
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub struct RegexToken {
     pub body: String,
     pub ignore_case: bool,

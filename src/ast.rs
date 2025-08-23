@@ -10,14 +10,14 @@ pub struct Program {
 }
 
 /// Represents the type of an if statement
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum IfStatementType {
     If,
     Unless,
 }
 
 /// Represents the type of a while statement
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum WhileStatementType {
     While,
     Until,
@@ -25,7 +25,7 @@ pub enum WhileStatementType {
 }
 
 /// Represents the type of a range expression
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RangeExpressionType {
     Exclusive, // Represents a range like `1..10`
     Inclusive, // Represents a range like `1..=10`
@@ -34,14 +34,14 @@ pub enum RangeExpressionType {
 }
 
 /// Represents a parameter in a function declaration
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Parameter {
     pub name: String,
     pub typ: Option<Box<Expression>>, // Type can be specified, e.g., "i32", "String"
     pub guard: Option<Box<Expression>>, // Optional guard expression
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MemberVisibility {
     Public,
     Protected,
@@ -49,14 +49,14 @@ pub enum MemberVisibility {
 }
 
 /// Represents the properties of a function declaration
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FunctionProperties {
     pub is_async: bool,
     pub is_gpu: bool,
     pub visibility: MemberVisibility,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub enum Statement {
     Empty, // Represents an empty statement, e.g., when a block is empty
 
@@ -96,7 +96,7 @@ pub enum Statement {
 }
 
 /// Represents an expression
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Expression {
     Literal(Literal),
     
@@ -173,14 +173,14 @@ pub enum Expression {
 }
 
 /// Represents the type of a variable
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum VariableDeclarationType {
     Mutable,
     Immutable,
 }
 
 /// Represents a variable declaration
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct VariableDeclaration {
     pub name: String,
     pub typ: Option<Box<Expression>>, // Type can be specified, e.g., "i32", "String"
@@ -189,7 +189,7 @@ pub struct VariableDeclaration {
 }
 
 /// Represents a left-hand side expression, which can be an identifier or a more complex expression
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LeftHandSideExpression {
     Identifier(Box<Expression>),
 
@@ -199,7 +199,7 @@ pub enum LeftHandSideExpression {
 }
 
 /// Represents a binary operator
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy, Eq, Hash)]
 pub enum BinaryOp {
     Add,
     Sub,
@@ -223,7 +223,7 @@ pub enum BinaryOp {
 }
 
 /// Represents a guard operator
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy, Eq, Hash)]
 pub enum GuardOp {
     NotEqual,
     LessThan,
@@ -236,7 +236,7 @@ pub enum GuardOp {
 }
 
 /// Represents a unary operator
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy, Eq, Hash)]
 pub enum UnaryOp {
     Negate, // - operator
     Not,
@@ -248,7 +248,7 @@ pub enum UnaryOp {
 }
 
 /// Represents an assignment operator
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy, Eq, Hash)]
 pub enum AssignmentOp {
     Assign,
     AssignAdd,
@@ -259,7 +259,7 @@ pub enum AssignmentOp {
 }
 
 /// Represents a literal value
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Literal {
     Integer(IntegerLiteral),
     Float(FloatLiteral),
@@ -270,7 +270,7 @@ pub enum Literal {
 }
 
 /// Represents an integer literal value
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum IntegerLiteral {
     I8(i8),
     I16(i16),
@@ -285,14 +285,14 @@ pub enum IntegerLiteral {
 }
 
 /// Represents a floating-point literal value
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FloatLiteral {
-    F32(f32),
-    F64(f64),
+    F32(u32), // Store as u32 to be hashable
+    F64(u64),
 }
 
 /// Represents a type expression
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     Int,
     I8,
@@ -324,7 +324,7 @@ pub enum Type {
 
 
 /// Represents a type declaration kind
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeDeclarationKind {
     None,
     Is,
@@ -334,19 +334,19 @@ pub enum TypeDeclarationKind {
 }
 
 /// Represents a branch in a match expression
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MatchBranch {
-    pub patterns: Vec<MatchPattern>,
+    pub patterns: Vec<Pattern>,
     pub guard: Option<Box<Expression>>,
     pub body: Box<Statement>,
 }
 
 /// Represents a pattern in a match expression
-#[derive(Debug, Clone, PartialEq)]
-pub enum MatchPattern {
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Pattern {
     Literal(Literal),
     Identifier(String),
-    Tuple(Vec<MatchPattern>),
+    Tuple(Vec<Pattern>),
     Regex(RegexToken),
     Default,
 }
@@ -423,11 +423,11 @@ impl AstFactory {
     }
 
     pub fn create_f32_literal(&self, value: f32) -> Literal {
-        Literal::Float(FloatLiteral::F32(value))
+        Literal::Float(FloatLiteral::F32(value.to_bits()))
     }
 
     pub fn create_f64_literal(&self, value: f64) -> Literal {
-        Literal::Float(FloatLiteral::F64(value))
+        Literal::Float(FloatLiteral::F64(value.to_bits()))
     }
 
     pub fn create_string_literal(&self, value: String) -> Literal {
