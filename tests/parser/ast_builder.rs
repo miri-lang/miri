@@ -46,11 +46,11 @@ pub fn int_literal_expression(val: i128) -> Expression {
 }
 
 pub fn float32(val: f32) -> FloatLiteral {
-    FloatLiteral::F32(val)
+    FloatLiteral::F32(val.to_bits())
 }
 
 pub fn float64(val: f64) -> FloatLiteral {
-    FloatLiteral::F64(val)
+    FloatLiteral::F64(val.to_bits())
 }
 
 pub fn float32_literal(val: f32) -> Expression {
