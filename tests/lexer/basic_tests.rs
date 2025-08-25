@@ -70,13 +70,13 @@ let dict2 {string: int} = {key1: 1, key2: 2} // dictionary with type
         Token::Var, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
         Token::Let, Token::Identifier, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
         Token::Let, Token::Identifier, Token::Assign, Token::Float, Token::ExpressionStatementEnd,
-        Token::Let, Token::Identifier, Token::Identifier, Token::Assign, Token::SingleQuotedString, Token::ExpressionStatementEnd,
+        Token::Let, Token::Identifier, Token::Identifier, Token::Assign, Token::String, Token::ExpressionStatementEnd,
         Token::Let, Token::Identifier, Token::Assign, Token::True, Token::ExpressionStatementEnd,
         Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::Percent, Token::Int, Token::Equal, Token::Int, Token::ExpressionStatementEnd,
         Token::Let, Token::Identifier, Token::Assign, Token::Identifier, Token::LessThan, Token::Identifier, Token::Comma, Token::Identifier, Token::GreaterThan, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
         Token::Let, Token::Identifier, Token::Assign, Token::LBracket, Token::Int, Token::Comma, Token::Int, Token::Comma, Token::Int, Token::RBracket, Token::ExpressionStatementEnd,
         Token::Let, Token::Identifier, Token::LBracket, Token::Identifier, Token::RBracket, Token::Assign, Token::LBracket, Token::Float, Token::Comma, Token::Float, Token::Comma, Token::Float, Token::RBracket, Token::ExpressionStatementEnd,
-        Token::Let, Token::Identifier, Token::Assign, Token::LBrace, Token::Identifier, Token::Colon, Token::SingleQuotedString, Token::Comma, Token::Identifier, Token::Colon, Token::SingleQuotedString, Token::RBrace, Token::ExpressionStatementEnd,
+        Token::Let, Token::Identifier, Token::Assign, Token::LBrace, Token::Identifier, Token::Colon, Token::String, Token::Comma, Token::Identifier, Token::Colon, Token::String, Token::RBrace, Token::ExpressionStatementEnd,
         Token::Let, Token::Identifier, Token::LBrace, Token::Identifier, Token::Colon, Token::Identifier, Token::RBrace, Token::Assign, Token::LBrace, Token::Identifier, Token::Colon, Token::Int, Token::Comma, Token::Identifier, Token::Colon, Token::Int, Token::RBrace, Token::ExpressionStatementEnd,
     ]);
 }
@@ -90,7 +90,7 @@ fn fancy_print
 ", vec![
         Token::Fn, Token::Identifier, Token::ExpressionStatementEnd,
             Token::Indent,
-            Token::Identifier, Token::DoubleQuotedString, Token::ExpressionStatementEnd,
+            Token::Identifier, Token::String, Token::ExpressionStatementEnd,
             Token::Dedent,
     ]);
 }
@@ -210,7 +210,7 @@ for i in 1..3
 ", vec![
         Token::For, Token::Identifier, Token::In, Token::Int, Token::Range, Token::Int, Token::ExpressionStatementEnd,
             Token::Indent,
-            Token::For, Token::Identifier, Token::In, Token::DoubleQuotedString, Token::ExpressionStatementEnd,
+            Token::For, Token::Identifier, Token::In, Token::String, Token::ExpressionStatementEnd,
             Token::Dedent
     ]);
 }
@@ -238,7 +238,7 @@ fn test_index_member_assignment() {
     lexer_test("
 obj['prop'] = 1
 ", vec![
-        Token::Identifier, Token::LBracket, Token::SingleQuotedString, Token::RBracket, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+        Token::Identifier, Token::LBracket, Token::String, Token::RBracket, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
     ]);
 }
 

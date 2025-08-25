@@ -63,7 +63,7 @@ fn test_regex_is_not_a_string() {
     // Ensure re"..." is tokenized differently from a normal string followed by an identifier.
     lexer_test("re\"abc\" \"abc\"g", vec![
         Token::Regex(regex_token("abc", "")),
-        Token::DoubleQuotedString,
+        Token::String,
         Token::Identifier,
     ]);
 }
@@ -97,7 +97,7 @@ fn test_error_unclosed_regex() {
 fn test_error_regex_without_re_prefix() {
     // This should be parsed as a string followed by an identifier.
     lexer_test(r#""[a-z]+"g"#, vec![
-        Token::DoubleQuotedString,
+        Token::String,
         Token::Identifier,
     ]);
 }

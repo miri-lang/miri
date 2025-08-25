@@ -63,7 +63,7 @@ fn keyword_test(keyword: &str, expected: Token) {
         Token::Identifier,
         Token::Identifier,
         Token::Identifier,
-        Token::DoubleQuotedString,
+        Token::String,
     ]);
 }
 
@@ -89,6 +89,6 @@ fn test_else_keyword() {
         Token::Identifier,
         Token::Identifier,
         Token::Identifier,
-        Token::DoubleQuotedString,
+        Token::String,
     ]);
 }

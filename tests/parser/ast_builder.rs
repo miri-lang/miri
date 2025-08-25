@@ -71,6 +71,10 @@ pub fn string_literal(val: &str) -> Expression {
     Expression::Literal(string(val))
 }
 
+pub fn f_string(parts: Vec<Expression>) -> Expression {
+    Expression::FormattedString(parts)
+}
+
 pub fn boolean(val: bool) -> Literal {
     Literal::Boolean(val)
 }

@@ -5,8 +5,9 @@ use super::ast_builder::*;
 use super::utils::*;
 
 
+
 #[test]
-fn test_parse_string_literal() {
-    parse_literal_test("'hello single quote'", string("hello single quote"));
-    parse_literal_test("\"hello double quote\"", string("hello double quote"));
+fn test_parse_symbol_literal() {
+    parse_literal_test(":my_fancy_symbol", symbol("my_fancy_symbol"));
 }
+

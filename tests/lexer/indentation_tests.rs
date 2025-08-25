@@ -108,7 +108,7 @@ func(10,
      50)
 ", vec![
         Token::Identifier, Token::LParen, Token::Int, Token::Comma,            
-            Token::DoubleQuotedString, Token::Comma,
+            Token::String, Token::Comma,
             Token::Int, Token::RParen, Token::ExpressionStatementEnd
     ]);
 }
@@ -272,8 +272,8 @@ let y = {
 }
 ", vec![
         Token::Let, Token::Identifier, Token::Assign, Token::LBrace,
-        Token::SingleQuotedString, Token::Colon, Token::SingleQuotedString, Token::Comma,
-        Token::SingleQuotedString, Token::Colon, Token::Int,
+        Token::String, Token::Colon, Token::String, Token::Comma,
+        Token::String, Token::Colon, Token::Int,
         Token::RBrace, Token::ExpressionStatementEnd,
     ]);
 }
@@ -417,7 +417,7 @@ let y = 1
 ", vec![
         Token::Let, Token::Identifier, Token::Assign, Token::LBracket,
         Token::Int, Token::Comma,
-        Token::LBrace, Token::SingleQuotedString, Token::Colon, Token::Int, Token::RBrace, Token::Comma,
+        Token::LBrace, Token::String, Token::Colon, Token::Int, Token::RBrace, Token::Comma,
         Token::Int,
         Token::RBracket, Token::ExpressionStatementEnd,
         Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
