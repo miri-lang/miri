@@ -3,7 +3,7 @@
 
 use std::vec;
 
-use miri::{lexer::{Token}, syntax_error::SyntaxErrorKind};
+use miri::{lexer::{RegexToken, Token}, syntax_error::SyntaxErrorKind};
 
 use super::utils::*;
 
@@ -82,6 +82,12 @@ fn test_unclosed_string_literal() {
     // An unclosed string should likely be tokenized up to the end of the line
     // and not consume the rest of the file.
     lexer_error_test("'unclosed string", SyntaxErrorKind::InvalidToken);
+}
+
+#[test]
+fn test_string_with_complex_escapes() {
+    lexer_test(r#""a \\\" b""#, vec![Token::String]);
+    lexer_test(r#"'a \\\' b'"#, vec![Token::String]);
 }
 
 #[test]
@@ -230,16 +236,9 @@ fn test_f_string_with_string_literal_in_expression() {
 
 #[test]
 fn test_f_string_with_nested_string_literal() {
-    // Tests that the parser correctly handles a regular string inside an f-string expression.
-    lexer_test(
+    lexer_error_test(
         r#"f"Greeting: {\"hello \" + name}""#,
-        vec![
-            Token::FormattedStringStart("Greeting: ".to_string()),
-            Token::String,
-            Token::Plus,
-            Token::Identifier,
-            Token::FormattedStringEnd("".to_string()),
-        ],
+        SyntaxErrorKind::BackslashInFStringExpression,
     );
 }
 
@@ -250,7 +249,79 @@ fn test_f_string_error_unclosed_brace() {
 }
 
 #[test]
-fn test_string_with_complex_escapes() {
-    lexer_test(r#""a \\\" b""#, vec![Token::String]);
-    lexer_test(r#"'a \\\' b'"#, vec![Token::String]);
+fn test_f_string_with_nested_f_string() {
+    // This ensures the lexer can recursively handle f-strings and that the
+    // sub-lexer correctly parses the inner f-string.
+    lexer_test(
+        r#"f"Outer value: {f'inner value: {x + 1}'}""#,
+        vec![
+            Token::FormattedStringStart("Outer value: ".to_string()),
+            // Start of inner f-string
+            Token::FormattedStringStart("inner value: ".to_string()),
+            Token::Identifier,
+            Token::Plus,
+            Token::Int,
+            Token::FormattedStringEnd("".to_string()),
+            // End of outer f-string
+            Token::FormattedStringEnd("".to_string()),
+        ],
+    );
 }
+
+#[test]
+fn test_f_string_with_regex_inside() {
+    // Ensures that a regex, with its own quote rules, is parsed correctly inside an expression.
+    lexer_test(
+        r#"f"The pattern is {re'a-z'i}""#,
+        vec![
+            Token::FormattedStringStart("The pattern is ".to_string()),
+            Token::Regex(RegexToken {
+                body: "a-z".to_string(),
+                ignore_case: true,
+                global: false,
+                multiline: false,
+                dot_all: false,
+                unicode: false,
+            }),
+            Token::FormattedStringEnd("".to_string()),
+        ],
+    );
+}
+
+#[test]
+fn test_f_string_with_complex_escapes_in_expression() {
+    lexer_error_test(
+        r#"f"Command: {\"echo \\\"hello world\\\"\"}""#,
+        SyntaxErrorKind::BackslashInFStringExpression,
+    );
+}
+
+#[test]
+fn test_f_string_with_escaped_backslash_before_quote() {
+    lexer_error_test(
+        r#"f"Path: {\"C:\\\\Users\\\\\"}""#,
+        SyntaxErrorKind::BackslashInFStringExpression,
+    );
+}
+
+#[test]
+fn test_f_string_with_regex() {
+    lexer_error_test(
+        r#"f"Pattern: {re'^\d+$'}""#,
+        SyntaxErrorKind::BackslashInFStringExpression,
+    );
+}
+
+#[test]
+fn test_f_string_with_empty_expression() {
+    // An empty expression `{}` should be a syntax error at the parser level,
+    // but the lexer should tokenize it without crashing.
+    lexer_test(
+        r#"f"Empty: {}""#,
+        vec![
+            Token::FormattedStringStart("Empty: ".to_string()),
+            Token::FormattedStringEnd("".to_string()),
+        ],
+    );
+}
+

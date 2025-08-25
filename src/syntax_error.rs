@@ -38,6 +38,7 @@ pub enum SyntaxErrorKind {
     InvalidRegexLiteral,
     InvalidFormattedString,
     InvalidFormattedStringExpression,
+    BackslashInFStringExpression,
 
     MissingStructMemberType,
 
@@ -163,6 +164,10 @@ impl SyntaxError {
             SyntaxErrorKind::InvalidFormattedStringExpression => (
                 "Invalid Formatted String Expression",
                 "The formatted string is malformed, likely due to an unclosed expression brace `{`.".to_string(),
+            ),
+            SyntaxErrorKind::BackslashInFStringExpression => (
+                "Invalid Backslash",
+                "The expression part of a formatted string cannot contain backslashes.".to_string(),
             ),
         };
 
