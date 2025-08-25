@@ -146,6 +146,7 @@ pub enum Expression {
 
     Match(Box<Expression>, Vec<MatchBranch>), // value, branches
 
+    FormattedString(Vec<Expression>), // "hello #{name}"
 
     // // Operators
     // Binary(Box<Expr>, BinaryOp, Box<Expr>),
@@ -622,6 +623,10 @@ impl AstFactory {
 
     pub fn create_match_expression(&self, value: Expression, branches: Vec<MatchBranch>) -> Expression {
         Expression::Match(Box::new(value), branches)
+    }
+
+    pub fn create_formatted_string(&self, parts: Vec<Expression>) -> Expression {
+        Expression::FormattedString(parts)
     }
 }
 

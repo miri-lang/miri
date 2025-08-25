@@ -39,9 +39,9 @@ Done ✅
   - [x] map
   - [x] set
   - [x] regex
-  - [ ] match / pattern matching
+  - [x] match / pattern matching
   - [ ] string interpolation
-  - [ ] refactor lexer & parser tests (split them in modules)
+  - [x] refactor lexer & parser tests (split them in modules)
   - [ ] identify gaps in tests
   - [ ] optimize parser
 - [x] Create an **AST (Abstract Syntax Tree)** representation.

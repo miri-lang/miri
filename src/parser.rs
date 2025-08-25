@@ -360,12 +360,15 @@ impl<'source> Parser<'source> {
                 let tuple = self.parenthesized_expression()?;
                 Ok(tuple)
             },
+            Some((Token::FormattedStringStart(_), _)) => {
+                let formatted_string = self.formatted_string_expression()?;
+                Ok(formatted_string)
+            },
             _ => {
                 let err = self.error_unexpected_lookahead_token("an identifier, a string or a number");
                 if self.lookahead_is_literal() {
                     let literal = match &self._lookahead {
-                        Some((Token::DoubleQuotedString, _)) => self.string_literal(&Token::DoubleQuotedString)?,
-                        Some((Token::SingleQuotedString, _)) => self.string_literal(&Token::SingleQuotedString)?,
+                        Some((Token::String, _)) => self.string_literal()?,
                         Some((Token::Int, _)) => self.integer_literal(&Token::Int)?,
                         Some((Token::BinaryNumber, _)) => self.integer_literal(&Token::BinaryNumber)?,
                         Some((Token::HexNumber, _)) => self.integer_literal(&Token::HexNumber)?,
@@ -1569,10 +1572,74 @@ impl<'source> Parser<'source> {
             Some((Token::LBracket, _)) => self.list_literal_expression(),
             Some((Token::LBrace, _)) => self.brace_expression(),
             Some((Token::Match, _)) => self.match_expression(),
+            Some((Token::FormattedStringStart(_), _)) => self.formatted_string_expression(),
             _ => Err(
                 self.error_unexpected_lookahead_token("literal, parenthesized expression, identifier, lambda, list, map or set")
             ),
         }
+    }
+
+    /*
+        FormattedStringExpression
+            : FormattedStringStart Expression (FormattedStringMiddle Expression)* FormattedStringEnd
+            ;
+    */
+    fn formatted_string_expression(&mut self) -> Result<Expression, SyntaxError> {
+        let mut parts = Vec::new();
+
+        let start_token_str = &token_to_string(&Token::FormattedStringStart("".to_string()));
+        if let Some((Token::FormattedStringStart(start_text), _)) = self._lookahead.clone() {
+            self.eat(
+                |t| matches!(t, Token::FormattedStringStart(_)),
+                start_token_str
+            )?;
+            if !start_text.is_empty() {
+                parts.push(
+                    self._ast_factory.create_literal_expression(
+                        self._ast_factory.create_string_literal(start_text)
+                    )
+                );
+            }
+        } else {
+            return Err(self.error_unexpected_lookahead_token(start_token_str));
+        }
+
+        while self._lookahead.is_some() {
+            parts.push(self.expression()?);
+
+            if let Some((Token::FormattedStringMiddle(middle_text), _)) = self._lookahead.clone() {
+                self.eat(
+                    |t| matches!(t, Token::FormattedStringMiddle(_)),
+                    &token_to_string(&Token::FormattedStringMiddle("".to_string()))
+                )?;
+                if !middle_text.is_empty() {
+                    parts.push(
+                        self._ast_factory.create_literal_expression(
+                            self._ast_factory.create_string_literal(middle_text)
+                        )
+                    );
+                }
+            } else if let Some((Token::FormattedStringEnd(end_text), _)) = self._lookahead.clone() {
+                self.eat(
+                    |t| matches!(t, Token::FormattedStringEnd(_)),
+                    &token_to_string(&Token::FormattedStringEnd("".to_string()))
+                )?;
+                if !end_text.is_empty() {
+                    parts.push(
+                        self._ast_factory.create_literal_expression(
+                            self._ast_factory.create_string_literal(end_text)
+                        )
+                    );
+                }
+                break; // End of the f-string
+            } else {
+                return Err(
+                    self.error_unexpected_lookahead_token("middle or end of a formatted string")
+                );
+            }
+        }
+
+        Ok(self._ast_factory.create_formatted_string(parts))
     }
 
     /*
@@ -1954,10 +2021,15 @@ impl<'source> Parser<'source> {
             Some((Token::Float, _)) => self.float_literal(),
             Some((Token::True, _)) => self.boolean_literal(&Token::True),
             Some((Token::False, _)) => self.boolean_literal(&Token::False),
-            Some((Token::DoubleQuotedString, _)) => self.string_literal(&Token::DoubleQuotedString),
-            Some((Token::SingleQuotedString, _)) => self.string_literal(&Token::SingleQuotedString),
+            Some((Token::String, _)) => self.string_literal(),
             Some((Token::Symbol, _)) => self.symbol_literal(),
             Some((Token::Regex(_), _)) => self.regex_literal(),
+            Some((Token::FormattedStringStart(_), _)) |
+            Some((Token::FormattedStringMiddle(_), _)) |
+            Some((Token::FormattedStringEnd(_), _)) => {
+                // These are handled by formatted_string_expression, not here.
+                Err(self.error_unexpected_lookahead_token("a literal"))
+            }
             Some((token, span)) => {
                 let token_text = &self.source[span.start..span.end];
                 Err(
@@ -2118,10 +2190,18 @@ impl<'source> Parser<'source> {
             : SingleQuotedString
             ;
     */
-    fn string_literal(&mut self, token_type: &Token) -> Result<Literal, SyntaxError> {
-        match self.eat_token(token_type) {
+    fn string_literal(&mut self) -> Result<Literal, SyntaxError> {
+        match self.eat_token(&Token::String) {
             Ok(token) => {
-                let str_value = &self.source[token.1.start + 1..token.1.end - 1]; // Remove quotes
+                let mut str_value = &self.source[token.1.start..token.1.end];
+                
+                // Strings that come from f-string expressions will have escaped quotes.
+                if str_value.starts_with('\\') {
+                    str_value = &str_value[2..str_value.len() - 1];
+                } else {
+                    str_value = &str_value[1..str_value.len() - 1];
+                }
+
                 let literal = self._ast_factory.create_string_literal(str_value.to_string());
                 Ok(literal)
             },
@@ -2526,7 +2606,7 @@ fn is_assignment_op(token: &Token) -> bool {
 }
 
 fn is_literal(token: &Token) -> bool {
-    matches!(token, Token::Int | Token::BinaryNumber | Token::HexNumber | Token::OctalNumber | Token::Float | Token::True | Token::False | Token::DoubleQuotedString | Token::SingleQuotedString | Token::Symbol | Token::Regex(_))
+    matches!(token, Token::Int | Token::BinaryNumber | Token::HexNumber | Token::OctalNumber | Token::Float | Token::True | Token::False | Token::String | Token::Symbol | Token::Regex(_))
 }
 
 fn is_colon(token: &Token) -> bool {

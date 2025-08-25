@@ -20,7 +20,7 @@ use System.Math // use System.Math // with another comment inside
 x = x + 1 // math: x becomes x + 1
 "#, vec![
         Token::Var, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
-        Token::Identifier, Token::LParen, Token::SingleQuotedString, Token::RParen, Token::ExpressionStatementEnd,
+        Token::Identifier, Token::LParen, Token::String, Token::RParen, Token::ExpressionStatementEnd,
         Token::Use, Token::Identifier, Token::Dot, Token::Identifier, Token::ExpressionStatementEnd,
         Token::Identifier, Token::Assign, Token::Identifier, Token::Plus, Token::Int, Token::ExpressionStatementEnd
     ]);
@@ -66,10 +66,10 @@ Symbols: /* nested? */ < > & ^ ~
 
 print("Hello") /* inline comment */
 "#, vec![
-        Token::Let, Token::Identifier, Token::Assign, Token::DoubleQuotedString, Token::ExpressionStatementEnd,
+        Token::Let, Token::Identifier, Token::Assign, Token::String, Token::ExpressionStatementEnd,
         Token::Fn, Token::Identifier, Token::LParen, Token::RParen, Token::Identifier, Token::Colon,
             Token::Int, Token::Plus, Token::Int, Token::ExpressionStatementEnd,
-        Token::Identifier, Token::LParen, Token::DoubleQuotedString, Token::RParen, Token::ExpressionStatementEnd,
+        Token::Identifier, Token::LParen, Token::String, Token::RParen, Token::ExpressionStatementEnd,
     ]);
 }
 

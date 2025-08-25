@@ -35,6 +35,9 @@ pub enum SyntaxErrorKind {
     InvalidStringLiteral,
     InvalidBooleanLiteral,
     InvalidInheritanceIdentifier,
+    InvalidRegexLiteral,
+    InvalidFormattedString,
+    InvalidFormattedStringExpression,
 
     MissingStructMemberType,
 
@@ -148,6 +151,18 @@ impl SyntaxError {
             SyntaxErrorKind::MissingMatchBranches => (
                 "Missing Match Branches",
                 "Match expressions must have at least one branch.".to_string(),
+            ),
+            SyntaxErrorKind::InvalidRegexLiteral => (
+                "Invalid Regex Literal",
+                "Regex literals must be enclosed in matching quote characters (e.g., re\".../\" or re'...').".to_string(),
+            ),
+            SyntaxErrorKind::InvalidFormattedString => (
+                "Invalid Formatted String",
+                "Formatted strings must be enclosed in matching quote characters (e.g., f\"...\" or f'...').".to_string(),
+            ),
+            SyntaxErrorKind::InvalidFormattedStringExpression => (
+                "Invalid Formatted String Expression",
+                "The formatted string is malformed, likely due to an unclosed expression brace `{`.".to_string(),
             ),
         };
 
