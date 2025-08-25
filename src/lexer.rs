@@ -443,95 +443,9 @@ impl<'source> Lexer<'source> {
         Ok(regex)
     }
 
-    fn parse_formatted_string2(&mut self, quote_character: char) -> Result<(), SyntaxError> {
-        let slice = self.inner.slice(); // Example: f"Hello, {name}!"
-        let without_prefix = &slice[1..]; // remove `f`
-        let escape_sequence = format!("\\{}", quote_character);
-        let quote_start = without_prefix.find(quote_character);
-        let quote_end = without_prefix.rfind(quote_character);
-
-        if quote_start.is_none() || quote_end.is_none() || quote_start == quote_end {
-            return Err(SyntaxError::new(SyntaxErrorKind::InvalidFormattedString, self.inner.span()));
-        }
-
-        let string_body = &without_prefix[quote_start.unwrap() + 1..quote_end.unwrap()];
-        let mut start = 0;
-        let token_offset = self.inner.span().start + 2; // position after f" or f'
-        let mut tokens: Vec<TokenSpan> = Vec::new();
-        let mut open_braces = 0;
-
-        for (i, c) in string_body.char_indices() {
-            if c == '{' {
-                if i == 0 || &string_body[i - 1..i] != "\\" {
-                    open_braces += 1;
-                    if open_braces == 1 {
-                        if start != 0 {
-                            let literal = &string_body[start..i];
-                            tokens.push((Token::FormattedStringMiddle(literal.to_string()), token_offset + start..token_offset + i));
-                        } else if start == 0 {
-                            let literal = &string_body[0..i];
-                            tokens.push((Token::FormattedStringStart(literal.to_string()), token_offset..token_offset + i));
-                        }
-                        start = i + 1;
-                    }
-                }
-            } else if c == '}' {
-                if i == 0 || &string_body[i - 1..i] != "\\" {
-                    open_braces -= 1;
-                    if open_braces == 0 {
-                        let expression = &string_body[start..i].replace(
-                            escape_sequence.as_str(), 
-                            quote_character.to_string().as_str()
-                        ); // we should replace the escape sequence with the actual quote character, so that the lexer can properly tokenize strings
-                        let mut lexer = Lexer::new(expression);
-                        while let Some(token) = lexer.next() {
-                            match token {
-                                Ok((token, span)) => {
-                                    let offset_span = (token_offset + span.start + start)..(token_offset + span.end + start);
-                                    tokens.push((token, offset_span));
-                                },
-                                Err(e) => return Err(e),
-                            }
-                        }
-                        start = i + 1;
-                    }
-                }
-            }
-        }
-
-        if open_braces != 0 {
-            return Err(
-                SyntaxError::new(SyntaxErrorKind::InvalidFormattedStringExpression, self.inner.span())
-            );
-        }
-
-        let end_literal = if start < string_body.len() {
-            &string_body[start..]
-        } else {
-            ""
-        };
-
-        // If we didn't see expressions, FormattedStringStart should still be emitted, 
-        // so that the parser can properly handle the string.
-        let last_token = if tokens.len() > 0 {
-            (Token::FormattedStringEnd(end_literal.to_string()), token_offset + start..token_offset + string_body.len())
-        } else {
-            (Token::FormattedStringStart(end_literal.to_string()), token_offset + start..token_offset + string_body.len())
-        };
-        tokens.push(last_token);
-
-        // Push all collected tokens onto the pending stack. We need to reverse the order, because it's a stack.
-        for (token, span) in tokens.into_iter().rev() {
-            self.pending_tokens_stack.push((token, span));
-        }
-
-        Ok(())
-    }
-
     fn parse_formatted_string(&mut self, quote_character: char) -> Result<(), SyntaxError> {
         let slice = self.inner.slice(); // Example: f"Hello, {name}!"
         let without_prefix = &slice[1..]; // remove `f`
-        let escape_sequence = format!("\\{}", quote_character);
         let quote_start = without_prefix.find(quote_character);
         let quote_end = without_prefix.rfind(quote_character);
 
@@ -598,29 +512,23 @@ impl<'source> Lexer<'source> {
                     return Err(SyntaxError::new(SyntaxErrorKind::InvalidFormattedStringExpression, self.inner.span()));
                 }
 
-                // This is the crucial part: lex the expression with span correction.
                 let expression_slice = &string_body[expr_start..expr_end];
-                
-                // 1. Find all positions where an escape was removed. Each replacement shifts subsequent spans.
-                let replacement_indices: Vec<usize> = expression_slice.match_indices(&escape_sequence)
-                    .map(|(i, _)| i)
-                    .collect();
 
-                // 2. Create the clean string for the sub-lexer.
-                let clean_expression = expression_slice.replace(&escape_sequence, &quote_character.to_string());
+                // Check for the disallowed backslash.
+                if expression_slice.contains('\\') {
+                    let backslash_pos = expression_slice.find('\\').unwrap();
+                    let error_span = (token_offset + expr_start + backslash_pos)..(token_offset + expr_start + backslash_pos + 1);
+                    return Err(SyntaxError::new(SyntaxErrorKind::BackslashInFStringExpression, error_span));
+                }
 
-                // 3. Run the sub-lexer.
-                let mut sub_lexer = Lexer::new(&clean_expression);
+                // Run the sub-lexer on the original, unmodified slice.
+                let mut sub_lexer = Lexer::new(expression_slice);
                 while let Some(token_result) = sub_lexer.next() {
                     let (token, span) = token_result?;
-                    
-                    // 4. Correct the spans.
-                    // The offset added to a span's position is the number of replacements that occurred before it.
-                    let start_offset = replacement_indices.iter().filter(|&&pos| pos < span.start).count();
-                    let end_offset = replacement_indices.iter().filter(|&&pos| pos < span.end).count();
 
-                    let original_start = token_offset + expr_start + span.start + start_offset;
-                    let original_end = token_offset + expr_start + span.end + end_offset;
+                    // Calculate the original span with a simple offset.
+                    let original_start = token_offset + expr_start + span.start;
+                    let original_end = token_offset + expr_start + span.end;
                     
                     tokens.push((token, original_start..original_end));
                 }

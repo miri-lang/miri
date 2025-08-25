@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
+use miri::ast::opt_expr;
 use miri::ast::BinaryOp;
+use miri::ast::MemberVisibility;
 
 use super::ast_builder::*;
 use super::utils::*;
@@ -146,21 +148,73 @@ fn test_f_string_with_single_quotes() {
 }
 
 #[test]
-fn test_f_string_with_nested_string_literal() {
-    // Tests that the parser correctly handles a regular string inside an f-string expression.
+fn test_f_string_with_nested_f_string() {
     parse_test(
-        r#"f"Greeting: {\"hello \" + name}""#,
+        r#"f"Outer: {f'Inner: {x}'}""#,
         vec![
             expression_statement(
                 f_string(vec![
-                    string_literal("Greeting: "),
-                    binary(
-                        string_literal("hello "),
-                        BinaryOp::Add,
-                        identifier("name")
-                    ),
+                    string_literal("Outer: "),
+                    f_string(vec![
+                        string_literal("Inner: "),
+                        identifier("x"),
+                    ]),
                 ])
             )
         ]
     );
 }
+
+#[test]
+fn test_f_string_with_map_literal() {
+    parse_test(
+        r#"f"Data: {{'key': value}}""#,
+        vec![
+            expression_statement(
+                f_string(vec![
+                    string_literal("Data: "),
+                    map(vec![(
+                        string_literal("key"),
+                        identifier("value")
+                    )]),
+                ])
+            )
+        ]
+    );
+}
+
+#[test]
+fn test_f_string_with_escaped_braces_is_parsed_as_literal() {
+    parse_test(
+        r#"f"Literal braces \{ and \}""#,
+        vec![
+            expression_statement(
+                f_string(vec![
+                    string_literal("Literal braces \\{ and \\}"),
+                ])
+            )
+        ]
+    );
+}
+
+#[test]
+fn test_f_string_assigned_to_variable() {
+    // Ensures f-strings work correctly as part of a larger statement.
+    parse_test(
+        r#"let message = f"Hello, {name}""#,
+        vec![
+            variable_statement(
+                vec![let_variable(
+                    "message",
+                    None,
+                    opt_expr(f_string(vec![
+                        string_literal("Hello, "),
+                        identifier("name"),
+                    ])),
+                )],
+                MemberVisibility::Public
+            )
+        ]
+    );
+}
+
