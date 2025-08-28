@@ -3,7 +3,7 @@
 
 use std::vec;
 
-use miri::lexer::{Token};
+use miri::{lexer::Token, syntax_error::SyntaxErrorKind};
 
 use super::utils::*;
 
@@ -86,18 +86,6 @@ fn test_binary_hex_octal_numbers_with_underscores() {
     ]);
 }
 
-#[test]
-fn test_binary_hex_octal_numbers_incomplete() {
-    lexer_test("0b 0x 0o", vec![
-        Token::Int, // should not panic, just return other tokens
-        Token::Identifier,
-        Token::Int,
-        Token::Identifier,
-        Token::Int,
-        Token::Identifier,
-    ]);
-}
-
 // Note: this works, but maybe it shouldn't?
 #[test]
 fn test_binary_hex_octal_numbers_long_underscores() {
@@ -110,41 +98,39 @@ fn test_binary_hex_octal_numbers_long_underscores() {
 
 #[test]
 fn test_invalid_binary() {
-    lexer_test("0b2 0bbb b111 0b1111_000F", vec![
-        Token::Int,
-        Token::Identifier,
-        Token::Int,
-        Token::Identifier,
-        Token::Identifier,
-        Token::BinaryNumber,
-        Token::Identifier,
-    ]);
-}
-
-#[test]
-fn test_invalid_hex() {
-    lexer_test("0xPPPPp 0xxxx x00 0x0123z", vec![
-        Token::Int,
-        Token::Identifier,
-        Token::Int,
-        Token::Identifier,
-        Token::Identifier,
-        Token::HexNumber,
-        Token::Identifier,
-    ]);
+    run_lexer_error_tests(vec![
+            "0b",
+            "0b2",
+            "0bbb",
+            "0b1111_000F",
+            "0b+"
+        ], 
+        &SyntaxErrorKind::InvalidBinaryLiteral
+    );
 }
 
 #[test]
 fn test_invalid_octal() {
-    lexer_test("0o8 0o9 0o7777z o7777", vec![
-        Token::Int,
-        Token::Identifier,
-        Token::Int,
-        Token::Identifier,
-        Token::OctalNumber,
-        Token::Identifier,
-        Token::Identifier,
-    ]);
+    run_lexer_error_tests(vec![
+        "0o",
+        "0o8",
+        "0o9",
+        "0o7777z",
+        "0o/"
+    ], &SyntaxErrorKind::InvalidOctalLiteral);
+}
+
+#[test]
+fn test_invalid_hex() {
+    run_lexer_error_tests(vec![
+        "0x",
+        "0xPPPPp",
+        "0xxxx",
+        "0xG",
+        "0x0123z",
+        "0x1G",
+        "0x-"
+    ], &SyntaxErrorKind::InvalidHexLiteral);
 }
 
 #[test]
@@ -167,3 +153,4 @@ fn test_hex_octal_binary_case_insensitivity() {
         Token::OctalNumber,
     ]);
 }
+

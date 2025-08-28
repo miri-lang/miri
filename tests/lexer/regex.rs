@@ -90,7 +90,7 @@ fn test_regex_in_expression() {
 #[test]
 fn test_error_unclosed_regex() {
     // An unclosed regex should be treated as an invalid token, similar to an unclosed string.
-    lexer_error_test(r#"re"abc"#, SyntaxErrorKind::InvalidToken);
+    lexer_error_test(r#"re"abc"#, &SyntaxErrorKind::InvalidToken);
 }
 
 #[test]

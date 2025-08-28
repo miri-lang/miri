@@ -54,7 +54,7 @@ fn test_keywords() {
 
 fn keyword_test(keyword: &str, expected: Token) {
     lexer_test(
-        format!("{keyword} {keyword}() {keyword}.blah blah.{keyword} {keyword}blah blah{keyword} blah_{keyword} \"{keyword}\" /* {keyword} */").as_str(),
+        format!("{keyword} {keyword}() {keyword}.blah blah.{keyword} {keyword}blah blah{keyword} blah_{keyword} \"{keyword}\" /* {keyword} */ {keyword}1 {keyword}'a' {keyword}-1").as_str(),
         vec![
         expected.clone(),
         expected.clone(), Token::LParen, Token::RParen,
@@ -64,11 +64,14 @@ fn keyword_test(keyword: &str, expected: Token) {
         Token::Identifier,
         Token::Identifier,
         Token::String,
+        Token::Identifier,
+        expected.clone(), Token::String,
+        expected.clone(), Token::Minus, Token::Int,
     ]);
 }
 
 #[test]
-fn test_in_keyword() {
+fn test_in_not_keyword() {
     lexer_test(
         "in not",
         vec![

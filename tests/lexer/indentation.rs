@@ -71,7 +71,7 @@ fn func()
     fn four_spaces()
       print(\"Hello\")
   print(\"World\")
-", SyntaxErrorKind::IndentationMismatch);
+", &SyntaxErrorKind::IndentationMismatch);
 }
 
 #[test]
@@ -82,7 +82,7 @@ fn func()
 \t\t\tfn tab()
 \t\tfn tab()
 print(\"Hello\")
-", SyntaxErrorKind::IndentationMismatch);
+", &SyntaxErrorKind::IndentationMismatch);
 }
 
 #[test]
@@ -96,7 +96,7 @@ fn func()
   \t\t\tfn tab()
     print(\"Indented with tabs\")
   print(\"Dedented with spaces\")
-", SyntaxErrorKind::IndentationMismatch);
+", &SyntaxErrorKind::IndentationMismatch);
 }
 
 #[test]
@@ -422,4 +422,22 @@ let y = 1
         Token::RBracket, Token::ExpressionStatementEnd,
         Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
     ]);
+}
+
+#[test]
+fn test_large_nested_structure() {
+    let mut input = String::new();
+    let mut expected = Vec::new();
+    
+    for i in 0..100 {
+        input.push_str(&format!("fn level{}()\n", i));
+        input.push_str(&"    ".repeat(i + 1));
+        expected.extend([Token::Fn, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd, Token::Indent]);
+    }
+    
+    for _ in 0..100 {
+        expected.push(Token::Dedent);
+    }
+    
+    lexer_test(&input, expected);
 }

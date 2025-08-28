@@ -10,14 +10,21 @@ pub fn lexer_test(input: &str, expected: Vec<Token>) {
     assert_eq!(tokens, expected);
 }
 
-pub fn lexer_error_test(input: &str, expected_kind: SyntaxErrorKind) {
+pub fn lexer_error_test(input: &str, expected_kind: &SyntaxErrorKind) {
     let lexer = Lexer::new(input);
     let results: Vec<_> = lexer.collect();
 
     let error = results.iter().find_map(|res| res.as_ref().err().cloned());
 
-    assert!(error.is_some(), "Expected a lexer error, but it succeeded without errors.");
-    assert_eq!(error.unwrap().kind, expected_kind, "Lexer produced an error of the wrong kind.");
+    assert!(error.is_some(), "Expected a lexer error, but it succeeded without errors for input: {}", input);
+    let error_kind = error.unwrap().kind;
+    assert_eq!(error_kind, *expected_kind, "Lexer produced an error of the wrong kind {:?}.", error_kind);
+}
+
+pub fn run_lexer_error_tests(inputs: Vec<&str>, expected_kind: &SyntaxErrorKind) {
+    for input in inputs {
+        lexer_error_test(input, expected_kind);
+    }
 }
 
 pub fn regex_token(body: &str, flags: &str) -> RegexToken {
