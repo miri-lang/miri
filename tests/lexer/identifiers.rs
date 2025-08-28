@@ -26,7 +26,7 @@ fn test_number_identifier_boundaries() {
 
 #[test]
 fn test_unicode_identifiers() {
-    lexer_error_test("café naïve résumé", SyntaxErrorKind::InvalidToken);
+    lexer_error_test("café naïve résumé", &SyntaxErrorKind::InvalidToken);
 }
 
 #[test]

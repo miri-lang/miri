@@ -82,7 +82,7 @@ fn test_deeply_nested_comments() {
 
 #[test]
 fn test_unclosed_nested_comment() {
-    lexer_error_test("/* outer /* inner */ still open", SyntaxErrorKind::UnclosedMultilineComment);
+    lexer_error_test("/* outer /* inner */ still open", &SyntaxErrorKind::UnclosedMultilineComment);
 }
 
 #[test]

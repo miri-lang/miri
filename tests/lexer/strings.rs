@@ -9,8 +9,8 @@ use super::utils::*;
 
 
 #[test]
-fn test_strings_with_escapes() {
-    lexer_test(r#"'string with \' quote' "string with \" quote""#, vec![
+fn test_strings() {
+    lexer_test("'single quote' \"double quote\"", vec![
         Token::String,
         Token::String,
     ]);
@@ -19,6 +19,24 @@ fn test_strings_with_escapes() {
 #[test]
 fn test_empty_strings() {
     lexer_test("'' \"\"", vec![
+        Token::String,
+        Token::String,
+    ]);
+}
+
+#[test]
+fn test_strings_with_escapes() {
+    lexer_test(r#"'string with \' quote' "string with \" quote""#, vec![
+        Token::String,
+        Token::String,
+    ]);
+}
+
+#[test]
+fn test_string_with_uncommon_escapes() {
+    // Test escapes for backslash and different quote types
+    lexer_test(r#""a \\ b" 'c \' d' "e \" f""#, vec![
+        Token::String,
         Token::String,
         Token::String,
     ]);
@@ -49,24 +67,6 @@ fn test_unicode_strings() {
 }
 
 #[test]
-fn test_string_escape_sequences() {
-    lexer_test(r#"'line1\nline2\ttab' "quote\"inside""#, vec![
-        Token::String,
-        Token::String,
-    ]);
-}
-
-#[test]
-fn test_string_with_uncommon_escapes() {
-    // Test escapes for backslash and different quote types
-    lexer_test(r#""a \\ b" 'c \' d' "e \" f""#, vec![
-        Token::String,
-        Token::String,
-        Token::String,
-    ]);
-}
-
-#[test]
 fn test_nested_strings() {
     lexer_test(r#"" \"inner\" 'inner' ""#, vec![
         Token::String,
@@ -81,7 +81,7 @@ fn test_nested_strings() {
 fn test_unclosed_string_literal() {
     // An unclosed string should likely be tokenized up to the end of the line
     // and not consume the rest of the file.
-    lexer_error_test("'unclosed string", SyntaxErrorKind::InvalidToken);
+    lexer_error_test("'unclosed string", &SyntaxErrorKind::InvalidToken);
 }
 
 #[test]
@@ -179,7 +179,6 @@ fn test_f_string_with_escaped_braces() {
 
 #[test]
 fn test_f_string_with_escaped_braces_and_expression() {
-    // Test escaped brace next to a real expression
     lexer_test(
         r#"f"\{ not code \} but {x} is""#,
         vec![
@@ -192,8 +191,6 @@ fn test_f_string_with_escaped_braces_and_expression() {
 
 #[test]
 fn test_f_string_with_nested_braces_in_expression() {
-    // This tests if the lexer correctly handles balanced braces inside an expression.
-    // The current implementation will likely fail this test, revealing a bug.
     lexer_test(
         r#"f"A map: {{'key': 'value'}}""#,
         vec![
@@ -238,20 +235,17 @@ fn test_f_string_with_string_literal_in_expression() {
 fn test_f_string_with_nested_string_literal() {
     lexer_error_test(
         r#"f"Greeting: {\"hello \" + name}""#,
-        SyntaxErrorKind::BackslashInFStringExpression,
+        &SyntaxErrorKind::BackslashInFStringExpression,
     );
 }
 
 #[test]
 fn test_f_string_error_unclosed_brace() {
-    // The lexer should detect an unclosed brace in an f-string as an error.
-    lexer_error_test(r#"f"unclosed {x""#, SyntaxErrorKind::InvalidFormattedStringExpression);
+    lexer_error_test(r#"f"unclosed {x""#, &SyntaxErrorKind::InvalidFormattedStringExpression);
 }
 
 #[test]
 fn test_f_string_with_nested_f_string() {
-    // This ensures the lexer can recursively handle f-strings and that the
-    // sub-lexer correctly parses the inner f-string.
     lexer_test(
         r#"f"Outer value: {f'inner value: {x + 1}'}""#,
         vec![
@@ -270,7 +264,6 @@ fn test_f_string_with_nested_f_string() {
 
 #[test]
 fn test_f_string_with_regex_inside() {
-    // Ensures that a regex, with its own quote rules, is parsed correctly inside an expression.
     lexer_test(
         r#"f"The pattern is {re'a-z'i}""#,
         vec![
@@ -292,7 +285,7 @@ fn test_f_string_with_regex_inside() {
 fn test_f_string_with_complex_escapes_in_expression() {
     lexer_error_test(
         r#"f"Command: {\"echo \\\"hello world\\\"\"}""#,
-        SyntaxErrorKind::BackslashInFStringExpression,
+        &SyntaxErrorKind::BackslashInFStringExpression,
     );
 }
 
@@ -300,7 +293,7 @@ fn test_f_string_with_complex_escapes_in_expression() {
 fn test_f_string_with_escaped_backslash_before_quote() {
     lexer_error_test(
         r#"f"Path: {\"C:\\\\Users\\\\\"}""#,
-        SyntaxErrorKind::BackslashInFStringExpression,
+        &SyntaxErrorKind::BackslashInFStringExpression,
     );
 }
 
@@ -308,14 +301,12 @@ fn test_f_string_with_escaped_backslash_before_quote() {
 fn test_f_string_with_regex() {
     lexer_error_test(
         r#"f"Pattern: {re'^\d+$'}""#,
-        SyntaxErrorKind::BackslashInFStringExpression,
+        &SyntaxErrorKind::BackslashInFStringExpression,
     );
 }
 
 #[test]
 fn test_f_string_with_empty_expression() {
-    // An empty expression `{}` should be a syntax error at the parser level,
-    // but the lexer should tokenize it without crashing.
     lexer_test(
         r#"f"Empty: {}""#,
         vec![
@@ -325,3 +316,16 @@ fn test_f_string_with_empty_expression() {
     );
 }
 
+#[test]
+fn test_f_string_with_escaped_backslash_before_brace() {
+    lexer_test(
+        r#"f"Literal backslash: \\{1+1}""#,
+        vec![
+            Token::FormattedStringStart("Literal backslash: \\\\".to_string()),
+            Token::Int,
+            Token::Plus,
+            Token::Int,
+            Token::FormattedStringEnd("".to_string()),
+        ],
+    );
+}

@@ -40,7 +40,7 @@ Done ✅
   - [x] set
   - [x] regex
   - [x] match / pattern matching
-  - [ ] string interpolation
+  - [x] string interpolation
   - [x] refactor lexer & parser tests (split them in modules)
   - [ ] identify gaps in tests
   - [ ] optimize parser

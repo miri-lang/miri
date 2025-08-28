@@ -115,6 +115,10 @@ pub enum Token {
     #[regex("0[xX][0-9a-fA-F_]+", priority = 2)] HexNumber,
     #[regex("0[oO][0-7_]+", priority = 2)] OctalNumber,
 
+    #[regex("0[bB](?:[0-1_]*[^0-1_\\s]+)?")] InvalidBinaryNumber,
+    #[regex("0[xX](?:[0-9a-fA-F_]*[^0-9a-fA-F_\\s]+)?")] InvalidHexNumber,
+    #[regex("0[oO](?:[0-7_]*[^0-7_\\s]+)?")] InvalidOctalNumber,
+
     // Comments and Whitespace
     #[regex("//.*", logos::skip)] InlineComment,
     #[regex(r"/\*")] MultilineComment,
@@ -125,6 +129,8 @@ pub enum Token {
     ExpressionStatementEnd, // Used to mark the end of an expression statement (one code line)
 
     #[regex("[ \t\r]+", logos::skip)] Whitespace,
+    #[regex("#!.*", logos::skip)] Shebang,
+    #[token("\u{FEFF}", logos::skip)] ByteOrderMark,
 }
 
 pub type TokenSpan = (Token, Span);
@@ -222,14 +228,14 @@ impl<'source> Lexer<'source> {
 
             match token {
                 Token::MultilineComment => {
-                    if let Err(e) = self.parse_nested_comment() {
+                    if let Err(e) = self.lex_nested_comment() {
                         return Some(Err(e));
                     }
                     continue;
                 },
                 Token::Newline => {
                     if self.have_previous_tokens() {
-                        if let Err(e) = self.parse_newline() {
+                        if let Err(e) = self.lex_newline() {
                             return Some(Err(e));
                         }
                     }
@@ -270,7 +276,7 @@ impl<'source> Lexer<'source> {
                 },
                 Token::SingleQuotedRegex | Token::DoubleQuotedRegex => {
                     let quote_char = if token == Token::SingleQuotedRegex { '\'' } else { '"' };
-                    match self.parse_regex_literal(quote_char) {
+                    match self.lex_regex_literal(quote_char) {
                         Ok(regex) => return Some(Ok((Token::Regex(regex), span))),
                         Err(e) => return Some(Err(e)),
                     }
@@ -280,17 +286,26 @@ impl<'source> Lexer<'source> {
                 },
                 Token::SingleQuotedFormattedString | Token::DoubleQuotedFormattedString => {
                     let quote_char = if token == Token::SingleQuotedFormattedString { '\'' } else { '"' };
-                    if let Err(e) = self.parse_formatted_string(quote_char) {
+                    if let Err(e) = self.lex_formatted_string(quote_char) {
                         return Some(Err(e));
                     }
                     continue;
+                },
+                Token::InvalidBinaryNumber => {
+                    return Some(Err(SyntaxError::new(SyntaxErrorKind::InvalidBinaryLiteral, span)));
+                },
+                Token::InvalidHexNumber => {
+                    return Some(Err(SyntaxError::new(SyntaxErrorKind::InvalidHexLiteral, span)));
+                },
+                Token::InvalidOctalNumber => {
+                    return Some(Err(SyntaxError::new(SyntaxErrorKind::InvalidOctalLiteral, span)));
                 },
                 _ => return Some(Ok((token, span)))
             }
         }
     }
 
-    fn parse_nested_comment(&mut self) -> Result<(), SyntaxError> {
+    fn lex_nested_comment(&mut self) -> Result<(), SyntaxError> {
         let src = self.inner.source();
         let mut depth = 1;
         let mut i = self.inner.span().end;
@@ -322,7 +337,7 @@ impl<'source> Lexer<'source> {
         )
     }
 
-    fn parse_newline(&mut self) -> Result<(), SyntaxError> {
+    fn lex_newline(&mut self) -> Result<(), SyntaxError> {
         let src = self.inner.source();
         let mut i = self.inner.span().end;
         let mut indent_len: usize = 0;
@@ -406,7 +421,7 @@ impl<'source> Lexer<'source> {
         Ok(())
     }
 
-    fn parse_regex_literal(&mut self, quote_character: char) -> Result<RegexToken, SyntaxError> {
+    fn lex_regex_literal(&mut self, quote_character: char) -> Result<RegexToken, SyntaxError> {
         let slice = self.inner.slice(); // Example: re"\d+"ig
         let without_prefix = &slice[2..]; // remove `re`
 
@@ -443,7 +458,7 @@ impl<'source> Lexer<'source> {
         Ok(regex)
     }
 
-    fn parse_formatted_string(&mut self, quote_character: char) -> Result<(), SyntaxError> {
+    fn lex_formatted_string(&mut self, quote_character: char) -> Result<(), SyntaxError> {
         let slice = self.inner.slice(); // Example: f"Hello, {name}!"
         let without_prefix = &slice[1..]; // remove `f`
         let quote_start = without_prefix.find(quote_character);
@@ -466,13 +481,22 @@ impl<'source> Lexer<'source> {
             loop {
                 if let Some(pos) = string_body[search_cursor..].find('{') {
                     let absolute_pos = search_cursor + pos;
-                    // Check if the brace is escaped.
-                    if absolute_pos > 0 && &string_body[absolute_pos - 1..absolute_pos] == "\\" {
-                        // It's escaped. Continue searching after this escaped brace.
+                    
+                    // Count preceding backslashes to determine if the brace is escaped.
+                    let mut backslash_count = 0;
+                    let mut i = absolute_pos;
+                    while i > 0 && &string_body[i - 1..i] == "\\" {
+                        backslash_count += 1;
+                        i -= 1;
+                    }
+
+                    if backslash_count % 2 == 1 {
+                        // Odd number of backslashes means the brace is escaped.
+                        // Continue searching after this escaped brace.
                         search_cursor = absolute_pos + 1;
                         continue;
                     } else {
-                        // Found a real, unescaped brace.
+                        // Even number of backslashes (or zero) means it's a real expression.
                         next_brace_pos = Some(absolute_pos);
                         break;
                     }
