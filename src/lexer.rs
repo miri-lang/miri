@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
+use std::collections::VecDeque;
+
 use logos::Logos;
 
 use crate::syntax_error::{Span, SyntaxError, SyntaxErrorKind};
@@ -155,7 +157,7 @@ pub struct Lexer<'source> {
     paren_stack: Vec<usize>, // stack of parenthesis levels
     bracket_stack: Vec<usize>, // stack of square bracket levels
     curly_brace_stack: Vec<usize>, // stack of curly brace levels
-    previous_tokens: Vec<Token>, // keeps track of previous tokens, primarily for indentation handling
+    previous_tokens: VecDeque<Token>, // keeps track of previous tokens, primarily for indentation handling
 }
 
 impl<'source> Iterator for Lexer<'source> {
@@ -171,7 +173,7 @@ impl<'source> Iterator for Lexer<'source> {
 }
 
 impl<'source> Lexer<'source> {
-    const MAX_PREVIOUS_TOKENS: usize = 3;
+    const MAX_PREVIOUS_TOKENS: usize = 2;
 
     pub fn new(source: &'source str) -> Self {
         Lexer {
@@ -184,7 +186,7 @@ impl<'source> Lexer<'source> {
             paren_stack: Vec::new(),
             bracket_stack: Vec::new(),
             curly_brace_stack: Vec::new(),
-            previous_tokens: Vec::new(),
+            previous_tokens: VecDeque::with_capacity(Self::MAX_PREVIOUS_TOKENS),
         }
     }
 
@@ -583,10 +585,10 @@ impl<'source> Lexer<'source> {
     }
 
     fn memorize_token(&mut self, token: Token) {
-        self.previous_tokens.push(token);
-        if self.previous_tokens.len() > Self::MAX_PREVIOUS_TOKENS {
-            self.previous_tokens.remove(0); // Keep only the limited amount tokens
+        if self.previous_tokens.len() == Self::MAX_PREVIOUS_TOKENS {
+            self.previous_tokens.pop_front();
         }
+        self.previous_tokens.push_back(token);
     }
 
     fn have_previous_tokens(&self) -> bool {
@@ -603,11 +605,11 @@ impl<'source> Lexer<'source> {
         }
 
         let start_index = self.previous_tokens.len() - tokens.len();
-        &self.previous_tokens[start_index..] == tokens
+        self.previous_tokens.iter().skip(start_index).eq(tokens.iter())
     }
     
     fn match_previous_token(&self, token: Token) -> bool {
-        self.previous_tokens.last().map_or(false, |t| *t == token)
+        self.previous_tokens.back().map_or(false, |t| *t == token)
     }
 
     fn prev_tokens_match_function_declaration(&self) -> bool {
