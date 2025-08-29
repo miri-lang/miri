@@ -124,7 +124,7 @@ pub enum Token {
     // Comments and Whitespace
     #[regex("//.*", logos::skip)] InlineComment,
     #[regex(r"/\*")] MultilineComment,
-    #[regex("\n\r?")] Newline,
+    #[regex("\r?\n")] Newline,
 
     Indent,
     Dedent,
@@ -341,21 +341,23 @@ impl<'source> Lexer<'source> {
 
     fn lex_newline(&mut self) -> Result<(), SyntaxError> {
         let src = self.inner.source();
-        let mut i = self.inner.span().end;
+        let token_end = self.inner.span().end;
         let mut indent_len: usize = 0;
         let mut found_comment = false;
         let mut found_newline = false;
 
-        // Count indentation
-        while i < src.len() {
-            let ch = &src[i..i + 1];
+        // Look ahead from the end of the current newline token to calculate indentation.
+        let mut lookahead_cursor = self.inner.span().end;
+
+        // Count indentation on the next line
+        while lookahead_cursor < src.len() {
+            let ch = &src[lookahead_cursor..lookahead_cursor + 1];
             match ch {
                 " " => indent_len += 1,
-                "\t" => indent_len += 4,
+                "\t" => indent_len += 4, // Assuming tab width is 4
                 "/" => {
-                    // Ignore indentation before comments
-                    if i + 1 < src.len() {
-                        let next_ch = &src[i + 1..i + 2];
+                    if lookahead_cursor + 1 < src.len() {
+                        let next_ch = &src[lookahead_cursor + 1..lookahead_cursor + 2];
                         if next_ch == "/" || next_ch == "*" {
                             found_comment = true;
                         }
@@ -368,7 +370,7 @@ impl<'source> Lexer<'source> {
                 },
                 _ => break
             }
-            i += 1;
+            lookahead_cursor += 1;
         }
 
         if !found_comment && !found_newline {
@@ -379,11 +381,11 @@ impl<'source> Lexer<'source> {
                 // If we are not inside parentheses or brackets, treat as an indentation increase
                 if self.is_outside_paired_tokens() {
                     // Indentation increase
-                    self.push_indent(i, indent_len);
+                    self.push_indent(token_end, indent_len);
                 } else {
                     if self.paren_stack.len() > 0 && self.prev_tokens_match_function_declaration() {
                         // If this is a function declaration within function arguments, treat as an indentation increase
-                        self.push_indent(i, indent_len);
+                        self.push_indent(token_end, indent_len);
                     }
                 }
             } else if indent_len < last_indent {
@@ -400,25 +402,22 @@ impl<'source> Lexer<'source> {
                 if !found_matching_indent {
                     return Err(
                         SyntaxError::new(
-                            SyntaxErrorKind::IndentationMismatch, i..i
+                            SyntaxErrorKind::IndentationMismatch, token_end..token_end
                         )
                     );
                 }
                 
                 // Pop indentation levels and generate Dedent tokens
                 while indent_len < *self.indent_stack.last().unwrap() {
-                    self.push_dedent(i);
+                    self.push_dedent(token_end);
                 }
             }
 
             if self.is_expression_statement_end() {
                 // If this is an expression statement end, return ExpressionStatementEnd token
-                self.pending_tokens_stack.push((Token::ExpressionStatementEnd, i..i));
+                self.pending_tokens_stack.push((Token::ExpressionStatementEnd, token_end..token_end));
             }
         }
-
-        let bump_len = i - self.inner.span().start - 1;
-        self.inner.bump(bump_len);
 
         Ok(())
     }

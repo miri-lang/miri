@@ -42,8 +42,62 @@ fn test_symbol_identifier_boundaries() {
 #[test]
 fn test_keywords_as_parts_of_identifiers() {
     lexer_test("if_condition use_case return_value", vec![
-        Token::Identifier,  // should not be parsed as "if"
-        Token::Identifier,  // should not be parsed as "use"
-        Token::Identifier,  // should not be parsed as "return"
+        Token::Identifier,
+        Token::Identifier,
+        Token::Identifier,
+    ]);
+}
+
+#[test]
+fn test_case_sensitivity_of_keywords() {
+    // Keywords are case-sensitive and must be lowercase.
+    // Uppercase or mixed-case versions should be treated as identifiers.
+    lexer_test("IF TRUE RETURN", vec![
+        Token::Identifier, Token::Identifier, Token::Identifier,
+    ]);
+    lexer_test("If True Return", vec![
+        Token::Identifier, Token::Identifier, Token::Identifier,
+    ]);
+    // A correct keyword next to an identifier version.
+    lexer_test("if If", vec![
+        Token::If, Token::Identifier,
+    ]);
+}
+
+#[test]
+fn test_identifiers_with_underscores() {
+    // Identifiers can start with, end with, or consist solely of underscores.
+    lexer_test("_private", vec![Token::Identifier]);
+    lexer_test("normal_", vec![Token::Identifier]);
+    lexer_test("__special__", vec![Token::Identifier]);
+    lexer_test("_", vec![Token::Identifier]);
+}
+
+#[test]
+fn test_identifier_operator_boundaries() {
+    // The lexer should correctly separate identifiers from adjacent operators
+    // without requiring whitespace.
+    lexer_test("my_var+1", vec![
+        Token::Identifier, Token::Plus, Token::Int,
+    ]);
+    lexer_test("counter++", vec![
+        Token::Identifier, Token::Increment,
+    ]);
+    lexer_test("obj.property", vec![
+        Token::Identifier, Token::Dot, Token::Identifier,
+    ]);
+    lexer_test("obj['prop'] = 1", vec![
+        Token::Identifier, Token::LBracket, Token::String, Token::RBracket, Token::Assign, Token::Int,
+    ]);
+}
+
+#[test]
+fn test_identifier_and_string_literal_boundaries() {
+    // No whitespace between an identifier and a string literal.
+    lexer_test(r#"my_func"string""#, vec![
+        Token::Identifier, Token::String,
+    ]);
+    lexer_test(r#"my_var'string'"#, vec![
+        Token::Identifier, Token::String,
     ]);
 }

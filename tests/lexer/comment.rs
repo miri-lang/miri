@@ -105,3 +105,37 @@ fn test_nested_comments_with_strings() {
         Token::Identifier,
     ]);
 }
+
+#[test]
+fn test_multiline_comment_at_eof() {
+    lexer_test("code /* comment */", vec![Token::Identifier]);
+    lexer_test("/* comment */", vec![]);
+}
+
+#[test]
+fn test_unclosed_comment_at_eof() {
+    lexer_error_test("code /* unclosed", &SyntaxErrorKind::UnclosedMultilineComment);
+    lexer_error_test("/*", &SyntaxErrorKind::UnclosedMultilineComment);
+}
+
+#[test]
+fn test_comment_markers_inside_strings() {
+    lexer_test(r#"let s1 = "This is not a // comment""#, vec![
+        Token::Let, Token::Identifier, Token::Assign, Token::String
+    ]);
+    lexer_test(r#"let s2 = "This is not a /* comment */""#, vec![
+        Token::Let, Token::Identifier, Token::Assign, Token::String
+    ]);
+}
+
+#[test]
+fn test_malformed_comment_delimiters() {
+    // A lone closing comment delimiter is just a star and a slash, not a comment.
+    lexer_test("a */ b", vec![
+        Token::Identifier, Token::Star, Token::Slash, Token::Identifier,
+    ]);
+    // A space breaks the opening delimiter.
+    lexer_test("a / * b", vec![
+        Token::Identifier, Token::Slash, Token::Star, Token::Identifier,
+    ]);
+}

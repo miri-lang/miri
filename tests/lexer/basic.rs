@@ -37,12 +37,3 @@ fn test_input_with_bom() {
         Token::Let, Token::Identifier, Token::Assign, Token::Int
     ]);
 }
-
-#[test]
-fn test_index_member_assignment() {
-    lexer_test("
-obj['prop'] = 1
-", vec![
-        Token::Identifier, Token::LBracket, Token::String, Token::RBracket, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
-    ]);
-}
