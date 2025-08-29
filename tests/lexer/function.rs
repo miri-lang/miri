@@ -12,10 +12,10 @@ use super::utils::*;
 fn test_function_with_no_params() {
     lexer_test("
 // Function with no parameters
-fn fancy_print
+fn fancy_print()
   print \"Hello, World!\"
 ", vec![
-        Token::Fn, Token::Identifier, Token::ExpressionStatementEnd,
+        Token::Fn, Token::Identifier, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
             Token::Indent,
             Token::Identifier, Token::String, Token::ExpressionStatementEnd,
             Token::Dedent,
@@ -59,9 +59,9 @@ fn multiply(a int, b int) int: a * b
 fn test_lambda_function() {
     lexer_test("
 // Lambda function
-let f = (x int) int: x * x
+let f = fn (x int) int: x * x
 ", vec![
-        Token::Let, Token::Identifier, Token::Assign, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon, Token::Identifier, Token::Star, Token::Identifier, Token::ExpressionStatementEnd
+        Token::Let, Token::Identifier, Token::Assign, Token::Fn, Token::LParen, Token::Identifier, Token::Identifier, Token::RParen, Token::Identifier, Token::Colon, Token::Identifier, Token::Star, Token::Identifier, Token::ExpressionStatementEnd
     ]);
 }
 
@@ -69,11 +69,11 @@ let f = (x int) int: x * x
 fn test_multiline_lambda_function() {
     lexer_test("
 // Multiline lambda function
-let f1 = (a float, b float)
+let f1 = fn (a float, b float)
   print(a + b)
   print(a - b)
 ", vec![
-        Token::Let, Token::Identifier, Token::Assign, Token::LParen, Token::Identifier, Token::Identifier, Token::Comma, Token::Identifier, Token::Identifier, Token::RParen, Token::ExpressionStatementEnd,
+        Token::Let, Token::Identifier, Token::Assign, Token::Fn, Token::LParen, Token::Identifier, Token::Identifier, Token::Comma, Token::Identifier, Token::Identifier, Token::RParen, Token::ExpressionStatementEnd,
             Token::Indent,
             Token::Identifier, Token::LParen, Token::Identifier, Token::Plus, Token::Identifier, Token::RParen, Token::ExpressionStatementEnd,
             Token::Identifier, Token::LParen, Token::Identifier, Token::Minus, Token::Identifier, Token::RParen, Token::ExpressionStatementEnd,
@@ -82,7 +82,7 @@ let f1 = (a float, b float)
 }
 
 #[test]
-fn test_function_calls_with_parentheses() {
+fn test_function_call() {
     lexer_test("
 // Call with parentheses
 fancy_print()
@@ -126,5 +126,73 @@ let f = fn()
     // empty body
 ", vec![
         Token::Let, Token::Identifier, Token::Assign, Token::Fn, Token::LParen, Token::RParen, Token::ExpressionStatementEnd
+    ]);
+}
+
+#[test]
+fn test_async_and_gpu_functions() {
+    lexer_test("async fn async_task()", vec![
+        Token::Async, Token::Fn, Token::Identifier, Token::LParen, Token::RParen,
+    ]);
+
+    lexer_test("gpu fn kernel()", vec![
+        Token::Gpu, Token::Fn, Token::Identifier, Token::LParen, Token::RParen,
+    ]);
+
+    // The order of modifiers should not matter to the lexer.
+    lexer_test("async gpu fn parallel_kernel()", vec![
+        Token::Async, Token::Gpu, Token::Fn, Token::Identifier, Token::LParen, Token::RParen,
+    ]);
+    lexer_test("gpu async fn another_kernel()", vec![
+        Token::Gpu, Token::Async, Token::Fn, Token::Identifier, Token::LParen, Token::RParen,
+    ]);
+}
+
+#[test]
+fn test_function_with_multiline_parameters() {
+    // The lexer should not insert Indent/Dedent or ExpressionStatementEnd tokens
+    // inside a parameter list that spans multiple lines.
+    lexer_test("
+fn complex_func(
+    a int,
+    b string,
+    c bool, // trailing comma
+)
+    print(a)
+", vec![
+        Token::Fn, Token::Identifier, Token::LParen,
+        Token::Identifier, Token::Identifier, Token::Comma,
+        Token::Identifier, Token::Identifier, Token::Comma,
+        Token::Identifier, Token::Identifier, Token::Comma,
+        Token::RParen, Token::ExpressionStatementEnd,
+            Token::Indent,
+            Token::Identifier, Token::LParen, Token::Identifier, Token::RParen, Token::ExpressionStatementEnd,
+            Token::Dedent,
+    ]);
+}
+
+#[test]
+fn test_nested_function_calls() {
+    lexer_test("a(b(c(1)))", vec![
+        Token::Identifier, Token::LParen,
+            Token::Identifier, Token::LParen,
+                Token::Identifier, Token::LParen, Token::Int, Token::RParen,
+            Token::RParen,
+        Token::RParen,
+    ]);
+}
+
+#[test]
+fn test_lambda_edge_cases() {
+    lexer_test("let l = fn(): 1", vec![
+        Token::Let, Token::Identifier, Token::Assign, Token::Fn, Token::LParen, Token::RParen,
+        Token::Colon, Token::Int,
+    ]);
+
+    lexer_test("let l = fn()\n  1", vec![
+        Token::Let, Token::Identifier, Token::Assign, Token::Fn, Token::LParen, Token::RParen, Token::ExpressionStatementEnd,
+            Token::Indent,
+            Token::Int,
+            Token::Dedent,
     ]);
 }
