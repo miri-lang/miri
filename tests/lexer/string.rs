@@ -329,3 +329,13 @@ fn test_f_string_with_escaped_backslash_before_brace() {
         ],
     );
 }
+
+#[test]
+fn test_keyword_in_formatted_string() {
+    lexer_test(r#"f"The value is {if x: 1 else: 0}""#, vec![
+        Token::FormattedStringStart("The value is ".to_string()),
+        Token::If, Token::Identifier, Token::Colon, Token::Int,
+        Token::Else, Token::Colon, Token::Int,
+        Token::FormattedStringEnd("".to_string()),
+    ]);
+}
