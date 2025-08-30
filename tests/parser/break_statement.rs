@@ -79,7 +79,7 @@ fn test_error_break_with_value() {
     parse_error_test(
         "for x in y: break 1",
         SyntaxErrorKind::UnexpectedToken {
-            expected: "newline or end of file".to_string(),
+            expected: "newline, `else`, or end of block".to_string(),
             found: "int".to_string(),
         }
     );

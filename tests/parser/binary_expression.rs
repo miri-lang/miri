@@ -107,7 +107,7 @@ fn test_parse_consecutive_operators() {
     parse_error_test(
         "5 + * 2", 
         SyntaxErrorKind::UnexpectedToken { 
-            expected: "literal, parenthesized expression, identifier, lambda, list, map or set".into(), 
+            expected: "an expression".into(), 
             found: "*".into() 
         }
     );

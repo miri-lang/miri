@@ -521,7 +521,7 @@ fn test_error_if_statement_as_condition() {
     parse_error_test(
         "if if x: 1",
         SyntaxErrorKind::UnexpectedToken {
-            expected: "literal, parenthesized expression, identifier, lambda, list, map or set".to_string(),
+            expected: "an expression".to_string(),
             found: "if".to_string(),
         }
     );
@@ -565,7 +565,7 @@ else
             )
         )
     ]),
-    None
+    Some(empty_statement())
     );
 }
 
@@ -590,7 +590,7 @@ x = 2
                         )
                     )
                 ]),
-                None,
+                Some(empty_statement()),
             ),
             expression_statement(
                 assign(
@@ -623,7 +623,7 @@ x = 2
                         )
                     )
                 ]),
-                None
+                Some(empty_statement()),
             ),
             expression_statement(
                 assign(
@@ -642,7 +642,7 @@ fn test_error_dangling_else() {
     parse_error_test(
         "else: print('error')",
         SyntaxErrorKind::UnexpectedToken {
-            expected: "literal, parenthesized expression, identifier, lambda, list, map or set".to_string(), // Or a more specific expectation
+            expected: "an expression".to_string(), // Or a more specific expectation
             found: "else".to_string(),
         }
     );

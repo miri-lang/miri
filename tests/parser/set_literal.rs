@@ -145,7 +145,7 @@ fn test_error_set_with_colon() {
     parse_error_test(
         "let s = {1:}",
         SyntaxErrorKind::UnexpectedToken {
-            expected: "literal, parenthesized expression, identifier, lambda, list, map or set".to_string(),
+            expected: "an expression".to_string(),
             found: "}".to_string(),
         }
     );

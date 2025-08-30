@@ -81,7 +81,7 @@ fn test_error_regex_prefix_space() {
     parse_error_test(
         r#"re "abc""#,
         SyntaxErrorKind::UnexpectedToken {
-            expected: "newline or end of file".to_string(),
+            expected: "newline, `else`, or end of block".to_string(),
             found: "string".to_string(),
         }
     );
