@@ -174,3 +174,29 @@ while x < 10
     ])
     );
 }
+
+#[test]
+fn test_while_loop_with_complex_multiline_condition() {
+    parse_while_test("
+while (
+    x > 0
+    and (y < 5)
+)
+    x -= 1
+",
+    logical(
+        binary(identifier("x".into()), BinaryOp::GreaterThan, int_literal_expression(0)),
+        BinaryOp::And,
+        binary(identifier("y".into()), BinaryOp::LessThan, int_literal_expression(5))
+    ),
+    block(vec![
+        expression_statement(
+            assign(
+                lhs_identifier("x"),
+                AssignmentOp::AssignSub,
+                int_literal_expression(1)
+            )
+        )
+    ])
+    );
+}

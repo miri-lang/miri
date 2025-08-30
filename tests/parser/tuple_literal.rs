@@ -116,6 +116,32 @@ fn test_single_item_tuple_with_tuple() {
 }
 
 #[test]
+fn test_tuple_multiline() {
+    parse_test("
+let num = (
+    1,
+        2, 3,
+4,
+    5,
+        6,
+            7
+)
+", vec![
+        variable_statement(vec![
+            let_variable("num", None, opt_expr(tuple(vec![
+                int_literal_expression(1),
+                int_literal_expression(2),
+                int_literal_expression(3),
+                int_literal_expression(4),
+                int_literal_expression(5),
+                int_literal_expression(6),
+                int_literal_expression(7)
+            ])))
+        ], MemberVisibility::Public)
+    ]);
+}
+
+#[test]
 fn test_single_item_tuple_with_map() {
     parse_test("let num = ({'a': 1})", vec![
         variable_statement(vec![
