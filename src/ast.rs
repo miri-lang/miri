@@ -21,6 +21,8 @@ pub enum IfStatementType {
 pub enum WhileStatementType {
     While,
     Until,
+    DoWhile,
+    DoUntil,
     Forever, // Endless loop
 }
 

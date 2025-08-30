@@ -102,6 +102,7 @@ impl<'source> Parser<'source> {
             Some((Token::Unless, _)) => self.if_statement(IfStatementType::Unless)?,
             Some((Token::While, _)) => self.while_statement(WhileStatementType::While)?,
             Some((Token::Until, _)) => self.while_statement(WhileStatementType::Until)?,
+            Some((Token::Do, _)) => self.while_statement(WhileStatementType::DoWhile)?,
             Some((Token::Forever, _)) => self.while_statement(WhileStatementType::Forever)?,
             Some((Token::For, _)) => self.for_statement()?,
             Some((Token::Async, _)) | Some((Token::Fn, _)) | Some((Token::Gpu, _)) => {
@@ -283,26 +284,45 @@ impl<'source> Parser<'source> {
             | 'while' Expression EXPRESSION_END BlockStatement
             | 'until' Expression ':' ExpressionStatement EXPRESSION_END
             | 'until' Expression EXPRESSION_END BlockStatement
+            : 'do' ':' ExpressionStatement 'while' Expression EXPRESSION_END
+            : 'do' ExpressionStatement 'while' Expression EXPRESSION_END
             | 'forever' ':' ExpressionStatement EXPRESSION_END
             | 'forever' EXPRESSION_END BlockStatement
             ;
     */
-    fn while_statement(&mut self, while_statement_type: WhileStatementType) -> Result<Statement, SyntaxError> {
+    fn while_statement(&mut self, mut while_statement_type: WhileStatementType) -> Result<Statement, SyntaxError> {
         let condition;
+        let then_block;
+
         if while_statement_type == WhileStatementType::Until {
             self.eat_token(&Token::Until)?;
             condition = self.expression()?;
+            then_block = self.statement_body()?;
         } else if while_statement_type == WhileStatementType::Forever {
             self.eat_token(&Token::Forever)?;
             condition = self._ast_factory.create_literal_expression(
                 self._ast_factory.create_boolean_literal(true)
             );
+            then_block = self.statement_body()?;
+        } else if while_statement_type == WhileStatementType::DoWhile {
+            self.eat_token(&Token::Do)?;
+            then_block = self.statement_body()?;
+            match &self._lookahead {
+                Some((Token::While, _)) => {
+                    self.eat_token(&Token::While)?;
+                },
+                Some((Token::Until, _)) => {
+                    self.eat_token(&Token::Until)?;
+                    while_statement_type = WhileStatementType::DoUntil;
+                },
+                _ => return Err(self.error_unexpected_lookahead_token("while or until")),
+            }
+            condition = self.expression()?;
         } else {
             self.eat_token(&Token::While)?;
             condition = self.expression()?;
+            then_block = self.statement_body()?;
         }
-
-        let then_block = self.statement_body()?;
 
         Ok(self._ast_factory.create_while_statement(condition, then_block, while_statement_type))
     }
@@ -2457,12 +2477,12 @@ impl<'source> Parser<'source> {
             // Valid terminators that we DON'T consume, as they belong to other parsers.
             None |
             Some((Token::Dedent, _)) |
-            Some((Token::Else, _)) => {
+            Some((Token::Else, _)) | Some((Token::While, _)) | Some((Token::Until, _)) => {
                 // Do nothing, the token is a valid boundary.
             },
             // Anything else is an error.
             _ => {
-                return Err(self.error_unexpected_lookahead_token("newline, `else`, or end of block"));
+                return Err(self.error_unexpected_lookahead_token("an end of statement"));
             }
         }
         Ok(())

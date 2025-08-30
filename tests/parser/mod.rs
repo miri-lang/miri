@@ -10,6 +10,7 @@ pub mod boolean;
 pub mod break_statement;
 pub mod conditional_expression;
 pub mod continue_statement;
+pub mod do_while_loop;
 pub mod enum_statement;
 pub mod equality_expression;
 pub mod extends_statement;

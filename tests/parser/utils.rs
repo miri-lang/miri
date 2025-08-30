@@ -95,6 +95,11 @@ pub fn parse_while_test(input: &str, condition: Expression, then_block: Statemen
     parse_while_expression_test(input.replace("while", "until").as_str(), condition, then_block, WhileStatementType::Until);
 }
 
+pub fn parse_do_while_test(input: &str, condition: Expression, then_block: Statement) {
+    parse_while_expression_test(input, condition.clone(), then_block.clone(), WhileStatementType::DoWhile);
+    parse_while_expression_test(input.replace("while", "until").as_str(), condition, then_block, WhileStatementType::DoUntil);
+}
+
 pub fn parse_for_test(input: &str, variable_declarations: Vec<VariableDeclaration>, iterable: Expression, body: Statement) {
     parse_test(input, vec![
         Statement::For(variable_declarations, Box::new(iterable), Box::new(body))

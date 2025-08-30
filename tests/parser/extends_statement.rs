@@ -25,7 +25,7 @@ fn test_error_extends_multiple_classes() {
     parse_error_test(
         "extends Base, Other",
         SyntaxErrorKind::UnexpectedToken {
-            expected: "newline, `else`, or end of block".to_string(),
+            expected: "an end of statement".to_string(),
             found: ",".to_string(),
         }
     );
