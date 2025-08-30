@@ -88,6 +88,30 @@ fn test_set_with_trailing_comma() {
 }
 
 #[test]
+fn test_multiline_set() {
+    parse_test("
+let s = {1, 
+2, 
+    3, 
+            4, 
+5, 
+    6, 
+7}", vec![
+        variable_statement(vec![
+            let_variable("s", None, opt_expr(set(vec![
+                int_literal_expression(1),
+                int_literal_expression(2),
+                int_literal_expression(3),
+                int_literal_expression(4),
+                int_literal_expression(5),
+                int_literal_expression(6),
+                int_literal_expression(7),
+            ])))
+        ], MemberVisibility::Public)
+    ]);
+}
+
+#[test]
 fn test_nested_sets_and_maps_multiline() {
     parse_test("
 let data = {

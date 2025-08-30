@@ -104,6 +104,26 @@ fn test_map_with_trailing_comma() {
 }
 
 #[test]
+fn test_map_multiline() {
+    parse_test("
+let m = {
+    'a'
+        :
+            1,
+    'b'
+        :
+ 2
+}", vec![
+        variable_statement(vec![
+            let_variable("m", None, opt_expr(map(vec![
+                (string_literal("a"), int_literal_expression(1)),
+                (string_literal("b"), int_literal_expression(2)),
+            ])))
+        ], MemberVisibility::Public)
+    ]);
+}
+
+#[test]
 fn test_nested_maps_multiline() {
     parse_test("
 let config = {
