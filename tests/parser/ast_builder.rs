@@ -203,6 +203,10 @@ pub fn while_statement(cond: Expression, body: Statement) -> Statement {
     Statement::While(Box::new(cond), Box::new(body), WhileStatementType::While)
 }
 
+pub fn do_while_statement(cond: Expression, body: Statement) -> Statement {
+    Statement::While(Box::new(cond), Box::new(body), WhileStatementType::DoWhile)
+}
+
 pub fn until_statement(cond: Expression, body: Statement) -> Statement {
     Statement::While(Box::new(cond), Box::new(body), WhileStatementType::Until)
 }
