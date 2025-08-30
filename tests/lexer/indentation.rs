@@ -441,3 +441,74 @@ fn test_large_nested_structure() {
     
     lexer_test(&input, expected);
 }
+
+#[test]
+fn test_dedent_followed_by_empty_line() {
+    // The lexer should correctly dedent and then process the empty line
+    // without getting confused about the indentation level.
+    lexer_test("
+if true
+    statement1
+// empty line here
+statement2
+", vec![
+        Token::If, Token::True, Token::ExpressionStatementEnd,
+        Token::Indent,
+        Token::Identifier, Token::ExpressionStatementEnd,
+        Token::Dedent,
+        Token::Identifier, Token::ExpressionStatementEnd,
+    ]);
+}
+
+#[test]
+fn test_file_with_only_comments_and_whitespace() {
+    // A file containing nothing but comments and whitespace should produce no tokens.
+    lexer_test("
+    // Indented comment
+  /*
+   * Nested multiline comment
+   */
+
+// Root level comment
+", vec![]);
+}
+
+#[test]
+fn test_indentation_change_on_line_with_only_comment() {
+    // The indentation level of a line containing only a comment should be ignored.
+    // It should not trigger an Indent, Dedent, or IndentationMismatch error.
+    lexer_test("
+if true
+    statement1
+        // This indented comment should not create a new indent level
+    statement2
+", vec![
+        Token::If, Token::True, Token::ExpressionStatementEnd,
+        Token::Indent,
+        Token::Identifier, Token::ExpressionStatementEnd,
+        Token::Identifier, Token::ExpressionStatementEnd,
+        Token::Dedent,
+    ]);
+}
+
+#[test]
+fn test_dedent_on_line_with_only_comment() {
+    // A dedent should not be triggered by a comment's indentation level.
+    lexer_test("
+if true
+    if false
+        statement1
+    // This comment is dedented, but should not trigger a Dedent token.
+    statement2
+", vec![
+        Token::If, Token::True, Token::ExpressionStatementEnd,
+        Token::Indent,
+        Token::If, Token::False, Token::ExpressionStatementEnd,
+        Token::Indent,
+        Token::Identifier, Token::ExpressionStatementEnd,
+        Token::Dedent,
+        Token::Identifier, Token::ExpressionStatementEnd,
+        Token::Dedent,
+    ]);
+}
+

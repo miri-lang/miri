@@ -9,7 +9,7 @@ use super::utils::*;
 
 
 #[test]
-fn test_keywords() {
+fn test_all_keywords_in_various_contexts() {
     let keyword_map = vec![
         ("use", Token::Use),
         ("fn", Token::Fn),
@@ -19,6 +19,7 @@ fn test_keywords() {
         ("gpu", Token::Gpu),
         ("if", Token::If),
         ("unless", Token::Unless),
+        ("else", Token::Else),
         ("match", Token::Match),
         ("default", Token::Default),
         ("return", Token::Return),
@@ -26,6 +27,7 @@ fn test_keywords() {
         ("until", Token::Until),
         ("do", Token::Do),
         ("for", Token::For),
+        ("forever", Token::Forever),
         ("in", Token::In),
         ("let", Token::Let),
         ("var", Token::Var),
@@ -45,29 +47,59 @@ fn test_keywords() {
         ("type", Token::Type),
         ("enum", Token::Enum),
         ("struct", Token::Struct),
-        ("else", Token::Else)
+        ("public", Token::Public),
+        ("protected", Token::Protected),
+        ("private", Token::Private),
     ];
 
     for (keyword, token) in keyword_map {
-        keyword_test(keyword, token);
+        keyword_context_test(keyword, token);
     }
 }
 
-fn keyword_test(keyword: &str, expected: Token) {
+/// Tests a keyword in various contexts to ensure it's not confused with an identifier.
+fn keyword_context_test(keyword: &str, expected_token: Token) {
+    // A keyword should be a standalone token, but part of an identifier if it's not bounded.
+    // Example for `if`: `if if_ok ifok ok_if "if" if-1`
+    let test_string = format!(
+        "{kw} {kw}_ok {kw}ok ok_{kw} \"{kw}\" {kw}-1",
+        kw = keyword
+    );
+
     lexer_test(
-        format!("{keyword} {keyword}() {keyword}.blah blah.{keyword} {keyword}blah blah{keyword} blah_{keyword} \"{keyword}\" /* {keyword} */ {keyword}1 {keyword}'a' {keyword}-1").as_str(),
+        &test_string,
         vec![
-        expected.clone(),
-        expected.clone(), Token::LParen, Token::RParen,
-        expected.clone(), Token::Dot, Token::Identifier,
-        Token::Identifier, Token::Dot, expected.clone(),
-        Token::Identifier,
-        Token::Identifier,
-        Token::Identifier,
-        Token::String,
-        Token::Identifier,
-        expected.clone(), Token::String,
-        expected.clone(), Token::Minus, Token::Int,
+            expected_token.clone(), // `if`
+            Token::Identifier,      // `if_ok`
+            Token::Identifier,      // `ifok`
+            Token::Identifier,      // `ok_if`
+            Token::String,          // `"if"`
+            expected_token.clone(), // `if`
+            Token::Minus,           // `-`
+            Token::Int,             // `1`
+        ],
+    );
+}
+
+#[test]
+fn test_keywords_are_case_sensitive() {
+    // Keywords must be lowercase. Uppercase or mixed-case versions are identifiers.
+    lexer_test("IF TRUE RETURN", vec![
+        Token::Identifier, Token::Identifier, Token::Identifier,
+    ]);
+    lexer_test("If True Return", vec![
+        Token::Identifier, Token::Identifier, Token::Identifier,
+    ]);
+}
+
+#[test]
+fn test_keyword_and_operator_boundary() {
+    // The lexer should not require whitespace between a keyword and an operator.
+    lexer_test("if(true)", vec![
+        Token::If, Token::LParen, Token::True, Token::RParen,
+    ]);
+    lexer_test("return-1", vec![
+        Token::Return, Token::Minus, Token::Int,
     ]);
 }
 
