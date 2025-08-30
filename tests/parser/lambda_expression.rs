@@ -108,7 +108,7 @@ fn test_error_lambda_with_visibility_modifier() {
     parse_error_test(
         "let f = public fn ()",
         SyntaxErrorKind::UnexpectedToken {
-            expected: "literal, parenthesized expression, identifier, lambda, list, map or set".to_string(),
+            expected: "an expression".to_string(),
             found: "public".to_string(),
         }
     );
@@ -148,7 +148,7 @@ fn test_error_lambda_with_statement_in_inline_body() {
     parse_error_test(
         "let f = fn (): let x = 1",
         SyntaxErrorKind::UnexpectedToken {
-            expected: "literal, parenthesized expression, identifier, lambda, list, map or set".to_string(),
+            expected: "an expression".to_string(),
             found: "let".to_string(),
         }
     );
@@ -302,7 +302,7 @@ fn test_error_return_in_inline_lambda() {
     parse_error_test(
         "let f = fn(): return 1",
         SyntaxErrorKind::UnexpectedToken {
-            expected: "literal, parenthesized expression, identifier, lambda, list, map or set".to_string(),
+            expected: "an expression".to_string(),
             found: "return".to_string(),
         }
     );

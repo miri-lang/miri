@@ -12,7 +12,7 @@ pub fn empty_statement() -> Statement {
 }
 
 pub fn empty_program() -> Vec<Statement> {
-    vec![Statement::Empty]
+    vec![]
 }
 
 pub fn identifier(name: &str) -> Expression {

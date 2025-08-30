@@ -222,7 +222,7 @@ fn test_error_double_nullable() {
     parse_error_test(
         "let x int??",
         SyntaxErrorKind::UnexpectedToken {
-            expected: "newline or end of file".to_string(),
+            expected: "an expression".to_string(),
             found: "?".to_string(),
         }
     );

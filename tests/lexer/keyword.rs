@@ -45,6 +45,7 @@ fn test_keywords() {
         ("type", Token::Type),
         ("enum", Token::Enum),
         ("struct", Token::Struct),
+        ("else", Token::Else)
     ];
 
     for (keyword, token) in keyword_map {
@@ -80,18 +81,3 @@ fn test_in_not_keyword() {
     ]);
 }
 
-#[test]
-fn test_else_keyword() {
-    lexer_test(
-        "else else() else.blah blah.else blah blahelse blah_else \"else\" /* else */",
-        vec![
-        Token::Else,
-        Token::ExpressionStatementEnd, Token::Else, Token::LParen, Token::RParen,
-        Token::ExpressionStatementEnd, Token::Else, Token::Dot, Token::Identifier,
-        Token::Identifier, Token::Dot, Token::ExpressionStatementEnd, Token::Else,
-        Token::Identifier,
-        Token::Identifier,
-        Token::Identifier,
-        Token::String,
-    ]);
-}

@@ -59,7 +59,7 @@ fn test_error_continue_with_value() {
     parse_error_test(
         "while true: continue false",
         SyntaxErrorKind::UnexpectedToken {
-            expected: "newline or end of file".to_string(),
+            expected: "newline, `else`, or end of block".to_string(),
             found: "false".to_string(),
         }
     );

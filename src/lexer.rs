@@ -267,15 +267,6 @@ impl<'source> Lexer<'source> {
                     self.curly_brace_stack.pop();
                     return Some(Ok((Token::RBrace, span)));
                 },
-                Token::Else => {
-                    // Add an ExpressionStatementEnd token if the previous token is not a Dedent or ExpressionStatementEnd
-                    // This is to ensure that the inline if/else block is treated as a separate statement
-                    if self.have_previous_tokens() && !self.match_previous_token(Token::Dedent) && !self.match_previous_token(Token::ExpressionStatementEnd) {
-                        self.pending_tokens_stack.push((Token::Else, span.clone()));
-                        return Some(Ok((Token::ExpressionStatementEnd, span)));
-                    }
-                    return Some(Ok((Token::Else, span)));
-                },
                 Token::SingleQuotedRegex | Token::DoubleQuotedRegex => {
                     let quote_char = if token == Token::SingleQuotedRegex { '\'' } else { '"' };
                     match self.lex_regex_literal(quote_char) {

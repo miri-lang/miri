@@ -82,7 +82,7 @@ fn test_if_statement_inline() {
 if x: x = 10 else: x = 20
 ", vec![
         Token::If, Token::Identifier, Token::Colon,
-            Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
+            Token::Identifier, Token::Assign, Token::Int,
         Token::Else, Token::Colon,
             Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
     ]);
@@ -96,7 +96,7 @@ let y = if x % 2 == 0: x * x else: x / x
 ", vec![
         Token::Let, Token::Identifier, Token::Assign, Token::Int, Token::ExpressionStatementEnd,
         Token::Let, Token::Identifier, Token::Assign, Token::If, Token::Identifier, Token::Percent, Token::Int, Token::Equal, Token::Int, Token::Colon,
-            Token::Identifier, Token::Star, Token::Identifier, Token::ExpressionStatementEnd,
+            Token::Identifier, Token::Star, Token::Identifier,
         Token::Else, Token::Colon,
             Token::Identifier, Token::Slash, Token::Identifier, Token::ExpressionStatementEnd,
     ]);
