@@ -6,7 +6,13 @@ use miri::{lexer::{Lexer, RegexToken, Token}, syntax_error::SyntaxErrorKind};
 
 pub fn lexer_test(input: &str, expected: Vec<Token>) {
     let lexer = Lexer::new(input);
-    let tokens: Vec<Token> = lexer.map(|result| result.unwrap().0).collect();
+    let results: Vec<_> = lexer.collect();
+    for res in &results {
+        if let Err(err) = res {
+            panic!("Lexer error: {:?}\nInput: {}", err, input);
+        }
+    }
+    let tokens: Vec<Token> = results.into_iter().filter_map(|result| result.ok().map(|(token, _)| token)).collect();
     assert_eq!(tokens, expected);
 }
 
@@ -24,6 +30,12 @@ pub fn lexer_error_test(input: &str, expected_kind: &SyntaxErrorKind) {
 pub fn run_lexer_error_tests(inputs: Vec<&str>, expected_kind: &SyntaxErrorKind) {
     for input in inputs {
         lexer_error_test(input, expected_kind);
+    }
+}
+
+pub fn run_lexer_tests(tests: Vec<(&str, Vec<Token>)>) {
+    for (input, expected) in tests {
+        lexer_test(input, expected);
     }
 }
 

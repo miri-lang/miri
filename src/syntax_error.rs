@@ -27,6 +27,7 @@ pub enum SyntaxErrorKind {
     InvalidLeftHandSideExpression,
     InvalidAssignmentTarget,
     IntegerLiteralOverflow,
+    InvalidNumberLiteral,
     InvalidIntegerLiteral,
     InvalidBinaryLiteral,
     InvalidOctalLiteral,
@@ -168,6 +169,10 @@ impl SyntaxError {
             SyntaxErrorKind::BackslashInFStringExpression => (
                 "Invalid Backslash",
                 "The expression part of a formatted string cannot contain backslashes.".to_string(),
+            ),
+            SyntaxErrorKind::InvalidNumberLiteral => (
+                "Invalid Number Literal",
+                "Number literals must be valid integers or floats, which cannot begin or end with underscores.".to_string(),
             ),
         };
 

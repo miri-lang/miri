@@ -111,15 +111,30 @@ pub enum Token {
     FormattedStringMiddle(String),
     FormattedStringEnd(String),
 
-    #[regex("[0-9]+(?:_[0-9]+)*(\\.[0-9]+(?:_[0-9]+)*)?([eE][+-]?[0-9]+(?:_[0-9]+)*)?", priority = 1)] Float,
-    #[regex("[0-9]+(?:_[0-9]+)*", priority = 2)] Int,
+    #[regex(r"[0-9]+(?:_[0-9]+)*(\\.[0-9]+(?:_[0-9]+)*)?([eE][+-]?[0-9]+(?:_[0-9]+)*)?_+", priority = 5)]
+    #[regex(r"_+[0-9]+(?:_[0-9]+)*(\\.[0-9]+(?:_[0-9]+)*)?([eE][+-]?[0-9]+(?:_[0-9]+)*)?", priority = 5)]
+    InvalidNumber,
+
+    #[regex("[0-9]+(?:_[0-9]+)*\\.", priority = 4)] FloatOrRange,
+    #[regex("\\.[0-9]+(?:_[0-9]+)*([eE][+-]?[0-9]+(?:_[0-9]+)*)?", priority = 3)]
+    #[regex("[0-9]+(?:_[0-9]+)*(\\.[0-9]+(?:_[0-9]+)*)?([eE][+-]?[0-9]+(?:_[0-9]+)*)?", priority = 2)]
+    Float,
+    #[regex("[0-9]+(?:_[0-9]+)*", priority = 3)] Int,
     #[regex("0[bB][0-1_]+", priority = 2)] BinaryNumber,
     #[regex("0[xX][0-9a-fA-F_]+", priority = 2)] HexNumber,
     #[regex("0[oO][0-7_]+", priority = 2)] OctalNumber,
 
-    #[regex("0[bB](?:[0-1_]*[^0-1_\\s]+)?")] InvalidBinaryNumber,
-    #[regex("0[xX](?:[0-9a-fA-F_]*[^0-9a-fA-F_\\s]+)?")] InvalidHexNumber,
-    #[regex("0[oO](?:[0-7_]*[^0-7_\\s]+)?")] InvalidOctalNumber,
+    #[regex("0[bB](?:[0-1_]*[^0-1_\\s]+)?")]
+    #[regex("0[bB]_+[0-1_]*")]
+    InvalidBinaryNumber,
+
+    #[regex("0[xX](?:[0-9a-fA-F_]*[^0-9a-fA-F_\\s]+)?")]
+    #[regex("0[xX]_+[0-9a-fA-F_]*")]
+    InvalidHexNumber,
+
+    #[regex("0[oO](?:[0-7_]*[^0-7_\\s]+)?")]
+    #[regex("0[oO]_+[0-7_]*")]
+    InvalidOctalNumber,
 
     // Comments and Whitespace
     #[regex("//.*", logos::skip)] InlineComment,
@@ -283,6 +298,15 @@ impl<'source> Lexer<'source> {
                         return Some(Err(e));
                     }
                     continue;
+                },
+                Token::FloatOrRange => {
+                    if let Err(e) = self.lex_float_or_range() {
+                        return Some(Err(e));
+                    }
+                    continue;
+                },
+                Token::InvalidNumber => {
+                    return Some(Err(SyntaxError::new(SyntaxErrorKind::InvalidNumberLiteral, span)));
                 },
                 Token::InvalidBinaryNumber => {
                     return Some(Err(SyntaxError::new(SyntaxErrorKind::InvalidBinaryLiteral, span)));
@@ -570,6 +594,42 @@ impl<'source> Lexer<'source> {
         for (token, span) in tokens.into_iter().rev() {
             self.pending_tokens_stack.push((token, span));
         }
+
+        Ok(())
+    }
+
+    fn lex_float_or_range(&mut self) -> Result<(), SyntaxError> {
+        let src = self.inner.source();
+        let lookahead_cursor = self.inner.span().end;
+
+        if lookahead_cursor < src.len() {
+            let ch = &src[lookahead_cursor..lookahead_cursor + 1];
+            if ch == "." {
+                // It's a range
+                let range_start = lookahead_cursor - 1;
+                let range_end = lookahead_cursor + 1;
+
+                if range_end < src.len() && &src[range_end..range_end + 1] == "=" {
+                    // It's a range inclusive
+                    self.pending_tokens_stack.push((Token::RangeInclusive, range_start..(range_end + 1)));
+                    self.inner.bump(2);
+                } else {
+                    self.pending_tokens_stack.push((Token::Range, range_start..range_end));
+                    self.inner.bump(1);
+                }
+                self.pending_tokens_stack.push((Token::Int, self.inner.span().start..range_start));
+
+                return Ok(());
+            } else if ch.chars().next().map_or(false, |c| c.is_ascii_alphabetic()) {
+                // It's a method call on an integer e.g. `1.to_string()`
+                self.pending_tokens_stack.push((Token::Dot, self.inner.span().end - 1..self.inner.span().end));
+                self.pending_tokens_stack.push((Token::Int, self.inner.span().start..self.inner.span().end - 1));
+                return Ok(());
+            }
+        }
+
+        // It's a float
+        self.pending_tokens_stack.push((Token::Float, self.inner.span()));
 
         Ok(())
     }
