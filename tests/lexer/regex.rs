@@ -101,3 +101,44 @@ fn test_error_regex_without_re_prefix() {
         Token::Identifier,
     ]);
 }
+
+#[test]
+fn test_single_quoted_regex_literals() {
+    lexer_test(
+        r#"re'abc' re'a\'b'i re''"#,
+        vec![
+            Token::Regex(regex_token("abc", "")),
+            Token::Regex(regex_token("a\\'b", "i")),
+            Token::Regex(regex_token("", "")),
+        ]
+    );
+}
+
+#[test]
+fn test_regex_with_various_escapes() {
+    lexer_test(
+        r#"re"line\n\t\{[0-9]+\}""#,
+        vec![
+            Token::Regex(regex_token("line\\n\\t\\{[0-9]+\\}", ""))
+        ]
+    );
+}
+
+#[test]
+fn test_regex_with_repeated_flags() {
+    // The lexer should just set the flag to true once, behavior is idempotent.
+    lexer_test(
+        r#"re"abc"iig"#,
+        vec![
+            Token::Regex(regex_token("abc", "ig"))
+        ]
+    );
+}
+
+#[test]
+fn test_error_unclosed_regex_with_flags() {
+    // An unclosed regex should fail even if valid flags are present.
+    // Logos will fail to match the regex token, see `re` as an identifier,
+    // and then see an unclosed string.
+    lexer_error_test(r#"re"unclosed'i"#, &SyntaxErrorKind::InvalidToken);
+}
