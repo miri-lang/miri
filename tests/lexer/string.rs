@@ -331,11 +331,54 @@ fn test_f_string_with_escaped_backslash_before_brace() {
 }
 
 #[test]
+fn test_f_string_with_double_braces() {
+    lexer_test(
+        r#"f"Literal backslash: \\{{'a': 1}}""#,
+        vec![
+            Token::FormattedStringStart("Literal backslash: \\\\".to_string()),
+            Token::LBrace,
+            Token::String,
+            Token::Colon,
+            Token::Int,
+            Token::RBrace,
+            Token::FormattedStringEnd("".to_string()),
+        ],
+    );
+}
+
+#[test]
 fn test_keyword_in_formatted_string() {
     lexer_test(r#"f"The value is {if x: 1 else: 0}""#, vec![
         Token::FormattedStringStart("The value is ".to_string()),
         Token::If, Token::Identifier, Token::Colon, Token::Int,
         Token::Else, Token::Colon, Token::Int,
         Token::FormattedStringEnd("".to_string()),
+    ]);
+}
+
+#[test]
+fn test_f_string_error_unclosed_string() {
+    run_lexer_error_tests(vec![
+        r#"f"this is not closed"#,
+        r#"f"unclosed with expr {x}"#,
+    ], &SyntaxErrorKind::InvalidToken);
+}
+
+#[test]
+fn test_f_string_with_whitespace_expression() {
+    lexer_test(
+        r#"f"Whitespace: { }""#,
+        vec![
+            Token::FormattedStringStart("Whitespace: ".to_string()),
+            Token::FormattedStringEnd("".to_string()),
+        ],
+    );
+}
+
+#[test]
+fn test_string_and_identifier_boundaries() {
+    run_lexer_tests(vec![
+        (r#""hello"world"#, vec![Token::String, Token::Identifier]),
+        (r#""value"if"#, vec![Token::String, Token::If]),
     ]);
 }
