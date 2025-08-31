@@ -9,23 +9,68 @@ use super::utils::*;
 
 
 #[test]
-fn test_number_edge_cases() {
-    lexer_test("0 00 1_000_000 0.0 .5 5. -19 1.0e10 6.67430e-11 1E10 1e-5 1.5E+3 1.5e-10 1_000e10", vec![
-        Token::Int,
-        Token::Int,
-        Token::Int,
-        Token::Float,
-        Token::Dot, Token::Int,  // .5 should be parsed as . and 5
-        Token::Int, Token::Dot,  // 5. should be parsed as 5 and .,
-        Token::Minus, Token::Int, // -19 should be parsed as Minus and 19
+fn test_valid_numbers() {
+    run_lexer_tests(vec![
+        // Normal numbers
+        ("0", vec![Token::Int]),
+        ("0.0", vec![Token::Float]),
+
+        // Leading zeros
+        ("00", vec![Token::Int]),
+        ("000000.000000", vec![Token::Float]),
+
+        // Underscores
+        ("1_000_000", vec![Token::Int]),
+        ("1_2_3", vec![Token::Int]),
+        ("4_5.6_7", vec![Token::Float]),
+        ("1_234_567_890", vec![Token::Int]),
+        ("0b1010_1010", vec![Token::BinaryNumber]),
+        ("0b1_0_1_0_1_0_1_0", vec![Token::BinaryNumber]),
+        ("0b0000_1111", vec![Token::BinaryNumber]),
+        ("0x1_A2_B", vec![Token::HexNumber]),
+        ("0xFaFa_EeEe", vec![Token::HexNumber]),
+        ("0xabcd_abcd", vec![Token::HexNumber]),
+        ("0o7_5_5", vec![Token::OctalNumber]),
+        ("0o755_7777", vec![Token::OctalNumber]),
+
+        // Binary numbers
+        ("0b1010", vec![Token::BinaryNumber]),
+        ("0b1111", vec![Token::BinaryNumber]),
+        ("0b0000_1111", vec![Token::BinaryNumber]),
+        ("0B1010", vec![Token::BinaryNumber]),
+
+        // Hexadecimal numbers
+        ("0x1A", vec![Token::HexNumber]),
+        ("0xFF", vec![Token::HexNumber]),
+        ("0x0_1A", vec![Token::HexNumber]),
+        ("0x0_1A_FF", vec![Token::HexNumber]),
+        ("0XFFF", vec![Token::HexNumber]),
+
+        // Octal numbers
+        ("0o7", vec![Token::OctalNumber]),
+        ("0o77", vec![Token::OctalNumber]),
+        ("0o0_7", vec![Token::OctalNumber]),
+        ("0o7_7_7", vec![Token::OctalNumber]),
+        ("0O777", vec![Token::OctalNumber]),
+
+        // Dot position
+        (".5", vec![Token::Float]),
+        ("5.", vec![Token::Float]),
+
+        // Negative
+        ("-19", vec![Token::Minus, Token::Int]),
+        ("-19.0", vec![Token::Minus, Token::Float]),
+        ("-.3", vec![Token::Minus, Token::Float]),
+        ("-3.", vec![Token::Minus, Token::Float]),
+
         // Scientific notation
-        Token::Float,
-        Token::Float,
-        Token::Float,
-        Token::Float,
-        Token::Float,
-        Token::Float,
-        Token::Float,
+        ("1.0e10", vec![Token::Float]),
+        ("6.67430e-11", vec![Token::Float]),
+        ("1E10", vec![Token::Float]), // Uppercase 'E'
+        ("1e-5", vec![Token::Float]), // Lowercase 'e' with negative exponent
+        ("1.5E+3", vec![Token::Float]), // Positive exponent with '+'
+        ("1.5e-10", vec![Token::Float]), // Lowercase 'e' with negative exponent
+        ("1_000e10", vec![Token::Float]), // Underscore in integer part with scientific notation
     ]);
 }
 
@@ -53,60 +98,44 @@ fn test_very_large_numbers() {
 }
 
 #[test]
-fn test_underscore_in_numbers() {
-    lexer_test("1_2_3 4_5.6_7 1_234_567_890", vec![
-        Token::Int,
-        Token::Float,
-        Token::Int,
-    ]);
+fn test_invalid_underscore_in_numbers() {
+    run_lexer_error_tests(vec![
+        "1_2_",
+        "_123",
+        "1_2_3_",
+    ], &SyntaxErrorKind::InvalidNumberLiteral);
 }
 
 #[test]
-fn test_binary_hex_octal_numbers() {
-    lexer_test("0b1010 0x1A2B 0x1fff 0o755", vec![
-        Token::BinaryNumber,
-        Token::HexNumber,
-        Token::HexNumber,
-        Token::OctalNumber,
-    ]);
-}
+fn test_invalid_base_n_numbers_with_only_underscores() {
+    run_lexer_error_tests(vec![
+        "0b_",        
+        "0b___________",
+    ], 
+    &SyntaxErrorKind::InvalidBinaryLiteral);
 
-#[test]
-fn test_binary_hex_octal_numbers_with_underscores() {
-    lexer_test("0b1010_1010 0b1_0_1_0_1_0_1_0 0b_1111 0x1_A2_B 0xFaFa_EeEe 0x_abcd 0o7_5_5 0o755_7777 0o_777", vec![
-        Token::BinaryNumber,
-        Token::BinaryNumber,
-        Token::BinaryNumber,
-        Token::HexNumber,
-        Token::HexNumber,
-        Token::HexNumber,
-        Token::OctalNumber,
-        Token::OctalNumber,
-        Token::OctalNumber,
-    ]);
-}
+    run_lexer_error_tests(vec![
+        "0x_",
+        "0x___________",
+    ], 
+    &SyntaxErrorKind::InvalidHexLiteral);
 
-// Note: this works, but maybe it shouldn't?
-#[test]
-fn test_binary_hex_octal_numbers_long_underscores() {
-    lexer_test("0b___________ 0x___________ 0o___________", vec![
-        Token::BinaryNumber, // should not panic, just return other tokens
-        Token::HexNumber,
-        Token::OctalNumber,
-    ]);
+    run_lexer_error_tests(vec![
+        "0o_",
+        "0o___________"
+    ], 
+    &SyntaxErrorKind::InvalidOctalLiteral);
 }
 
 #[test]
 fn test_invalid_binary() {
     run_lexer_error_tests(vec![
-            "0b",
-            "0b2",
-            "0bbb",
-            "0b1111_000F",
-            "0b+"
-        ], 
-        &SyntaxErrorKind::InvalidBinaryLiteral
-    );
+        "0b",
+        "0b2",
+        "0bbb",
+        "0b1111_000F",
+        "0b+"
+    ],  &SyntaxErrorKind::InvalidBinaryLiteral);
 }
 
 #[test]
@@ -134,23 +163,22 @@ fn test_invalid_hex() {
 }
 
 #[test]
-fn test_numbers_starting_with_dot() {
-    // TODO: Should this be allowed? Works in Python, but not in Rust.
-    lexer_test(".123", vec![Token::Dot, Token::Int]);
-}
-
-#[test]
-fn test_numbers_ending_with_dot() {
-    // TODO: Should this be allowed? Works in Python and Rust.
-    lexer_test("123.", vec![Token::Int, Token::Dot]);
-}
-
-#[test]
-fn test_hex_octal_binary_case_insensitivity() {
-    lexer_test("0X1A 0B101 0O77", vec![
-        Token::HexNumber,
-        Token::BinaryNumber,
-        Token::OctalNumber,
+fn test_number_followed_by_dot_method_call() {
+    // This is a critical test to ensure `1.to_string()` is not confused with a float.
+    // The `FloatOrRange` logic should correctly see the `t` and treat `1.` as member call of an integer,
+    lexer_test("1.to_string()", vec![
+        Token::Int,
+        Token::Dot,
+        Token::Identifier,
+        Token::LParen,
+        Token::RParen,
     ]);
 }
 
+#[test]
+fn test_number_in_range() {
+    run_lexer_tests(vec![
+        ("5..10", vec![Token::Int, Token::Range, Token::Int]),
+        ("5..=10", vec![Token::Int, Token::RangeInclusive, Token::Int]),
+    ]);
+}
