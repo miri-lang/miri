@@ -11,13 +11,13 @@ use super::utils::*;
 
 #[test]
 fn test_parse_string_literal() {
-    parse_literal_test("'hello single quote'", string("hello single quote"));
-    parse_literal_test("\"hello double quote\"", string("hello double quote"));
+    literal_test("'hello single quote'", string("hello single quote"));
+    literal_test("\"hello double quote\"", string("hello double quote"));
 }
 
 #[test]
 fn test_f_string() {
-    parse_test(
+    parser_test(
         r#"f"User: {name}""#,
         vec![
             expression_statement(
@@ -33,7 +33,7 @@ fn test_f_string() {
 #[test]
 fn test_f_string_no_expressions() {
     // An f-string with no expressions should be parsed as a single literal part.
-    parse_test(
+    parser_test(
         r#"f"just a regular string""#,
         vec![
             expression_statement(
@@ -47,7 +47,7 @@ fn test_f_string_no_expressions() {
 
 #[test]
 fn test_f_string_starts_with_expression() {
-    parse_test(
+    parser_test(
         r#"f"{name} is the user""#,
         vec![
             expression_statement(
@@ -62,7 +62,7 @@ fn test_f_string_starts_with_expression() {
 
 #[test]
 fn test_f_string_ends_with_expression() {
-    parse_test(
+    parser_test(
         r#"f"The user is {name}""#,
         vec![
             expression_statement(
@@ -77,7 +77,7 @@ fn test_f_string_ends_with_expression() {
 
 #[test]
 fn test_f_string_with_adjacent_expressions() {
-    parse_test(
+    parser_test(
         r#"f"{greeting}{separator}{name}""#,
         vec![
             expression_statement(
@@ -93,7 +93,7 @@ fn test_f_string_with_adjacent_expressions() {
 
 #[test]
 fn test_f_string_with_complex_expression() {
-    parse_test(
+    parser_test(
         r#"f"Result: {10 * (x + y)}""#,
         vec![
             expression_statement(
@@ -116,7 +116,7 @@ fn test_f_string_with_complex_expression() {
 
 #[test]
 fn test_f_string_with_function_call() {
-    parse_test(
+    parser_test(
         r#"f"Status: {get_status(200)}""#,
         vec![
             expression_statement(
@@ -134,7 +134,7 @@ fn test_f_string_with_function_call() {
 
 #[test]
 fn test_f_string_with_single_quotes() {
-    parse_test(
+    parser_test(
         r#"f'User: {name}'"#,
         vec![
             expression_statement(
@@ -149,7 +149,7 @@ fn test_f_string_with_single_quotes() {
 
 #[test]
 fn test_f_string_with_nested_f_string() {
-    parse_test(
+    parser_test(
         r#"f"Outer: {f'Inner: {x}'}""#,
         vec![
             expression_statement(
@@ -167,7 +167,7 @@ fn test_f_string_with_nested_f_string() {
 
 #[test]
 fn test_f_string_with_map_literal() {
-    parse_test(
+    parser_test(
         r#"f"Data: {{'key': value}}""#,
         vec![
             expression_statement(
@@ -185,7 +185,7 @@ fn test_f_string_with_map_literal() {
 
 #[test]
 fn test_f_string_with_escaped_braces_is_parsed_as_literal() {
-    parse_test(
+    parser_test(
         r#"f"Literal braces \{ and \}""#,
         vec![
             expression_statement(
@@ -200,7 +200,7 @@ fn test_f_string_with_escaped_braces_is_parsed_as_literal() {
 #[test]
 fn test_f_string_assigned_to_variable() {
     // Ensures f-strings work correctly as part of a larger statement.
-    parse_test(
+    parser_test(
         r#"let message = f"Hello, {name}""#,
         vec![
             variable_statement(

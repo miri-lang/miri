@@ -9,7 +9,7 @@ use super::utils::*;
 
 #[test]
 fn test_parse_list_type_in_variable() {
-    parse_type_test(
+    type_statement_test(
         "[int]",
         typ(Type::List(Box::new(typ(Type::Int))))
     );
@@ -17,7 +17,7 @@ fn test_parse_list_type_in_variable() {
 
 #[test]
 fn test_parse_nullable_map_type_in_parameter() {
-    parse_test("
+    parser_test("
 fn process_data(data {string: bool}?)
     // body
 ", vec![
@@ -33,6 +33,7 @@ fn process_data(data {string: bool}?)
                             ),
                         )
                     ),
+                    None,
                     None
                 )
             ]
@@ -42,7 +43,7 @@ fn process_data(data {string: bool}?)
 
 #[test]
 fn test_parse_tuple_type_as_return_type() {
-    parse_test("
+    parser_test("
 fn get_coordinates() (float, float?, float)?
     // body
 ", vec![
@@ -60,7 +61,7 @@ fn get_coordinates() (float, float?, float)?
 
 #[test]
 fn test_parse_generic_result_type() {
-    parse_type_test(
+    type_statement_test(
         "result<int, string>", 
         typ(
             Type::Result(
@@ -73,7 +74,7 @@ fn test_parse_generic_result_type() {
 
 #[test]
 fn test_parse_generic_custom_type_with_nesting() {
-    parse_test("
+    parser_test("
 fn get_data() MyContainer<[int]?, future<string>>
     // body
 ", vec![
@@ -93,7 +94,7 @@ fn get_data() MyContainer<[int]?, future<string>>
 
 #[test]
 fn test_parse_set_type() {
-    parse_type_test(
+    type_statement_test(
         "{i64}", 
         typ(Type::Set(Box::new(typ(Type::I64))))
     );
@@ -101,17 +102,17 @@ fn test_parse_set_type() {
 
 #[test]
 fn test_error_unclosed_list_type() {
-    parse_error_test(
+    parser_error_test(
         "let my_list [int",
-        SyntaxErrorKind::UnexpectedEOF
+        &SyntaxErrorKind::UnexpectedEOF
     );
 }
 
 #[test]
 fn test_error_malformed_map_type() {
-    parse_error_test(
+    parser_error_test(
         "let my_map {string, int}",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "}".to_string(),
             found: ",".to_string(),
         }
@@ -120,9 +121,9 @@ fn test_error_malformed_map_type() {
 
 #[test]
 fn test_error_incomplete_generic_type() {
-    parse_error_test(
+    parser_error_test(
         "let my_generic MyType<int,",
-        SyntaxErrorKind::InvalidTypeDeclaration {
+        &SyntaxErrorKind::InvalidTypeDeclaration {
             expected: "Generic type".to_string(),
         }
     );
@@ -130,9 +131,9 @@ fn test_error_incomplete_generic_type() {
 
 #[test]
 fn test_error_empty_generic_parameters() {
-    parse_error_test(
+    parser_error_test(
         "let my_generic MyType<>",
-        SyntaxErrorKind::InvalidTypeDeclaration {
+        &SyntaxErrorKind::InvalidTypeDeclaration {
             expected: "Generic type".to_string()
         }
     );
@@ -140,7 +141,7 @@ fn test_error_empty_generic_parameters() {
 
 #[test]
 fn test_deeply_nested_collection_type() {
-    parse_type_test(
+    type_statement_test(
         "[[{string: (int?, bool)}]?]?",
         null_typ( // The outer list is nullable: `[...]`?
             Type::List(Box::new(
@@ -162,9 +163,9 @@ fn test_deeply_nested_collection_type() {
 
 #[test]
 fn test_unit_type_tuple() {
-    parse_error_test(
+    parser_error_test(
         "let u ()",
-        SyntaxErrorKind::InvalidTypeDeclaration {
+        &SyntaxErrorKind::InvalidTypeDeclaration {
             expected: "Tuple element type".to_string(),
         }
     );
@@ -172,7 +173,7 @@ fn test_unit_type_tuple() {
 
 #[test]
 fn test_single_element_tuple_type() {
-    parse_type_test(
+    type_statement_test(
         "(string)",
         typ(Type::Tuple(vec![typ(Type::String)]))
     );
@@ -180,7 +181,7 @@ fn test_single_element_tuple_type() {
 
 #[test]
 fn test_simple_nullable_built_in_type() {
-    parse_type_test(
+    type_statement_test(
         "int?",
         null_typ(Type::Int)
     );
@@ -188,9 +189,9 @@ fn test_simple_nullable_built_in_type() {
 
 #[test]
 fn test_error_trailing_comma_in_tuple_type() {
-    parse_error_test(
+    parser_error_test(
         "let x (int, )",
-        SyntaxErrorKind::InvalidTypeDeclaration {
+        &SyntaxErrorKind::InvalidTypeDeclaration {
             expected: "Tuple element type".to_string()
         }
     );
@@ -198,9 +199,9 @@ fn test_error_trailing_comma_in_tuple_type() {
 
 #[test]
 fn test_error_map_missing_value_type() {
-    parse_error_test(
+    parser_error_test(
         "let x {string:}",
-        SyntaxErrorKind::InvalidTypeDeclaration {
+        &SyntaxErrorKind::InvalidTypeDeclaration {
             expected: "Map value type".to_string(),
         }
     );
@@ -208,9 +209,9 @@ fn test_error_map_missing_value_type() {
 
 #[test]
 fn test_error_result_type_missing_parameter() {
-    parse_error_test(
+    parser_error_test(
         "let x result<int>",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: ",".to_string(),
             found: ">".to_string(),
         }
@@ -219,9 +220,9 @@ fn test_error_result_type_missing_parameter() {
 
 #[test]
 fn test_error_double_nullable() {
-    parse_error_test(
+    parser_error_test(
         "let x int??",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "an expression".to_string(),
             found: "?".to_string(),
         }
@@ -257,20 +258,20 @@ fn test_primitive_types() {
     ];
 
     for (name, mapped_type) in type_map {
-        parse_type_test(name, typ(mapped_type.clone()));
-        parse_type_test(format!("{}?", name).as_str(), null_typ(mapped_type.clone()));
+        type_statement_test(name, typ(mapped_type.clone()));
+        type_statement_test(format!("{}?", name).as_str(), null_typ(mapped_type.clone()));
     }
 }
 
 #[test]
 fn test_function_type_with_named_parameters() {
-    parse_type_test(
+    type_statement_test(
         "fn(x int, y string?) bool",
         typ(Type::Function(
             None, // no generics
             vec![
-                parameter("x".into(), opt_expr(typ(Type::Int)), None),
-                parameter("y".into(), opt_expr(null_typ(Type::String)), None),
+                parameter("x".into(), opt_expr(typ(Type::Int)), None, None),
+                parameter("y".into(), opt_expr(null_typ(Type::String)), None, None),
             ],
             opt_expr(typ(Type::Boolean))
         ))
@@ -281,14 +282,14 @@ fn test_function_type_with_named_parameters() {
 fn test_function_type_returning_function_type() {
     // A function type that returns another function type.
     // Note: The inner function type must also have named parameters per current parser rules.
-    parse_type_test(
+    type_statement_test(
         "fn() fn(x int) bool",
         typ(Type::Function(
             None,
             vec![],
             opt_expr(typ(Type::Function(
                 None,
-                vec![parameter("x".into(), opt_expr(typ(Type::Int)), None)],
+                vec![parameter("x".into(), opt_expr(typ(Type::Int)), None, None)],
                 opt_expr(typ(Type::Boolean))
             )))
         ))
@@ -297,12 +298,12 @@ fn test_function_type_returning_function_type() {
 
 #[test]
 fn test_list_of_function_types() {
-    parse_type_test(
+    type_statement_test(
         "[fn(s string) bool]",
         typ(Type::List(Box::new(
             typ(Type::Function(
                 None,
-                vec![parameter("s".into(), opt_expr(typ(Type::String)), None)],
+                vec![parameter("s".into(), opt_expr(typ(Type::String)), None, None)],
                 opt_expr(typ(Type::Boolean))
             ))
         )))
@@ -311,11 +312,11 @@ fn test_list_of_function_types() {
 
 #[test]
 fn test_function_type_with_generics() {
-    parse_type_test(
+    type_statement_test(
         "fn<T>(item T) T",
         typ(Type::Function(
             Some(vec![generic_type("T", None)]),
-            vec![parameter("item".into(), opt_expr(typ(Type::Custom("T".into(), None))), None)],
+            vec![parameter("item".into(), opt_expr(typ(Type::Custom("T".into(), None))), None, None)],
             opt_expr(typ(Type::Custom("T".into(), None)))
         ))
     );
@@ -325,7 +326,7 @@ fn test_function_type_with_generics() {
 fn test_nullable_parenthesized_function_type() {
     // The parser will interpret `(fn() int)` as a single-element tuple containing a function type.
     // The `?` then makes the tuple itself nullable.
-    parse_type_test(
+    type_statement_test(
         "(fn() int)?",
         null_typ(Type::Tuple(vec![
             typ(Type::Function(
@@ -340,13 +341,13 @@ fn test_nullable_parenthesized_function_type() {
 #[test]
 fn test_function_type_with_type_as_parameter_name() {
     // Crazy but valid: a function with parameters named 'int' and 'bool' of unspecified types.
-    parse_type_test(
+    type_statement_test(
         "fn(int, bool)",
         typ(Type::Function(
             None,
             vec![
-                parameter("int".into(), None, None),
-                parameter("bool".into(), None, None),
+                parameter("int".into(), None, None, None),
+                parameter("bool".into(), None, None, None),
             ],
             None
         ))
@@ -357,7 +358,7 @@ fn test_function_type_with_type_as_parameter_name() {
 fn test_crazy_nested_function_type() {
     // A generic function type that takes another function type as a parameter
     // and returns a nullable function type.
-    parse_type_test(
+    type_statement_test(
         "fn<T>(cb fn(item T) bool, items [T]?) (fn() T)?",
         typ(Type::Function(
             Some(vec![generic_type("T", None)]), // generics: <T>
@@ -366,14 +367,16 @@ fn test_crazy_nested_function_type() {
                     "cb".into(),
                     opt_expr(typ(Type::Function(
                         None,
-                        vec![parameter("item".into(), opt_expr(typ(Type::Custom("T".into(), None))), None)],
+                        vec![parameter("item".into(), opt_expr(typ(Type::Custom("T".into(), None))), None, None)],
                         opt_expr(typ(Type::Boolean))
                     ))),
+                    None,
                     None
                 ),
                 parameter(
                     "items".into(),
                     opt_expr(null_typ(Type::List(Box::new(typ(Type::Custom("T".into(), None)))))),
+                    None,
                     None
                 )
             ],
@@ -391,9 +394,9 @@ fn test_crazy_nested_function_type() {
 
 #[test]
 fn test_error_function_type_with_trailing_comma() {
-    parse_error_test(
+    parser_error_test(
         "let x fn(a int,)",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "identifier".to_string(),
             found: ")".to_string(),
         }

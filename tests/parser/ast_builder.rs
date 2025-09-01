@@ -137,16 +137,16 @@ pub fn var(name: &str, typ: Option<Box<Expression>>, init: Option<Box<Expression
     }
 }
 
-pub fn conditional(cond: Expression, then: Expression, else_b: Option<Expression>, if_type: IfStatementType) -> Expression {
-    Expression::Conditional(Box::new(cond), Box::new(then), else_b.map(Box::new), if_type)
+pub fn conditional(then: Expression, cond: Expression, else_b: Option<Expression>, if_type: IfStatementType) -> Expression {
+    Expression::Conditional(Box::new(then), Box::new(cond), else_b.map(Box::new), if_type)
 }
 
-pub fn if_conditional(cond: Expression, then: Expression, else_b: Option<Expression>) -> Expression {
-    conditional(cond, then, else_b, IfStatementType::If)
+pub fn if_conditional(then: Expression, cond: Expression, else_b: Option<Expression>) -> Expression {
+    conditional(then, cond, else_b, IfStatementType::If)
 }
 
-pub fn unless_conditional(cond: Expression, then: Expression, else_b: Option<Expression>) -> Expression {
-    conditional(cond, then, else_b, IfStatementType::Unless)
+pub fn unless_conditional(then: Expression, cond: Expression, else_b: Option<Expression>) -> Expression {
+    conditional(then, cond, else_b, IfStatementType::Unless)
 }
 
 pub fn range(start: Expression, end: Option<Box<Expression>>, range_type: RangeExpressionType) -> Expression {
@@ -199,6 +199,10 @@ pub fn if_statement(cond: Expression, then: Statement, else_b: Option<Statement>
     Statement::If(Box::new(cond), Box::new(then), else_b.map(Box::new), IfStatementType::If)
 }
 
+pub fn unless_statement(cond: Expression, then: Statement, else_b: Option<Statement>) -> Statement {
+    Statement::If(Box::new(cond), Box::new(then), else_b.map(Box::new), IfStatementType::Unless)
+}
+
 pub fn while_statement(cond: Expression, body: Statement) -> Statement {
     Statement::While(Box::new(cond), Box::new(body), WhileStatementType::While)
 }
@@ -231,8 +235,8 @@ pub fn guard(op: GuardOp, expr: Expression) -> Expression {
     Expression::Guard(op, Box::new(expr))
 }
 
-pub fn parameter(name: String, typ: Option<Box<Expression>>, guard: Option<Box<Expression>>) -> Parameter {
-    Parameter { name, typ, guard }
+pub fn parameter(name: String, typ: Option<Box<Expression>>, guard: Option<Box<Expression>>, default_value: Option<Box<Expression>>) -> Parameter {
+    Parameter { name, typ, guard, default_value }
 }
 
 pub fn import_path(path: &str) -> Expression {

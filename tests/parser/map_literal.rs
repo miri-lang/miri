@@ -9,7 +9,7 @@ use super::utils::*;
 
 #[test]
 fn test_map_literal_assignment() {
-    parse_test("let m = {'a': 1, 'b': 2}", vec![
+    parser_test("let m = {'a': 1, 'b': 2}", vec![
         variable_statement(vec![
             let_variable("m", None, opt_expr(map(vec![
                 (string_literal("a"), int_literal_expression(1)),
@@ -22,7 +22,7 @@ fn test_map_literal_assignment() {
 #[test]
 fn test_map_index_access() {
     // This relies on the existing index expression parsing
-    parse_test("print(my_map['key'])", vec![
+    parser_test("print(my_map['key'])", vec![
         expression_statement(
             call(
                 identifier("print"),
@@ -34,7 +34,7 @@ fn test_map_index_access() {
 
 #[test]
 fn test_for_loop_over_map_literal() {
-    parse_test("
+    parser_test("
 for k, v in {'a': 1, 'b': 2}
     print(k, v)
 ", vec![
@@ -58,7 +58,7 @@ for k, v in {'a': 1, 'b': 2}
 
 #[test]
 fn test_method_call_on_map_literal() {
-    parse_test("{'a': 1}.keys()", vec![
+    parser_test("{'a': 1}.keys()", vec![
         expression_statement(
             call(
                 member(
@@ -73,7 +73,7 @@ fn test_method_call_on_map_literal() {
 
 #[test]
 fn test_map_of_lambdas() {
-    parse_test("let funcs = {'a': fn(): 1, 'b': fn(): 2}", vec![
+    parser_test("let funcs = {'a': fn(): 1, 'b': fn(): 2}", vec![
         variable_statement(vec![
             let_variable("funcs", None, opt_expr(map(vec![
                 (string_literal("a"), lambda().build_lambda(expression_statement(int_literal_expression(1)))),
@@ -85,7 +85,7 @@ fn test_map_of_lambdas() {
 
 #[test]
 fn test_empty_map() {
-    parse_test("let empty = {}", vec![
+    parser_test("let empty = {}", vec![
         variable_statement(vec![
             let_variable("empty", None, opt_expr(map(vec![])))
         ], MemberVisibility::Public)
@@ -94,7 +94,7 @@ fn test_empty_map() {
 
 #[test]
 fn test_map_with_trailing_comma() {
-    parse_test("let m = {'a': 1,}", vec![
+    parser_test("let m = {'a': 1,}", vec![
         variable_statement(vec![
             let_variable("m", None, opt_expr(map(vec![
                 (string_literal("a"), int_literal_expression(1)),
@@ -105,7 +105,7 @@ fn test_map_with_trailing_comma() {
 
 #[test]
 fn test_map_multiline() {
-    parse_test("
+    parser_test("
 let m = {
     'a'
         :
@@ -125,7 +125,7 @@ let m = {
 
 #[test]
 fn test_nested_maps_multiline() {
-    parse_test("
+    parser_test("
 let config = {
     'user': {
         'name': 'John',
@@ -148,18 +148,18 @@ let config = {
 
 #[test]
 fn test_error_unclosed_map() {
-    parse_error_test(
+    parser_error_test(
         "let m = {'a': 1",
-        SyntaxErrorKind::UnexpectedEOF
+        &SyntaxErrorKind::UnexpectedEOF
     );
 }
 
 #[test]
 fn test_error_map_missing_colon() {
     // This is invalid syntax. It's not a valid map (due to :) and not a valid set (due to missing value).
-    parse_error_test(
+    parser_error_test(
         "let m = {'a' 1}",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "}".to_string(),
             found: "int".to_string(),
         }
@@ -168,9 +168,9 @@ fn test_error_map_missing_colon() {
 
 #[test]
 fn test_error_map_missing_comma() {
-    parse_error_test(
+    parser_error_test(
         "let m = {'a': 1 'b': 2}",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "}".to_string(),
             found: "string".to_string(),
         }

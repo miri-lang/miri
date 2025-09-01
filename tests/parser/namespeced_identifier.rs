@@ -9,7 +9,7 @@ use super::utils::*;
 
 #[test]
 fn test_namespaced_function_call() {
-    parse_test("Http::new(url)", vec![
+    parser_test("Http::new(url)", vec![
         expression_statement(
             call(
                 class_identifier("Http::new"),
@@ -21,7 +21,7 @@ fn test_namespaced_function_call() {
 
 #[test]
 fn test_namespaced_enum_access() {
-    parse_test("let status = Http::Status.Ok", vec![
+    parser_test("let status = Http::Status.Ok", vec![
         variable_statement(vec![
             let_variable(
                 "status",
@@ -37,7 +37,7 @@ fn test_namespaced_enum_access() {
 
 #[test]
 fn test_namespaced_type_in_variable_declaration() {
-    parse_variable_declaration_test(
+    variable_declaration_test(
         "let client Http::Client",
         vec![
             let_variable(
@@ -52,7 +52,7 @@ fn test_namespaced_type_in_variable_declaration() {
 
 #[test]
 fn test_namespaced_type_in_function_return() {
-    parse_test("fn get_status() Http::Status: Http::Status.Ok", vec![
+    parser_test("fn get_status() Http::Status: Http::Status.Ok", vec![
         func("get_status").return_type(
             typ(Type::Custom("Http::Status".into(), None)),
         ).build(
@@ -68,12 +68,13 @@ fn test_namespaced_type_in_function_return() {
 
 #[test]
 fn test_namespaced_type_in_function_parameter() {
-    parse_test("fn set_status(s Http::Status): _status = s", vec![
+    parser_test("fn set_status(s Http::Status): _status = s", vec![
         func("set_status").params(
             vec![
                 parameter(
                     "s".into(),
                     opt_expr(typ(Type::Custom("Http::Status".into(), None))),
+                    None,
                     None
                 )
             ]
@@ -92,9 +93,9 @@ fn test_namespaced_type_in_function_parameter() {
 #[test]
 fn test_error_namespaced_variable_declaration() {
     // A variable name cannot be namespaced.
-    parse_error_test(
+    parser_error_test(
         "let Http::x = 1",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "a simple identifier".to_string(),
             found: "Http::x".to_string(),
         }
@@ -104,9 +105,9 @@ fn test_error_namespaced_variable_declaration() {
 #[test]
 fn test_error_namespaced_parameter_name() {
     // A function parameter name cannot be namespaced.
-    parse_error_test(
+    parser_error_test(
         "fn my_func(Http::p int)",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "a simple identifier".to_string(),
             found: "Http::p".to_string(),
         }
@@ -117,8 +118,8 @@ fn test_error_namespaced_parameter_name() {
 fn test_error_namespaced_assignment_target() {
     // A namespaced identifier like `Http::Status` is a value, not a variable,
     // so it cannot be the direct target of an assignment.
-    parse_error_test(
+    parser_error_test(
         "Http::Status = 'new_status'",
-        SyntaxErrorKind::InvalidLeftHandSideExpression
+        &SyntaxErrorKind::InvalidLeftHandSideExpression
     );
 }

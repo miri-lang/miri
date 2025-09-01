@@ -9,7 +9,7 @@ use super::utils::*;
 
 #[test]
 fn test_type_alias_statement() {
-    parse_test("
+    parser_test("
 type MyInt is int
 ", vec![
         type_statement(vec![
@@ -24,7 +24,7 @@ type MyInt is int
 
 #[test]
 fn test_type_alias_complex() {
-    parse_test("
+    parser_test("
 type UserMap is {string: User?}
 ", vec![
         type_statement(vec![
@@ -42,7 +42,7 @@ type UserMap is {string: User?}
 
 #[test]
 fn test_type_parameter_unconstrained() {
-    parse_test("
+    parser_test("
 type T, U
 ", vec![
         type_statement(vec![
@@ -54,7 +54,7 @@ type T, U
 
 #[test]
 fn test_type_parameter_constrained() {
-    parse_test("
+    parser_test("
 type T extends SomeClass
 ", vec![
         type_statement(vec![
@@ -69,7 +69,7 @@ type T extends SomeClass
 
 #[test]
 fn test_type_parameter_list_mixed() {
-    parse_test("
+    parser_test("
 type T, U extends Serializable, X implements IGraph
 ", vec![
         type_statement(vec![
@@ -90,9 +90,9 @@ type T, U extends Serializable, X implements IGraph
 
 #[test]
 fn test_error_type_statement_missing_keyword() {
-    parse_error_test(
+    parser_error_test(
         "type T SomeClass",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "is, implements, includes or extends".to_string(),
             found: "identifier".to_string(),
         }
@@ -101,9 +101,9 @@ fn test_error_type_statement_missing_keyword() {
 
 #[test]
 fn test_error_type_statement_trailing_comma() {
-    parse_error_test(
+    parser_error_test(
         "type T,",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "identifier".to_string(),
             found: "end of file".to_string(),
         }
@@ -112,9 +112,9 @@ fn test_error_type_statement_trailing_comma() {
 
 #[test]
 fn test_error_type_statement_missing_identifier() {
-    parse_error_test(
+    parser_error_test(
         "type is int",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "identifier".to_string(),
             found: "is".to_string(),
         }
@@ -123,7 +123,7 @@ fn test_error_type_statement_missing_identifier() {
 
 #[test]
 fn test_protected_type_alias() {
-    parse_test("protected type MyInt is int", vec![
+    parser_test("protected type MyInt is int", vec![
         type_statement(
             vec![type_declaration("MyInt", TypeDeclarationKind::Is, opt_expr(typ(Type::Int)))],
             MemberVisibility::Protected

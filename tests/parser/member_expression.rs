@@ -8,7 +8,7 @@ use super::utils::*;
 
 #[test]
 fn test_member_expression() {
-    parse_test("
+    parser_test("
 obj.prop
 ", vec![
         expression_statement(
@@ -19,7 +19,7 @@ obj.prop
 
 #[test]
 fn test_assign_to_member_expression() {
-    parse_test("
+    parser_test("
 obj.prop = 1
 ", vec![
         expression_statement(
@@ -34,7 +34,7 @@ obj.prop = 1
 
 #[test]
 fn test_assign_to_index_expression() {
-    parse_test("
+    parser_test("
 obj['prop'] = 1
 ", vec![
         expression_statement(
@@ -49,7 +49,7 @@ obj['prop'] = 1
 
 #[test]
 fn test_assign_to_chained_member_expression() {
-    parse_test("
+    parser_test("
 obj.a.b['prop'][0] = 1.0
 ", vec![
         expression_statement(
@@ -77,7 +77,7 @@ obj.a.b['prop'][0] = 1.0
 #[test]
 fn test_chained_calls_and_member_access() {
     // `a.b(c).d` should parse as `((a.b)(c)).d`
-    parse_test("a.b(c).d", vec![
+    parser_test("a.b(c).d", vec![
         expression_statement(
             member(
                 call(

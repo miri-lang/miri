@@ -9,7 +9,7 @@ use super::utils::*;
 
 #[test]
 fn test_continue_in_while_loop() {
-    parse_test("
+    parser_test("
 while x > 0
     if x == 1
         continue
@@ -37,7 +37,7 @@ while x > 0
 
 #[test]
 fn test_continue_in_nested_loop() {
-    parse_test("
+    parser_test("
 while a
     while b
         continue // continues inner loop only
@@ -56,9 +56,9 @@ while a
 
 #[test]
 fn test_error_continue_with_value() {
-    parse_error_test(
+    parser_error_test(
         "while true: continue false",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "an end of statement".to_string(),
             found: "false".to_string(),
         }
@@ -67,5 +67,5 @@ fn test_error_continue_with_value() {
 
 #[test]
 fn test_parse_continue_outside_loop() {
-    parse_test("continue", vec![continue_statement()]);
+    parser_test("continue", vec![continue_statement()]);
 }

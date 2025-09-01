@@ -9,7 +9,7 @@ use super::utils::*;
 
 #[test]
 fn test_parse_assignment_expression() {
-    parse_assignment_expression_test(
+    assignment_expression_test(
         "x = 123", 
         lhs_identifier("x".into()), 
         AssignmentOp::Assign, 
@@ -19,7 +19,7 @@ fn test_parse_assignment_expression() {
 
 #[test]
 fn test_parse_chained_assignment_expression() {
-    parse_assignment_expression_test(
+    assignment_expression_test(
         "x = y = 123", 
         lhs_identifier("x".into()), 
         AssignmentOp::Assign, 
@@ -33,7 +33,7 @@ fn test_parse_chained_assignment_expression() {
 
 #[test]
 fn test_parse_increment_assignment_expression() {
-    parse_assignment_expression_test(
+    assignment_expression_test(
         "x += 100", 
         lhs_identifier("x".into()), 
         AssignmentOp::AssignAdd,
@@ -43,7 +43,7 @@ fn test_parse_increment_assignment_expression() {
 
 #[test]
 fn test_parse_decrement_assignment_expression() {
-    parse_assignment_expression_test(
+    assignment_expression_test(
         "x -= 200", 
         lhs_identifier("x".into()), 
         AssignmentOp::AssignSub,
@@ -53,7 +53,7 @@ fn test_parse_decrement_assignment_expression() {
 
 #[test]
 fn test_parse_multiplication_assignment_expression() {
-    parse_assignment_expression_test(
+    assignment_expression_test(
         "x *= 10", 
         lhs_identifier("x".into()), 
         AssignmentOp::AssignMul,
@@ -63,7 +63,7 @@ fn test_parse_multiplication_assignment_expression() {
 
 #[test]
 fn test_parse_division_assignment_expression() {
-    parse_assignment_expression_test(
+    assignment_expression_test(
         "x /= 10", 
         lhs_identifier("x".into()), 
         AssignmentOp::AssignDiv,
@@ -73,7 +73,7 @@ fn test_parse_division_assignment_expression() {
 
 #[test]
 fn test_parse_modulo_assignment_expression() {
-    parse_assignment_expression_test(
+    assignment_expression_test(
         "x %= 10", 
         lhs_identifier("x".into()), 
         AssignmentOp::AssignMod,
@@ -83,7 +83,7 @@ fn test_parse_modulo_assignment_expression() {
 
 #[test]
 fn test_parse_increment_chained_assignment_expression() {
-    parse_assignment_expression_test(
+    assignment_expression_test(
         "x = y = z += 100",
         lhs_identifier("x".into()),
         AssignmentOp::Assign,
@@ -101,7 +101,26 @@ fn test_parse_increment_chained_assignment_expression() {
 
 #[test]
 fn test_parse_invalid_assignment_target() {
-    // The left-hand side of an assignment must be a valid target (e.g., identifier).
-    // An expression like `x + 1` is not a valid target.
-    parse_error_test("x + 1 = 10", SyntaxErrorKind::InvalidLeftHandSideExpression);
+    run_parser_error_tests(
+        vec![
+        "x + 1 = 10",
+        "get_x() = 10",
+        "123 = 10",
+        r#""hello" = 10"#,
+        "await x = 5"
+    ], &SyntaxErrorKind::InvalidLeftHandSideExpression);
+}
+
+#[test]
+fn test_assignment_precedence_with_binary_expression() {
+    assignment_expression_test(
+        "x = 1 + 2",
+        lhs_identifier("x".into()),
+        AssignmentOp::Assign,
+        binary(
+            int_literal_expression(1),
+            BinaryOp::Add,
+            int_literal_expression(2)
+        )
+    );
 }

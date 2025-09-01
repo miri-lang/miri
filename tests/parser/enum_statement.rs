@@ -9,7 +9,7 @@ use super::utils::*;
 
 #[test]
 fn test_inline_enum_simple_values() {
-    parse_test("
+    parser_test("
 enum Colors: Red, Green, Blue
 ", vec![
         enum_statement(
@@ -26,7 +26,7 @@ enum Colors: Red, Green, Blue
 
 #[test]
 fn test_block_enum_simple_values() {
-    parse_test("
+    parser_test("
 enum Colors
     Red
     Green
@@ -46,7 +46,7 @@ enum Colors
 
 #[test]
 fn test_inline_enum_with_typed_values() {
-    parse_test("
+    parser_test("
 enum Message: Write(string), Move(int, int)
 ", vec![
         enum_statement(
@@ -62,7 +62,7 @@ enum Message: Write(string), Move(int, int)
 
 #[test]
 fn test_block_enum_with_mixed_values() {
-    parse_test("
+    parser_test("
 enum Event
     Quit
     KeyPress(int)
@@ -82,7 +82,7 @@ enum Event
 
 #[test]
 fn test_enum_with_single_value() {
-    parse_test("enum Status: Ok", vec![
+    parser_test("enum Status: Ok", vec![
         enum_statement(
             identifier("Status"),
             vec![enum_value("Ok", vec![])],
@@ -93,7 +93,7 @@ fn test_enum_with_single_value() {
 
 #[test]
 fn test_enum_with_complex_value_types() {
-    parse_test("
+    parser_test("
 enum Data: Point([int]?), Config({string: bool})
 ", vec![
         enum_statement(
@@ -109,12 +109,12 @@ enum Data: Point([int]?), Config({string: bool})
 
 #[test]
 fn test_empty_block_enum() {
-    parse_error_test("
+    parser_error_test("
 enum EmptyEnum
     // No values
 
 let x = 0
-", SyntaxErrorKind::UnexpectedToken {
+", &SyntaxErrorKind::UnexpectedToken {
         expected: "an indentation for block enums".to_string(),
         found: "let".to_string()
     });
@@ -122,9 +122,9 @@ let x = 0
 
 #[test]
 fn test_error_enum_missing_name() {
-    parse_error_test(
+    parser_error_test(
         "enum: Red, Blue",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "identifier".to_string(),
             found: ":".to_string(),
         }
@@ -133,9 +133,9 @@ fn test_error_enum_missing_name() {
 
 #[test]
 fn test_error_enum_missing_colon_or_indent() {
-    parse_error_test(
+    parser_error_test(
         "enum Colors Red",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "either a colon for inline enums or an indentation for block enums".to_string(),
             found: "identifier".to_string(),
         }
@@ -144,9 +144,9 @@ fn test_error_enum_missing_colon_or_indent() {
 
 #[test]
 fn test_error_enum_empty_inline() {
-    parse_error_test(
+    parser_error_test(
         "enum Colors:",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "identifier".to_string(),
             found: "end of file".to_string(),
         }
@@ -155,21 +155,75 @@ fn test_error_enum_empty_inline() {
 
 #[test]
 fn test_error_enum_malformed_value_type() {
-    parse_error_test(
+    parser_error_test(
         "enum E: V(int,)",
-        SyntaxErrorKind::InvalidTypeDeclaration {
+        &SyntaxErrorKind::InvalidTypeDeclaration {
             expected: "Enum value type".to_string(),
         }
     );
 }
 
 #[test]
-fn test_public_enum() {
-    parse_test("public enum Color: Red", vec![
+fn test_enum_visibility_modifiers() {
+    parser_test("public enum Color: Red", vec![
         enum_statement(
             identifier("Color"),
             vec![enum_value("Red", vec![])],
             MemberVisibility::Public
         )
     ]);
+
+    parser_test("protected enum E: V", vec![
+        enum_statement(
+            identifier("E"),
+            vec![enum_value("V", vec![])],
+            MemberVisibility::Protected
+        )
+    ]);
+    parser_test("private enum E: V", vec![
+        enum_statement(
+            identifier("E"),
+            vec![enum_value("V", vec![])],
+            MemberVisibility::Private
+        )
+    ]);
 }
+
+#[test]
+fn test_enum_with_keyword_names() {
+    parser_error_test("enum E: if, else, match", &SyntaxErrorKind::UnexpectedToken {
+        expected: "identifier".to_string(),
+        found: "if".to_string(),
+    });
+}
+
+#[test]
+fn test_error_on_empty_block_enum() {
+    parser_error_test(
+        "enum Empty: ",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "identifier".to_string(),
+            found: "end of file".to_string(),
+        }
+    );
+
+    parser_error_test(
+        "enum Empty\n    \n",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "an indentation for block enums".to_string(),
+            found: "end of file".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_error_on_trailing_comma_in_inline_enum() {
+    parser_error_test(
+        "enum E: A, B,",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "identifier".to_string(),
+            found: "end of file".to_string(),
+        }
+    );
+}
+

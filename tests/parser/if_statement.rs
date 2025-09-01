@@ -9,7 +9,7 @@ use super::utils::*;
 
 #[test]
 fn test_parse_if_statement() {
-    parse_if_test("
+    combined_if_unless_test("
 if x
     x = 10
 else
@@ -40,7 +40,7 @@ else
 
 #[test]
 fn test_parse_if_statement_with_condition() {
-    parse_if_test("
+    combined_if_unless_test("
 if x > 5
     x = 10
 else
@@ -60,7 +60,7 @@ else
 
 #[test]
 fn test_parse_if_block_else_inline() {
-    parse_if_test("
+    combined_if_unless_test("
 if x
     x = 10
 else: x = 20
@@ -88,7 +88,7 @@ else: x = 20
 
 #[test]
 fn test_parse_if_inline_else_block() {
-    parse_if_test("
+    combined_if_unless_test("
 if x: x = 10
 else
     x = 20
@@ -116,7 +116,7 @@ else
 
 #[test]
 fn test_parse_if_statement_no_else() {
-    parse_if_test("
+    combined_if_unless_test("
 if x
     x = 10
 ",
@@ -136,7 +136,7 @@ if x
 
 #[test]
 fn test_parse_if_statement_nested() {
-    parse_if_statement_test("
+    if_statement_test("
 if x
     if y
         x = 10
@@ -214,7 +214,7 @@ else
 
 #[test]
 fn test_parse_if_statement_inline() {
-    parse_if_test("
+    combined_if_unless_test("
 if x: x = 10 else: x = 20
 ",
     identifier("x".into()),
@@ -239,7 +239,7 @@ if x: x = 10 else: x = 20
 
 #[test]
 fn test_parse_if_mixed_inline() {
-    parse_if_test("
+    combined_if_unless_test("
 if x: x = 10
 else: x = 20
 ",
@@ -265,7 +265,7 @@ else: x = 20
 
 #[test]
 fn test_parse_if_statement_inline_nested() {
-    parse_if_statement_test("
+    if_statement_test("
 // This is crazy, but should work
 if x: if y: x = 10 else: if z: x = 20 else: x = 30
 ",
@@ -308,7 +308,7 @@ if x: if y: x = 10 else: if z: x = 20 else: x = 30
 
 #[test]
 fn test_parse_if_statement_inline_no_else() {
-    parse_if_test("
+    combined_if_unless_test("
 if x: x = 10
 ",
     identifier("x".into()),
@@ -325,7 +325,7 @@ if x: x = 10
 
 #[test]
 fn test_parse_if_statement_precedence() {
-    parse_if_test("
+    combined_if_unless_test("
 if x + 10 <= 20: x = 10
 ",
     binary(
@@ -350,7 +350,7 @@ if x + 10 <= 20: x = 10
 
 #[test]
 fn test_parse_if_else_if_chain() {
-    parse_if_statement_test("
+    if_statement_test("
 if x > 10
     y = 1
 else if x > 5
@@ -403,7 +403,7 @@ else
 
 #[test]
 fn test_parse_if_with_variable_declaration() {
-    parse_if_test("
+    combined_if_unless_test("
 if x
     let y = 10
 else
@@ -425,7 +425,7 @@ else
 
 #[test]
 fn test_parse_if_with_complex_logical_condition() {
-    parse_if_test("
+    combined_if_unless_test("
 if (x > 10 and y < 5) or z == 1
     x = 1
 ",
@@ -465,7 +465,7 @@ if (x > 10 and y < 5) or z == 1
 
 #[test]
 fn test_parse_if_with_empty_block() {
-    parse_if_test("
+    combined_if_unless_test("
 if x
     // empty then
 else
@@ -485,7 +485,7 @@ else
 
 #[test]
 fn test_parse_if_with_empty_block_no_else() {
-    parse_if_test("
+    combined_if_unless_test("
 if x
     // TODO
 ",
@@ -498,7 +498,7 @@ if x
 #[test]
 fn test_comment_in_empty_block() {
     // An indented block containing only a comment should parse as an empty block.
-    parse_test("
+    parser_test("
 if x
     // This block is empty
 let y = 1
@@ -518,9 +518,9 @@ let y = 1
 fn test_error_if_statement_as_condition() {
     // An `if` statement is not an expression and cannot be a condition.
     // The parser should expect an expression and fail on the block/inline body.
-    parse_error_test(
+    parser_error_test(
         "if if x: 1",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "an expression".to_string(),
             found: "if".to_string(),
         }
@@ -529,7 +529,7 @@ fn test_error_if_statement_as_condition() {
 
 #[test]
 fn test_parse_if_nested_empty() {
-    parse_if_statement_test("
+    if_statement_test("
 if x
     if y
         // TODO
@@ -549,7 +549,7 @@ if x
 
 #[test]
 fn test_parse_if_with_empty_else_block() {
-    parse_if_test("
+    combined_if_unless_test("
 if x
     x = 1
 else
@@ -571,7 +571,7 @@ else
 
 #[test]
 fn test_parse_if_with_empty_else_block_with_followup() {
-    parse_test("
+    parser_test("
 if x
     x = 1
 else
@@ -605,7 +605,7 @@ x = 2
 
 #[test]
 fn test_parse_if_with_empty_inline_else_block_with_followup() {
-    parse_test("
+    parser_test("
 if x
     x = 1
 else: // empty else
@@ -639,11 +639,67 @@ x = 2
 #[test]
 fn test_error_dangling_else() {
     // An `else` without a preceding `if` is a syntax error.
-    parse_error_test(
+    parser_error_test(
         "else: print('error')",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "an expression".to_string(), // Or a more specific expectation
             found: "else".to_string(),
         }
+    );
+}
+
+#[test]
+fn test_parse_unless_else_if_chain() {
+    parser_test("
+unless x > 10
+    y = 1
+else if x > 5
+    y = 2
+else
+    y = 3
+",
+        vec![
+            unless_statement(
+                binary(
+                    identifier("x"),
+                    BinaryOp::GreaterThan,
+                    int_literal_expression(10)
+                ),
+                block(vec![
+                    expression_statement(assign(
+                        lhs_identifier("y"),
+                        AssignmentOp::Assign,
+                        int_literal_expression(1)
+                    ))
+                ]),
+                Some(
+                    if_statement(
+                        binary(
+                            identifier("x"),
+                            BinaryOp::GreaterThan,
+                            int_literal_expression(5)
+                        ),
+                        block(vec![
+                            expression_statement(
+                                assign(
+                                    lhs_identifier("y"),
+                                    AssignmentOp::Assign,
+                                    int_literal_expression(2)
+                                )
+                            )
+                        ]),
+                        Some(block(vec![
+                            expression_statement(
+                                assign(
+                                    lhs_identifier("y"),
+                                    AssignmentOp::Assign,
+                                    int_literal_expression(3)
+                                )
+                            )
+                        ])),
+                    )
+                )
+            )
+        ]
     );
 }

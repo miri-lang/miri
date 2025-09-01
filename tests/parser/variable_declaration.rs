@@ -9,7 +9,7 @@ use super::utils::*;
 
 #[test]
 fn test_parse_variable_declaration() {
-    parse_variable_declaration_test(
+    variable_declaration_test(
         "let x",
         vec![
             let_variable(
@@ -24,7 +24,7 @@ fn test_parse_variable_declaration() {
 
 #[test]
 fn test_parse_variable_declaration_with_initializer() {
-    parse_variable_declaration_test(
+    variable_declaration_test(
         "let x = 5",
         vec![
             let_variable(
@@ -39,7 +39,7 @@ fn test_parse_variable_declaration_with_initializer() {
 
 #[test]
 fn test_parse_typed_variable_declaration() {
-    parse_variable_declaration_test(
+    variable_declaration_test(
         "let x float",
         vec![
             let_variable(
@@ -54,7 +54,7 @@ fn test_parse_typed_variable_declaration() {
 
 #[test]
 fn test_parse_typed_variable_declaration_with_initializer() {
-    parse_variable_declaration_test(
+    variable_declaration_test(
         "let x int = 5",
         vec![
             let_variable(
@@ -70,7 +70,7 @@ fn test_parse_typed_variable_declaration_with_initializer() {
 #[test]
 fn test_parse_invalid_variable_declaration() {
     // A literal cannot be a variable name.
-    parse_error_test("let 123 = 456", SyntaxErrorKind::UnexpectedToken {
+    parser_error_test("let 123 = 456", &SyntaxErrorKind::UnexpectedToken {
         expected: "identifier".into(),
         found: "int".into(),
     });
@@ -78,7 +78,7 @@ fn test_parse_invalid_variable_declaration() {
 
 #[test]
 fn test_parse_mutable_variable_declaration() {
-    parse_variable_declaration_test(
+    variable_declaration_test(
         "var text = \"Hello, World!\"",
         vec![
             var("text", None, opt_expr(string_literal("Hello, World!")))
@@ -89,7 +89,7 @@ fn test_parse_mutable_variable_declaration() {
 
 #[test]
 fn test_parse_multiple_variable_declaration_no_initializer() {
-    parse_variable_declaration_test(
+    variable_declaration_test(
         "let x, y, z",
         vec![
             let_variable("x", None, None),
@@ -102,7 +102,7 @@ fn test_parse_multiple_variable_declaration_no_initializer() {
 
 #[test]
 fn test_parse_multiple_variable_declaration_mixed_initializer() {
-    parse_variable_declaration_test(
+    variable_declaration_test(
         "let x, y = 10, z",
         vec![
             let_variable("x", None, None),
@@ -115,7 +115,7 @@ fn test_parse_multiple_variable_declaration_mixed_initializer() {
 
 #[test]
 fn test_parse_variable_declaration_and_assignment() {
-    parse_test("
+    parser_test("
 var bar = 100
 let foo = bar = 200
 ",
@@ -134,7 +134,7 @@ let foo = bar = 200
 
 #[test]
 fn test_public_variable() {
-    parse_variable_declaration_test(
+    variable_declaration_test(
         "public let x = 1",
         vec![let_variable("x", None, opt_expr(int_literal_expression(1)))],
         MemberVisibility::Public
@@ -143,7 +143,7 @@ fn test_public_variable() {
 
 #[test]
 fn test_private_variable() {
-    parse_variable_declaration_test(
+    variable_declaration_test(
         "private var y",
         vec![var("y", None, None)],
         MemberVisibility::Private
@@ -153,9 +153,9 @@ fn test_private_variable() {
 #[test]
 fn test_error_modifier_order_variable() {
     // This is not a valid statement start.
-    parse_error_test(
+    parser_error_test(
         "let public x = 1",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "identifier".to_string(),
             found: "public".to_string(),
         }

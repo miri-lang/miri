@@ -8,6 +8,6 @@ use super::utils::*;
 
 #[test]
 fn test_parse_symbol_literal() {
-    parse_literal_test(":my_fancy_symbol", symbol("my_fancy_symbol"));
+    literal_test(":my_fancy_symbol", symbol("my_fancy_symbol"));
 }
 

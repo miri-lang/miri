@@ -8,14 +8,14 @@ use super::utils::*;
 
 #[test]
 fn test_implements_statement_single() {
-    parse_test("implements ISerializable", vec![
+    parser_test("implements ISerializable", vec![
         implements(vec![identifier("ISerializable")])
     ]);
 }
 
 #[test]
 fn test_implements_statement_multiple() {
-    parse_test("implements ISerializable, IClickable, IView", vec![
+    parser_test("implements ISerializable, IClickable, IView", vec![
         implements(vec![
             identifier("ISerializable"),
             identifier("IClickable"),
@@ -26,9 +26,9 @@ fn test_implements_statement_multiple() {
 
 #[test]
 fn test_error_implements_trailing_comma() {
-    parse_error_test(
+    parser_error_test(
         "implements ISerializable,",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "identifier".to_string(),
             found: "end of file".to_string(),
         }

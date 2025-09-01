@@ -8,14 +8,14 @@ use super::utils::*;
 
 #[test]
 fn test_includes_statement_single() {
-    parse_test("includes Enumerable", vec![
+    parser_test("includes Enumerable", vec![
         includes(vec![identifier("Enumerable")])
     ]);
 }
 
 #[test]
 fn test_includes_statement_multiple() {
-    parse_test("includes Enumerable, Utils", vec![
+    parser_test("includes Enumerable, Utils", vec![
         includes(vec![
             identifier("Enumerable"),
             identifier("Utils")
@@ -25,9 +25,9 @@ fn test_includes_statement_multiple() {
 
 #[test]
 fn test_error_includes_missing_identifier() {
-    parse_error_test(
+    parser_error_test(
         "includes",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "identifier".to_string(),
             found: "end of file".to_string(),
         }

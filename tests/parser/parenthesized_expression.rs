@@ -8,9 +8,9 @@ use super::utils::*;
 #[test]
 fn test_parse_mismatched_parentheses() {
     // Mismatched brackets should be a syntax error.
-    parse_error_test(
+    parser_error_test(
         "(5 + 2]", 
-        SyntaxErrorKind::UnexpectedToken { 
+        &SyntaxErrorKind::UnexpectedToken { 
             expected: ")".into(),
             found: "]".into() 
         }

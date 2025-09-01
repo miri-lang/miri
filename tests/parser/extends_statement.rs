@@ -8,7 +8,7 @@ use super::utils::*;
 
 #[test]
 fn test_extends_statement() {
-    parse_test("extends BaseClass", vec![
+    parser_test("extends BaseClass", vec![
         extends(identifier("BaseClass"))
     ]);
 }
@@ -16,15 +16,18 @@ fn test_extends_statement() {
 #[test]
 fn test_extends_statement_namespaced() {
     // This is not allowed, because you can't define a class within a class.
-    parse_error_test("extends Core::Base", SyntaxErrorKind::InvalidInheritanceIdentifier);
+    parser_error_test(
+        "extends Core::Base",
+        &SyntaxErrorKind::InvalidInheritanceIdentifier
+    );
 }
 
 #[test]
 fn test_error_extends_multiple_classes() {
     // `extends` only supports single inheritance.
-    parse_error_test(
+    parser_error_test(
         "extends Base, Other",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "an end of statement".to_string(),
             found: ",".to_string(),
         }
@@ -33,9 +36,9 @@ fn test_error_extends_multiple_classes() {
 
 #[test]
 fn test_error_extends_with_literal() {
-    parse_error_test(
+    parser_error_test(
         "extends 123",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "identifier".to_string(),
             found: "int".to_string(),
         }
