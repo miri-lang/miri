@@ -7,12 +7,12 @@ use super::utils::*;
 
 #[test]
 fn test_parse_empty_program() {
-    parse_test("", empty_program());
+    parser_test("", empty_program());
 }
 
 #[test]
 fn test_parse_program_with_only_comments_and_whitespace() {
-    parse_test("
+    parser_test("
 // This is a comment
     // This is an indented comment
 
@@ -22,7 +22,7 @@ fn test_parse_program_with_only_comments_and_whitespace() {
 
 #[test]
 fn test_parse_simple_expressions() {
-    parse_test("
+    parser_test("
 123
 'Hello World'
 ", vec![

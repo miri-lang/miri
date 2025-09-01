@@ -9,7 +9,7 @@ use super::utils::*;
 
 #[test]
 fn test_inline_struct_simple_members() {
-    parse_test("
+    parser_test("
 struct Point: x int, y int
 ", vec![
         struct_statement(
@@ -25,7 +25,7 @@ struct Point: x int, y int
 
 #[test]
 fn test_block_struct_simple_members() {
-    parse_test("
+    parser_test("
 struct Point
     x int
     y int
@@ -43,7 +43,7 @@ struct Point
 
 #[test]
 fn test_struct_with_complex_member_types() {
-    parse_test("
+    parser_test("
 struct UserProfile
     id string
     aliases [string]?
@@ -63,7 +63,7 @@ struct UserProfile
 
 #[test]
 fn test_struct_with_single_member() {
-    parse_test("struct Wrapper: value float", vec![
+    parser_test("struct Wrapper: value float", vec![
         struct_statement(
             identifier("Wrapper"),
             vec![struct_member("value", typ(Type::Float))],
@@ -74,10 +74,10 @@ fn test_struct_with_single_member() {
 
 #[test]
 fn test_empty_block_struct() {
-    parse_error_test("
+    parser_error_test("
 struct Empty
     // This struct has no members
-", SyntaxErrorKind::UnexpectedToken {
+", &SyntaxErrorKind::UnexpectedToken {
         expected: "an indentation for block structs".to_string(),
         found: "end of file".to_string(),
     });
@@ -85,9 +85,9 @@ struct Empty
 
 #[test]
 fn test_error_struct_missing_name() {
-    parse_error_test(
+    parser_error_test(
         "struct: x int",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "identifier".to_string(),
             found: ":".to_string(),
         }
@@ -96,9 +96,9 @@ fn test_error_struct_missing_name() {
 
 #[test]
 fn test_error_struct_missing_colon_or_indent() {
-    parse_error_test(
+    parser_error_test(
         "struct Point x int",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "either a colon for inline structs or an indentation for block structs".to_string(),
             found: "identifier".to_string(),
         }
@@ -107,17 +107,17 @@ fn test_error_struct_missing_colon_or_indent() {
 
 #[test]
 fn test_error_struct_member_missing_type() {
-    parse_error_test(
+    parser_error_test(
         "struct Point: x, y int",
-        SyntaxErrorKind::MissingStructMemberType
+        &SyntaxErrorKind::MissingStructMemberType
     );
 }
 
 #[test]
 fn test_error_struct_trailing_comma_inline() {
-    parse_error_test(
+    parser_error_test(
         "struct Point: x int,",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "identifier".to_string(),
             found: "end of file".to_string(),
         }
@@ -126,7 +126,7 @@ fn test_error_struct_trailing_comma_inline() {
 
 #[test]
 fn test_private_struct() {
-    parse_test("private struct Point: x int", vec![
+    parser_test("private struct Point: x int", vec![
         struct_statement(
             identifier("Point"),
             vec![struct_member("x", typ(Type::Int))],

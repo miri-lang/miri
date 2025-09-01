@@ -41,6 +41,7 @@ pub struct Parameter {
     pub name: String,
     pub typ: Option<Box<Expression>>, // Type can be specified, e.g., "i32", "String"
     pub guard: Option<Box<Expression>>, // Optional guard expression
+    pub default_value: Option<Box<Expression>>, // Optional default value
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -112,7 +113,7 @@ pub enum Expression {
 
     Assignment(Box<LeftHandSideExpression>, AssignmentOp, Box<Expression>),
 
-    Conditional(Box<Expression>, Box<Expression>, Option<Box<Expression>>, IfStatementType), // condition, then_expr, else_expr
+    Conditional(Box<Expression>, Box<Expression>, Option<Box<Expression>>, IfStatementType), // then_expr, condition, else_expr
 
     Range(Box<Expression>, Option<Box<Expression>>, RangeExpressionType), // start, end, range_type
 
@@ -149,30 +150,6 @@ pub enum Expression {
     Match(Box<Expression>, Vec<MatchBranch>), // value, branches
 
     FormattedString(Vec<Expression>), // "hello #{name}"
-
-    // // Operators
-    // Binary(Box<Expr>, BinaryOp, Box<Expr>),
-    // Unary(UnaryOp, Box<Expr>),
-    
-    // // Collections
-    // Array(Vec<Expr>),
-    // Dict(Vec<(Expr, Expr)>),
-    
-    // // Control flow expressions
-    // Lambda(Vec<Parameter>, Option<TypeExpr>, Box<Expr>),
-    // Block(Block),
-    // IfExpr(Box<Expr>, Box<Expr>, Option<Box<Expr>>), // condition, then_expr, else_expr
-    
-    // // Concurrency and parallelism
-    // Async(Box<Expr>),
-    // Await(Box<Expr>),
-    // Spawn(Box<Expr>),
-    // Parallel(Box<Expr>),
-    // Send(Box<Expr>, String, Vec<Expr>), // actor, method, args
-    
-    // // Other
-    // Symbol(String),
-    // Try(Box<Expr>), // expr?
 }
 
 /// Represents the type of a variable
@@ -353,33 +330,6 @@ pub enum Pattern {
     Regex(RegexToken),
     Default,
 }
-
-// /// Represents a statement in the Miri language
-// #[derive(Debug, PartialEq)]
-// pub enum Stmt {
-//     // Variable declarations and assignments
-//     VarDecl(String, Option<TypeExpr>, Option<Box<Expr>>, bool), // name, type, initializer, mutable
-//     Assign(Box<Expr>, Box<Expr>), // target, value
-    
-//     // Function-related
-//     FuncDecl(String, Vec<Parameter>, Option<TypeExpr>, Block), // name, parameters, return type, body
-//     Return(Option<Box<Expr>>),
-    
-//     // Control flow
-//     If(Box<Expr>, Block, Option<Block>), // condition, then_block, else_block
-//     While(Box<Expr>, Block),
-//     DoWhile(Block, Box<Expr>),
-//     For(String, Box<Expr>, Block), // variable, iterable, body
-//     Match(Box<Expr>, Vec<MatchArm>), // value, arms
-    
-//     // Module system
-//     Use(Vec<String>, Option<String>, Option<Vec<String>>), // path, alias, selective imports
-    
-//     // Other statements
-//     Block(Block),
-//     Expr(Box<Expr>),
-// }
-
 
 
 pub struct AstFactory;

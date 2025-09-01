@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
+use miri::ast::opt_expr;
+use miri::ast::AssignmentOp;
+use miri::ast::BinaryOp;
+use miri::syntax_error::SyntaxErrorKind;
+
 use super::ast_builder::*;
 use super::utils::*;
 
 
 #[test]
 fn test_forever_loop() {
-    parse_test("
+    parser_test("
 forever
     x
 ", vec![
@@ -21,7 +26,7 @@ forever
 
 #[test]
 fn test_forever_loop_with_comment() {
-    parse_test("
+    parser_test("
 forever // This is an infinite loop
     x
 ", vec![
@@ -35,7 +40,7 @@ forever // This is an infinite loop
 
 #[test]
 fn test_forever_loop_with_empty_body_and_comment() {
-    parse_test("
+    parser_test("
 forever
     // This is an infinite loop
 ", vec![
@@ -47,7 +52,7 @@ forever
 
 #[test]
 fn test_forever_loop_nested_with_empty_body_and_comment() {
-    parse_test("
+    parser_test("
 forever
     forever
         // This is an infinite loop
@@ -64,7 +69,7 @@ forever
 
 #[test]
 fn test_forever_loop_inline() {
-    parse_test("
+    parser_test("
 forever: x
 ", vec![
         forever_statement(
@@ -75,7 +80,7 @@ forever: x
 
 #[test]
 fn test_forever_loop_inline_with_empty_body_and_comment() {
-    parse_test("
+    parser_test("
 forever: // This is an infinite loop
 ", vec![
         forever_statement(
@@ -86,7 +91,7 @@ forever: // This is an infinite loop
 
 #[test]
 fn test_forever_loop_inline_nested_with_empty_body_and_comment() {
-    parse_test("
+    parser_test("
 forever: forever: // This is an infinite loop
 ", vec![
         forever_statement(
@@ -95,4 +100,62 @@ forever: forever: // This is an infinite loop
             )
         )
     ]);
+}
+
+#[test]
+fn test_forever_loop_with_break_and_continue() {
+    parser_test("
+forever
+    x += 1
+    if x > 10: continue
+    if x == 5: break
+", vec![
+        forever_statement(
+            block(vec![
+                expression_statement(
+                    assign(
+                        lhs_identifier("x"),
+                        AssignmentOp::AssignAdd,
+                        int_literal_expression(1)
+                    )
+                ),
+                if_statement(
+                    binary(identifier("x"), BinaryOp::GreaterThan, int_literal_expression(10)),
+                    continue_statement(),
+                    None
+                ),
+                if_statement(
+                    binary(identifier("x"), BinaryOp::Equal, int_literal_expression(5)),
+                    break_statement(),
+                    None
+                )
+            ])
+        )
+    ]);
+}
+
+#[test]
+fn test_forever_loop_with_return() {
+    parser_test("
+forever
+    if condition(): return 42
+", vec![
+        forever_statement(
+            block(vec![
+                if_statement(
+                    call(identifier("condition"), vec![]),
+                    return_statement(opt_expr(int_literal_expression(42))),
+                    None
+                )
+            ])
+        )
+    ]);
+}
+
+#[test]
+fn test_error_on_forever_without_body() {
+    parser_error_test("forever x", &SyntaxErrorKind::UnexpectedToken {
+        expected: "a colon or an expression end".to_string(),
+        found: "identifier".to_string(),
+    });
 }

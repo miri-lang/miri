@@ -8,7 +8,7 @@ use super::utils::*;
 
 #[test]
 fn test_use_statement_local_module() {
-    parse_test("
+    parser_test("
 // Local module 
 use Calc
 ", vec![
@@ -21,7 +21,7 @@ use Calc
 
 #[test]
 fn test_use_statement_multiple_segments() {
-    parse_test("
+    parser_test("
 // Local module with path
 use MyProject.Path.SomeModule
 ", vec![
@@ -34,7 +34,7 @@ use MyProject.Path.SomeModule
 
 #[test]
 fn test_use_statement_alias() {
-    parse_test("
+    parser_test("
 // Module with path
 use System.Math as M
 ", vec![

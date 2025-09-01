@@ -10,7 +10,7 @@ use super::utils::*;
 
 #[test]
 fn test_match_expression_block() {
-    parse_test("
+    parser_test("
 match x
     1: print('one')
     2
@@ -44,7 +44,7 @@ match x
 
 #[test]
 fn test_match_expression_fully_inline() {
-    parse_test(
+    parser_test(
         "match x: 1: 'one', 2: 'two', default: 'other'",
         vec![
             expression_statement(
@@ -75,7 +75,7 @@ fn test_match_expression_fully_inline() {
 
 #[test]
 fn test_match_with_guard() {
-    parse_test("
+    parser_test("
 match num
     x if x > 10: 'large'
     x: 'small'
@@ -102,7 +102,7 @@ match num
 
 #[test]
 fn test_match_with_multiple_patterns() {
-    parse_test("
+    parser_test("
 match code
     200 | 201 | 204: 'Success'
     404: 'Not Found'
@@ -133,7 +133,7 @@ match code
 
 #[test]
 fn test_match_with_tuple_pattern() {
-    parse_test("
+    parser_test("
 match point
     (0, 0): 'origin'
     (x, 0): 'on x-axis'
@@ -160,7 +160,7 @@ match point
 
 #[test]
 fn test_match_with_regex_pattern() {
-    parse_test(r#"
+    parser_test(r#"
 match text
     re"^\d+$": 'digits only'
     re"^[a-z]+$": 'lowercase only'
@@ -205,10 +205,10 @@ match text
 
 #[test]
 fn test_error_match_missing_body() {
-parse_error_test("
+parser_error_test("
 match x
     1
-", SyntaxErrorKind::UnexpectedToken {
+", &SyntaxErrorKind::UnexpectedToken {
         expected: "a colon for an inline body or an indented block for a block body".to_string(),
         found: "end of expression".to_string()
     });
@@ -217,10 +217,10 @@ match x
 #[test]
 fn test_error_match_invalid_guard() {
     // Guard must be a valid expression, `1 2` is not.
-    parse_error_test("
+    parser_error_test("
 match x
     y if 1 2: 'invalid'
-", SyntaxErrorKind::UnexpectedToken {
+", &SyntaxErrorKind::UnexpectedToken {
     expected: "a colon for an inline body or an indented block for a block body".to_string(),
     found: "int".to_string()
 });
@@ -228,27 +228,27 @@ match x
 
 #[test]
 fn test_error_duplicate_patterns() {
-    parse_error_test("
+    parser_error_test("
 match x
     1: 'one'
     1: 'duplicate'
-", SyntaxErrorKind::DuplicateMatchPattern
+", &SyntaxErrorKind::DuplicateMatchPattern
     );
 }
 
 #[test]
 fn test_error_duplicate_patterns_with_guard() {
-    parse_error_test("
+    parser_error_test("
 match x
     x if x > 0: 'one'
     x if x > 0: 'duplicate'
-", SyntaxErrorKind::DuplicateMatchPattern
+", &SyntaxErrorKind::DuplicateMatchPattern
     );
 }
 
 #[test]
 fn test_duplicate_patterns_with_different_guard() {
-    parse_test("
+    parser_test("
 match x
     x if x > 0: 'one'
     x if x < 0: 'no duplicate'

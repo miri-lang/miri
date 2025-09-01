@@ -8,7 +8,7 @@ use super::utils::*;
 
 #[test]
 fn test_logical_expression() {
-    parse_test("
+    parser_test("
 x > 10 and y <= 8
 ",
         vec![
@@ -33,7 +33,7 @@ x > 10 and y <= 8
 
 #[test]
 fn test_logical_expression_and_precedence() {
-    parse_test("
+    parser_test("
 x > 1 and y <= 2 or y == 10
 ",
         vec![
@@ -68,7 +68,7 @@ x > 1 and y <= 2 or y == 10
 fn test_precedence_of_logical_and_or() {
     // `and` has higher precedence than `or`.
     // This should parse as `(true and false) or true`.
-    parse_test("true and false or true", vec![
+    parser_test("true and false or true", vec![
         expression_statement(
             logical(
                 logical(
@@ -87,7 +87,7 @@ fn test_precedence_of_logical_and_or() {
 fn test_precedence_of_unary_not_and_logical_and() {
     // `not` should have higher precedence than `and`.
     // This should parse as `(not a) and b`.
-    parse_test("not a and b", vec![
+    parser_test("not a and b", vec![
         expression_statement(
             logical(
                 unary(UnaryOp::Not, identifier("a")),

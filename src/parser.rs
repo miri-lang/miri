@@ -234,21 +234,23 @@ impl<'source> Parser<'source> {
                 self.try_eat_expression_end();
                 return Ok(Statement::Empty);
             }
-        }
-        
-        if self.lookahead_is_expression_end() {
+        } else if self.lookahead_is_expression_end() {
             self.eat_expression_end()?;
 
             if !self.lookahead_is_indent() {
                 return Ok(Statement::Empty);
             }
+        } else if self.match_lookahead_type(|t| t == &Token::If || t == &Token::Unless) { // To support `else if`
+            return self.statement();
+        } else {
+            return Err(self.error_unexpected_lookahead_token("a colon or an expression end"));
         }
 
         if self._lookahead.is_some() {
             return self.statement();
         }
 
-        return Err(self.error_unexpected_lookahead_token("a colon or an expression end"));
+        Ok(Statement::Empty)
     }
 
     /*
@@ -328,64 +330,14 @@ impl<'source> Parser<'source> {
     }
 
     /*
-        RangeBoundaryExpression
-            : Identifier
-            | StringLiteral
-            | IntegerLiteral
-            | ListLiteralExpression
-            | MapLiteralExpression
-            ;
-    */
-    fn range_boundary_expression(&mut self) -> Result<Expression, SyntaxError> {
-        match &self._lookahead {
-            Some((Token::Identifier, _)) => {
-                let identifier = self.identifier()?;
-                Ok(identifier)
-            },
-            Some((Token::LBracket, _)) => {
-                let list = self.list_literal_expression()?;
-                Ok(list)
-            },
-            Some((Token::LBrace, _)) => {
-                let map = self.brace_expression()?;
-                Ok(map)
-            },
-            Some((Token::LParen, _)) => {
-                let tuple = self.parenthesized_expression()?;
-                Ok(tuple)
-            },
-            Some((Token::FormattedStringStart(_), _)) => {
-                let formatted_string = self.formatted_string_expression()?;
-                Ok(formatted_string)
-            },
-            _ => {
-                let err = self.error_unexpected_lookahead_token("an identifier, a string or a number");
-                if self.lookahead_is_literal() {
-                    let literal = match &self._lookahead {
-                        Some((Token::String, _)) => self.string_literal()?,
-                        Some((Token::Int, _)) => self.integer_literal(&Token::Int)?,
-                        Some((Token::BinaryNumber, _)) => self.integer_literal(&Token::BinaryNumber)?,
-                        Some((Token::HexNumber, _)) => self.integer_literal(&Token::HexNumber)?,
-                        Some((Token::OctalNumber, _)) => self.integer_literal(&Token::OctalNumber)?,
-                        _ => return Err(err),
-                    };
-                    Ok(self._ast_factory.create_literal_expression(literal))
-                } else {
-                    Err(err)
-                }
-            }
-        }
-    }
-
-    /*
         RangeExpression
-            : RangeBoundaryExpression
-            | RangeBoundaryExpression .. RangeBoundaryExpression
-            | RangeBoundaryExpression ..= RangeBoundaryExpression
+            : LeftHandSideExpression
+            | LeftHandSideExpression .. LeftHandSideExpression
+            | LeftHandSideExpression ..= LeftHandSideExpression
             ;
     */
     fn range_expression(&mut self) -> Result<Expression, SyntaxError> {
-        let start = self.range_boundary_expression()?;
+        let start = self.left_hand_side_expression()?;
         let end: Option<Box<Expression>>;
         let range_type;
 
@@ -393,12 +345,12 @@ impl<'source> Parser<'source> {
             Some((Token::Range, _)) => {
                 self.eat_token(&Token::Range)?;
                 range_type = RangeExpressionType::Exclusive;
-                end = opt_expr(self.range_boundary_expression()?);
+                end = opt_expr(self.left_hand_side_expression()?);
             },
             Some((Token::RangeInclusive, _)) => {
                 self.eat_token(&Token::RangeInclusive)?;
                 range_type = RangeExpressionType::Inclusive;
-                end = opt_expr(self.range_boundary_expression()?);
+                end = opt_expr(self.left_hand_side_expression()?);
             },
             _ => {
                 range_type = RangeExpressionType::IterableObject;
@@ -425,6 +377,15 @@ impl<'source> Parser<'source> {
         )?;
         self.eat_token(&Token::In)?;
         let iterable = self.range_expression()?;
+
+        if let Expression::Range(_, _, range_type) = &iterable {
+            if *range_type != RangeExpressionType::IterableObject && variable_declarations.len() > 1 {
+                return Err(self.error_unexpected_token(
+                    "a single loop variable for a numeric range",
+                    &format!("{} variables", variable_declarations.len()),
+                ));
+            }
+        }
 
         let body = self.statement_body()?;
 
@@ -588,6 +549,10 @@ impl<'source> Parser<'source> {
 
         while self.lookahead_is_comma() {
             self.eat_token(&Token::Comma)?;
+            // Allow an optional trailing comma before the closing parenthesis.
+            if self.lookahead_is_rparen() {
+                break;
+            }
             parameters.push(self.parameter()?);
         }
 
@@ -613,7 +578,14 @@ impl<'source> Parser<'source> {
             None
         };
 
-        Ok(Parameter { name, typ, guard })
+        let default_value = if self.match_lookahead_type(|t| t == &Token::Assign) {
+            self.eat_token(&Token::Assign)?;
+            Some(Box::new(self.expression()?))
+        } else {
+            None
+        };
+
+        Ok(Parameter { name, typ, guard, default_value })
     }
 
     /*
@@ -1198,7 +1170,7 @@ impl<'source> Parser<'source> {
         };
 
         // The condition is also a full expression, which will be parsed with its own precedence.
-        let condition = self.logical_or_expression()?;
+        let condition = self.conditional_expression()?;
 
         // The `else` part is optional for a postfix modifier `if`.
         let else_branch = if self.match_lookahead_type(|t| t == &Token::Else) {
@@ -1354,7 +1326,7 @@ impl<'source> Parser<'source> {
             : PrimaryExpression
             | CallMemberExpression '.' Identifier
             | CallMemberExpression '[' Expression ']'
-            | CallMemberExpression Arguments
+            | CallMemberExpression '(' Arguments ')'
             ;
     */
     fn call_member_expression(&mut self) -> Result<Expression, SyntaxError> {
@@ -1418,6 +1390,10 @@ impl<'source> Parser<'source> {
 
         while self.lookahead_is_comma() {
             self.eat_token(&Token::Comma)?;
+            // Allow an optional trailing comma before the closing parenthesis.
+            if self.lookahead_is_rparen() {
+                break;
+            }
             args.push(self.assignment_expression()?);
         }
 
@@ -2116,13 +2092,12 @@ impl<'source> Parser<'source> {
     fn float_literal(&mut self) -> Result<Literal, SyntaxError> {
         match self.eat_token(&Token::Float) {
             Ok(token) => {
+                let err = SyntaxError::new(
+                    SyntaxErrorKind::InvalidFloatLiteral,
+                    token.1.start..token.1.end
+                );
                 let str_value = &self.source[token.1.start..token.1.end].replace("_", ""); // Remove underscores
-                let f32_value = str_value.parse::<f32>().map_err(|_| {
-                    SyntaxError::new(
-                        SyntaxErrorKind::InvalidFloatLiteral,
-                        token.1.start..token.1.end
-                    )
-                })?;
+                let f32_value = str_value.parse::<f32>().map_err(|_| { err.clone() })?;
                 let uses_exponent = str_value.contains('e') || str_value.contains('E');
                 let f32_str = if uses_exponent {
                     // Count digits after the decimal in the significand (before 'e')
@@ -2160,13 +2135,12 @@ impl<'source> Parser<'source> {
                     Ok(self._ast_factory.create_f32_literal(f32_value))
                 } else {
                     // Otherwise, parse as f64
-                    let f64_value = str_value.parse::<f64>().map_err(|_| {
-                        SyntaxError::new(
-                            SyntaxErrorKind::InvalidFloatLiteral,
-                            token.1.start..token.1.end
-                        )
-                    })?;
-                    Ok(self._ast_factory.create_f64_literal(f64_value))
+                    let f64_value = str_value.parse::<f64>().map_err(|_| { err.clone() })?;
+                    if f64_value.is_finite() {
+                        Ok(self._ast_factory.create_f64_literal(f64_value))
+                    } else {
+                        Err(err)
+                    }
                 }
             },
             Err(e) => Err(e),

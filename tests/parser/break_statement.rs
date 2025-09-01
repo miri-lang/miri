@@ -9,7 +9,7 @@ use super::utils::*;
 
 #[test]
 fn test_break_in_for_loop() {
-    parse_test("
+    parser_test("
 for i in 1..10
     if i == 5
         break
@@ -30,7 +30,7 @@ for i in 1..10
 
 #[test]
 fn test_break_in_forever_loop() {
-    parse_test("
+    parser_test("
 forever
     print('running')
     break
@@ -48,7 +48,7 @@ forever
 
 #[test]
 fn test_break_in_nested_loop() {
-    parse_test("
+    parser_test("
 for i in 1..3
     for j in 1..3
         if j == 2
@@ -76,9 +76,9 @@ for i in 1..3
 
 #[test]
 fn test_error_break_with_value() {
-    parse_error_test(
+    parser_error_test(
         "for x in y: break 1",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "an end of statement".to_string(),
             found: "int".to_string(),
         }
@@ -89,5 +89,5 @@ fn test_error_break_with_value() {
 // The parser should successfully parse it, and a later analysis pass would reject it.
 #[test]
 fn test_parse_break_outside_loop() {
-    parse_test("break", vec![break_statement()]);
+    parser_test("break", vec![break_statement()]);
 }

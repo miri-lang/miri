@@ -8,7 +8,7 @@ use super::utils::*;
 
 #[test]
 fn test_while_loop() {
-    parse_while_test("
+    combined_while_until_test("
 while x > 0
     x -= 1
 ",
@@ -31,7 +31,7 @@ while x > 0
 
 #[test]
 fn test_while_loop_empty() {
-    parse_while_test("
+    combined_while_until_test("
 while x > 0
     // TODO
 ",
@@ -46,7 +46,7 @@ while x > 0
 
 #[test]
 fn test_while_loop_nested() {
-    parse_while_expression_test("
+    while_expression_test("
 while x > 0
     while y < 5
         y += 1
@@ -81,7 +81,7 @@ while x > 0
 
 #[test]
 fn test_while_loop_nested_empty() {
-    parse_while_expression_test("
+    while_expression_test("
 while x > 0
     while y < 5
         // TODO
@@ -107,7 +107,7 @@ while x > 0
 
 #[test]
 fn test_while_loop_inline() {
-    parse_while_test("
+    combined_while_until_test("
 while x > 0: x -= 1
 ",
     binary(
@@ -127,7 +127,7 @@ while x > 0: x -= 1
 
 #[test]
 fn test_while_loop_containing_if_statement() {
-    parse_while_test("
+    combined_while_until_test("
 while x < 10
     if x % 2 == 0
         x += 1
@@ -177,7 +177,7 @@ while x < 10
 
 #[test]
 fn test_while_loop_with_complex_multiline_condition() {
-    parse_while_test("
+    combined_while_until_test("
 while (
     x > 0
     and (y < 5)

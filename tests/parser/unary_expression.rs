@@ -8,37 +8,37 @@ use super::utils::*;
 
 #[test]
 fn test_unary_expression_negate() {
-    parse_unary_expression_test("-x", UnaryOp::Negate, identifier("x".into()));
+    unary_expression_test("-x", UnaryOp::Negate, identifier("x".into()));
 }
 
 #[test]
 fn test_unary_expression_plus() {
-    parse_unary_expression_test("+x", UnaryOp::Plus, identifier("x".into()));
+    unary_expression_test("+x", UnaryOp::Plus, identifier("x".into()));
 }
 
 #[test]
 fn test_unary_expression_not() {
-    parse_unary_expression_test("not x", UnaryOp::Not, identifier("x".into()));
+    unary_expression_test("not x", UnaryOp::Not, identifier("x".into()));
 }
 
 #[test]
 fn test_unary_expression_bitwise_not() {
-    parse_unary_expression_test("~x", UnaryOp::BitwiseNot, identifier("x".into()));
+    unary_expression_test("~x", UnaryOp::BitwiseNot, identifier("x".into()));
 }
 
 #[test]
 fn test_unary_expression_increment() {
-    parse_unary_expression_test("++x", UnaryOp::Increment, identifier("x".into()));
+    unary_expression_test("++x", UnaryOp::Increment, identifier("x".into()));
 }
 
 #[test]
 fn test_unary_expression_decrement() {
-    parse_unary_expression_test("--x", UnaryOp::Decrement, identifier("x".into()));
+    unary_expression_test("--x", UnaryOp::Decrement, identifier("x".into()));
 }
 
 #[test]
 fn test_unary_expression_precedence() {
-    parse_test("-x * -2", vec![
+    parser_test("-x * -2", vec![
         expression_statement(
             binary(
                 unary(UnaryOp::Negate, identifier("x".into())),
@@ -53,7 +53,7 @@ fn test_unary_expression_precedence() {
 fn test_precedence_of_member_access_and_unary_negation() {
     // Member access `.` has higher precedence than unary `-`.
     // This should parse as `-(a.b)`.
-    parse_test("-a.b", vec![
+    parser_test("-a.b", vec![
         expression_statement(
             unary(
                 UnaryOp::Negate,

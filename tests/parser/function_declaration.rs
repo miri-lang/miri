@@ -9,12 +9,12 @@ use super::utils::*;
 
 #[test]
 fn test_function_declaration() {
-    parse_test("
+    parser_test("
 fn square(x int)
     x * x
 ", vec![
         func("square").params(vec![
-            parameter("x".into(), opt_expr(typ(Type::Int)), None)
+            parameter("x".into(), opt_expr(typ(Type::Int)), None, None)
         ]).build(block(vec![
             expression_statement(
                 binary(
@@ -29,13 +29,18 @@ fn square(x int)
 
 #[test]
 fn test_function_declaration_with_guard() {
-    parse_test("
+    parser_test("
 fn square(x int > 0)
     x * x
 ", vec![
         func("square")
             .params(vec![
-                parameter("x".into(), opt_expr(typ(Type::Int)), opt_expr(guard(GuardOp::GreaterThan, int_literal_expression(0))))
+                parameter(
+                    "x".into(),
+                    opt_expr(typ(Type::Int)),
+                    opt_expr(guard(GuardOp::GreaterThan, int_literal_expression(0))),
+                    None
+                )
             ])
             .build(block(vec![
                 expression_statement(
@@ -51,12 +56,17 @@ fn square(x int > 0)
 
 #[test]
 fn test_inline_function_declaration_with_guard() {
-    parse_test("
+    parser_test("
 fn square(x int > 0) int: x * x
 ", vec![
         func("square")
             .params(vec![
-                parameter("x".into(), opt_expr(typ(Type::Int)), opt_expr(guard(GuardOp::GreaterThan, int_literal_expression(0))))
+                parameter(
+                    "x".into(),
+                    opt_expr(typ(Type::Int)),
+                    opt_expr(guard(GuardOp::GreaterThan, int_literal_expression(0))),
+                    None
+                )
             ])
             .return_type(typ(Type::Int))
             .build(expression_statement(
@@ -71,7 +81,7 @@ fn square(x int > 0) int: x * x
 
 #[test]
 fn test_function_no_parameters() {
-    parse_test("
+    parser_test("
 fn get_answer() int: 42
 ", vec![
         func("get_answer")
@@ -82,14 +92,14 @@ fn get_answer() int: 42
 
 #[test]
 fn test_function_multiple_parameters() {
-    parse_test("
+    parser_test("
 fn add(a int, b int)
     return a + b
 ", vec![
         func("add")
             .params(vec![
-                parameter("a".into(), opt_expr(typ(Type::Int)), None),
-                parameter("b".into(), opt_expr(typ(Type::Int)), None),
+                parameter("a".into(), opt_expr(typ(Type::Int)), None, None),
+                parameter("b".into(), opt_expr(typ(Type::Int)), None, None),
             ])
             .build(block(vec![
                 return_statement(
@@ -101,13 +111,13 @@ fn add(a int, b int)
 
 #[test]
 fn test_function_untyped_parameter() {
-    parse_test("
+    parser_test("
 fn process(data)
     // do something
 ", vec![
         func("process")
             .params(vec![
-                parameter("data".into(), None, None)
+                parameter("data".into(), None, None, None)
             ])
             .build(empty_statement())
     ]);
@@ -115,7 +125,7 @@ fn process(data)
 
 #[test]
 fn test_function_empty_body_block() {
-    parse_test("
+    parser_test("
 fn no_op()
     // This function does nothing
 ", vec![
@@ -126,7 +136,7 @@ fn no_op()
 
 #[test]
 fn test_function_empty_body_inline() {
-    parse_test("
+    parser_test("
 fn no_op_inline(): // This function also does nothing
 ", vec![
         func("no_op_inline")
@@ -136,9 +146,9 @@ fn no_op_inline(): // This function also does nothing
 
 #[test]
 fn test_error_function_missing_parens() {
-    parse_error_test(
+    parser_error_test(
         "fn my_func int: 42",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "(".to_string(),
             found: "identifier".to_string(),
         }
@@ -147,9 +157,9 @@ fn test_error_function_missing_parens() {
 
 #[test]
 fn test_error_function_invalid_parameter() {
-    parse_error_test(
+    parser_error_test(
         "fn my_func(123)",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "identifier".to_string(),
             found: "int".to_string(),
         }
@@ -157,19 +167,8 @@ fn test_error_function_invalid_parameter() {
 }
 
 #[test]
-fn test_error_function_trailing_comma_in_params() {
-    parse_error_test(
-        "fn my_func(a, )",
-        SyntaxErrorKind::UnexpectedToken {
-            expected: "identifier".to_string(),
-            found: ")".to_string(),
-        }
-    );
-}
-
-#[test]
 fn test_function_with_single_generic_type() {
-    parse_test("
+    parser_test("
 fn my_func<T>()
     // body
 ", vec![
@@ -181,7 +180,7 @@ fn my_func<T>()
 
 #[test]
 fn test_function_with_multiple_generic_types() {
-    parse_test("
+    parser_test("
 fn my_func<K, V>()
     // body
 ", vec![
@@ -196,7 +195,7 @@ fn my_func<K, V>()
 
 #[test]
 fn test_function_with_constrained_generic_type() {
-    parse_test("
+    parser_test("
 fn my_func<T extends SomeClass>()
     // body
 ", vec![
@@ -210,7 +209,7 @@ fn my_func<T extends SomeClass>()
 
 #[test]
 fn test_function_with_mixed_generic_types() {
-    parse_test("
+    parser_test("
 fn my_func<K, V extends SomeTrait>()
     // body
 ", vec![
@@ -225,12 +224,15 @@ fn my_func<K, V extends SomeTrait>()
 
 #[test]
 fn test_function_using_generic_types() {
-    parse_test("
+    parser_test("
 fn process<T>(data T) T: data
 ", vec![
         func("process").generics(vec![generic_type("T", None)])
             .params(vec![
-                parameter("data".into(), opt_expr(typ(Type::Custom("T".into(), None))), None)
+                parameter(
+                    "data".into(),
+                    opt_expr(typ(Type::Custom("T".into(), None))), None, None
+                )
             ])
             .return_type(typ(Type::Custom("T".into(), None)))
             .build(expression_statement(identifier("data")))
@@ -239,17 +241,17 @@ fn process<T>(data T) T: data
 
 #[test]
 fn test_error_function_unclosed_generics() {
-    parse_error_test(
+    parser_error_test(
         "fn my_func<T",
-        SyntaxErrorKind::UnexpectedEOF
+        &SyntaxErrorKind::UnexpectedEOF
     );
 }
 
 #[test]
 fn test_error_function_empty_generics() {
-    parse_error_test(
+    parser_error_test(
         "fn my_func<>()",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "identifier".to_string(),
             found: ">".to_string(),
         }
@@ -258,9 +260,9 @@ fn test_error_function_empty_generics() {
 
 #[test]
 fn test_error_function_trailing_comma_in_generics() {
-    parse_error_test(
+    parser_error_test(
         "fn my_func<T,>()",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "identifier".to_string(),
             found: ">".to_string(),
         }
@@ -270,19 +272,19 @@ fn test_error_function_trailing_comma_in_generics() {
 #[test]
 fn test_comment_between_function_name_and_params() {
     // This is unusual but should be syntactically valid.
-    parse_test("
+    parser_test("
 fn my_func /* comment */ (a int)
     // body
 ", vec![
         func("my_func").params(
-            vec![parameter("a".into(), opt_expr(typ(Type::Int)), None)]
+            vec![parameter("a".into(), opt_expr(typ(Type::Int)), None, None)]
         ).build_empty_body()
     ]);
 }
 
 #[test]
 fn test_async_function_declaration() {
-    parse_test("
+    parser_test("
 async fn my_async_func()
     // body
 ", vec![
@@ -292,7 +294,7 @@ async fn my_async_func()
 
 #[test]
 fn test_gpu_function_declaration() {
-    parse_test("
+    parser_test("
 gpu fn my_gpu_func()
     // body
 ", vec![
@@ -302,7 +304,7 @@ gpu fn my_gpu_func()
 
 #[test]
 fn test_async_gpu_function_declaration() {
-    parse_test("
+    parser_test("
 async gpu fn my_async_gpu_func()
     // body
 ", vec![
@@ -313,7 +315,7 @@ async gpu fn my_async_gpu_func()
 #[test]
 fn test_gpu_async_function_declaration_order() {
     // The order of modifiers should not matter.
-    parse_test("
+    parser_test("
 gpu async fn my_gpu_async_func()
     // body
 ", vec![
@@ -323,7 +325,7 @@ gpu async fn my_gpu_async_func()
 
 #[test]
 fn test_private_gpu_function_declaration() {
-    parse_test("
+    parser_test("
 private gpu fn my_private_gpu_func()
     // body
 ", vec![
@@ -333,7 +335,7 @@ private gpu fn my_private_gpu_func()
 
 #[test]
 fn test_all_modifiers_function_declaration() {
-    parse_test("
+    parser_test("
 private async gpu fn my_uber_func()
     // body
 ", vec![
@@ -348,9 +350,9 @@ private async gpu fn my_uber_func()
 #[test]
 fn test_error_modifier_after_func() {
     // Modifiers must precede the `def` keyword.
-    parse_error_test(
+    parser_error_test(
         "fn gpu my_func()",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "a function name, '(' or '<'".to_string(),
             found: "gpu".to_string(),
         }
@@ -359,7 +361,7 @@ fn test_error_modifier_after_func() {
 
 #[test]
 fn test_protected_function() {
-    parse_test("protected fn my_func(): x", vec![
+    parser_test("protected fn my_func(): x", vec![
         func("my_func")
             .set_protected()
             .build(
@@ -370,7 +372,7 @@ fn test_protected_function() {
 
 #[test]
 fn test_private_async_gpu_function() {
-    parse_test("private async gpu fn complex_func(): x", vec![
+    parser_test("private async gpu fn complex_func(): x", vec![
         func("complex_func")
             .set_private()
             .set_async()
@@ -384,9 +386,9 @@ fn test_private_async_gpu_function() {
 #[test]
 fn test_error_modifier_order_function() {
     // Visibility must come first. `async public` is invalid.
-    parse_error_test(
+    parser_error_test(
         "async public fn my_func()",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "fn".to_string(),
             found: "public".to_string(),
         }
@@ -395,11 +397,67 @@ fn test_error_modifier_order_function() {
 
 #[test]
 fn test_error_double_visibility_modifier() {
-    parse_error_test(
+    parser_error_test(
         "public private fn my_func()",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "let, var, async, def, gpu, enum, type or struct".to_string(),
             found: "private".to_string(),
         }
     );
+}
+
+#[test]
+fn test_function_with_default_parameter_values() {
+    parser_test("
+fn my_func(a int = 10, b = true)
+    // body
+", vec![
+        func("my_func").params(vec![
+            parameter("a".into(), opt_expr(typ(Type::Int)), None, opt_expr(int_literal_expression(10))),
+            parameter("b".into(), None, None, opt_expr(boolean_literal(true)))
+        ]).build_empty_body()
+    ]);
+}
+
+#[test]
+fn test_function_and_parameter_names_as_keywords() {
+    parser_error_test("
+fn if(let int, for string)
+    // body
+", &SyntaxErrorKind::UnexpectedToken {
+        expected: "a function name, '(' or '<'".to_string(),
+        found: "if".to_string(),
+    });
+}
+
+#[test]
+fn test_function_with_complex_generic_types() {
+    parser_test("
+fn process<T>(data list<T>) list<T>: data
+", vec![
+        func("process").generics(vec![generic_type("T", None)])
+            .params(vec![
+                parameter(
+                    "data".into(),
+                    opt_expr(typ(Type::List(Box::new(typ(Type::Custom("T".into(), None)))))),
+                    None,
+                    None
+                )
+            ])
+            .return_type(typ(Type::List(Box::new(typ(Type::Custom("T".into(), None))))))
+            .build(expression_statement(identifier("data")))
+    ]);
+}
+
+#[test]
+fn test_function_with_trailing_comma_in_parameters() {
+    parser_test("
+fn my_func(a int, b string,)
+    // body
+", vec![
+        func("my_func").params(vec![
+            parameter("a".into(), opt_expr(typ(Type::Int)), None, None),
+            parameter("b".into(), opt_expr(typ(Type::String)), None, None)
+        ]).build_empty_body()
+    ]);
 }

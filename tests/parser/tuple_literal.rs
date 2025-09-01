@@ -9,7 +9,7 @@ use super::utils::*;
 
 #[test]
 fn test_tuple_literal_assignment() {
-    parse_test("let t = (:ok, 'Hello', 200)", vec![
+    parser_test("let t = (:ok, 'Hello', 200)", vec![
         variable_statement(vec![
             let_variable("t", None, opt_expr(tuple(vec![
                 symbol_literal("ok"),
@@ -22,7 +22,7 @@ fn test_tuple_literal_assignment() {
 
 #[test]
 fn test_tuple_index_access() {
-    parse_test("print(my_tuple[1])", vec![
+    parser_test("print(my_tuple[1])", vec![
         expression_statement(
             call(
                 identifier("print"),
@@ -34,7 +34,7 @@ fn test_tuple_index_access() {
 
 #[test]
 fn test_for_loop_over_tuple_literal() {
-    parse_test("
+    parser_test("
 for el in (:ok, 200)
     print(el)
 ", vec![
@@ -50,7 +50,7 @@ for el in (:ok, 200)
 
 #[test]
 fn test_method_call_on_tuple_literal() {
-    parse_test("(:ok, 200).len()", vec![
+    parser_test("(:ok, 200).len()", vec![
         expression_statement(
             call(
                 member(
@@ -65,7 +65,7 @@ fn test_method_call_on_tuple_literal() {
 
 #[test]
 fn test_tuple_of_lambdas() {
-    parse_test("let funcs = (fn(): 1, fn(): 2)", vec![
+    parser_test("let funcs = (fn(): 1, fn(): 2)", vec![
         variable_statement(vec![
             let_variable("funcs", None, opt_expr(tuple(vec![
                 lambda().build_lambda(expression_statement(int_literal_expression(1))),
@@ -77,7 +77,7 @@ fn test_tuple_of_lambdas() {
 
 #[test]
 fn test_empty_tuple_unit_tuple() {
-    parse_test("let unit = ()", vec![
+    parser_test("let unit = ()", vec![
         variable_statement(vec![
             let_variable("unit", None, opt_expr(tuple(vec![])))
         ], MemberVisibility::Public)
@@ -86,7 +86,7 @@ fn test_empty_tuple_unit_tuple() {
 
 #[test]
 fn test_single_item_tuple() {
-    parse_test("let num = (42)", vec![
+    parser_test("let num = (42)", vec![
         variable_statement(vec![
             let_variable("num", None, opt_expr(tuple(vec![int_literal_expression(42)])))
         ], MemberVisibility::Public)
@@ -95,7 +95,7 @@ fn test_single_item_tuple() {
 
 #[test]
 fn test_single_item_not_tuple() {
-    parse_test("let num = (42 + 100)", vec![
+    parser_test("let num = (42 + 100)", vec![
         variable_statement(vec![
             let_variable("num", None, opt_expr(
                 binary(int_literal_expression(42), BinaryOp::Add, int_literal_expression(100))
@@ -106,7 +106,7 @@ fn test_single_item_not_tuple() {
 
 #[test]
 fn test_single_item_tuple_with_tuple() {
-    parse_test("let num = ((1))", vec![
+    parser_test("let num = ((1))", vec![
         variable_statement(vec![
             let_variable("num", None, opt_expr(tuple(vec![
                 tuple(vec![int_literal_expression(1)])
@@ -117,7 +117,7 @@ fn test_single_item_tuple_with_tuple() {
 
 #[test]
 fn test_tuple_multiline() {
-    parse_test("
+    parser_test("
 let num = (
     1,
         2, 3,
@@ -143,7 +143,7 @@ let num = (
 
 #[test]
 fn test_single_item_tuple_with_map() {
-    parse_test("let num = ({'a': 1})", vec![
+    parser_test("let num = ({'a': 1})", vec![
         variable_statement(vec![
             let_variable("num", None, opt_expr(tuple(vec![
                 map(vec![
@@ -156,7 +156,7 @@ fn test_single_item_tuple_with_map() {
 
 #[test]
 fn test_single_item_tuple_with_member() {
-    parse_test("let num = (obj.prop)", vec![
+    parser_test("let num = (obj.prop)", vec![
         variable_statement(vec![
             let_variable("num", None, opt_expr(tuple(vec![
                 member(identifier("obj"), identifier("prop"))
@@ -167,7 +167,7 @@ fn test_single_item_tuple_with_member() {
 
 #[test]
 fn test_single_item_tuple_with_call() {
-    parse_test("let num = (obj.func())", vec![
+    parser_test("let num = (obj.func())", vec![
         variable_statement(vec![
             let_variable("num", None, opt_expr(tuple(vec![
                 call(member(identifier("obj"), identifier("func")), vec![])
@@ -178,7 +178,7 @@ fn test_single_item_tuple_with_call() {
 
 #[test]
 fn test_single_item_tuple_with_index() {
-    parse_test("let num = (obj[0])", vec![
+    parser_test("let num = (obj[0])", vec![
         variable_statement(vec![
             let_variable("num", None, opt_expr(tuple(vec![
                 index(identifier("obj"), int_literal_expression(0))
@@ -191,7 +191,7 @@ fn test_single_item_tuple_with_index() {
 fn test_single_item_tuple_with_lambda() {
     // It makes no sense to have such a tuple, and supporting it
     // creates problems with expressions like (fn(): 1)()
-    parse_test("let num = (fn(): 1)", vec![
+    parser_test("let num = (fn(): 1)", vec![
         variable_statement(vec![
             let_variable("num", None, opt_expr(
                 lambda().build_lambda(expression_statement(int_literal_expression(1)))
@@ -202,7 +202,7 @@ fn test_single_item_tuple_with_lambda() {
 
 #[test]
 fn test_single_element_tuple_with_trailing_comma() {
-    parse_test("let single = (1,)", vec![
+    parser_test("let single = (1,)", vec![
         variable_statement(vec![
             let_variable("single", None, opt_expr(tuple(vec![
                 int_literal_expression(1),
@@ -213,17 +213,17 @@ fn test_single_element_tuple_with_trailing_comma() {
 
 #[test]
 fn test_error_unclosed_tuple() {
-    parse_error_test(
+    parser_error_test(
         "let t = (1, 2",
-        SyntaxErrorKind::UnexpectedEOF
+        &SyntaxErrorKind::UnexpectedEOF
     );
 }
 
 #[test]
 fn test_error_tuple_missing_comma() {
-    parse_error_test(
+    parser_error_test(
         "let t = (1 2)",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: ")".to_string(),
             found: "int".to_string(),
         }

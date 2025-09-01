@@ -9,7 +9,7 @@ use super::utils::*;
 
 #[test]
 fn test_parse_binary_expression() {
-    parse_binary_expression_test(
+    binary_expression_test(
         "123 + 456",
         int_literal_expression(123),
         BinaryOp::Add,
@@ -19,7 +19,7 @@ fn test_parse_binary_expression() {
 
 #[test]
 fn test_parse_chained_binary_expression() {
-    parse_binary_expression_test(
+    binary_expression_test(
         "123 + 456 - 789",
         binary(
             int_literal_expression(123),
@@ -33,7 +33,7 @@ fn test_parse_chained_binary_expression() {
 
 #[test]
 fn test_parse_chained_multiply_expression() {
-    parse_test("2 + 2 * 2", vec![
+    parser_test("2 + 2 * 2", vec![
         expression_statement(
             binary(
                 int_literal_expression(2),
@@ -46,7 +46,7 @@ fn test_parse_chained_multiply_expression() {
 
 #[test]
 fn test_parse_bitwise_and_expression() {
-    parse_binary_expression_test(
+    binary_expression_test(
         "1 + 2 & 2",
         binary(
             int_literal_expression(1),
@@ -60,7 +60,7 @@ fn test_parse_bitwise_and_expression() {
 
 #[test]
 fn test_parse_bitwise_or_expression() {
-    parse_binary_expression_test(
+    binary_expression_test(
         "1 + 2 | 2",
         binary(
             int_literal_expression(1),
@@ -74,7 +74,7 @@ fn test_parse_bitwise_or_expression() {
 
 #[test]
 fn test_parse_bitwise_xor_expression() {
-    parse_binary_expression_test(
+    binary_expression_test(
         "1 + 2 ^ 2",
         binary(
             int_literal_expression(1),
@@ -89,7 +89,7 @@ fn test_parse_bitwise_xor_expression() {
 
 #[test]
 fn test_parse_multiply_with_parentheses_expression() {
-    parse_binary_expression_test(
+    binary_expression_test(
         "(2 + 2) * 2",
         binary(
             int_literal_expression(2),
@@ -104,9 +104,9 @@ fn test_parse_multiply_with_parentheses_expression() {
 #[test]
 fn test_parse_consecutive_operators() {
     // Two binary operators in a row is invalid.
-    parse_error_test(
+    parser_error_test(
         "5 + * 2", 
-        SyntaxErrorKind::UnexpectedToken { 
+        &SyntaxErrorKind::UnexpectedToken { 
             expected: "an expression".into(), 
             found: "*".into() 
         }
@@ -116,9 +116,9 @@ fn test_parse_consecutive_operators() {
 #[test]
 fn test_parse_incomplete_expression() {
     // The parser should error on an incomplete binary expression.
-    parse_error_test(
+    parser_error_test(
         "5 +", 
-        SyntaxErrorKind::UnexpectedEOF
+        &SyntaxErrorKind::UnexpectedEOF
     );
 }
 
@@ -132,4 +132,73 @@ fn test_very_long_chain_of_binary_operators() {
     // For now, we just check that `parser.parse()` returns Ok.
     let long_expr = "1 + ".repeat(500) + "1";
     parse_program(&long_expr);
+}
+
+#[test]
+fn test_precedence_of_equality_and_relational_operators() {
+    // Relational operators (`<`, `>`) have higher precedence than equality (`==`, `!=`).
+    // This should parse as `(a < b) == (c > d)`.
+    parser_test("a < b == c > d", vec![
+        expression_statement(
+            binary(
+                binary(identifier("a"), BinaryOp::LessThan, identifier("b")),
+                BinaryOp::Equal,
+                binary(identifier("c"), BinaryOp::GreaterThan, identifier("d"))
+            )
+        )
+    ]);
+}
+
+#[test]
+fn test_precedence_of_additive_and_relational_operators() {
+    // Additive operators (`+`, `-`) have higher precedence than relational operators.
+    // This should parse as `(a + b) > (c - d)`.
+    parser_test("a + b > c - d", vec![
+        expression_statement(
+            binary(
+                binary(identifier("a"), BinaryOp::Add, identifier("b")),
+                BinaryOp::GreaterThan,
+                binary(identifier("c"), BinaryOp::Sub, identifier("d"))
+            )
+        )
+    ]);
+}
+
+#[test]
+fn test_precedence_of_logical_and_equality_operators() {
+    // Equality operators have higher precedence than `and`.
+    // This should parse as `(a == b) and (c != d)`.
+    parser_test("a == b and c != d", vec![
+        expression_statement(
+            logical(
+                binary(identifier("a"), BinaryOp::Equal, identifier("b")),
+                BinaryOp::And,
+                binary(identifier("c"), BinaryOp::NotEqual, identifier("d"))
+            )
+        )
+    ]);
+}
+
+#[test]
+fn test_all_binary_operators() {
+    let test_cases = vec![
+        ("a + b", identifier("a"), BinaryOp::Add, identifier("b")),
+        ("a - b", identifier("a"), BinaryOp::Sub, identifier("b")),
+        ("a * b", identifier("a"), BinaryOp::Mul, identifier("b")),
+        ("a / b", identifier("a"), BinaryOp::Div, identifier("b")),
+        ("a % b", identifier("a"), BinaryOp::Mod, identifier("b")),
+        ("a == b", identifier("a"), BinaryOp::Equal, identifier("b")),
+        ("a != b", identifier("a"), BinaryOp::NotEqual, identifier("b")),
+        ("a < b", identifier("a"), BinaryOp::LessThan, identifier("b")),
+        ("a <= b", identifier("a"), BinaryOp::LessThanEqual, identifier("b")),
+        ("a > b", identifier("a"), BinaryOp::GreaterThan, identifier("b")),
+        ("a >= b", identifier("a"), BinaryOp::GreaterThanEqual, identifier("b")),
+        ("a & b", identifier("a"), BinaryOp::BitwiseAnd, identifier("b")),
+        ("a | b", identifier("a"), BinaryOp::BitwiseOr, identifier("b")),
+        ("a ^ b", identifier("a"), BinaryOp::BitwiseXor, identifier("b")),
+    ];
+
+    for (input, left, op, right) in test_cases {
+        binary_expression_test(input, left, op, right);
+    }
 }

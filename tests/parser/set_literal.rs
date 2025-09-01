@@ -9,7 +9,7 @@ use super::utils::*;
 
 #[test]
 fn test_set_literal_assignment() {
-    parse_test("let s = {1, 2, 3}", vec![
+    parser_test("let s = {1, 2, 3}", vec![
         variable_statement(vec![
             let_variable("s", None, opt_expr(set(vec![
                 int_literal_expression(1),
@@ -22,7 +22,7 @@ fn test_set_literal_assignment() {
 
 #[test]
 fn test_for_loop_over_set_literal() {
-    parse_test("
+    parser_test("
 for el in {1, 2, 3}
     print(el)
 ", vec![
@@ -38,7 +38,7 @@ for el in {1, 2, 3}
 
 #[test]
 fn test_method_call_on_set_literal() {
-    parse_test("{1, 2, 3}.len()", vec![
+    parser_test("{1, 2, 3}.len()", vec![
         expression_statement(
             call(
                 member(
@@ -53,7 +53,7 @@ fn test_method_call_on_set_literal() {
 
 #[test]
 fn test_set_of_lambdas() {
-    parse_test("let funcs = {fn(): 1, fn(): 2}", vec![
+    parser_test("let funcs = {fn(): 1, fn(): 2}", vec![
         variable_statement(vec![
             let_variable("funcs", None, opt_expr(set(vec![
                 lambda().build_lambda(expression_statement(int_literal_expression(1))),
@@ -65,7 +65,7 @@ fn test_set_of_lambdas() {
 
 #[test]
 fn test_map_of_values_similar_to_set() {
-    parse_test("let funcs = {func1(): 1, func2(): 2}", vec![
+    parser_test("let funcs = {func1(): 1, func2(): 2}", vec![
         variable_statement(vec![
             let_variable("funcs", None, opt_expr(map(vec![
                 (call(identifier("func1"), vec![]), int_literal_expression(1)),
@@ -77,7 +77,7 @@ fn test_map_of_values_similar_to_set() {
 
 #[test]
 fn test_set_with_trailing_comma() {
-    parse_test("let s = {1, 2,}", vec![
+    parser_test("let s = {1, 2,}", vec![
         variable_statement(vec![
             let_variable("s", None, opt_expr(set(vec![
                 int_literal_expression(1),
@@ -89,7 +89,7 @@ fn test_set_with_trailing_comma() {
 
 #[test]
 fn test_multiline_set() {
-    parse_test("
+    parser_test("
 let s = {1, 
 2, 
     3, 
@@ -113,7 +113,7 @@ let s = {1,
 
 #[test]
 fn test_nested_sets_and_maps_multiline() {
-    parse_test("
+    parser_test("
 let data = {
     'users',
     {'id': 1, 'name': 'John'},
@@ -139,7 +139,7 @@ let data = {
 #[test]
 fn test_distinction_empty_is_map() {
     // An empty `{}` should be parsed as an empty map.
-    parse_test("let empty = {}", vec![
+    parser_test("let empty = {}", vec![
         variable_statement(vec![
             let_variable("empty", None, opt_expr(map(vec![])))
         ], MemberVisibility::Public)
@@ -148,7 +148,7 @@ fn test_distinction_empty_is_map() {
 
 #[test]
 fn test_distinction_single_item_is_set() {
-    parse_test("let s = {'a'}", vec![
+    parser_test("let s = {'a'}", vec![
         variable_statement(vec![
             let_variable("s", None, opt_expr(set(vec![string_literal("a")])))
         ], MemberVisibility::Public)
@@ -157,18 +157,18 @@ fn test_distinction_single_item_is_set() {
 
 #[test]
 fn test_error_unclosed_set() {
-    parse_error_test(
+    parser_error_test(
         "let s = {1, 2",
-        SyntaxErrorKind::UnexpectedEOF
+        &SyntaxErrorKind::UnexpectedEOF
     );
 }
 
 #[test]
 fn test_error_set_with_colon() {
     // This is invalid syntax. It's not a valid set (due to :) and not a valid map (due to missing value).
-    parse_error_test(
+    parser_error_test(
         "let s = {1:}",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "an expression".to_string(),
             found: "}".to_string(),
         }

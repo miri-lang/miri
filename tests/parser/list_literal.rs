@@ -9,7 +9,7 @@ use super::utils::*;
 
 #[test]
 fn test_list_literal_assignment() {
-    parse_test("let arr = [1, 2, 3]", vec![
+    parser_test("let arr = [1, 2, 3]", vec![
         variable_statement(vec![
             let_variable("arr", None, opt_expr(list(vec![
                 int_literal_expression(1),
@@ -22,7 +22,7 @@ fn test_list_literal_assignment() {
 
 #[test]
 fn test_list_index_access() {
-    parse_test("print(arr[0])", vec![
+    parser_test("print(arr[0])", vec![
         expression_statement(
             call(
                 identifier("print"),
@@ -34,7 +34,7 @@ fn test_list_index_access() {
 
 #[test]
 fn test_for_loop_over_list_literal() {
-    parse_test("
+    parser_test("
 for el in [1, 2, 3]
     print(el)
 ", vec![
@@ -52,14 +52,14 @@ for el in [1, 2, 3]
 
 #[test]
 fn test_method_call_on_list_literal() {
-    parse_test("[1, 2, 3].each(fn (el): print(el))", vec![
+    parser_test("[1, 2, 3].each(fn (el): print(el))", vec![
         expression_statement(
             call(
                 member(
                     list(vec![int_literal_expression(1), int_literal_expression(2), int_literal_expression(3)]),
                     identifier("each")
                 ),
-                vec![lambda().params(vec![parameter("el".into(), None, None)]).build_lambda(
+                vec![lambda().params(vec![parameter("el".into(), None, None, None)]).build_lambda(
                     expression_statement(call(identifier("print"), vec![identifier("el")]))
                 )]
             )
@@ -69,7 +69,7 @@ fn test_method_call_on_list_literal() {
 
 #[test]
 fn test_list_of_lambdas() {
-    parse_test("let funcs = [fn (): 1, fn (): 2]", vec![
+    parser_test("let funcs = [fn (): 1, fn (): 2]", vec![
         variable_statement(vec![
             let_variable("funcs", None, opt_expr(list(vec![
                 lambda().build_lambda(expression_statement(int_literal_expression(1))),
@@ -81,7 +81,7 @@ fn test_list_of_lambdas() {
 
 #[test]
 fn test_empty_list() {
-    parse_test("let empty = []", vec![
+    parser_test("let empty = []", vec![
         variable_statement(vec![
             let_variable("empty", None, opt_expr(list(vec![])))
         ], MemberVisibility::Public)
@@ -90,7 +90,7 @@ fn test_empty_list() {
 
 #[test]
 fn test_list_with_trailing_comma() {
-    parse_test("let arr = [1, 2,]", vec![
+    parser_test("let arr = [1, 2,]", vec![
         variable_statement(vec![
             let_variable("arr", None, opt_expr(list(vec![
                 int_literal_expression(1),
@@ -102,7 +102,7 @@ fn test_list_with_trailing_comma() {
 
 #[test]
 fn test_nested_lists() {
-    parse_test("let matrix = [[1, 2], [3, 4]]", vec![
+    parser_test("let matrix = [[1, 2], [3, 4]]", vec![
         variable_statement(vec![
             let_variable("matrix", None, opt_expr(list(vec![
                 list(vec![int_literal_expression(1), int_literal_expression(2)]),
@@ -114,7 +114,7 @@ fn test_nested_lists() {
 
 #[test]
 fn test_nested_lists_multiline() {
-    parse_test("
+    parser_test("
 let matrix = [
     [
         1,
@@ -140,17 +140,17 @@ let matrix = [
 
 #[test]
 fn test_error_unclosed_list() {
-    parse_error_test(
+    parser_error_test(
         "let arr = [1, 2",
-        SyntaxErrorKind::UnexpectedEOF
+        &SyntaxErrorKind::UnexpectedEOF
     );
 }
 
 #[test]
 fn test_error_list_missing_comma() {
-    parse_error_test(
+    parser_error_test(
         "let arr = [1 2]",
-        SyntaxErrorKind::UnexpectedToken {
+        &SyntaxErrorKind::UnexpectedToken {
             expected: "]".to_string(),
             found: "int".to_string(),
         }
