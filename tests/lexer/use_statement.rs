@@ -29,3 +29,19 @@ use Module2 as M2
         Token::Use, Token::Identifier, Token::As, Token::Identifier, Token::ExpressionStatementEnd,
     ]);
 }
+
+#[test]
+fn test_use_with_keywords_in_path() {
+    lexer_test("use My.if.Path as return", vec![
+        Token::Use, Token::Identifier, Token::Dot, Token::If, Token::Dot, Token::Identifier,
+        Token::As, Token::Return
+    ]);
+}
+
+#[test]
+fn test_use_without_whitespace() {
+    lexer_test("use(MyModule)", vec![
+        Token::Use, Token::LParen, Token::Identifier, Token::RParen
+    ]);
+}
+
