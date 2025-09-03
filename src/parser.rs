@@ -665,39 +665,45 @@ impl<'source> Parser<'source> {
         name: Expression,
         visibility: MemberVisibility,
         inline_error: &str,
-        block_error: &str,
+        missing_members_error: SyntaxErrorKind,
+        generic_types: Option<Vec<Expression>>,
     ) -> Result<Statement, SyntaxError>
     where
         F: Fn(&mut Self) -> Result<Expression, SyntaxError>,
-        C: Fn(&mut Self, Expression, Vec<Expression>, MemberVisibility) -> Statement,
+        C: Fn(&mut Self, Expression, Option<Vec<Expression>>, Vec<Expression>, MemberVisibility) -> Statement,
     {
         let mut items = vec![];
 
         match &self._lookahead {
             Some((Token::Colon, _)) => { // Inline form
                 self.eat_token(&Token::Colon)?;
-                items.push(item_parser(self)?);
-                while self.lookahead_is_comma() {
-                    self.eat_token(&Token::Comma)?;
+                if !self.lookahead_is_expression_end() && !self._lookahead.is_none() {
                     items.push(item_parser(self)?);
+                    while self.lookahead_is_comma() {
+                        self.eat_token(&Token::Comma)?;
+                        items.push(item_parser(self)?);
+                    }
                 }
             }
             Some((Token::ExpressionStatementEnd, _)) => { // Block form
                 self.eat_expression_end()?;
-                if !self.lookahead_is_indent() {
-                    return Err(self.error_unexpected_lookahead_token(block_error));
+                if self.lookahead_is_indent() {
+                    self.eat_token(&Token::Indent)?;
+                    while !self.lookahead_is_dedent() {
+                        items.push(item_parser(self)?);
+                        self.try_eat_expression_end();
+                    }
+                    self.eat_token(&Token::Dedent)?;
                 }
-                self.eat_token(&Token::Indent)?;
-                while !self.lookahead_is_dedent() {
-                    items.push(item_parser(self)?);
-                    self.try_eat_expression_end();
-                }
-                self.eat_token(&Token::Dedent)?;
             },
             _ => return Err(self.error_unexpected_lookahead_token(inline_error)),
         };
 
-        Ok(creator(self, name, items, visibility))
+        if items.is_empty() {
+            return Err(self.error_missing_members(missing_members_error));
+        }
+
+        Ok(creator(self, name, generic_types, items, visibility))
     }
 
     /*
@@ -711,11 +717,12 @@ impl<'source> Parser<'source> {
         let name = self.identifier()?;
         self.parse_declaration_block(
             Self::enum_value_expression,
-            |p, n, vals: Vec<Expression>, vis| p._ast_factory.create_enum_statement(n, vals, vis),
+            |p, n, _, vals: Vec<Expression>, vis| p._ast_factory.create_enum_statement(n, vals, vis),
             name,
             visibility,
             "either a colon for inline enums or an indentation for block enums",
-            "an indentation for block enums",
+            SyntaxErrorKind::MissingEnumMembers,
+            None
         )
     }
 
@@ -745,13 +752,15 @@ impl<'source> Parser<'source> {
     fn struct_statement(&mut self, visibility: MemberVisibility) -> Result<Statement, SyntaxError> {
         self.eat_token(&Token::Struct)?;
         let name = self.identifier()?;
+        let generic_types = self.generic_types_expression()?;
         self.parse_declaration_block(
             Self::struct_member_expression,
-            |p, n, m, vis| p._ast_factory.create_struct_statement(n, m, vis),
+            |p, n, g, m, vis| p._ast_factory.create_struct_statement(n, g, m, vis),
             name,
             visibility,
             "either a colon for inline structs or an indentation for block structs",
-            "an indentation for block structs",
+            SyntaxErrorKind::MissingStructMembers,
+            generic_types
         )
     }
 
@@ -1620,7 +1629,9 @@ impl<'source> Parser<'source> {
 
         if self.lookahead_is_colon() {
             self.eat_token(&Token::Colon)?;
-            branches.extend(self.match_branch_list(true)?);
+            if self._lookahead.is_some() {
+                branches.extend(self.match_branch_list(true)?);
+            }
         } else if self.lookahead_is_expression_end() {
             self.eat_expression_end()?;
             if self.lookahead_is_indent() {
@@ -1920,25 +1931,11 @@ impl<'source> Parser<'source> {
 
         let first_expr = self.expression()?;
 
+        // The presence of a comma is what distinguishes a tuple from a grouping parenthesis.
         if !self.lookahead_is_comma() {
+            // No comma, so this is a grouping parenthesized expression.
             self.eat_token(&Token::RParen)?;
-            match first_expr {
-                Expression::Identifier(_, _) 
-                | Expression::Literal(_)
-                | Expression::Member(_, _)
-                | Expression::Call(_, _)
-                | Expression::Index(_, _)
-                | Expression::List(_)
-                | Expression::Map(_)
-                | Expression::Tuple(_) => {
-                    // Treat it as a single element tuple, if the expression can be a tuple element.
-                    return Ok(self._ast_factory.create_tuple_expression(vec![first_expr]))
-                },
-                _ => {
-                    // Otherwise, treat it as a parenthesized expression.
-                    return Ok(first_expr);
-                }
-            }
+            return Ok(first_expr);
         }
 
         // It's a tuple. Start with the first expression we already parsed.
@@ -2535,6 +2532,13 @@ impl<'source> Parser<'source> {
     fn error_missing_struct_member_type(&self) -> SyntaxError {
         SyntaxError::new(
             SyntaxErrorKind::MissingStructMemberType,
+            self.source.len()..self.source.len()
+        )
+    }
+
+    fn error_missing_members(&self, kind: SyntaxErrorKind) -> SyntaxError {
+        SyntaxError::new(
+            kind,
             self.source.len()..self.source.len()
         )
     }

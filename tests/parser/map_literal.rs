@@ -176,3 +176,54 @@ fn test_error_map_missing_comma() {
         }
     );
 }
+
+#[test]
+fn test_map_with_complex_keys() {
+    // Map keys can be complex expressions, not just literals.
+    // NOTE: semantically this code isn't correct, because keys must have the same type.
+    parser_test("let m = {1 + 1: 'a', my_func(): 'b'}", vec![
+        variable_statement(vec![
+            let_variable("m", None, opt_expr(map(vec![
+                (
+                    binary(int_literal_expression(1), BinaryOp::Add, int_literal_expression(1)),
+                    string_literal("a")
+                ),
+                (
+                    call(identifier("my_func"), vec![]),
+                    string_literal("b")
+                ),
+            ])))
+        ], MemberVisibility::Public)
+    ]);
+}
+
+#[test]
+fn test_map_with_symbol_keys() {
+    // A common pattern is to use symbols as keys.
+    parser_test("let m = {:a: 1, :b: 2}", vec![
+        variable_statement(vec![
+            let_variable("m", None, opt_expr(map(vec![
+                (symbol_literal("a"), int_literal_expression(1)),
+                (symbol_literal("b"), int_literal_expression(2)),
+            ])))
+        ], MemberVisibility::Public)
+    ]);
+}
+
+#[test]
+fn test_map_index_precedence() {
+    // Index access on a literal has higher precedence than binary operators.
+    // This should parse as `({'a': 10}['a']) + 1`.
+    parser_test("{'a': 10}['a'] + 1", vec![
+        expression_statement(
+            binary(
+                index(
+                    map(vec![(string_literal("a"), int_literal_expression(10))]),
+                    string_literal("a")
+                ),
+                BinaryOp::Add,
+                int_literal_expression(1)
+            )
+        )
+    ]);
+}

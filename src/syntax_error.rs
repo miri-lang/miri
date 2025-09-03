@@ -42,6 +42,8 @@ pub enum SyntaxErrorKind {
     BackslashInFStringExpression,
 
     MissingStructMemberType,
+    MissingStructMembers,
+    MissingEnumMembers,
 
     DuplicateMatchPattern,
     MissingMatchBranches
@@ -173,6 +175,14 @@ impl SyntaxError {
             SyntaxErrorKind::InvalidNumberLiteral => (
                 "Invalid Number Literal",
                 "Number literals must be valid integers or floats, which cannot begin or end with underscores.".to_string(),
+            ),
+            SyntaxErrorKind::MissingStructMembers => (
+                "Missing Struct Members",
+                "Structs must have at least one member.".to_string(),
+            ),
+            SyntaxErrorKind::MissingEnumMembers => (
+                "Missing Enum Members",
+                "Enums must have at least one member.".to_string(),
             ),
         };
 

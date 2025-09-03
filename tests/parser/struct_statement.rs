@@ -14,6 +14,7 @@ struct Point: x int, y int
 ", vec![
         struct_statement(
             identifier("Point"),
+            None,
             vec![
                 struct_member("x", typ(Type::Int)),
                 struct_member("y", typ(Type::Int))
@@ -32,6 +33,7 @@ struct Point
 ", vec![
         struct_statement(
             identifier("Point"),
+            None,
             vec![
                 struct_member("x", typ(Type::Int)),
                 struct_member("y", typ(Type::Int))
@@ -51,6 +53,7 @@ struct UserProfile
 ", vec![
         struct_statement(
             identifier("UserProfile"),
+            None,
             vec![
                 struct_member("id", typ(Type::String)),
                 struct_member("aliases", null_typ(Type::List(Box::new(typ(Type::String))))),
@@ -66,21 +69,11 @@ fn test_struct_with_single_member() {
     parser_test("struct Wrapper: value float", vec![
         struct_statement(
             identifier("Wrapper"),
+            None,
             vec![struct_member("value", typ(Type::Float))],
             MemberVisibility::Public
         )
     ]);
-}
-
-#[test]
-fn test_empty_block_struct() {
-    parser_error_test("
-struct Empty
-    // This struct has no members
-", &SyntaxErrorKind::UnexpectedToken {
-        expected: "an indentation for block structs".to_string(),
-        found: "end of file".to_string(),
-    });
 }
 
 #[test]
@@ -129,8 +122,84 @@ fn test_private_struct() {
     parser_test("private struct Point: x int", vec![
         struct_statement(
             identifier("Point"),
+            None,
             vec![struct_member("x", typ(Type::Int))],
             MemberVisibility::Private
         )
     ]);
+}
+
+#[test]
+fn test_generic_struct() {
+    parser_test("struct Optional<T>: value T?", vec![
+        struct_statement(
+            identifier("Optional"),
+            Some(vec![generic_type("T", None)]),
+            vec![struct_member("value", null_typ(Type::Custom("T".into(), None)))],
+            MemberVisibility::Public
+        )
+    ]);
+}
+
+#[test]
+fn test_struct_with_multiple_generic_parameters() {
+    parser_test("struct Pair<K, V>: key K, value V", vec![
+        struct_statement(
+            identifier("Pair"),
+            Some(vec![
+                generic_type("K", None),
+                generic_type("V", None)
+            ]),
+            vec![
+                struct_member("key", typ(Type::Custom("K".into(), None))),
+                struct_member("value", typ(Type::Custom("V".into(), None)))
+            ],
+            MemberVisibility::Public
+        )
+    ]);
+}
+
+#[test]
+fn test_generic_struct_with_constraint() {
+    parser_test("struct Node<T extends Equatable>: value T", vec![
+        struct_statement(
+            identifier("Node"),
+            Some(vec![generic_type(
+                "T",
+                Some(Box::new(typ(Type::Custom("Equatable".into(), None))))
+            )]),
+            vec![struct_member("value", typ(Type::Custom("T".into(), None)))],
+            MemberVisibility::Public
+        )
+    ]);
+}
+
+#[test]
+fn test_struct_with_nested_generic_member() {
+    parser_test("struct Container<T>: items list<Optional<T>>", vec![
+        struct_statement(
+            identifier("Container"),
+            Some(vec![generic_type("T", None)]),
+            vec![struct_member(
+                "items",
+                typ(Type::List(Box::new(typ(Type::Custom(
+                    "Optional".into(),
+                    Some(vec![typ(Type::Custom("T".into(), None))])
+                )))))
+            )],
+            MemberVisibility::Public
+        )
+    ]);
+}
+
+#[test]
+fn test_error_on_empty_struct() {
+    run_parser_error_tests(vec![
+        "struct Empty:",
+        "struct Empty\n    \n",
+"
+struct Empty
+    // This struct has no members
+"
+    ], &SyntaxErrorKind::MissingStructMembers);
 }

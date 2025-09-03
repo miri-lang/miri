@@ -174,3 +174,22 @@ fn test_error_set_with_colon() {
         }
     );
 }
+
+#[test]
+fn test_set_literal_precedence() {
+    parser_test("{1, 2}.contains(1) and true", vec![
+        expression_statement(
+            logical(
+                call(
+                    member(
+                        set(vec![int_literal_expression(1), int_literal_expression(2)]),
+                        identifier("contains")
+                    ),
+                    vec![int_literal_expression(1)]
+                ),
+                BinaryOp::And,
+                boolean_literal(true)
+            )
+        )
+    ]);
+}

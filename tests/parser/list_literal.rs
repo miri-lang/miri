@@ -156,3 +156,27 @@ fn test_error_list_missing_comma() {
         }
     );
 }
+
+#[test]
+fn test_list_index_precedence() {
+    // Index access on a literal has higher precedence than binary operators.
+    // This should parse as `([1, 2, 3][0]) + 1`.
+    parser_test("
+[1, 2, 3][0] + 1
+", vec![
+        expression_statement(
+            binary(
+                index(
+                    list(vec![
+                        int_literal_expression(1),
+                        int_literal_expression(2),
+                        int_literal_expression(3),
+                    ]),
+                    int_literal_expression(0)
+                ),
+                BinaryOp::Add,
+                int_literal_expression(1)
+            )
+        )
+    ]);
+}

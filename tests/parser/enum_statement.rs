@@ -114,10 +114,7 @@ enum EmptyEnum
     // No values
 
 let x = 0
-", &SyntaxErrorKind::UnexpectedToken {
-        expected: "an indentation for block enums".to_string(),
-        found: "let".to_string()
-    });
+", &SyntaxErrorKind::MissingEnumMembers);
 }
 
 #[test]
@@ -146,10 +143,7 @@ fn test_error_enum_missing_colon_or_indent() {
 fn test_error_enum_empty_inline() {
     parser_error_test(
         "enum Colors:",
-        &SyntaxErrorKind::UnexpectedToken {
-            expected: "identifier".to_string(),
-            found: "end of file".to_string(),
-        }
+        &SyntaxErrorKind::MissingEnumMembers
     );
 }
 
@@ -201,18 +195,12 @@ fn test_enum_with_keyword_names() {
 fn test_error_on_empty_block_enum() {
     parser_error_test(
         "enum Empty: ",
-        &SyntaxErrorKind::UnexpectedToken {
-            expected: "identifier".to_string(),
-            found: "end of file".to_string(),
-        }
+        &SyntaxErrorKind::MissingEnumMembers
     );
 
     parser_error_test(
         "enum Empty\n    \n",
-        &SyntaxErrorKind::UnexpectedToken {
-            expected: "an indentation for block enums".to_string(),
-            found: "end of file".to_string(),
-        }
+        &SyntaxErrorKind::MissingEnumMembers
     );
 }
 

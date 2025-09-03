@@ -4,6 +4,7 @@
 use miri::ast::opt_expr;
 use miri::ast::BinaryOp;
 use miri::ast::MemberVisibility;
+use miri::syntax_error::SyntaxErrorKind;
 
 use super::ast_builder::*;
 use super::utils::*;
@@ -218,3 +219,67 @@ fn test_f_string_assigned_to_variable() {
     );
 }
 
+#[test]
+fn test_method_call_on_string_literal() {
+    parser_test(
+        r#""hello".len()"#,
+        vec![
+            expression_statement(
+                call(
+                    member(
+                        string_literal("hello"),
+                        identifier("len")
+                    ),
+                    vec![]
+                )
+            )
+        ]
+    );
+}
+
+#[test]
+fn test_method_call_on_f_string() {
+    parser_test(
+        r#"f"hello, {name}".upper()"#,
+        vec![
+            expression_statement(
+                call(
+                    member(
+                        f_string(vec![
+                            string_literal("hello, "),
+                            identifier("name"),
+                        ]),
+                        identifier("upper")
+                    ),
+                    vec![]
+                )
+            )
+        ]
+    );
+}
+
+#[test]
+fn test_error_on_unclosed_f_string_expression() {
+    parser_error_test(
+        r#"f"Hello {name"#,
+        &SyntaxErrorKind::InvalidToken
+    );
+}
+
+#[test]fn test_error_on_statement_in_f_string() {
+    parser_error_test(
+        r#"f"Value: {let x = 5}""#,
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "an expression".to_string(),
+            found: "let".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_error_on_backslash_in_f_string_expression() {
+    parser_error_test(
+        r#"f"Path: {\"C:\\Users\"}""#,
+        &SyntaxErrorKind::BackslashInFStringExpression
+    );
+}

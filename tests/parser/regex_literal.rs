@@ -86,3 +86,24 @@ fn test_error_regex_prefix_space() {
         }
     );
 }
+
+#[test]
+fn test_regex_with_all_flags() {
+    parser_test(r#"let p = re"."gimsu"#, vec![
+        variable_statement(vec![
+            let_variable(
+                "p",
+                None,
+                opt_expr(regex_literal(".", "gimsu"))
+            )
+        ], MemberVisibility::Public)
+    ]);
+}
+
+#[test]
+fn test_error_on_unterminated_regex() {
+    parser_error_test(
+        r#"let p = re"abc"#,
+        &SyntaxErrorKind::InvalidToken
+    );
+}
