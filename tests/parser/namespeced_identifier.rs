@@ -123,3 +123,12 @@ fn test_error_namespaced_assignment_target() {
         &SyntaxErrorKind::InvalidLeftHandSideExpression
     );
 }
+
+#[test]
+fn test_error_on_trailing_double_colon() {
+    // A namespace path cannot end with `::`.
+    parser_error_test(
+        "let x = MyModule::",
+        &SyntaxErrorKind::UnexpectedEOF
+    );
+}

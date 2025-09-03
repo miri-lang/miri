@@ -89,7 +89,7 @@ pub enum Statement {
 
     Enum(Box<Expression>, Vec<Expression>, MemberVisibility), // enum Colors: Red, Green, Blue(string)
 
-    Struct(Box<Expression>, Vec<Expression>, MemberVisibility), // struct Point: x int, y int
+    Struct(Box<Expression>, Option<Vec<Expression>>, Vec<Expression>, MemberVisibility), // struct Point<T>: x T, y int
 
     Extends(Box<Expression>), // extends BaseClass
 
@@ -533,8 +533,8 @@ impl AstFactory {
         Expression::StructMember(Box::new(name), Box::new(typ))
     }
 
-    pub fn create_struct_statement(&self, name: Expression, members: Vec<Expression>, visibility: MemberVisibility) -> Statement {
-        Statement::Struct(Box::new(name), members, visibility)
+    pub fn create_struct_statement(&self, name: Expression, generic_types: Option<Vec<Expression>>, members: Vec<Expression>, visibility: MemberVisibility) -> Statement {
+        Statement::Struct(Box::new(name), generic_types, members, visibility)
     }
 
     pub fn create_lambda_expression(&self, generic_types: Option<Vec<Expression>>, parameters: Vec<Parameter>, return_type: Option<Box<Expression>>, body: Statement, properties: FunctionProperties) -> Expression {

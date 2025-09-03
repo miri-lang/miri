@@ -394,11 +394,20 @@ fn test_crazy_nested_function_type() {
 
 #[test]
 fn test_error_function_type_with_trailing_comma() {
-    parser_error_test(
+    parser_test(
         "let x fn(a int,)",
-        &SyntaxErrorKind::UnexpectedToken {
-            expected: "identifier".to_string(),
-            found: ")".to_string(),
-        }
+        vec![
+            variable_statement(vec![
+                let_variable(
+                    "x",
+                    opt_expr(typ(Type::Function(
+                        None,
+                        vec![parameter("a".into(), opt_expr(typ(Type::Int)), None, None)],
+                        None
+                    ))),
+                    None
+                )
+            ], MemberVisibility::Public)
+        ]
     );
 }

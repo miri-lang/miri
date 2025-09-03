@@ -280,3 +280,116 @@ match x
         )
     ]);
 }
+
+#[test]
+fn test_match_with_complex_subject() {
+    // The subject of a match can be any expression, not just an identifier.
+    parser_test("
+match get_value() + 1
+    1: 'one'
+    _: 'other'
+", vec![
+        expression_statement(
+            match_expression(
+                binary(
+                    call(identifier("get_value"), vec![]),
+                    BinaryOp::Add,
+                    int_literal_expression(1)
+                ),
+                vec![
+                    MatchBranch {
+                        patterns: vec![Pattern::Literal(int_literal(1))],
+                        guard: None,
+                        body: Box::new(expression_statement(string_literal("one")))
+                    },
+                    MatchBranch {
+                        patterns: vec![Pattern::Identifier("_".to_string())],
+                        guard: None,
+                        body: Box::new(expression_statement(string_literal("other")))
+                    }
+                ]
+            )
+        )
+    ]);
+}
+
+#[test]
+fn test_match_as_return_value() {
+    // A match expression can be used as the value in a variable assignment or return.
+    parser_test("
+let result = match x: 1: 'one', _: 'other'
+", vec![
+        variable_statement(vec![
+            let_variable(
+                "result",
+                None,
+                opt_expr(match_expression(
+                    identifier("x"),
+                    vec![
+                        MatchBranch {
+                            patterns: vec![Pattern::Literal(int_literal(1))],
+                            guard: None,
+                            body: Box::new(expression_statement(string_literal("one")))
+                        },
+                        MatchBranch {
+                            patterns: vec![Pattern::Identifier("_".to_string())],
+                            guard: None,
+                            body: Box::new(expression_statement(string_literal("other")))
+                        }
+                    ]
+                ))
+            )
+        ], MemberVisibility::Public)
+    ]);
+}
+
+#[test]
+fn test_nested_match_expression() {
+    // The body of a match branch can contain another match expression.
+    parser_test("
+match a
+    1: match b
+        2: 'inner'
+        _: 'other inner'
+    _: 'outer'
+", vec![
+        expression_statement(
+            match_expression(
+                identifier("a"),
+                vec![
+                    MatchBranch {
+                        patterns: vec![Pattern::Literal(int_literal(1))],
+                        guard: None,
+                        body: Box::new(expression_statement(match_expression(
+                            identifier("b"),
+                            vec![
+                                MatchBranch {
+                                    patterns: vec![Pattern::Literal(int_literal(2))],
+                                    guard: None,
+                                    body: Box::new(expression_statement(string_literal("inner")))
+                                },
+                                MatchBranch {
+                                    patterns: vec![Pattern::Identifier("_".to_string())],
+                                    guard: None,
+                                    body: Box::new(expression_statement(string_literal("other inner")))
+                                }
+                            ]
+                        )))
+                    },
+                    MatchBranch {
+                        patterns: vec![Pattern::Identifier("_".to_string())],
+                        guard: None,
+                        body: Box::new(expression_statement(string_literal("outer")))
+                    }
+                ]
+            )
+        )
+    ]);
+}
+
+#[test]
+fn test_error_on_empty_match() {
+    // A match expression must have at least one branch.
+    parser_error_test("match x:", &SyntaxErrorKind::MissingMatchBranches);
+    parser_error_test("match x\n    \n", &SyntaxErrorKind::MissingMatchBranches);
+}

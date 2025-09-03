@@ -86,7 +86,7 @@ fn test_empty_tuple_unit_tuple() {
 
 #[test]
 fn test_single_item_tuple() {
-    parser_test("let num = (42)", vec![
+    parser_test("let num = (42,)", vec![
         variable_statement(vec![
             let_variable("num", None, opt_expr(tuple(vec![int_literal_expression(42)])))
         ], MemberVisibility::Public)
@@ -105,12 +105,14 @@ fn test_single_item_not_tuple() {
 }
 
 #[test]
-fn test_single_item_tuple_with_tuple() {
+fn test_assignment_to_nested_parenthesized_expression() {
     parser_test("let num = ((1))", vec![
         variable_statement(vec![
-            let_variable("num", None, opt_expr(tuple(vec![
-                tuple(vec![int_literal_expression(1)])
-            ])))
+            let_variable(
+                "num", 
+                None, 
+                opt_expr(int_literal_expression(1))
+            )
         ], MemberVisibility::Public)
     ]);
 }
@@ -143,7 +145,7 @@ let num = (
 
 #[test]
 fn test_single_item_tuple_with_map() {
-    parser_test("let num = ({'a': 1})", vec![
+    parser_test("let num = ({'a': 1},)", vec![
         variable_statement(vec![
             let_variable("num", None, opt_expr(tuple(vec![
                 map(vec![
@@ -156,7 +158,7 @@ fn test_single_item_tuple_with_map() {
 
 #[test]
 fn test_single_item_tuple_with_member() {
-    parser_test("let num = (obj.prop)", vec![
+    parser_test("let num = (obj.prop,)", vec![
         variable_statement(vec![
             let_variable("num", None, opt_expr(tuple(vec![
                 member(identifier("obj"), identifier("prop"))
@@ -167,7 +169,7 @@ fn test_single_item_tuple_with_member() {
 
 #[test]
 fn test_single_item_tuple_with_call() {
-    parser_test("let num = (obj.func())", vec![
+    parser_test("let num = (obj.func(),)", vec![
         variable_statement(vec![
             let_variable("num", None, opt_expr(tuple(vec![
                 call(member(identifier("obj"), identifier("func")), vec![])
@@ -178,7 +180,7 @@ fn test_single_item_tuple_with_call() {
 
 #[test]
 fn test_single_item_tuple_with_index() {
-    parser_test("let num = (obj[0])", vec![
+    parser_test("let num = (obj[0],)", vec![
         variable_statement(vec![
             let_variable("num", None, opt_expr(tuple(vec![
                 index(identifier("obj"), int_literal_expression(0))

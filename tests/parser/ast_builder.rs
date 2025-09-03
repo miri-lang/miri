@@ -284,8 +284,8 @@ pub fn enum_value(name: &str, types: Vec<Expression>) -> Expression {
     Expression::EnumValue(Box::new(identifier(name)), types)
 }
 
-pub fn struct_statement(name: Expression, members: Vec<Expression>, visibility: MemberVisibility) -> Statement {
-    Statement::Struct(Box::new(name), members, visibility)
+pub fn struct_statement(name: Expression, generic_types: Option<Vec<Expression>>, members: Vec<Expression>, visibility: MemberVisibility) -> Statement {
+    Statement::Struct(Box::new(name), generic_types, members, visibility)
 }
 
 pub fn struct_member(name: &str, typ: Expression) -> Expression {

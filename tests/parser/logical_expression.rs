@@ -2,6 +2,7 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use miri::ast::*;
+use miri::syntax_error::SyntaxErrorKind;
 use super::ast_builder::*;
 use super::utils::*;
 
@@ -97,3 +98,72 @@ fn test_precedence_of_unary_not_and_logical_and() {
         )
     ]);
 }
+
+#[test]
+fn test_chained_logical_or_expression() {
+    // This test verifies the left-associativity of the `or` operator.
+    // It should parse as `(a or b) or c`.
+    parser_test("a or b or c", vec![
+        expression_statement(
+            logical(
+                logical(
+                    identifier("a"),
+                    BinaryOp::Or,
+                    identifier("b")
+                ),
+                BinaryOp::Or,
+                identifier("c")
+            )
+        )
+    ]);
+}
+
+#[test]
+fn test_precedence_of_unary_not_and_logical_or() {
+    // `not` should have higher precedence than `or`.
+    // This should parse as `(not a) or b`.
+    parser_test("not a or b", vec![
+        expression_statement(
+            logical(
+                unary(UnaryOp::Not, identifier("a")),
+                BinaryOp::Or,
+                identifier("b")
+            )
+        )
+    ]);
+}
+
+#[test]
+fn test_logical_expression_with_parentheses() {
+    // Parentheses should override the default precedence of `and` over `or`.
+    // This should parse as `a and (b or c)`.
+    parser_test("a and (b or c)", vec![
+        expression_statement(
+            logical(
+                identifier("a"),
+                BinaryOp::And,
+                logical(
+                    identifier("b"),
+                    BinaryOp::Or,
+                    identifier("c")
+                )
+            )
+        )
+    ]);
+}
+
+#[test]
+fn test_error_on_consecutive_logical_operators() {
+    // The parser should fail if it encounters two logical operators in a row.
+    parser_error_test("a and and b", &SyntaxErrorKind::UnexpectedToken {
+        expected: "an expression".to_string(),
+        found: "and".to_string(),
+    });
+}
+
+#[test]
+fn test_error_on_missing_rhs_logical() {
+    // The parser should fail if a logical operator is not followed by an expression.
+    parser_error_test("a or", &SyntaxErrorKind::UnexpectedEOF);
+}
+
