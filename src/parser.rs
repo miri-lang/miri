@@ -568,8 +568,11 @@ impl<'source> Parser<'source> {
         let name = self.parse_simple_identifier()?;
 
         let typ = match self.type_expression()? {
-            Some(typ) => Some(Box::new(typ)),
-            None => None,
+            Some(typ) => Box::new(typ),
+            None => {
+                // Miri doesn't support untyped parameters
+                return Err(self.error_missing_type_expression())
+            },
         };
 
         let guard = if self._lookahead.is_some() && self.lookahead_is_guard() {
@@ -792,58 +795,80 @@ impl<'source> Parser<'source> {
             return Ok(None);
         }
 
-        let typ: Type;
-         
-        match &self._lookahead {
+        let base_typ_expr: Option<Expression> = match &self._lookahead {
             Some((Token::Identifier, _)) => {
                 let type_name = self.identifier_to_type_name()?;
-                typ = self.type_name_to_type(type_name)?;
+                let typ = self.type_name_to_type(type_name)?;
+                Some(self._ast_factory.create_type_expression(typ, false))
             },
             Some((Token::LBracket, _)) => {
                 self.eat_token(&Token::LBracket)?;
                 let element_type = self.element_type_expression("List element type")?;
                 self.eat_token(&Token::RBracket)?;
-                typ = Type::List(Box::new(element_type));
+                Some(self._ast_factory.create_type_expression(Type::List(Box::new(element_type)), false))
             },
             Some((Token::LParen, _)) => {
-                let elements = self.multiple_element_type_expressions(
-                    "Tuple element type", 
-                    &Token::LParen, 
-                    &Token::RParen
-                )?;
-                typ = Type::Tuple(elements);
+                self.eat_token(&Token::LParen)?;
+                if self.lookahead_is_rparen() {
+                    self.eat_token(&Token::RParen)?;
+                    // Empty tuple type `()`
+                    return Ok(Some(self._ast_factory.create_type_expression(Type::Tuple(vec![]), false)));
+                }
+
+                let first_element = self.element_type_expression("Grouped type or tuple element")?;
+
+                if self.lookahead_is_comma() {
+                    let mut elements = vec![first_element];
+                    while self.lookahead_is_comma() {
+                        self.eat_token(&Token::Comma)?;
+                        if self.lookahead_is_rparen() { break; } // Allow trailing comma
+                        elements.push(self.element_type_expression("Tuple element type")?);
+                    }
+                    self.eat_token(&Token::RParen)?;
+                    Some(self._ast_factory.create_type_expression(Type::Tuple(elements), false))
+                } else {
+                    self.eat_token(&Token::RParen)?;
+                    Some(first_element)
+                }
             },
             Some((Token::LBrace, _)) => {
                 self.eat_token(&Token::LBrace)?;
                 let key_type = self.element_type_expression("Map key type")?;
-                if self.match_lookahead_type(|t| t == &Token::Colon) {
+                let typ = if self.match_lookahead_type(|t| t == &Token::Colon) {
                     self.eat_token(&Token::Colon)?;
                     let value_type = self.element_type_expression("Map value type")?;
                     self.eat_token(&Token::RBrace)?;
-                    typ = Type::Map(Box::new(key_type), Box::new(value_type));
+                    Type::Map(Box::new(key_type), Box::new(value_type))
                 } else {
                     self.eat_token(&Token::RBrace)?;
-                    typ = Type::Set(Box::new(key_type));
-                }
+                    Type::Set(Box::new(key_type))
+                };
+                Some(self._ast_factory.create_type_expression(typ, false))
             },
             Some((Token::Fn, _)) => {
                 self.eat_token(&Token::Fn)?;
                 let generic_types = self.generic_types_expression()?;
                 let parameters = self.function_params_expression()?;
                 let return_type = self.return_type_expression()?;
-                typ = Type::Function(generic_types, parameters, return_type);
+                let typ = Type::Function(generic_types, parameters, return_type);
+                Some(self._ast_factory.create_type_expression(typ, false))
             },
             _ => return Ok(None),
-        }
-
-        let is_nullable = if self.match_lookahead_type(|t| t == &Token::QuestionMark) {
-            self.eat_token(&Token::QuestionMark)?;
-            true
-        } else {
-            false
         };
 
-        Ok(Some(self._ast_factory.create_type_expression(typ, is_nullable)))
+        if base_typ_expr.is_none() { 
+            return Ok(None); 
+        }
+        let mut final_expr = base_typ_expr.unwrap();
+
+        if self.match_lookahead_type(|t| t == &Token::QuestionMark) {
+            self.eat_token(&Token::QuestionMark)?;
+            if let Expression::Type(inner_type, _) = final_expr {
+                final_expr = self._ast_factory.create_type_expression(*inner_type, true);
+            }
+        }
+
+        Ok(Some(final_expr))
     }
 
     fn type_name_to_type(&mut self, type_name: String) -> Result<Type, SyntaxError> {
@@ -948,8 +973,14 @@ impl<'source> Parser<'source> {
         let mut elements = vec![element_type];
         while self.lookahead_is_comma() {
             self.eat_token(&Token::Comma)?;
-            let element_type = self.element_type_expression(expected)?;
-            elements.push(element_type);
+            match &self._lookahead {
+                Some((t, _)) if t == right_token => break, // Allow trailing comma
+                None => break,
+                _ => {
+                    let element_type = self.element_type_expression(expected)?;
+                    elements.push(element_type);
+                }
+            }
         }
 
         self.eat_token(right_token)?;
@@ -1007,6 +1038,9 @@ impl<'source> Parser<'source> {
 
         while self.lookahead_is_comma() {
             self.eat_token(&Token::Comma)?;
+            if self.lookahead_is_expression_end() {
+                break; // Allow trailing comma
+            }
             declarations.push(self.type_declaration()?);
         }
         self.eat_statement_end()?;
@@ -1077,6 +1111,7 @@ impl<'source> Parser<'source> {
     */
     fn type_declaration(&mut self) -> Result<Expression, SyntaxError> {
         let name = self.identifier()?;
+        let generic_types = self.generic_types_expression()?;
         let kind = match self._lookahead {
             Some((Token::Is, _)) => {
                 self.eat_token(&Token::Is)?;
@@ -1096,7 +1131,12 @@ impl<'source> Parser<'source> {
             },
             Some((Token::Comma, _)) | Some((Token::ExpressionStatementEnd, _)) => {
                 // If we see a comma or the end of the statement, it means this is a continuation of a type declaration list
-                return Ok(self._ast_factory.create_type_declaration(name, TypeDeclarationKind::None, None));
+                return Ok(self._ast_factory.create_type_declaration(
+                    name, 
+                    generic_types, 
+                    TypeDeclarationKind::None, 
+                    None)
+                );
             }
             _ => return Err(self.error_unexpected_token("is, implements, includes or extends", &self.lookahead_as_string())),
         };
@@ -1104,21 +1144,56 @@ impl<'source> Parser<'source> {
             Some(typ) => Some(Box::new(typ)),
             None => None,
         };
-        Ok(self._ast_factory.create_type_declaration(name, kind, type_expr))
+        Ok(self._ast_factory.create_type_declaration(name, generic_types, kind, type_expr))
     }
 
     /*
         ImportPathExpression
-            : Identifier ('.' Identifier)*
+            : Identifier ('.' Identifier)* ('.' ('*' | '{' ImportList '}'))?
             ;
     */
     fn import_path_expression(&mut self) -> Result<Expression, SyntaxError> {
         let mut segments = vec![self.identifier()?];
+        let mut kind = ImportPathKind::Simple;
+
         while self.match_lookahead_type(|t| t == &Token::Dot) {
             self.eat_token(&Token::Dot)?;
+
+            if self.match_lookahead_type(|t| t == &Token::Star) {
+                self.eat_token(&Token::Star)?;
+                kind = ImportPathKind::Wildcard;
+                break; // Wildcard must be the last part of the path
+            }
+
+            if self.match_lookahead_type(|t| t == &Token::LBrace) {
+                self.eat_token(&Token::LBrace)?;
+                let mut multi_imports = vec![self.multi_import_segment()?];
+                while self.lookahead_is_comma() {
+                    self.eat_token(&Token::Comma)?;
+                    if self.match_lookahead_type(|t| t == &Token::RBrace) {
+                        break; // Allow trailing comma
+                    }
+                    multi_imports.push(self.multi_import_segment()?);
+                }
+                self.eat_token(&Token::RBrace)?;
+                kind = ImportPathKind::Multi(multi_imports);
+                break; // Multi-import block must be the last part
+            }
+
             segments.push(self.identifier()?);
         }
-        Ok(self._ast_factory.create_import_path_expression(segments))
+        Ok(self._ast_factory.create_import_path_expression(segments, kind))
+    }
+
+    fn multi_import_segment(&mut self) -> Result<(Expression, Option<Box<Expression>>), SyntaxError> {
+        let path = self.identifier()?;
+        let alias = if self.match_lookahead_type(|t| t == &Token::As) {
+            self.eat_token(&Token::As)?;
+            Some(Box::new(self.identifier()?))
+        } else {
+            None
+        };
+        Ok((path, alias))
     }
 
     /*
@@ -2539,6 +2614,13 @@ impl<'source> Parser<'source> {
     fn error_missing_members(&self, kind: SyntaxErrorKind) -> SyntaxError {
         SyntaxError::new(
             kind,
+            self.source.len()..self.source.len()
+        )
+    }
+
+    fn error_missing_type_expression(&self) -> SyntaxError {
+        SyntaxError::new(
+            SyntaxErrorKind::MissingTypeExpression,
             self.source.len()..self.source.len()
         )
     }

@@ -2,6 +2,7 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use miri::ast::*;
+use miri::syntax_error::SyntaxErrorKind;
 use super::ast_builder::*;
 use super::utils::*;
 
@@ -61,4 +62,51 @@ fn test_precedence_of_member_access_and_unary_negation() {
             )
         )
     ]);
+}
+
+#[test]
+fn test_precedence_of_index_and_unary_negation() {
+    // Index access `[]` has higher precedence than unary `-`.
+    // This should parse as `-(a[0])`.
+    parser_test("-a[0]", vec![
+        expression_statement(
+            unary(
+                UnaryOp::Negate,
+                index(identifier("a"), int_literal_expression(0))
+            )
+        )
+    ]);
+}
+
+#[test]
+fn test_precedence_of_call_and_unary_negation() {
+    // Function calls `()` have higher precedence than unary `-`.
+    // This should parse as `-(a())`.
+    parser_test("-a()", vec![
+        expression_statement(
+            unary(
+                UnaryOp::Negate,
+                call(identifier("a"), vec![])
+            )
+        )
+    ]);
+}
+
+#[test]
+fn test_chained_unary_operator() {
+    parser_test("not not y", vec![
+        expression_statement(
+            unary(
+                UnaryOp::Not,
+                unary(UnaryOp::Not, identifier("y"))
+            )
+        )
+    ]);
+}
+
+#[test]
+fn test_error_on_dangling_unary_operator() {
+    // A unary operator must be followed by an expression.
+    parser_error_test("not", &SyntaxErrorKind::UnexpectedEOF);
+    parser_error_test("let x = -", &SyntaxErrorKind::UnexpectedEOF);
 }

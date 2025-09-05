@@ -14,7 +14,7 @@ fn square(x int)
     x * x
 ", vec![
         func("square").params(vec![
-            parameter("x".into(), opt_expr(typ(Type::Int)), None, None)
+            parameter("x".into(), typ(Type::Int), None, None)
         ]).build(block(vec![
             expression_statement(
                 binary(
@@ -37,7 +37,7 @@ fn square(x int > 0)
             .params(vec![
                 parameter(
                     "x".into(),
-                    opt_expr(typ(Type::Int)),
+                    typ(Type::Int),
                     opt_expr(guard(GuardOp::GreaterThan, int_literal_expression(0))),
                     None
                 )
@@ -63,7 +63,7 @@ fn square(x int > 0) int: x * x
             .params(vec![
                 parameter(
                     "x".into(),
-                    opt_expr(typ(Type::Int)),
+                    typ(Type::Int),
                     opt_expr(guard(GuardOp::GreaterThan, int_literal_expression(0))),
                     None
                 )
@@ -98,8 +98,8 @@ fn add(a int, b int)
 ", vec![
         func("add")
             .params(vec![
-                parameter("a".into(), opt_expr(typ(Type::Int)), None, None),
-                parameter("b".into(), opt_expr(typ(Type::Int)), None, None),
+                parameter("a".into(), typ(Type::Int), None, None),
+                parameter("b".into(), typ(Type::Int), None, None),
             ])
             .build(block(vec![
                 return_statement(
@@ -111,16 +111,10 @@ fn add(a int, b int)
 
 #[test]
 fn test_function_untyped_parameter() {
-    parser_test("
+    parser_error_test("
 fn process(data)
     // do something
-", vec![
-        func("process")
-            .params(vec![
-                parameter("data".into(), None, None, None)
-            ])
-            .build(empty_statement())
-    ]);
+", &SyntaxErrorKind::MissingTypeExpression);
 }
 
 #[test]
@@ -231,7 +225,7 @@ fn process<T>(data T) T: data
             .params(vec![
                 parameter(
                     "data".into(),
-                    opt_expr(typ(Type::Custom("T".into(), None))), None, None
+                    typ(Type::Custom("T".into(), None)), None, None
                 )
             ])
             .return_type(typ(Type::Custom("T".into(), None)))
@@ -277,7 +271,7 @@ fn my_func /* comment */ (a int)
     // body
 ", vec![
         func("my_func").params(
-            vec![parameter("a".into(), opt_expr(typ(Type::Int)), None, None)]
+            vec![parameter("a".into(), typ(Type::Int), None, None)]
         ).build_empty_body()
     ]);
 }
@@ -409,12 +403,12 @@ fn test_error_double_visibility_modifier() {
 #[test]
 fn test_function_with_default_parameter_values() {
     parser_test("
-fn my_func(a int = 10, b = true)
+fn my_func(a int = 10, b bool = true)
     // body
 ", vec![
         func("my_func").params(vec![
-            parameter("a".into(), opt_expr(typ(Type::Int)), None, opt_expr(int_literal_expression(10))),
-            parameter("b".into(), None, None, opt_expr(boolean_literal(true)))
+            parameter("a".into(), typ(Type::Int), None, opt_expr(int_literal_expression(10))),
+            parameter("b".into(), typ(Type::Boolean), None, opt_expr(boolean_literal(true)))
         ]).build_empty_body()
     ]);
 }
@@ -439,7 +433,7 @@ fn process<T>(data list<T>) list<T>: data
             .params(vec![
                 parameter(
                     "data".into(),
-                    opt_expr(typ(Type::List(Box::new(typ(Type::Custom("T".into(), None)))))),
+                    typ(Type::List(Box::new(typ(Type::Custom("T".into(), None))))),
                     None,
                     None
                 )
@@ -456,8 +450,8 @@ fn my_func(a int, b string,)
     // body
 ", vec![
         func("my_func").params(vec![
-            parameter("a".into(), opt_expr(typ(Type::Int)), None, None),
-            parameter("b".into(), opt_expr(typ(Type::String)), None, None)
+            parameter("a".into(), typ(Type::Int), None, None),
+            parameter("b".into(), typ(Type::String), None, None)
         ]).build_empty_body()
     ]);
 }

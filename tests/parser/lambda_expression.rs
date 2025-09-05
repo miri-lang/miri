@@ -34,7 +34,7 @@ fn test_lambda_with_generics() {
                 opt_expr(
                     lambda()
                         .generics(vec![generic_type("T", None)])
-                        .params(vec![parameter("x".into(), opt_expr(typ(Type::Custom("T".into(), None))), None, None)])
+                        .params(vec![parameter("x".into(), typ(Type::Custom("T".into(), None)), None, None)])
                         .return_type(typ(Type::Custom("T".into(), None)))
                         .build_lambda(expression_statement(identifier("x")))
                 )
@@ -52,11 +52,11 @@ fn test_nested_lambdas() {
                 None,
                 opt_expr(
                     lambda()
-                        .params(vec![parameter("x".into(), opt_expr(typ(Type::Int)), None, None)])
+                        .params(vec![parameter("x".into(), typ(Type::Int), None, None)])
                         .build_lambda(
                             expression_statement(
                                 lambda()
-                                    .params(vec![parameter("y".into(), opt_expr(typ(Type::Int)), None, None)])
+                                    .params(vec![parameter("y".into(), typ(Type::Int), None, None)])
                                     .build_lambda(expression_statement(
                                         binary(identifier("x"), BinaryOp::Add, identifier("y"))
                                     ))
@@ -74,7 +74,7 @@ fn test_immediately_invoked_function_expression() {
         expression_statement(
             call(
                 lambda()
-                    .params(vec![parameter("x".into(), opt_expr(typ(Type::Int)), None, None)])
+                    .params(vec![parameter("x".into(), typ(Type::Int), None, None)])
                     .build_lambda(expression_statement(
                         binary(identifier("x"), BinaryOp::Mul, int_literal_expression(2))
                     )),
@@ -169,7 +169,7 @@ fn test_lambda_with_parameter_guard() {
                         .params(vec![
                             parameter(
                                 "x".into(),
-                                opt_expr(typ(Type::Int)),
+                                typ(Type::Int),
                                 opt_expr(guard(GuardOp::GreaterThan, int_literal_expression(0))),
                                 None
                             )
@@ -185,15 +185,15 @@ fn test_lambda_with_parameter_guard() {
 fn test_lambda_returned_from_function() {
     parser_test("
 fn get_adder()
-    return fn (a, b): a + b
+    return fn (a int, b int): a + b
 ", vec![
         func("get_adder").build(
             block(vec![
                 return_statement(opt_expr(
                     lambda()
                         .params(vec![
-                            parameter("a".into(), None, None, None),
-                            parameter("b".into(), None, None, None)
+                            parameter("a".into(), typ(Type::Int), None, None),
+                            parameter("b".into(), typ(Type::Int), None, None)
                         ])
                         .build_lambda(expression_statement(
                             binary(identifier("a"), BinaryOp::Add, identifier("b"))
@@ -208,8 +208,8 @@ fn get_adder()
 fn test_mutiline_lambda_as_parameter() {
     parser_test("
 func(
-    fn (a, b): a + b,
-    fn (c, d, e)
+    fn (a int, b int): a + b,
+    fn (c int, d int, e int)
         let x = c + d + e
         print(x)
         return x
@@ -225,17 +225,17 @@ func(
                 vec![
                     lambda()
                         .params(vec![
-                            parameter("a".into(), None, None, None),
-                            parameter("b".into(), None, None, None)
+                            parameter("a".into(), typ(Type::Int), None, None),
+                            parameter("b".into(), typ(Type::Int), None, None)
                         ])
                         .build_lambda(expression_statement(
                             binary(identifier("a"), BinaryOp::Add, identifier("b"))
                         )),
                     lambda()
                         .params(vec![
-                            parameter("c".into(), None, None, None),
-                            parameter("d".into(), None, None, None),
-                            parameter("e".into(), None, None, None)
+                            parameter("c".into(), typ(Type::Int), None, None),
+                            parameter("d".into(), typ(Type::Int), None, None),
+                            parameter("e".into(), typ(Type::Int), None, None)
                         ])
                         .build_lambda(block(vec![
                             variable_statement(vec![
@@ -326,7 +326,7 @@ fn test_error_lambda_with_misplaced_modifier() {
 
 #[test]
 fn test_lambda_with_default_parameter_values() {
-    parser_test("let f = fn (a int = 10, b = true): a", vec![
+    parser_test("let f = fn (a int = 10, b bool = true): a", vec![
         variable_statement(vec![
             let_variable(
                 "f",
@@ -334,8 +334,8 @@ fn test_lambda_with_default_parameter_values() {
                 opt_expr(
                     lambda()
                         .params(vec![
-                            parameter("a".into(), opt_expr(typ(Type::Int)), None, opt_expr(int_literal_expression(10))),
-                            parameter("b".into(), None, None, opt_expr(boolean_literal(true)))
+                            parameter("a".into(), typ(Type::Int), None, opt_expr(int_literal_expression(10))),
+                            parameter("b".into(), typ(Type::Boolean), None, opt_expr(boolean_literal(true)))
                         ])
                         .build_lambda(expression_statement(identifier("a")))
                 )
@@ -362,8 +362,8 @@ fn test_lambda_with_trailing_comma_in_parameters() {
                 opt_expr(
                     lambda()
                         .params(vec![
-                            parameter("a".into(), opt_expr(typ(Type::Int)), None, None),
-                            parameter("b".into(), opt_expr(typ(Type::String)), None, None)
+                            parameter("a".into(), typ(Type::Int), None, None),
+                            parameter("b".into(), typ(Type::String), None, None)
                         ])
                         .build_lambda(expression_statement(identifier("a")))
                 )

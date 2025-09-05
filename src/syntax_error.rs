@@ -44,6 +44,7 @@ pub enum SyntaxErrorKind {
     MissingStructMemberType,
     MissingStructMembers,
     MissingEnumMembers,
+    MissingTypeExpression,
 
     DuplicateMatchPattern,
     MissingMatchBranches
@@ -183,6 +184,10 @@ impl SyntaxError {
             SyntaxErrorKind::MissingEnumMembers => (
                 "Missing Enum Members",
                 "Enums must have at least one member.".to_string(),
+            ),
+            SyntaxErrorKind::MissingTypeExpression => (
+                "Missing Type Expression",
+                "Type expression is required but not provided.".to_string(),
             ),
         };
 

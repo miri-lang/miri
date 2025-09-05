@@ -73,7 +73,7 @@ fn test_namespaced_type_in_function_parameter() {
             vec![
                 parameter(
                     "s".into(),
-                    opt_expr(typ(Type::Custom("Http::Status".into(), None))),
+                    typ(Type::Custom("Http::Status".into(), None)),
                     None,
                     None
                 )

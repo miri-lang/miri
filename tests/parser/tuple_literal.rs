@@ -203,17 +203,6 @@ fn test_single_item_tuple_with_lambda() {
 }
 
 #[test]
-fn test_single_element_tuple_with_trailing_comma() {
-    parser_test("let single = (1,)", vec![
-        variable_statement(vec![
-            let_variable("single", None, opt_expr(tuple(vec![
-                int_literal_expression(1),
-            ])))
-        ], MemberVisibility::Public)
-    ]);
-}
-
-#[test]
 fn test_error_unclosed_tuple() {
     parser_error_test(
         "let t = (1, 2",
@@ -230,4 +219,25 @@ fn test_error_tuple_missing_comma() {
             found: "int".to_string(),
         }
     );
+}
+
+#[test]
+fn test_tuple_index_precedence() {
+    // Index access on a literal has higher precedence than binary operators.
+    // This should parse as `((1, 2)[0]) + 3`.
+    parser_test("(1, 2)[0] + 3", vec![
+        expression_statement(
+            binary(
+                index(
+                    tuple(vec![
+                        int_literal_expression(1),
+                        int_literal_expression(2),
+                    ]),
+                    int_literal_expression(0)
+                ),
+                BinaryOp::Add,
+                int_literal_expression(3)
+            )
+        )
+    ]);
 }

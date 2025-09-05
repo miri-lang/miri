@@ -25,13 +25,11 @@ fn process_data(data {string: bool}?)
             vec![
                 parameter(
                     "data".into(),
-                    opt_expr(
-                        null_typ(
-                            Type::Map(
-                                Box::new(typ(Type::String)),
-                                Box::new(typ(Type::Boolean))
-                            ),
-                        )
+                    null_typ(
+                        Type::Map(
+                            Box::new(typ(Type::String)),
+                            Box::new(typ(Type::Boolean))
+                        ),
                     ),
                     None,
                     None
@@ -123,9 +121,7 @@ fn test_error_malformed_map_type() {
 fn test_error_incomplete_generic_type() {
     parser_error_test(
         "let my_generic MyType<int,",
-        &SyntaxErrorKind::InvalidTypeDeclaration {
-            expected: "Generic type".to_string(),
-        }
+        &SyntaxErrorKind::UnexpectedEOF
     );
 }
 
@@ -162,20 +158,58 @@ fn test_deeply_nested_collection_type() {
 }
 
 #[test]
-fn test_unit_type_tuple() {
-    parser_error_test(
-        "let u ()",
-        &SyntaxErrorKind::InvalidTypeDeclaration {
-            expected: "Tuple element type".to_string(),
-        }
+fn test_grouping_parentheses_in_type() {
+    type_statement_test(
+        "(string)", 
+        typ(Type::String)
     );
 }
 
 #[test]
-fn test_single_element_tuple_type() {
+fn test_single_element_tuple_with_trailing_comma() {
     type_statement_test(
-        "(string)",
+        "(string,)",
         typ(Type::Tuple(vec![typ(Type::String)]))
+    );
+}
+
+#[test]
+fn test_multi_element_tuple_with_trailing_comma() {
+    type_statement_test(
+        "(int, bool,)",
+        typ(Type::Tuple(vec![typ(Type::Int), typ(Type::Boolean)]))
+    );
+}
+
+#[test]
+fn test_nullable_function_type() {
+    type_statement_test(
+        "(fn(s string) bool)?",
+        null_typ(Type::Function(
+            None,
+            vec![parameter("s".into(), typ(Type::String), None, None)],
+            opt_expr(typ(Type::Boolean))
+        ))
+    );
+}
+
+#[test]
+fn test_error_ambiguous_nullable_function_return() {
+    parser_test(
+        "let x fn() int?",
+        vec![
+            variable_statement(vec![
+                let_variable(
+                    "x",
+                    opt_expr(typ(Type::Function(
+                        None,
+                        vec![],
+                        opt_expr(null_typ(Type::Int)) // The `?` applies to the return type, not the function itself.
+                    ))),
+                    None
+                )
+            ], MemberVisibility::Public)
+        ]
     );
 }
 
@@ -184,16 +218,6 @@ fn test_simple_nullable_built_in_type() {
     type_statement_test(
         "int?",
         null_typ(Type::Int)
-    );
-}
-
-#[test]
-fn test_error_trailing_comma_in_tuple_type() {
-    parser_error_test(
-        "let x (int, )",
-        &SyntaxErrorKind::InvalidTypeDeclaration {
-            expected: "Tuple element type".to_string()
-        }
     );
 }
 
@@ -270,8 +294,8 @@ fn test_function_type_with_named_parameters() {
         typ(Type::Function(
             None, // no generics
             vec![
-                parameter("x".into(), opt_expr(typ(Type::Int)), None, None),
-                parameter("y".into(), opt_expr(null_typ(Type::String)), None, None),
+                parameter("x".into(), typ(Type::Int), None, None),
+                parameter("y".into(), null_typ(Type::String), None, None),
             ],
             opt_expr(typ(Type::Boolean))
         ))
@@ -289,7 +313,7 @@ fn test_function_type_returning_function_type() {
             vec![],
             opt_expr(typ(Type::Function(
                 None,
-                vec![parameter("x".into(), opt_expr(typ(Type::Int)), None, None)],
+                vec![parameter("x".into(), typ(Type::Int), None, None)],
                 opt_expr(typ(Type::Boolean))
             )))
         ))
@@ -303,7 +327,7 @@ fn test_list_of_function_types() {
         typ(Type::List(Box::new(
             typ(Type::Function(
                 None,
-                vec![parameter("s".into(), opt_expr(typ(Type::String)), None, None)],
+                vec![parameter("s".into(), typ(Type::String), None, None)],
                 opt_expr(typ(Type::Boolean))
             ))
         )))
@@ -316,48 +340,14 @@ fn test_function_type_with_generics() {
         "fn<T>(item T) T",
         typ(Type::Function(
             Some(vec![generic_type("T", None)]),
-            vec![parameter("item".into(), opt_expr(typ(Type::Custom("T".into(), None))), None, None)],
+            vec![parameter("item".into(), typ(Type::Custom("T".into(), None)), None, None)],
             opt_expr(typ(Type::Custom("T".into(), None)))
         ))
     );
 }
 
 #[test]
-fn test_nullable_parenthesized_function_type() {
-    // The parser will interpret `(fn() int)` as a single-element tuple containing a function type.
-    // The `?` then makes the tuple itself nullable.
-    type_statement_test(
-        "(fn() int)?",
-        null_typ(Type::Tuple(vec![
-            typ(Type::Function(
-                None,
-                vec![],
-                opt_expr(typ(Type::Int))
-            ))
-        ]))
-    );
-}
-
-#[test]
-fn test_function_type_with_type_as_parameter_name() {
-    // Crazy but valid: a function with parameters named 'int' and 'bool' of unspecified types.
-    type_statement_test(
-        "fn(int, bool)",
-        typ(Type::Function(
-            None,
-            vec![
-                parameter("int".into(), None, None, None),
-                parameter("bool".into(), None, None, None),
-            ],
-            None
-        ))
-    );
-}
-
-#[test]
 fn test_crazy_nested_function_type() {
-    // A generic function type that takes another function type as a parameter
-    // and returns a nullable function type.
     type_statement_test(
         "fn<T>(cb fn(item T) bool, items [T]?) (fn() T)?",
         typ(Type::Function(
@@ -365,35 +355,33 @@ fn test_crazy_nested_function_type() {
             vec![ // parameters
                 parameter(
                     "cb".into(),
-                    opt_expr(typ(Type::Function(
+                    typ(Type::Function(
                         None,
-                        vec![parameter("item".into(), opt_expr(typ(Type::Custom("T".into(), None))), None, None)],
+                        vec![parameter("item".into(), typ(Type::Custom("T".into(), None)), None, None)],
                         opt_expr(typ(Type::Boolean))
-                    ))),
+                    )),
                     None,
                     None
                 ),
                 parameter(
                     "items".into(),
-                    opt_expr(null_typ(Type::List(Box::new(typ(Type::Custom("T".into(), None)))))),
+                    null_typ(Type::List(Box::new(typ(Type::Custom("T".into(), None))))),
                     None,
                     None
                 )
             ],
             // return type: (fn() T)?
-            opt_expr(null_typ(Type::Tuple(vec![
-                typ(Type::Function(
-                    None,
-                    vec![],
-                    opt_expr(typ(Type::Custom("T".into(), None)))
-                ))
-            ])))
+            opt_expr(null_typ(Type::Function( // <-- This is now a nullable function, not a tuple
+                None,
+                vec![],
+                opt_expr(typ(Type::Custom("T".into(), None)))
+            )))
         ))
     );
 }
 
 #[test]
-fn test_error_function_type_with_trailing_comma() {
+fn test_function_type_with_trailing_comma() {
     parser_test(
         "let x fn(a int,)",
         vec![
@@ -402,7 +390,7 @@ fn test_error_function_type_with_trailing_comma() {
                     "x",
                     opt_expr(typ(Type::Function(
                         None,
-                        vec![parameter("a".into(), opt_expr(typ(Type::Int)), None, None)],
+                        vec![parameter("a".into(), typ(Type::Int), None, None)],
                         None
                     ))),
                     None
