@@ -52,14 +52,14 @@ for el in [1, 2, 3]
 
 #[test]
 fn test_method_call_on_list_literal() {
-    parser_test("[1, 2, 3].each(fn (el): print(el))", vec![
+    parser_test("[1, 2, 3].each(fn (el int): print(el))", vec![
         expression_statement(
             call(
                 member(
                     list(vec![int_literal_expression(1), int_literal_expression(2), int_literal_expression(3)]),
                     identifier("each")
                 ),
-                vec![lambda().params(vec![parameter("el".into(), None, None, None)]).build_lambda(
+                vec![lambda().params(vec![parameter("el".into(), typ(Type::Int), None, None)]).build_lambda(
                     expression_statement(call(identifier("print"), vec![identifier("el")]))
                 )]
             )

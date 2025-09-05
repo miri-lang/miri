@@ -2,6 +2,7 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use miri::ast::*;
+use miri::syntax_error::SyntaxErrorKind;
 use super::ast_builder::*;
 use super::utils::*;
 
@@ -198,5 +199,41 @@ while (
             )
         )
     ])
+    );
+}
+
+#[test]
+fn test_while_loop_with_break_and_continue() {
+    combined_while_until_test("
+while true
+    if condition()
+        continue
+    else
+        break
+",
+    boolean_literal(true),
+    block(vec![
+        if_statement(
+            call(identifier("condition"), vec![]),
+            block(vec![continue_statement()]),
+            Some(block(vec![break_statement()]))
+        )
+    ])
+    );
+}
+
+#[test]
+fn test_error_on_missing_loop_condition() {
+    parser_error_test("while", &SyntaxErrorKind::UnexpectedEOF);
+}
+
+#[test]
+fn test_error_on_missing_loop_body() {
+    parser_error_test(
+        "while x > 0",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "a colon or an expression end".to_string(),
+            found: "end of file".to_string(),
+        }
     );
 }

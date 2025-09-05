@@ -39,7 +39,7 @@ pub enum RangeExpressionType {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Parameter {
     pub name: String,
-    pub typ: Option<Box<Expression>>, // Type can be specified, e.g., "i32", "String"
+    pub typ: Box<Expression>,
     pub guard: Option<Box<Expression>>, // Optional guard expression
     pub default_value: Option<Box<Expression>>, // Optional default value
 }
@@ -125,13 +125,13 @@ pub enum Expression {
 
     Call(Box<Expression>, Vec<Expression>), // function, args
 
-    ImportPath(Vec<Expression>), // Represents an import path, e.g., `use a.b.c`
+    ImportPath(Vec<Expression>, ImportPathKind), // Represents an import path, e.g., `use a.b.c`
 
     Type(Box<Type>, bool), // Represents a type expression, e.g., `i32`, `string`, etc.
 
     GenericType(Box<Expression>, Option<Box<Expression>>), // Represents a generic type, e.g., <T is MyClass>
 
-    TypeDeclaration(Box<Expression>, TypeDeclarationKind, Option<Box<Expression>>), // T extends SomeClass
+    TypeDeclaration(Box<Expression>, Option<Vec<Expression>>, TypeDeclarationKind, Option<Box<Expression>>), // T extends SomeClass
 
     EnumValue(Box<Expression>, Vec<Expression>), // Represents an enum value, e.g., Ok, Err(string)
 
@@ -150,6 +150,13 @@ pub enum Expression {
     Match(Box<Expression>, Vec<MatchBranch>), // value, branches
 
     FormattedString(Vec<Expression>), // "hello #{name}"
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ImportPathKind {
+    Simple,
+    Wildcard,
+    Multi(Vec<(Expression, Option<Box<Expression>>)>),
 }
 
 /// Represents the type of a variable
@@ -489,8 +496,8 @@ impl AstFactory {
         Expression::Call(Box::new(callee), args)
     }
 
-    pub fn create_import_path_expression(&self, segments: Vec<Expression>) -> Expression {
-        Expression::ImportPath(segments)
+    pub fn create_import_path_expression(&self, segments: Vec<Expression>, kind: ImportPathKind) -> Expression {
+        Expression::ImportPath(segments, kind)
     }
 
     pub fn create_use_statement(&self, path: Expression, alias: Option<Box<Expression>>) -> Statement {
@@ -505,8 +512,8 @@ impl AstFactory {
         Expression::GenericType(Box::new(name), constraint)
     }
 
-    pub fn create_type_declaration(&self, name: Expression, kind: TypeDeclarationKind, type_expr: Option<Box<Expression>>) -> Expression {
-        Expression::TypeDeclaration(Box::new(name), kind, type_expr)
+    pub fn create_type_declaration(&self, name: Expression, generic_types: Option<Vec<Expression>>, kind: TypeDeclarationKind, type_expr: Option<Box<Expression>>) -> Expression {
+        Expression::TypeDeclaration(Box::new(name), generic_types, kind, type_expr)
     }
 
     pub fn create_type_statement(&self, declarations: Vec<Expression>, visibility: MemberVisibility) -> Statement {

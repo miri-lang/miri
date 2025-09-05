@@ -254,6 +254,17 @@ do
 }
 
 #[test]
+fn test_error_on_missing_do_while_condition() {
+    parser_error_test(
+        "do: x += 1",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "while or until".to_string(),
+            found: "end of file".to_string(),
+        }
+    );
+}
+
+#[test]
 fn test_error_on_do_with_wrong_keyword() {
     parser_error_test("
 do

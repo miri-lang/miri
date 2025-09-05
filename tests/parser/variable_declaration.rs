@@ -161,3 +161,33 @@ fn test_error_modifier_order_variable() {
         }
     );
 }
+
+#[test]
+fn test_error_on_trailing_comma_in_declaration() {
+    parser_error_test(
+        "let x, y,",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "identifier".to_string(),
+            found: "end of file".to_string(),
+        }
+    );
+}
+
+#[test]
+fn test_error_on_missing_variable_name() {
+    parser_error_test(
+        "let = 5",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "identifier".to_string(),
+            found: "=".to_string(),
+        }
+    );
+
+    parser_error_test(
+        "let x, = 10",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "identifier".to_string(),
+            found: "=".to_string(),
+        }
+    );
+}

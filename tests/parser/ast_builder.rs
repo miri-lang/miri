@@ -235,13 +235,23 @@ pub fn guard(op: GuardOp, expr: Expression) -> Expression {
     Expression::Guard(op, Box::new(expr))
 }
 
-pub fn parameter(name: String, typ: Option<Box<Expression>>, guard: Option<Box<Expression>>, default_value: Option<Box<Expression>>) -> Parameter {
-    Parameter { name, typ, guard, default_value }
+pub fn parameter(name: String, typ: Expression, guard: Option<Box<Expression>>, default_value: Option<Box<Expression>>) -> Parameter {
+    Parameter { name, typ: Box::new(typ), guard, default_value }
 }
 
 pub fn import_path(path: &str) -> Expression {
     let segments: Vec<Expression> = path.split(".").map(|s| identifier(s.trim())).collect();
-    Expression::ImportPath(segments)
+    Expression::ImportPath(segments, ImportPathKind::Simple)
+}
+
+pub fn import_path_wildcard(path: &str) -> Expression {
+    let segments: Vec<Expression> = path.split(".").map(|s| identifier(s.trim())).collect();
+    Expression::ImportPath(segments, ImportPathKind::Wildcard)
+}
+
+pub fn import_path_multi(path: &str, items: Vec<(Expression, Option<Box<Expression>>)>) -> Expression {
+    let segments: Vec<Expression> = path.split(".").map(|s| identifier(s.trim())).collect();
+    Expression::ImportPath(segments, ImportPathKind::Multi(items))
 }
 
 pub fn use_statement(import_path: Expression, alias: Option<Box<Expression>>) -> Statement {
@@ -260,8 +270,8 @@ pub fn null_typ(t: Type) -> Expression {
     Expression::Type(Box::new(t), true)
 }
 
-pub fn type_declaration(name: &str, kind: TypeDeclarationKind, type_expr: Option<Box<Expression>>) -> Expression {
-    Expression::TypeDeclaration(Box::new(identifier(name)), kind, type_expr)
+pub fn type_declaration(name: &str, generic_types: Option<Vec<Expression>>, kind: TypeDeclarationKind, type_expr: Option<Box<Expression>>) -> Expression {
+    Expression::TypeDeclaration(Box::new(identifier(name)), generic_types, kind, type_expr)
 }
 
 pub fn type_statement(declarations: Vec<Expression>, visibility: MemberVisibility) -> Statement {

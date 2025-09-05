@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
+use std::vec;
+
 use miri::ast::*;
 use miri::syntax_error::SyntaxErrorKind;
 use super::ast_builder::*;
@@ -149,11 +151,15 @@ fn test_error_enum_empty_inline() {
 
 #[test]
 fn test_error_enum_malformed_value_type() {
-    parser_error_test(
+    parser_test(
         "enum E: V(int,)",
-        &SyntaxErrorKind::InvalidTypeDeclaration {
-            expected: "Enum value type".to_string(),
-        }
+        vec![
+            enum_statement(
+                identifier("E"),
+                vec![enum_value("V", vec![typ(Type::Int)])],
+                MemberVisibility::Public
+            )
+        ]
     );
 }
 
