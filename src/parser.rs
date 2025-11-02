@@ -6,22 +6,21 @@ use std::vec;
 use crate::lexer::{token_to_string, Lexer, Token, TokenSpan};
 use crate::syntax_error::{Span, SyntaxError, SyntaxErrorKind};
 use crate::ast::*;
+use crate::ast_factory as ast;
 
 
 pub struct Parser<'source> {
     lexer: &'source mut Lexer<'source>,
     source: &'source str,
-    _lookahead: Option<TokenSpan>,
-    _ast_factory: AstFactory,
+    _lookahead: Option<TokenSpan>
 }
 
 impl<'source> Parser<'source> {
-    pub fn new(lexer: &'source mut Lexer<'source>, source: &'source str, ast_factory: AstFactory) -> Self {
+    pub fn new(lexer: &'source mut Lexer<'source>, source: &'source str) -> Self {
         Parser {
             lexer,
             source,
-            _lookahead: None,
-            _ast_factory: ast_factory,
+            _lookahead: None
         }
     }
 
@@ -37,7 +36,7 @@ impl<'source> Parser<'source> {
     */
     fn program(&mut self) -> Result<Program, SyntaxError> {
         let statements = self.statement_list()?;
-        Ok(self._ast_factory.create_program(statements))
+        Ok(ast::program(statements))
     }
 
     /*
@@ -153,8 +152,11 @@ impl<'source> Parser<'source> {
         };
 
         self.eat_token(&token)?;
-        let declarations = self.variable_declaration_list(&variable_declaration_type, true)?;
-        Ok(self._ast_factory.create_variable_statement(declarations, visibility))
+        let declarations = self.variable_declaration_list(
+            &variable_declaration_type, 
+            true
+        )?;
+        Ok(ast::variable_statement(declarations, visibility))
     }
 
     /*
@@ -277,7 +279,11 @@ impl<'source> Parser<'source> {
             None
         };
 
-        Ok(self._ast_factory.create_if_statement(condition, then_block, else_block, if_statement_type))
+        if if_statement_type == IfStatementType::Unless {
+            Ok(ast::unless_statement(condition, then_block, else_block))
+        } else {
+            Ok(ast::if_statement(condition, then_block, else_block))
+        }
     }
 
     /*
@@ -302,8 +308,8 @@ impl<'source> Parser<'source> {
             then_block = self.statement_body()?;
         } else if while_statement_type == WhileStatementType::Forever {
             self.eat_token(&Token::Forever)?;
-            condition = self._ast_factory.create_literal_expression(
-                self._ast_factory.create_boolean_literal(true)
+            condition = ast::literal(
+                ast::boolean(true)
             );
             then_block = self.statement_body()?;
         } else if while_statement_type == WhileStatementType::DoWhile {
@@ -326,7 +332,7 @@ impl<'source> Parser<'source> {
             then_block = self.statement_body()?;
         }
 
-        Ok(self._ast_factory.create_while_statement(condition, then_block, while_statement_type))
+        Ok(ast::while_statement_with_type(condition, then_block, while_statement_type))
     }
 
     /*
@@ -358,7 +364,7 @@ impl<'source> Parser<'source> {
             }
         };
 
-        Ok(self._ast_factory.create_range_expression(start, end, range_type))
+        Ok(ast::range(start, end, range_type))
     }
 
     /*
@@ -389,7 +395,7 @@ impl<'source> Parser<'source> {
 
         let body = self.statement_body()?;
 
-        Ok(self._ast_factory.create_for_statement(variable_declarations, iterable, body))
+        Ok(ast::for_statement(variable_declarations, iterable, body))
     }
 
     /*
@@ -444,7 +450,7 @@ impl<'source> Parser<'source> {
                 // An inline lambda body is a single expression, not a full statement.
                 // We parse it and wrap it in an ExpressionStatement for the AST.
                 let expr = self.expression()?;
-                self._ast_factory.create_expression_statement(expr)
+                ast::expression_statement(expr)
             } else {
                 // A block lambda body is a normal block statement, which statement_body handles correctly.
                 self.statement_body()?
@@ -456,8 +462,8 @@ impl<'source> Parser<'source> {
 
         if name.is_empty() {
             return Ok(
-                self._ast_factory.create_expression_statement(
-                    self._ast_factory.create_lambda_expression(
+                ast::expression_statement(
+                    ast::lambda_expression(
                         generic_types,
                         parameters,
                         return_type,
@@ -468,7 +474,14 @@ impl<'source> Parser<'source> {
             );
         }
 
-        Ok(self._ast_factory.create_function_declaration(name, generic_types, parameters, return_type, body, properties))
+        Ok(ast::function_declaration(
+            &name,
+            generic_types,
+            parameters,
+            return_type,
+            body,
+            properties
+        ))
     }
 
     fn generic_types_expression(&mut self) -> Result<Option<Vec<Expression>>, SyntaxError> {
@@ -526,7 +539,7 @@ impl<'source> Parser<'source> {
     fn generic_type(&mut self) -> Result<Expression, SyntaxError> {
         let identifier = self.identifier()?;
         if self._lookahead.is_none() || !self.lookahead_is_inheritance_modifier() {
-            return Ok(self._ast_factory.create_generic_type_expression(identifier, None));
+            return Ok(ast::generic_type_expression(identifier, None));
         }
 
         self.eat(is_inheritance_modifier, "extends, includes or implements")?;
@@ -535,7 +548,7 @@ impl<'source> Parser<'source> {
             None => None,
         };
 
-        Ok(self._ast_factory.create_generic_type_expression(identifier, typ))
+        Ok(ast::generic_type_expression(identifier, typ))
     }
 
     /*
@@ -620,7 +633,7 @@ impl<'source> Parser<'source> {
         }
 
         let expression = self.expression()?;
-        Ok(self._ast_factory.create_guard_expression(guard_op, expression))
+        Ok(ast::guard(guard_op, expression))
     }
 
     /*
@@ -636,7 +649,7 @@ impl<'source> Parser<'source> {
             opt_expr(self.expression()?)
         };
         self.eat_statement_end()?;
-        Ok(self._ast_factory.create_return_statement(expression))
+        Ok(ast::return_statement(expression))
     }
 
     /*
@@ -647,7 +660,7 @@ impl<'source> Parser<'source> {
     fn break_statement(&mut self) -> Result<Statement, SyntaxError> {
         self.eat_token(&Token::Break)?;
         self.eat_statement_end()?;
-        Ok(self._ast_factory.create_break_statement())
+        Ok(ast::break_statement())
     }
 
     /*
@@ -658,7 +671,7 @@ impl<'source> Parser<'source> {
     fn continue_statement(&mut self) -> Result<Statement, SyntaxError> {
         self.eat_token(&Token::Continue)?;
         self.eat_statement_end()?;
-        Ok(self._ast_factory.create_continue_statement())
+        Ok(ast::continue_statement())
     }
 
     fn parse_declaration_block<F, C>(
@@ -673,7 +686,7 @@ impl<'source> Parser<'source> {
     ) -> Result<Statement, SyntaxError>
     where
         F: Fn(&mut Self) -> Result<Expression, SyntaxError>,
-        C: Fn(&mut Self, Expression, Option<Vec<Expression>>, Vec<Expression>, MemberVisibility) -> Statement,
+        C: Fn(Expression, Option<Vec<Expression>>, Vec<Expression>, MemberVisibility) -> Statement,
     {
         let mut items = vec![];
 
@@ -706,7 +719,7 @@ impl<'source> Parser<'source> {
             return Err(self.error_missing_members(missing_members_error));
         }
 
-        Ok(creator(self, name, generic_types, items, visibility))
+        Ok(creator(name, generic_types, items, visibility))
     }
 
     /*
@@ -720,7 +733,7 @@ impl<'source> Parser<'source> {
         let name = self.identifier()?;
         self.parse_declaration_block(
             Self::enum_value_expression,
-            |p, n, _, vals: Vec<Expression>, vis| p._ast_factory.create_enum_statement(n, vals, vis),
+            |n, _, vals: Vec<Expression>, vis| ast::enum_statement(n, vals, vis),
             name,
             visibility,
             "either a colon for inline enums or an indentation for block enums",
@@ -743,7 +756,7 @@ impl<'source> Parser<'source> {
             vec![]
         };
 
-        Ok(self._ast_factory.create_enum_value_expression(identifier, types))
+        Ok(ast::enum_value_expression(identifier, types))
     }
 
     /*
@@ -758,7 +771,7 @@ impl<'source> Parser<'source> {
         let generic_types = self.generic_types_expression()?;
         self.parse_declaration_block(
             Self::struct_member_expression,
-            |p, n, g, m, vis| p._ast_factory.create_struct_statement(n, g, m, vis),
+            |n, g, m, vis| ast::struct_statement(n, g, m, vis),
             name,
             visibility,
             "either a colon for inline structs or an indentation for block structs",
@@ -778,7 +791,7 @@ impl<'source> Parser<'source> {
         if typ.is_none() {
             return Err(self.error_missing_struct_member_type());
         }
-        Ok(self._ast_factory.create_struct_member_expression(name, typ.unwrap()))
+        Ok(ast::struct_member_expression(name, typ.unwrap()))
     }
 
     /*
@@ -799,20 +812,20 @@ impl<'source> Parser<'source> {
             Some((Token::Identifier, _)) => {
                 let type_name = self.identifier_to_type_name()?;
                 let typ = self.type_name_to_type(type_name)?;
-                Some(self._ast_factory.create_type_expression(typ, false))
+                Some(ast::typ(typ))
             },
             Some((Token::LBracket, _)) => {
                 self.eat_token(&Token::LBracket)?;
                 let element_type = self.element_type_expression("List element type")?;
                 self.eat_token(&Token::RBracket)?;
-                Some(self._ast_factory.create_type_expression(Type::List(Box::new(element_type)), false))
+                Some(ast::typ(Type::List(Box::new(element_type))))
             },
             Some((Token::LParen, _)) => {
                 self.eat_token(&Token::LParen)?;
                 if self.lookahead_is_rparen() {
                     self.eat_token(&Token::RParen)?;
                     // Empty tuple type `()`
-                    return Ok(Some(self._ast_factory.create_type_expression(Type::Tuple(vec![]), false)));
+                    return Ok(Some(ast::typ(Type::Tuple(vec![]))));
                 }
 
                 let first_element = self.element_type_expression("Grouped type or tuple element")?;
@@ -825,7 +838,7 @@ impl<'source> Parser<'source> {
                         elements.push(self.element_type_expression("Tuple element type")?);
                     }
                     self.eat_token(&Token::RParen)?;
-                    Some(self._ast_factory.create_type_expression(Type::Tuple(elements), false))
+                    Some(ast::typ(Type::Tuple(elements)))
                 } else {
                     self.eat_token(&Token::RParen)?;
                     Some(first_element)
@@ -843,7 +856,7 @@ impl<'source> Parser<'source> {
                     self.eat_token(&Token::RBrace)?;
                     Type::Set(Box::new(key_type))
                 };
-                Some(self._ast_factory.create_type_expression(typ, false))
+                Some(ast::typ(typ))
             },
             Some((Token::Fn, _)) => {
                 self.eat_token(&Token::Fn)?;
@@ -851,7 +864,7 @@ impl<'source> Parser<'source> {
                 let parameters = self.function_params_expression()?;
                 let return_type = self.return_type_expression()?;
                 let typ = Type::Function(generic_types, parameters, return_type);
-                Some(self._ast_factory.create_type_expression(typ, false))
+                Some(ast::typ(typ))
             },
             _ => return Ok(None),
         };
@@ -864,7 +877,7 @@ impl<'source> Parser<'source> {
         if self.match_lookahead_type(|t| t == &Token::QuestionMark) {
             self.eat_token(&Token::QuestionMark)?;
             if let Expression::Type(inner_type, _) = final_expr {
-                final_expr = self._ast_factory.create_type_expression(*inner_type, true);
+                final_expr = ast::null_typ(*inner_type);
             }
         }
 
@@ -1023,7 +1036,7 @@ impl<'source> Parser<'source> {
         } else {
             None
         };
-        Ok(self._ast_factory.create_use_statement(import_path, alias))
+        Ok(ast::use_statement(import_path, alias))
     }
 
 
@@ -1044,7 +1057,7 @@ impl<'source> Parser<'source> {
             declarations.push(self.type_declaration()?);
         }
         self.eat_statement_end()?;
-        Ok(self._ast_factory.create_type_statement(declarations, visibility))
+        Ok(ast::type_statement(declarations, visibility))
     }
 
     fn inheritance_identifier(&mut self) -> Result<Expression, SyntaxError> {
@@ -1069,7 +1082,7 @@ impl<'source> Parser<'source> {
         self.eat_token(&Token::Extends)?;
         let base = self.inheritance_identifier()?;
         self.eat_statement_end()?;
-        Ok(self._ast_factory.create_extends_statement(base))
+        Ok(ast::extends(base))
     }
 
     /*
@@ -1085,7 +1098,7 @@ impl<'source> Parser<'source> {
             trait_names.push(self.inheritance_identifier()?);
         }
         self.eat_statement_end()?;
-        Ok(self._ast_factory.create_implements_statement(trait_names))
+        Ok(ast::implements(trait_names))
     }
 
     /*
@@ -1101,7 +1114,7 @@ impl<'source> Parser<'source> {
             module_names.push(self.inheritance_identifier()?);
         }
         self.eat_statement_end()?;
-        Ok(self._ast_factory.create_includes_statement(module_names))
+        Ok(ast::includes(module_names))
     }
 
     /*
@@ -1131,7 +1144,7 @@ impl<'source> Parser<'source> {
             },
             Some((Token::Comma, _)) | Some((Token::ExpressionStatementEnd, _)) => {
                 // If we see a comma or the end of the statement, it means this is a continuation of a type declaration list
-                return Ok(self._ast_factory.create_type_declaration(
+                return Ok(ast::type_declaration_expression(
                     name, 
                     generic_types, 
                     TypeDeclarationKind::None, 
@@ -1144,7 +1157,7 @@ impl<'source> Parser<'source> {
             Some(typ) => Some(Box::new(typ)),
             None => None,
         };
-        Ok(self._ast_factory.create_type_declaration(name, generic_types, kind, type_expr))
+        Ok(ast::type_declaration_expression(name, generic_types, kind, type_expr))
     }
 
     /*
@@ -1182,7 +1195,7 @@ impl<'source> Parser<'source> {
 
             segments.push(self.identifier()?);
         }
-        Ok(self._ast_factory.create_import_path_expression(segments, kind))
+        Ok(ast::import_path_expression(segments, kind))
     }
 
     fn multi_import_segment(&mut self) -> Result<(Expression, Option<Box<Expression>>), SyntaxError> {
@@ -1204,7 +1217,7 @@ impl<'source> Parser<'source> {
     fn expression_statement(&mut self) -> Result<Statement, SyntaxError> {
         let expression = self.expression()?;
         self.eat_statement_end()?;
-        Ok(self._ast_factory.create_expression_statement(expression))
+        Ok(ast::expression_statement(expression))
     }
 
     /*
@@ -1219,7 +1232,7 @@ impl<'source> Parser<'source> {
             _ => self.statement_list()?,
         };
         self.eat_token(&Token::Dedent)?;
-        Ok(self._ast_factory.create_block(body))
+        Ok(ast::block(body))
     }
 
     /*
@@ -1264,7 +1277,7 @@ impl<'source> Parser<'source> {
             None
         };
 
-        let expression = self._ast_factory.create_conditional_expression(expression, condition, else_branch, if_statement_type);
+        let expression = ast::conditional(expression, condition, else_branch, if_statement_type);
         
         Ok(expression)
     }
@@ -1303,10 +1316,10 @@ impl<'source> Parser<'source> {
                     // A left-hand side identifier cannot be namespaced.
                     return Err(self.error_invalid_left_hand_side_expression());
                 }
-                self._ast_factory.create_left_hand_side_identifier(left)
+                ast::lhs_identifier_from_expr(left)
             },
-            Expression::Member(_, _) => self._ast_factory.create_left_hand_side_member(left),
-            Expression::Index(_, _) => self._ast_factory.create_left_hand_side_index(left),
+            Expression::Member(_, _) => ast::lhs_member_from_expr(left),
+            Expression::Index(_, _) => ast::lhs_index_from_expr(left),
             // Other left-hand side expression types can be added here in the future
             _ => return Err(
                 self.error_invalid_left_hand_side_expression()
@@ -1315,7 +1328,7 @@ impl<'source> Parser<'source> {
 
         let right = self.assignment_expression()?;
 
-        let assignment_expression = self._ast_factory.create_assignment_expression(
+        let assignment_expression = ast::assign(
             left,
             op,
             right,
@@ -1340,7 +1353,7 @@ impl<'source> Parser<'source> {
             Self::additive_expression,
             is_relational_op,
             Self::eat_relational_op,
-            |p, l, op, r| p._ast_factory.create_binary_expression(l, op, r)
+            |l, op, r| ast::binary(l, op, r)
         )
     }
 
@@ -1358,7 +1371,7 @@ impl<'source> Parser<'source> {
             Self::relational_expression,
             is_equality_op,
             Self::eat_equality_op,
-            |p, l, op, r| p._ast_factory.create_binary_expression(l, op, r)
+            |l, op, r| ast::binary(l, op, r)
         )
     }
 
@@ -1375,7 +1388,7 @@ impl<'source> Parser<'source> {
             Self::equality_expression,
             is_logical_and_op,
             Self::eat_logical_and_op,
-            |p, l, op, r| p._ast_factory.create_logical_expression(l, op, r)
+            |l, op, r| ast::logical(l, op, r)
         )
     }
 
@@ -1392,7 +1405,7 @@ impl<'source> Parser<'source> {
             Self::logical_and_expression,
             is_logical_or_op,
             Self::eat_logical_or_op,
-            |p, l, op, r| p._ast_factory.create_logical_expression(l, op, r)
+            |l, op, r| ast::logical(l, op, r)
         )
     }
 
@@ -1425,17 +1438,17 @@ impl<'source> Parser<'source> {
                 Some((Token::Dot, _)) => {
                     self.eat_token(&Token::Dot)?;
                     let property = self.identifier()?;
-                    self._ast_factory.create_member_expression(expression, property)
+                    ast::member(expression, property)
                 },
                 Some((Token::LBracket, _)) => {
                     self.eat_token(&Token::LBracket)?;
                     let index = self.expression()?;
                     self.eat_token(&Token::RBracket)?;
-                    self._ast_factory.create_index_expression(expression, index)
+                    ast::index(expression, index)
                 },
                 Some((Token::LParen, _)) => {
                     let args = self.arguments()?;
-                    self._ast_factory.create_call_expression(expression, args)
+                    ast::call(expression, args)
                 },
                 _ => break,
             };
@@ -1496,7 +1509,6 @@ impl<'source> Parser<'source> {
                 let token = self.eat_token(&Token::Identifier)?;
                 let (name, class) = match &self._lookahead {
                     Some((Token::DoubleColon, _)) => {
-                        
                         self.eat_token(&Token::DoubleColon)?;
                         let second_token = self.eat_token(&Token::Identifier)?;
 
@@ -1504,7 +1516,7 @@ impl<'source> Parser<'source> {
                     },
                     _ => (self.source[token.1.start..token.1.end].to_string(), None),
                 };
-                Ok(self._ast_factory.create_identifier_expression(name.to_string(), class))
+                Ok(ast::identifier_with_class(&name, class))
             },
             _ => Err(
                 self.error_unexpected_lookahead_token("identifier")
@@ -1523,7 +1535,7 @@ impl<'source> Parser<'source> {
             Self::multiplicative_expression,
             is_additive_op,
             Self::eat_additive_op,
-            |p, l, op, r| p._ast_factory.create_binary_expression(l, op, r)
+            |l, op, r| ast::binary(l, op, r)
         )
     }
 
@@ -1538,7 +1550,7 @@ impl<'source> Parser<'source> {
             Self::unary_expression,
             is_multiplicative_op,
             Self::eat_multiplicative_op,
-            |p, l, op, r| p._ast_factory.create_binary_expression(l, op, r)
+            |l, op, r| ast::binary(l, op, r)
         )
     }
 
@@ -1551,7 +1563,7 @@ impl<'source> Parser<'source> {
     where
         F: FnMut(&mut Self) -> Result<Expression, SyntaxError>,
         G: FnMut(&mut Self) -> Result<BinaryOp, Result<Expression, SyntaxError>>,
-        E: FnMut(&mut Self, Expression, BinaryOp, Expression) -> Expression,
+        E: FnMut(Expression, BinaryOp, Expression) -> Expression,
     {
         let mut left = create_branch(self)?;
 
@@ -1563,7 +1575,7 @@ impl<'source> Parser<'source> {
 
             let right = create_branch(self)?;
 
-            left = create_expression(self, left, op, right);
+            left = create_expression(left, op, right);
         }
 
         Ok(left)
@@ -1593,7 +1605,7 @@ impl<'source> Parser<'source> {
     fn create_unary_expression(&mut self, token: &Token, op: UnaryOp) -> Result<Expression, SyntaxError> {
         self.eat_token(token)?;
         let operand = self.unary_expression()?;
-        Ok(self._ast_factory.create_unary_expression(op, operand))
+        Ok(ast::unary(op, operand))
     }
 
     /*
@@ -1644,8 +1656,8 @@ impl<'source> Parser<'source> {
             )?;
             if !start_text.is_empty() {
                 parts.push(
-                    self._ast_factory.create_literal_expression(
-                        self._ast_factory.create_string_literal(start_text)
+                    ast::literal(
+                        ast::string_literal(&start_text)
                     )
                 );
             }
@@ -1663,8 +1675,8 @@ impl<'source> Parser<'source> {
                 )?;
                 if !middle_text.is_empty() {
                     parts.push(
-                        self._ast_factory.create_literal_expression(
-                            self._ast_factory.create_string_literal(middle_text)
+                        ast::literal(
+                            ast::string_literal(&middle_text)
                         )
                     );
                 }
@@ -1675,8 +1687,8 @@ impl<'source> Parser<'source> {
                 )?;
                 if !end_text.is_empty() {
                     parts.push(
-                        self._ast_factory.create_literal_expression(
-                            self._ast_factory.create_string_literal(end_text)
+                        ast::literal(
+                            ast::string_literal(&end_text)
                         )
                     );
                 }
@@ -1688,7 +1700,7 @@ impl<'source> Parser<'source> {
             }
         }
 
-        Ok(self._ast_factory.create_formatted_string(parts))
+        Ok(ast::f_string(parts))
     }
 
     /*
@@ -1738,7 +1750,7 @@ impl<'source> Parser<'source> {
             }
         }
 
-        Ok(self._ast_factory.create_match_expression(value, branches))
+        Ok(ast::match_expression(value, branches))
     }
 
     /*
@@ -1783,7 +1795,7 @@ impl<'source> Parser<'source> {
             Some((Token::Colon, _)) => {
                 self.eat_token(&Token::Colon)?;
                 let expr = self.expression()?;
-                self._ast_factory.create_expression_statement(expr)
+                ast::expression_statement(expr)
             },
             Some((Token::ExpressionStatementEnd, _)) => {
                 self.eat_expression_end()?;
@@ -1872,7 +1884,7 @@ impl<'source> Parser<'source> {
         }
 
         self.eat_token(&Token::RBracket)?;
-        Ok(self._ast_factory.create_list_expression(elements))
+        Ok(ast::list(elements))
     }
 
     /*
@@ -1887,7 +1899,7 @@ impl<'source> Parser<'source> {
         // If the next token is a closing brace, it's an empty map.
         if self.match_lookahead_type(|t| t == &Token::RBrace) {
             self.eat_token(&Token::RBrace)?;
-            return Ok(self._ast_factory.create_map_expression(vec![]));
+            return Ok(ast::map(vec![]));
         }
 
         // Parse the first expression.
@@ -1909,7 +1921,7 @@ impl<'source> Parser<'source> {
                 pairs.push((key, value));
             }
             self.eat_token(&Token::RBrace)?;
-            Ok(self._ast_factory.create_map_expression(pairs))
+            Ok(ast::map(pairs))
         } else {
             // It's a set.
             let mut elements = vec![first_expr];
@@ -1921,7 +1933,7 @@ impl<'source> Parser<'source> {
                 elements.push(self.expression()?);
             }
             self.eat_token(&Token::RBrace)?;
-            Ok(self._ast_factory.create_set_expression(elements))
+            Ok(ast::set(elements))
         }
     }
 
@@ -1963,7 +1975,7 @@ impl<'source> Parser<'source> {
             Some((Token::Colon, _)) => {
                 self.eat_token(&Token::Colon)?;
                 let expr = self.expression()?;
-                self._ast_factory.create_expression_statement(expr)
+                ast::expression_statement(expr)
             },
             Some((Token::ExpressionStatementEnd, _)) => {
                 self.eat_expression_end()?;
@@ -1978,7 +1990,7 @@ impl<'source> Parser<'source> {
             _ => return Err(body_parsing_error),
         };
 
-        Ok(self._ast_factory.create_lambda_expression(
+        Ok(ast::lambda_expression(
             generic_types,
             parameters,
             return_type,
@@ -2001,7 +2013,7 @@ impl<'source> Parser<'source> {
         // Handle the empty tuple `()` case.
         if self.match_lookahead_type(|t| t == &Token::RParen) {
             self.eat_token(&Token::RParen)?;
-            return Ok(self._ast_factory.create_tuple_expression(vec![]));
+            return Ok(ast::tuple(vec![]));
         }
 
         let first_expr = self.expression()?;
@@ -2027,7 +2039,7 @@ impl<'source> Parser<'source> {
         }
 
         self.eat_token(&Token::RParen)?;
-        Ok(self._ast_factory.create_tuple_expression(elements))
+        Ok(ast::tuple(elements))
     }
 
     /*
@@ -2037,7 +2049,7 @@ impl<'source> Parser<'source> {
     */
     fn literal_expression(&mut self) -> Result<Expression, SyntaxError> {
         let literal = self.literal()?;
-        Ok(self._ast_factory.create_literal_expression(literal))
+        Ok(ast::literal(literal))
     }
 
     /*
@@ -2137,20 +2149,7 @@ impl<'source> Parser<'source> {
                     ),
                 };
                 
-                let literal = match value {
-                    v if v >= i8::MIN as i128 && v <= i8::MAX as i128 => self._ast_factory.create_i8_literal(v as i8),
-                    v if v >= i16::MIN as i128 && v <= i16::MAX as i128 => self._ast_factory.create_i16_literal(v as i16),
-                    v if v >= i32::MIN as i128 && v <= i32::MAX as i128 => self._ast_factory.create_i32_literal(v as i32),
-                    v if v >= i64::MIN as i128 && v <= i64::MAX as i128 => self._ast_factory.create_i64_literal(v as i64),
-                    v if v >= i128::MIN && v <= i128::MAX => self._ast_factory.create_i128_literal(v),
-                    _ => return Err(
-                        SyntaxError::new(
-                            SyntaxErrorKind::IntegerLiteralOverflow,
-                            token.1.start..token.1.end
-                        )
-                    ),
-                };
-                Ok(literal)
+                Ok(ast::int_literal(value))
             },
             Err(e) => Err(e),
         }
@@ -2204,12 +2203,12 @@ impl<'source> Parser<'source> {
 
                 // If the f32 representation matches the original string, return as f32
                 if normalized_input == normalized_f32 {
-                    Ok(self._ast_factory.create_f32_literal(f32_value))
+                    Ok(ast::float32_literal(f32_value))
                 } else {
                     // Otherwise, parse as f64
                     let f64_value = str_value.parse::<f64>().map_err(|_| { err.clone() })?;
                     if f64_value.is_finite() {
-                        Ok(self._ast_factory.create_f64_literal(f64_value))
+                        Ok(ast::float64_literal(f64_value))
                     } else {
                         Err(err)
                     }
@@ -2237,7 +2236,7 @@ impl<'source> Parser<'source> {
                     str_value = &str_value[1..str_value.len() - 1];
                 }
 
-                let literal = self._ast_factory.create_string_literal(str_value.to_string());
+                let literal = ast::string_literal(str_value);
                 Ok(literal)
             },
             Err(e) => Err(e),
@@ -2255,8 +2254,8 @@ impl<'source> Parser<'source> {
             Ok(token) => {
                 let str_value = &self.source[token.1.start..token.1.end];
                 let literal = match str_value {
-                    "true" => self._ast_factory.create_boolean_literal(true),
-                    "false" => self._ast_factory.create_boolean_literal(false),
+                    "true" => ast::boolean(true),
+                    "false" => ast::boolean(false),
                     _ => return Err(
                         SyntaxError::new(
                             SyntaxErrorKind::InvalidBooleanLiteral,
@@ -2279,7 +2278,7 @@ impl<'source> Parser<'source> {
         match self.eat_token(&Token::Symbol) {
             Ok(token) => {
                 let str_value = &self.source[token.1.start + 1..token.1.end]; // Remove leading colon
-                let literal = self._ast_factory.create_symbol_literal(str_value.to_string());
+                let literal = ast::symbol(str_value);
                 Ok(literal)
             },
             Err(e) => Err(e),
@@ -2294,7 +2293,7 @@ impl<'source> Parser<'source> {
     fn regex_literal(&mut self) -> Result<Literal, SyntaxError> {
         let token_span = self.eat(|t| matches!(t, Token::Regex(_)), "regex literal")?;
         if let (Token::Regex(regex_data), _) = token_span {
-            Ok(self._ast_factory.create_regex_literal(regex_data))
+            Ok(ast::regex_literal_from_token(regex_data))
         } else {
             // This branch should be unreachable if the predicate in `eat` is correct.
             unreachable!();

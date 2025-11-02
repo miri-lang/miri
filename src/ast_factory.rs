@@ -1,22 +1,31 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
-#![allow(dead_code)] // Allow unused functions, as not all helpers may be used in every test file.
+use crate::{ast::*, lexer::RegexToken};
 
-use miri::{ast::*, lexer::RegexToken};
-
-// === Expression Builders ===
 
 pub fn empty_statement() -> Statement {
     Statement::Empty
+}
+
+pub fn program(statements: Vec<Statement>) -> Program {
+    Program { body: statements }
 }
 
 pub fn empty_program() -> Vec<Statement> {
     vec![]
 }
 
+pub fn identifier_with_class(name: &str, class: Option<String>) -> Expression {
+    Expression::Identifier(name.into(), class)
+}
+
 pub fn identifier(name: &str) -> Expression {
-    Expression::Identifier(name.into(), None)
+    identifier_with_class(name.into(), None)
+}
+
+pub fn literal(value: Literal) -> Expression {
+    Expression::Literal(value)
 }
 
 pub fn class_identifier(name: &str) -> Expression {
@@ -53,22 +62,30 @@ pub fn float64(val: f64) -> FloatLiteral {
     FloatLiteral::F64(val.to_bits())
 }
 
-pub fn float32_literal(val: f32) -> Expression {
+pub fn float32_literal(val: f32) -> Literal {
     let literal = float32(val);
-    Expression::Literal(Literal::Float(literal))
+    Literal::Float(literal)
 }
 
-pub fn float64_literal(val: f64) -> Expression {
+pub fn float32_literal_expression(val: f32) -> Expression {
+    literal(float32_literal(val))
+}
+
+pub fn float64_literal(val: f64) -> Literal {
     let literal = float64(val);
-    Expression::Literal(Literal::Float(literal))
+    Literal::Float(literal)
 }
 
-pub fn string(val: &str) -> Literal {
+pub fn float64_literal_expression(val: f64) -> Expression {
+    literal(float64_literal(val))
+}
+
+pub fn string_literal(val: &str) -> Literal {
     Literal::String(val.to_string())
 }
 
-pub fn string_literal(val: &str) -> Expression {
-    Expression::Literal(string(val))
+pub fn string_literal_expression(val: &str) -> Expression {
+    Expression::Literal(string_literal(val))
 }
 
 pub fn f_string(parts: Vec<Expression>) -> Expression {
@@ -91,6 +108,10 @@ pub fn symbol_literal(val: &str) -> Expression {
     Expression::Literal(symbol(val))
 }
 
+pub fn regex_literal_from_token(value: RegexToken) -> Literal {
+    Literal::Regex(value)
+}
+
 pub fn regex_literal(body: &str, flags: &str) -> Expression {
     let token = RegexToken {
         body: body.to_string(),
@@ -100,7 +121,7 @@ pub fn regex_literal(body: &str, flags: &str) -> Expression {
         dot_all: flags.contains('s'),
         unicode: flags.contains('u'),
     };
-    Expression::Literal(Literal::Regex(token))
+    Expression::Literal(regex_literal_from_token(token))
 }
 
 pub fn binary(left: Expression, op: BinaryOp, right: Expression) -> Expression {
@@ -165,23 +186,33 @@ pub fn index(object: Expression, index: Expression) -> Expression {
     Expression::Index(Box::new(object), Box::new(index))
 }
 
+pub fn lhs_identifier_from_expr(expr: Expression) -> LeftHandSideExpression {
+    LeftHandSideExpression::Identifier(Box::new(expr))
+}
+
 pub fn lhs_identifier(name: &str) -> LeftHandSideExpression {
-    LeftHandSideExpression::Identifier(Box::new(identifier(name)))
+    lhs_identifier_from_expr(identifier(name))
+}
+
+pub fn lhs_member_from_expr(expr: Expression) -> LeftHandSideExpression {
+    LeftHandSideExpression::Member(Box::new(expr))
 }
 
 pub fn lhs_member(object: Expression, property: Expression) -> LeftHandSideExpression {
-    LeftHandSideExpression::Member(Box::new(member(object, property)))
+    lhs_member_from_expr(member(object, property))
+}
+
+pub fn lhs_index_from_expr(expr: Expression) -> LeftHandSideExpression {
+    LeftHandSideExpression::Index(Box::new(expr))
 }
 
 pub fn lhs_index(object: Expression, idx: Expression) -> LeftHandSideExpression {
-    LeftHandSideExpression::Index(Box::new(index(object, idx)))
+    lhs_index_from_expr(index(object, idx))
 }
 
 pub fn call(callee: Expression, args: Vec<Expression>) -> Expression {
     Expression::Call(Box::new(callee), args)
 }
-
-// === Statement Builders ===
 
 pub fn variable_statement(declarations: Vec<VariableDeclaration>, visibility: MemberVisibility) -> Statement {
     Statement::Variable(declarations, visibility)
@@ -203,20 +234,24 @@ pub fn unless_statement(cond: Expression, then: Statement, else_b: Option<Statem
     Statement::If(Box::new(cond), Box::new(then), else_b.map(Box::new), IfStatementType::Unless)
 }
 
+pub fn while_statement_with_type(cond: Expression, body: Statement, while_statement_type: WhileStatementType) -> Statement {
+    Statement::While(Box::new(cond), Box::new(body), while_statement_type)
+}
+
 pub fn while_statement(cond: Expression, body: Statement) -> Statement {
-    Statement::While(Box::new(cond), Box::new(body), WhileStatementType::While)
+    while_statement_with_type(cond, body, WhileStatementType::While)
 }
 
 pub fn do_while_statement(cond: Expression, body: Statement) -> Statement {
-    Statement::While(Box::new(cond), Box::new(body), WhileStatementType::DoWhile)
+    while_statement_with_type(cond, body, WhileStatementType::DoWhile)
 }
 
 pub fn until_statement(cond: Expression, body: Statement) -> Statement {
-    Statement::While(Box::new(cond), Box::new(body), WhileStatementType::Until)
+    while_statement_with_type(cond, body, WhileStatementType::Until)
 }
 
 pub fn forever_statement(body: Statement) -> Statement {
-    Statement::While(Box::new(Expression::Literal(Literal::Boolean(true))), Box::new(body), WhileStatementType::Forever)
+    while_statement_with_type(Expression::Literal(Literal::Boolean(true)), body, WhileStatementType::Forever)
 }
 
 pub fn for_statement(
@@ -239,39 +274,55 @@ pub fn parameter(name: String, typ: Expression, guard: Option<Box<Expression>>, 
     Parameter { name, typ: Box::new(typ), guard, default_value }
 }
 
+pub fn import_path_expression(segments: Vec<Expression>, kind: ImportPathKind) -> Expression {
+    Expression::ImportPath(segments, kind)
+}
+
 pub fn import_path(path: &str) -> Expression {
     let segments: Vec<Expression> = path.split(".").map(|s| identifier(s.trim())).collect();
-    Expression::ImportPath(segments, ImportPathKind::Simple)
+    import_path_expression(segments, ImportPathKind::Simple)
 }
 
 pub fn import_path_wildcard(path: &str) -> Expression {
     let segments: Vec<Expression> = path.split(".").map(|s| identifier(s.trim())).collect();
-    Expression::ImportPath(segments, ImportPathKind::Wildcard)
+    import_path_expression(segments, ImportPathKind::Wildcard)
 }
 
 pub fn import_path_multi(path: &str, items: Vec<(Expression, Option<Box<Expression>>)>) -> Expression {
     let segments: Vec<Expression> = path.split(".").map(|s| identifier(s.trim())).collect();
-    Expression::ImportPath(segments, ImportPathKind::Multi(items))
+    import_path_expression(segments, ImportPathKind::Multi(items))
 }
 
 pub fn use_statement(import_path: Expression, alias: Option<Box<Expression>>) -> Statement {
     Statement::Use(Box::new(import_path), alias)
 }
 
+pub fn generic_type_expression(name_expression: Expression, constraint: Option<Box<Expression>>) -> Expression {
+    Expression::GenericType(Box::new(name_expression), constraint)
+}
+
 pub fn generic_type(name: &str, constraint: Option<Box<Expression>>) -> Expression {
-    Expression::GenericType(Box::new(identifier(name)), constraint)
+    generic_type_expression(identifier(name), constraint)
+}
+
+pub fn type_expression(inner: Type, is_nullable: bool) -> Expression {
+    Expression::Type(Box::new(inner), is_nullable)
 }
 
 pub fn typ(t: Type) -> Expression {
-    Expression::Type(Box::new(t), false)
+    type_expression(t, false)
 }
 
 pub fn null_typ(t: Type) -> Expression {
-    Expression::Type(Box::new(t), true)
+    type_expression(t, true)
+}
+
+pub fn type_declaration_expression(name: Expression, generic_types: Option<Vec<Expression>>, kind: TypeDeclarationKind, type_expr: Option<Box<Expression>>) -> Expression {
+    Expression::TypeDeclaration(Box::new(name), generic_types, kind, type_expr)
 }
 
 pub fn type_declaration(name: &str, generic_types: Option<Vec<Expression>>, kind: TypeDeclarationKind, type_expr: Option<Box<Expression>>) -> Expression {
-    Expression::TypeDeclaration(Box::new(identifier(name)), generic_types, kind, type_expr)
+    type_declaration_expression(identifier(name), generic_types, kind, type_expr)
 }
 
 pub fn type_statement(declarations: Vec<Expression>, visibility: MemberVisibility) -> Statement {
@@ -290,16 +341,24 @@ pub fn enum_statement(name: Expression, values: Vec<Expression>, visibility: Mem
     Statement::Enum(Box::new(name), values, visibility)
 }
 
+pub fn enum_value_expression(name: Expression, types: Vec<Expression>) -> Expression {
+    Expression::EnumValue(Box::new(name), types)
+}
+
 pub fn enum_value(name: &str, types: Vec<Expression>) -> Expression {
-    Expression::EnumValue(Box::new(identifier(name)), types)
+    enum_value_expression(identifier(name), types)
 }
 
 pub fn struct_statement(name: Expression, generic_types: Option<Vec<Expression>>, members: Vec<Expression>, visibility: MemberVisibility) -> Statement {
     Statement::Struct(Box::new(name), generic_types, members, visibility)
 }
 
+pub fn struct_member_expression(name: Expression, typ: Expression) -> Expression {
+    Expression::StructMember(Box::new(name), Box::new(typ))
+}
+
 pub fn struct_member(name: &str, typ: Expression) -> Expression {
-    Expression::StructMember(Box::new(identifier(name)), Box::new(typ))
+    struct_member_expression(identifier(name), typ)
 }
 
 pub fn extends(base: Expression) -> Statement {
@@ -367,6 +426,11 @@ impl FunctionBuilder {
         self
     }
 
+    pub fn properties(mut self, properties: FunctionProperties) -> Self {
+        self.properties = properties;
+        self
+    }
+
     pub fn return_type(mut self, ret_type: Expression) -> Self {
         self.return_type = Some(Box::new(ret_type));
         self
@@ -426,6 +490,14 @@ pub fn func(name: &str) -> FunctionBuilder {
     FunctionBuilder::new(name)
 }
 
+pub fn function_declaration(name: &str, generic_types: Option<Vec<Expression>>, parameters: Vec<Parameter>, return_type: Option<Box<Expression>>, body: Statement, properties: FunctionProperties) -> Statement {
+    Statement::FunctionDeclaration(name.into(), generic_types, parameters, return_type, Box::new(body), properties)
+}
+
 pub fn lambda() -> FunctionBuilder {
     FunctionBuilder::new("")
+}
+
+pub fn lambda_expression(generic_types: Option<Vec<Expression>>, parameters: Vec<Parameter>, return_type: Option<Box<Expression>>, body: Statement, properties: FunctionProperties) -> Expression {
+    Expression::Lambda(generic_types, parameters, return_type, Box::new(body), properties)
 }

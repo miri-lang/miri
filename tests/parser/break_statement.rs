@@ -3,7 +3,7 @@
 
 use miri::ast::*;
 use miri::syntax_error::SyntaxErrorKind;
-use super::ast_builder::*;
+use miri::ast_factory::*;
 use super::utils::*;
 
 
@@ -38,7 +38,7 @@ forever
         forever_statement(
             block(vec![
                 expression_statement(
-                    call(identifier("print"), vec![string_literal("running")])
+                    call(identifier("print"), vec![string_literal_expression("running")])
                 ),
                 break_statement()
             ])

@@ -3,7 +3,7 @@
 
 use miri::ast::*;
 use miri::syntax_error::SyntaxErrorKind;
-use super::ast_builder::*;
+use miri::ast_factory::*;
 use super::utils::*;
 
 
@@ -40,7 +40,7 @@ obj['prop'] = 1
 ", vec![
         expression_statement(
             assign(
-                lhs_index(identifier("obj".into()), string_literal("prop".into())),
+                lhs_index(identifier("obj".into()), string_literal_expression("prop".into())),
                 AssignmentOp::Assign,
                 int_literal_expression(1)
             )
@@ -64,12 +64,12 @@ obj.a.b['prop'][0] = 1.0
                             ),
                             identifier("b".into())
                         ),
-                        string_literal("prop".into())
+                        string_literal_expression("prop".into())
                     ),
                     int_literal_expression(0)
                 ),
                 AssignmentOp::Assign,
-                float32_literal(1.0)
+                float32_literal_expression(1.0)
             )
         )
     ]);
@@ -112,7 +112,7 @@ fn test_index_access_with_complex_expression() {
                 binary(
                     call(identifier("get_key"), vec![]),
                     BinaryOp::Add,
-                    string_literal("_suffix")
+                    string_literal_expression("_suffix")
                 )
             )
         )

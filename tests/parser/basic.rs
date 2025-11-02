@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
-use super::ast_builder::*;
+use miri::ast_factory::*;
 use super::utils::*;
 
 
@@ -30,7 +30,7 @@ fn test_parse_simple_expressions() {
             int_literal_expression(123)
         ),
         expression_statement(
-            string_literal("Hello World")
+            string_literal_expression("Hello World")
         )
     ]);
 }

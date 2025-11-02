@@ -7,7 +7,7 @@ use miri::ast::MemberVisibility;
 use miri::ast::UnaryOp;
 use miri::syntax_error::SyntaxErrorKind;
 
-use super::ast_builder::*;
+use miri::ast_factory::*;
 use super::utils::*;
 
 
@@ -69,7 +69,7 @@ fn test_float_in_variable_declaration() {
             let_variable(
                 "x",
                 None,
-                opt_expr(float32_literal(3.14))
+                opt_expr(float32_literal_expression(3.14))
             )
         ], MemberVisibility::Public)
     ]);
@@ -81,7 +81,7 @@ fn test_negative_float_expression() {
         expression_statement(
             unary(
                 UnaryOp::Negate,
-                float32_literal(3.14)
+                float32_literal_expression(3.14)
             )
         )
     ]);
@@ -92,9 +92,9 @@ fn test_float_in_binary_expression() {
     parser_test("1.5 + 2.5", vec![
         expression_statement(
             binary(
-                float32_literal(1.5),
+                float32_literal_expression(1.5),
                 BinaryOp::Add,
-                float32_literal(2.5)
+                float32_literal_expression(2.5)
             )
         )
     ]);
@@ -106,7 +106,7 @@ fn test_float_as_method_call_target() {
         expression_statement(
             call(
                 member(
-                    float32_literal(3.14),
+                    float32_literal_expression(3.14),
                     identifier("round")
                 ),
                 vec![]

@@ -3,7 +3,7 @@
 
 use miri::ast::*;
 use miri::syntax_error::SyntaxErrorKind;
-use super::ast_builder::*;
+use miri::ast_factory::*;
 use super::utils::*;
 
 
@@ -81,7 +81,7 @@ fn test_parse_mutable_variable_declaration() {
     variable_declaration_test(
         "var text = \"Hello, World!\"",
         vec![
-            var("text", None, opt_expr(string_literal("Hello, World!")))
+            var("text", None, opt_expr(string_literal_expression("Hello, World!")))
         ],
         MemberVisibility::Public
     );

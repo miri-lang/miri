@@ -3,7 +3,7 @@
 
 use miri::ast::*;
 use miri::syntax_error::SyntaxErrorKind;
-use super::ast_builder::*;
+use miri::ast_factory::*;
 use super::utils::*;
 
 
@@ -12,8 +12,8 @@ fn test_map_literal_assignment() {
     parser_test("let m = {'a': 1, 'b': 2}", vec![
         variable_statement(vec![
             let_variable("m", None, opt_expr(map(vec![
-                (string_literal("a"), int_literal_expression(1)),
-                (string_literal("b"), int_literal_expression(2)),
+                (string_literal_expression("a"), int_literal_expression(1)),
+                (string_literal_expression("b"), int_literal_expression(2)),
             ])))
         ], MemberVisibility::Public)
     ]);
@@ -26,7 +26,7 @@ fn test_map_index_access() {
         expression_statement(
             call(
                 identifier("print"),
-                vec![index(identifier("my_map"), string_literal("key"))]
+                vec![index(identifier("my_map"), string_literal_expression("key"))]
             )
         )
     ]);
@@ -44,8 +44,8 @@ for k, v in {'a': 1, 'b': 2}
                 let_variable("v", None, None)
             ],
             iter_obj(map(vec![
-                (string_literal("a"), int_literal_expression(1)),
-                (string_literal("b"), int_literal_expression(2)),
+                (string_literal_expression("a"), int_literal_expression(1)),
+                (string_literal_expression("b"), int_literal_expression(2)),
             ])),
             block(vec![
                 expression_statement(
@@ -62,7 +62,7 @@ fn test_method_call_on_map_literal() {
         expression_statement(
             call(
                 member(
-                    map(vec![(string_literal("a"), int_literal_expression(1))]),
+                    map(vec![(string_literal_expression("a"), int_literal_expression(1))]),
                     identifier("keys")
                 ),
                 vec![]
@@ -76,8 +76,8 @@ fn test_map_of_lambdas() {
     parser_test("let funcs = {'a': fn(): 1, 'b': fn(): 2}", vec![
         variable_statement(vec![
             let_variable("funcs", None, opt_expr(map(vec![
-                (string_literal("a"), lambda().build_lambda(expression_statement(int_literal_expression(1)))),
-                (string_literal("b"), lambda().build_lambda(expression_statement(int_literal_expression(2)))),
+                (string_literal_expression("a"), lambda().build_lambda(expression_statement(int_literal_expression(1)))),
+                (string_literal_expression("b"), lambda().build_lambda(expression_statement(int_literal_expression(2)))),
             ])))
         ], MemberVisibility::Public)
     ]);
@@ -97,7 +97,7 @@ fn test_map_with_trailing_comma() {
     parser_test("let m = {'a': 1,}", vec![
         variable_statement(vec![
             let_variable("m", None, opt_expr(map(vec![
-                (string_literal("a"), int_literal_expression(1)),
+                (string_literal_expression("a"), int_literal_expression(1)),
             ])))
         ], MemberVisibility::Public)
     ]);
@@ -116,8 +116,8 @@ let m = {
 }", vec![
         variable_statement(vec![
             let_variable("m", None, opt_expr(map(vec![
-                (string_literal("a"), int_literal_expression(1)),
-                (string_literal("b"), int_literal_expression(2)),
+                (string_literal_expression("a"), int_literal_expression(1)),
+                (string_literal_expression("b"), int_literal_expression(2)),
             ])))
         ], MemberVisibility::Public)
     ]);
@@ -136,11 +136,11 @@ let config = {
 ", vec![
         variable_statement(vec![
             let_variable("config", None, opt_expr(map(vec![
-                (string_literal("user"), map(vec![
-                    (string_literal("name"), string_literal("John")),
-                    (string_literal("id"), int_literal_expression(123)),
+                (string_literal_expression("user"), map(vec![
+                    (string_literal_expression("name"), string_literal_expression("John")),
+                    (string_literal_expression("id"), int_literal_expression(123)),
                 ])),
-                (string_literal("settings"), map(vec![])),
+                (string_literal_expression("settings"), map(vec![])),
             ])))
         ], MemberVisibility::Public)
     ]);
@@ -186,11 +186,11 @@ fn test_map_with_complex_keys() {
             let_variable("m", None, opt_expr(map(vec![
                 (
                     binary(int_literal_expression(1), BinaryOp::Add, int_literal_expression(1)),
-                    string_literal("a")
+                    string_literal_expression("a")
                 ),
                 (
                     call(identifier("my_func"), vec![]),
-                    string_literal("b")
+                    string_literal_expression("b")
                 ),
             ])))
         ], MemberVisibility::Public)
@@ -218,8 +218,8 @@ fn test_map_index_precedence() {
         expression_statement(
             binary(
                 index(
-                    map(vec![(string_literal("a"), int_literal_expression(10))]),
-                    string_literal("a")
+                    map(vec![(string_literal_expression("a"), int_literal_expression(10))]),
+                    string_literal_expression("a")
                 ),
                 BinaryOp::Add,
                 int_literal_expression(1)

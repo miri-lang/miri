@@ -3,7 +3,7 @@
 
 use miri::ast::*;
 use miri::syntax_error::SyntaxErrorKind;
-use super::ast_builder::*;
+use miri::ast_factory::*;
 use super::utils::*;
 
 
@@ -54,7 +54,7 @@ fn test_method_call_on_regex_literal() {
                     regex_literal("abc", "g"),
                     identifier("test")
                 ),
-                vec![string_literal("abc")]
+                vec![string_literal_expression("abc")]
             )
         )
     ]);

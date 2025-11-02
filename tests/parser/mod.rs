@@ -2,7 +2,6 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 pub mod assignment_expression;
-pub mod ast_builder;
 pub mod await_expression;
 pub mod basic;
 pub mod binary_expression;

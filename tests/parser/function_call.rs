@@ -5,7 +5,7 @@ use miri::ast::BinaryOp;
 use miri::ast::UnaryOp;
 use miri::syntax_error::SyntaxErrorKind;
 
-use super::ast_builder::*;
+use miri::ast_factory::*;
 use super::utils::*;
 
 
@@ -17,7 +17,7 @@ print(\"Hello\")
         expression_statement(
             call(
                 identifier("print".into()),
-                vec![string_literal("Hello".into())]
+                vec![string_literal_expression("Hello".into())]
             )
         )
     ]);
@@ -113,9 +113,9 @@ my_func(
                         identifier("another_func"),
                         vec![
                             set(vec![
-                                string_literal("set"),
-                                string_literal("of"),
-                                string_literal("strings")
+                                string_literal_expression("set"),
+                                string_literal_expression("of"),
+                                string_literal_expression("strings")
                             ]),
                             list(vec![
                                 int_literal_expression(0),
@@ -123,8 +123,8 @@ my_func(
                                 int_literal_expression(2)
                             ]),
                             map(vec![
-                                (string_literal("a"), int_literal_expression(10)),
-                                (string_literal("b"), int_literal_expression(20))
+                                (string_literal_expression("a"), int_literal_expression(10)),
+                                (string_literal_expression("b"), int_literal_expression(20))
                             ])
                         ]
                     ),

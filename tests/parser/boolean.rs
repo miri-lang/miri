@@ -5,7 +5,7 @@ use miri::ast::opt_expr;
 use miri::ast::BinaryOp;
 use miri::ast::MemberVisibility;
 
-use super::ast_builder::*;
+use miri::ast_factory::*;
 use super::utils::*;
 
 
