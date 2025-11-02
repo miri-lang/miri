@@ -3,7 +3,7 @@
 
 use miri::ast::*;
 use miri::syntax_error::SyntaxErrorKind;
-use super::ast_builder::*;
+use miri::ast_factory::*;
 use super::utils::*;
 
 
@@ -89,7 +89,7 @@ for ch in \"hello\": y = ch
         let_variable("ch".into(), None, None),
     ],
     range(
-        string_literal("hello"),
+        string_literal_expression("hello"),
         None,
         RangeExpressionType::IterableObject
     ),
@@ -115,7 +115,7 @@ for i in 1..3
         block(vec![
             for_statement(
                 vec![let_variable("c".into(), None, None)],
-                range(string_literal("ab"), None, RangeExpressionType::IterableObject),
+                range(string_literal_expression("ab"), None, RangeExpressionType::IterableObject),
                 empty_statement()
             )
         ])
@@ -131,7 +131,7 @@ for i in 1..3: for c in \"ab\": // nested body
         range(int_literal_expression(1), opt_expr(int_literal_expression(3)), RangeExpressionType::Exclusive),
         for_statement(
                 vec![let_variable("c".into(), None, None)],
-                range(string_literal("ab"), None, RangeExpressionType::IterableObject),
+                range(string_literal_expression("ab"), None, RangeExpressionType::IterableObject),
                 empty_statement()
             )
     );

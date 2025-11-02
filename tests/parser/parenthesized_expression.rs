@@ -4,7 +4,7 @@
 use miri::ast::BinaryOp;
 use miri::syntax_error::SyntaxErrorKind;
 
-use super::ast_builder::*;
+use miri::ast_factory::*;
 use super::utils::*;
 
 
@@ -56,7 +56,7 @@ fn test_multi_element_tuple_literal() {
     parser_test("(1, 'a', true)", vec![
         expression_statement(tuple(vec![
             int_literal_expression(1),
-            string_literal("a"),
+            string_literal_expression("a"),
             boolean_literal(true)
         ]))
     ]);

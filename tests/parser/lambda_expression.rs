@@ -3,7 +3,7 @@
 
 use miri::ast::*;
 use miri::syntax_error::SyntaxErrorKind;
-use super::ast_builder::*;
+use miri::ast_factory::*;
 use super::utils::*;
 
 
@@ -258,7 +258,7 @@ func(
                             return_statement(opt_expr(identifier("x")))
                         ])),
                     list(vec![int_literal_expression(6), int_literal_expression(7), int_literal_expression(8)]),
-                    string_literal("Some string")
+                    string_literal_expression("Some string")
                 ]
             )
         )

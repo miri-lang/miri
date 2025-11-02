@@ -5,7 +5,7 @@ use miri::ast::opt_expr;
 use miri::ast::MemberVisibility;
 use miri::syntax_error::SyntaxErrorKind;
 
-use super::ast_builder::*;
+use miri::ast_factory::*;
 use super::utils::*;
 
 
@@ -34,7 +34,7 @@ fn test_symbol_as_map_key() {
         variable_statement(vec![
             let_variable("m", None, opt_expr(map(vec![
                 (symbol_literal("key1"), int_literal_expression(1)),
-                (symbol_literal("key2"), string_literal("value")),
+                (symbol_literal("key2"), string_literal_expression("value")),
             ])))
         ], MemberVisibility::Public)
     ]);

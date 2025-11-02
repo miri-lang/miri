@@ -7,13 +7,12 @@ use miri::ast::*;
 use miri::lexer::Lexer;
 use miri::parser::Parser;
 use miri::syntax_error::{SyntaxError, SyntaxErrorKind};
-
-use super::ast_builder::*;
+use miri::ast_factory::*;
 
 
 fn parse(input: &str) -> Result<Program, SyntaxError> {
     let mut lexer = Lexer::new(input);
-    let mut parser = Parser::new(&mut lexer, input, AstFactory::new());
+    let mut parser = Parser::new(&mut lexer, input);
 
     parser.parse()
 }

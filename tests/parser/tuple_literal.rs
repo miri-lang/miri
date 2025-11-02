@@ -3,7 +3,7 @@
 
 use miri::ast::*;
 use miri::syntax_error::SyntaxErrorKind;
-use super::ast_builder::*;
+use miri::ast_factory::*;
 use super::utils::*;
 
 
@@ -13,7 +13,7 @@ fn test_tuple_literal_assignment() {
         variable_statement(vec![
             let_variable("t", None, opt_expr(tuple(vec![
                 symbol_literal("ok"),
-                string_literal("Hello"),
+                string_literal_expression("Hello"),
                 int_literal_expression(200),
             ])))
         ], MemberVisibility::Public)
@@ -149,7 +149,7 @@ fn test_single_item_tuple_with_map() {
         variable_statement(vec![
             let_variable("num", None, opt_expr(tuple(vec![
                 map(vec![
-                    (string_literal("a"), int_literal_expression(1))
+                    (string_literal_expression("a"), int_literal_expression(1))
                 ])
             ])))
         ], MemberVisibility::Public)

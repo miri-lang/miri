@@ -4,7 +4,7 @@
 use miri::ast::*;
 use miri::lexer::RegexToken;
 use miri::syntax_error::SyntaxErrorKind;
-use super::ast_builder::*;
+use miri::ast_factory::*;
 use super::utils::*;
 
 
@@ -24,17 +24,17 @@ match x
                     MatchBranch {
                         patterns: vec![Pattern::Literal(int_literal(1))],
                         guard: None,
-                        body: Box::new(expression_statement(call(identifier("print"), vec![string_literal("one")])))
+                        body: Box::new(expression_statement(call(identifier("print"), vec![string_literal_expression("one")])))
                     },
                     MatchBranch {
                         patterns: vec![Pattern::Literal(int_literal(2))],
                         guard: None,
-                        body: Box::new(block(vec![expression_statement(call(identifier("print"), vec![string_literal("two")]))]))
+                        body: Box::new(block(vec![expression_statement(call(identifier("print"), vec![string_literal_expression("two")]))]))
                     },
                     MatchBranch {
                         patterns: vec![Pattern::Default],
                         guard: None,
-                        body: Box::new(expression_statement(call(identifier("print"), vec![string_literal("other")])))
+                        body: Box::new(expression_statement(call(identifier("print"), vec![string_literal_expression("other")])))
                     }
                 ]
             )
@@ -54,17 +54,17 @@ fn test_match_expression_fully_inline() {
                         MatchBranch {
                             patterns: vec![Pattern::Literal(int_literal(1))],
                             guard: None,
-                            body: Box::new(expression_statement(string_literal("one")))
+                            body: Box::new(expression_statement(string_literal_expression("one")))
                         },
                         MatchBranch {
                             patterns: vec![Pattern::Literal(int_literal(2))],
                             guard: None,
-                            body: Box::new(expression_statement(string_literal("two")))
+                            body: Box::new(expression_statement(string_literal_expression("two")))
                         },
                         MatchBranch {
                             patterns: vec![Pattern::Default],
                             guard: None,
-                            body: Box::new(expression_statement(string_literal("other")))
+                            body: Box::new(expression_statement(string_literal_expression("other")))
                         }
                     ]
                 )
@@ -87,12 +87,12 @@ match num
                     MatchBranch {
                         patterns: vec![Pattern::Identifier("x".to_string())],
                         guard: Some(Box::new(binary(identifier("x"), BinaryOp::GreaterThan, int_literal_expression(10)))),
-                        body: Box::new(expression_statement(string_literal("large")))
+                        body: Box::new(expression_statement(string_literal_expression("large")))
                     },
                     MatchBranch {
                         patterns: vec![Pattern::Identifier("x".to_string())],
                         guard: None,
-                        body: Box::new(expression_statement(string_literal("small")))
+                        body: Box::new(expression_statement(string_literal_expression("small")))
                     }
                 ]
             )
@@ -118,12 +118,12 @@ match code
                             Pattern::Literal(int_literal(204))
                         ],
                         guard: None,
-                        body: Box::new(expression_statement(string_literal("Success")))
+                        body: Box::new(expression_statement(string_literal_expression("Success")))
                     },
                     MatchBranch {
                         patterns: vec![Pattern::Literal(int_literal(404))],
                         guard: None,
-                        body: Box::new(expression_statement(string_literal("Not Found")))
+                        body: Box::new(expression_statement(string_literal_expression("Not Found")))
                     }
                 ]
             )
@@ -145,12 +145,12 @@ match point
                     MatchBranch {
                         patterns: vec![Pattern::Tuple(vec![Pattern::Literal(int_literal(0)), Pattern::Literal(int_literal(0))])],
                         guard: None,
-                        body: Box::new(expression_statement(string_literal("origin")))
+                        body: Box::new(expression_statement(string_literal_expression("origin")))
                     },
                     MatchBranch {
                         patterns: vec![Pattern::Tuple(vec![Pattern::Identifier("x".to_string()), Pattern::Literal(int_literal(0))])],
                         guard: None,
-                        body: Box::new(expression_statement(string_literal("on x-axis")))
+                        body: Box::new(expression_statement(string_literal_expression("on x-axis")))
                     }
                 ]
             )
@@ -181,7 +181,7 @@ match text
                             })
                         ],
                         guard: None,
-                        body: Box::new(expression_statement(string_literal("digits only")))
+                        body: Box::new(expression_statement(string_literal_expression("digits only")))
                     },
                     MatchBranch {
                         patterns: vec![
@@ -195,7 +195,7 @@ match text
                             })
                         ],
                         guard: None,
-                        body: Box::new(expression_statement(string_literal("lowercase only")))
+                        body: Box::new(expression_statement(string_literal_expression("lowercase only")))
                     }
                 ]
             )
@@ -264,7 +264,7 @@ match x
                             BinaryOp::GreaterThan,
                             int_literal_expression(0)
                         )),
-                        body: Box::new(expression_statement(string_literal("one")))
+                        body: Box::new(expression_statement(string_literal_expression("one")))
                     },
                     MatchBranch {
                         patterns: vec![Pattern::Identifier("x".to_string())],
@@ -273,7 +273,7 @@ match x
                             BinaryOp::LessThan,
                             int_literal_expression(0)
                         )),
-                        body: Box::new(expression_statement(string_literal("no duplicate")))
+                        body: Box::new(expression_statement(string_literal_expression("no duplicate")))
                     }
                 ]
             )
@@ -300,12 +300,12 @@ match get_value() + 1
                     MatchBranch {
                         patterns: vec![Pattern::Literal(int_literal(1))],
                         guard: None,
-                        body: Box::new(expression_statement(string_literal("one")))
+                        body: Box::new(expression_statement(string_literal_expression("one")))
                     },
                     MatchBranch {
                         patterns: vec![Pattern::Identifier("_".to_string())],
                         guard: None,
-                        body: Box::new(expression_statement(string_literal("other")))
+                        body: Box::new(expression_statement(string_literal_expression("other")))
                     }
                 ]
             )
@@ -329,12 +329,12 @@ let result = match x: 1: 'one', _: 'other'
                         MatchBranch {
                             patterns: vec![Pattern::Literal(int_literal(1))],
                             guard: None,
-                            body: Box::new(expression_statement(string_literal("one")))
+                            body: Box::new(expression_statement(string_literal_expression("one")))
                         },
                         MatchBranch {
                             patterns: vec![Pattern::Identifier("_".to_string())],
                             guard: None,
-                            body: Box::new(expression_statement(string_literal("other")))
+                            body: Box::new(expression_statement(string_literal_expression("other")))
                         }
                     ]
                 ))
@@ -366,12 +366,12 @@ match a
                                 MatchBranch {
                                     patterns: vec![Pattern::Literal(int_literal(2))],
                                     guard: None,
-                                    body: Box::new(expression_statement(string_literal("inner")))
+                                    body: Box::new(expression_statement(string_literal_expression("inner")))
                                 },
                                 MatchBranch {
                                     patterns: vec![Pattern::Identifier("_".to_string())],
                                     guard: None,
-                                    body: Box::new(expression_statement(string_literal("other inner")))
+                                    body: Box::new(expression_statement(string_literal_expression("other inner")))
                                 }
                             ]
                         )))
@@ -379,7 +379,7 @@ match a
                     MatchBranch {
                         patterns: vec![Pattern::Identifier("_".to_string())],
                         guard: None,
-                        body: Box::new(expression_statement(string_literal("outer")))
+                        body: Box::new(expression_statement(string_literal_expression("outer")))
                     }
                 ]
             )

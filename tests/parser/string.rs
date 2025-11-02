@@ -6,14 +6,14 @@ use miri::ast::BinaryOp;
 use miri::ast::MemberVisibility;
 use miri::syntax_error::SyntaxErrorKind;
 
-use super::ast_builder::*;
+use miri::ast_factory::*;
 use super::utils::*;
 
 
 #[test]
 fn test_parse_string_literal() {
-    literal_test("'hello single quote'", string("hello single quote"));
-    literal_test("\"hello double quote\"", string("hello double quote"));
+    literal_test("'hello single quote'", string_literal("hello single quote"));
+    literal_test("\"hello double quote\"", string_literal("hello double quote"));
 }
 
 #[test]
@@ -23,7 +23,7 @@ fn test_f_string() {
         vec![
             expression_statement(
                 f_string(vec![
-                    string_literal("User: "),
+                    string_literal_expression("User: "),
                     identifier("name"),
                 ])
             )
@@ -39,7 +39,7 @@ fn test_f_string_no_expressions() {
         vec![
             expression_statement(
                 f_string(vec![
-                    string_literal("just a regular string"),
+                    string_literal_expression("just a regular string"),
                 ])
             )
         ]
@@ -54,7 +54,7 @@ fn test_f_string_starts_with_expression() {
             expression_statement(
                 f_string(vec![
                     identifier("name"),
-                    string_literal(" is the user"),
+                    string_literal_expression(" is the user"),
                 ])
             )
         ]
@@ -68,7 +68,7 @@ fn test_f_string_ends_with_expression() {
         vec![
             expression_statement(
                 f_string(vec![
-                    string_literal("The user is "),
+                    string_literal_expression("The user is "),
                     identifier("name"),
                 ])
             )
@@ -99,7 +99,7 @@ fn test_f_string_with_complex_expression() {
         vec![
             expression_statement(
                 f_string(vec![
-                    string_literal("Result: "),
+                    string_literal_expression("Result: "),
                     binary(
                         int_literal_expression(10),
                         BinaryOp::Mul,
@@ -122,7 +122,7 @@ fn test_f_string_with_function_call() {
         vec![
             expression_statement(
                 f_string(vec![
-                    string_literal("Status: "),
+                    string_literal_expression("Status: "),
                     call(
                         identifier("get_status"),
                         vec![int_literal_expression(200)]
@@ -140,7 +140,7 @@ fn test_f_string_with_single_quotes() {
         vec![
             expression_statement(
                 f_string(vec![
-                    string_literal("User: "),
+                    string_literal_expression("User: "),
                     identifier("name"),
                 ])
             )
@@ -155,9 +155,9 @@ fn test_f_string_with_nested_f_string() {
         vec![
             expression_statement(
                 f_string(vec![
-                    string_literal("Outer: "),
+                    string_literal_expression("Outer: "),
                     f_string(vec![
-                        string_literal("Inner: "),
+                        string_literal_expression("Inner: "),
                         identifier("x"),
                     ]),
                 ])
@@ -173,9 +173,9 @@ fn test_f_string_with_map_literal() {
         vec![
             expression_statement(
                 f_string(vec![
-                    string_literal("Data: "),
+                    string_literal_expression("Data: "),
                     map(vec![(
-                        string_literal("key"),
+                        string_literal_expression("key"),
                         identifier("value")
                     )]),
                 ])
@@ -191,7 +191,7 @@ fn test_f_string_with_escaped_braces_is_parsed_as_literal() {
         vec![
             expression_statement(
                 f_string(vec![
-                    string_literal("Literal braces \\{ and \\}"),
+                    string_literal_expression("Literal braces \\{ and \\}"),
                 ])
             )
         ]
@@ -209,7 +209,7 @@ fn test_f_string_assigned_to_variable() {
                     "message",
                     None,
                     opt_expr(f_string(vec![
-                        string_literal("Hello, "),
+                        string_literal_expression("Hello, "),
                         identifier("name"),
                     ])),
                 )],
@@ -227,7 +227,7 @@ fn test_method_call_on_string_literal() {
             expression_statement(
                 call(
                     member(
-                        string_literal("hello"),
+                        string_literal_expression("hello"),
                         identifier("len")
                     ),
                     vec![]
@@ -246,7 +246,7 @@ fn test_method_call_on_f_string() {
                 call(
                     member(
                         f_string(vec![
-                            string_literal("hello, "),
+                            string_literal_expression("hello, "),
                             identifier("name"),
                         ]),
                         identifier("upper")

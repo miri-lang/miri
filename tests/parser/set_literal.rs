@@ -3,7 +3,7 @@
 
 use miri::ast::*;
 use miri::syntax_error::SyntaxErrorKind;
-use super::ast_builder::*;
+use miri::ast_factory::*;
 use super::utils::*;
 
 
@@ -122,14 +122,14 @@ let data = {
 ", vec![
         variable_statement(vec![
             let_variable("data", None, opt_expr(set(vec![
-                string_literal("users"),
+                string_literal_expression("users"),
                 map(vec![
-                    (string_literal("id"), int_literal_expression(1)),
-                    (string_literal("name"), string_literal("John")),
+                    (string_literal_expression("id"), int_literal_expression(1)),
+                    (string_literal_expression("name"), string_literal_expression("John")),
                 ]),
                 map(vec![
-                    (string_literal("id"), int_literal_expression(2)),
-                    (string_literal("name"), string_literal("Jane")),
+                    (string_literal_expression("id"), int_literal_expression(2)),
+                    (string_literal_expression("name"), string_literal_expression("Jane")),
                 ]),
             ])))
         ], MemberVisibility::Public)
@@ -150,7 +150,7 @@ fn test_distinction_empty_is_map() {
 fn test_distinction_single_item_is_set() {
     parser_test("let s = {'a'}", vec![
         variable_statement(vec![
-            let_variable("s", None, opt_expr(set(vec![string_literal("a")])))
+            let_variable("s", None, opt_expr(set(vec![string_literal_expression("a")])))
         ], MemberVisibility::Public)
     ]);
 }
