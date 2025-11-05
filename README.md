@@ -47,7 +47,7 @@ This version also includes unit-test, which in Miri is part of the same function
 extends ConsoleApp
 
 # Fake constructor, used in the examples.
-fake
+new
   new(Console.fake, []String.new)
 
 # runs the app.

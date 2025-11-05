@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2017–2025 Viacheslav Shynkarenko
+
 use assert_cmd::Command;
 
 #[test]
