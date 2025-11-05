@@ -42,8 +42,8 @@ Done ✅
   - [x] match / pattern matching
   - [x] string interpolation
   - [x] refactor lexer & parser tests (split them in modules)
-  - [ ] identify gaps in tests
-  - [ ] optimize parser
+  - [x] identify gaps in tests
+  - [x] optimize parser
 - [x] Create an **AST (Abstract Syntax Tree)** representation.
 - [ ] Introduce a simple **REPL** (interactive shell for experimentation, for now just returns the AST).
 - [ ] Add simple integration tests (running real programs, without failing)
