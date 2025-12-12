@@ -8,3 +8,7 @@ pub mod syntax_error;
 pub mod parser;
 pub mod ast;
 pub mod ast_factory;
+pub mod type_checker;
+pub mod repl;
+pub mod compiler_error;
+pub mod pipeline;
