@@ -202,7 +202,7 @@ impl SyntaxError {
             "Syntax Error: {error_title}\n\
               --> line {line_num}:{col_num}\n\
                |\n\
-            {line_num:^3} | {line_str}\n\
+               | {line_str}\n\
                | {padding}{underline}\n\
                = help: {help_message}",
             padding = " ".repeat(col_num - 1)

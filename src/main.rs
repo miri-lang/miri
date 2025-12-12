@@ -91,7 +91,7 @@ fn run_tests(filter: Option<String>, format: TestFormat, dir: PathBuf, _verbose:
         .filter_map(|e| e.ok())
         .filter(|e| {
             let path = e.path();
-            let is_miri_file = path.extension().map_or(false, |ext| ext == "miri");
+            let is_miri_file = path.extension().map_or(false, |ext| ext == "mi");
             let in_tests_dir = path.to_string_lossy().contains("tests/");
             let has_test_in_name = path.to_string_lossy().contains("test");
 
