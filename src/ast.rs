@@ -59,6 +59,32 @@ pub struct FunctionProperties {
     pub visibility: MemberVisibility,
 }
 
+use std::hash::{Hash, Hasher};
+
+#[derive(Debug, Clone, Eq)]
+pub struct IdNode<T> {
+    pub id: usize,
+    pub node: T,
+}
+
+impl<T: PartialEq> PartialEq for IdNode<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.node == other.node
+    }
+}
+
+impl<T: Hash> Hash for IdNode<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.node.hash(state);
+    }
+}
+
+impl<T> IdNode<T> {
+    pub fn new(id: usize, node: T) -> Self {
+        Self { id, node }
+    }
+}
+
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub enum Statement {
     Empty, // Represents an empty statement, e.g., when a block is empty
@@ -100,7 +126,7 @@ pub enum Statement {
 
 /// Represents an expression
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Expression {
+pub enum ExpressionKind {
     Literal(Literal),
     
     Identifier(String, Option<String>), // name, optional class e.g. x or Http::Status
@@ -151,6 +177,8 @@ pub enum Expression {
 
     FormattedString(Vec<Expression>), // "hello #{name}"
 }
+
+pub type Expression = IdNode<ExpressionKind>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ImportPathKind {

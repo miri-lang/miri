@@ -42,7 +42,7 @@ pub fn variable_declaration_test(input: &str, expected: Vec<VariableDeclaration>
 
 pub fn literal_test(input: &str, expected: Literal) {
     parser_test(input, vec![
-        Statement::Expression(Expression::Literal(expected))
+        Statement::Expression(literal(expected))
     ]);
 }
 
@@ -74,13 +74,13 @@ pub fn run_float_tests(inputs: Vec<(&str, FloatLiteral)>) {
 
 pub fn binary_expression_test(input: &str, left: Expression, op: BinaryOp, right: Expression) {
     parser_test(input, vec![
-        Statement::Expression(Expression::Binary(Box::new(left), op, Box::new(right)))
+        Statement::Expression(binary(left, op, right))
     ]);
 }
 
 pub fn assignment_expression_test(input: &str, left: LeftHandSideExpression, op: AssignmentOp, right: Expression) {
     parser_test(input, vec![
-        Statement::Expression(Expression::Assignment(Box::new(left), op, Box::new(right)))
+        Statement::Expression(assign(left, op, right))
     ]);
 }
 
@@ -97,7 +97,7 @@ pub fn combined_if_unless_test(input: &str, condition: Expression, then_block: S
 
 pub fn unary_expression_test(input: &str, op: UnaryOp, right: Expression) {
     parser_test(input, vec![
-        Statement::Expression(Expression::Unary(op, Box::new(right)))
+        Statement::Expression(unary(op, right))
     ]);
 }
 

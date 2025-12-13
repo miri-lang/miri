@@ -178,7 +178,7 @@ impl<'source> Parser<'source> {
 
     fn parse_simple_identifier(&mut self) -> Result<String, SyntaxError> {
         let identifier_expr = self.identifier()?;
-        if let Expression::Identifier(id, class_opt) = identifier_expr {
+        if let ExpressionKind::Identifier(id, class_opt) = identifier_expr.node {
             if let Some(class) = class_opt {
                 // A simple identifier cannot be namespaced.
                 return Err(self.error_unexpected_token("a simple identifier", &format!("{}::{}", class, id)));
@@ -384,7 +384,7 @@ impl<'source> Parser<'source> {
         self.eat_token(&Token::In)?;
         let iterable = self.range_expression()?;
 
-        if let Expression::Range(_, _, range_type) = &iterable {
+        if let ExpressionKind::Range(_, _, range_type) = &iterable.node {
             if *range_type != RangeExpressionType::IterableObject && variable_declarations.len() > 1 {
                 return Err(self.error_unexpected_token(
                     "a single loop variable for a numeric range",
@@ -876,7 +876,7 @@ impl<'source> Parser<'source> {
 
         if self.match_lookahead_type(|t| t == &Token::QuestionMark) {
             self.eat_token(&Token::QuestionMark)?;
-            if let Expression::Type(inner_type, _) = final_expr {
+            if let ExpressionKind::Type(inner_type, _) = final_expr.node {
                 final_expr = ast::null_typ(*inner_type);
             }
         }
@@ -960,9 +960,9 @@ impl<'source> Parser<'source> {
     }
     
     fn identifier_to_type_name(&mut self) -> Result<String, SyntaxError> {
-        Ok(match self.identifier()? {
-            Expression::Identifier(id, Some(class)) => format!("{}::{}", class, id), // Reconstruct the full path
-            Expression::Identifier(id, None) => id,
+        Ok(match self.identifier()?.node {
+            ExpressionKind::Identifier(id, Some(class)) => format!("{}::{}", class, id), // Reconstruct the full path
+            ExpressionKind::Identifier(id, None) => id,
             _ => return Err(
                 self.error_unexpected_token("identifier", &self.lookahead_as_string())
             ),
@@ -1062,11 +1062,11 @@ impl<'source> Parser<'source> {
 
     fn inheritance_identifier(&mut self) -> Result<Expression, SyntaxError> {
         let name = self.identifier()?;
-        match name {
-            Expression::Identifier(_, Some(_)) => {
+        match name.node {
+            ExpressionKind::Identifier(_, Some(_)) => {
                 Err(self.error_invalid_inheritance_identifier())
             },
-            Expression::Identifier(_, None) => {
+            ExpressionKind::Identifier(_, None) => {
                 Ok(name)
             },
             _ => Err(self.error_unexpected_token("identifier", format!("{:?}", name).as_str()))
@@ -1310,16 +1310,16 @@ impl<'source> Parser<'source> {
             Err(err) => return Err(err),
         };
 
-        let left = match &left {
-            Expression::Identifier(_, class) => {
+        let left = match &left.node {
+            ExpressionKind::Identifier(_, class) => {
                 if class.is_some() {
                     // A left-hand side identifier cannot be namespaced.
                     return Err(self.error_invalid_left_hand_side_expression());
                 }
                 ast::lhs_identifier_from_expr(left)
             },
-            Expression::Member(_, _) => ast::lhs_member_from_expr(left),
-            Expression::Index(_, _) => ast::lhs_index_from_expr(left),
+            ExpressionKind::Member(_, _) => ast::lhs_member_from_expr(left),
+            ExpressionKind::Index(_, _) => ast::lhs_index_from_expr(left),
             // Other left-hand side expression types can be added here in the future
             _ => return Err(
                 self.error_invalid_left_hand_side_expression()

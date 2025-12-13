@@ -2,7 +2,20 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use crate::{ast::*, lexer::RegexToken};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
+static NEXT_ID: AtomicUsize = AtomicUsize::new(1);
+
+fn next_id() -> usize {
+    NEXT_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+fn expr(kind: ExpressionKind) -> Expression {
+    Expression {
+        id: next_id(),
+        node: kind,
+    }
+}
 
 pub fn empty_statement() -> Statement {
     Statement::Empty
@@ -17,7 +30,7 @@ pub fn empty_program() -> Vec<Statement> {
 }
 
 pub fn identifier_with_class(name: &str, class: Option<String>) -> Expression {
-    Expression::Identifier(name.into(), class)
+    expr(ExpressionKind::Identifier(name.into(), class))
 }
 
 pub fn identifier(name: &str) -> Expression {
@@ -25,7 +38,7 @@ pub fn identifier(name: &str) -> Expression {
 }
 
 pub fn literal(value: Literal) -> Expression {
-    Expression::Literal(value)
+    expr(ExpressionKind::Literal(value))
 }
 
 pub fn class_identifier(name: &str) -> Expression {
@@ -33,7 +46,7 @@ pub fn class_identifier(name: &str) -> Expression {
     let class = parts[0].to_string();
     let id_name = parts[1].to_string();
 
-    Expression::Identifier(id_name, Some(class))
+    expr(ExpressionKind::Identifier(id_name, Some(class)))
 }
 
 pub fn int(val: i128) -> IntegerLiteral {
@@ -51,7 +64,7 @@ pub fn int_literal(val: i128) -> Literal {
 }
 
 pub fn int_literal_expression(val: i128) -> Expression {
-    Expression::Literal(int_literal(val))
+    expr(ExpressionKind::Literal(int_literal(val)))
 }
 
 pub fn float32(val: f32) -> FloatLiteral {
@@ -85,11 +98,11 @@ pub fn string_literal(val: &str) -> Literal {
 }
 
 pub fn string_literal_expression(val: &str) -> Expression {
-    Expression::Literal(string_literal(val))
+    expr(ExpressionKind::Literal(string_literal(val)))
 }
 
 pub fn f_string(parts: Vec<Expression>) -> Expression {
-    Expression::FormattedString(parts)
+    expr(ExpressionKind::FormattedString(parts))
 }
 
 pub fn boolean(val: bool) -> Literal {
@@ -97,7 +110,7 @@ pub fn boolean(val: bool) -> Literal {
 }
 
 pub fn boolean_literal(val: bool) -> Expression {
-    Expression::Literal(boolean(val))
+    expr(ExpressionKind::Literal(boolean(val)))
 }
 
 pub fn symbol(val: &str) -> Literal {
@@ -105,7 +118,7 @@ pub fn symbol(val: &str) -> Literal {
 }
 
 pub fn symbol_literal(val: &str) -> Expression {
-    Expression::Literal(symbol(val))
+    expr(ExpressionKind::Literal(symbol(val)))
 }
 
 pub fn regex_literal_from_token(value: RegexToken) -> Literal {
@@ -121,24 +134,25 @@ pub fn regex_literal(body: &str, flags: &str) -> Expression {
         dot_all: flags.contains('s'),
         unicode: flags.contains('u'),
     };
-    Expression::Literal(regex_literal_from_token(token))
+    expr(ExpressionKind::Literal(regex_literal_from_token(token)))
 }
 
 pub fn binary(left: Expression, op: BinaryOp, right: Expression) -> Expression {
-    Expression::Binary(Box::new(left), op, Box::new(right))
+    expr(ExpressionKind::Binary(Box::new(left), op, Box::new(right)))
 }
 
-pub fn unary(op: UnaryOp, expr: Expression) -> Expression {
-    Expression::Unary(op, Box::new(expr))
+pub fn unary(op: UnaryOp, expr_node: Expression) -> Expression {
+    expr(ExpressionKind::Unary(op, Box::new(expr_node)))
 }
 
 pub fn logical(left: Expression, op: BinaryOp, right: Expression) -> Expression {
-    Expression::Logical(Box::new(left), op, Box::new(right))
+    expr(ExpressionKind::Logical(Box::new(left), op, Box::new(right)))
 }
 
 pub fn assign(left: LeftHandSideExpression, op: AssignmentOp, right: Expression) -> Expression {
-    Expression::Assignment(Box::new(left), op, Box::new(right))
+    expr(ExpressionKind::Assignment(Box::new(left), op, Box::new(right)))
 }
+
 
 pub fn let_variable(name: &str, typ: Option<Box<Expression>>, init: Option<Box<Expression>>) -> VariableDeclaration {
     VariableDeclaration {
@@ -159,7 +173,7 @@ pub fn var(name: &str, typ: Option<Box<Expression>>, init: Option<Box<Expression
 }
 
 pub fn conditional(then: Expression, cond: Expression, else_b: Option<Expression>, if_type: IfStatementType) -> Expression {
-    Expression::Conditional(Box::new(then), Box::new(cond), else_b.map(Box::new), if_type)
+    expr(ExpressionKind::Conditional(Box::new(then), Box::new(cond), else_b.map(Box::new), if_type))
 }
 
 pub fn if_conditional(then: Expression, cond: Expression, else_b: Option<Expression>) -> Expression {
@@ -171,19 +185,19 @@ pub fn unless_conditional(then: Expression, cond: Expression, else_b: Option<Exp
 }
 
 pub fn range(start: Expression, end: Option<Box<Expression>>, range_type: RangeExpressionType) -> Expression {
-    Expression::Range(Box::new(start), end, range_type)
+    expr(ExpressionKind::Range(Box::new(start), end, range_type))
 }
 
 pub fn iter_obj(start: Expression) -> Expression {
-    Expression::Range(Box::new(start), None, RangeExpressionType::IterableObject)
+    expr(ExpressionKind::Range(Box::new(start), None, RangeExpressionType::IterableObject))
 }
 
 pub fn member(object: Expression, property: Expression) -> Expression {
-    Expression::Member(Box::new(object), Box::new(property))
+    expr(ExpressionKind::Member(Box::new(object), Box::new(property)))
 }
 
 pub fn index(object: Expression, index: Expression) -> Expression {
-    Expression::Index(Box::new(object), Box::new(index))
+    expr(ExpressionKind::Index(Box::new(object), Box::new(index)))
 }
 
 pub fn lhs_identifier_from_expr(expr: Expression) -> LeftHandSideExpression {
@@ -211,7 +225,7 @@ pub fn lhs_index(object: Expression, idx: Expression) -> LeftHandSideExpression 
 }
 
 pub fn call(callee: Expression, args: Vec<Expression>) -> Expression {
-    Expression::Call(Box::new(callee), args)
+    expr(ExpressionKind::Call(Box::new(callee), args))
 }
 
 pub fn variable_statement(declarations: Vec<VariableDeclaration>, visibility: MemberVisibility) -> Statement {
@@ -251,7 +265,7 @@ pub fn until_statement(cond: Expression, body: Statement) -> Statement {
 }
 
 pub fn forever_statement(body: Statement) -> Statement {
-    while_statement_with_type(Expression::Literal(Literal::Boolean(true)), body, WhileStatementType::Forever)
+    while_statement_with_type(expr(ExpressionKind::Literal(Literal::Boolean(true))), body, WhileStatementType::Forever)
 }
 
 pub fn for_statement(
@@ -266,8 +280,8 @@ pub fn return_statement(expr: Option<Box<Expression>>) -> Statement {
     Statement::Return(expr)
 }
 
-pub fn guard(op: GuardOp, expr: Expression) -> Expression {
-    Expression::Guard(op, Box::new(expr))
+pub fn guard(op: GuardOp, expr_node: Expression) -> Expression {
+    expr(ExpressionKind::Guard(op, Box::new(expr_node)))
 }
 
 pub fn parameter(name: String, typ: Expression, guard: Option<Box<Expression>>, default_value: Option<Box<Expression>>) -> Parameter {
@@ -275,7 +289,7 @@ pub fn parameter(name: String, typ: Expression, guard: Option<Box<Expression>>, 
 }
 
 pub fn import_path_expression(segments: Vec<Expression>, kind: ImportPathKind) -> Expression {
-    Expression::ImportPath(segments, kind)
+    expr(ExpressionKind::ImportPath(segments, kind))
 }
 
 pub fn import_path(path: &str) -> Expression {
@@ -298,7 +312,7 @@ pub fn use_statement(import_path: Expression, alias: Option<Box<Expression>>) ->
 }
 
 pub fn generic_type_expression(name_expression: Expression, constraint: Option<Box<Expression>>) -> Expression {
-    Expression::GenericType(Box::new(name_expression), constraint)
+    expr(ExpressionKind::GenericType(Box::new(name_expression), constraint))
 }
 
 pub fn generic_type(name: &str, constraint: Option<Box<Expression>>) -> Expression {
@@ -306,7 +320,7 @@ pub fn generic_type(name: &str, constraint: Option<Box<Expression>>) -> Expressi
 }
 
 pub fn type_expression(inner: Type, is_nullable: bool) -> Expression {
-    Expression::Type(Box::new(inner), is_nullable)
+    expr(ExpressionKind::Type(Box::new(inner), is_nullable))
 }
 
 pub fn typ(t: Type) -> Expression {
@@ -318,7 +332,7 @@ pub fn null_typ(t: Type) -> Expression {
 }
 
 pub fn type_declaration_expression(name: Expression, generic_types: Option<Vec<Expression>>, kind: TypeDeclarationKind, type_expr: Option<Box<Expression>>) -> Expression {
-    Expression::TypeDeclaration(Box::new(name), generic_types, kind, type_expr)
+    expr(ExpressionKind::TypeDeclaration(Box::new(name), generic_types, kind, type_expr))
 }
 
 pub fn type_declaration(name: &str, generic_types: Option<Vec<Expression>>, kind: TypeDeclarationKind, type_expr: Option<Box<Expression>>) -> Expression {
@@ -342,7 +356,7 @@ pub fn enum_statement(name: Expression, values: Vec<Expression>, visibility: Mem
 }
 
 pub fn enum_value_expression(name: Expression, types: Vec<Expression>) -> Expression {
-    Expression::EnumValue(Box::new(name), types)
+    expr(ExpressionKind::EnumValue(Box::new(name), types))
 }
 
 pub fn enum_value(name: &str, types: Vec<Expression>) -> Expression {
@@ -354,7 +368,7 @@ pub fn struct_statement(name: Expression, generic_types: Option<Vec<Expression>>
 }
 
 pub fn struct_member_expression(name: Expression, typ: Expression) -> Expression {
-    Expression::StructMember(Box::new(name), Box::new(typ))
+    expr(ExpressionKind::StructMember(Box::new(name), Box::new(typ)))
 }
 
 pub fn struct_member(name: &str, typ: Expression) -> Expression {
@@ -374,23 +388,23 @@ pub fn includes(modules: Vec<Expression>) -> Statement {
 }
 
 pub fn list(elements: Vec<Expression>) -> Expression {
-    Expression::List(elements)
+    expr(ExpressionKind::List(elements))
 }
 
 pub fn map(pairs: Vec<(Expression, Expression)>) -> Expression {
-    Expression::Map(pairs)
+    expr(ExpressionKind::Map(pairs))
 }
 
 pub fn tuple(elements: Vec<Expression>) -> Expression {
-    Expression::Tuple(elements)
+    expr(ExpressionKind::Tuple(elements))
 }
 
 pub fn set(elements: Vec<Expression>) -> Expression {
-    Expression::Set(elements)
+    expr(ExpressionKind::Set(elements))
 }
 
 pub fn match_expression(subject: Expression, branches: Vec<MatchBranch>) -> Expression {
-    Expression::Match(Box::new(subject), branches)
+    expr(ExpressionKind::Match(Box::new(subject), branches))
 }
 
 pub struct FunctionBuilder {
@@ -472,13 +486,13 @@ impl FunctionBuilder {
     }
 
     pub fn build_lambda(self, body: Statement) -> Expression {
-        Expression::Lambda(
+        expr(ExpressionKind::Lambda(
             self.generic_types,
             self.parameters,
             self.return_type,
             Box::new(body),
             self.properties,
-        )
+        ))
     }
 
     pub fn build_lambda_empty_body(self) -> Expression {
@@ -499,5 +513,5 @@ pub fn lambda() -> FunctionBuilder {
 }
 
 pub fn lambda_expression(generic_types: Option<Vec<Expression>>, parameters: Vec<Parameter>, return_type: Option<Box<Expression>>, body: Statement, properties: FunctionProperties) -> Expression {
-    Expression::Lambda(generic_types, parameters, return_type, Box::new(body), properties)
+    expr(ExpressionKind::Lambda(generic_types, parameters, return_type, Box::new(body), properties))
 }

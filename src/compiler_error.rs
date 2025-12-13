@@ -15,6 +15,9 @@ pub enum CompilerError {
     #[error("Parser Error: {0:?}")]
     Parser(SyntaxError),
 
+    #[error("Type Error: {0}")]
+    Type(String),
+
     #[error("File not found: {0}")]
     FileNotFound(String),
 
