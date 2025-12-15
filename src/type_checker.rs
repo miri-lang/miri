@@ -485,6 +485,13 @@ impl TypeChecker {
         }
     }
 
+    fn infer_formatted_string(&mut self, parts: &[Expression], context: &mut Context) -> Type {
+        for part in parts {
+            self.infer_expression(part, context);
+        }
+        Type::String
+    }
+
     fn check_pattern(&mut self, pattern: &Pattern, subject_type: &Type, context: &mut Context, span: Span) {
         match pattern {
             Pattern::Literal(lit) => {
@@ -567,6 +574,7 @@ impl TypeChecker {
             ExpressionKind::Member(obj, prop) => self.infer_member(obj, prop, expr.span.clone(), context),
             ExpressionKind::Match(subject, branches) => self.infer_match(subject, branches, expr.span.clone(), context),
             ExpressionKind::Conditional(then_expr, cond_expr, else_expr, _) => self.infer_conditional(then_expr, cond_expr, else_expr, expr.span.clone(), context),
+            ExpressionKind::FormattedString(parts) => self.infer_formatted_string(parts, context),
             _ => Type::Int, // Default fallback for unimplemented expressions
         };
 
