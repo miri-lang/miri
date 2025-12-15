@@ -415,6 +415,110 @@ impl TypeChecker {
         context.define(name, Type::Meta(Box::new(enum_type)), false);
     }
 
+    fn infer_match(&mut self, subject: &Expression, branches: &[MatchBranch], span: Span, context: &mut Context) -> Type {
+        let subject_type = self.infer_expression(subject, context);
+        
+        if branches.is_empty() {
+            return Type::Void;
+        }
+
+        let mut first_branch_type = None;
+
+        for branch in branches {
+            context.enter_scope();
+            
+            // Check patterns and bind variables
+            for pattern in &branch.patterns {
+                self.check_pattern(pattern, &subject_type, context, span.clone());
+            }
+
+            // Check guard
+            if let Some(guard) = &branch.guard {
+                let guard_type = self.infer_expression(guard, context);
+                if guard_type != Type::Boolean {
+                    self.report_error(format!("Match guard must be a boolean, got {:?}", guard_type), guard.span.clone());
+                }
+            }
+
+            // Check body
+            let body_type = self.infer_statement_type(&branch.body, context);
+            
+            context.exit_scope();
+
+            if let Some(first_type) = &first_branch_type {
+                if !self.are_compatible(first_type, &body_type) {
+                    self.report_error(format!("Match branches must return the same type. Expected {:?}, got {:?}", first_type, body_type), span.clone());
+                }
+            } else {
+                first_branch_type = Some(body_type);
+            }
+        }
+
+        first_branch_type.unwrap_or(Type::Void)
+    }
+
+    fn check_pattern(&mut self, pattern: &Pattern, subject_type: &Type, context: &mut Context, span: Span) {
+        match pattern {
+            Pattern::Literal(lit) => {
+                let lit_type = self.infer_literal(lit);
+                if !self.are_compatible(subject_type, &lit_type) {
+                    self.report_error(format!("Pattern type mismatch: expected {:?}, got {:?}", subject_type, lit_type), span);
+                }
+            }
+            Pattern::Identifier(name) => {
+                // Bind variable
+                context.define(name.clone(), subject_type.clone(), false); // Immutable binding by default
+            }
+            Pattern::Tuple(patterns) => {
+                if let Type::Tuple(elem_types) = subject_type {
+                    if patterns.len() != elem_types.len() {
+                        self.report_error(format!("Tuple pattern length mismatch: expected {}, got {}", elem_types.len(), patterns.len()), span.clone());
+                        return;
+                    }
+                    
+                    // Clone to avoid borrowing issues
+                    let elem_types_cloned = elem_types.clone();
+                    
+                    for (i, pat) in patterns.iter().enumerate() {
+                        let elem_type = self.resolve_type_expression(&elem_types_cloned[i]);
+                        self.check_pattern(pat, &elem_type, context, span.clone());
+                    }
+                } else {
+                    self.report_error(format!("Expected tuple type for tuple pattern, got {:?}", subject_type), span);
+                }
+            }
+            Pattern::Regex(_) => {
+                 if !matches!(subject_type, Type::String) {
+                    self.report_error(format!("Regex pattern requires string subject, got {:?}", subject_type), span);
+                 }
+            }
+            Pattern::Default => {}
+        }
+    }
+
+    fn infer_statement_type(&mut self, stmt: &Statement, context: &mut Context) -> Type {
+        match stmt {
+            Statement::Expression(expr) => self.infer_expression(expr, context),
+            Statement::Block(stmts) => {
+                context.enter_scope();
+                let mut last_type = Type::Void;
+                for (i, s) in stmts.iter().enumerate() {
+                    if i == stmts.len() - 1 {
+                        last_type = self.infer_statement_type(s, context);
+                    } else {
+                        self.check_statement(s, context);
+                    }
+                }
+                context.exit_scope();
+                last_type
+            }
+            _ => {
+                self.check_statement(stmt, context);
+                Type::Void
+            }
+        }
+    }
+
     // --- Expression Inference ---
 
     fn infer_expression(&mut self, expr: &Expression, context: &mut Context) -> Type {
@@ -433,6 +537,7 @@ impl TypeChecker {
             ExpressionKind::Tuple(elements) => self.infer_tuple(elements, expr.span.clone(), context),
             ExpressionKind::Index(obj, index) => self.infer_index(obj, index, expr.span.clone(), context),
             ExpressionKind::Member(obj, prop) => self.infer_member(obj, prop, expr.span.clone(), context),
+            ExpressionKind::Match(subject, branches) => self.infer_match(subject, branches, expr.span.clone(), context),
             _ => Type::Int, // Default fallback for unimplemented expressions
         };
 

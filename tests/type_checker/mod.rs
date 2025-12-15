@@ -8,6 +8,7 @@ pub mod function;
 pub mod integer;
 pub mod list;
 pub mod map;
+pub mod match_expression;
 pub mod multiple_errors;
 pub mod mutability;
 pub mod set;
