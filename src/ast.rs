@@ -347,6 +347,7 @@ pub enum Type {
     Function(Option<Vec<Expression>>, Vec<Parameter>, Option<Box<Expression>>), // fn<T>(x int) float
 
     Custom(String, Option<Vec<Expression>>),    // a custom type, e.g., MyStruct<T, U>
+    Void,                                       // Represents void type
     Error,                                      // Represents a type error
 }
 

@@ -13,11 +13,15 @@ pub struct TypeChecker {
 
 struct Context {
     scopes: Vec<HashMap<String, Type>>,
+    return_types: Vec<Type>,
 }
 
 impl Context {
     fn new() -> Self {
-        Self { scopes: vec![HashMap::new()] }
+        Self { 
+            scopes: vec![HashMap::new()],
+            return_types: Vec::new(),
+        }
     }
     
     fn enter_scope(&mut self) {
@@ -142,8 +146,61 @@ impl TypeChecker {
                 }
                 self.check_statement(body, context);
             }
-            Statement::Return(Some(expr)) => {
-                self.infer_expression(expr, context);
+            Statement::Return(expr_opt) => {
+                let expected_return_type = context.return_types.last().unwrap_or(&Type::Void).clone();
+                
+                let actual_return_type = if let Some(expr) = expr_opt {
+                    self.infer_expression(expr, context)
+                } else {
+                    Type::Void
+                };
+
+                if !self.are_compatible(&expected_return_type, &actual_return_type) {
+                    let span = if let Some(expr) = expr_opt {
+                        expr.span.clone()
+                    } else {
+                        0..0 // TODO: Need span for return statement
+                    };
+                    self.errors.push(TypeError::new(
+                        format!("Invalid return type: expected {:?}, got {:?}", expected_return_type, actual_return_type),
+                        span
+                    ));
+                }
+            }
+            Statement::FunctionDeclaration(name, generics, params, return_type_expr, body, _) => {
+                let func_type = Type::Function(generics.clone(), params.clone(), return_type_expr.clone());
+                context.define(name.clone(), func_type);
+
+                let return_type = if let Some(rt_expr) = return_type_expr {
+                    match self.extract_type_from_expression(rt_expr) {
+                        Ok(t) => t,
+                        Err(msg) => {
+                            self.errors.push(TypeError::new(msg, rt_expr.span.clone()));
+                            Type::Error
+                        }
+                    }
+                } else {
+                    Type::Void
+                };
+                
+                context.return_types.push(return_type);
+                context.enter_scope();
+
+                for param in params {
+                    let param_type = match self.extract_type_from_expression(&param.typ) {
+                        Ok(t) => t,
+                        Err(msg) => {
+                            self.errors.push(TypeError::new(msg, param.typ.span.clone()));
+                            Type::Error
+                        }
+                    };
+                    context.define(param.name.clone(), param_type);
+                }
+
+                self.check_statement(body, context);
+
+                context.exit_scope();
+                context.return_types.pop();
             }
             _ => {}
         }
@@ -219,6 +276,52 @@ impl TypeChecker {
                 }
                 lhs_type
             },
+            ExpressionKind::Call(func, args) => {
+                let func_type = self.infer_expression(func, context);
+                match func_type {
+                    Type::Function(_, params, return_type_expr) => {
+                        if args.len() != params.len() {
+                            self.errors.push(TypeError::new(
+                                format!("Incorrect number of arguments: expected {}, got {}", params.len(), args.len()),
+                                expr.span.clone()
+                            ));
+                        }
+
+                        for (i, arg) in args.iter().enumerate() {
+                            let arg_type = self.infer_expression(arg, context);
+                            if i < params.len() {
+                                let param_type = match self.extract_type_from_expression(&params[i].typ) {
+                                    Ok(t) => t,
+                                    Err(_) => Type::Error,
+                                };
+                                if !self.are_compatible(&param_type, &arg_type) {
+                                    self.errors.push(TypeError::new(
+                                        format!("Type mismatch for argument {}: expected {:?}, got {:?}", i + 1, param_type, arg_type),
+                                        arg.span.clone()
+                                    ));
+                                }
+                            }
+                        }
+
+                        if let Some(rt_expr) = return_type_expr {
+                             match self.extract_type_from_expression(&rt_expr) {
+                                Ok(t) => t,
+                                Err(_) => Type::Error,
+                            }
+                        } else {
+                            Type::Void
+                        }
+                    }
+                    Type::Error => Type::Error,
+                    _ => {
+                        self.errors.push(TypeError::new(
+                            format!("Expression is not callable: {:?}", func_type),
+                            func.span.clone()
+                        ));
+                        Type::Error
+                    }
+                }
+            }
             _ => Type::Int,
         };
 

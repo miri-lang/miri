@@ -14,12 +14,16 @@ pub fn type_check_test(source: &str) -> PipelineResult {
 
 pub fn assert_expression_type(source: &str, expected_type: Type) {
     let result = type_check_test(source);
-    let last_stmt = result.ast.body.last().expect("Program is empty");
+    let last_stmt = result.ast.body.iter().rev().find(|s| match s {
+        Statement::Empty => false,
+        Statement::Block(stmts) if stmts.is_empty() => false,
+        _ => true,
+    }).expect("Program is empty or only contains empty statements");
     if let Statement::Expression(expr) = last_stmt {
             let actual_type = result.type_checker.get_type(expr.id).expect("Type not found for expression");
             assert_eq!(actual_type, &expected_type, "Type mismatch for expression '{}'", source);
     } else {
-        panic!("Last statement is not an expression in '{}'", source);
+        panic!("Last statement is not an expression in '{}'. Found: {:?}", source, last_stmt);
     }
 }
 

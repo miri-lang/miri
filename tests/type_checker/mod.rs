@@ -3,6 +3,7 @@
 
 pub mod boolean;
 pub mod float;
+pub mod function;
 pub mod integer;
 pub mod multiple_errors;
 pub mod string;
