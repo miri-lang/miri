@@ -1277,7 +1277,8 @@ impl<'source> Parser<'source> {
             None
         };
 
-        let expression = ast::conditional(expression, condition, else_branch, if_statement_type);
+        let span = expression.span.start..(if let Some(ref e) = else_branch { e.span.end } else { condition.span.end });
+        let expression = ast::conditional_with_span(expression, condition, else_branch, if_statement_type, span);
         
         Ok(expression)
     }
@@ -1328,10 +1329,12 @@ impl<'source> Parser<'source> {
 
         let right = self.assignment_expression()?;
 
-        let assignment_expression = ast::assign(
+        let span = left.span().start..right.span.end;
+        let assignment_expression = ast::assign_with_span(
             left,
             op,
             right,
+            span
         );
 
         Ok(assignment_expression)
@@ -1353,7 +1356,7 @@ impl<'source> Parser<'source> {
             Self::additive_expression,
             is_relational_op,
             Self::eat_relational_op,
-            |l, op, r| ast::binary(l, op, r)
+            |l, op, r, span| ast::binary_with_span(l, op, r, span)
         )
     }
 
@@ -1371,7 +1374,7 @@ impl<'source> Parser<'source> {
             Self::relational_expression,
             is_equality_op,
             Self::eat_equality_op,
-            |l, op, r| ast::binary(l, op, r)
+            |l, op, r, span| ast::binary_with_span(l, op, r, span)
         )
     }
 
@@ -1388,7 +1391,7 @@ impl<'source> Parser<'source> {
             Self::equality_expression,
             is_logical_and_op,
             Self::eat_logical_and_op,
-            |l, op, r| ast::logical(l, op, r)
+            |l, op, r, span| ast::logical_with_span(l, op, r, span)
         )
     }
 
@@ -1405,7 +1408,7 @@ impl<'source> Parser<'source> {
             Self::logical_and_expression,
             is_logical_or_op,
             Self::eat_logical_or_op,
-            |l, op, r| ast::logical(l, op, r)
+            |l, op, r, span| ast::logical_with_span(l, op, r, span)
         )
     }
 
@@ -1438,17 +1441,20 @@ impl<'source> Parser<'source> {
                 Some((Token::Dot, _)) => {
                     self.eat_token(&Token::Dot)?;
                     let property = self.identifier()?;
-                    ast::member(expression, property)
+                    let span = expression.span.start..property.span.end;
+                    ast::member_with_span(expression, property, span)
                 },
                 Some((Token::LBracket, _)) => {
                     self.eat_token(&Token::LBracket)?;
                     let index = self.expression()?;
-                    self.eat_token(&Token::RBracket)?;
-                    ast::index(expression, index)
+                    let (_, rbracket_span) = self.eat_token(&Token::RBracket)?;
+                    let span = expression.span.start..rbracket_span.end;
+                    ast::index_with_span(expression, index, span)
                 },
                 Some((Token::LParen, _)) => {
-                    let args = self.arguments()?;
-                    ast::call(expression, args)
+                    let (args, rparen_span) = self.arguments()?;
+                    let span = expression.span.start..rparen_span.end;
+                    ast::call_with_span(expression, args, span)
                 },
                 _ => break,
             };
@@ -1462,7 +1468,7 @@ impl<'source> Parser<'source> {
             : '(' ')'
             | '(' ArgumentList ')'
     */
-    fn arguments(&mut self) -> Result<Vec<Expression>, SyntaxError> {
+    fn arguments(&mut self) -> Result<(Vec<Expression>, Span), SyntaxError> {
         self.eat_token(&Token::LParen)?;
 
         let argument_list = if self.lookahead_is_rparen() {
@@ -1471,8 +1477,8 @@ impl<'source> Parser<'source> {
             self.argument_list()?
         };
 
-        self.eat_token(&Token::RParen)?;
-        Ok(argument_list)
+        let (_, span) = self.eat_token(&Token::RParen)?;
+        Ok((argument_list, span))
     }
 
     /*
@@ -1506,17 +1512,17 @@ impl<'source> Parser<'source> {
     fn identifier(&mut self) -> Result<Expression, SyntaxError> {
         match &self._lookahead {
             Some((Token::Identifier, _)) => {
-                let token = self.eat_token(&Token::Identifier)?;
-                let (name, class) = match &self._lookahead {
+                let (_, span) = self.eat_token(&Token::Identifier)?;
+                let (name, class, full_span) = match &self._lookahead {
                     Some((Token::DoubleColon, _)) => {
                         self.eat_token(&Token::DoubleColon)?;
-                        let second_token = self.eat_token(&Token::Identifier)?;
+                        let (_, second_span) = self.eat_token(&Token::Identifier)?;
 
-                        (self.source[second_token.1.start..second_token.1.end].to_string(), Some(self.source[token.1.start..token.1.end].to_string()))
+                        (self.source[second_span.start..second_span.end].to_string(), Some(self.source[span.start..span.end].to_string()), span.start..second_span.end)
                     },
-                    _ => (self.source[token.1.start..token.1.end].to_string(), None),
+                    _ => (self.source[span.start..span.end].to_string(), None, span),
                 };
-                Ok(ast::identifier_with_class(&name, class))
+                Ok(ast::identifier_with_class_and_span(&name, class, full_span))
             },
             _ => Err(
                 self.error_unexpected_lookahead_token("identifier")
@@ -1535,7 +1541,7 @@ impl<'source> Parser<'source> {
             Self::multiplicative_expression,
             is_additive_op,
             Self::eat_additive_op,
-            |l, op, r| ast::binary(l, op, r)
+            |l, op, r, span| ast::binary_with_span(l, op, r, span)
         )
     }
 
@@ -1550,7 +1556,7 @@ impl<'source> Parser<'source> {
             Self::unary_expression,
             is_multiplicative_op,
             Self::eat_multiplicative_op,
-            |l, op, r| ast::binary(l, op, r)
+            |l, op, r, span| ast::binary_with_span(l, op, r, span)
         )
     }
 
@@ -1563,7 +1569,7 @@ impl<'source> Parser<'source> {
     where
         F: FnMut(&mut Self) -> Result<Expression, SyntaxError>,
         G: FnMut(&mut Self) -> Result<BinaryOp, Result<Expression, SyntaxError>>,
-        E: FnMut(Expression, BinaryOp, Expression) -> Expression,
+        E: FnMut(Expression, BinaryOp, Expression, Span) -> Expression,
     {
         let mut left = create_branch(self)?;
 
@@ -1575,7 +1581,8 @@ impl<'source> Parser<'source> {
 
             let right = create_branch(self)?;
 
-            left = create_expression(left, op, right);
+            let span = left.span.start..right.span.end;
+            left = create_expression(left, op, right, span);
         }
 
         Ok(left)
@@ -1603,9 +1610,10 @@ impl<'source> Parser<'source> {
     }
 
     fn create_unary_expression(&mut self, token: &Token, op: UnaryOp) -> Result<Expression, SyntaxError> {
-        self.eat_token(token)?;
+        let (_, span) = self.eat_token(token)?;
         let operand = self.unary_expression()?;
-        Ok(ast::unary(op, operand))
+        let full_span = span.start..operand.span.end;
+        Ok(ast::unary_with_span(op, operand, full_span))
     }
 
     /*
@@ -2048,8 +2056,13 @@ impl<'source> Parser<'source> {
             ;
     */
     fn literal_expression(&mut self) -> Result<Expression, SyntaxError> {
+        let span = if let Some((_, span)) = &self._lookahead {
+            span.clone()
+        } else {
+            return Err(self.error_eof());
+        };
         let literal = self.literal()?;
-        Ok(ast::literal(literal))
+        Ok(ast::literal_with_span(literal, span))
     }
 
     /*

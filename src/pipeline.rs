@@ -36,7 +36,7 @@ impl Pipeline {
         let ast = parser.parse().map_err(CompilerError::Parser)?;
 
         let mut type_checker = crate::type_checker::TypeChecker::new();
-        type_checker.check(&ast).map_err(CompilerError::Type)?;
+        type_checker.check(&ast).map_err(CompilerError::TypeErrors)?;
 
         // TODO: Hook for Lowering/IR Generation
         // let ir = lowerer.lower(typed_ast)?;

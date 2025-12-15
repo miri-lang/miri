@@ -211,7 +211,7 @@ impl SyntaxError {
 }
 
 // Helper function to find line number, column, and the line content from a source string and a byte position.
-fn find_line_info(source: &str, pos: usize) -> (usize, usize, &str) {
+pub fn find_line_info(source: &str, pos: usize) -> (usize, usize, &str) {
     let mut line_start = 0;
     let mut line_num = 1;
     for (i, c) in source.char_indices() {

@@ -2,11 +2,13 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use crate::ast::*;
+use crate::type_error::TypeError;
 use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct TypeChecker {
     types: HashMap<usize, Type>,
+    errors: Vec<TypeError>,
 }
 
 struct Context {
@@ -46,6 +48,7 @@ impl TypeChecker {
     pub fn new() -> Self {
         Self {
             types: HashMap::new(),
+            errors: Vec::new(),
         }
     }
 
@@ -53,126 +56,174 @@ impl TypeChecker {
         self.types.get(&id)
     }
 
-    pub fn check(&mut self, program: &Program) -> Result<(), String> {
+    pub fn check(&mut self, program: &Program) -> Result<(), Vec<TypeError>> {
         let mut context = Context::new();
         for statement in &program.body {
-            self.check_statement(statement, &mut context)?;
+            self.check_statement(statement, &mut context);
         }
-        Ok(())
+        
+        if self.errors.is_empty() {
+            Ok(())
+        } else {
+            Err(self.errors.clone())
+        }
     }
 
-    fn check_statement(&mut self, statement: &Statement, context: &mut Context) -> Result<(), String> {
+    fn check_statement(&mut self, statement: &Statement, context: &mut Context) {
         match statement {
             Statement::Variable(decls, _) => {
                 for decl in decls {
                     let inferred_type = if let Some(init) = &decl.initializer {
-                        self.infer_expression(init, context)?
+                        self.infer_expression(init, context)
                     } else if let Some(type_expr) = &decl.typ {
-                        self.extract_type_from_expression(type_expr)?
+                        match self.extract_type_from_expression(type_expr) {
+                            Ok(t) => t,
+                            Err(msg) => {
+                                self.errors.push(TypeError::new(msg, type_expr.span.clone()));
+                                Type::Error
+                            }
+                        }
                     } else {
-                        // If no initializer and no type, we can't infer (unless we allow 'any' or defer)
-                        // For now, defaulting to Int to avoid blocking tests, or erroring?
-                        // Let's error if we can't determine type.
-                        return Err(format!("Cannot infer type for variable '{}'", decl.name));
+                        self.errors.push(TypeError::new(
+                            format!("Cannot infer type for variable '{}'", decl.name),
+                            0..0 // TODO: Need span for variable declaration
+                        ));
+                        Type::Error
                     };
                     
-                    // If explicit type is provided, check if it matches initializer
                     if let Some(type_expr) = &decl.typ {
                         if let Some(init) = &decl.initializer {
-                            let declared_type = self.extract_type_from_expression(type_expr)?;
-                            let init_type = self.infer_expression(init, context)?;
-                            if !self.are_compatible(&declared_type, &init_type) {
-                                return Err(format!("Type mismatch for variable '{}': expected {:?}, got {:?}", decl.name, declared_type, init_type));
+                            let declared_type = match self.extract_type_from_expression(type_expr) {
+                                Ok(t) => t,
+                                Err(_) => Type::Error,
+                            };
+                            if !self.are_compatible(&declared_type, &inferred_type) {
+                                self.errors.push(TypeError::new(
+                                    format!("Type mismatch for variable '{}': expected {:?}, got {:?}", decl.name, declared_type, inferred_type),
+                                    init.span.clone()
+                                ));
                             }
                         }
                     }
 
                     context.define(decl.name.clone(), inferred_type);
                 }
-                Ok(())
             }
             Statement::Expression(expr) => {
-                self.infer_expression(expr, context)?;
-                Ok(())
+                self.infer_expression(expr, context);
             }
             Statement::Block(stmts) => {
                 context.enter_scope();
                 for s in stmts {
-                    self.check_statement(s, context)?;
+                    self.check_statement(s, context);
                 }
                 context.exit_scope();
-                Ok(())
             }
             Statement::If(cond, then_block, else_block, _) => {
-                let cond_type = self.infer_expression(cond, context)?;
+                let cond_type = self.infer_expression(cond, context);
                 if cond_type != Type::Boolean {
-                    return Err(format!("If condition must be a boolean, got {:?}", cond_type));
+                    self.errors.push(TypeError::new(
+                        format!("If condition must be a boolean, got {:?}", cond_type),
+                        cond.span.clone()
+                    ));
                 }
-                self.check_statement(then_block, context)?;
+                self.check_statement(then_block, context);
                 if let Some(else_stmt) = else_block {
-                    self.check_statement(else_stmt, context)?;
+                    self.check_statement(else_stmt, context);
                 }
-                Ok(())
             }
             Statement::While(cond, body, _) => {
-                let cond_type = self.infer_expression(cond, context)?;
+                let cond_type = self.infer_expression(cond, context);
                 if cond_type != Type::Boolean {
-                    return Err(format!("While condition must be a boolean, got {:?}", cond_type));
+                    self.errors.push(TypeError::new(
+                        format!("While condition must be a boolean, got {:?}", cond_type),
+                        cond.span.clone()
+                    ));
                 }
-                self.check_statement(body, context)?;
-                Ok(())
+                self.check_statement(body, context);
             }
             Statement::Return(Some(expr)) => {
-                self.infer_expression(expr, context)?;
-                Ok(())
+                self.infer_expression(expr, context);
             }
-            _ => Ok(())
+            _ => {}
         }
     }
 
-    fn infer_expression(&mut self, expr: &Expression, context: &mut Context) -> Result<Type, String> {
+    fn infer_expression(&mut self, expr: &Expression, context: &mut Context) -> Type {
         let ty = match &expr.node {
-            ExpressionKind::Literal(lit) => Ok(self.infer_literal(lit)),
+            ExpressionKind::Literal(lit) => self.infer_literal(lit),
             ExpressionKind::Binary(left, op, right) => {
-                let left_ty = self.infer_expression(left, context)?;
-                let right_ty = self.infer_expression(right, context)?;
-                self.check_binary_op(&left_ty, op, &right_ty)
+                let left_ty = self.infer_expression(left, context);
+                let right_ty = self.infer_expression(right, context);
+                match self.check_binary_op(&left_ty, op, &right_ty) {
+                    Ok(t) => t,
+                    Err(msg) => {
+                        self.errors.push(TypeError::new(msg, expr.span.clone()));
+                        Type::Error
+                    }
+                }
             }
             ExpressionKind::Logical(left, op, right) => {
-                let left_ty = self.infer_expression(left, context)?;
-                let right_ty = self.infer_expression(right, context)?;
-                self.check_binary_op(&left_ty, op, &right_ty)
+                let left_ty = self.infer_expression(left, context);
+                let right_ty = self.infer_expression(right, context);
+                match self.check_binary_op(&left_ty, op, &right_ty) {
+                    Ok(t) => t,
+                    Err(msg) => {
+                        self.errors.push(TypeError::new(msg, expr.span.clone()));
+                        Type::Error
+                    }
+                }
             }
-            ExpressionKind::Unary(op, expr) => {
-                let expr_ty = self.infer_expression(expr, context)?;
-                self.check_unary_op(op, &expr_ty)
+            ExpressionKind::Unary(op, operand) => {
+                let expr_ty = self.infer_expression(operand, context);
+                match self.check_unary_op(op, &expr_ty) {
+                    Ok(t) => t,
+                    Err(msg) => {
+                        self.errors.push(TypeError::new(msg, expr.span.clone()));
+                        Type::Error
+                    }
+                }
             }
             ExpressionKind::Identifier(name, _) => {
-                context.resolve(name).ok_or_else(|| format!("Undefined variable: {}", name))
+                if let Some(ty) = context.resolve(name) {
+                    ty
+                } else {
+                    self.errors.push(TypeError::new(format!("Undefined variable: {}", name), expr.span.clone()));
+                    Type::Error
+                }
             }
             ExpressionKind::Assignment(lhs, _, rhs) => {
-                let rhs_type = self.infer_expression(rhs, context)?;
+                let rhs_type = self.infer_expression(rhs, context);
                 let lhs_type = match &**lhs {
                     LeftHandSideExpression::Identifier(id_expr) => {
                         if let ExpressionKind::Identifier(name, _) = &id_expr.node {
-                            context.resolve(name).ok_or_else(|| format!("Undefined variable: {}", name))?
+                            if let Some(ty) = context.resolve(name) {
+                                ty
+                            } else {
+                                self.errors.push(TypeError::new(format!("Undefined variable: {}", name), id_expr.span.clone()));
+                                Type::Error
+                            }
                         } else {
-                            return Err("Invalid assignment target".to_string());
+                            self.errors.push(TypeError::new("Invalid assignment target".to_string(), expr.span.clone()));
+                            Type::Error
                         }
                     }
-                    _ => return Ok(rhs_type), // Skip complex LHS for now
+                    _ => rhs_type.clone(), // Skip complex LHS for now
                 };
 
                 if !self.are_compatible(&lhs_type, &rhs_type) {
-                    return Err(format!("Type mismatch in assignment: cannot assign {:?} to {:?}", rhs_type, lhs_type));
+                    self.errors.push(TypeError::new(
+                        format!("Type mismatch in assignment: cannot assign {:?} to {:?}", rhs_type, lhs_type),
+                        expr.span.clone()
+                    ));
                 }
-                Ok(lhs_type)
+                lhs_type
             },
-            _ => Ok(Type::Int),
-        }?;
+            _ => Type::Int,
+        };
 
         self.types.insert(expr.id, ty.clone());
-        Ok(ty)
+        ty
     }
 
     fn infer_literal(&self, lit: &Literal) -> Type {
@@ -256,7 +307,7 @@ impl TypeChecker {
                     Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::U128 | Type::F32 | Type::F64)
     }
 
-    fn is_string(&self, t: &Type) -> bool {
+    fn _is_string(&self, t: &Type) -> bool {
         matches!(t, Type::String)
     }
 

@@ -2,7 +2,8 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use thiserror::Error;
-use crate::syntax_error::SyntaxError;
+use crate::syntax_error::{SyntaxError, find_line_info};
+use crate::type_error::TypeError;
 
 #[derive(Error, Debug)]
 pub enum CompilerError {
@@ -16,7 +17,10 @@ pub enum CompilerError {
     Parser(SyntaxError),
 
     #[error("Type Error: {0}")]
-    Type(String),
+    Type(TypeError),
+
+    #[error("Type Errors: {0:?}")]
+    TypeErrors(Vec<TypeError>),
 
     #[error("File not found: {0}")]
     FileNotFound(String),
@@ -29,6 +33,40 @@ impl CompilerError {
     pub fn report(&self, source: &str) -> String {
         match self {
             CompilerError::Lexer(e) | CompilerError::Parser(e) => e.report(source),
+            CompilerError::Type(e) => {
+                let (line_num, col_num, line_str) = find_line_info(source, e.span.start);
+                let len = if e.span.end > e.span.start { e.span.end - e.span.start } else { 1 };
+                let underline = "^".repeat(len);
+                format!(
+                    "Type Error: {}\n\
+                      --> line {}:{}\n\
+                       |\n\
+                       | {}\n\
+                       | {}{}\n",
+                    e.message,
+                    line_num, col_num,
+                    line_str,
+                    " ".repeat(col_num - 1), underline
+                )
+            },
+            CompilerError::TypeErrors(errs) => {
+                errs.iter().map(|e| {
+                    let (line_num, col_num, line_str) = find_line_info(source, e.span.start);
+                    let len = if e.span.end > e.span.start { e.span.end - e.span.start } else { 1 };
+                    let underline = "^".repeat(len);
+                    format!(
+                        "Type Error: {}\n\
+                          --> line {}:{}\n\
+                           |\n\
+                           | {}\n\
+                           | {}{}\n",
+                        e.message,
+                        line_num, col_num,
+                        line_str,
+                        " ".repeat(col_num - 1), underline
+                    )
+                }).collect::<Vec<_>>().join("\n")
+            },
             _ => format!("{}", self),
         }
     }

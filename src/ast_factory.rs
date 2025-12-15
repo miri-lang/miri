@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
-use crate::{ast::*, lexer::RegexToken};
+use crate::{ast::*, lexer::RegexToken, syntax_error::Span};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static NEXT_ID: AtomicUsize = AtomicUsize::new(1);
@@ -10,11 +10,116 @@ fn next_id() -> usize {
     NEXT_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-fn expr(kind: ExpressionKind) -> Expression {
+pub fn expr_with_span(kind: ExpressionKind, span: Span) -> Expression {
     Expression {
         id: next_id(),
         node: kind,
+        span,
     }
+}
+
+fn expr(kind: ExpressionKind) -> Expression {
+    expr_with_span(kind, 0..0)
+}
+
+pub fn identifier_with_span(name: &str, span: Span) -> Expression {
+    expr_with_span(ExpressionKind::Identifier(name.into(), None), span)
+}
+
+pub fn identifier_with_class_and_span(name: &str, class: Option<String>, span: Span) -> Expression {
+    expr_with_span(ExpressionKind::Identifier(name.into(), class), span)
+}
+
+pub fn literal_with_span(value: Literal, span: Span) -> Expression {
+    expr_with_span(ExpressionKind::Literal(value), span)
+}
+
+pub fn binary_with_span(left: Expression, op: BinaryOp, right: Expression, span: Span) -> Expression {
+    expr_with_span(ExpressionKind::Binary(Box::new(left), op, Box::new(right)), span)
+}
+
+pub fn unary_with_span(op: UnaryOp, expr_node: Expression, span: Span) -> Expression {
+    expr_with_span(ExpressionKind::Unary(op, Box::new(expr_node)), span)
+}
+
+pub fn logical_with_span(left: Expression, op: BinaryOp, right: Expression, span: Span) -> Expression {
+    expr_with_span(ExpressionKind::Logical(Box::new(left), op, Box::new(right)), span)
+}
+
+pub fn call_with_span(callee: Expression, args: Vec<Expression>, span: Span) -> Expression {
+    expr_with_span(ExpressionKind::Call(Box::new(callee), args), span)
+}
+
+pub fn member_with_span(object: Expression, property: Expression, span: Span) -> Expression {
+    expr_with_span(ExpressionKind::Member(Box::new(object), Box::new(property)), span)
+}
+
+pub fn index_with_span(object: Expression, index: Expression, span: Span) -> Expression {
+    expr_with_span(ExpressionKind::Index(Box::new(object), Box::new(index)), span)
+}
+
+pub fn assign_with_span(left: LeftHandSideExpression, op: AssignmentOp, right: Expression, span: Span) -> Expression {
+    expr_with_span(ExpressionKind::Assignment(Box::new(left), op, Box::new(right)), span)
+}
+
+pub fn list_with_span(elements: Vec<Expression>, span: Span) -> Expression {
+    expr_with_span(ExpressionKind::List(elements), span)
+}
+
+pub fn map_with_span(pairs: Vec<(Expression, Expression)>, span: Span) -> Expression {
+    expr_with_span(ExpressionKind::Map(pairs), span)
+}
+
+pub fn tuple_with_span(elements: Vec<Expression>, span: Span) -> Expression {
+    expr_with_span(ExpressionKind::Tuple(elements), span)
+}
+
+pub fn set_with_span(elements: Vec<Expression>, span: Span) -> Expression {
+    expr_with_span(ExpressionKind::Set(elements), span)
+}
+
+pub fn match_expression_with_span(subject: Expression, branches: Vec<MatchBranch>, span: Span) -> Expression {
+    expr_with_span(ExpressionKind::Match(Box::new(subject), branches), span)
+}
+
+pub fn f_string_with_span(parts: Vec<Expression>, span: Span) -> Expression {
+    expr_with_span(ExpressionKind::FormattedString(parts), span)
+}
+
+pub fn type_expression_with_span(inner: Type, is_nullable: bool, span: Span) -> Expression {
+    expr_with_span(ExpressionKind::Type(Box::new(inner), is_nullable), span)
+}
+
+pub fn generic_type_expression_with_span(name_expression: Expression, constraint: Option<Box<Expression>>, span: Span) -> Expression {
+    expr_with_span(ExpressionKind::GenericType(Box::new(name_expression), constraint), span)
+}
+
+pub fn conditional_with_span(then: Expression, cond: Expression, else_b: Option<Expression>, if_type: IfStatementType, span: Span) -> Expression {
+    expr_with_span(ExpressionKind::Conditional(Box::new(then), Box::new(cond), else_b.map(Box::new), if_type), span)
+}
+
+pub fn range_with_span(start: Expression, end: Option<Box<Expression>>, range_type: RangeExpressionType, span: Span) -> Expression {
+    expr_with_span(ExpressionKind::Range(Box::new(start), end, range_type), span)
+}
+
+pub fn guard_with_span(op: GuardOp, expr_node: Expression, span: Span) -> Expression {
+    expr_with_span(ExpressionKind::Guard(op, Box::new(expr_node)), span)
+}
+
+pub fn import_path_expression_with_span(segments: Vec<Expression>, kind: ImportPathKind, span: Span) -> Expression {
+    expr_with_span(ExpressionKind::ImportPath(segments, kind), span)
+}
+
+pub fn type_declaration_expression_with_span(name: Expression, generic_types: Option<Vec<Expression>>, kind: TypeDeclarationKind, type_expr: Option<Box<Expression>>, span: Span) -> Expression {
+    expr_with_span(ExpressionKind::TypeDeclaration(Box::new(name), generic_types, kind, type_expr), span)
+}
+
+pub fn enum_value_expression_with_span(name: Expression, types: Vec<Expression>, span: Span) -> Expression {
+    expr_with_span(ExpressionKind::EnumValue(Box::new(name), types), span)
+}
+
+pub fn struct_member_expression_with_span(name: Expression, typ: Expression, span: Span) -> Expression {
+    expr_with_span(ExpressionKind::StructMember(Box::new(name), Box::new(typ)), span)
 }
 
 pub fn empty_statement() -> Statement {

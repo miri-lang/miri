@@ -2,6 +2,7 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use crate::lexer::RegexToken;
+use crate::syntax_error::Span;
 
 /// Represents a fully parsed Miri program
 #[derive(Debug, PartialEq)]
@@ -65,6 +66,7 @@ use std::hash::{Hash, Hasher};
 pub struct IdNode<T> {
     pub id: usize,
     pub node: T,
+    pub span: Span,
 }
 
 impl<T: PartialEq> PartialEq for IdNode<T> {
@@ -80,8 +82,8 @@ impl<T: Hash> Hash for IdNode<T> {
 }
 
 impl<T> IdNode<T> {
-    pub fn new(id: usize, node: T) -> Self {
-        Self { id, node }
+    pub fn new(id: usize, node: T, span: Span) -> Self {
+        Self { id, node, span }
     }
 }
 
@@ -213,6 +215,16 @@ pub enum LeftHandSideExpression {
     Index(Box<Expression>), // object[index]
 }
 
+impl LeftHandSideExpression {
+    pub fn span(&self) -> Span {
+        match self {
+            LeftHandSideExpression::Identifier(e) => e.span.clone(),
+            LeftHandSideExpression::Member(e) => e.span.clone(),
+            LeftHandSideExpression::Index(e) => e.span.clone(),
+        }
+    }
+}
+
 /// Represents a binary operator
 #[derive(Debug, PartialEq, Clone, Copy, Eq, Hash)]
 pub enum BinaryOp {
@@ -335,6 +347,7 @@ pub enum Type {
     Function(Option<Vec<Expression>>, Vec<Parameter>, Option<Box<Expression>>), // fn<T>(x int) float
 
     Custom(String, Option<Vec<Expression>>),    // a custom type, e.g., MyStruct<T, U>
+    Error,                                      // Represents a type error
 }
 
 

@@ -62,3 +62,16 @@ pub fn assert_type_check_error(source: &str, expected_error_part: &str) {
         }
     }
 }
+
+pub fn assert_type_check_errors(source: &str, expected_errors: Vec<&str>) {
+    let pipeline = Pipeline::new();
+    match pipeline.frontend(source) {
+        Ok(_) => panic!("Type check should have failed but succeeded"),
+        Err(e) => {
+            let msg = format!("{}", e);
+            for expected in expected_errors {
+                assert!(msg.contains(expected), "Error message did not contain '{}'. Full message:\n{}", expected, msg);
+            }
+        }
+    }
+}
