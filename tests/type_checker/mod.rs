@@ -2,6 +2,7 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 pub mod boolean;
+pub mod await_expression;
 pub mod conditional_expression;
 pub mod control_flow;
 pub mod float;

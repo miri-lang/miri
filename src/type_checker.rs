@@ -1093,6 +1093,13 @@ impl TypeChecker {
                     Err(format!("Logical NOT requires boolean, got {:?}", expr_type))
                 }
             }
+            UnaryOp::Await => {
+                if let Type::Future(inner_expr) = expr_type {
+                    self.extract_type_from_expression(inner_expr)
+                } else {
+                    Err(format!("Await requires a Future, got {:?}", expr_type))
+                }
+            }
             _ => Ok(expr_type.clone())
         }
     }
