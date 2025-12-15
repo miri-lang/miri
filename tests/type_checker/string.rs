@@ -6,7 +6,7 @@ use miri::ast::Type;
 
 #[test]
 fn test_string_literals() {
-    assert_expressions_type(vec![
+    check_exprs_type(vec![
         ("\"hello\"", Type::String),
         ("\"\"", Type::String),
         ("'hello'", Type::String),
@@ -15,7 +15,7 @@ fn test_string_literals() {
 
 #[test]
 fn test_string_concatenation() {
-    assert_expressions_type(vec![
+    check_exprs_type(vec![
         ("\"hello\" + \" world\"", Type::String),
         ("'a' + 'b'", Type::String),
     ]);
@@ -23,7 +23,7 @@ fn test_string_concatenation() {
 
 #[test]
 fn test_string_comparisons() {
-    assert_expressions_type(vec![
+    check_exprs_type(vec![
         ("\"a\" == \"b\"", Type::Boolean),
         ("\"a\" != \"b\"", Type::Boolean),
         ("\"a\" < \"b\"", Type::Boolean),
@@ -35,7 +35,7 @@ fn test_string_comparisons() {
 
 #[test]
 fn test_explicit_string_type() {
-    assert_variable_types("
+    check_vars_type("
 let x string = \"hello\"
 let y string = 'world'
 ", vec![
@@ -46,7 +46,7 @@ let y string = 'world'
 
 #[test]
 fn test_string_assignment_operators() {
-    assert_variable_types("
+    check_vars_type("
 var x = \"hello\"
 x += \" world\"
 ", vec![("x", Type::String)]);
@@ -54,21 +54,21 @@ x += \" world\"
 
 #[test]
 fn test_string_int_mismatch() {
-    assert_type_check_error("
+    check_error("
 let x = \"hello\" + 1
 ", "Invalid types for arithmetic operation");
 }
 
 #[test]
 fn test_string_bool_mismatch() {
-    assert_type_check_error("
+    check_error("
 let x = \"hello\" + true
 ", "Invalid types for arithmetic operation");
 }
 
 #[test]
 fn test_invalid_string_assignment() {
-    assert_type_check_error("
+    check_error("
 var x = \"hello\"
 x = 1
 ", "Type mismatch in assignment");

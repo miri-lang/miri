@@ -12,7 +12,7 @@ fn add(a int, b int) int
 
 add(1, 2)
     ";
-    assert_expression_type(source, Type::Int);
+    check_expr_type(source, Type::Int);
 }
 
 #[test]
@@ -21,7 +21,7 @@ fn test_function_return_type_mismatch() {
 fn foo() int
     return true
     ";
-    assert_type_check_error(source, "Invalid return type: expected Int, got Boolean");
+    check_error(source, "Invalid return type: expected Int, got Boolean");
 }
 
 #[test]
@@ -32,7 +32,7 @@ fn foo(a int)
 
 foo(true)
     ";
-    assert_type_check_error(source, "Type mismatch for argument 1: expected Int, got Boolean");
+    check_error(source, "Type mismatch for argument 1: expected Int, got Boolean");
 }
 
 #[test]
@@ -43,7 +43,7 @@ fn foo(a int)
 
 foo(1, 2)
     ";
-    assert_type_check_error(source, "Incorrect number of arguments: expected 1, got 2");
+    check_error(source, "Incorrect number of arguments: expected 1, got 2");
 }
 
 #[test]
@@ -55,7 +55,7 @@ fn foo()
 foo()
     ";
     // Just check if it passes type checking
-    type_check_test(source);
+    check_success(source);
 }
 
 #[test]
@@ -66,7 +66,7 @@ fn add(a int, b int) int
 
 add(add(1, 2), 3)
     ";
-    assert_expression_type(source, Type::Int);
+    check_expr_type(source, Type::Int);
 }
 
 #[test]
@@ -78,5 +78,5 @@ fn factorial(n int) int
 
 factorial(5)
     ";
-    assert_expression_type(source, Type::Int);
+    check_expr_type(source, Type::Int);
 }
