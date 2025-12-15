@@ -8,9 +8,12 @@ use crate::compiler_error::CompilerError;
 use crate::lexer::Lexer;
 use crate::parser::Parser;
 
+use crate::type_checker::TypeChecker;
+
 #[derive(Debug)]
 pub struct PipelineResult {
     pub ast: Program,
+    pub type_checker: TypeChecker,
 }
 
 #[derive(Debug, Default)]
@@ -32,13 +35,13 @@ impl Pipeline {
         let mut parser = Parser::new(&mut lexer, source);
         let ast = parser.parse().map_err(CompilerError::Parser)?;
 
-        let type_checker = crate::type_checker::TypeChecker::new();
+        let mut type_checker = crate::type_checker::TypeChecker::new();
         type_checker.check(&ast).map_err(CompilerError::Type)?;
 
         // TODO: Hook for Lowering/IR Generation
         // let ir = lowerer.lower(typed_ast)?;
 
-        Ok(PipelineResult { ast })
+        Ok(PipelineResult { ast, type_checker })
     }
 
     pub fn run(&self, source: &str) -> Result<i32, CompilerError> {

@@ -4,7 +4,10 @@
 use crate::ast::*;
 use std::collections::HashMap;
 
-pub struct TypeChecker;
+#[derive(Debug)]
+pub struct TypeChecker {
+    types: HashMap<usize, Type>,
+}
 
 struct Context {
     scopes: Vec<HashMap<String, Type>>,
@@ -41,10 +44,16 @@ impl Context {
 
 impl TypeChecker {
     pub fn new() -> Self {
-        Self
+        Self {
+            types: HashMap::new(),
+        }
     }
 
-    pub fn check(&self, program: &Program) -> Result<(), String> {
+    pub fn get_type(&self, id: usize) -> Option<&Type> {
+        self.types.get(&id)
+    }
+
+    pub fn check(&mut self, program: &Program) -> Result<(), String> {
         let mut context = Context::new();
         for statement in &program.body {
             self.check_statement(statement, &mut context)?;
@@ -52,7 +61,7 @@ impl TypeChecker {
         Ok(())
     }
 
-    fn check_statement(&self, statement: &Statement, context: &mut Context) -> Result<(), String> {
+    fn check_statement(&mut self, statement: &Statement, context: &mut Context) -> Result<(), String> {
         match statement {
             Statement::Variable(decls, _) => {
                 for decl in decls {
@@ -121,8 +130,8 @@ impl TypeChecker {
         }
     }
 
-    fn infer_expression(&self, expr: &Expression, context: &mut Context) -> Result<Type, String> {
-        match &expr.node {
+    fn infer_expression(&mut self, expr: &Expression, context: &mut Context) -> Result<Type, String> {
+        let ty = match &expr.node {
             ExpressionKind::Literal(lit) => Ok(self.infer_literal(lit)),
             ExpressionKind::Binary(left, op, right) => {
                 let left_ty = self.infer_expression(left, context)?;
@@ -160,13 +169,19 @@ impl TypeChecker {
                 Ok(lhs_type)
             },
             _ => Ok(Type::Int),
-        }
+        }?;
+
+        self.types.insert(expr.id, ty.clone());
+        Ok(ty)
     }
 
     fn infer_literal(&self, lit: &Literal) -> Type {
         match lit {
             Literal::Integer(_) => Type::Int,
-            Literal::Float(_) => Type::Float,
+            Literal::Float(f) => match f {
+                FloatLiteral::F32(_) => Type::F32,
+                FloatLiteral::F64(_) => Type::F64,
+            },
             Literal::Boolean(_) => Type::Boolean,
             Literal::String(_) => Type::String,
             Literal::Symbol(_) => Type::Symbol,
@@ -183,6 +198,8 @@ impl TypeChecker {
                     } else {
                         Err(format!("Type mismatch: {:?} and {:?} are not compatible for arithmetic operation", left, right))
                     }
+                } else if matches!(op, BinaryOp::Add) && matches!(left, Type::String) && matches!(right, Type::String) {
+                    Ok(Type::String)
                 } else {
                     Err(format!("Invalid types for arithmetic operation: {:?} and {:?}", left, right))
                 }
@@ -201,6 +218,13 @@ impl TypeChecker {
                     Ok(Type::Boolean)
                 } else {
                     Err(format!("Logical operations require booleans, got {:?} and {:?}", left, right))
+                }
+            }
+            BinaryOp::BitwiseAnd | BinaryOp::BitwiseOr | BinaryOp::BitwiseXor => {
+                if matches!(left, Type::Int) && matches!(right, Type::Int) {
+                    Ok(Type::Int)
+                } else {
+                    Err(format!("Invalid types for bitwise operation: {:?} and {:?}", left, right))
                 }
             }
             _ => Ok(Type::Boolean)
