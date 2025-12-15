@@ -457,6 +457,34 @@ impl TypeChecker {
         first_branch_type.unwrap_or(Type::Void)
     }
 
+    fn infer_conditional(&mut self, then_expr: &Expression, cond_expr: &Expression, else_expr_opt: &Option<Box<Expression>>, span: Span, context: &mut Context) -> Type {
+        let cond_type = self.infer_expression(cond_expr, context);
+        if cond_type != Type::Boolean {
+            self.report_error(format!("Conditional condition must be a boolean, got {:?}", cond_type), cond_expr.span.clone());
+        }
+
+        let then_type = self.infer_expression(then_expr, context);
+
+        if let Some(else_expr) = else_expr_opt {
+            let else_type = self.infer_expression(else_expr, context);
+            if !self.are_compatible(&then_type, &else_type) {
+                self.report_error(
+                    format!("Conditional branches must have the same type: expected {:?}, got {:?}", then_type, else_type),
+                    span
+                );
+            }
+            then_type
+        } else {
+            if !self.are_compatible(&then_type, &Type::Void) {
+                self.report_error(
+                    format!("Conditional expression without else branch must return Void, got {:?}", then_type),
+                    span
+                );
+            }
+            Type::Void
+        }
+    }
+
     fn check_pattern(&mut self, pattern: &Pattern, subject_type: &Type, context: &mut Context, span: Span) {
         match pattern {
             Pattern::Literal(lit) => {
@@ -538,6 +566,7 @@ impl TypeChecker {
             ExpressionKind::Index(obj, index) => self.infer_index(obj, index, expr.span.clone(), context),
             ExpressionKind::Member(obj, prop) => self.infer_member(obj, prop, expr.span.clone(), context),
             ExpressionKind::Match(subject, branches) => self.infer_match(subject, branches, expr.span.clone(), context),
+            ExpressionKind::Conditional(then_expr, cond_expr, else_expr, _) => self.infer_conditional(then_expr, cond_expr, else_expr, expr.span.clone(), context),
             _ => Type::Int, // Default fallback for unimplemented expressions
         };
 
