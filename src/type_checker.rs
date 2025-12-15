@@ -36,7 +36,7 @@ enum TypeDefinition {
 /// Context holds the current state of the type checking process, including
 /// variable scopes, return types for functions, and loop depth.
 struct Context {
-    scopes: Vec<HashMap<String, Type>>,
+    scopes: Vec<HashMap<String, (Type, bool)>>, // (Type, is_mutable)
     type_definitions: Vec<HashMap<String, TypeDefinition>>,
     return_types: Vec<Type>,
     loop_depth: usize,
@@ -77,9 +77,9 @@ impl Context {
     }
     
     /// Defines a variable in the current scope.
-    fn define(&mut self, name: String, ty: Type) {
+    fn define(&mut self, name: String, ty: Type, mutable: bool) {
         if let Some(scope) = self.scopes.last_mut() {
-            scope.insert(name, ty);
+            scope.insert(name, (ty, mutable));
         }
     }
 
@@ -93,11 +93,21 @@ impl Context {
     /// Resolves a variable name to its type, searching from the innermost scope outwards.
     fn resolve(&self, name: &str) -> Option<Type> {
         for scope in self.scopes.iter().rev() {
-            if let Some(ty) = scope.get(name) {
+            if let Some((ty, _)) = scope.get(name) {
                 return Some(ty.clone());
             }
         }
         None
+    }
+
+    /// Checks if a variable is mutable.
+    fn is_mutable(&self, name: &str) -> bool {
+        for scope in self.scopes.iter().rev() {
+            if let Some((_, mutable)) = scope.get(name) {
+                return *mutable;
+            }
+        }
+        false
     }
 
     /// Resolves a type definition, searching from the innermost scope outwards.
@@ -161,7 +171,8 @@ impl TypeChecker {
     fn check_variable_declaration(&mut self, decls: &[VariableDeclaration], context: &mut Context) {
         for decl in decls {
             let inferred_type = self.determine_variable_type(decl, context);
-            context.define(decl.name.clone(), inferred_type);
+            let is_mutable = matches!(decl.declaration_type, VariableDeclarationType::Mutable);
+            context.define(decl.name.clone(), inferred_type, is_mutable);
         }
     }
 
@@ -247,15 +258,19 @@ impl TypeChecker {
             } else {
                 element_type.clone()
             };
-            context.define(decl.name.clone(), var_type);
+            let is_mutable = matches!(decl.declaration_type, VariableDeclarationType::Mutable);
+            context.define(decl.name.clone(), var_type, is_mutable);
         } else if decls.len() == 2 {
             if let Type::Tuple(exprs) = element_type {
                 if exprs.len() == 2 {
                     let key_type = self.extract_type_from_expression(&exprs[0]).unwrap_or(Type::Error);
                     let val_type = self.extract_type_from_expression(&exprs[1]).unwrap_or(Type::Error);
                     
-                    context.define(decls[0].name.clone(), key_type);
-                    context.define(decls[1].name.clone(), val_type);
+                    let is_mutable_0 = matches!(decls[0].declaration_type, VariableDeclarationType::Mutable);
+                    let is_mutable_1 = matches!(decls[1].declaration_type, VariableDeclarationType::Mutable);
+
+                    context.define(decls[0].name.clone(), key_type, is_mutable_0);
+                    context.define(decls[1].name.clone(), val_type, is_mutable_1);
                 } else {
                     self.report_error("Destructuring mismatch: expected tuple of size 2".to_string(), span);
                 }
@@ -303,7 +318,7 @@ impl TypeChecker {
 
     fn check_function_declaration(&mut self, name: &str, generics: &Option<Vec<Expression>>, params: &[Parameter], return_type_expr: &Option<Box<Expression>>, body: &Statement, context: &mut Context) {
         let func_type = Type::Function(generics.clone(), params.to_vec(), return_type_expr.clone());
-        context.define(name.to_string(), func_type);
+        context.define(name.to_string(), func_type, false); // Functions are immutable
 
         let return_type = if let Some(rt_expr) = return_type_expr {
             self.resolve_type_expression(rt_expr)
@@ -320,7 +335,7 @@ impl TypeChecker {
 
         for param in params {
             let param_type = self.resolve_type_expression(&param.typ);
-            context.define(param.name.clone(), param_type);
+            context.define(param.name.clone(), param_type, false); // Parameters are immutable by default
         }
 
         self.check_statement(body, context);
@@ -361,7 +376,7 @@ impl TypeChecker {
         // Define constructor/type symbol
         // The type of the struct name identifier is Meta(Custom(name))
         let struct_type = Type::Custom(name.clone(), None); // TODO: Handle generics
-        context.define(name, Type::Meta(Box::new(struct_type)));
+        context.define(name, Type::Meta(Box::new(struct_type)), false);
     }
 
     fn check_enum(&mut self, name_expr: &Expression, variants: &[Expression], context: &mut Context) {
@@ -397,7 +412,7 @@ impl TypeChecker {
         
         // Define enum type symbol
         let enum_type = Type::Custom(name.clone(), None);
-        context.define(name, Type::Meta(Box::new(enum_type)));
+        context.define(name, Type::Meta(Box::new(enum_type)), false);
     }
 
     // --- Expression Inference ---
@@ -482,13 +497,35 @@ impl TypeChecker {
         let lhs_type = match lhs {
             LeftHandSideExpression::Identifier(id_expr) => {
                 if let ExpressionKind::Identifier(name, _) = &id_expr.node {
+                    if !context.is_mutable(name) {
+                        self.report_error(format!("Cannot assign to immutable variable '{}'", name), span.clone());
+                    }
                     self.infer_identifier(name, id_expr.span.clone(), context)
                 } else {
                     self.report_error("Invalid assignment target".to_string(), span.clone());
                     Type::Error
                 }
             }
-            _ => rhs_type.clone(), // Skip complex LHS for now
+            LeftHandSideExpression::Member(member_expr) => {
+                if let ExpressionKind::Member(obj, prop) = &member_expr.node {
+                    if !self.is_mutable_expression(obj, context) {
+                        self.report_error("Cannot assign to field of immutable variable".to_string(), span.clone());
+                    }
+                    self.infer_member(obj, prop, member_expr.span.clone(), context)
+                } else {
+                    Type::Error
+                }
+            }
+            LeftHandSideExpression::Index(index_expr) => {
+                if let ExpressionKind::Index(obj, index) = &index_expr.node {
+                    if !self.is_mutable_expression(obj, context) {
+                        self.report_error("Cannot assign to element of immutable variable".to_string(), span.clone());
+                    }
+                    self.infer_index(obj, index, index_expr.span.clone(), context)
+                } else {
+                    Type::Error
+                }
+            }
         };
 
         if !self.are_compatible(&lhs_type, &rhs_type) {
@@ -970,6 +1007,15 @@ impl TypeChecker {
                 self.report_error(msg, expr.span.clone());
                 Type::Error
             }
+        }
+    }
+
+    fn is_mutable_expression(&self, expr: &Expression, context: &Context) -> bool {
+        match &expr.node {
+            ExpressionKind::Identifier(name, _) => context.is_mutable(name),
+            ExpressionKind::Member(obj, _) => self.is_mutable_expression(obj, context),
+            ExpressionKind::Index(obj, _) => self.is_mutable_expression(obj, context),
+            _ => false, 
         }
     }
 
