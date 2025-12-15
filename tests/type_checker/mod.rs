@@ -12,5 +12,6 @@ pub mod multiple_errors;
 pub mod set;
 pub mod string;
 pub mod tuple;
+pub mod user_defined_types;
 pub mod utils;
 

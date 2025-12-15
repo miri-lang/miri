@@ -347,6 +347,7 @@ pub enum Type {
     Function(Option<Vec<Expression>>, Vec<Parameter>, Option<Box<Expression>>), // fn<T>(x int) float
 
     Custom(String, Option<Vec<Expression>>),    // a custom type, e.g., MyStruct<T, U>
+    Meta(Box<Type>),                            // Represents the type of a type itself, e.g. the type of the identifier `Point` is `Meta(Custom("Point"))`
     Void,                                       // Represents void type
     Error,                                      // Represents a type error
 }

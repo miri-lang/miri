@@ -17,10 +17,27 @@ pub struct TypeChecker {
     errors: Vec<TypeError>,
 }
 
+#[derive(Debug, Clone)]
+struct StructDefinition {
+    fields: Vec<(String, Type)>,
+}
+
+#[derive(Debug, Clone)]
+struct EnumDefinition {
+    variants: HashMap<String, Vec<Type>>,
+}
+
+#[derive(Debug, Clone)]
+enum TypeDefinition {
+    Struct(StructDefinition),
+    Enum(EnumDefinition),
+}
+
 /// Context holds the current state of the type checking process, including
 /// variable scopes, return types for functions, and loop depth.
 struct Context {
     scopes: Vec<HashMap<String, Type>>,
+    type_definitions: Vec<HashMap<String, TypeDefinition>>,
     return_types: Vec<Type>,
     loop_depth: usize,
 }
@@ -29,6 +46,7 @@ impl Context {
     fn new() -> Self {
         Self { 
             scopes: vec![HashMap::new()],
+            type_definitions: vec![HashMap::new()],
             return_types: Vec::new(),
             loop_depth: 0,
         }
@@ -37,11 +55,13 @@ impl Context {
     /// Enters a new scope (e.g., block, function).
     fn enter_scope(&mut self) {
         self.scopes.push(HashMap::new());
+        self.type_definitions.push(HashMap::new());
     }
     
     /// Exits the current scope.
     fn exit_scope(&mut self) {
         self.scopes.pop();
+        self.type_definitions.pop();
     }
 
     /// Increments loop depth when entering a loop.
@@ -62,12 +82,29 @@ impl Context {
             scope.insert(name, ty);
         }
     }
+
+    /// Defines a type in the current scope.
+    fn define_type(&mut self, name: String, def: TypeDefinition) {
+        if let Some(scope) = self.type_definitions.last_mut() {
+            scope.insert(name, def);
+        }
+    }
     
     /// Resolves a variable name to its type, searching from the innermost scope outwards.
     fn resolve(&self, name: &str) -> Option<Type> {
         for scope in self.scopes.iter().rev() {
             if let Some(ty) = scope.get(name) {
                 return Some(ty.clone());
+            }
+        }
+        None
+    }
+
+    /// Resolves a type definition, searching from the innermost scope outwards.
+    fn resolve_type_definition(&self, name: &str) -> Option<&TypeDefinition> {
+        for scope in self.type_definitions.iter().rev() {
+            if let Some(def) = scope.get(name) {
+                return Some(def);
             }
         }
         None
@@ -113,6 +150,8 @@ impl TypeChecker {
             Statement::Return(expr) => self.check_return(expr, context),
             Statement::FunctionDeclaration(name, generics, params, return_type, body, _) => 
                 self.check_function_declaration(name, generics, params, return_type, body, context),
+            Statement::Struct(name, generics, fields, _) => self.check_struct(name, generics, fields, context),
+            Statement::Enum(name, variants, _) => self.check_enum(name, variants, context),
             _ => {}
         }
     }
@@ -291,6 +330,76 @@ impl TypeChecker {
         context.return_types.pop();
     }
 
+    fn check_struct(&mut self, name_expr: &Expression, _generics: &Option<Vec<Expression>>, fields: &[Expression], context: &mut Context) {
+        let name = if let ExpressionKind::Identifier(n, _) = &name_expr.node {
+            n.clone()
+        } else {
+            self.report_error("Invalid struct name".to_string(), name_expr.span.clone());
+            return;
+        };
+
+        let mut fields_vec = Vec::new();
+        for field in fields {
+            if let ExpressionKind::StructMember(field_name_expr, field_type_expr) = &field.node {
+                if let ExpressionKind::Identifier(field_name, _) = &field_name_expr.node {
+                    let field_type = self.resolve_type_expression(field_type_expr);
+                    fields_vec.push((field_name.clone(), field_type));
+                } else {
+                    self.report_error("Invalid struct field name".to_string(), field_name_expr.span.clone());
+                }
+            } else {
+                self.report_error("Invalid struct field definition".to_string(), field.span.clone());
+            }
+        }
+
+        let struct_def = StructDefinition {
+            fields: fields_vec,
+        };
+
+        context.define_type(name.clone(), TypeDefinition::Struct(struct_def));
+        
+        // Define constructor/type symbol
+        // The type of the struct name identifier is Meta(Custom(name))
+        let struct_type = Type::Custom(name.clone(), None); // TODO: Handle generics
+        context.define(name, Type::Meta(Box::new(struct_type)));
+    }
+
+    fn check_enum(&mut self, name_expr: &Expression, variants: &[Expression], context: &mut Context) {
+        let name = if let ExpressionKind::Identifier(n, _) = &name_expr.node {
+            n.clone()
+        } else {
+            self.report_error("Invalid enum name".to_string(), name_expr.span.clone());
+            return;
+        };
+
+        let mut variant_map = HashMap::new();
+        for variant in variants {
+            if let ExpressionKind::EnumValue(variant_name_expr, associated_types) = &variant.node {
+                if let ExpressionKind::Identifier(variant_name, _) = &variant_name_expr.node {
+                    let mut types = Vec::new();
+                    for ty_expr in associated_types {
+                        types.push(self.resolve_type_expression(ty_expr));
+                    }
+                    variant_map.insert(variant_name.clone(), types);
+                } else {
+                    self.report_error("Invalid enum variant name".to_string(), variant_name_expr.span.clone());
+                }
+            } else {
+                self.report_error("Invalid enum variant definition".to_string(), variant.span.clone());
+            }
+        }
+
+        let enum_def = EnumDefinition {
+            variants: variant_map,
+        };
+
+        context.define_type(name.clone(), TypeDefinition::Enum(enum_def));
+        
+        // Define enum type symbol
+        let enum_type = Type::Custom(name.clone(), None);
+        context.define(name, Type::Meta(Box::new(enum_type)));
+    }
+
     // --- Expression Inference ---
 
     fn infer_expression(&mut self, expr: &Expression, context: &mut Context) -> Type {
@@ -308,6 +417,7 @@ impl TypeChecker {
             ExpressionKind::Set(elements) => self.infer_set(elements, expr.span.clone(), context),
             ExpressionKind::Tuple(elements) => self.infer_tuple(elements, expr.span.clone(), context),
             ExpressionKind::Index(obj, index) => self.infer_index(obj, index, expr.span.clone(), context),
+            ExpressionKind::Member(obj, prop) => self.infer_member(obj, prop, expr.span.clone(), context),
             _ => Type::Int, // Default fallback for unimplemented expressions
         };
 
@@ -419,6 +529,34 @@ impl TypeChecker {
                 } else {
                     Type::Void
                 }
+            }
+            Type::Meta(inner_type) => {
+                if let Type::Custom(name, _) = &*inner_type {
+                    if let Some(TypeDefinition::Struct(def)) = context.resolve_type_definition(name).cloned() {
+                        if args.len() != def.fields.len() {
+                             self.report_error(
+                                format!("Incorrect number of arguments for struct constructor: expected {}, got {}", def.fields.len(), args.len()),
+                                span.clone()
+                            );
+                        }
+                        
+                        for (i, arg) in args.iter().enumerate() {
+                            let arg_type = self.infer_expression(arg, context);
+                            if i < def.fields.len() {
+                                let (_, field_type) = &def.fields[i];
+                                if !self.are_compatible(field_type, &arg_type) {
+                                    self.report_error(
+                                        format!("Type mismatch for field '{}': expected {:?}, got {:?}", def.fields[i].0, field_type, arg_type),
+                                        arg.span.clone()
+                                    );
+                                }
+                            }
+                        }
+                        return Type::Custom(name.clone(), None);
+                    }
+                }
+                self.report_error(format!("Type '{:?}' is not callable", inner_type), span);
+                Type::Error
             }
             Type::Error => Type::Error,
             _ => {
@@ -639,6 +777,78 @@ impl TypeChecker {
             Type::Error => Type::Error,
             _ => {
                 self.report_error(format!("Type {:?} is not indexable", obj_type), span);
+                Type::Error
+            }
+        }
+    }
+
+    fn infer_member(&mut self, obj: &Expression, prop: &Expression, span: Span, context: &mut Context) -> Type {
+        let obj_type = self.infer_expression(obj, context);
+        
+        let prop_name = if let ExpressionKind::Identifier(name, _) = &prop.node {
+            name
+        } else {
+            self.report_error("Member property must be an identifier".to_string(), prop.span.clone());
+            return Type::Error;
+        };
+
+        match obj_type {
+            Type::Custom(name, _) => {
+                // Instance member access (Struct field)
+                // We need to clone the definition to avoid borrowing issues with context
+                let def_opt = context.resolve_type_definition(&name).cloned();
+                
+                if let Some(TypeDefinition::Struct(def)) = def_opt {
+                    if let Some((_, field_type)) = def.fields.iter().find(|(n, _)| n == prop_name) {
+                        return field_type.clone();
+                    } else {
+                        self.report_error(format!("Struct '{}' has no field '{}'", name, prop_name), span);
+                        return Type::Error;
+                    }
+                } else {
+                    // Could be an enum instance, but enums don't have fields yet (unless methods are added later)
+                    self.report_error(format!("Type '{}' does not have members", name), span);
+                    return Type::Error;
+                }
+            }
+            Type::Meta(inner_type) => {
+                // Static member access (Enum variant)
+                if let Type::Custom(name, _) = *inner_type {
+                    let def_opt = context.resolve_type_definition(&name).cloned();
+
+                    if let Some(TypeDefinition::Enum(def)) = def_opt {
+                        if let Some(variant_types) = def.variants.get(prop_name) {
+                            // If variant has no associated types, it's a value of the Enum type.
+                            // If it has associated types, it's a constructor function.
+                            if variant_types.is_empty() {
+                                return Type::Custom(name.clone(), None);
+                            } else {
+                                // Constructor function: (args) -> EnumType
+                                let params: Vec<Parameter> = variant_types.iter().enumerate().map(|(i, t)| {
+                                    Parameter {
+                                        name: format!("arg{}", i),
+                                        typ: Box::new(self.create_type_expression(t.clone())),
+                                        guard: None,
+                                        default_value: None,
+                                    }
+                                }).collect();
+                                return Type::Function(None, params, Some(Box::new(self.create_type_expression(Type::Custom(name.clone(), None)))));
+                            }
+                        } else {
+                            self.report_error(format!("Enum '{}' has no variant '{}'", name, prop_name), span);
+                            return Type::Error;
+                        }
+                    } else {
+                         self.report_error(format!("Type '{}' does not have static members", name), span);
+                         return Type::Error;
+                    }
+                } else {
+                    self.report_error(format!("Type '{:?}' does not have static members", inner_type), span);
+                    return Type::Error;
+                }
+            }
+            _ => {
+                self.report_error(format!("Type '{:?}' does not have members", obj_type), span);
                 Type::Error
             }
         }
