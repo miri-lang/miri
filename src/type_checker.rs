@@ -303,6 +303,11 @@ impl TypeChecker {
             ExpressionKind::Assignment(lhs, _, rhs) => self.infer_assignment(lhs, rhs, expr.span.clone(), context),
             ExpressionKind::Call(func, args) => self.infer_call(func, args, expr.span.clone(), context),
             ExpressionKind::Range(start, end, kind) => self.infer_range(start, end, kind, expr.span.clone(), context),
+            ExpressionKind::List(elements) => self.infer_list(elements, expr.span.clone(), context),
+            ExpressionKind::Map(entries) => self.infer_map(entries, expr.span.clone(), context),
+            ExpressionKind::Set(elements) => self.infer_set(elements, expr.span.clone(), context),
+            ExpressionKind::Tuple(elements) => self.infer_tuple(elements, expr.span.clone(), context),
+            ExpressionKind::Index(obj, index) => self.infer_index(obj, index, expr.span.clone(), context),
             _ => Type::Int, // Default fallback for unimplemented expressions
         };
 
@@ -442,6 +447,201 @@ impl TypeChecker {
         
         let type_expr = self.create_type_expression(start_type);
         Type::Custom("Range".to_string(), Some(vec![type_expr]))
+    }
+
+    fn infer_list(&mut self, elements: &[Expression], span: Span, context: &mut Context) -> Type {
+        if elements.is_empty() {
+            // Empty list, we can't infer type yet. 
+            // For now, let's assume it's a list of Any or Error, or maybe we need type inference from context (which we don't have yet).
+            // Let's return List(Void) or similar for now, or maybe Error to force explicit type?
+            // Actually, empty list literal `[]` is valid in many languages.
+            // Let's assume List<Void> for now if we can't infer.
+            // But wait, `Type::Void` might not be what we want.
+            // Let's use a placeholder or just return List(Error) but without reporting error?
+            // Or maybe we should allow it and infer type later?
+            // For this iteration, let's assume non-empty lists for inference or just return List(Error) if empty.
+            // Actually, let's return List(Any) if we had Any.
+            // Let's return List(Void) for now.
+            return Type::List(Box::new(self.create_type_expression(Type::Void)));
+        }
+
+        let first_type = self.infer_expression(&elements[0], context);
+        for element in &elements[1..] {
+            let element_type = self.infer_expression(element, context);
+            if !self.are_compatible(&first_type, &element_type) {
+                self.report_error("List elements must have the same type".to_string(), span.clone());
+                return Type::Error;
+            }
+        }
+
+        Type::List(Box::new(self.create_type_expression(first_type)))
+    }
+
+    fn infer_map(&mut self, entries: &[(Expression, Expression)], span: Span, context: &mut Context) -> Type {
+        if entries.is_empty() {
+            return Type::Map(
+                Box::new(self.create_type_expression(Type::Void)),
+                Box::new(self.create_type_expression(Type::Void))
+            );
+        }
+
+        let (first_key, first_val) = &entries[0];
+        let key_type = self.infer_expression(first_key, context);
+        let val_type = self.infer_expression(first_val, context);
+
+        for (key, val) in &entries[1..] {
+            let k_type = self.infer_expression(key, context);
+            let v_type = self.infer_expression(val, context);
+
+            if !self.are_compatible(&key_type, &k_type) {
+                self.report_error("Map keys must have the same type".to_string(), span.clone());
+                return Type::Error;
+            }
+            if !self.are_compatible(&val_type, &v_type) {
+                self.report_error("Map values must have the same type".to_string(), span.clone());
+                return Type::Error;
+            }
+        }
+
+        Type::Map(
+            Box::new(self.create_type_expression(key_type)),
+            Box::new(self.create_type_expression(val_type))
+        )
+    }
+
+    fn infer_set(&mut self, elements: &[Expression], span: Span, context: &mut Context) -> Type {
+        if elements.is_empty() {
+            return Type::Set(Box::new(self.create_type_expression(Type::Void)));
+        }
+
+        let first_type = self.infer_expression(&elements[0], context);
+        for element in &elements[1..] {
+            let element_type = self.infer_expression(element, context);
+            if !self.are_compatible(&first_type, &element_type) {
+                self.report_error("Set elements must have the same type".to_string(), span.clone());
+                return Type::Error;
+            }
+        }
+
+        Type::Set(Box::new(self.create_type_expression(first_type)))
+    }
+
+    fn infer_tuple(&mut self, elements: &[Expression], _span: Span, context: &mut Context) -> Type {
+        let mut element_types = Vec::new();
+        for element in elements {
+            let ty = self.infer_expression(element, context);
+            element_types.push(self.create_type_expression(ty));
+        }
+        Type::Tuple(element_types)
+    }
+
+    fn infer_index(&mut self, obj: &Expression, index: &Expression, span: Span, context: &mut Context) -> Type {
+        let obj_type = self.infer_expression(obj, context);
+        let index_type = self.infer_expression(index, context);
+
+        match obj_type {
+            Type::List(inner_type_expr) => {
+                if index_type != Type::Int {
+                    self.report_error("List index must be an integer".to_string(), index.span.clone());
+                    return Type::Error;
+                }
+                self.resolve_type_expression(&inner_type_expr)
+            }
+            Type::Map(key_type_expr, val_type_expr) => {
+                let key_type = self.resolve_type_expression(&key_type_expr);
+                if !self.are_compatible(&key_type, &index_type) {
+                    self.report_error("Invalid map key type".to_string(), index.span.clone());
+                    return Type::Error;
+                }
+                self.resolve_type_expression(&val_type_expr)
+            }
+            Type::Tuple(element_type_exprs) => {
+                // Check if tuple is homogeneous
+                let is_homogeneous = if element_type_exprs.is_empty() {
+                    true
+                } else {
+                    let resolved_types: Vec<Type> = element_type_exprs.iter()
+                        .map(|t| self.resolve_type_expression(t))
+                        .collect();
+                    
+                    let first_type = &resolved_types[0];
+                    resolved_types.iter().all(|t| self.are_compatible(t, first_type))
+                };
+
+                if is_homogeneous {
+                    if index_type != Type::Int {
+                        self.report_error("Tuple index must be an integer".to_string(), index.span.clone());
+                        return Type::Error;
+                    }
+                    // If homogeneous, we can return the type of the first element (or any element)
+                    if element_type_exprs.is_empty() {
+                        // Indexing empty tuple is always out of bounds, but let's handle it gracefully or error
+                        self.report_error("Tuple index out of bounds (empty tuple)".to_string(), span);
+                        return Type::Error;
+                    }
+                    
+                    // If it's a literal, we can still check bounds
+                    if let ExpressionKind::Literal(Literal::Integer(val)) = &index.node {
+                         let idx = match val {
+                            crate::ast::IntegerLiteral::I8(v) => *v as usize,
+                            crate::ast::IntegerLiteral::I16(v) => *v as usize,
+                            crate::ast::IntegerLiteral::I32(v) => *v as usize,
+                            crate::ast::IntegerLiteral::I64(v) => *v as usize,
+                            crate::ast::IntegerLiteral::I128(v) => *v as usize,
+                            crate::ast::IntegerLiteral::U8(v) => *v as usize,
+                            crate::ast::IntegerLiteral::U16(v) => *v as usize,
+                            crate::ast::IntegerLiteral::U32(v) => *v as usize,
+                            crate::ast::IntegerLiteral::U64(v) => *v as usize,
+                            crate::ast::IntegerLiteral::U128(v) => *v as usize,
+                        };
+                        if idx >= element_type_exprs.len() {
+                            self.report_error("Tuple index out of bounds".to_string(), span);
+                            return Type::Error;
+                        }
+                    }
+
+                    self.resolve_type_expression(&element_type_exprs[0])
+                } else {
+                    // For heterogeneous tuple, index must be a compile-time integer literal
+                    if let ExpressionKind::Literal(Literal::Integer(val)) = &index.node {
+                        let idx = match val {
+                            crate::ast::IntegerLiteral::I8(v) => *v as usize,
+                            crate::ast::IntegerLiteral::I16(v) => *v as usize,
+                            crate::ast::IntegerLiteral::I32(v) => *v as usize,
+                            crate::ast::IntegerLiteral::I64(v) => *v as usize,
+                            crate::ast::IntegerLiteral::I128(v) => *v as usize,
+                            crate::ast::IntegerLiteral::U8(v) => *v as usize,
+                            crate::ast::IntegerLiteral::U16(v) => *v as usize,
+                            crate::ast::IntegerLiteral::U32(v) => *v as usize,
+                            crate::ast::IntegerLiteral::U64(v) => *v as usize,
+                            crate::ast::IntegerLiteral::U128(v) => *v as usize,
+                        };
+
+                        if idx < element_type_exprs.len() {
+                            self.resolve_type_expression(&element_type_exprs[idx])
+                        } else {
+                            self.report_error("Tuple index out of bounds".to_string(), span);
+                            Type::Error
+                        }
+                    } else {
+                        self.report_error("Tuple index must be an integer literal for heterogeneous tuples".to_string(), index.span.clone());
+                        Type::Error
+                    }
+                }
+            }
+            Type::String => {
+                 if index_type != Type::Int {
+                    self.report_error("String index must be an integer".to_string(), index.span.clone());
+                    return Type::Error;
+                }
+                Type::String // Indexing a string returns a string (char)
+            }
+            Type::Error => Type::Error,
+            _ => {
+                self.report_error(format!("Type {:?} is not indexable", obj_type), span);
+                Type::Error
+            }
+        }
     }
 
     // --- Helpers ---

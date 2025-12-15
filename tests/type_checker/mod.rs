@@ -6,7 +6,11 @@ pub mod control_flow;
 pub mod float;
 pub mod function;
 pub mod integer;
+pub mod list;
+pub mod map;
 pub mod multiple_errors;
+pub mod set;
 pub mod string;
+pub mod tuple;
 pub mod utils;
 
