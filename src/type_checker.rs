@@ -326,7 +326,7 @@ impl TypeChecker {
             Type::Void
         };
         
-        context.return_types.push(return_type);
+        context.return_types.push(return_type.clone());
         context.enter_scope();
         
         // Reset loop depth for function body as it's a new context
@@ -338,7 +338,42 @@ impl TypeChecker {
             context.define(param.name.clone(), param_type, false); // Parameters are immutable by default
         }
 
-        self.check_statement(body, context);
+        match body {
+            Statement::Block(stmts) => {
+                context.enter_scope();
+                let len = stmts.len();
+                for (i, stmt) in stmts.iter().enumerate() {
+                    if i == len - 1 {
+                        if let Statement::Expression(expr) = stmt {
+                            let expr_type = self.infer_expression(expr, context);
+                            if return_type != Type::Void && !self.are_compatible(&return_type, &expr_type) {
+                                self.report_error(
+                                    format!("Invalid return type: expected {:?}, got {:?}", return_type, expr_type),
+                                    expr.span.clone()
+                                );
+                            }
+                        } else {
+                            self.check_statement(stmt, context);
+                        }
+                    } else {
+                        self.check_statement(stmt, context);
+                    }
+                }
+                context.exit_scope();
+            }
+            Statement::Expression(expr) => {
+                let expr_type = self.infer_expression(expr, context);
+                if return_type != Type::Void && !self.are_compatible(&return_type, &expr_type) {
+                    self.report_error(
+                        format!("Invalid return type: expected {:?}, got {:?}", return_type, expr_type),
+                        expr.span.clone()
+                    );
+                }
+            }
+            _ => {
+                self.check_statement(body, context);
+            }
+        }
 
         context.loop_depth = old_loop_depth;
         context.exit_scope();

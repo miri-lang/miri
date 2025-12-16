@@ -80,3 +80,67 @@ factorial(5)
     ";
     check_expr_type(source, Type::Int);
 }
+
+
+#[test]
+fn test_implicit_return_multiline() {
+    let source = "
+fn add(a int, b int) int
+    let c = 10
+    c * (a + b)
+
+add(1, 2)
+    ";
+    check_expr_type(source, Type::Int);
+}
+
+#[test]
+fn test_implicit_return_inline() {
+    let source = "
+fn add(a int, b int) int: a + b
+
+add(1, 2)
+    ";
+    check_expr_type(source, Type::Int);
+}
+
+#[test]
+fn test_implicit_return_void_ignored() {
+    let source = "
+fn dummy_add(a int, b int)
+   a + b
+
+dummy_add(1, 2)
+    ";
+    check_success(source);
+}
+
+#[test]
+fn test_void_function_explicit_return_value_error() {
+    let source = "
+fn dummy_add(a int, b int)
+   return a + b
+    ";
+    check_error(source, "Invalid return type: expected Void, got Int");
+}
+
+#[test]
+fn test_implicit_return_type_mismatch() {
+    let source = "
+fn foo() int
+    true
+    ";
+    check_error(source, "Invalid return type: expected Int, got Boolean");
+}
+
+#[test]
+fn test_implicit_return_block_scope() {
+    let source = "
+fn foo() int
+    let a = 1
+    a
+
+foo()
+    ";
+    check_expr_type(source, Type::Int);
+}

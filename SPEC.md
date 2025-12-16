@@ -6,16 +6,32 @@ A modern, minimal, AI-friendly programming language for high-performance, concur
 
 ## Table of Contents
 
-1. [Core Concepts](#core-concepts)
-2. [Types & Variables](#types--variables)
-3. [Functions](#functions)
-4. [Control Flow](#control-flow)
-5. [Collections](#collections)
-6. [Pattern Matching](#pattern-matching)
-7. [Structs](#structs)
-8. [Enums](#enums)
-9. [Imports](#imports)
-10. [Symbols](#symbols)
+- [Miri Language Specification (v0.1)](#miri-language-specification-v01)
+  - [Table of Contents](#table-of-contents)
+  - [Core Concepts](#core-concepts)
+  - [Types \& Variables](#types--variables)
+    - [Declaration](#declaration)
+    - [Types](#types)
+  - [Functions](#functions)
+    - [Basic Syntax](#basic-syntax)
+    - [Implicit Return](#implicit-return)
+    - [Explicit Return](#explicit-return)
+    - [Lambdas](#lambdas)
+    - [Guards](#guards)
+  - [Control Flow](#control-flow)
+    - [If / Else](#if--else)
+    - [Loops](#loops)
+    - [Inline Control Flow](#inline-control-flow)
+  - [Collections](#collections)
+    - [Lists](#lists)
+    - [Maps](#maps)
+    - [Tuples](#tuples)
+    - [Sets](#sets)
+  - [Pattern Matching](#pattern-matching)
+  - [Structs](#structs)
+  - [Enums](#enums)
+  - [Imports](#imports)
+  - [Symbols](#symbols)
 
 ---
 
@@ -154,9 +170,9 @@ let set = {1, 2, 3}
 
 ```miri
 match x
-    1 -> print("One")
-    2 -> print("Two")
-    _ -> print("Other")
+    1: print("One")
+    2: print("Two")
+    _: print("Other")
 ```
 
 ---
@@ -193,7 +209,7 @@ enum Color
 ## Imports
 
 ```miri
-use std.io
+use System.Math
 ```
 
 ---
