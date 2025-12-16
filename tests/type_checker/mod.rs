@@ -9,6 +9,7 @@ pub mod float;
 pub mod formatted_string;
 pub mod function;
 pub mod integer;
+pub mod lambda;
 pub mod list;
 pub mod map;
 pub mod match_expression;

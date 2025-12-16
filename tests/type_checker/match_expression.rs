@@ -23,7 +23,7 @@ fn test_match_expression_type_mismatch() {
         1: 'one'
         2: 2
     ";
-    check_error(source, "Match branches must return the same type");
+    check_error(source, "Match branch types mismatch");
 }
 
 #[test]

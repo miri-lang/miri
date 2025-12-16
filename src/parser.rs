@@ -861,7 +861,87 @@ impl<'source> Parser<'source> {
             Some((Token::Fn, _)) => {
                 self.eat_token(&Token::Fn)?;
                 let generic_types = self.generic_types_expression()?;
-                let parameters = self.function_params_expression()?;
+                
+                self.eat_token(&Token::LParen)?;
+                let mut parameters = Vec::new();
+                if !self.lookahead_is_rparen() {
+                    loop {
+                        if self.lookahead_is_rparen() { break; }
+                        
+                        // Parse first type expression
+                        let first_type_expr = if let Some(typ) = self.type_expression()? {
+                            typ
+                        } else {
+                             return Err(self.error_missing_type_expression());
+                        };
+
+                        // Check what follows to decide if first_type_expr is a name or a type
+                        let is_named_param = if self.lookahead_is_comma() || self.lookahead_is_rparen() {
+                            false
+                        } else {
+                            // If it's not comma or rparen, it must be the start of another type expression
+                            // Check if the next token can start a type expression
+                            self.match_lookahead_type(|t| matches!(t, 
+                                Token::Identifier | 
+                                Token::LBracket | 
+                                Token::LParen | 
+                                Token::LBrace | 
+                                Token::Fn
+                            ))
+                        };
+
+                        if is_named_param {
+                            // The first expression was the name.
+                            let param_name = if let ExpressionKind::Type(ty, is_nullable) = &first_type_expr.node {
+                                if *is_nullable {
+                                     return Err(self.error_unexpected_token("Parameter name cannot be nullable", "identifier"));
+                                }
+                                match &**ty {
+                                    Type::Custom(name, None) => name.clone(),
+                                    _ => return Err(self.error_unexpected_token(
+                                        "Parameter name must be a simple identifier", 
+                                        "identifier"
+                                    ))
+                                }
+                            } else {
+                                return Err(self.error_unexpected_token("Expected parameter name", "identifier"));
+                            };
+
+                            // Now parse the actual type
+                            let param_type = if let Some(typ) = self.type_expression()? {
+                                typ
+                            } else {
+                                return Err(self.error_missing_type_expression());
+                            };
+
+                            parameters.push(Parameter {
+                                name: param_name,
+                                typ: Box::new(param_type),
+                                guard: None,
+                                default_value: None
+                            });
+
+                        } else {
+                            // Unnamed parameter
+                            parameters.push(Parameter {
+                                name: "".to_string(),
+                                typ: Box::new(first_type_expr),
+                                guard: None,
+                                default_value: None
+                            });
+                        }
+
+                        if self.lookahead_is_comma() {
+                            self.eat_token(&Token::Comma)?;
+                            // Allow trailing comma
+                            if self.lookahead_is_rparen() { break; }
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                self.eat_token(&Token::RParen)?;
+
                 let return_type = self.return_type_expression()?;
                 let typ = Type::Function(generic_types, parameters, return_type);
                 Some(ast::typ(typ))
@@ -942,6 +1022,56 @@ impl<'source> Parser<'source> {
                     &Token::GreaterThan
                 )?;
                 Type::Tuple(inner)
+            }
+            "fn" => {
+                // fn<T>(int) int
+                let generic_types = self.generic_types_expression()?;
+                
+                // Parse parameter types, not full parameters
+                self.eat_token(&Token::LParen)?;
+                let mut parameters = Vec::new();
+                if !self.lookahead_is_rparen() {
+                    loop {
+                        if self.lookahead_is_rparen() { break; }
+                        
+                        // In function type, we only have types, not names
+                        // But wait, the AST for Function type uses `Vec<Parameter>`?
+                        // Let's check `ast.rs`.
+                        // Type::Function(Option<Vec<Expression>>, Vec<Parameter>, Option<Box<Expression>>)
+                        // It uses `Vec<Parameter>`. This implies named parameters in function types?
+                        // Or maybe just types wrapped in Parameter struct with empty names?
+                        // If the user writes `fn(int, string)`, there are no names.
+                        // If the user writes `fn(x int, y string)`, there are names.
+                        // The parser test `test_function_type_as_return_type` uses `fn() int`.
+                        // The failing test `test_lambda_as_argument` uses `fn(int) int`.
+                        // So it seems we support unnamed parameters in function types.
+                        
+                        // Let's try to parse a type expression first.
+                        if let Some(typ) = self.type_expression()? {
+                             // It's a type. Create a dummy parameter.
+                             parameters.push(Parameter {
+                                 name: "".to_string(),
+                                 typ: Box::new(typ),
+                                 guard: None,
+                                 default_value: None
+                             });
+                        } else {
+                             return Err(self.error_missing_type_expression());
+                        }
+
+                        if self.lookahead_is_comma() {
+                            self.eat_token(&Token::Comma)?;
+                            // Allow trailing comma
+                            if self.lookahead_is_rparen() { break; }
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                self.eat_token(&Token::RParen)?;
+
+                let return_type = self.return_type_expression()?;
+                Type::Function(generic_types, parameters, return_type)
             }
             _ => {
                 match &self._lookahead {
