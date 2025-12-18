@@ -1,0 +1,385 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2017–2025 Viacheslav Shynkarenko
+
+use crate::ast::*;
+use crate::ast_factory as ast;
+use crate::lexer::Token;
+use crate::syntax_error::SyntaxError;
+
+use super::Parser;
+
+impl<'source> Parser<'source> {
+    /*
+        TypeExpression
+            : Identifier ('<' TypeExpression ',' TypeExpression* '>')? '?'?
+            | '[' TypeExpression ']' '?'?
+            | '(' TypeExpression ',' TypeExpression* ')' '?'?
+            | '{' TypeExpression '}' '?'?
+            | '{' TypeExpression ':' TypeExpression* '}' '?'?
+            ;
+    */
+    pub(crate) fn type_expression(&mut self) -> Result<Option<Expression>, SyntaxError> {
+        if self._lookahead.is_none() {
+            return Ok(None);
+        }
+
+        let base_typ_expr: Option<Expression> = match &self._lookahead {
+            Some((Token::Identifier, _)) => {
+                let type_name = self.identifier_to_type_name()?;
+                let typ = self.type_name_to_type(type_name)?;
+                Some(ast::typ(typ))
+            }
+            Some((Token::LBracket, _)) => {
+                self.eat_token(&Token::LBracket)?;
+                let element_type = self.element_type_expression("List element type")?;
+                self.eat_token(&Token::RBracket)?;
+                Some(ast::typ(Type::List(Box::new(element_type))))
+            }
+            Some((Token::LParen, _)) => {
+                self.eat_token(&Token::LParen)?;
+                if self.lookahead_is_rparen() {
+                    self.eat_token(&Token::RParen)?;
+                    // Empty tuple type `()`
+                    return Ok(Some(ast::typ(Type::Tuple(vec![]))));
+                }
+
+                let first_element =
+                    self.element_type_expression("Grouped type or tuple element")?;
+
+                if self.lookahead_is_comma() {
+                    let mut elements = vec![first_element];
+                    while self.lookahead_is_comma() {
+                        self.eat_token(&Token::Comma)?;
+                        if self.lookahead_is_rparen() {
+                            break;
+                        } // Allow trailing comma
+                        elements.push(self.element_type_expression("Tuple element type")?);
+                    }
+                    self.eat_token(&Token::RParen)?;
+                    Some(ast::typ(Type::Tuple(elements)))
+                } else {
+                    self.eat_token(&Token::RParen)?;
+                    Some(first_element)
+                }
+            }
+            Some((Token::LBrace, _)) => {
+                self.eat_token(&Token::LBrace)?;
+                let key_type = self.element_type_expression("Map key type")?;
+                let typ = if self.match_lookahead_type(|t| t == &Token::Colon) {
+                    self.eat_token(&Token::Colon)?;
+                    let value_type = self.element_type_expression("Map value type")?;
+                    self.eat_token(&Token::RBrace)?;
+                    Type::Map(Box::new(key_type), Box::new(value_type))
+                } else {
+                    self.eat_token(&Token::RBrace)?;
+                    Type::Set(Box::new(key_type))
+                };
+                Some(ast::typ(typ))
+            }
+            Some((Token::Fn, _)) => {
+                self.eat_token(&Token::Fn)?;
+                let generic_types = self.generic_types_expression()?;
+
+                self.eat_token(&Token::LParen)?;
+                let mut parameters = Vec::new();
+                if !self.lookahead_is_rparen() {
+                    loop {
+                        if self.lookahead_is_rparen() {
+                            break;
+                        }
+
+                        // Parse first type expression
+                        let first_type_expr = if let Some(typ) = self.type_expression()? {
+                            typ
+                        } else {
+                            return Err(self.error_missing_type_expression());
+                        };
+
+                        // Check what follows to decide if first_type_expr is a name or a type
+                        let is_named_param =
+                            if self.lookahead_is_comma() || self.lookahead_is_rparen() {
+                                false
+                            } else {
+                                // If it's not comma or rparen, it must be the start of another type expression
+                                // Check if the next token can start a type expression
+                                self.match_lookahead_type(|t| {
+                                    matches!(
+                                        t,
+                                        Token::Identifier
+                                            | Token::LBracket
+                                            | Token::LParen
+                                            | Token::LBrace
+                                            | Token::Fn
+                                    )
+                                })
+                            };
+
+                        if is_named_param {
+                            // The first expression was the name.
+                            let param_name = if let ExpressionKind::Type(ty, is_nullable) =
+                                &first_type_expr.node
+                            {
+                                if *is_nullable {
+                                    return Err(self.error_unexpected_token(
+                                        "Parameter name cannot be nullable",
+                                        "identifier",
+                                    ));
+                                }
+                                match &**ty {
+                                    Type::Custom(name, None) => name.clone(),
+                                    _ => {
+                                        return Err(self.error_unexpected_token(
+                                            "Parameter name must be a simple identifier",
+                                            "identifier",
+                                        ))
+                                    }
+                                }
+                            } else {
+                                return Err(self.error_unexpected_token(
+                                    "Expected parameter name",
+                                    "identifier",
+                                ));
+                            };
+
+                            // Now parse the actual type
+                            let param_type = if let Some(typ) = self.type_expression()? {
+                                typ
+                            } else {
+                                return Err(self.error_missing_type_expression());
+                            };
+
+                            parameters.push(Parameter {
+                                name: param_name,
+                                typ: Box::new(param_type),
+                                guard: None,
+                                default_value: None,
+                            });
+                        } else {
+                            // Unnamed parameter
+                            parameters.push(Parameter {
+                                name: "".to_string(),
+                                typ: Box::new(first_type_expr),
+                                guard: None,
+                                default_value: None,
+                            });
+                        }
+
+                        if self.lookahead_is_comma() {
+                            self.eat_token(&Token::Comma)?;
+                            // Allow trailing comma
+                            if self.lookahead_is_rparen() {
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                self.eat_token(&Token::RParen)?;
+
+                let return_type = self.return_type_expression()?;
+                let typ = Type::Function(generic_types, parameters, return_type);
+                Some(ast::typ(typ))
+            }
+            _ => return Ok(None),
+        };
+
+        let mut final_expr = match base_typ_expr {
+            Some(expr) => expr,
+            None => return Ok(None),
+        };
+
+        if self.match_lookahead_type(|t| t == &Token::QuestionMark) {
+            self.eat_token(&Token::QuestionMark)?;
+            if let ExpressionKind::Type(inner_type, _) = final_expr.node {
+                final_expr = ast::null_typ(*inner_type);
+            }
+        }
+
+        Ok(Some(final_expr))
+    }
+
+    pub(crate) fn type_name_to_type(&mut self, type_name: String) -> Result<Type, SyntaxError> {
+        Ok(match type_name.as_str() {
+            "int" => Type::Int,
+            "i8" => Type::I8,
+            "i16" => Type::I16,
+            "i32" => Type::I32,
+            "i64" => Type::I64,
+            "i128" => Type::I128,
+            "u8" => Type::U8,
+            "u16" => Type::U16,
+            "u32" => Type::U32,
+            "u64" => Type::U64,
+            "u128" => Type::U128,
+            "float" => Type::Float,
+            "f32" => Type::F32,
+            "f64" => Type::F64,
+            "string" => Type::String,
+            "bool" => Type::Boolean,
+            "symbol" => Type::Symbol,
+            "result" => self.generic_two_types_expression(
+                "Ok result type",
+                "Error result type",
+                Type::Result,
+            )?,
+            "map" => {
+                self.generic_two_types_expression("Map key type", "Map value type", Type::Map)?
+            }
+            "future" => self.generic_one_type_expression("Future result type", Type::Future)?,
+            "list" => self.generic_one_type_expression("List element type", Type::List)?,
+            "set" => self.generic_one_type_expression("Set element type", Type::Set)?,
+            "tuple" => {
+                let inner = self.multiple_element_type_expressions(
+                    "Tuple item type",
+                    &Token::LessThan,
+                    &Token::GreaterThan,
+                )?;
+                Type::Tuple(inner)
+            }
+            "fn" => {
+                // fn<T>(int) int
+                let generic_types = self.generic_types_expression()?;
+
+                // Parse parameter types, not full parameters
+                self.eat_token(&Token::LParen)?;
+                let mut parameters = Vec::new();
+                if !self.lookahead_is_rparen() {
+                    loop {
+                        if self.lookahead_is_rparen() {
+                            break;
+                        }
+
+                        // In function type, we only have types, not names
+                        // But wait, the AST for Function type uses `Vec<Parameter>`?
+                        // Let's check `ast.rs`.
+                        // Type::Function(Option<Vec<Expression>>, Vec<Parameter>, Option<Box<Expression>>)
+                        // It uses `Vec<Parameter>`. This implies named parameters in function types?
+                        // Or maybe just types wrapped in Parameter struct with empty names?
+                        // If the user writes `fn(int, string)`, there are no names.
+                        // If the user writes `fn(x int, y string)`, there are names.
+                        // The parser test `test_function_type_as_return_type` uses `fn() int`.
+                        // The failing test `test_lambda_as_argument` uses `fn(int) int`.
+                        // So it seems we support unnamed parameters in function types.
+
+                        // Let's try to parse a type expression first.
+                        if let Some(typ) = self.type_expression()? {
+                            // It's a type. Create a dummy parameter.
+                            parameters.push(Parameter {
+                                name: "".to_string(),
+                                typ: Box::new(typ),
+                                guard: None,
+                                default_value: None,
+                            });
+                        } else {
+                            return Err(self.error_missing_type_expression());
+                        }
+
+                        if self.lookahead_is_comma() {
+                            self.eat_token(&Token::Comma)?;
+                            // Allow trailing comma
+                            if self.lookahead_is_rparen() {
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                self.eat_token(&Token::RParen)?;
+
+                let return_type = self.return_type_expression()?;
+                Type::Function(generic_types, parameters, return_type)
+            }
+            _ => match &self._lookahead {
+                Some((Token::LessThan, _)) => {
+                    let inner = self.multiple_element_type_expressions(
+                        "Generic type",
+                        &Token::LessThan,
+                        &Token::GreaterThan,
+                    )?;
+                    Type::Custom(type_name, Some(inner))
+                }
+                _ => Type::Custom(type_name, None),
+            },
+        })
+    }
+
+    pub(crate) fn identifier_to_type_name(&mut self) -> Result<String, SyntaxError> {
+        Ok(match self.identifier()?.node {
+            ExpressionKind::Identifier(id, Some(class)) => format!("{}::{}", class, id), // Reconstruct the full path
+            ExpressionKind::Identifier(id, None) => id,
+            _ => return Err(self.error_unexpected_token("identifier", &self.lookahead_as_string())),
+        })
+    }
+
+    pub(crate) fn element_type_expression(
+        &mut self,
+        expected: &str,
+    ) -> Result<Expression, SyntaxError> {
+        let element_type = match self.type_expression()? {
+            Some(typ) => typ,
+            None => return Err(self.error_invalid_type_declaration(expected)),
+        };
+        Ok(element_type)
+    }
+
+    pub(crate) fn multiple_element_type_expressions(
+        &mut self,
+        expected: &str,
+        left_token: &Token,
+        right_token: &Token,
+    ) -> Result<Vec<Expression>, SyntaxError> {
+        self.eat_token(left_token)?;
+
+        let element_type = self.element_type_expression(expected)?;
+        let mut elements = vec![element_type];
+        while self.lookahead_is_comma() {
+            self.eat_token(&Token::Comma)?;
+            match &self._lookahead {
+                Some((t, _)) if t == right_token => break, // Allow trailing comma
+                None => break,
+                _ => {
+                    let element_type = self.element_type_expression(expected)?;
+                    elements.push(element_type);
+                }
+            }
+        }
+
+        self.eat_token(right_token)?;
+
+        Ok(elements)
+    }
+
+    pub(crate) fn generic_one_type_expression<F>(
+        &mut self,
+        expected: &str,
+        create_type: F,
+    ) -> Result<Type, SyntaxError>
+    where
+        F: FnOnce(Box<Expression>) -> Type,
+    {
+        self.eat_token(&Token::LessThan)?;
+        let inner_type = self.element_type_expression(expected)?;
+        self.eat_token(&Token::GreaterThan)?;
+        Ok(create_type(Box::new(inner_type)))
+    }
+
+    pub(crate) fn generic_two_types_expression<F>(
+        &mut self,
+        expected_a: &str,
+        expected_b: &str,
+        create_type: F,
+    ) -> Result<Type, SyntaxError>
+    where
+        F: FnOnce(Box<Expression>, Box<Expression>) -> Type,
+    {
+        self.eat_token(&Token::LessThan)?;
+        let a_type = self.element_type_expression(expected_a)?;
+        self.eat_token(&Token::Comma)?;
+        let b_type = self.element_type_expression(expected_b)?;
+        self.eat_token(&Token::GreaterThan)?;
+
+        Ok(create_type(Box::new(a_type), Box::new(b_type)))
+    }
+}

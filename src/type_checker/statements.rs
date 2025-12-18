@@ -420,11 +420,7 @@ impl TypeChecker {
         }
     }
 
-    fn check_function_declaration(
-        &mut self,
-        info: FunctionDeclarationInfo,
-        context: &mut Context,
-    ) {
+    fn check_function_declaration(&mut self, info: FunctionDeclarationInfo, context: &mut Context) {
         let FunctionDeclarationInfo {
             name,
             generics,
