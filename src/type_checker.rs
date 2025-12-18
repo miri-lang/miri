@@ -15,6 +15,17 @@ pub struct TypeChecker {
     types: HashMap<usize, Type>,
     /// Collects all type errors encountered during checking.
     errors: Vec<TypeError>,
+    /// Stores type hierarchy relationships (extends, implements, includes)
+    hierarchy: HashMap<String, TypeRelation>,
+    /// Name of the current module/class being checked
+    current_module: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct TypeRelation {
+    extends: Option<String>,
+    implements: Vec<String>,
+    includes: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -144,7 +155,13 @@ impl TypeChecker {
         Self {
             types: HashMap::new(),
             errors: Vec::new(),
+            hierarchy: HashMap::new(),
+            current_module: "Main".to_string(),
         }
+    }
+
+    pub fn set_current_module(&mut self, name: String) {
+        self.current_module = name;
     }
 
     pub fn get_type(&self, id: usize) -> Option<&Type> {
@@ -187,11 +204,92 @@ impl TypeChecker {
                 self.check_struct(name, generics, fields, context)
             }
             Statement::Enum(name, variants, _) => self.check_enum(name, variants, context),
+            Statement::Extends(expr) => self.check_extends_statement(expr, context),
+            Statement::Implements(exprs) => self.check_implements_statement(exprs, context),
+            Statement::Includes(exprs) => self.check_includes_statement(exprs, context),
+            Statement::Type(exprs, visibility) => {
+                self.check_type_statement(exprs, visibility, context)
+            }
             _ => {}
         }
     }
 
     // --- Statement Checkers ---
+
+    fn check_extends_statement(&mut self, expr: &Expression, _context: &mut Context) {
+        if let Ok(parent) = self.extract_type_name(expr) {
+            self.hierarchy
+                .entry(self.current_module.clone())
+                .or_default()
+                .extends = Some(parent);
+        }
+    }
+
+    fn check_implements_statement(&mut self, exprs: &[Expression], _context: &mut Context) {
+        for expr in exprs {
+            if let Ok(interface) = self.extract_type_name(expr) {
+                self.hierarchy
+                    .entry(self.current_module.clone())
+                    .or_default()
+                    .implements
+                    .push(interface);
+            }
+        }
+    }
+
+    fn check_includes_statement(&mut self, exprs: &[Expression], _context: &mut Context) {
+        for expr in exprs {
+            if let Ok(mixin) = self.extract_type_name(expr) {
+                self.hierarchy
+                    .entry(self.current_module.clone())
+                    .or_default()
+                    .includes
+                    .push(mixin);
+            }
+        }
+    }
+
+    fn check_type_statement(
+        &mut self,
+        exprs: &[Expression],
+        _visibility: &MemberVisibility,
+        context: &mut Context,
+    ) {
+        for expr in exprs {
+            if let ExpressionKind::TypeDeclaration(name_expr, _generics, kind, target_expr) =
+                &expr.node
+            {
+                if let Ok(name) = self.extract_name(name_expr) {
+                    // Handle "type F is map<string, int>"
+                    if *kind == TypeDeclarationKind::Is {
+                        if let Some(target) = target_expr {
+                            let _target_type = self.resolve_type_expression(target, context);
+                            // Define type alias
+                            // We need to wrap it in a TypeDefinition?
+                            // Currently TypeDefinition only supports Struct, Enum, Generic.
+                            // Maybe we need TypeDefinition::Alias(Type)?
+                            // For now, let's just define it in the scope as a Meta type?
+                            // context.define(name.clone(), Type::Meta(Box::new(target_type)), false);
+                            // But define_type is for TypeDefinition.
+                            // Let's assume for now we just handle inheritance registration.
+                        }
+                    } else if let Some(target) = target_expr {
+                        if let Ok(target_name) = self.extract_type_name(target) {
+                            let entry = self.hierarchy.entry(name.clone()).or_default();
+                            match kind {
+                                TypeDeclarationKind::Extends => entry.extends = Some(target_name),
+                                TypeDeclarationKind::Implements => {
+                                    entry.implements.push(target_name)
+                                }
+                                TypeDeclarationKind::Includes => entry.includes.push(target_name),
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     fn check_variable_declaration(&mut self, decls: &[VariableDeclaration], context: &mut Context) {
         for decl in decls {
@@ -1818,6 +1916,17 @@ impl TypeChecker {
     }
 
     fn are_compatible(&self, t1: &Type, t2: &Type, context: &Context) -> bool {
+        if t1 == t2 {
+            return true;
+        }
+
+        // Handle inheritance and interfaces
+        if let (Type::Custom(n1, _), Type::Custom(n2, _)) = (t1, t2) {
+            if self.is_subtype(n1, n2) {
+                return true;
+            }
+        }
+
         match (t1, t2) {
             (Type::Function(gen1, params1, ret1), Type::Function(gen2, params2, ret2)) => {
                 // Check generics count
@@ -1876,6 +1985,34 @@ impl TypeChecker {
             },
             _ => t1 == t2,
         }
+    }
+
+    fn is_subtype(&self, sub: &str, sup: &str) -> bool {
+        if sub == sup {
+            return true;
+        }
+
+        if let Some(relation) = self.hierarchy.get(sub) {
+            // Check extends
+            if let Some(parent) = &relation.extends {
+                if self.is_subtype(parent, sup) {
+                    return true;
+                }
+            }
+            // Check implements
+            for interface in &relation.implements {
+                if self.is_subtype(interface, sup) {
+                    return true;
+                }
+            }
+            // Check includes (treat as mixin/parent)
+            for mixin in &relation.includes {
+                if self.is_subtype(mixin, sup) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     fn create_type_expression(&self, ty: Type) -> Expression {
@@ -2005,6 +2142,24 @@ impl TypeChecker {
                     }
                 }
             }
+        }
+    }
+
+    fn extract_name(&self, expr: &Expression) -> Result<String, String> {
+        match &expr.node {
+            ExpressionKind::Identifier(name, _) => Ok(name.clone()),
+            _ => Err("Expected identifier".to_string()),
+        }
+    }
+
+    fn extract_type_name(&self, expr: &Expression) -> Result<String, String> {
+        match &expr.node {
+            ExpressionKind::Identifier(name, _) => Ok(name.clone()),
+            ExpressionKind::Type(ty, _) => match &**ty {
+                Type::Custom(name, _) => Ok(name.clone()),
+                _ => Err("Expected custom type".to_string()),
+            },
+            _ => Err("Expected type identifier".to_string()),
         }
     }
 
