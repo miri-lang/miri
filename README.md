@@ -94,6 +94,23 @@ You can run the language test suite using Cargo:
 cargo test
 ```
 
+## Contributing
+
+To contribute to Miri, please ensure your code meets the quality standards:
+
+1. **Format your code**:
+   ```bash
+   cargo fmt
+   ```
+2. **Run the linter**:
+   ```bash
+   cargo clippy -- -D warnings
+   ```
+3. **Run tests**:
+   ```bash
+   cargo test
+   ```
+
 ## License
 
 Apache-2.0

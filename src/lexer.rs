@@ -512,7 +512,10 @@ impl<'source> Lexer<'source> {
         if !found_comment && !found_newline {
             // Handle indentation changes
             // SAFETY: indent_stack is initialized with [0] and never empty
-            let last_indent = *self.indent_stack.last().expect("Indent stack should not be empty");
+            let last_indent = *self
+                .indent_stack
+                .last()
+                .expect("Indent stack should not be empty");
 
             if indent_len > last_indent {
                 // If we are not inside parentheses or brackets, treat as an indentation increase

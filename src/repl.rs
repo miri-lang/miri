@@ -8,9 +8,8 @@ use rustyline::history::DefaultHistory;
 use rustyline::Editor;
 
 pub fn start() -> Result<(), CompilerError> {
-    let mut rl = Editor::<(), DefaultHistory>::new().map_err(|e| {
-        CompilerError::Internal(format!("Failed to initialize REPL editor: {}", e))
-    })?;
+    let mut rl = Editor::<(), DefaultHistory>::new()
+        .map_err(|e| CompilerError::Internal(format!("Failed to initialize REPL editor: {}", e)))?;
     println!("Miri REPL. Type :quit to exit.");
 
     let pipeline = Pipeline::new();

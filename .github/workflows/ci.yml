@@ -20,6 +20,13 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Check formatting
+        run: cargo fmt -- --check
+
+      - name: Run clippy
+        run: cargo clippy -- -D warnings
 
       - name: Build project
         run: cargo build --verbose
