@@ -47,7 +47,7 @@ pub enum SyntaxErrorKind {
     MissingTypeExpression,
 
     DuplicateMatchPattern,
-    MissingMatchBranches
+    MissingMatchBranches,
 }
 
 impl SyntaxError {
@@ -223,7 +223,9 @@ pub fn find_line_info(source: &str, pos: usize) -> (usize, usize, &str) {
             line_num += 1;
         }
     }
-    let line_end = source[line_start..].find('\n').map_or(source.len(), |i| line_start + i);
+    let line_end = source[line_start..]
+        .find('\n')
+        .map_or(source.len(), |i| line_start + i);
     let line_str = &source[line_start..line_end];
     let col_num = source[line_start..pos].chars().count() + 1;
     (line_num, col_num, line_str)

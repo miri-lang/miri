@@ -32,7 +32,10 @@ fn foo(a int)
 
 foo(true)
     ";
-    check_error(source, "Type mismatch for argument 1: expected Int, got Boolean");
+    check_error(
+        source,
+        "Type mismatch for argument 1: expected Int, got Boolean",
+    );
 }
 
 #[test]
@@ -80,7 +83,6 @@ factorial(5)
     ";
     check_expr_type(source, Type::Int);
 }
-
 
 #[test]
 fn test_implicit_return_multiline() {

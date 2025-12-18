@@ -70,7 +70,10 @@ let f = fn(a int)
     if a > 0: return 1
     return true
     ";
-    check_error(source, "Incompatible return types in lambda: Int and Boolean");
+    check_error(
+        source,
+        "Incompatible return types in lambda: Int and Boolean",
+    );
 }
 
 #[test]

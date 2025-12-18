@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
-use clap::{Parser, Subcommand, ArgAction};
+use clap::{ArgAction, Parser, Subcommand};
 use std::path::PathBuf;
 
 use crate::version::version;
@@ -70,4 +70,3 @@ pub enum TestFormat {
     Pretty,
     Json,
 }
-

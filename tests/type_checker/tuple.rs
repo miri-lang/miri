@@ -23,27 +23,36 @@ fn test_tuple_indexing_out_of_bounds() {
 #[test]
 fn test_tuple_indexing_variable_homogeneous() {
     // Should succeed because tuple is homogeneous (int, int)
-    check_expr_type("
+    check_expr_type(
+        "
 let i = 0
 (1, 2)[i]
-", Type::Int);
+",
+        Type::Int,
+    );
 }
 
 #[test]
 fn test_tuple_indexing_variable_heterogeneous() {
     // Should fail because tuple is heterogeneous (int, string)
-    check_error("
+    check_error(
+        "
 let i = 0
 (1, \"a\")[i]
-", "Tuple index must be an integer literal for heterogeneous tuples");
+",
+        "Tuple index must be an integer literal for heterogeneous tuples",
+    );
 }
 
 #[test]
 fn test_tuple_indexing_function_call_homogeneous() {
-    check_expr_type("
+    check_expr_type(
+        "
 fn get_index() int
     return 0
 
 (1, 2)[get_index()]
-", Type::Int);
+",
+        Type::Int,
+    );
 }

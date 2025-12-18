@@ -43,5 +43,8 @@ fn test_conditional_expression_no_else_non_void() {
     let source = "
     let x = 10 if true
     ";
-    check_error(source, "Conditional expression without else branch must return Void");
+    check_error(
+        source,
+        "Conditional expression without else branch must return Void",
+    );
 }

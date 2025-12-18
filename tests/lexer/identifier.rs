@@ -3,11 +3,9 @@
 
 use std::vec;
 
-use miri::{lexer::{Token}, syntax_error::SyntaxErrorKind};
+use miri::{lexer::Token, syntax_error::SyntaxErrorKind};
 
 use super::utils::*;
-
-
 
 #[test]
 fn test_very_long_identifier() {
@@ -26,11 +24,10 @@ fn test_number_identifier_boundaries() {
 
 #[test]
 fn test_unicode_identifiers() {
-    run_lexer_error_tests(vec![
-        "café",
-        "naïve",
-        "résumé",
-    ], &SyntaxErrorKind::InvalidToken);
+    run_lexer_error_tests(
+        vec!["café", "naïve", "résumé"],
+        &SyntaxErrorKind::InvalidToken,
+    );
 }
 
 #[test]
@@ -80,8 +77,21 @@ fn test_identifier_operator_boundaries() {
     run_lexer_tests(vec![
         ("my_var+1", vec![Token::Identifier, Token::Plus, Token::Int]),
         ("counter++", vec![Token::Identifier, Token::Increment]),
-        ("obj.property", vec![Token::Identifier, Token::Dot, Token::Identifier]),
-        ("obj['prop'] = 1", vec![Token::Identifier, Token::LBracket, Token::String, Token::RBracket, Token::Assign, Token::Int]),
+        (
+            "obj.property",
+            vec![Token::Identifier, Token::Dot, Token::Identifier],
+        ),
+        (
+            "obj['prop'] = 1",
+            vec![
+                Token::Identifier,
+                Token::LBracket,
+                Token::String,
+                Token::RBracket,
+                Token::Assign,
+                Token::Int,
+            ],
+        ),
     ]);
 }
 
@@ -96,11 +106,23 @@ fn test_identifier_and_string_literal_boundaries() {
 #[test]
 fn test_identifier_in_range() {
     run_lexer_tests(vec![
-        ("a..b", vec![Token::Identifier, Token::Range, Token::Identifier]),
+        (
+            "a..b",
+            vec![Token::Identifier, Token::Range, Token::Identifier],
+        ),
         ("a..10", vec![Token::Identifier, Token::Range, Token::Int]),
         ("10..b", vec![Token::Int, Token::Range, Token::Identifier]),
-        ("a..=b", vec![Token::Identifier, Token::RangeInclusive, Token::Identifier]),
-        ("a..=10", vec![Token::Identifier, Token::RangeInclusive, Token::Int]),
-        ("10..=b", vec![Token::Int, Token::RangeInclusive, Token::Identifier]),
+        (
+            "a..=b",
+            vec![Token::Identifier, Token::RangeInclusive, Token::Identifier],
+        ),
+        (
+            "a..=10",
+            vec![Token::Identifier, Token::RangeInclusive, Token::Int],
+        ),
+        (
+            "10..=b",
+            vec![Token::Int, Token::RangeInclusive, Token::Identifier],
+        ),
     ]);
 }

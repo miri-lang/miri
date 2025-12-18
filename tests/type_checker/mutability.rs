@@ -1,4 +1,4 @@
-use crate::type_checker::utils::{check_success, check_error};
+use crate::type_checker::utils::{check_error, check_success};
 
 #[test]
 fn test_mutable_variable_assignment() {

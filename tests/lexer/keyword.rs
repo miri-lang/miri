@@ -3,10 +3,9 @@
 
 use std::vec;
 
-use miri::lexer::{Token};
+use miri::lexer::Token;
 
 use super::utils::*;
-
 
 #[test]
 fn test_all_keywords_in_various_contexts() {
@@ -61,10 +60,7 @@ fn test_all_keywords_in_various_contexts() {
 fn keyword_context_test(keyword: &str, expected_token: Token) {
     // A keyword should be a standalone token, but part of an identifier if it's not bounded.
     // Example for `if`: `if if_ok ifok ok_if "if" if-1`
-    let test_string = format!(
-        "{kw} {kw}_ok {kw}ok ok_{kw} \"{kw}\" {kw}-1",
-        kw = keyword
-    );
+    let test_string = format!("{kw} {kw}_ok {kw}ok ok_{kw} \"{kw}\" {kw}-1", kw = keyword);
 
     lexer_test(
         &test_string,
@@ -84,32 +80,27 @@ fn keyword_context_test(keyword: &str, expected_token: Token) {
 #[test]
 fn test_keywords_are_case_sensitive() {
     // Keywords must be lowercase. Uppercase or mixed-case versions are identifiers.
-    lexer_test("IF TRUE RETURN", vec![
-        Token::Identifier, Token::Identifier, Token::Identifier,
-    ]);
-    lexer_test("If True Return", vec![
-        Token::Identifier, Token::Identifier, Token::Identifier,
-    ]);
+    lexer_test(
+        "IF TRUE RETURN",
+        vec![Token::Identifier, Token::Identifier, Token::Identifier],
+    );
+    lexer_test(
+        "If True Return",
+        vec![Token::Identifier, Token::Identifier, Token::Identifier],
+    );
 }
 
 #[test]
 fn test_keyword_and_operator_boundary() {
     // The lexer should not require whitespace between a keyword and an operator.
-    lexer_test("if(true)", vec![
-        Token::If, Token::LParen, Token::True, Token::RParen,
-    ]);
-    lexer_test("return-1", vec![
-        Token::Return, Token::Minus, Token::Int,
-    ]);
+    lexer_test(
+        "if(true)",
+        vec![Token::If, Token::LParen, Token::True, Token::RParen],
+    );
+    lexer_test("return-1", vec![Token::Return, Token::Minus, Token::Int]);
 }
 
 #[test]
 fn test_in_not_keyword() {
-    lexer_test(
-        "in not",
-        vec![
-        Token::In,
-        Token::Not,
-    ]);
+    lexer_test("in not", vec![Token::In, Token::Not]);
 }
-

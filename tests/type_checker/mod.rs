@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
-pub mod boolean;
 pub mod await_expression;
+pub mod boolean;
 pub mod conditional_expression;
 pub mod control_flow;
 pub mod float;
 pub mod formatted_string;
 pub mod function;
+pub mod generics;
 pub mod integer;
 pub mod lambda;
 pub mod list;
@@ -20,4 +21,3 @@ pub mod string;
 pub mod tuple;
 pub mod user_defined_types;
 pub mod utils;
-

@@ -6,10 +6,7 @@ use miri::ast::Type;
 
 #[test]
 fn test_boolean_literals() {
-    check_exprs_type(vec![
-        ("true", Type::Boolean),
-        ("false", Type::Boolean),
-    ]);
+    check_exprs_type(vec![("true", Type::Boolean), ("false", Type::Boolean)]);
 }
 
 #[test]
@@ -24,15 +21,18 @@ fn test_boolean_expressions() {
 
 #[test]
 fn test_boolean_logic() {
-    check_vars_type("
+    check_vars_type(
+        "
 let x = true and false
 let y = not x
 let z = x or y
-", vec![
-        ("x", Type::Boolean),
-        ("y", Type::Boolean),
-        ("z", Type::Boolean),
-    ]);
+",
+        vec![
+            ("x", Type::Boolean),
+            ("y", Type::Boolean),
+            ("z", Type::Boolean),
+        ],
+    );
 }
 
 #[test]
@@ -49,78 +49,97 @@ fn test_equality() {
 
 #[test]
 fn test_comparison() {
-    check_vars_type("
+    check_vars_type(
+        "
 let x = 1 > 2
 let y = 1.5 <= 2.5
-", vec![
-        ("x", Type::Boolean),
-        ("y", Type::Boolean),
-    ]);
+",
+        vec![("x", Type::Boolean), ("y", Type::Boolean)],
+    );
 }
 
 #[test]
 fn test_explicit_type() {
-    check_vars_type("
+    check_vars_type(
+        "
 let x bool = true
 let y bool = false
-", vec![
-        ("x", Type::Boolean),
-        ("y", Type::Boolean),
-    ]);
+",
+        vec![("x", Type::Boolean), ("y", Type::Boolean)],
+    );
 }
 
 #[test]
 fn test_invalid_boolean_logic_and() {
-    check_error("
+    check_error(
+        "
 let x = true and 1
-", "Logical operations require booleans");
+",
+        "Logical operations require booleans",
+    );
 }
 
 #[test]
 fn test_invalid_boolean_logic_or() {
-    check_error("
+    check_error(
+        "
 let x = 1 or false
-", "Logical operations require booleans");
+",
+        "Logical operations require booleans",
+    );
 }
 
 #[test]
 fn test_invalid_boolean_logic_not() {
-    check_error("
+    check_error(
+        "
 let x = not 1
-", "Logical NOT requires boolean");
+",
+        "Logical NOT requires boolean",
+    );
 }
 
 #[test]
 fn test_invalid_equality_types() {
-    check_error("
+    check_error(
+        "
 let x = 1 == true
-", "Type mismatch");
+",
+        "Type mismatch",
+    );
 }
 
 #[test]
 fn test_boolean_comparison() {
     // Boolean comparison is valid (e.g. true > false)
-    check_vars_type("
+    check_vars_type(
+        "
 let x = true > false
-", vec![
-        ("x", Type::Boolean),
-    ]);
+",
+        vec![("x", Type::Boolean)],
+    );
 }
 
 #[test]
 fn test_if_condition_type_mismatch() {
-    check_error("
+    check_error(
+        "
 if 1
     let x = 1
-", "If condition must be a boolean");
+",
+        "If condition must be a boolean",
+    );
 }
 
 #[test]
 fn test_while_condition_type_mismatch() {
-    check_error("
+    check_error(
+        "
 while 1
     let x = 1
-", "While condition must be a boolean");
+",
+        "While condition must be a boolean",
+    );
 }
 
 #[test]

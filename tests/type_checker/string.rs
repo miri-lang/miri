@@ -35,41 +35,53 @@ fn test_string_comparisons() {
 
 #[test]
 fn test_explicit_string_type() {
-    check_vars_type("
+    check_vars_type(
+        "
 let x string = \"hello\"
 let y string = 'world'
-", vec![
-        ("x", Type::String),
-        ("y", Type::String),
-    ]);
+",
+        vec![("x", Type::String), ("y", Type::String)],
+    );
 }
 
 #[test]
 fn test_string_assignment_operators() {
-    check_vars_type("
+    check_vars_type(
+        "
 var x = \"hello\"
 x += \" world\"
-", vec![("x", Type::String)]);
+",
+        vec![("x", Type::String)],
+    );
 }
 
 #[test]
 fn test_string_int_mismatch() {
-    check_error("
+    check_error(
+        "
 let x = \"hello\" + 1
-", "Invalid types for arithmetic operation");
+",
+        "Invalid types for arithmetic operation",
+    );
 }
 
 #[test]
 fn test_string_bool_mismatch() {
-    check_error("
+    check_error(
+        "
 let x = \"hello\" + true
-", "Invalid types for arithmetic operation");
+",
+        "Invalid types for arithmetic operation",
+    );
 }
 
 #[test]
 fn test_invalid_string_assignment() {
-    check_error("
+    check_error(
+        "
 var x = \"hello\"
 x = 1
-", "Type mismatch in assignment");
+",
+        "Type mismatch in assignment",
+    );
 }

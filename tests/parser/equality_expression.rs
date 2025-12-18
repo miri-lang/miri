@@ -1,51 +1,44 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
-use miri::ast::*;
-use miri::syntax_error::SyntaxErrorKind;
-use miri::ast_factory::*;
 use super::utils::*;
-
+use miri::ast::*;
+use miri::ast_factory::*;
+use miri::syntax_error::SyntaxErrorKind;
 
 #[test]
 fn test_equality_expression() {
-    parser_test("
+    parser_test(
+        "
 x > 10 == false
 ",
-        vec![
-            expression_statement(
-                binary(
-                    binary(
-                        identifier("x".into()),
-                        BinaryOp::GreaterThan,
-                        int_literal_expression(10)
-                    ),
-                    BinaryOp::Equal,
-                    boolean_literal(false)
-                )
-            )
-        ]
+        vec![expression_statement(binary(
+            binary(
+                identifier("x".into()),
+                BinaryOp::GreaterThan,
+                int_literal_expression(10),
+            ),
+            BinaryOp::Equal,
+            boolean_literal(false),
+        ))],
     );
 }
 
 #[test]
 fn test_equality_expression_not_equal() {
-    parser_test("
+    parser_test(
+        "
 x >= 8 != true
 ",
-        vec![
-            expression_statement(
-                binary(
-                    binary(
-                        identifier("x".into()),
-                        BinaryOp::GreaterThanEqual,
-                        int_literal_expression(8)
-                    ),
-                    BinaryOp::NotEqual,
-                    boolean_literal(true)
-                )
-            )
-        ]
+        vec![expression_statement(binary(
+            binary(
+                identifier("x".into()),
+                BinaryOp::GreaterThanEqual,
+                int_literal_expression(8),
+            ),
+            BinaryOp::NotEqual,
+            boolean_literal(true),
+        ))],
     );
 }
 
@@ -53,76 +46,63 @@ x >= 8 != true
 fn test_precedence_of_bitwise_and_equality() {
     // Equality (==) has lower precedence than bitwise AND (&).
     // This should parse as `(x & 10) == 10`.
-    parser_test("x & 10 == 10", vec![
-        expression_statement(
+    parser_test(
+        "x & 10 == 10",
+        vec![expression_statement(binary(
             binary(
-                binary(
-                    identifier("x".into()),
-                    BinaryOp::BitwiseAnd,
-                    int_literal_expression(10)
-                ),
-                BinaryOp::Equal,
-                int_literal_expression(10)
-            )
-        )
-    ]);
+                identifier("x".into()),
+                BinaryOp::BitwiseAnd,
+                int_literal_expression(10),
+            ),
+            BinaryOp::Equal,
+            int_literal_expression(10),
+        ))],
+    );
 }
 
 #[test]
 fn test_chained_equality_expression() {
-    parser_test("a == b == c", vec![
-        expression_statement(
-            binary(
-                binary(
-                    identifier("a"),
-                    BinaryOp::Equal,
-                    identifier("b")
-                ),
-                BinaryOp::Equal,
-                identifier("c")
-            )
-        )
-    ]);
+    parser_test(
+        "a == b == c",
+        vec![expression_statement(binary(
+            binary(identifier("a"), BinaryOp::Equal, identifier("b")),
+            BinaryOp::Equal,
+            identifier("c"),
+        ))],
+    );
 }
 
 #[test]
 fn test_mixed_chained_equality_expression() {
-    parser_test("a == b != c", vec![
-        expression_statement(
-            binary(
-                binary(
-                    identifier("a"),
-                    BinaryOp::Equal,
-                    identifier("b")
-                ),
-                BinaryOp::NotEqual,
-                identifier("c")
-            )
-        )
-    ]);
+    parser_test(
+        "a == b != c",
+        vec![expression_statement(binary(
+            binary(identifier("a"), BinaryOp::Equal, identifier("b")),
+            BinaryOp::NotEqual,
+            identifier("c"),
+        ))],
+    );
 }
 
 #[test]
-fn test_precedence_of_logical_and_equality() {    
-    parser_test("a and b == c", vec![
-        expression_statement(
-            logical(
-                identifier("a"),
-                BinaryOp::And,
-                binary(
-                    identifier("b"),
-                    BinaryOp::Equal,
-                    identifier("c")
-                )
-            )
-        )
-    ]);
+fn test_precedence_of_logical_and_equality() {
+    parser_test(
+        "a and b == c",
+        vec![expression_statement(logical(
+            identifier("a"),
+            BinaryOp::And,
+            binary(identifier("b"), BinaryOp::Equal, identifier("c")),
+        ))],
+    );
 }
 
 #[test]
 fn test_error_on_consecutive_equality_operators() {
-    parser_error_test("a == == b", &SyntaxErrorKind::UnexpectedToken {
-        expected: "an expression".to_string(),
-        found: "==".to_string(),
-    });
+    parser_error_test(
+        "a == == b",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "an expression".to_string(),
+            found: "==".to_string(),
+        },
+    );
 }

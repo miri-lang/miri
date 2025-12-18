@@ -3,78 +3,72 @@
 
 use std::vec;
 
-use miri::{lexer::{RegexToken, Token}, syntax_error::SyntaxErrorKind};
+use miri::{
+    lexer::{RegexToken, Token},
+    syntax_error::SyntaxErrorKind,
+};
 
 use super::utils::*;
 
-
 #[test]
 fn test_strings() {
-    lexer_test("'single quote' \"double quote\"", vec![
-        Token::String,
-        Token::String,
-    ]);
+    lexer_test(
+        "'single quote' \"double quote\"",
+        vec![Token::String, Token::String],
+    );
 }
 
 #[test]
 fn test_empty_strings() {
-    lexer_test("'' \"\"", vec![
-        Token::String,
-        Token::String,
-    ]);
+    lexer_test("'' \"\"", vec![Token::String, Token::String]);
 }
 
 #[test]
 fn test_strings_with_escapes() {
-    lexer_test(r#"'string with \' quote' "string with \" quote""#, vec![
-        Token::String,
-        Token::String,
-    ]);
+    lexer_test(
+        r#"'string with \' quote' "string with \" quote""#,
+        vec![Token::String, Token::String],
+    );
 }
 
 #[test]
 fn test_string_with_uncommon_escapes() {
     // Test escapes for backslash and different quote types
-    lexer_test(r#""a \\ b" 'c \' d' "e \" f""#, vec![
-        Token::String,
-        Token::String,
-        Token::String,
-    ]);
+    lexer_test(
+        r#""a \\ b" 'c \' d' "e \" f""#,
+        vec![Token::String, Token::String, Token::String],
+    );
 }
 
 #[test]
 fn test_multiline_strings() {
-    lexer_test("'line1\nline2' \"line1\nline2\"", vec![
-        Token::String,
-        Token::String,
-    ]);
+    lexer_test(
+        "'line1\nline2' \"line1\nline2\"",
+        vec![Token::String, Token::String],
+    );
 }
 
 #[test]
 fn test_mixed_quotes_in_strings() {
-    lexer_test(r#"'string with "double" quotes' "string with 'single' quotes""#, vec![
-        Token::String,
-        Token::String,
-    ]);
+    lexer_test(
+        r#"'string with "double" quotes' "string with 'single' quotes""#,
+        vec![Token::String, Token::String],
+    );
 }
 
 #[test]
 fn test_unicode_strings() {
-    lexer_test(r#""Hello 世界" "🚀 rocket""#, vec![
-        Token::String,
-        Token::String,
-    ]);
+    lexer_test(
+        r#""Hello 世界" "🚀 rocket""#,
+        vec![Token::String, Token::String],
+    );
 }
 
 #[test]
 fn test_nested_strings() {
-    lexer_test(r#"" \"inner\" 'inner' ""#, vec![
-        Token::String,
-    ]);
+    lexer_test(r#"" \"inner\" 'inner' ""#, vec![Token::String]);
 
-    lexer_test(r#"' \'inner\' "inner" '"#, vec![
-        Token::String,
-    ]);
+    lexer_test(r#"' \'inner\' "inner" '"#, vec![Token::String]);
 }
 
 #[test]
@@ -123,9 +117,9 @@ fn test_f_string_empty() {
 fn test_f_string_no_expressions() {
     lexer_test(
         r#"f"this is just a string""#,
-        vec![
-            Token::FormattedStringStart("this is just a string".to_string()),
-        ],
+        vec![Token::FormattedStringStart(
+            "this is just a string".to_string(),
+        )],
     );
 }
 
@@ -171,9 +165,9 @@ fn test_f_string_with_adjacent_expressions() {
 fn test_f_string_with_escaped_braces() {
     lexer_test(
         r#"f"Literal braces: \{ and \}""#,
-        vec![
-            Token::FormattedStringStart("Literal braces: \\{ and \\}".to_string()),
-        ],
+        vec![Token::FormattedStringStart(
+            "Literal braces: \\{ and \\}".to_string(),
+        )],
     );
 }
 
@@ -241,7 +235,10 @@ fn test_f_string_with_nested_string_literal() {
 
 #[test]
 fn test_f_string_error_unclosed_brace() {
-    lexer_error_test(r#"f"unclosed {x""#, &SyntaxErrorKind::InvalidFormattedStringExpression);
+    lexer_error_test(
+        r#"f"unclosed {x""#,
+        &SyntaxErrorKind::InvalidFormattedStringExpression,
+    );
 }
 
 #[test]
@@ -348,20 +345,28 @@ fn test_f_string_with_double_braces() {
 
 #[test]
 fn test_keyword_in_formatted_string() {
-    lexer_test(r#"f"The value is {if x: 1 else: 0}""#, vec![
-        Token::FormattedStringStart("The value is ".to_string()),
-        Token::If, Token::Identifier, Token::Colon, Token::Int,
-        Token::Else, Token::Colon, Token::Int,
-        Token::FormattedStringEnd("".to_string()),
-    ]);
+    lexer_test(
+        r#"f"The value is {if x: 1 else: 0}""#,
+        vec![
+            Token::FormattedStringStart("The value is ".to_string()),
+            Token::If,
+            Token::Identifier,
+            Token::Colon,
+            Token::Int,
+            Token::Else,
+            Token::Colon,
+            Token::Int,
+            Token::FormattedStringEnd("".to_string()),
+        ],
+    );
 }
 
 #[test]
 fn test_f_string_error_unclosed_string() {
-    run_lexer_error_tests(vec![
-        r#"f"this is not closed"#,
-        r#"f"unclosed with expr {x}"#,
-    ], &SyntaxErrorKind::InvalidToken);
+    run_lexer_error_tests(
+        vec![r#"f"this is not closed"#, r#"f"unclosed with expr {x}"#],
+        &SyntaxErrorKind::InvalidToken,
+    );
 }
 
 #[test]

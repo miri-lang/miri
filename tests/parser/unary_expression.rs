@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
-use miri::ast::*;
-use miri::syntax_error::SyntaxErrorKind;
-use miri::ast_factory::*;
 use super::utils::*;
-
+use miri::ast::*;
+use miri::ast_factory::*;
+use miri::syntax_error::SyntaxErrorKind;
 
 #[test]
 fn test_unary_expression_negate() {
@@ -39,69 +38,64 @@ fn test_unary_expression_decrement() {
 
 #[test]
 fn test_unary_expression_precedence() {
-    parser_test("-x * -2", vec![
-        expression_statement(
-            binary(
-                unary(UnaryOp::Negate, identifier("x".into())),
-                BinaryOp::Mul,
-                unary(UnaryOp::Negate, int_literal_expression(2))
-            )
-        )
-    ]);
+    parser_test(
+        "-x * -2",
+        vec![expression_statement(binary(
+            unary(UnaryOp::Negate, identifier("x".into())),
+            BinaryOp::Mul,
+            unary(UnaryOp::Negate, int_literal_expression(2)),
+        ))],
+    );
 }
 
 #[test]
 fn test_precedence_of_member_access_and_unary_negation() {
     // Member access `.` has higher precedence than unary `-`.
     // This should parse as `-(a.b)`.
-    parser_test("-a.b", vec![
-        expression_statement(
-            unary(
-                UnaryOp::Negate,
-                member(identifier("a"), identifier("b"))
-            )
-        )
-    ]);
+    parser_test(
+        "-a.b",
+        vec![expression_statement(unary(
+            UnaryOp::Negate,
+            member(identifier("a"), identifier("b")),
+        ))],
+    );
 }
 
 #[test]
 fn test_precedence_of_index_and_unary_negation() {
     // Index access `[]` has higher precedence than unary `-`.
     // This should parse as `-(a[0])`.
-    parser_test("-a[0]", vec![
-        expression_statement(
-            unary(
-                UnaryOp::Negate,
-                index(identifier("a"), int_literal_expression(0))
-            )
-        )
-    ]);
+    parser_test(
+        "-a[0]",
+        vec![expression_statement(unary(
+            UnaryOp::Negate,
+            index(identifier("a"), int_literal_expression(0)),
+        ))],
+    );
 }
 
 #[test]
 fn test_precedence_of_call_and_unary_negation() {
     // Function calls `()` have higher precedence than unary `-`.
     // This should parse as `-(a())`.
-    parser_test("-a()", vec![
-        expression_statement(
-            unary(
-                UnaryOp::Negate,
-                call(identifier("a"), vec![])
-            )
-        )
-    ]);
+    parser_test(
+        "-a()",
+        vec![expression_statement(unary(
+            UnaryOp::Negate,
+            call(identifier("a"), vec![]),
+        ))],
+    );
 }
 
 #[test]
 fn test_chained_unary_operator() {
-    parser_test("not not y", vec![
-        expression_statement(
-            unary(
-                UnaryOp::Not,
-                unary(UnaryOp::Not, identifier("y"))
-            )
-        )
-    ]);
+    parser_test(
+        "not not y",
+        vec![expression_statement(unary(
+            UnaryOp::Not,
+            unary(UnaryOp::Not, identifier("y")),
+        ))],
+    );
 }
 
 #[test]

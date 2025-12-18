@@ -4,9 +4,8 @@
 use miri::ast::*;
 use miri::syntax_error::SyntaxErrorKind;
 
-use miri::ast_factory::*;
 use super::utils::*;
-
+use miri::ast_factory::*;
 
 #[test]
 fn test_parse_integer_literal() {
@@ -15,65 +14,60 @@ fn test_parse_integer_literal() {
         ("12345", int(12345)),
         ("1_234_567_890", int(1234567890)),
         ("9_223_372_036_854_775_807", int(9223372036854775807)),
-
         ("0b1_01_010", int(42)),
         ("0xFF", int(255)),
         ("0o77", int(63)),
-        ("0o1234567", int(342391))
+        ("0o1234567", int(342391)),
     ]);
 }
 
 #[test]
 fn test_integer_in_variable_declaration() {
-    parser_test("let x = 10", vec![
-        variable_statement(vec![
-            let_variable(
+    parser_test(
+        "let x = 10",
+        vec![variable_statement(
+            vec![let_variable(
                 "x",
                 None,
-                opt_expr(int_literal_expression(10))
-            )
-        ], MemberVisibility::Public)
-    ]);
+                opt_expr(int_literal_expression(10)),
+            )],
+            MemberVisibility::Public,
+        )],
+    );
 }
 
 #[test]
 fn test_negative_integer_expression() {
-    parser_test("-42", vec![
-        expression_statement(
-            unary(
-                UnaryOp::Negate,
-                int_literal_expression(42)
-            )
-        )
-    ]);
+    parser_test(
+        "-42",
+        vec![expression_statement(unary(
+            UnaryOp::Negate,
+            int_literal_expression(42),
+        ))],
+    );
 }
 
 #[test]
 fn test_integer_in_binary_expression() {
-    parser_test("10 + 20", vec![
-        expression_statement(
-            binary(
-                int_literal_expression(10),
-                BinaryOp::Add,
-                int_literal_expression(20)
-            )
-        )
-    ]);
+    parser_test(
+        "10 + 20",
+        vec![expression_statement(binary(
+            int_literal_expression(10),
+            BinaryOp::Add,
+            int_literal_expression(20),
+        ))],
+    );
 }
 
 #[test]
 fn test_integer_as_method_call_target() {
-    parser_test("42.to_string()", vec![
-        expression_statement(
-            call(
-                member(
-                    int_literal_expression(42),
-                    identifier("to_string")
-                ),
-                vec![]
-            )
-        )
-    ]);
+    parser_test(
+        "42.to_string()",
+        vec![expression_statement(call(
+            member(int_literal_expression(42), identifier("to_string")),
+            vec![],
+        ))],
+    );
 }
 
 #[test]

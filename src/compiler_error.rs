@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
-use thiserror::Error;
-use crate::syntax_error::{SyntaxError, find_line_info};
+use crate::syntax_error::{find_line_info, SyntaxError};
 use crate::type_error::TypeError;
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum CompilerError {
@@ -35,7 +35,11 @@ impl CompilerError {
             CompilerError::Lexer(e) | CompilerError::Parser(e) => e.report(source),
             CompilerError::Type(e) => {
                 let (line_num, col_num, line_str) = find_line_info(source, e.span.start);
-                let len = if e.span.end > e.span.start { e.span.end - e.span.start } else { 1 };
+                let len = if e.span.end > e.span.start {
+                    e.span.end - e.span.start
+                } else {
+                    1
+                };
                 let underline = "^".repeat(len);
                 format!(
                     "Type Error: {}\n\
@@ -44,15 +48,22 @@ impl CompilerError {
                        | {}\n\
                        | {}{}\n",
                     e.message,
-                    line_num, col_num,
+                    line_num,
+                    col_num,
                     line_str,
-                    " ".repeat(col_num - 1), underline
+                    " ".repeat(col_num - 1),
+                    underline
                 )
-            },
-            CompilerError::TypeErrors(errs) => {
-                errs.iter().map(|e| {
+            }
+            CompilerError::TypeErrors(errs) => errs
+                .iter()
+                .map(|e| {
                     let (line_num, col_num, line_str) = find_line_info(source, e.span.start);
-                    let len = if e.span.end > e.span.start { e.span.end - e.span.start } else { 1 };
+                    let len = if e.span.end > e.span.start {
+                        e.span.end - e.span.start
+                    } else {
+                        1
+                    };
                     let underline = "^".repeat(len);
                     format!(
                         "Type Error: {}\n\
@@ -61,12 +72,15 @@ impl CompilerError {
                            | {}\n\
                            | {}{}\n",
                         e.message,
-                        line_num, col_num,
+                        line_num,
+                        col_num,
                         line_str,
-                        " ".repeat(col_num - 1), underline
+                        " ".repeat(col_num - 1),
+                        underline
                     )
-                }).collect::<Vec<_>>().join("\n")
-            },
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
             _ => format!("{}", self),
         }
     }

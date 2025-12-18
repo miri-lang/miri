@@ -1,27 +1,28 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
-use miri::syntax_error::SyntaxErrorKind;
-use miri::ast_factory::*;
 use super::utils::*;
-
+use miri::ast_factory::*;
+use miri::syntax_error::SyntaxErrorKind;
 
 #[test]
 fn test_implements_statement_single() {
-    parser_test("implements ISerializable", vec![
-        implements(vec![identifier("ISerializable")])
-    ]);
+    parser_test(
+        "implements ISerializable",
+        vec![implements(vec![identifier("ISerializable")])],
+    );
 }
 
 #[test]
 fn test_implements_statement_multiple() {
-    parser_test("implements ISerializable, IClickable, IView", vec![
-        implements(vec![
+    parser_test(
+        "implements ISerializable, IClickable, IView",
+        vec![implements(vec![
             identifier("ISerializable"),
             identifier("IClickable"),
-            identifier("IView")
-        ])
-    ]);
+            identifier("IView"),
+        ])],
+    );
 }
 
 #[test]
@@ -31,6 +32,6 @@ fn test_error_implements_trailing_comma() {
         &SyntaxErrorKind::UnexpectedToken {
             expected: "identifier".to_string(),
             found: "end of file".to_string(),
-        }
+        },
     );
 }

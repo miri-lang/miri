@@ -3,16 +3,20 @@
 
 use std::vec;
 
-use crate::lexer::{token_to_string, Lexer, Token, TokenSpan};
-use crate::syntax_error::{Span, SyntaxError, SyntaxErrorKind};
 use crate::ast::*;
 use crate::ast_factory as ast;
+use crate::lexer::{token_to_string, Lexer, Token, TokenSpan};
+use crate::syntax_error::{Span, SyntaxError, SyntaxErrorKind};
 
+struct DeclarationBlockConfig<'a> {
+    inline_error: &'a str,
+    missing_members_error: SyntaxErrorKind,
+}
 
 pub struct Parser<'source> {
     lexer: &'source mut Lexer<'source>,
     source: &'source str,
-    _lookahead: Option<TokenSpan>
+    _lookahead: Option<TokenSpan>,
 }
 
 impl<'source> Parser<'source> {
@@ -20,7 +24,7 @@ impl<'source> Parser<'source> {
         Parser {
             lexer,
             source,
-            _lookahead: None
+            _lookahead: None,
         }
     }
 
@@ -86,17 +90,19 @@ impl<'source> Parser<'source> {
             Some((Token::Public, _)) => {
                 self.eat_token(&Token::Public)?;
                 self.class_member_statement(MemberVisibility::Public)?
-            },
+            }
             Some((Token::Protected, _)) => {
                 self.eat_token(&Token::Protected)?;
                 self.class_member_statement(MemberVisibility::Protected)?
-            },
+            }
             Some((Token::Private, _)) => {
                 self.eat_token(&Token::Private)?;
                 self.class_member_statement(MemberVisibility::Private)?
-            },
+            }
             Some((Token::Indent, _)) => self.block_statement()?,
-            Some((Token::Let, _)) | Some((Token::Var, _)) => self.variable_statement(MemberVisibility::Public)?,
+            Some((Token::Let, _)) | Some((Token::Var, _)) => {
+                self.variable_statement(MemberVisibility::Public)?
+            }
             Some((Token::If, _)) => self.if_statement(IfStatementType::If)?,
             Some((Token::Unless, _)) => self.if_statement(IfStatementType::Unless)?,
             Some((Token::While, _)) => self.while_statement(WhileStatementType::While)?,
@@ -122,7 +128,10 @@ impl<'source> Parser<'source> {
         Ok(statement)
     }
 
-    fn class_member_statement(&mut self, visibility: MemberVisibility) -> Result<Statement, SyntaxError> {
+    fn class_member_statement(
+        &mut self,
+        visibility: MemberVisibility,
+    ) -> Result<Statement, SyntaxError> {
         let statement = match &self._lookahead {
             Some((Token::Let, _)) | Some((Token::Var, _)) => self.variable_statement(visibility)?,
             Some((Token::Async, _)) | Some((Token::Fn, _)) | Some((Token::Gpu, _)) => {
@@ -132,7 +141,9 @@ impl<'source> Parser<'source> {
             Some((Token::Struct, _)) => self.struct_statement(visibility)?,
             Some((Token::Type, _)) => self.type_statement(visibility)?,
             _ => {
-                return Err(self.error_unexpected_lookahead_token("let, var, async, def, gpu, enum, type or struct"));
+                return Err(self.error_unexpected_lookahead_token(
+                    "let, var, async, def, gpu, enum, type or struct",
+                ));
             }
         };
         Ok(statement)
@@ -144,7 +155,10 @@ impl<'source> Parser<'source> {
             | 'var' VariableDeclarationList EXPRESSION_END
             ;
     */
-    fn variable_statement(&mut self, visibility: MemberVisibility) -> Result<Statement, SyntaxError> {
+    fn variable_statement(
+        &mut self,
+        visibility: MemberVisibility,
+    ) -> Result<Statement, SyntaxError> {
         let (token, variable_declaration_type) = match &self._lookahead {
             Some((Token::Let, _)) => (Token::Let, VariableDeclarationType::Immutable),
             Some((Token::Var, _)) => (Token::Var, VariableDeclarationType::Mutable),
@@ -152,10 +166,7 @@ impl<'source> Parser<'source> {
         };
 
         self.eat_token(&token)?;
-        let declarations = self.variable_declaration_list(
-            &variable_declaration_type, 
-            true
-        )?;
+        let declarations = self.variable_declaration_list(&variable_declaration_type, true)?;
         Ok(ast::variable_statement(declarations, visibility))
     }
 
@@ -165,8 +176,13 @@ impl<'source> Parser<'source> {
             | VariableDeclarationList ',' VariableDeclaration
             ;
     */
-    fn variable_declaration_list(&mut self, declaration_type: &VariableDeclarationType, accept_initializer: bool) -> Result<Vec<VariableDeclaration>, SyntaxError> {
-        let mut declarations = vec![self.variable_declaration(declaration_type, accept_initializer)?];
+    fn variable_declaration_list(
+        &mut self,
+        declaration_type: &VariableDeclarationType,
+        accept_initializer: bool,
+    ) -> Result<Vec<VariableDeclaration>, SyntaxError> {
+        let mut declarations =
+            vec![self.variable_declaration(declaration_type, accept_initializer)?];
 
         while self.lookahead_is_comma() {
             self.eat_token(&Token::Comma)?;
@@ -181,7 +197,8 @@ impl<'source> Parser<'source> {
         if let ExpressionKind::Identifier(id, class_opt) = identifier_expr.node {
             if let Some(class) = class_opt {
                 // A simple identifier cannot be namespaced.
-                return Err(self.error_unexpected_token("a simple identifier", &format!("{}::{}", class, id)));
+                return Err(self
+                    .error_unexpected_token("a simple identifier", &format!("{}::{}", class, id)));
             }
             Ok(id)
         } else {
@@ -198,27 +215,26 @@ impl<'source> Parser<'source> {
             | IDENTIFIER TYPE '=' Expression
             ;
     */
-    fn variable_declaration(&mut self, declaration_type: &VariableDeclarationType, accept_initializer: bool) -> Result<VariableDeclaration, SyntaxError> {
+    fn variable_declaration(
+        &mut self,
+        declaration_type: &VariableDeclarationType,
+        accept_initializer: bool,
+    ) -> Result<VariableDeclaration, SyntaxError> {
         let name = self.parse_simple_identifier()?;
 
-        let typ = match self.type_expression()? {
-            Some(typ) => Some(Box::new(typ)),
-            None => None,
-        };
+        let typ = self.type_expression()?.map(Box::new);
 
-        let initializer;
-        if accept_initializer {
-            initializer = match &self._lookahead {
+        let initializer = if accept_initializer {
+            match &self._lookahead {
                 Some((Token::Assign, _)) => {
                     self.eat_token(&Token::Assign)?;
                     opt_expr(self.expression()?)
-                },
-                _ => None
-            };
-        }
-        else {
-            initializer = None;
-        }
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
 
         Ok(VariableDeclaration {
             name,
@@ -232,7 +248,11 @@ impl<'source> Parser<'source> {
         if self.lookahead_is_colon() {
             self.eat_token(&Token::Colon)?;
 
-            if self._lookahead.is_none() || self.lookahead_is_expression_end() || self.lookahead_is_dedent() || self.lookahead_is_else() {
+            if self._lookahead.is_none()
+                || self.lookahead_is_expression_end()
+                || self.lookahead_is_dedent()
+                || self.lookahead_is_else()
+            {
                 self.try_eat_expression_end();
                 return Ok(Statement::Empty);
             }
@@ -242,7 +262,8 @@ impl<'source> Parser<'source> {
             if !self.lookahead_is_indent() {
                 return Ok(Statement::Empty);
             }
-        } else if self.match_lookahead_type(|t| t == &Token::If || t == &Token::Unless) { // To support `else if`
+        } else if self.match_lookahead_type(|t| t == &Token::If || t == &Token::Unless) {
+            // To support `else if`
             return self.statement();
         } else {
             return Err(self.error_unexpected_lookahead_token("a colon or an expression end"));
@@ -261,7 +282,10 @@ impl<'source> Parser<'source> {
             | 'if' Expression EXPRESSION_END BlockStatement ('else' EXPRESSION_END BlockStatement)?
             ;
     */
-    fn if_statement(&mut self, if_statement_type: IfStatementType) -> Result<Statement, SyntaxError> {
+    fn if_statement(
+        &mut self,
+        if_statement_type: IfStatementType,
+    ) -> Result<Statement, SyntaxError> {
         if if_statement_type == IfStatementType::Unless {
             self.eat_token(&Token::Unless)?;
         } else {
@@ -298,7 +322,10 @@ impl<'source> Parser<'source> {
             | 'forever' EXPRESSION_END BlockStatement
             ;
     */
-    fn while_statement(&mut self, mut while_statement_type: WhileStatementType) -> Result<Statement, SyntaxError> {
+    fn while_statement(
+        &mut self,
+        mut while_statement_type: WhileStatementType,
+    ) -> Result<Statement, SyntaxError> {
         let condition;
         let then_block;
 
@@ -308,9 +335,7 @@ impl<'source> Parser<'source> {
             then_block = self.statement_body()?;
         } else if while_statement_type == WhileStatementType::Forever {
             self.eat_token(&Token::Forever)?;
-            condition = ast::literal(
-                ast::boolean(true)
-            );
+            condition = ast::literal(ast::boolean(true));
             then_block = self.statement_body()?;
         } else if while_statement_type == WhileStatementType::DoWhile {
             self.eat_token(&Token::Do)?;
@@ -318,11 +343,11 @@ impl<'source> Parser<'source> {
             match &self._lookahead {
                 Some((Token::While, _)) => {
                     self.eat_token(&Token::While)?;
-                },
+                }
                 Some((Token::Until, _)) => {
                     self.eat_token(&Token::Until)?;
                     while_statement_type = WhileStatementType::DoUntil;
-                },
+                }
                 _ => return Err(self.error_unexpected_lookahead_token("while or until")),
             }
             condition = self.expression()?;
@@ -332,7 +357,11 @@ impl<'source> Parser<'source> {
             then_block = self.statement_body()?;
         }
 
-        Ok(ast::while_statement_with_type(condition, then_block, while_statement_type))
+        Ok(ast::while_statement_with_type(
+            condition,
+            then_block,
+            while_statement_type,
+        ))
     }
 
     /*
@@ -352,12 +381,12 @@ impl<'source> Parser<'source> {
                 self.eat_token(&Token::Range)?;
                 range_type = RangeExpressionType::Exclusive;
                 end = opt_expr(self.left_hand_side_expression()?);
-            },
+            }
             Some((Token::RangeInclusive, _)) => {
                 self.eat_token(&Token::RangeInclusive)?;
                 range_type = RangeExpressionType::Inclusive;
                 end = opt_expr(self.left_hand_side_expression()?);
-            },
+            }
             _ => {
                 range_type = RangeExpressionType::IterableObject;
                 end = None;
@@ -377,15 +406,14 @@ impl<'source> Parser<'source> {
         self.eat_token(&Token::For)?;
 
         // For loop has immutable variable declarations without initializers
-        let variable_declarations = self.variable_declaration_list(
-            &VariableDeclarationType::Immutable,
-            false
-        )?;
+        let variable_declarations =
+            self.variable_declaration_list(&VariableDeclarationType::Immutable, false)?;
         self.eat_token(&Token::In)?;
         let iterable = self.range_expression()?;
 
         if let ExpressionKind::Range(_, _, range_type) = &iterable.node {
-            if *range_type != RangeExpressionType::IterableObject && variable_declarations.len() > 1 {
+            if *range_type != RangeExpressionType::IterableObject && variable_declarations.len() > 1
+            {
                 return Err(self.error_unexpected_token(
                     "a single loop variable for a numeric range",
                     &format!("{} variables", variable_declarations.len()),
@@ -404,7 +432,10 @@ impl<'source> Parser<'source> {
             | 'async'? 'gpu'? 'fn' Identifier [GenericTypesDeclaration] '(' ParameterList ')' [ReturnType] ':' ExpressionStatement EXPRESSION_END
             ;
     */
-    fn function_declaration(&mut self, visibility: MemberVisibility) -> Result<Statement, SyntaxError> {
+    fn function_declaration(
+        &mut self,
+        visibility: MemberVisibility,
+    ) -> Result<Statement, SyntaxError> {
         let mut properties = FunctionProperties {
             is_async: false,
             is_gpu: false,
@@ -416,12 +447,16 @@ impl<'source> Parser<'source> {
                 Some((Token::Async, _)) => {
                     self.eat_token(&Token::Async)?;
                     properties.is_async = true;
-                },
+                }
                 Some((Token::Gpu, _)) => {
                     self.eat_token(&Token::Gpu)?;
                     properties.is_gpu = true;
                 }
-                _ => return Err(self.error_unexpected_lookahead_token("function modifier (async or gpu)")),
+                _ => {
+                    return Err(
+                        self.error_unexpected_lookahead_token("function modifier (async or gpu)")
+                    )
+                }
             }
         }
 
@@ -431,11 +466,11 @@ impl<'source> Parser<'source> {
             Some((Token::Identifier, _)) => {
                 let token = self.eat_token(&Token::Identifier)?;
                 self.source[token.1.start..token.1.end].to_string()
-            },
+            }
             Some((Token::LessThan, _)) | Some((Token::LParen, _)) => {
                 // No name, it's a lambda
                 "".to_string()
-            },
+            }
             _ => return Err(self.error_unexpected_lookahead_token("a function name, '(' or '<'")),
         };
 
@@ -461,17 +496,13 @@ impl<'source> Parser<'source> {
         };
 
         if name.is_empty() {
-            return Ok(
-                ast::expression_statement(
-                    ast::lambda_expression(
-                        generic_types,
-                        parameters,
-                        return_type,
-                        body,
-                        properties
-                    )
-                )
-            );
+            return Ok(ast::expression_statement(ast::lambda_expression(
+                generic_types,
+                parameters,
+                return_type,
+                body,
+                properties,
+            )));
         }
 
         Ok(ast::function_declaration(
@@ -480,7 +511,7 @@ impl<'source> Parser<'source> {
             parameters,
             return_type,
             body,
-            properties
+            properties,
         ))
     }
 
@@ -495,7 +526,7 @@ impl<'source> Parser<'source> {
 
     fn function_params_expression(&mut self) -> Result<Vec<Parameter>, SyntaxError> {
         self.eat_token(&Token::LParen)?;
-        let parameters =  if self.lookahead_is_rparen() {
+        let parameters = if self.lookahead_is_rparen() {
             vec![]
         } else {
             self.parameter_list()?
@@ -506,10 +537,7 @@ impl<'source> Parser<'source> {
     }
 
     fn return_type_expression(&mut self) -> Result<Option<Box<Expression>>, SyntaxError> {
-        let return_type = match self.type_expression()? {
-            Some(typ) => Some(Box::new(typ)),
-            None => None,
-        };
+        let return_type = self.type_expression()?.map(Box::new);
         Ok(return_type)
     }
 
@@ -539,16 +567,24 @@ impl<'source> Parser<'source> {
     fn generic_type(&mut self) -> Result<Expression, SyntaxError> {
         let identifier = self.identifier()?;
         if self._lookahead.is_none() || !self.lookahead_is_inheritance_modifier() {
-            return Ok(ast::generic_type_expression(identifier, None));
+            return Ok(ast::generic_type_expression(
+                identifier,
+                None,
+                TypeDeclarationKind::None,
+            ));
         }
 
-        self.eat(is_inheritance_modifier, "extends, includes or implements")?;
-        let typ = match self.type_expression()? {
-            Some(typ) => Some(Box::new(typ)),
-            None => None,
+        let token_span = self.eat(is_inheritance_modifier, "extends, includes or implements")?;
+        let kind = match token_span.0 {
+            Token::Extends => TypeDeclarationKind::Extends,
+            Token::Implements => TypeDeclarationKind::Implements,
+            Token::Includes => TypeDeclarationKind::Includes,
+            _ => TypeDeclarationKind::None,
         };
 
-        Ok(ast::generic_type_expression(identifier, typ))
+        let typ = self.type_expression()?.map(Box::new);
+
+        Ok(ast::generic_type_expression(identifier, typ, kind))
     }
 
     /*
@@ -584,8 +620,8 @@ impl<'source> Parser<'source> {
             Some(typ) => Box::new(typ),
             None => {
                 // Miri doesn't support untyped parameters
-                return Err(self.error_missing_type_expression())
-            },
+                return Err(self.error_missing_type_expression());
+            }
         };
 
         let guard = if self._lookahead.is_some() && self.lookahead_is_guard() {
@@ -601,7 +637,12 @@ impl<'source> Parser<'source> {
             None
         };
 
-        Ok(Parameter { name, typ, guard, default_value })
+        Ok(Parameter {
+            name,
+            typ,
+            guard,
+            default_value,
+        })
     }
 
     /*
@@ -680,8 +721,7 @@ impl<'source> Parser<'source> {
         creator: C,
         name: Expression,
         visibility: MemberVisibility,
-        inline_error: &str,
-        missing_members_error: SyntaxErrorKind,
+        config: DeclarationBlockConfig,
         generic_types: Option<Vec<Expression>>,
     ) -> Result<Statement, SyntaxError>
     where
@@ -691,9 +731,10 @@ impl<'source> Parser<'source> {
         let mut items = vec![];
 
         match &self._lookahead {
-            Some((Token::Colon, _)) => { // Inline form
+            Some((Token::Colon, _)) => {
+                // Inline form
                 self.eat_token(&Token::Colon)?;
-                if !self.lookahead_is_expression_end() && !self._lookahead.is_none() {
+                if !self.lookahead_is_expression_end() && self._lookahead.is_some() {
                     items.push(item_parser(self)?);
                     while self.lookahead_is_comma() {
                         self.eat_token(&Token::Comma)?;
@@ -701,7 +742,8 @@ impl<'source> Parser<'source> {
                     }
                 }
             }
-            Some((Token::ExpressionStatementEnd, _)) => { // Block form
+            Some((Token::ExpressionStatementEnd, _)) => {
+                // Block form
                 self.eat_expression_end()?;
                 if self.lookahead_is_indent() {
                     self.eat_token(&Token::Indent)?;
@@ -711,12 +753,12 @@ impl<'source> Parser<'source> {
                     }
                     self.eat_token(&Token::Dedent)?;
                 }
-            },
-            _ => return Err(self.error_unexpected_lookahead_token(inline_error)),
+            }
+            _ => return Err(self.error_unexpected_lookahead_token(config.inline_error)),
         };
 
         if items.is_empty() {
-            return Err(self.error_missing_members(missing_members_error));
+            return Err(self.error_missing_members(config.missing_members_error));
         }
 
         Ok(creator(name, generic_types, items, visibility))
@@ -736,9 +778,11 @@ impl<'source> Parser<'source> {
             |n, _, vals: Vec<Expression>, vis| ast::enum_statement(n, vals, vis),
             name,
             visibility,
-            "either a colon for inline enums or an indentation for block enums",
-            SyntaxErrorKind::MissingEnumMembers,
-            None
+            DeclarationBlockConfig {
+                inline_error: "either a colon for inline enums or an indentation for block enums",
+                missing_members_error: SyntaxErrorKind::MissingEnumMembers,
+            },
+            None,
         )
     }
 
@@ -751,7 +795,11 @@ impl<'source> Parser<'source> {
     pub fn enum_value_expression(&mut self) -> Result<Expression, SyntaxError> {
         let identifier = self.identifier()?;
         let types = if self.match_lookahead_type(|t| t == &Token::LParen) {
-            self.multiple_element_type_expressions("Enum value type", &Token::LParen, &Token::RParen)?
+            self.multiple_element_type_expressions(
+                "Enum value type",
+                &Token::LParen,
+                &Token::RParen,
+            )?
         } else {
             vec![]
         };
@@ -771,12 +819,15 @@ impl<'source> Parser<'source> {
         let generic_types = self.generic_types_expression()?;
         self.parse_declaration_block(
             Self::struct_member_expression,
-            |n, g, m, vis| ast::struct_statement(n, g, m, vis),
+            ast::struct_statement,
             name,
             visibility,
-            "either a colon for inline structs or an indentation for block structs",
-            SyntaxErrorKind::MissingStructMembers,
-            generic_types
+            DeclarationBlockConfig {
+                inline_error:
+                    "either a colon for inline structs or an indentation for block structs",
+                missing_members_error: SyntaxErrorKind::MissingStructMembers,
+            },
+            generic_types,
         )
     }
 
@@ -787,11 +838,10 @@ impl<'source> Parser<'source> {
     */
     fn struct_member_expression(&mut self) -> Result<Expression, SyntaxError> {
         let name = self.identifier()?;
-        let typ = self.type_expression()?;
-        if typ.is_none() {
-            return Err(self.error_missing_struct_member_type());
-        }
-        Ok(ast::struct_member_expression(name, typ.unwrap()))
+        let typ = self
+            .type_expression()?
+            .ok_or_else(|| self.error_missing_struct_member_type())?;
+        Ok(ast::struct_member_expression(name, typ))
     }
 
     /*
@@ -813,13 +863,13 @@ impl<'source> Parser<'source> {
                 let type_name = self.identifier_to_type_name()?;
                 let typ = self.type_name_to_type(type_name)?;
                 Some(ast::typ(typ))
-            },
+            }
             Some((Token::LBracket, _)) => {
                 self.eat_token(&Token::LBracket)?;
                 let element_type = self.element_type_expression("List element type")?;
                 self.eat_token(&Token::RBracket)?;
                 Some(ast::typ(Type::List(Box::new(element_type))))
-            },
+            }
             Some((Token::LParen, _)) => {
                 self.eat_token(&Token::LParen)?;
                 if self.lookahead_is_rparen() {
@@ -828,13 +878,16 @@ impl<'source> Parser<'source> {
                     return Ok(Some(ast::typ(Type::Tuple(vec![]))));
                 }
 
-                let first_element = self.element_type_expression("Grouped type or tuple element")?;
+                let first_element =
+                    self.element_type_expression("Grouped type or tuple element")?;
 
                 if self.lookahead_is_comma() {
                     let mut elements = vec![first_element];
                     while self.lookahead_is_comma() {
                         self.eat_token(&Token::Comma)?;
-                        if self.lookahead_is_rparen() { break; } // Allow trailing comma
+                        if self.lookahead_is_rparen() {
+                            break;
+                        } // Allow trailing comma
                         elements.push(self.element_type_expression("Tuple element type")?);
                     }
                     self.eat_token(&Token::RParen)?;
@@ -843,7 +896,7 @@ impl<'source> Parser<'source> {
                     self.eat_token(&Token::RParen)?;
                     Some(first_element)
                 }
-            },
+            }
             Some((Token::LBrace, _)) => {
                 self.eat_token(&Token::LBrace)?;
                 let key_type = self.element_type_expression("Map key type")?;
@@ -857,54 +910,70 @@ impl<'source> Parser<'source> {
                     Type::Set(Box::new(key_type))
                 };
                 Some(ast::typ(typ))
-            },
+            }
             Some((Token::Fn, _)) => {
                 self.eat_token(&Token::Fn)?;
                 let generic_types = self.generic_types_expression()?;
-                
+
                 self.eat_token(&Token::LParen)?;
                 let mut parameters = Vec::new();
                 if !self.lookahead_is_rparen() {
                     loop {
-                        if self.lookahead_is_rparen() { break; }
-                        
+                        if self.lookahead_is_rparen() {
+                            break;
+                        }
+
                         // Parse first type expression
                         let first_type_expr = if let Some(typ) = self.type_expression()? {
                             typ
                         } else {
-                             return Err(self.error_missing_type_expression());
+                            return Err(self.error_missing_type_expression());
                         };
 
                         // Check what follows to decide if first_type_expr is a name or a type
-                        let is_named_param = if self.lookahead_is_comma() || self.lookahead_is_rparen() {
-                            false
-                        } else {
-                            // If it's not comma or rparen, it must be the start of another type expression
-                            // Check if the next token can start a type expression
-                            self.match_lookahead_type(|t| matches!(t, 
-                                Token::Identifier | 
-                                Token::LBracket | 
-                                Token::LParen | 
-                                Token::LBrace | 
-                                Token::Fn
-                            ))
-                        };
+                        let is_named_param =
+                            if self.lookahead_is_comma() || self.lookahead_is_rparen() {
+                                false
+                            } else {
+                                // If it's not comma or rparen, it must be the start of another type expression
+                                // Check if the next token can start a type expression
+                                self.match_lookahead_type(|t| {
+                                    matches!(
+                                        t,
+                                        Token::Identifier
+                                            | Token::LBracket
+                                            | Token::LParen
+                                            | Token::LBrace
+                                            | Token::Fn
+                                    )
+                                })
+                            };
 
                         if is_named_param {
                             // The first expression was the name.
-                            let param_name = if let ExpressionKind::Type(ty, is_nullable) = &first_type_expr.node {
+                            let param_name = if let ExpressionKind::Type(ty, is_nullable) =
+                                &first_type_expr.node
+                            {
                                 if *is_nullable {
-                                     return Err(self.error_unexpected_token("Parameter name cannot be nullable", "identifier"));
+                                    return Err(self.error_unexpected_token(
+                                        "Parameter name cannot be nullable",
+                                        "identifier",
+                                    ));
                                 }
                                 match &**ty {
                                     Type::Custom(name, None) => name.clone(),
-                                    _ => return Err(self.error_unexpected_token(
-                                        "Parameter name must be a simple identifier", 
-                                        "identifier"
-                                    ))
+                                    _ => {
+                                        return Err(self.error_unexpected_token(
+                                            "Parameter name must be a simple identifier",
+                                            "identifier",
+                                        ))
+                                    }
                                 }
                             } else {
-                                return Err(self.error_unexpected_token("Expected parameter name", "identifier"));
+                                return Err(self.error_unexpected_token(
+                                    "Expected parameter name",
+                                    "identifier",
+                                ));
                             };
 
                             // Now parse the actual type
@@ -918,23 +987,24 @@ impl<'source> Parser<'source> {
                                 name: param_name,
                                 typ: Box::new(param_type),
                                 guard: None,
-                                default_value: None
+                                default_value: None,
                             });
-
                         } else {
                             // Unnamed parameter
                             parameters.push(Parameter {
                                 name: "".to_string(),
                                 typ: Box::new(first_type_expr),
                                 guard: None,
-                                default_value: None
+                                default_value: None,
                             });
                         }
 
                         if self.lookahead_is_comma() {
                             self.eat_token(&Token::Comma)?;
                             // Allow trailing comma
-                            if self.lookahead_is_rparen() { break; }
+                            if self.lookahead_is_rparen() {
+                                break;
+                            }
                         } else {
                             break;
                         }
@@ -945,14 +1015,14 @@ impl<'source> Parser<'source> {
                 let return_type = self.return_type_expression()?;
                 let typ = Type::Function(generic_types, parameters, return_type);
                 Some(ast::typ(typ))
-            },
+            }
             _ => return Ok(None),
         };
 
-        if base_typ_expr.is_none() { 
-            return Ok(None); 
-        }
-        let mut final_expr = base_typ_expr.unwrap();
+        let mut final_expr = match base_typ_expr {
+            Some(expr) => expr,
+            None => return Ok(None),
+        };
 
         if self.match_lookahead_type(|t| t == &Token::QuestionMark) {
             self.eat_token(&Token::QuestionMark)?;
@@ -983,57 +1053,38 @@ impl<'source> Parser<'source> {
             "string" => Type::String,
             "bool" => Type::Boolean,
             "symbol" => Type::Symbol,
-            "result" => {
-                self.generic_two_types_expression(
-                    "Ok result type", 
-                    "Error result type", 
-                    |a, b| Type::Result(a, b)
-                )?
-            },
+            "result" => self.generic_two_types_expression(
+                "Ok result type",
+                "Error result type",
+                Type::Result,
+            )?,
             "map" => {
-                self.generic_two_types_expression(
-                    "Map key type",
-                    "Map value type",
-                    |a, b| Type::Map(a, b)
-                )?
-            },
-            "future" => {
-                self.generic_one_type_expression(
-                    "Future result type",
-                    |inner| Type::Future(inner)
-                )?
+                self.generic_two_types_expression("Map key type", "Map value type", Type::Map)?
             }
-            "list" => {
-                self.generic_one_type_expression(
-                    "List element type",
-                    |inner| Type::List(inner)
-                )?
-            }
-            "set" => {
-                self.generic_one_type_expression(
-                    "Set element type",
-                    |inner| Type::Set(inner)
-                )?
-            },
+            "future" => self.generic_one_type_expression("Future result type", Type::Future)?,
+            "list" => self.generic_one_type_expression("List element type", Type::List)?,
+            "set" => self.generic_one_type_expression("Set element type", Type::Set)?,
             "tuple" => {
                 let inner = self.multiple_element_type_expressions(
                     "Tuple item type",
                     &Token::LessThan,
-                    &Token::GreaterThan
+                    &Token::GreaterThan,
                 )?;
                 Type::Tuple(inner)
             }
             "fn" => {
                 // fn<T>(int) int
                 let generic_types = self.generic_types_expression()?;
-                
+
                 // Parse parameter types, not full parameters
                 self.eat_token(&Token::LParen)?;
                 let mut parameters = Vec::new();
                 if !self.lookahead_is_rparen() {
                     loop {
-                        if self.lookahead_is_rparen() { break; }
-                        
+                        if self.lookahead_is_rparen() {
+                            break;
+                        }
+
                         // In function type, we only have types, not names
                         // But wait, the AST for Function type uses `Vec<Parameter>`?
                         // Let's check `ast.rs`.
@@ -1045,24 +1096,26 @@ impl<'source> Parser<'source> {
                         // The parser test `test_function_type_as_return_type` uses `fn() int`.
                         // The failing test `test_lambda_as_argument` uses `fn(int) int`.
                         // So it seems we support unnamed parameters in function types.
-                        
+
                         // Let's try to parse a type expression first.
                         if let Some(typ) = self.type_expression()? {
-                             // It's a type. Create a dummy parameter.
-                             parameters.push(Parameter {
-                                 name: "".to_string(),
-                                 typ: Box::new(typ),
-                                 guard: None,
-                                 default_value: None
-                             });
+                            // It's a type. Create a dummy parameter.
+                            parameters.push(Parameter {
+                                name: "".to_string(),
+                                typ: Box::new(typ),
+                                guard: None,
+                                default_value: None,
+                            });
                         } else {
-                             return Err(self.error_missing_type_expression());
+                            return Err(self.error_missing_type_expression());
                         }
 
                         if self.lookahead_is_comma() {
                             self.eat_token(&Token::Comma)?;
                             // Allow trailing comma
-                            if self.lookahead_is_rparen() { break; }
+                            if self.lookahead_is_rparen() {
+                                break;
+                            }
                         } else {
                             break;
                         }
@@ -1073,43 +1126,42 @@ impl<'source> Parser<'source> {
                 let return_type = self.return_type_expression()?;
                 Type::Function(generic_types, parameters, return_type)
             }
-            _ => {
-                match &self._lookahead {
-                    Some((Token::LessThan, _)) => {
-                        let inner = self.multiple_element_type_expressions(
-                            "Generic type",
-                            &Token::LessThan,
-                            &Token::GreaterThan
-                        )?;
-                        Type::Custom(type_name, Some(inner))
-                    },
-                    _ => Type::Custom(type_name, None),
+            _ => match &self._lookahead {
+                Some((Token::LessThan, _)) => {
+                    let inner = self.multiple_element_type_expressions(
+                        "Generic type",
+                        &Token::LessThan,
+                        &Token::GreaterThan,
+                    )?;
+                    Type::Custom(type_name, Some(inner))
                 }
+                _ => Type::Custom(type_name, None),
             },
         })
     }
-    
+
     fn identifier_to_type_name(&mut self) -> Result<String, SyntaxError> {
         Ok(match self.identifier()?.node {
             ExpressionKind::Identifier(id, Some(class)) => format!("{}::{}", class, id), // Reconstruct the full path
             ExpressionKind::Identifier(id, None) => id,
-            _ => return Err(
-                self.error_unexpected_token("identifier", &self.lookahead_as_string())
-            ),
+            _ => return Err(self.error_unexpected_token("identifier", &self.lookahead_as_string())),
         })
     }
-    
+
     fn element_type_expression(&mut self, expected: &str) -> Result<Expression, SyntaxError> {
         let element_type = match self.type_expression()? {
             Some(typ) => typ,
-            None => return Err(
-                self.error_invalid_type_declaration(expected)
-            ),
+            None => return Err(self.error_invalid_type_declaration(expected)),
         };
         Ok(element_type)
     }
 
-    fn multiple_element_type_expressions(&mut self, expected: &str, left_token: &Token, right_token: &Token) -> Result<Vec<Expression>, SyntaxError> {
+    fn multiple_element_type_expressions(
+        &mut self,
+        expected: &str,
+        left_token: &Token,
+        right_token: &Token,
+    ) -> Result<Vec<Expression>, SyntaxError> {
         self.eat_token(left_token)?;
 
         let element_type = self.element_type_expression(expected)?;
@@ -1131,8 +1183,13 @@ impl<'source> Parser<'source> {
         Ok(elements)
     }
 
-    fn generic_one_type_expression<F>(&mut self, expected: &str, create_type: F) -> Result<Type, SyntaxError> 
-        where F: FnOnce(Box<Expression>) -> Type
+    fn generic_one_type_expression<F>(
+        &mut self,
+        expected: &str,
+        create_type: F,
+    ) -> Result<Type, SyntaxError>
+    where
+        F: FnOnce(Box<Expression>) -> Type,
     {
         self.eat_token(&Token::LessThan)?;
         let inner_type = self.element_type_expression(expected)?;
@@ -1140,8 +1197,14 @@ impl<'source> Parser<'source> {
         Ok(create_type(Box::new(inner_type)))
     }
 
-    fn generic_two_types_expression<F>(&mut self, expected_a: &str, expected_b: &str, create_type: F) -> Result<Type, SyntaxError> 
-        where F: FnOnce(Box<Expression>, Box<Expression>) -> Type
+    fn generic_two_types_expression<F>(
+        &mut self,
+        expected_a: &str,
+        expected_b: &str,
+        create_type: F,
+    ) -> Result<Type, SyntaxError>
+    where
+        F: FnOnce(Box<Expression>, Box<Expression>) -> Type,
     {
         self.eat_token(&Token::LessThan)?;
         let a_type = self.element_type_expression(expected_a)?;
@@ -1169,7 +1232,6 @@ impl<'source> Parser<'source> {
         Ok(ast::use_statement(import_path, alias))
     }
 
-
     /*
         TypeStatement
             : 'type' TypeDeclaration, (',' TypeDeclaration)*
@@ -1195,11 +1257,9 @@ impl<'source> Parser<'source> {
         match name.node {
             ExpressionKind::Identifier(_, Some(_)) => {
                 Err(self.error_invalid_inheritance_identifier())
-            },
-            ExpressionKind::Identifier(_, None) => {
-                Ok(name)
-            },
-            _ => Err(self.error_unexpected_token("identifier", format!("{:?}", name).as_str()))
+            }
+            ExpressionKind::Identifier(_, None) => Ok(name),
+            _ => Err(self.error_unexpected_token("identifier", format!("{:?}", name).as_str())),
         }
     }
 
@@ -1271,23 +1331,30 @@ impl<'source> Parser<'source> {
             Some((Token::Includes, _)) => {
                 self.eat_token(&Token::Includes)?;
                 TypeDeclarationKind::Includes
-            },
+            }
             Some((Token::Comma, _)) | Some((Token::ExpressionStatementEnd, _)) => {
                 // If we see a comma or the end of the statement, it means this is a continuation of a type declaration list
                 return Ok(ast::type_declaration_expression(
-                    name, 
-                    generic_types, 
-                    TypeDeclarationKind::None, 
-                    None)
-                );
+                    name,
+                    generic_types,
+                    TypeDeclarationKind::None,
+                    None,
+                ));
             }
-            _ => return Err(self.error_unexpected_token("is, implements, includes or extends", &self.lookahead_as_string())),
+            _ => {
+                return Err(self.error_unexpected_token(
+                    "is, implements, includes or extends",
+                    &self.lookahead_as_string(),
+                ))
+            }
         };
-        let type_expr = match self.type_expression()? {
-            Some(typ) => Some(Box::new(typ)),
-            None => None,
-        };
-        Ok(ast::type_declaration_expression(name, generic_types, kind, type_expr))
+        let type_expr = self.type_expression()?.map(Box::new);
+        Ok(ast::type_declaration_expression(
+            name,
+            generic_types,
+            kind,
+            type_expr,
+        ))
     }
 
     /*
@@ -1328,7 +1395,9 @@ impl<'source> Parser<'source> {
         Ok(ast::import_path_expression(segments, kind))
     }
 
-    fn multi_import_segment(&mut self) -> Result<(Expression, Option<Box<Expression>>), SyntaxError> {
+    fn multi_import_segment(
+        &mut self,
+    ) -> Result<(Expression, Option<Box<Expression>>), SyntaxError> {
         let path = self.identifier()?;
         let alias = if self.match_lookahead_type(|t| t == &Token::As) {
             self.eat_token(&Token::As)?;
@@ -1407,9 +1476,14 @@ impl<'source> Parser<'source> {
             None
         };
 
-        let span = expression.span.start..(if let Some(ref e) = else_branch { e.span.end } else { condition.span.end });
-        let expression = ast::conditional_with_span(expression, condition, else_branch, if_statement_type, span);
-        
+        let span = expression.span.start..(if let Some(ref e) = else_branch {
+            e.span.end
+        } else {
+            condition.span.end
+        });
+        let expression =
+            ast::conditional_with_span(expression, condition, else_branch, if_statement_type, span);
+
         Ok(expression)
     }
 
@@ -1434,9 +1508,7 @@ impl<'source> Parser<'source> {
                 Token::AssignMul => AssignmentOp::AssignMul,
                 Token::AssignDiv => AssignmentOp::AssignDiv,
                 Token::AssignMod => AssignmentOp::AssignMod,
-                _ => return Err(
-                    self.error_unexpected_operator(token, "=, +=, -=, *=, /=, %=")
-                ),
+                _ => return Err(self.error_unexpected_operator(token, "=, +=, -=, *=, /=, %=")),
             },
             Err(err) => return Err(err),
         };
@@ -1448,24 +1520,17 @@ impl<'source> Parser<'source> {
                     return Err(self.error_invalid_left_hand_side_expression());
                 }
                 ast::lhs_identifier_from_expr(left)
-            },
+            }
             ExpressionKind::Member(_, _) => ast::lhs_member_from_expr(left),
             ExpressionKind::Index(_, _) => ast::lhs_index_from_expr(left),
             // Other left-hand side expression types can be added here in the future
-            _ => return Err(
-                self.error_invalid_left_hand_side_expression()
-            ),
+            _ => return Err(self.error_invalid_left_hand_side_expression()),
         };
 
         let right = self.assignment_expression()?;
 
         let span = left.span().start..right.span.end;
-        let assignment_expression = ast::assign_with_span(
-            left,
-            op,
-            right,
-            span
-        );
+        let assignment_expression = ast::assign_with_span(left, op, right, span);
 
         Ok(assignment_expression)
     }
@@ -1486,7 +1551,7 @@ impl<'source> Parser<'source> {
             Self::additive_expression,
             is_relational_op,
             Self::eat_relational_op,
-            |l, op, r, span| ast::binary_with_span(l, op, r, span)
+            ast::binary_with_span,
         )
     }
 
@@ -1504,13 +1569,13 @@ impl<'source> Parser<'source> {
             Self::relational_expression,
             is_equality_op,
             Self::eat_equality_op,
-            |l, op, r, span| ast::binary_with_span(l, op, r, span)
+            ast::binary_with_span,
         )
     }
 
     /*
         x and y
-    
+
         LogicalAndExpression
             : EqualityExpression AND LogicalAndExpression
             | EqualityExpression
@@ -1521,13 +1586,13 @@ impl<'source> Parser<'source> {
             Self::equality_expression,
             is_logical_and_op,
             Self::eat_logical_and_op,
-            |l, op, r, span| ast::logical_with_span(l, op, r, span)
+            ast::logical_with_span,
         )
     }
 
     /*
         x or y
-    
+
         LogicalOrExpression
             : LogicalAndExpression OR LogicalOrExpression
             | LogicalOrExpression
@@ -1538,7 +1603,7 @@ impl<'source> Parser<'source> {
             Self::logical_and_expression,
             is_logical_or_op,
             Self::eat_logical_or_op,
-            |l, op, r, span| ast::logical_with_span(l, op, r, span)
+            ast::logical_with_span,
         )
     }
 
@@ -1573,19 +1638,19 @@ impl<'source> Parser<'source> {
                     let property = self.identifier()?;
                     let span = expression.span.start..property.span.end;
                     ast::member_with_span(expression, property, span)
-                },
+                }
                 Some((Token::LBracket, _)) => {
                     self.eat_token(&Token::LBracket)?;
                     let index = self.expression()?;
                     let (_, rbracket_span) = self.eat_token(&Token::RBracket)?;
                     let span = expression.span.start..rbracket_span.end;
                     ast::index_with_span(expression, index, span)
-                },
+                }
                 Some((Token::LParen, _)) => {
                     let (args, rparen_span) = self.arguments()?;
                     let span = expression.span.start..rparen_span.end;
                     ast::call_with_span(expression, args, span)
-                },
+                }
                 _ => break,
             };
         }
@@ -1648,15 +1713,17 @@ impl<'source> Parser<'source> {
                         self.eat_token(&Token::DoubleColon)?;
                         let (_, second_span) = self.eat_token(&Token::Identifier)?;
 
-                        (self.source[second_span.start..second_span.end].to_string(), Some(self.source[span.start..span.end].to_string()), span.start..second_span.end)
-                    },
+                        (
+                            self.source[second_span.start..second_span.end].to_string(),
+                            Some(self.source[span.start..span.end].to_string()),
+                            span.start..second_span.end,
+                        )
+                    }
                     _ => (self.source[span.start..span.end].to_string(), None, span),
                 };
                 Ok(ast::identifier_with_class_and_span(&name, class, full_span))
-            },
-            _ => Err(
-                self.error_unexpected_lookahead_token("identifier")
-            ),
+            }
+            _ => Err(self.error_unexpected_lookahead_token("identifier")),
         }
     }
 
@@ -1671,7 +1738,7 @@ impl<'source> Parser<'source> {
             Self::multiplicative_expression,
             is_additive_op,
             Self::eat_additive_op,
-            |l, op, r, span| ast::binary_with_span(l, op, r, span)
+            ast::binary_with_span,
         )
     }
 
@@ -1686,16 +1753,17 @@ impl<'source> Parser<'source> {
             Self::unary_expression,
             is_multiplicative_op,
             Self::eat_multiplicative_op,
-            |l, op, r, span| ast::binary_with_span(l, op, r, span)
+            ast::binary_with_span,
         )
     }
 
-    fn _binary_expression<F, G, E>(&mut self,
-            mut create_branch: F,
-            op_predicate: fn(&Token) -> bool,
-            mut eat_op: G,
-            mut create_expression: E
-        ) -> Result<Expression, SyntaxError> 
+    fn _binary_expression<F, G, E>(
+        &mut self,
+        mut create_branch: F,
+        op_predicate: fn(&Token) -> bool,
+        mut eat_op: G,
+        mut create_expression: E,
+    ) -> Result<Expression, SyntaxError>
     where
         F: FnMut(&mut Self) -> Result<Expression, SyntaxError>,
         G: FnMut(&mut Self) -> Result<BinaryOp, Result<Expression, SyntaxError>>,
@@ -1731,15 +1799,25 @@ impl<'source> Parser<'source> {
             Some((Token::Plus, _)) => self.create_unary_expression(&Token::Plus, UnaryOp::Plus),
             Some((Token::Minus, _)) => self.create_unary_expression(&Token::Minus, UnaryOp::Negate),
             Some((Token::Not, _)) => self.create_unary_expression(&Token::Not, UnaryOp::Not),
-            Some((Token::Tilde, _)) => self.create_unary_expression(&Token::Tilde, UnaryOp::BitwiseNot),
-            Some((Token::Decrement, _)) => self.create_unary_expression(&Token::Decrement, UnaryOp::Decrement),
-            Some((Token::Increment, _)) => self.create_unary_expression(&Token::Increment, UnaryOp::Increment),
+            Some((Token::Tilde, _)) => {
+                self.create_unary_expression(&Token::Tilde, UnaryOp::BitwiseNot)
+            }
+            Some((Token::Decrement, _)) => {
+                self.create_unary_expression(&Token::Decrement, UnaryOp::Decrement)
+            }
+            Some((Token::Increment, _)) => {
+                self.create_unary_expression(&Token::Increment, UnaryOp::Increment)
+            }
             Some((Token::Await, _)) => self.create_unary_expression(&Token::Await, UnaryOp::Await),
             _ => self.left_hand_side_expression(),
         }
     }
 
-    fn create_unary_expression(&mut self, token: &Token, op: UnaryOp) -> Result<Expression, SyntaxError> {
+    fn create_unary_expression(
+        &mut self,
+        token: &Token,
+        op: UnaryOp,
+    ) -> Result<Expression, SyntaxError> {
         let (_, span) = self.eat_token(token)?;
         let operand = self.unary_expression()?;
         let full_span = span.start..operand.span.end;
@@ -1767,14 +1845,12 @@ impl<'source> Parser<'source> {
             Some((Token::Identifier, _)) => self.identifier(),
             Some((Token::Async, _)) | Some((Token::Fn, _)) | Some((Token::Gpu, _)) => {
                 self.lambda_expression()
-            },
+            }
             Some((Token::LBracket, _)) => self.list_literal_expression(),
             Some((Token::LBrace, _)) => self.brace_expression(),
             Some((Token::Match, _)) => self.match_expression(),
             Some((Token::FormattedStringStart(_), _)) => self.formatted_string_expression(),
-            _ => Err(
-                self.error_unexpected_lookahead_token("an expression")
-            ),
+            _ => Err(self.error_unexpected_lookahead_token("an expression")),
         }
     }
 
@@ -1790,14 +1866,10 @@ impl<'source> Parser<'source> {
         if let Some((Token::FormattedStringStart(start_text), _)) = self._lookahead.clone() {
             self.eat(
                 |t| matches!(t, Token::FormattedStringStart(_)),
-                start_token_str
+                start_token_str,
             )?;
             if !start_text.is_empty() {
-                parts.push(
-                    ast::literal(
-                        ast::string_literal(&start_text)
-                    )
-                );
+                parts.push(ast::literal(ast::string_literal(&start_text)));
             }
         } else {
             return Err(self.error_unexpected_lookahead_token(start_token_str));
@@ -1809,26 +1881,18 @@ impl<'source> Parser<'source> {
             if let Some((Token::FormattedStringMiddle(middle_text), _)) = self._lookahead.clone() {
                 self.eat(
                     |t| matches!(t, Token::FormattedStringMiddle(_)),
-                    &token_to_string(&Token::FormattedStringMiddle("".to_string()))
+                    &token_to_string(&Token::FormattedStringMiddle("".to_string())),
                 )?;
                 if !middle_text.is_empty() {
-                    parts.push(
-                        ast::literal(
-                            ast::string_literal(&middle_text)
-                        )
-                    );
+                    parts.push(ast::literal(ast::string_literal(&middle_text)));
                 }
             } else if let Some((Token::FormattedStringEnd(end_text), _)) = self._lookahead.clone() {
                 self.eat(
                     |t| matches!(t, Token::FormattedStringEnd(_)),
-                    &token_to_string(&Token::FormattedStringEnd("".to_string()))
+                    &token_to_string(&Token::FormattedStringEnd("".to_string())),
                 )?;
                 if !end_text.is_empty() {
-                    parts.push(
-                        ast::literal(
-                            ast::string_literal(&end_text)
-                        )
-                    );
+                    parts.push(ast::literal(ast::string_literal(&end_text)));
                 }
                 break; // End of the f-string
             } else {
@@ -1865,7 +1929,9 @@ impl<'source> Parser<'source> {
                 self.eat_token(&Token::Dedent)?;
             }
         } else {
-            return Err(self.error_unexpected_lookahead_token("':' for an inline match or a new line for a block match"));
+            return Err(self.error_unexpected_lookahead_token(
+                "':' for an inline match or a new line for a block match",
+            ));
         }
 
         if branches.is_empty() {
@@ -1899,7 +1965,9 @@ impl<'source> Parser<'source> {
     fn match_branch_list(&mut self, inline_mode: bool) -> Result<Vec<MatchBranch>, SyntaxError> {
         let mut branches = vec![self.match_branch()?];
 
-        while (inline_mode && self.lookahead_is_comma()) || (!inline_mode && self._lookahead.is_some() && !self.lookahead_is_dedent()) {
+        while (inline_mode && self.lookahead_is_comma())
+            || (!inline_mode && self._lookahead.is_some() && !self.lookahead_is_dedent())
+        {
             if inline_mode {
                 self.eat_token(&Token::Comma)?;
             }
@@ -1928,13 +1996,15 @@ impl<'source> Parser<'source> {
             None
         };
 
-        let body_parsing_error = self.error_unexpected_lookahead_token("a colon for an inline body or an indented block for a block body");
+        let body_parsing_error = self.error_unexpected_lookahead_token(
+            "a colon for an inline body or an indented block for a block body",
+        );
         let body = match &self._lookahead {
             Some((Token::Colon, _)) => {
                 self.eat_token(&Token::Colon)?;
                 let expr = self.expression()?;
                 ast::expression_statement(expr)
-            },
+            }
             Some((Token::ExpressionStatementEnd, _)) => {
                 self.eat_expression_end()?;
                 if self.lookahead_is_indent() {
@@ -1942,12 +2012,16 @@ impl<'source> Parser<'source> {
                 } else {
                     return Err(body_parsing_error);
                 }
-            },
+            }
             _ => return Err(body_parsing_error),
         };
         self.try_eat_expression_end();
 
-        Ok(MatchBranch { patterns, guard, body: Box::new(body) })
+        Ok(MatchBranch {
+            patterns,
+            guard,
+            body: Box::new(body),
+        })
     }
 
     /*
@@ -1963,11 +2037,11 @@ impl<'source> Parser<'source> {
             Some((Token::Default, _)) => {
                 self.eat_token(&Token::Default)?;
                 Ok(Pattern::Default)
-            },
+            }
             Some((Token::Identifier, _)) => {
                 let name = self.parse_simple_identifier()?;
                 Ok(Pattern::Identifier(name))
-            },
+            }
             Some((Token::LParen, _)) => self.tuple_pattern(),
             Some((Token::Regex(_), _)) => {
                 if let Literal::Regex(regex_token) = self.regex_literal()? {
@@ -1980,7 +2054,8 @@ impl<'source> Parser<'source> {
                 let literal = self.literal()?;
                 Ok(Pattern::Literal(literal))
             }
-            _ => Err(self.error_unexpected_lookahead_token("a pattern (literal, identifier, or default)"))
+            _ => Err(self
+                .error_unexpected_lookahead_token("a pattern (literal, identifier, or default)")),
         }
     }
 
@@ -1996,7 +2071,9 @@ impl<'source> Parser<'source> {
             patterns.push(self.pattern()?);
             while self.lookahead_is_comma() {
                 self.eat_token(&Token::Comma)?;
-                if self.lookahead_is_rparen() { break; } // Allow trailing comma
+                if self.lookahead_is_rparen() {
+                    break;
+                } // Allow trailing comma
                 patterns.push(self.pattern()?);
             }
         }
@@ -2052,7 +2129,9 @@ impl<'source> Parser<'source> {
 
             while self.lookahead_is_comma() {
                 self.eat_token(&Token::Comma)?;
-                if self.match_lookahead_type(|t| t == &Token::RBrace) { break; } // Trailing comma
+                if self.match_lookahead_type(|t| t == &Token::RBrace) {
+                    break;
+                } // Trailing comma
                 let key = self.expression()?;
                 self.eat_token(&Token::Colon)?;
                 let value = self.expression()?;
@@ -2065,7 +2144,7 @@ impl<'source> Parser<'source> {
             let mut elements = vec![first_expr];
             while self.lookahead_is_comma() {
                 self.eat_token(&Token::Comma)?;
-                if self.match_lookahead_type(|t| t == &Token::RBrace) { 
+                if self.match_lookahead_type(|t| t == &Token::RBrace) {
                     break;
                 } // Trailing comma
                 elements.push(self.expression()?);
@@ -2085,7 +2164,7 @@ impl<'source> Parser<'source> {
         let mut properties = FunctionProperties {
             is_async: false,
             is_gpu: false,
-            visibility: MemberVisibility::Public
+            visibility: MemberVisibility::Public,
         };
 
         while self.lookahead_is_function_modifier() {
@@ -2093,28 +2172,30 @@ impl<'source> Parser<'source> {
                 Some((Token::Async, _)) => {
                     self.eat_token(&Token::Async)?;
                     properties.is_async = true;
-                },
+                }
                 Some((Token::Gpu, _)) => {
                     self.eat_token(&Token::Gpu)?;
                     properties.is_gpu = true;
-                },
+                }
                 _ => break,
             }
         }
-        
+
         self.eat_token(&Token::Fn)?;
 
         let generic_types = self.generic_types_expression()?;
         let parameters = self.function_params_expression()?;
         let return_type = self.return_type_expression()?;
 
-        let body_parsing_error = self.error_unexpected_lookahead_token("a colon for an inline body or an indented block for a block body");
+        let body_parsing_error = self.error_unexpected_lookahead_token(
+            "a colon for an inline body or an indented block for a block body",
+        );
         let body = match &self._lookahead {
             Some((Token::Colon, _)) => {
                 self.eat_token(&Token::Colon)?;
                 let expr = self.expression()?;
                 ast::expression_statement(expr)
-            },
+            }
             Some((Token::ExpressionStatementEnd, _)) => {
                 self.eat_expression_end()?;
                 if self.lookahead_is_indent() {
@@ -2124,7 +2205,7 @@ impl<'source> Parser<'source> {
                 } else {
                     return Err(body_parsing_error);
                 }
-            },
+            }
             _ => return Err(body_parsing_error),
         };
 
@@ -2216,22 +2297,20 @@ impl<'source> Parser<'source> {
             Some((Token::String, _)) => self.string_literal(),
             Some((Token::Symbol, _)) => self.symbol_literal(),
             Some((Token::Regex(_), _)) => self.regex_literal(),
-            Some((Token::FormattedStringStart(_), _)) |
-            Some((Token::FormattedStringMiddle(_), _)) |
-            Some((Token::FormattedStringEnd(_), _)) => {
+            Some((Token::FormattedStringStart(_), _))
+            | Some((Token::FormattedStringMiddle(_), _))
+            | Some((Token::FormattedStringEnd(_), _)) => {
                 // These are handled by formatted_string_expression, not here.
                 Err(self.error_unexpected_lookahead_token("a literal"))
             }
             Some((token, span)) => {
                 let token_text = &self.source[span.start..span.end];
-                Err(
-                    self.error_unexpected_token_with_span(
-                        "a valid literal", 
-                        &format!("{:?} with value '{}'", token, token_text),
-                        span.clone()
-                    )
-                )
-            },
+                Err(self.error_unexpected_token_with_span(
+                    "a valid literal",
+                    &format!("{:?} with value '{}'", token, token_text),
+                    span.clone(),
+                ))
+            }
             None => Err(self.error_eof()),
         }
     }
@@ -2245,13 +2324,13 @@ impl<'source> Parser<'source> {
         match self.eat_token(token_type) {
             Ok(token) => {
                 let str_value = &self.source[token.1.start..token.1.end].replace("_", ""); // Remove underscores
-                
+
                 // Parse the value based on the token type
                 let value = match token_type {
                     Token::Int => str_value.parse::<i128>().map_err(|_| {
                         SyntaxError::new(
                             SyntaxErrorKind::InvalidIntegerLiteral,
-                            token.1.start..token.1.end
+                            token.1.start..token.1.end,
                         )
                     })?,
                     Token::BinaryNumber => {
@@ -2259,41 +2338,41 @@ impl<'source> Parser<'source> {
                         i128::from_str_radix(&str_value[2..], 2).map_err(|_| {
                             SyntaxError::new(
                                 SyntaxErrorKind::InvalidBinaryLiteral,
-                                token.1.start..token.1.end
+                                token.1.start..token.1.end,
                             )
                         })?
-                    },
+                    }
                     Token::HexNumber => {
                         // Strip "0x" prefix and parse as base 16
                         i128::from_str_radix(&str_value[2..], 16).map_err(|_| {
                             SyntaxError::new(
                                 SyntaxErrorKind::InvalidHexLiteral,
-                                token.1.start..token.1.end
+                                token.1.start..token.1.end,
                             )
                         })?
-                    },
+                    }
                     Token::OctalNumber => {
                         // Strip "0o" prefix and parse as base 8
                         i128::from_str_radix(&str_value[2..], 8).map_err(|_| {
                             SyntaxError::new(
                                 SyntaxErrorKind::InvalidOctalLiteral,
-                                token.1.start..token.1.end
+                                token.1.start..token.1.end,
                             )
                         })?
-                    },
-                    _ => return Err(
-                        SyntaxError::new(
+                    }
+                    _ => {
+                        return Err(SyntaxError::new(
                             SyntaxErrorKind::UnexpectedToken {
                                 expected: "integer literal".to_string(),
                                 found: format!("{:?}", token_type),
                             },
-                            token.1.start..token.1.end
-                        )
-                    ),
+                            token.1.start..token.1.end,
+                        ))
+                    }
                 };
-                
+
                 Ok(ast::int_literal(value))
-            },
+            }
             Err(e) => Err(e),
         }
     }
@@ -2308,27 +2387,20 @@ impl<'source> Parser<'source> {
             Ok(token) => {
                 let err = SyntaxError::new(
                     SyntaxErrorKind::InvalidFloatLiteral,
-                    token.1.start..token.1.end
+                    token.1.start..token.1.end,
                 );
                 let str_value = &self.source[token.1.start..token.1.end].replace("_", ""); // Remove underscores
-                let f32_value = str_value.parse::<f32>().map_err(|_| { err.clone() })?;
+                let f32_value = str_value.parse::<f32>().map_err(|_| err.clone())?;
                 let uses_exponent = str_value.contains('e') || str_value.contains('E');
                 let f32_str = if uses_exponent {
                     // Count digits after the decimal in the significand (before 'e')
-                    let significand = str_value
-                        .split(|c| c == 'e' || c == 'E')
-                        .next()
-                        .unwrap_or("");
-                    let decimal_digits = significand
-                        .split('.')
-                        .nth(1)
-                        .unwrap_or("")
-                        .len();
+                    let significand = str_value.split(['e', 'E']).next().unwrap_or("");
+                    let decimal_digits = significand.split('.').nth(1).unwrap_or("").len();
                     format!("{:.1$e}", f32_value, decimal_digits)
                 } else {
                     let part_after_dot_len = str_value.split('.').nth(1).unwrap_or("").len();
                     format!("{:.1$}", f32_value, part_after_dot_len)
-                };                
+                };
 
                 fn normalize(s: &str) -> String {
                     let s = s.to_lowercase();
@@ -2349,14 +2421,14 @@ impl<'source> Parser<'source> {
                     Ok(ast::float32_literal(f32_value))
                 } else {
                     // Otherwise, parse as f64
-                    let f64_value = str_value.parse::<f64>().map_err(|_| { err.clone() })?;
+                    let f64_value = str_value.parse::<f64>().map_err(|_| err.clone())?;
                     if f64_value.is_finite() {
                         Ok(ast::float64_literal(f64_value))
                     } else {
                         Err(err)
                     }
                 }
-            },
+            }
             Err(e) => Err(e),
         }
     }
@@ -2371,7 +2443,7 @@ impl<'source> Parser<'source> {
         match self.eat_token(&Token::String) {
             Ok(token) => {
                 let mut str_value = &self.source[token.1.start..token.1.end];
-                
+
                 // Strings that come from f-string expressions will have escaped quotes.
                 if str_value.starts_with('\\') {
                     str_value = &str_value[2..str_value.len() - 1];
@@ -2381,7 +2453,7 @@ impl<'source> Parser<'source> {
 
                 let literal = ast::string_literal(str_value);
                 Ok(literal)
-            },
+            }
             Err(e) => Err(e),
         }
     }
@@ -2399,15 +2471,15 @@ impl<'source> Parser<'source> {
                 let literal = match str_value {
                     "true" => ast::boolean(true),
                     "false" => ast::boolean(false),
-                    _ => return Err(
-                        SyntaxError::new(
+                    _ => {
+                        return Err(SyntaxError::new(
                             SyntaxErrorKind::InvalidBooleanLiteral,
-                            token.1.start..token.1.end
-                        )
-                    ),
+                            token.1.start..token.1.end,
+                        ))
+                    }
                 };
                 Ok(literal)
-            },
+            }
             Err(e) => Err(e),
         }
     }
@@ -2423,7 +2495,7 @@ impl<'source> Parser<'source> {
                 let str_value = &self.source[token.1.start + 1..token.1.end]; // Remove leading colon
                 let literal = ast::symbol(str_value);
                 Ok(literal)
-            },
+            }
             Err(e) => Err(e),
         }
     }
@@ -2443,7 +2515,11 @@ impl<'source> Parser<'source> {
         }
     }
 
-    fn eat(&mut self, expected: impl Fn(&Token) -> bool, expected_str: &str) -> Result<TokenSpan, SyntaxError> {
+    fn eat(
+        &mut self,
+        expected: impl Fn(&Token) -> bool,
+        expected_str: &str,
+    ) -> Result<TokenSpan, SyntaxError> {
         let token = &self._lookahead;
 
         match token {
@@ -2451,18 +2527,14 @@ impl<'source> Parser<'source> {
                 let result = (t.clone(), span.clone());
                 self._lookahead = self.lexer.next().transpose()?;
                 Ok(result)
-            },
-            Some((found, _)) => {
-                Err(
-                    SyntaxError::new(
-                    SyntaxErrorKind::UnexpectedToken {
-                        expected: expected_str.to_string(),
-                        found: token_to_string(found),
-                    },
-                    self.source.len()..self.source.len()
-                    )
-                )
-            },
+            }
+            Some((found, _)) => Err(SyntaxError::new(
+                SyntaxErrorKind::UnexpectedToken {
+                    expected: expected_str.to_string(),
+                    found: token_to_string(found),
+                },
+                self.source.len()..self.source.len(),
+            )),
             None => {
                 if expected(&Token::ExpressionStatementEnd) {
                     // Special case for end of expression
@@ -2471,7 +2543,7 @@ impl<'source> Parser<'source> {
                 }
 
                 Err(self.error_eof())
-            },
+            }
         }
     }
 
@@ -2480,7 +2552,7 @@ impl<'source> Parser<'source> {
     }
 
     fn eat_binary_op(&mut self, match_token: fn(&Token) -> bool) -> Result<TokenSpan, SyntaxError> {
-        self.eat(|t| match_token(t), "binary operator")
+        self.eat(match_token, "binary operator")
     }
 
     fn match_lookahead_type(&self, match_token: fn(&Token) -> bool) -> bool {
@@ -2524,7 +2596,9 @@ impl<'source> Parser<'source> {
     }
 
     fn lookahead_as_string(&self) -> String {
-        self._lookahead.as_ref().map_or("end of file".to_string(), |(t, _)| token_to_string(t))
+        self._lookahead
+            .as_ref()
+            .map_or("end of file".to_string(), |(t, _)| token_to_string(t))
     }
 
     fn lookahead_is_guard(&self) -> bool {
@@ -2563,9 +2637,7 @@ impl<'source> Parser<'source> {
                 Token::Pipe => BinaryOp::BitwiseOr,
                 Token::Ampersand => BinaryOp::BitwiseAnd,
                 Token::Caret => BinaryOp::BitwiseXor,
-                _ => return Err(
-                    Err(self.error_unexpected_operator(token, "+, -, |, &, ^"))
-                ),
+                _ => return Err(Err(self.error_unexpected_operator(token, "+, -, |, &, ^"))),
             },
             Err(err) => return Err(Err(err)),
         };
@@ -2579,9 +2651,7 @@ impl<'source> Parser<'source> {
                 Token::LessThanEqual => BinaryOp::LessThanEqual,
                 Token::GreaterThanEqual => BinaryOp::GreaterThanEqual,
                 Token::GreaterThan => BinaryOp::GreaterThan,
-                _ => return Err(
-                    Err(self.error_unexpected_operator(token, "<, <=, >, >="))
-                ),
+                _ => return Err(Err(self.error_unexpected_operator(token, "<, <=, >, >="))),
             },
             Err(err) => return Err(Err(err)),
         };
@@ -2593,9 +2663,7 @@ impl<'source> Parser<'source> {
             Ok(token) => match token.0 {
                 Token::Equal => BinaryOp::Equal,
                 Token::NotEqual => BinaryOp::NotEqual,
-                _ => return Err(
-                    Err(self.error_unexpected_operator(token, "=, !="))
-                ),
+                _ => return Err(Err(self.error_unexpected_operator(token, "=, !="))),
             },
             Err(err) => return Err(Err(err)),
         };
@@ -2606,9 +2674,7 @@ impl<'source> Parser<'source> {
         let op = match self.eat_binary_op(is_logical_and_op) {
             Ok(token) => match token.0 {
                 Token::And => BinaryOp::And,
-                _ => return Err(
-                    Err(self.error_unexpected_operator(token, "and"))
-                ),
+                _ => return Err(Err(self.error_unexpected_operator(token, "and"))),
             },
             Err(err) => return Err(Err(err)),
         };
@@ -2619,9 +2685,7 @@ impl<'source> Parser<'source> {
         let op = match self.eat_binary_op(is_logical_or_op) {
             Ok(token) => match token.0 {
                 Token::Or => BinaryOp::Or,
-                _ => return Err(
-                    Err(self.error_unexpected_operator(token, "or"))
-                ),
+                _ => return Err(Err(self.error_unexpected_operator(token, "or"))),
             },
             Err(err) => return Err(Err(err)),
         };
@@ -2634,9 +2698,7 @@ impl<'source> Parser<'source> {
                 Token::Star => BinaryOp::Mul,
                 Token::Slash => BinaryOp::Div,
                 Token::Percent => BinaryOp::Mod,
-                _ => return Err(
-                    Err(self.error_unexpected_operator(token, "*, /, %"))
-                ),
+                _ => return Err(Err(self.error_unexpected_operator(token, "*, /, %"))),
             },
             Err(err) => return Err(Err(err)),
         };
@@ -2661,13 +2723,15 @@ impl<'source> Parser<'source> {
             // Valid terminators that we consume.
             Some((Token::ExpressionStatementEnd, _)) => {
                 self.eat_expression_end()?;
-            },
+            }
             // Valid terminators that we DON'T consume, as they belong to other parsers.
-            None |
-            Some((Token::Dedent, _)) |
-            Some((Token::Else, _)) | Some((Token::While, _)) | Some((Token::Until, _)) => {
+            None
+            | Some((Token::Dedent, _))
+            | Some((Token::Else, _))
+            | Some((Token::While, _))
+            | Some((Token::Until, _)) => {
                 // Do nothing, the token is a valid boundary.
-            },
+            }
             // Anything else is an error.
             _ => {
                 return Err(self.error_unexpected_lookahead_token("an end of statement"));
@@ -2682,7 +2746,7 @@ impl<'source> Parser<'source> {
                 expected: expected.to_string(),
                 found: self.lookahead_as_string(),
             },
-            token.1.start..token.1.end
+            token.1.start..token.1.end,
         )
     }
 
@@ -2693,17 +2757,22 @@ impl<'source> Parser<'source> {
     fn error_invalid_inheritance_identifier(&self) -> SyntaxError {
         SyntaxError::new(
             SyntaxErrorKind::InvalidInheritanceIdentifier,
-            self.source.len()..self.source.len()
+            self.source.len()..self.source.len(),
         )
     }
 
-    fn error_unexpected_token_with_span(&self, expected: &str, found: &str, span: Span) -> SyntaxError {
+    fn error_unexpected_token_with_span(
+        &self,
+        expected: &str,
+        found: &str,
+        span: Span,
+    ) -> SyntaxError {
         SyntaxError::new(
             SyntaxErrorKind::UnexpectedToken {
                 expected: expected.to_string(),
                 found: found.to_string(),
             },
-            span
+            span,
         )
     }
 
@@ -2714,66 +2783,71 @@ impl<'source> Parser<'source> {
     fn error_missing_match_branches(&self) -> SyntaxError {
         SyntaxError::new(
             SyntaxErrorKind::MissingMatchBranches,
-            self.source.len()..self.source.len()
+            self.source.len()..self.source.len(),
         )
     }
 
     fn error_duplicate_match_pattern(&self) -> SyntaxError {
         SyntaxError::new(
             SyntaxErrorKind::DuplicateMatchPattern,
-            self.source.len()..self.source.len()
+            self.source.len()..self.source.len(),
         )
     }
 
     fn error_eof(&self) -> SyntaxError {
         SyntaxError::new(
             SyntaxErrorKind::UnexpectedEOF,
-            self.source.len()..self.source.len()
+            self.source.len()..self.source.len(),
         )
     }
 
     fn error_invalid_left_hand_side_expression(&self) -> SyntaxError {
         SyntaxError::new(
             SyntaxErrorKind::InvalidLeftHandSideExpression,
-            self.source.len()..self.source.len()
+            self.source.len()..self.source.len(),
         )
     }
 
     fn error_invalid_type_declaration(&self, expected: &str) -> SyntaxError {
         SyntaxError::new(
-            SyntaxErrorKind::InvalidTypeDeclaration { expected: expected.to_string() },
-            self.source.len()..self.source.len()
+            SyntaxErrorKind::InvalidTypeDeclaration {
+                expected: expected.to_string(),
+            },
+            self.source.len()..self.source.len(),
         )
     }
 
     fn error_missing_struct_member_type(&self) -> SyntaxError {
         SyntaxError::new(
             SyntaxErrorKind::MissingStructMemberType,
-            self.source.len()..self.source.len()
+            self.source.len()..self.source.len(),
         )
     }
 
     fn error_missing_members(&self, kind: SyntaxErrorKind) -> SyntaxError {
-        SyntaxError::new(
-            kind,
-            self.source.len()..self.source.len()
-        )
+        SyntaxError::new(kind, self.source.len()..self.source.len())
     }
 
     fn error_missing_type_expression(&self) -> SyntaxError {
         SyntaxError::new(
             SyntaxErrorKind::MissingTypeExpression,
-            self.source.len()..self.source.len()
+            self.source.len()..self.source.len(),
         )
     }
 }
 
 fn is_additive_op(token: &Token) -> bool {
-    matches!(token, Token::Plus | Token::Minus | Token::Pipe | Token::Ampersand | Token::Caret)
+    matches!(
+        token,
+        Token::Plus | Token::Minus | Token::Pipe | Token::Ampersand | Token::Caret
+    )
 }
 
 fn is_relational_op(token: &Token) -> bool {
-    matches!(token, Token::LessThan | Token::LessThanEqual | Token::GreaterThanEqual | Token::GreaterThan)
+    matches!(
+        token,
+        Token::LessThan | Token::LessThanEqual | Token::GreaterThanEqual | Token::GreaterThan
+    )
 }
 
 fn is_equality_op(token: &Token) -> bool {
@@ -2793,11 +2867,31 @@ fn is_multiplicative_op(token: &Token) -> bool {
 }
 
 fn is_assignment_op(token: &Token) -> bool {
-    matches!(token, Token::Assign | Token::AssignAdd | Token::AssignSub | Token::AssignMul | Token::AssignDiv | Token::AssignMod)
+    matches!(
+        token,
+        Token::Assign
+            | Token::AssignAdd
+            | Token::AssignSub
+            | Token::AssignMul
+            | Token::AssignDiv
+            | Token::AssignMod
+    )
 }
 
 fn is_literal(token: &Token) -> bool {
-    matches!(token, Token::Int | Token::BinaryNumber | Token::HexNumber | Token::OctalNumber | Token::Float | Token::True | Token::False | Token::String | Token::Symbol | Token::Regex(_))
+    matches!(
+        token,
+        Token::Int
+            | Token::BinaryNumber
+            | Token::HexNumber
+            | Token::OctalNumber
+            | Token::Float
+            | Token::True
+            | Token::False
+            | Token::String
+            | Token::Symbol
+            | Token::Regex(_)
+    )
 }
 
 fn is_colon(token: &Token) -> bool {
@@ -2825,7 +2919,16 @@ fn is_dedent(token: &Token) -> bool {
 }
 
 fn is_guard(token: &Token) -> bool {
-    matches!(token, Token::GreaterThan | Token::GreaterThanEqual | Token::LessThan | Token::LessThanEqual | Token::In | Token::Not | Token::NotEqual)
+    matches!(
+        token,
+        Token::GreaterThan
+            | Token::GreaterThanEqual
+            | Token::LessThan
+            | Token::LessThanEqual
+            | Token::In
+            | Token::Not
+            | Token::NotEqual
+    )
 }
 
 fn is_in(token: &Token) -> bool {

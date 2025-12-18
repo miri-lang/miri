@@ -1,96 +1,109 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
-use miri::ast::*;
-use miri::syntax_error::SyntaxErrorKind;
-use miri::ast_factory::*;
 use super::utils::*;
-
+use miri::ast::*;
+use miri::ast_factory::*;
+use miri::syntax_error::SyntaxErrorKind;
 
 #[test]
 fn test_type_alias_statement() {
-    parser_test("
+    parser_test(
+        "
 type MyInt is int
-", vec![
-        type_statement(vec![
-            type_declaration(
+",
+        vec![type_statement(
+            vec![type_declaration(
                 "MyInt",
                 None,
                 TypeDeclarationKind::Is,
-                opt_expr(typ(Type::Int))
-            )
-        ], MemberVisibility::Public)
-    ]);
+                opt_expr(typ(Type::Int)),
+            )],
+            MemberVisibility::Public,
+        )],
+    );
 }
 
 #[test]
 fn test_type_alias_complex() {
-    parser_test("
+    parser_test(
+        "
 type UserMap is {string: User?}
-", vec![
-        type_statement(vec![
-            type_declaration(
+",
+        vec![type_statement(
+            vec![type_declaration(
                 "UserMap",
                 None,
                 TypeDeclarationKind::Is,
                 opt_expr(typ(Type::Map(
                     Box::new(typ(Type::String)),
-                    Box::new(null_typ(Type::Custom("User".into(), None)))
-                )))
-            )
-        ], MemberVisibility::Public)
-    ]);
+                    Box::new(null_typ(Type::Custom("User".into(), None))),
+                ))),
+            )],
+            MemberVisibility::Public,
+        )],
+    );
 }
 
 #[test]
 fn test_type_parameter_unconstrained() {
-    parser_test("
+    parser_test(
+        "
 type T, U
-", vec![
-        type_statement(vec![
-            type_declaration("T", None, TypeDeclarationKind::None, None),
-            type_declaration("U", None, TypeDeclarationKind::None, None)
-        ], MemberVisibility::Public)
-    ]);
+",
+        vec![type_statement(
+            vec![
+                type_declaration("T", None, TypeDeclarationKind::None, None),
+                type_declaration("U", None, TypeDeclarationKind::None, None),
+            ],
+            MemberVisibility::Public,
+        )],
+    );
 }
 
 #[test]
 fn test_type_parameter_constrained() {
-    parser_test("
+    parser_test(
+        "
 type T extends SomeClass
-", vec![
-        type_statement(vec![
-            type_declaration(
+",
+        vec![type_statement(
+            vec![type_declaration(
                 "T",
                 None,
                 TypeDeclarationKind::Extends,
-                opt_expr(typ(Type::Custom("SomeClass".into(), None)))
-            )
-        ], MemberVisibility::Public)
-    ]);
+                opt_expr(typ(Type::Custom("SomeClass".into(), None))),
+            )],
+            MemberVisibility::Public,
+        )],
+    );
 }
 
 #[test]
 fn test_type_parameter_list_mixed() {
-    parser_test("
+    parser_test(
+        "
 type T, U extends Serializable, X implements IGraph
-", vec![
-        type_statement(vec![
-            type_declaration("T", None, TypeDeclarationKind::None, None),
-            type_declaration(
-                "U",
-                None,
-                TypeDeclarationKind::Extends,
-                opt_expr(typ(Type::Custom("Serializable".into(), None)))
-            ),
-            type_declaration(
-                "X",
-                None,
-                TypeDeclarationKind::Implements,
-                opt_expr(typ(Type::Custom("IGraph".into(), None)))
-            )
-        ], MemberVisibility::Public)
-    ]);
+",
+        vec![type_statement(
+            vec![
+                type_declaration("T", None, TypeDeclarationKind::None, None),
+                type_declaration(
+                    "U",
+                    None,
+                    TypeDeclarationKind::Extends,
+                    opt_expr(typ(Type::Custom("Serializable".into(), None))),
+                ),
+                type_declaration(
+                    "X",
+                    None,
+                    TypeDeclarationKind::Implements,
+                    opt_expr(typ(Type::Custom("IGraph".into(), None))),
+                ),
+            ],
+            MemberVisibility::Public,
+        )],
+    );
 }
 
 #[test]
@@ -100,7 +113,7 @@ fn test_error_type_statement_missing_keyword() {
         &SyntaxErrorKind::UnexpectedToken {
             expected: "is, implements, includes or extends".to_string(),
             found: "identifier".to_string(),
-        }
+        },
     );
 }
 
@@ -111,7 +124,7 @@ fn test_error_type_statement_trailing_comma() {
         &SyntaxErrorKind::UnexpectedToken {
             expected: "identifier".to_string(),
             found: "end of file".to_string(),
-        }
+        },
     );
 }
 
@@ -122,35 +135,38 @@ fn test_error_type_statement_missing_identifier() {
         &SyntaxErrorKind::UnexpectedToken {
             expected: "identifier".to_string(),
             found: "is".to_string(),
-        }
+        },
     );
 }
 
 #[test]
 fn test_protected_type_alias() {
-    parser_test("protected type MyInt is int", vec![
-        type_statement(
+    parser_test(
+        "protected type MyInt is int",
+        vec![type_statement(
             vec![type_declaration(
-                "MyInt", 
-                None, 
-                TypeDeclarationKind::Is, 
-                opt_expr(typ(Type::Int))
+                "MyInt",
+                None,
+                TypeDeclarationKind::Is,
+                opt_expr(typ(Type::Int)),
             )],
-            MemberVisibility::Protected
-        )
-    ]);
+            MemberVisibility::Protected,
+        )],
+    );
 }
 
 #[test]
 fn test_generic_type_alias() {
-    parser_test("type Optional<T> is T?", vec![
-        type_statement(vec![
-            type_declaration(
+    parser_test(
+        "type Optional<T> is T?",
+        vec![type_statement(
+            vec![type_declaration(
                 "Optional",
                 Some(vec![generic_type("T", None)]),
                 TypeDeclarationKind::Is,
-                opt_expr(null_typ(Type::Custom("T".into(), None)))
-            )
-        ], MemberVisibility::Public)
-    ]);
+                opt_expr(null_typ(Type::Custom("T".into(), None))),
+            )],
+            MemberVisibility::Public,
+        )],
+    );
 }

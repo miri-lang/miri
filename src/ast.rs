@@ -49,7 +49,7 @@ pub struct Parameter {
 pub enum MemberVisibility {
     Public,
     Protected,
-    Private
+    Private,
 }
 
 /// Represents the properties of a function declaration
@@ -101,13 +101,25 @@ pub enum Statement {
 
     Variable(Vec<VariableDeclaration>, MemberVisibility),
 
-    If(Box<Expression>, Box<Statement>, Option<Box<Statement>>, IfStatementType), // condition, then_block, else_block, type
+    If(
+        Box<Expression>,
+        Box<Statement>,
+        Option<Box<Statement>>,
+        IfStatementType,
+    ), // condition, then_block, else_block, type
 
     While(Box<Expression>, Box<Statement>, WhileStatementType), // condition, then_block, type
 
     For(Vec<VariableDeclaration>, Box<Expression>, Box<Statement>), // variable_declarations, iterable, body
 
-    FunctionDeclaration(String, Option<Vec<Expression>>, Vec<Parameter>, Option<Box<Expression>>, Box<Statement>, FunctionProperties), // name, generic_types, parameters, return type, body
+    FunctionDeclaration(
+        String,
+        Option<Vec<Expression>>,
+        Vec<Parameter>,
+        Option<Box<Expression>>,
+        Box<Statement>,
+        FunctionProperties,
+    ), // name, generic_types, parameters, return type, body
 
     Return(Option<Box<Expression>>), // Optional return expression
 
@@ -117,7 +129,12 @@ pub enum Statement {
 
     Enum(Box<Expression>, Vec<Expression>, MemberVisibility), // enum Colors: Red, Green, Blue(string)
 
-    Struct(Box<Expression>, Option<Vec<Expression>>, Vec<Expression>, MemberVisibility), // struct Point<T>: x T, y int
+    Struct(
+        Box<Expression>,
+        Option<Vec<Expression>>,
+        Vec<Expression>,
+        MemberVisibility,
+    ), // struct Point<T>: x T, y int
 
     Extends(Box<Expression>), // extends BaseClass
 
@@ -130,7 +147,7 @@ pub enum Statement {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ExpressionKind {
     Literal(Literal),
-    
+
     Identifier(String, Option<String>), // name, optional class e.g. x or Http::Status
 
     Binary(Box<Expression>, BinaryOp, Box<Expression>),
@@ -141,9 +158,18 @@ pub enum ExpressionKind {
 
     Assignment(Box<LeftHandSideExpression>, AssignmentOp, Box<Expression>),
 
-    Conditional(Box<Expression>, Box<Expression>, Option<Box<Expression>>, IfStatementType), // then_expr, condition, else_expr
+    Conditional(
+        Box<Expression>,
+        Box<Expression>,
+        Option<Box<Expression>>,
+        IfStatementType,
+    ), // then_expr, condition, else_expr
 
-    Range(Box<Expression>, Option<Box<Expression>>, RangeExpressionType), // start, end, range_type
+    Range(
+        Box<Expression>,
+        Option<Box<Expression>>,
+        RangeExpressionType,
+    ), // start, end, range_type
 
     Guard(GuardOp, Box<Expression>), // guard operator and expression
 
@@ -157,15 +183,30 @@ pub enum ExpressionKind {
 
     Type(Box<Type>, bool), // Represents a type expression, e.g., `i32`, `string`, etc.
 
-    GenericType(Box<Expression>, Option<Box<Expression>>), // Represents a generic type, e.g., <T is MyClass>
+    GenericType(
+        Box<Expression>,
+        Option<Box<Expression>>,
+        TypeDeclarationKind,
+    ), // Represents a generic type, e.g., <T is MyClass>
 
-    TypeDeclaration(Box<Expression>, Option<Vec<Expression>>, TypeDeclarationKind, Option<Box<Expression>>), // T extends SomeClass
+    TypeDeclaration(
+        Box<Expression>,
+        Option<Vec<Expression>>,
+        TypeDeclarationKind,
+        Option<Box<Expression>>,
+    ), // T extends SomeClass
 
     EnumValue(Box<Expression>, Vec<Expression>), // Represents an enum value, e.g., Ok, Err(string)
 
     StructMember(Box<Expression>, Box<Expression>), // Represents a struct member, e.g., `x int`
 
-    Lambda(Option<Vec<Expression>>, Vec<Parameter>, Option<Box<Expression>>, Box<Statement>, FunctionProperties), // generic_types, parameters, return type, body
+    Lambda(
+        Option<Vec<Expression>>,
+        Vec<Parameter>,
+        Option<Box<Expression>>,
+        Box<Statement>,
+        FunctionProperties,
+    ), // generic_types, parameters, return type, body
 
     List(Vec<Expression>), // A list literal, e.g., [1, 2, 3]
 
@@ -246,7 +287,7 @@ pub enum BinaryOp {
     And,
     Or,
     Range, // Represents a range operator (e.g., `1..10`)
-    In,   // Represents the `in` operator for membership tests
+    In,    // Represents the `in` operator for membership tests
 }
 
 /// Represents a guard operator
@@ -267,10 +308,10 @@ pub enum GuardOp {
 pub enum UnaryOp {
     Negate, // - operator
     Not,
-    Plus, // + operator (unary plus)
+    Plus,       // + operator (unary plus)
     BitwiseNot, // ~ operator
-    Decrement, // -- operator
-    Increment, // ++ operator
+    Decrement,  // -- operator
+    Increment,  // ++ operator
     Await,
 }
 
@@ -338,20 +379,25 @@ pub enum Type {
     String,
     Boolean,
     Symbol,
-    List(Box<Expression>),                      // [i32]
-    Map(Box<Expression>, Box<Expression>),      // {string: i32}
-    Tuple(Vec<Expression>),                     // (i32, String)
-    Set(Box<Expression>),                       // {i32}
-    Result(Box<Expression>, Box<Expression>),   // result<i32, String>
-    Future(Box<Expression>),                    // future<i32>
-    Function(Option<Vec<Expression>>, Vec<Parameter>, Option<Box<Expression>>), // fn<T>(x int) float
+    List(Box<Expression>),                    // [i32]
+    Map(Box<Expression>, Box<Expression>),    // {string: i32}
+    Tuple(Vec<Expression>),                   // (i32, String)
+    Set(Box<Expression>),                     // {i32}
+    Result(Box<Expression>, Box<Expression>), // result<i32, String>
+    Future(Box<Expression>),                  // future<i32>
+    Function(
+        Option<Vec<Expression>>,
+        Vec<Parameter>,
+        Option<Box<Expression>>,
+    ), // fn<T>(x int) float
 
-    Custom(String, Option<Vec<Expression>>),    // a custom type, e.g., MyStruct<T, U>
-    Meta(Box<Type>),                            // Represents the type of a type itself, e.g. the type of the identifier `Point` is `Meta(Custom("Point"))`
-    Void,                                       // Represents void type
-    Error,                                      // Represents a type error
+    Generic(String, Option<Box<Type>>, TypeDeclarationKind), // T extends Number
+
+    Custom(String, Option<Vec<Expression>>), // a custom type, e.g., MyStruct<T, U>
+    Meta(Box<Type>), // Represents the type of a type itself, e.g. the type of the identifier `Point` is `Meta(Custom("Point"))`
+    Void,            // Represents void type
+    Error,           // Represents a type error
 }
-
 
 /// Represents a type declaration kind
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

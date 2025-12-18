@@ -3,13 +3,13 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use serde::Serialize;
 use std::fs;
 use std::path::PathBuf;
 use walkdir::WalkDir;
-use serde::{Serialize};
 
 use miri::cli::{Cli, Commands, TestFormat};
-use miri::pipeline::{Pipeline, BuildOptions};
+use miri::pipeline::{BuildOptions, Pipeline};
 use miri::repl;
 
 pub fn main() -> Result<()> {
@@ -18,8 +18,17 @@ pub fn main() -> Result<()> {
     match cli.command {
         Some(command) => match command {
             Commands::Run { path, program_args } => run_file(path, program_args, cli.verbose),
-            Commands::Build { path, out, release, opt_level } => build_file(path, out, release, opt_level, cli.verbose),
-            Commands::Test { filter, format, dir } => run_tests(filter, format, dir, cli.verbose),
+            Commands::Build {
+                path,
+                out,
+                release,
+                opt_level,
+            } => build_file(path, out, release, opt_level, cli.verbose),
+            Commands::Test {
+                filter,
+                format,
+                dir,
+            } => run_tests(filter, format, dir, cli.verbose),
         },
         None => repl::start().map_err(|e| anyhow::anyhow!(e)),
     }
@@ -28,7 +37,7 @@ pub fn main() -> Result<()> {
 fn run_file(path: PathBuf, _program_args: Vec<String>, _verbose: u8) -> Result<()> {
     let source = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read file: {}", path.display()))?;
-    
+
     let pipeline = Pipeline::new();
     match pipeline.run(&source) {
         Ok(exit_code) => {
@@ -44,7 +53,13 @@ fn run_file(path: PathBuf, _program_args: Vec<String>, _verbose: u8) -> Result<(
     }
 }
 
-fn build_file(path: PathBuf, out: Option<PathBuf>, release: bool, opt_level: u8, _verbose: u8) -> Result<()> {
+fn build_file(
+    path: PathBuf,
+    out: Option<PathBuf>,
+    release: bool,
+    opt_level: u8,
+    _verbose: u8,
+) -> Result<()> {
     let source = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read file: {}", path.display()))?;
 
@@ -91,14 +106,16 @@ fn run_tests(filter: Option<String>, format: TestFormat, dir: PathBuf, _verbose:
         .filter_map(|e| e.ok())
         .filter(|e| {
             let path = e.path();
-            let is_miri_file = path.extension().map_or(false, |ext| ext == "mi");
+            let is_miri_file = path.extension().is_some_and(|ext| ext == "mi");
             let in_tests_dir = path.to_string_lossy().contains("tests/");
             let has_test_in_name = path.to_string_lossy().contains("test");
 
             is_miri_file && (in_tests_dir || has_test_in_name)
         })
         .filter(|e| {
-            filter.as_ref().map_or(true, |f| e.path().to_string_lossy().contains(f))
+            filter
+                .as_ref()
+                .is_none_or(|f| e.path().to_string_lossy().contains(f))
         });
 
     for entry in test_files {
@@ -106,20 +123,18 @@ fn run_tests(filter: Option<String>, format: TestFormat, dir: PathBuf, _verbose:
         let source_res = fs::read_to_string(path);
 
         let result = match source_res {
-            Ok(source) => {
-                match pipeline.frontend(&source) {
-                    Ok(_) => TestResult {
-                        path: path.to_string_lossy().into(),
-                        status: "ok".to_string(),
-                        error: None,
-                    },
-                    Err(e) => TestResult {
-                        path: path.to_string_lossy().into(),
-                        status: "fail".to_string(),
-                        error: Some(e.report(&source)),
-                    },
-                }
-            }
+            Ok(source) => match pipeline.frontend(&source) {
+                Ok(_) => TestResult {
+                    path: path.to_string_lossy().into(),
+                    status: "ok".to_string(),
+                    error: None,
+                },
+                Err(e) => TestResult {
+                    path: path.to_string_lossy().into(),
+                    status: "fail".to_string(),
+                    error: Some(e.report(&source)),
+                },
+            },
             Err(e) => TestResult {
                 path: path.to_string_lossy().into(),
                 status: "fail".to_string(),
@@ -159,6 +174,10 @@ fn print_pretty_test_summary(summary: &TestSummary) {
             eprintln!("---- error ----\n{}\n", err);
         }
     }
-    println!("\ntest result: {}. {} passed; {} failed", if summary.failed > 0 { "failed" } else { "ok" }, summary.passed, summary.failed);
+    println!(
+        "\ntest result: {}. {} passed; {} failed",
+        if summary.failed > 0 { "failed" } else { "ok" },
+        summary.passed,
+        summary.failed
+    );
 }
-

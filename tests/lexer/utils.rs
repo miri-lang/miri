@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
-use miri::{lexer::{Lexer, RegexToken, Token}, syntax_error::SyntaxErrorKind};
-
+use miri::{
+    lexer::{Lexer, RegexToken, Token},
+    syntax_error::SyntaxErrorKind,
+};
 
 pub fn lexer_test(input: &str, expected: Vec<Token>) {
     let lexer = Lexer::new(input);
@@ -12,7 +14,10 @@ pub fn lexer_test(input: &str, expected: Vec<Token>) {
             panic!("Lexer error: {:?}\nInput: {}", err, input);
         }
     }
-    let tokens: Vec<Token> = results.into_iter().filter_map(|result| result.ok().map(|(token, _)| token)).collect();
+    let tokens: Vec<Token> = results
+        .into_iter()
+        .filter_map(|result| result.ok().map(|(token, _)| token))
+        .collect();
     assert_eq!(tokens, expected);
 }
 
@@ -22,9 +27,17 @@ pub fn lexer_error_test(input: &str, expected_kind: &SyntaxErrorKind) {
 
     let error = results.iter().find_map(|res| res.as_ref().err().cloned());
 
-    assert!(error.is_some(), "Expected a lexer error, but it succeeded without errors for input: {}", input);
+    assert!(
+        error.is_some(),
+        "Expected a lexer error, but it succeeded without errors for input: {}",
+        input
+    );
     let error_kind = error.unwrap().kind;
-    assert_eq!(error_kind, *expected_kind, "Lexer produced an error of the wrong kind {:?}.", error_kind);
+    assert_eq!(
+        error_kind, *expected_kind,
+        "Lexer produced an error of the wrong kind {:?}.",
+        error_kind
+    );
 }
 
 pub fn run_lexer_error_tests(inputs: Vec<&str>, expected_kind: &SyntaxErrorKind) {

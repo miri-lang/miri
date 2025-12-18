@@ -3,10 +3,9 @@
 
 use std::vec;
 
-use miri::{lexer::{Token}, syntax_error::SyntaxErrorKind};
+use miri::{lexer::Token, syntax_error::SyntaxErrorKind};
 
 use super::utils::*;
-
 
 #[test]
 fn test_empty_input() {
@@ -18,7 +17,6 @@ fn test_whitespace_only() {
     lexer_test("   \t  \n  \r\n  ", vec![]);
 }
 
-
 #[test]
 fn test_invalid_characters() {
     lexer_error_test("valid @ invalid", &SyntaxErrorKind::InvalidToken);
@@ -26,14 +24,16 @@ fn test_invalid_characters() {
 
 #[test]
 fn test_shebang() {
-    lexer_test("#!/usr/bin/env miri\nlet x = 1", vec![
-        Token::Let, Token::Identifier, Token::Assign, Token::Int
-    ]);
+    lexer_test(
+        "#!/usr/bin/env miri\nlet x = 1",
+        vec![Token::Let, Token::Identifier, Token::Assign, Token::Int],
+    );
 }
 
 #[test]
 fn test_input_with_bom() {
-    lexer_test("\u{FEFF}let x = 1", vec![
-        Token::Let, Token::Identifier, Token::Assign, Token::Int
-    ]);
+    lexer_test(
+        "\u{FEFF}let x = 1",
+        vec![Token::Let, Token::Identifier, Token::Assign, Token::Int],
+    );
 }

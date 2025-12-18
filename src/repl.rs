@@ -8,7 +8,9 @@ use rustyline::history::DefaultHistory;
 use rustyline::Editor;
 
 pub fn start() -> Result<(), CompilerError> {
-    let mut rl = Editor::<(), DefaultHistory>::new().unwrap();
+    let mut rl = Editor::<(), DefaultHistory>::new().map_err(|e| {
+        CompilerError::Internal(format!("Failed to initialize REPL editor: {}", e))
+    })?;
     println!("Miri REPL. Type :quit to exit.");
 
     let pipeline = Pipeline::new();
@@ -25,12 +27,10 @@ pub fn start() -> Result<(), CompilerError> {
 
                 match line {
                     ":quit" | ":q" | ":exit" => break,
-                    _ => {
-                        match pipeline.run(&line) {
-                            Ok(_) => println!("Execution successful."),
-                            Err(e) => eprintln!("{}", e.report(&line)),
-                        }
-                    }
+                    _ => match pipeline.run(line) {
+                        Ok(_) => println!("Execution successful."),
+                        Err(e) => eprintln!("{}", e.report(line)),
+                    },
                 }
             }
             Err(ReadlineError::Interrupted) => {

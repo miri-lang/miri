@@ -1,108 +1,118 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
-use miri::ast::*;
-use miri::syntax_error::SyntaxErrorKind;
-use miri::ast_factory::*;
 use super::utils::*;
-
+use miri::ast::*;
+use miri::ast_factory::*;
+use miri::syntax_error::SyntaxErrorKind;
 
 #[test]
 fn test_gpu_async_lambda() {
-    parser_test("let f = gpu async fn (): 1", vec![
-        variable_statement(vec![
-            let_variable(
+    parser_test(
+        "let f = gpu async fn (): 1",
+        vec![variable_statement(
+            vec![let_variable(
                 "f",
                 None,
                 opt_expr(
-                    lambda().set_gpu().set_async().build_lambda(
-                        expression_statement(int_literal_expression(1))
-                    )
-                )
-            )
-        ], MemberVisibility::Public)
-    ]);
+                    lambda()
+                        .set_gpu()
+                        .set_async()
+                        .build_lambda(expression_statement(int_literal_expression(1))),
+                ),
+            )],
+            MemberVisibility::Public,
+        )],
+    );
 }
 
 #[test]
 fn test_lambda_with_generics() {
-    parser_test("let identity = fn<T>(x T) T: x", vec![
-        variable_statement(vec![
-            let_variable(
+    parser_test(
+        "let identity = fn<T>(x T) T: x",
+        vec![variable_statement(
+            vec![let_variable(
                 "identity",
                 None,
                 opt_expr(
                     lambda()
                         .generics(vec![generic_type("T", None)])
-                        .params(vec![parameter("x".into(), typ(Type::Custom("T".into(), None)), None, None)])
+                        .params(vec![parameter(
+                            "x".into(),
+                            typ(Type::Custom("T".into(), None)),
+                            None,
+                            None,
+                        )])
                         .return_type(typ(Type::Custom("T".into(), None)))
-                        .build_lambda(expression_statement(identifier("x")))
-                )
-            )
-        ], MemberVisibility::Public)
-    ]);
+                        .build_lambda(expression_statement(identifier("x"))),
+                ),
+            )],
+            MemberVisibility::Public,
+        )],
+    );
 }
 
 #[test]
 fn test_nested_lambdas() {
-    parser_test("let add = fn (x int): fn (y int): x + y", vec![
-        variable_statement(vec![
-            let_variable(
+    parser_test(
+        "let add = fn (x int): fn (y int): x + y",
+        vec![variable_statement(
+            vec![let_variable(
                 "add",
                 None,
                 opt_expr(
                     lambda()
                         .params(vec![parameter("x".into(), typ(Type::Int), None, None)])
-                        .build_lambda(
-                            expression_statement(
-                                lambda()
-                                    .params(vec![parameter("y".into(), typ(Type::Int), None, None)])
-                                    .build_lambda(expression_statement(
-                                        binary(identifier("x"), BinaryOp::Add, identifier("y"))
-                                    ))
-                            )
-                        )
-                )
-            )
-        ], MemberVisibility::Public)
-    ]);
+                        .build_lambda(expression_statement(
+                            lambda()
+                                .params(vec![parameter("y".into(), typ(Type::Int), None, None)])
+                                .build_lambda(expression_statement(binary(
+                                    identifier("x"),
+                                    BinaryOp::Add,
+                                    identifier("y"),
+                                ))),
+                        )),
+                ),
+            )],
+            MemberVisibility::Public,
+        )],
+    );
 }
 
 #[test]
 fn test_immediately_invoked_function_expression() {
-    parser_test("(fn (x int): x * 2)(10)", vec![
-        expression_statement(
-            call(
-                lambda()
-                    .params(vec![parameter("x".into(), typ(Type::Int), None, None)])
-                    .build_lambda(expression_statement(
-                        binary(identifier("x"), BinaryOp::Mul, int_literal_expression(2))
-                    )),
-                vec![int_literal_expression(10)]
-            )
-        )
-    ]);
+    parser_test(
+        "(fn (x int): x * 2)(10)",
+        vec![expression_statement(call(
+            lambda()
+                .params(vec![parameter("x".into(), typ(Type::Int), None, None)])
+                .build_lambda(expression_statement(binary(
+                    identifier("x"),
+                    BinaryOp::Mul,
+                    int_literal_expression(2),
+                ))),
+            vec![int_literal_expression(10)],
+        ))],
+    );
 }
 
 #[test]
 fn test_function_type_as_return_type() {
-    parser_test("fn counter() fn() int: fn() int: 1", vec![
-        func("counter")
+    parser_test(
+        "fn counter() fn() int: fn() int: 1",
+        vec![func("counter")
             .return_type(typ(Type::Function(None, vec![], opt_expr(typ(Type::Int)))))
             .build(expression_statement(
                 lambda()
                     .return_type(typ(Type::Int))
-                    .build_lambda(expression_statement(int_literal_expression(1)))
-            ))
-    ]);
+                    .build_lambda(expression_statement(int_literal_expression(1))),
+            ))],
+    );
 }
 
 #[test]
 fn test_lambda_with_empty_body() {
-    parser_error_test(
-        "let no_op = fn ():", 
-        &SyntaxErrorKind::UnexpectedEOF
-    );
+    parser_error_test("let no_op = fn ():", &SyntaxErrorKind::UnexpectedEOF);
 }
 
 #[test]
@@ -113,7 +123,7 @@ fn test_error_lambda_with_visibility_modifier() {
         &SyntaxErrorKind::UnexpectedToken {
             expected: "an expression".to_string(),
             found: "public".to_string(),
-        }
+        },
     );
 }
 
@@ -121,15 +131,14 @@ fn test_error_lambda_with_visibility_modifier() {
 fn test_lambda_assignment() {
     parser_test(
         "let f = fn(): 1",
-        vec![
-            variable_statement(vec![
-                let_variable(
-                    "f",
-                    None,
-                    opt_expr(lambda().build_lambda(expression_statement(int_literal_expression(1))))
-                )
-            ], MemberVisibility::Public)
-        ]
+        vec![variable_statement(
+            vec![let_variable(
+                "f",
+                None,
+                opt_expr(lambda().build_lambda(expression_statement(int_literal_expression(1)))),
+            )],
+            MemberVisibility::Public,
+        )],
     );
 }
 
@@ -141,7 +150,7 @@ fn test_error_lambda_missing_parameter_parens() {
         &SyntaxErrorKind::UnexpectedToken {
             expected: "(".to_string(),
             found: ":".to_string(),
-        }
+        },
     );
 }
 
@@ -153,60 +162,62 @@ fn test_error_lambda_with_statement_in_inline_body() {
         &SyntaxErrorKind::UnexpectedToken {
             expected: "an expression".to_string(),
             found: "let".to_string(),
-        }
+        },
     );
 }
 
 #[test]
 fn test_lambda_with_parameter_guard() {
-    parser_test("let check = fn (x int > 0): x", vec![
-        variable_statement(vec![
-            let_variable(
+    parser_test(
+        "let check = fn (x int > 0): x",
+        vec![variable_statement(
+            vec![let_variable(
                 "check",
                 None,
                 opt_expr(
                     lambda()
-                        .params(vec![
-                            parameter(
-                                "x".into(),
-                                typ(Type::Int),
-                                opt_expr(guard(GuardOp::GreaterThan, int_literal_expression(0))),
-                                None
-                            )
-                        ])
-                        .build_lambda(expression_statement(identifier("x")))
-                )
-            )
-        ], MemberVisibility::Public)
-    ]);
+                        .params(vec![parameter(
+                            "x".into(),
+                            typ(Type::Int),
+                            opt_expr(guard(GuardOp::GreaterThan, int_literal_expression(0))),
+                            None,
+                        )])
+                        .build_lambda(expression_statement(identifier("x"))),
+                ),
+            )],
+            MemberVisibility::Public,
+        )],
+    );
 }
 
 #[test]
 fn test_lambda_returned_from_function() {
-    parser_test("
+    parser_test(
+        "
 fn get_adder()
     return fn (a int, b int): a + b
-", vec![
-        func("get_adder").build(
-            block(vec![
-                return_statement(opt_expr(
-                    lambda()
-                        .params(vec![
-                            parameter("a".into(), typ(Type::Int), None, None),
-                            parameter("b".into(), typ(Type::Int), None, None)
-                        ])
-                        .build_lambda(expression_statement(
-                            binary(identifier("a"), BinaryOp::Add, identifier("b"))
-                        ))
-                ))
-            ])
-        )
-    ]);
+",
+        vec![
+            func("get_adder").build(block(vec![return_statement(opt_expr(
+                lambda()
+                    .params(vec![
+                        parameter("a".into(), typ(Type::Int), None, None),
+                        parameter("b".into(), typ(Type::Int), None, None),
+                    ])
+                    .build_lambda(expression_statement(binary(
+                        identifier("a"),
+                        BinaryOp::Add,
+                        identifier("b"),
+                    ))),
+            ))])),
+        ],
+    );
 }
 
 #[test]
 fn test_mutiline_lambda_as_parameter() {
-    parser_test("
+    parser_test(
+        "
 func(
     fn (a int, b int): a + b,
     fn (c int, d int, e int)
@@ -218,86 +229,87 @@ func(
         6, 7, 8
     ], 'Some string'
 )
-", vec![
-        expression_statement(
-            call(
-                identifier("func"),
-                vec![
-                    lambda()
-                        .params(vec![
-                            parameter("a".into(), typ(Type::Int), None, None),
-                            parameter("b".into(), typ(Type::Int), None, None)
-                        ])
-                        .build_lambda(expression_statement(
-                            binary(identifier("a"), BinaryOp::Add, identifier("b"))
-                        )),
-                    lambda()
-                        .params(vec![
-                            parameter("c".into(), typ(Type::Int), None, None),
-                            parameter("d".into(), typ(Type::Int), None, None),
-                            parameter("e".into(), typ(Type::Int), None, None)
-                        ])
-                        .build_lambda(block(vec![
-                            variable_statement(vec![
-                                let_variable("x", None,
-                                    opt_expr(
-                                        binary(
-                                            binary(
-                                                identifier("c"),
-                                                BinaryOp::Add,
-                                                identifier("d")
-                                            ),
-                                            BinaryOp::Add,
-                                            identifier("e")
-                                        )
-                                     )
-                                )],
-                                MemberVisibility::Public
-                            ),
-                            expression_statement(call(identifier("print"), vec![identifier("x")])),
-                            return_statement(opt_expr(identifier("x")))
-                        ])),
-                    list(vec![int_literal_expression(6), int_literal_expression(7), int_literal_expression(8)]),
-                    string_literal_expression("Some string")
-                ]
-            )
-        )
-    ]);
+",
+        vec![expression_statement(call(
+            identifier("func"),
+            vec![
+                lambda()
+                    .params(vec![
+                        parameter("a".into(), typ(Type::Int), None, None),
+                        parameter("b".into(), typ(Type::Int), None, None),
+                    ])
+                    .build_lambda(expression_statement(binary(
+                        identifier("a"),
+                        BinaryOp::Add,
+                        identifier("b"),
+                    ))),
+                lambda()
+                    .params(vec![
+                        parameter("c".into(), typ(Type::Int), None, None),
+                        parameter("d".into(), typ(Type::Int), None, None),
+                        parameter("e".into(), typ(Type::Int), None, None),
+                    ])
+                    .build_lambda(block(vec![
+                        variable_statement(
+                            vec![let_variable(
+                                "x",
+                                None,
+                                opt_expr(binary(
+                                    binary(identifier("c"), BinaryOp::Add, identifier("d")),
+                                    BinaryOp::Add,
+                                    identifier("e"),
+                                )),
+                            )],
+                            MemberVisibility::Public,
+                        ),
+                        expression_statement(call(identifier("print"), vec![identifier("x")])),
+                        return_statement(opt_expr(identifier("x"))),
+                    ])),
+                list(vec![
+                    int_literal_expression(6),
+                    int_literal_expression(7),
+                    int_literal_expression(8),
+                ]),
+                string_literal_expression("Some string"),
+            ],
+        ))],
+    );
 }
 
 #[test]
 fn test_async_iife_with_await() {
     // An immediately-invoked async lambda that is awaited.
     // This tests the precedence of `await` vs. `()`.
-    parser_test("await (async fn(): 1)()", vec![
-        expression_statement(
-            unary(
-                UnaryOp::Await,
-                call(
-                    lambda()
-                        .set_async()
-                        .build_lambda(expression_statement(int_literal_expression(1))),
-                    vec![]
-                )
-            )
-        )
-    ]);
+    parser_test(
+        "await (async fn(): 1)()",
+        vec![expression_statement(unary(
+            UnaryOp::Await,
+            call(
+                lambda()
+                    .set_async()
+                    .build_lambda(expression_statement(int_literal_expression(1))),
+                vec![],
+            ),
+        ))],
+    );
 }
 
 #[test]
 fn test_lambda_with_empty_block_body() {
-    parser_test("
+    parser_test(
+        "
 let f = fn()
     // empty body
-", vec![
-        variable_statement(vec![
-            let_variable(
+",
+        vec![variable_statement(
+            vec![let_variable(
                 "f",
                 None,
-                opt_expr(lambda().build_lambda(empty_statement()))
-            )
-        ], MemberVisibility::Public)
-    ]);
+                opt_expr(lambda().build_lambda(empty_statement())),
+            )],
+            MemberVisibility::Public,
+        )],
+    );
 }
 
 #[test]
@@ -308,7 +320,7 @@ fn test_error_return_in_inline_lambda() {
         &SyntaxErrorKind::UnexpectedToken {
             expected: "an expression".to_string(),
             found: "return".to_string(),
-        }
+        },
     );
 }
 
@@ -320,77 +332,96 @@ fn test_error_lambda_with_misplaced_modifier() {
         &SyntaxErrorKind::UnexpectedToken {
             expected: "(".to_string(),
             found: "async".to_string(),
-        }
+        },
     );
 }
 
 #[test]
 fn test_lambda_with_default_parameter_values() {
-    parser_test("let f = fn (a int = 10, b bool = true): a", vec![
-        variable_statement(vec![
-            let_variable(
+    parser_test(
+        "let f = fn (a int = 10, b bool = true): a",
+        vec![variable_statement(
+            vec![let_variable(
                 "f",
                 None,
                 opt_expr(
                     lambda()
                         .params(vec![
-                            parameter("a".into(), typ(Type::Int), None, opt_expr(int_literal_expression(10))),
-                            parameter("b".into(), typ(Type::Boolean), None, opt_expr(boolean_literal(true)))
+                            parameter(
+                                "a".into(),
+                                typ(Type::Int),
+                                None,
+                                opt_expr(int_literal_expression(10)),
+                            ),
+                            parameter(
+                                "b".into(),
+                                typ(Type::Boolean),
+                                None,
+                                opt_expr(boolean_literal(true)),
+                            ),
                         ])
-                        .build_lambda(expression_statement(identifier("a")))
-                )
-            )
-        ], MemberVisibility::Public)
-    ]);
+                        .build_lambda(expression_statement(identifier("a"))),
+                ),
+            )],
+            MemberVisibility::Public,
+        )],
+    );
 }
 
 #[test]
 fn test_lambda_with_keyword_as_parameter_name() {
-    parser_error_test("let f = fn (let int): let", &SyntaxErrorKind::UnexpectedToken {
-        expected: "identifier".to_string(),
-        found: "let".to_string(),
-    });
+    parser_error_test(
+        "let f = fn (let int): let",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "identifier".to_string(),
+            found: "let".to_string(),
+        },
+    );
 }
 
 #[test]
 fn test_lambda_with_trailing_comma_in_parameters() {
-    parser_test("let f = fn (a int, b string,): a", vec![
-        variable_statement(vec![
-            let_variable(
+    parser_test(
+        "let f = fn (a int, b string,): a",
+        vec![variable_statement(
+            vec![let_variable(
                 "f",
                 None,
                 opt_expr(
                     lambda()
                         .params(vec![
                             parameter("a".into(), typ(Type::Int), None, None),
-                            parameter("b".into(), typ(Type::String), None, None)
+                            parameter("b".into(), typ(Type::String), None, None),
                         ])
-                        .build_lambda(expression_statement(identifier("a")))
-                )
-            )
-        ], MemberVisibility::Public)
-    ]);
+                        .build_lambda(expression_statement(identifier("a"))),
+                ),
+            )],
+            MemberVisibility::Public,
+        )],
+    );
 }
 
 #[test]
 fn test_lambda_with_block_body_assignment() {
-    parser_test("
+    parser_test(
+        "
 let f = fn ()
     let x = 1
     return x
-", vec![
-        variable_statement(vec![
-            let_variable(
+",
+        vec![variable_statement(
+            vec![let_variable(
                 "f",
                 None,
-                opt_expr(
-                    lambda().build_lambda(block(vec![
-                        variable_statement(vec![let_variable("x", None, opt_expr(int_literal_expression(1)))], MemberVisibility::Public),
-                        return_statement(opt_expr(identifier("x")))
-                    ]))
-                )
-            )
-        ], MemberVisibility::Public)
-    ]);
+                opt_expr(lambda().build_lambda(block(vec![
+                    variable_statement(
+                        vec![let_variable("x", None, opt_expr(int_literal_expression(1)))],
+                        MemberVisibility::Public,
+                    ),
+                    return_statement(opt_expr(identifier("x"))),
+                ]))),
+            )],
+            MemberVisibility::Public,
+        )],
+    );
 }
-

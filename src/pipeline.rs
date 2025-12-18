@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
-use std::fs;
-use std::path::PathBuf;
 use crate::ast::Program;
 use crate::compiler_error::CompilerError;
 use crate::lexer::Lexer;
 use crate::parser::Parser;
+use std::fs;
+use std::path::PathBuf;
 
 use crate::type_checker::TypeChecker;
 
@@ -25,6 +25,12 @@ pub struct BuildOptions {
 
 pub struct Pipeline {}
 
+impl Default for Pipeline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Pipeline {
     pub fn new() -> Self {
         Self {}
@@ -36,7 +42,9 @@ impl Pipeline {
         let ast = parser.parse().map_err(CompilerError::Parser)?;
 
         let mut type_checker = crate::type_checker::TypeChecker::new();
-        type_checker.check(&ast).map_err(CompilerError::TypeErrors)?;
+        type_checker
+            .check(&ast)
+            .map_err(CompilerError::TypeErrors)?;
 
         // TODO: Hook for Lowering/IR Generation
         // let ir = lowerer.lower(typed_ast)?;
@@ -46,11 +54,14 @@ impl Pipeline {
 
     pub fn run(&self, source: &str) -> Result<i32, CompilerError> {
         let pipeline_result = self.frontend(source)?;
-        
+
         // For now, just print a minimal summary.
         // In the future, this will execute the code.
-        println!("AST generated with {} statements.", pipeline_result.ast.body.len());
-        
+        println!(
+            "AST generated with {} statements.",
+            pipeline_result.ast.body.len()
+        );
+
         // TODO: Hook for Code Generation and Execution
         // codegen.execute(ir)?;
 
@@ -62,7 +73,10 @@ impl Pipeline {
 
         let target_dir = if opts.release { "release" } else { "debug" };
         let default_out_dir = PathBuf::from("target").join(target_dir);
-        let out_path = opts.out_path.clone().unwrap_or_else(|| default_out_dir.join("a.miribin"));
+        let out_path = opts
+            .out_path
+            .clone()
+            .unwrap_or_else(|| default_out_dir.join("a.miribin"));
 
         if let Some(parent) = out_path.parent() {
             fs::create_dir_all(parent)?;

@@ -1,16 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
-use miri::syntax_error::SyntaxErrorKind;
-use miri::ast_factory::*;
 use super::utils::*;
-
+use miri::ast_factory::*;
+use miri::syntax_error::SyntaxErrorKind;
 
 #[test]
 fn test_extends_statement() {
-    parser_test("extends BaseClass", vec![
-        extends(identifier("BaseClass"))
-    ]);
+    parser_test("extends BaseClass", vec![extends(identifier("BaseClass"))]);
 }
 
 #[test]
@@ -18,7 +15,7 @@ fn test_extends_statement_namespaced() {
     // This is not allowed, because you can't define a class within a class.
     parser_error_test(
         "extends Core::Base",
-        &SyntaxErrorKind::InvalidInheritanceIdentifier
+        &SyntaxErrorKind::InvalidInheritanceIdentifier,
     );
 }
 
@@ -30,7 +27,7 @@ fn test_error_extends_multiple_classes() {
         &SyntaxErrorKind::UnexpectedToken {
             expected: "an end of statement".to_string(),
             found: ",".to_string(),
-        }
+        },
     );
 }
 
@@ -41,6 +38,6 @@ fn test_error_extends_with_literal() {
         &SyntaxErrorKind::UnexpectedToken {
             expected: "identifier".to_string(),
             found: "int".to_string(),
-        }
+        },
     );
 }
