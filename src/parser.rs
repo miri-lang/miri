@@ -2294,6 +2294,10 @@ impl<'source> Parser<'source> {
             Some((Token::Float, _)) => self.float_literal(),
             Some((Token::True, _)) => self.boolean_literal(&Token::True),
             Some((Token::False, _)) => self.boolean_literal(&Token::False),
+            Some((Token::None, _)) => {
+                self.eat_token(&Token::None)?;
+                Ok(Literal::None)
+            }
             Some((Token::String, _)) => self.string_literal(),
             Some((Token::Symbol, _)) => self.symbol_literal(),
             Some((Token::Regex(_), _)) => self.regex_literal(),
@@ -2891,6 +2895,7 @@ fn is_literal(token: &Token) -> bool {
             | Token::String
             | Token::Symbol
             | Token::Regex(_)
+            | Token::None
     )
 }
 

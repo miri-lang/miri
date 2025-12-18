@@ -122,3 +122,30 @@ pub fn check_vars_type(source: &str, expected_types: Vec<(&str, Type)>) {
         );
     }
 }
+
+pub fn check_warning(source: &str, expected_warning: &str) {
+    let pipeline = Pipeline::new();
+    let result = match pipeline.frontend(source) {
+        Ok(res) => res,
+        Err(e) => panic!("Type check failed unexpectedly: {}", e),
+    };
+
+    let found = result
+        .type_checker
+        .warnings
+        .iter()
+        .any(|w| w.message.contains(expected_warning));
+
+    if !found {
+        let warning_messages: Vec<String> = result
+            .type_checker
+            .warnings
+            .iter()
+            .map(|w| w.message.clone())
+            .collect();
+        panic!(
+            "Expected warning '{}' not found. Found: {:?}",
+            expected_warning, warning_messages
+        );
+    }
+}

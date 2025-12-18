@@ -335,6 +335,7 @@ pub enum Literal {
     Boolean(bool),
     Symbol(String),
     Regex(RegexToken),
+    None,
 }
 
 /// Represents an integer literal value
@@ -395,6 +396,7 @@ pub enum Type {
 
     Custom(String, Option<Vec<Expression>>), // a custom type, e.g., MyStruct<T, U>
     Meta(Box<Type>), // Represents the type of a type itself, e.g. the type of the identifier `Point` is `Meta(Custom("Point"))`
+    Nullable(Box<Type>), // Represents a nullable type, e.g., `int?`
     Void,            // Represents void type
     Error,           // Represents a type error
 }

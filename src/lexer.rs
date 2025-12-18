@@ -60,6 +60,8 @@ pub enum Token {
     True,
     #[token("false")]
     False,
+    #[token("None")]
+    None,
     #[token("from")]
     From,
     #[token("as")]
