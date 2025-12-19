@@ -208,6 +208,7 @@ impl TypeChecker {
                     }
                 }
             }
+            return declared_type;
         }
 
         inferred_type
