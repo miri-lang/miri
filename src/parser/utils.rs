@@ -2,8 +2,8 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use crate::ast::*;
+use crate::error::syntax::{Span, SyntaxError, SyntaxErrorKind};
 use crate::lexer::{token_to_string, Token, TokenSpan};
-use crate::syntax_error::{Span, SyntaxError, SyntaxErrorKind};
 
 use super::Parser;
 

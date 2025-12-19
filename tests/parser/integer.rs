@@ -2,10 +2,10 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use miri::ast::*;
-use miri::syntax_error::SyntaxErrorKind;
+use miri::error::syntax::SyntaxErrorKind;
 
 use super::utils::*;
-use miri::ast_factory::*;
+use miri::ast::factory::*;
 
 #[test]
 fn test_parse_integer_literal() {

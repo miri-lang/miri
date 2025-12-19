@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
+use crate::ast::factory as ast;
 use crate::ast::*;
-use crate::ast_factory as ast;
+use crate::error::syntax::{Span, SyntaxError};
 use crate::lexer::{token_to_string, Token};
-use crate::syntax_error::{Span, SyntaxError};
 
 use super::utils::{
     is_additive_op, is_assignment_op, is_equality_op, is_logical_and_op, is_logical_or_op,

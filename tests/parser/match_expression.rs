@@ -2,10 +2,10 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use super::utils::*;
+use miri::ast::factory::*;
 use miri::ast::*;
-use miri::ast_factory::*;
+use miri::error::syntax::SyntaxErrorKind;
 use miri::lexer::RegexToken;
-use miri::syntax_error::SyntaxErrorKind;
 
 #[test]
 fn test_match_expression_block() {

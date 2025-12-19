@@ -2,9 +2,9 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use super::utils::*;
+use miri::ast::factory::*;
 use miri::ast::*;
-use miri::ast_factory::*;
-use miri::syntax_error::SyntaxErrorKind;
+use miri::error::syntax::SyntaxErrorKind;
 
 #[test]
 fn test_namespaced_function_call() {

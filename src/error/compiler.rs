@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
-use crate::syntax_error::{find_line_info, SyntaxError};
-use crate::type_error::TypeError;
+use crate::error::syntax::{find_line_info, SyntaxError};
+use crate::error::type_error::TypeError;
 use thiserror::Error;
 
 #[derive(Error, Debug)]

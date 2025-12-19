@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
+use crate::ast::factory as ast;
 use crate::ast::*;
-use crate::ast_factory as ast;
+use crate::error::syntax::{SyntaxError, SyntaxErrorKind};
 use crate::lexer::{Lexer, TokenSpan};
-use crate::syntax_error::{SyntaxError, SyntaxErrorKind};
 
 pub mod declarations;
 pub mod expressions;

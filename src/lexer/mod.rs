@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 
 use logos::Logos;
 
-use crate::syntax_error::{Span, SyntaxError, SyntaxErrorKind};
+use crate::error::syntax::{Span, SyntaxError, SyntaxErrorKind};
 
 #[derive(Logos, Debug, PartialEq, Clone)]
 pub enum Token {

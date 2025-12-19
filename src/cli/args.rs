@@ -4,7 +4,7 @@
 use clap::{ArgAction, Parser, Subcommand};
 use std::path::PathBuf;
 
-use crate::version::version;
+use crate::cli::version::version;
 
 #[derive(Parser, Debug)]
 #[command(name = "miri", version = version(), about = "Miri Compiler", author = "Slavik Shynkarenko <slavik@slavikdev.com>")]

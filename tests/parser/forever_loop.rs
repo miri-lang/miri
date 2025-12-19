@@ -4,10 +4,10 @@
 use miri::ast::opt_expr;
 use miri::ast::AssignmentOp;
 use miri::ast::BinaryOp;
-use miri::syntax_error::SyntaxErrorKind;
+use miri::error::syntax::SyntaxErrorKind;
 
 use super::utils::*;
-use miri::ast_factory::*;
+use miri::ast::factory::*;
 
 #[test]
 fn test_forever_loop() {

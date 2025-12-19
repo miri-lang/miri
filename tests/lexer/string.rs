@@ -4,8 +4,8 @@
 use std::vec;
 
 use miri::{
+    error::syntax::SyntaxErrorKind,
     lexer::{RegexToken, Token},
-    syntax_error::SyntaxErrorKind,
 };
 
 use super::utils::*;

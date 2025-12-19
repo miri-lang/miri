@@ -2,7 +2,7 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use crate::ast::Program;
-use crate::compiler_error::CompilerError;
+use crate::error::compiler::CompilerError;
 use crate::lexer::Lexer;
 use crate::parser::Parser;
 use std::fs;

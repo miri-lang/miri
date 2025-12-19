@@ -2,8 +2,8 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use super::utils::*;
+use miri::ast::factory::*;
 use miri::ast::*;
-use miri::ast_factory::*;
 
 #[test]
 fn test_await_expression() {

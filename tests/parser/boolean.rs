@@ -6,7 +6,7 @@ use miri::ast::BinaryOp;
 use miri::ast::MemberVisibility;
 
 use super::utils::*;
-use miri::ast_factory::*;
+use miri::ast::factory::*;
 
 #[test]
 fn test_parse_boolean_literal() {

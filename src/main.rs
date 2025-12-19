@@ -8,9 +8,9 @@ use std::fs;
 use std::path::PathBuf;
 use walkdir::WalkDir;
 
+use miri::cli::repl;
 use miri::cli::{Cli, Commands, TestFormat};
 use miri::pipeline::{BuildOptions, Pipeline};
-use miri::repl;
 
 pub fn main() -> Result<()> {
     let cli = Cli::parse();

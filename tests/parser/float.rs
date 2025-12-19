@@ -5,10 +5,10 @@ use miri::ast::opt_expr;
 use miri::ast::BinaryOp;
 use miri::ast::MemberVisibility;
 use miri::ast::UnaryOp;
-use miri::syntax_error::SyntaxErrorKind;
+use miri::error::syntax::SyntaxErrorKind;
 
 use super::utils::*;
-use miri::ast_factory::*;
+use miri::ast::factory::*;
 
 #[test]
 fn test_parse_float_literal() {

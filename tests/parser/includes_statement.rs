@@ -2,8 +2,8 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use super::utils::*;
-use miri::ast_factory::*;
-use miri::syntax_error::SyntaxErrorKind;
+use miri::ast::factory::*;
+use miri::error::syntax::SyntaxErrorKind;
 
 #[test]
 fn test_includes_statement_single() {

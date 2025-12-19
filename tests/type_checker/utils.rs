@@ -2,7 +2,7 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use miri::ast::{Statement, Type};
-use miri::compiler_error::CompilerError;
+use miri::error::compiler::CompilerError;
 use miri::pipeline::Pipeline;
 
 pub fn check_success(source: &str) {

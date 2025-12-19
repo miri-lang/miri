@@ -2,8 +2,8 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use miri::{
+    error::syntax::SyntaxErrorKind,
     lexer::{Lexer, RegexToken, Token},
-    syntax_error::SyntaxErrorKind,
 };
 
 pub fn lexer_test(input: &str, expected: Vec<Token>) {

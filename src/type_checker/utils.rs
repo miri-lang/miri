@@ -4,8 +4,8 @@
 use super::context::{Context, TypeDefinition};
 use super::TypeChecker;
 use crate::ast::*;
-use crate::syntax_error::Span;
-use crate::type_error::TypeError;
+use crate::error::syntax::Span;
+use crate::error::type_error::TypeError;
 
 impl TypeChecker {
     pub(crate) fn check_binary_op_types(

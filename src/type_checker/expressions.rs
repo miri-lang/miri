@@ -4,7 +4,7 @@
 use super::context::{Context, TypeDefinition};
 use super::TypeChecker;
 use crate::ast::*;
-use crate::syntax_error::Span;
+use crate::error::syntax::Span;
 
 impl TypeChecker {
     pub(crate) fn infer_expression(&mut self, expr: &Expression, context: &mut Context) -> Type {

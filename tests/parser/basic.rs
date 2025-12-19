@@ -2,7 +2,7 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use super::utils::*;
-use miri::ast_factory::*;
+use miri::ast::factory::*;
 
 #[test]
 fn test_parse_empty_program() {

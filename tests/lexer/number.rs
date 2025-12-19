@@ -3,7 +3,7 @@
 
 use std::vec;
 
-use miri::{lexer::Token, syntax_error::SyntaxErrorKind};
+use miri::{error::syntax::SyntaxErrorKind, lexer::Token};
 
 use super::utils::*;
 

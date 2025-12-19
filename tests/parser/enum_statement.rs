@@ -4,9 +4,9 @@
 use std::vec;
 
 use super::utils::*;
+use miri::ast::factory::*;
 use miri::ast::*;
-use miri::ast_factory::*;
-use miri::syntax_error::SyntaxErrorKind;
+use miri::error::syntax::SyntaxErrorKind;
 
 #[test]
 fn test_inline_enum_simple_values() {

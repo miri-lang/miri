@@ -2,7 +2,7 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use super::utils::*;
-use miri::{lexer::Token, syntax_error::SyntaxErrorKind};
+use miri::{error::syntax::SyntaxErrorKind, lexer::Token};
 use std::vec;
 
 #[test]

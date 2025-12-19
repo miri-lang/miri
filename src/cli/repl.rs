@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
-use crate::compiler_error::CompilerError;
+use crate::error::compiler::CompilerError;
 use crate::pipeline::Pipeline;
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;

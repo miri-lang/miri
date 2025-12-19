@@ -3,11 +3,11 @@
 
 use std::vec;
 
+use miri::ast::factory::*;
 use miri::ast::*;
-use miri::ast_factory::*;
+use miri::error::syntax::{SyntaxError, SyntaxErrorKind};
 use miri::lexer::Lexer;
 use miri::parser::Parser;
-use miri::syntax_error::{SyntaxError, SyntaxErrorKind};
 
 fn parse(input: &str) -> Result<Program, SyntaxError> {
     let mut lexer = Lexer::new(input);

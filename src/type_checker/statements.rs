@@ -6,7 +6,7 @@ use super::context::{
 };
 use super::TypeChecker;
 use crate::ast::*;
-use crate::syntax_error::Span;
+use crate::error::syntax::Span;
 use std::collections::HashMap;
 
 pub(crate) struct FunctionDeclarationInfo<'a> {

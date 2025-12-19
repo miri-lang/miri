@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
+use crate::error::syntax::Span;
 use crate::lexer::RegexToken;
-use crate::syntax_error::Span;
+
+pub mod factory;
 
 /// Represents a fully parsed Miri program
 #[derive(Debug, PartialEq)]

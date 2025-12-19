@@ -2,7 +2,7 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use super::utils::{check_error, check_expr_type, check_success};
-use miri::{ast::Type, ast_factory::typ};
+use miri::{ast::factory::typ, ast::Type};
 
 #[test]
 fn test_await_future_variable() {

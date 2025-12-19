@@ -2,7 +2,7 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use crate::ast::*;
-use crate::type_error::TypeError;
+use crate::error::type_error::TypeError;
 use std::collections::HashMap;
 
 pub mod context;
