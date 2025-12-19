@@ -2,12 +2,7 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use super::utils::*;
-use miri::ast::{ExpressionKind, IdNode, Type};
-use miri::error::syntax::Span;
-
-fn type_expr(t: Type) -> miri::ast::Expression {
-    IdNode::new(0, ExpressionKind::Type(Box::new(t), false), Span::default())
-}
+use miri::ast::Type;
 
 #[test]
 fn test_for_loop_range() {

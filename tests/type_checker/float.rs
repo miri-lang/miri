@@ -2,6 +2,7 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use super::utils::*;
+use miri::ast::factory::typ;
 use miri::ast::Type;
 
 #[test]
@@ -141,5 +142,74 @@ var x = 1.0
 x += 1
 ",
         "Type mismatch in assignment",
+    );
+}
+
+#[test]
+fn test_f64_arithmetic() {
+    // Using high precision literals to force F64
+    let f64_val = "1.1234567890123456789";
+    check_exprs_type(vec![
+        (&format!("{} + {}", f64_val, f64_val), Type::F64),
+        (&format!("{} - {}", f64_val, f64_val), Type::F64),
+        (&format!("{} * {}", f64_val, f64_val), Type::F64),
+        (&format!("{} / {}", f64_val, f64_val), Type::F64),
+    ]);
+}
+
+#[test]
+fn test_f32_f64_mismatch() {
+    check_error("1.0 + 1.1234567890123456789", "Type mismatch");
+}
+
+#[test]
+fn test_float_bitwise_invalid() {
+    check_error("1.0 & 2.0", "Invalid types for bitwise operation");
+    check_error("1.0 | 2.0", "Invalid types for bitwise operation");
+    check_error("1.0 ^ 2.0", "Invalid types for bitwise operation");
+}
+
+#[test]
+fn test_float_unary_plus() {
+    check_expr_type("+1.0", Type::F32);
+}
+
+#[test]
+fn test_float_function() {
+    check_success(
+        "
+fn add(a f32, b f32) f32
+    return a + b
+
+let x = add(1.0, 2.0)
+",
+    );
+}
+
+#[test]
+fn test_float_list() {
+    check_expr_type("[1.0, 2.0, 3.0]", Type::List(Box::new(typ(Type::F32))));
+}
+
+#[test]
+fn test_float_list_mismatch() {
+    check_error("[1.0, 1]", "List elements must have the same type");
+}
+
+#[test]
+fn test_nullable_float() {
+    check_expr_type(
+        "
+let x f32? = 1.0
+x
+",
+        Type::Nullable(Box::new(Type::F32)),
+    );
+    check_expr_type(
+        "
+let y f32? = None
+y
+",
+        Type::Nullable(Box::new(Type::F32)),
     );
 }
