@@ -52,6 +52,7 @@ pub enum TypeDefinition {
     Struct(StructDefinition),
     Enum(EnumDefinition),
     Generic(GenericDefinition),
+    Alias(Type),
 }
 
 /// Context holds the current state of the type checking process, including

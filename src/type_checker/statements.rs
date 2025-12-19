@@ -110,11 +110,24 @@ impl TypeChecker {
                     // Handle "type F is map<string, int>"
                     if *kind == TypeDeclarationKind::Is {
                         if let Some(target) = target_expr {
-                            let _target_type = self.resolve_type_expression(target, context);
-                            // Define type alias logic here if needed
+                            let target_type = self.resolve_type_expression(target, context);
+                            self.global_type_definitions
+                                .insert(name.clone(), TypeDefinition::Alias(target_type));
                         }
                     } else if let Some(target) = target_expr {
                         if let Ok(target_name) = self.extract_type_name(target) {
+                            // Register type if not exists (as empty struct/interface)
+                            if !self.global_type_definitions.contains_key(&name) {
+                                self.global_type_definitions.insert(
+                                    name.clone(),
+                                    TypeDefinition::Struct(StructDefinition {
+                                        fields: vec![],
+                                        generics: None,
+                                        module: self.current_module.clone(),
+                                    }),
+                                );
+                            }
+
                             let entry = self.hierarchy.entry(name.clone()).or_default();
                             match kind {
                                 TypeDeclarationKind::Extends => entry.extends = Some(target_name),
@@ -125,6 +138,16 @@ impl TypeChecker {
                                 _ => {}
                             }
                         }
+                    } else {
+                        // "type A" - opaque type / interface
+                        self.global_type_definitions.insert(
+                            name.clone(),
+                            TypeDefinition::Struct(StructDefinition {
+                                fields: vec![],
+                                generics: None,
+                                module: self.current_module.clone(),
+                            }),
+                        );
                     }
                 }
             }

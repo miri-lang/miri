@@ -164,7 +164,7 @@ impl TypeChecker {
 
         // Handle inheritance and interfaces
         if let (Type::Custom(n1, _), Type::Custom(n2, _)) = (t1, t2) {
-            if self.is_subtype(n1, n2) {
+            if self.is_subtype(n2, n1) {
                 return true;
             }
         }
@@ -453,6 +453,12 @@ impl TypeChecker {
                                     gen_def.constraint.clone().map(Box::new),
                                     gen_def.kind.clone(),
                                 );
+                            }
+                            TypeDefinition::Alias(alias_type) => {
+                                if args.is_some() {
+                                    // TODO: Handle generic aliases
+                                }
+                                return alias_type.clone();
                             }
                         }
                     } else {
