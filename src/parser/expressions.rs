@@ -121,13 +121,13 @@ impl<'source> Parser<'source> {
         x <= y
 
         RelationalExpression
-            : AdditiveExpression
-            | AdditiveExpression RELATIONAL_OPERATOR RelationalExpression
+            : RangeExpression
+            | RangeExpression RELATIONAL_OPERATOR RelationalExpression
             ;
     */
     pub(crate) fn relational_expression(&mut self) -> Result<Expression, SyntaxError> {
         self._binary_expression(
-            Self::additive_expression,
+            Self::range_expression,
             is_relational_op,
             Self::eat_relational_op,
             ast::binary_with_span,
@@ -875,34 +875,35 @@ impl<'source> Parser<'source> {
 
     /*
         RangeExpression
-            : LeftHandSideExpression
-            | LeftHandSideExpression .. LeftHandSideExpression
-            | LeftHandSideExpression ..= LeftHandSideExpression
+            : AdditiveExpression
+            | AdditiveExpression .. AdditiveExpression
+            | AdditiveExpression ..= AdditiveExpression
             ;
     */
     pub(crate) fn range_expression(&mut self) -> Result<Expression, SyntaxError> {
-        let start = self.left_hand_side_expression()?;
-        let end: Option<Box<Expression>>;
-        let range_type;
+        let start = self.additive_expression()?;
 
         match &self._lookahead {
             Some((Token::Range, _)) => {
                 self.eat_token(&Token::Range)?;
-                range_type = RangeExpressionType::Exclusive;
-                end = opt_expr(self.left_hand_side_expression()?);
+                let end = self.additive_expression()?;
+                Ok(ast::range(
+                    start,
+                    Some(Box::new(end)),
+                    RangeExpressionType::Exclusive,
+                ))
             }
             Some((Token::RangeInclusive, _)) => {
                 self.eat_token(&Token::RangeInclusive)?;
-                range_type = RangeExpressionType::Inclusive;
-                end = opt_expr(self.left_hand_side_expression()?);
+                let end = self.additive_expression()?;
+                Ok(ast::range(
+                    start,
+                    Some(Box::new(end)),
+                    RangeExpressionType::Inclusive,
+                ))
             }
-            _ => {
-                range_type = RangeExpressionType::IterableObject;
-                end = None;
-            }
-        };
-
-        Ok(ast::range(start, end, range_type))
+            _ => Ok(start),
+        }
     }
 
     pub(crate) fn generic_types_expression(

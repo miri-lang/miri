@@ -419,31 +419,6 @@ impl TypeChecker {
         }
     }
 
-    fn define_generics(&mut self, generics: &[Expression], context: &mut Context) {
-        for gen in generics {
-            if let ExpressionKind::GenericType(name_expr, constraint_expr, kind) = &gen.node {
-                let name = if let ExpressionKind::Identifier(n, _) = &name_expr.node {
-                    n.clone()
-                } else {
-                    continue;
-                };
-
-                let constraint_type = constraint_expr
-                    .as_ref()
-                    .map(|c| self.resolve_type_expression(c, context));
-
-                context.define_type(
-                    name.clone(),
-                    TypeDefinition::Generic(GenericDefinition {
-                        name: name.clone(),
-                        constraint: constraint_type,
-                        kind: kind.clone(),
-                    }),
-                );
-            }
-        }
-    }
-
     fn check_function_declaration(&mut self, info: FunctionDeclarationInfo, context: &mut Context) {
         let FunctionDeclarationInfo {
             name,
@@ -497,6 +472,20 @@ impl TypeChecker {
 
         for param in params {
             let param_type = self.resolve_type_expression(&param.typ, context);
+
+            if let Some(default_val) = &param.default_value {
+                let default_val_type = self.infer_expression(default_val, context);
+                if !self.are_compatible(&param_type, &default_val_type, context) {
+                    self.report_error(
+                        format!(
+                            "Type mismatch for default value: expected {:?}, got {:?}",
+                            param_type, default_val_type
+                        ),
+                        default_val.span.clone(),
+                    );
+                }
+            }
+
             context.define(
                 param.name.clone(),
                 param_type,
@@ -504,6 +493,35 @@ impl TypeChecker {
                 MemberVisibility::Public,
                 self.current_module.clone(),
             ); // Parameters are immutable by default
+
+            if let Some(guard) = &param.guard {
+                if let ExpressionKind::Guard(op, right) = &guard.node {
+                    let bin_op = match op {
+                        GuardOp::NotEqual => BinaryOp::NotEqual,
+                        GuardOp::LessThan => BinaryOp::LessThan,
+                        GuardOp::LessThanEqual => BinaryOp::LessThanEqual,
+                        GuardOp::GreaterThan => BinaryOp::GreaterThan,
+                        GuardOp::GreaterThanEqual => BinaryOp::GreaterThanEqual,
+                        GuardOp::In => BinaryOp::In,
+                        GuardOp::NotIn => BinaryOp::In, // Type check is same as In
+                        GuardOp::Not => BinaryOp::NotEqual, // Assumption: not is !=
+                    };
+
+                    let left = crate::ast::factory::identifier_with_span(
+                        &param.name,
+                        param.typ.span.clone(),
+                    );
+                    let guard_type =
+                        self.infer_binary(&left, &bin_op, right, guard.span.clone(), context);
+
+                    if guard_type != Type::Boolean {
+                        self.report_error(
+                            format!("Type mismatch: guard must be boolean, got {:?}", guard_type),
+                            guard.span.clone(),
+                        );
+                    }
+                }
+            }
         }
 
         match body {

@@ -75,7 +75,7 @@ impl TypeChecker {
         }
     }
 
-    fn infer_binary(
+    pub(crate) fn infer_binary(
         &mut self,
         left: &Expression,
         op: &BinaryOp,
@@ -213,8 +213,60 @@ impl TypeChecker {
     ) -> Type {
         let func_type = self.infer_expression(func, context);
         match func_type {
-            Type::Function(_, params, return_type_expr) => {
-                if args.len() != params.len() {
+            Type::Function(generics, params, return_type_expr) => {
+                let mut generic_map = std::collections::HashMap::new();
+
+                // Evaluate arguments in the current context (before entering generic scope)
+                let mut arg_types = Vec::new();
+                for arg in args {
+                    arg_types.push(self.infer_expression(arg, context));
+                }
+
+                if let Some(gens) = &generics {
+                    context.enter_scope();
+                    self.define_generics(gens, context);
+                }
+
+                let mut arg_iter = arg_types.iter();
+                // We also need the original arg expressions for error reporting (spans)
+                let mut arg_expr_iter = args.iter();
+
+                for (i, param) in params.iter().enumerate() {
+                    let param_type = self.resolve_type_expression(&param.typ, context);
+
+                    if let Some(arg_type) = arg_iter.next() {
+                        let arg_expr = arg_expr_iter.next().unwrap();
+
+                        if generics.is_some() {
+                            self.infer_generic_types(&param_type, arg_type, &mut generic_map);
+                        }
+
+                        let concrete_param_type = if generics.is_some() {
+                            self.substitute_type(&param_type, &generic_map)
+                        } else {
+                            param_type.clone()
+                        };
+
+                        if !self.are_compatible(&concrete_param_type, arg_type, context) {
+                            self.report_error(
+                                format!(
+                                    "Type mismatch for argument {}: expected {:?}, got {:?}",
+                                    i + 1,
+                                    concrete_param_type,
+                                    arg_type
+                                ),
+                                arg_expr.span.clone(),
+                            );
+                        }
+                    } else if param.default_value.is_none() {
+                        self.report_error(
+                            format!("Missing argument for parameter '{}'", param.name),
+                            span.clone(),
+                        );
+                    }
+                }
+
+                if arg_iter.next().is_some() {
                     self.report_error(
                         format!(
                             "Incorrect number of arguments: expected {}, got {}",
@@ -225,29 +277,22 @@ impl TypeChecker {
                     );
                 }
 
-                for (i, arg) in args.iter().enumerate() {
-                    let arg_type = self.infer_expression(arg, context);
-                    if i < params.len() {
-                        let param_type = self.resolve_type_expression(&params[i].typ, context);
-                        if !self.are_compatible(&param_type, &arg_type, context) {
-                            self.report_error(
-                                format!(
-                                    "Type mismatch for argument {}: expected {:?}, got {:?}",
-                                    i + 1,
-                                    param_type,
-                                    arg_type
-                                ),
-                                arg.span.clone(),
-                            );
-                        }
+                let return_type = if let Some(rt_expr) = return_type_expr {
+                    let rt = self.resolve_type_expression(&rt_expr, context);
+                    if generics.is_some() {
+                        self.substitute_type(&rt, &generic_map)
+                    } else {
+                        rt
                     }
-                }
-
-                if let Some(rt_expr) = return_type_expr {
-                    self.resolve_type_expression(&rt_expr, context)
                 } else {
                     Type::Void
+                };
+
+                if generics.is_some() {
+                    context.exit_scope();
                 }
+
+                return_type
             }
             Type::Meta(inner_type) => {
                 if let Type::Custom(name, _) = &*inner_type {

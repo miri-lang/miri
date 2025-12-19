@@ -146,3 +146,219 @@ foo()
     ";
     check_expr_type(source, Type::Int);
 }
+
+#[test]
+fn test_default_argument_valid() {
+    check_success(
+        "
+fn foo(a int = 1)
+    return
+foo()
+foo(2)
+",
+    );
+}
+
+#[test]
+fn test_default_argument_type_mismatch() {
+    check_error(
+        "
+fn foo(a int = true)
+    return
+",
+        "Type mismatch for default value",
+    );
+}
+
+#[test]
+fn test_guard_valid() {
+    check_success(
+        "
+fn foo(a int > 0)
+    return
+foo(1)
+",
+    );
+}
+
+#[test]
+fn test_guard_type_mismatch() {
+    check_error(
+        "
+fn foo(a int > \"0\")
+    return
+",
+        "Type mismatch", // Or "Invalid types for comparison"
+    );
+}
+
+#[test]
+fn test_parameter_shadowing() {
+    check_success(
+        "
+let a = \"global\"
+fn foo(a int) int
+    return a
+foo(1)
+",
+    );
+}
+
+#[test]
+fn test_local_shadowing_parameter() {
+    check_success(
+        "
+fn foo(a int) int
+    let a = 2
+    return a
+foo(1)
+",
+    );
+}
+
+#[test]
+fn test_generic_function_inference() {
+    check_expr_type(
+        "
+fn id<T>(x T) T
+    return x
+
+id(1)
+",
+        Type::Int,
+    );
+}
+
+#[test]
+fn test_higher_order_function() {
+    check_expr_type(
+        "
+fn apply(f fn(int) int, x int) int
+    return f(x)
+
+fn square(x int) int
+    return x * x
+
+apply(square, 5)
+",
+        Type::Int,
+    );
+}
+
+#[test]
+fn test_returning_function() {
+    check_success(
+        "
+fn get_adder() fn(int) int
+    return fn(x int): x + 1
+
+let add = get_adder()
+add(1)
+",
+    );
+}
+
+#[test]
+fn test_guard_in_range() {
+    check_success(
+        "
+fn foo(a int in 1..10)
+    return
+foo(5)
+",
+    );
+}
+
+#[test]
+fn test_guard_in_list() {
+    check_success(
+        "
+fn foo(a int in [1, 2, 3])
+    return
+foo(1)
+",
+    );
+}
+
+#[test]
+fn test_guard_not() {
+    check_success(
+        "
+fn foo(a int not 0)
+    return
+foo(1)
+",
+    );
+}
+
+#[test]
+fn test_guard_referencing_previous_param() {
+    check_success(
+        "
+fn foo(a int, b int > a)
+    return
+foo(1, 2)
+",
+    );
+}
+
+#[test]
+fn test_default_value_referencing_previous_param() {
+    check_success(
+        "
+fn foo(a int, b int = a)
+    return
+foo(1)
+",
+    );
+}
+
+#[test]
+fn test_complex_generic_param() {
+    check_expr_type(
+        "
+fn first<T>(list [T]) T
+    return list[0]
+
+first([1, 2, 3])
+",
+        Type::Int,
+    );
+}
+
+#[test]
+fn test_nested_generic_param() {
+    check_expr_type(
+        "
+fn flatten<T>(list [[T]]) [T]
+    return list[0]
+
+flatten([[1], [2]])
+",
+        Type::List(Box::new(type_expr(Type::Int))),
+    );
+}
+
+#[test]
+fn test_map_generic_param() {
+    check_expr_type(
+        "
+fn get_value<K, V>(map {K: V}, key K) V
+    return map[key]
+
+get_value({\"a\": 1}, \"a\")
+",
+        Type::Int,
+    );
+}
+
+#[test]
+fn test_guard_type_mismatch_in() {
+    check_error(
+        "
+fn foo(a int in [\"string\"])
+    return
+",
+        "Type mismatch",
+    );
+}

@@ -307,7 +307,19 @@ impl<'source> Parser<'source> {
         let variable_declarations =
             self.variable_declaration_list(&VariableDeclarationType::Immutable, false)?;
         self.eat_token(&Token::In)?;
-        let iterable = self.range_expression()?;
+        let iterable_expr = self.range_expression()?;
+
+        let iterable = if let ExpressionKind::Range(_, _, _) = &iterable_expr.node {
+            iterable_expr
+        } else {
+            let span = iterable_expr.span.clone();
+            ast::range_with_span(
+                iterable_expr,
+                None,
+                RangeExpressionType::IterableObject,
+                span,
+            )
+        };
 
         if let ExpressionKind::Range(_, _, range_type) = &iterable.node {
             if *range_type != RangeExpressionType::IterableObject && variable_declarations.len() > 1

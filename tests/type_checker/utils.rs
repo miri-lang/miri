@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
-use miri::ast::{Statement, Type};
+use miri::ast::{Expression, ExpressionKind, IdNode, Statement, Type};
 use miri::error::compiler::CompilerError;
+use miri::error::syntax::Span;
 use miri::pipeline::Pipeline;
 use miri::type_checker::TypeChecker;
+
+pub fn type_expr(t: Type) -> Expression {
+    IdNode::new(0, ExpressionKind::Type(Box::new(t), false), Span::default())
+}
 
 pub fn check_success(source: &str) {
     let pipeline = Pipeline::new();

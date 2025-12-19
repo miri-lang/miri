@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
-use super::context::{Context, TypeDefinition};
+use super::context::{Context, GenericDefinition, TypeDefinition};
 use super::TypeChecker;
 use crate::ast::*;
 use crate::error::syntax::Span;
@@ -9,7 +9,7 @@ use crate::error::type_error::TypeError;
 
 impl TypeChecker {
     pub(crate) fn check_binary_op_types(
-        &self,
+        &mut self,
         left: &Type,
         op: &BinaryOp,
         right: &Type,
@@ -70,6 +70,45 @@ impl TypeChecker {
                     ))
                 }
             }
+            BinaryOp::In => match right {
+                Type::List(inner_expr) | Type::Set(inner_expr) => {
+                    let inner = self.resolve_type_expression(inner_expr, context);
+                    if self.are_compatible(&inner, left, context) {
+                        Ok(Type::Boolean)
+                    } else {
+                        Err(format!(
+                            "Type mismatch: cannot check membership of {:?} in collection of {:?}",
+                            left, inner
+                        ))
+                    }
+                }
+                Type::Map(key_expr, _) => {
+                    let key = self.resolve_type_expression(key_expr, context);
+                    if self.are_compatible(&key, left, context) {
+                        Ok(Type::Boolean)
+                    } else {
+                        Err(format!(
+                            "Type mismatch: cannot check membership of {:?} in map with keys of {:?}",
+                            left, key
+                        ))
+                    }
+                }
+                Type::Custom(name, Some(args)) if name == "Range" && args.len() == 1 => {
+                    let range_type = self.resolve_type_expression(&args[0], context);
+                    if self.are_compatible(&range_type, left, context) {
+                        Ok(Type::Boolean)
+                    } else {
+                        Err(format!(
+                            "Type mismatch: cannot check membership of {:?} in range of {:?}",
+                            left, range_type
+                        ))
+                    }
+                }
+                _ => Err(format!(
+                    "Invalid type for 'in' operator: expected collection, got {:?}",
+                    right
+                )),
+            },
             _ => Ok(Type::Boolean),
         }
     }
@@ -425,48 +464,72 @@ impl TypeChecker {
     pub(crate) fn resolve_type_expression(&mut self, expr: &Expression, context: &Context) -> Type {
         match self.extract_type_from_expression(expr) {
             Ok(t) => {
-                if let Type::Custom(name, args) = &t {
-                    let def = context.resolve_type_definition(name);
-                    if let Some(def) = def {
-                        match def {
-                            TypeDefinition::Struct(struct_def) => {
-                                self.validate_generics(
-                                    args,
-                                    &struct_def.generics,
-                                    context,
-                                    expr.span.clone(),
-                                );
-                            }
-                            TypeDefinition::Enum(_) => {
-                                // TODO: Enum generics
-                            }
-                            TypeDefinition::Generic(gen_def) => {
-                                if args.is_some() {
-                                    self.report_error(
-                                        "Generic type parameter cannot have generic arguments"
-                                            .to_string(),
+                match t {
+                    Type::List(inner) => {
+                        let resolved_inner = self.resolve_type_expression(&inner, context);
+                        Type::List(Box::new(self.create_type_expression(resolved_inner)))
+                    }
+                    Type::Set(inner) => {
+                        let resolved_inner = self.resolve_type_expression(&inner, context);
+                        Type::Set(Box::new(self.create_type_expression(resolved_inner)))
+                    }
+                    Type::Map(k, v) => {
+                        let rk = self.resolve_type_expression(&k, context);
+                        let rv = self.resolve_type_expression(&v, context);
+                        Type::Map(
+                            Box::new(self.create_type_expression(rk)),
+                            Box::new(self.create_type_expression(rv)),
+                        )
+                    }
+                    Type::Nullable(inner) => {
+                        let inner_expr = self.create_type_expression(*inner);
+                        let resolved_inner = self.resolve_type_expression(&inner_expr, context);
+                        Type::Nullable(Box::new(resolved_inner))
+                    }
+                    Type::Custom(name, args) => {
+                        let def = context.resolve_type_definition(&name);
+                        if let Some(def) = def {
+                            match def {
+                                TypeDefinition::Struct(struct_def) => {
+                                    self.validate_generics(
+                                        &args,
+                                        &struct_def.generics,
+                                        context,
                                         expr.span.clone(),
                                     );
                                 }
-                                return Type::Generic(
-                                    name.clone(),
-                                    gen_def.constraint.clone().map(Box::new),
-                                    gen_def.kind.clone(),
-                                );
-                            }
-                            TypeDefinition::Alias(alias_type) => {
-                                if args.is_some() {
-                                    // TODO: Handle generic aliases
+                                TypeDefinition::Enum(_) => {
+                                    // TODO: Enum generics
                                 }
-                                return alias_type.clone();
+                                TypeDefinition::Generic(gen_def) => {
+                                    if args.is_some() {
+                                        self.report_error(
+                                            "Generic type parameter cannot have generic arguments"
+                                                .to_string(),
+                                            expr.span.clone(),
+                                        );
+                                    }
+                                    return Type::Generic(
+                                        name.clone(),
+                                        gen_def.constraint.clone().map(Box::new),
+                                        gen_def.kind.clone(),
+                                    );
+                                }
+                                TypeDefinition::Alias(alias_type) => {
+                                    if args.is_some() {
+                                        // TODO: Handle generic aliases
+                                    }
+                                    return alias_type.clone();
+                                }
                             }
+                        } else {
+                            self.report_error(format!("Unknown type: {}", name), expr.span.clone());
+                            return Type::Error;
                         }
-                    } else {
-                        self.report_error(format!("Unknown type: {}", name), expr.span.clone());
-                        return Type::Error;
+                        Type::Custom(name, args)
                     }
+                    _ => t,
                 }
-                t
             }
             Err(msg) => {
                 self.report_error(msg, expr.span.clone());
@@ -491,5 +554,123 @@ impl TypeChecker {
 
     pub(crate) fn report_warning(&mut self, message: String, span: Span) {
         self.warnings.push(TypeError::new(message, span));
+    }
+
+    pub(crate) fn infer_generic_types(
+        &self,
+        param_type: &Type,
+        arg_type: &Type,
+        mapping: &mut std::collections::HashMap<String, Type>,
+    ) {
+        match (param_type, arg_type) {
+            (Type::Generic(name, _, _), _) => {
+                if !mapping.contains_key(name) {
+                    mapping.insert(name.clone(), arg_type.clone());
+                }
+            }
+            (Type::List(p_inner_expr), Type::List(a_inner_expr)) => {
+                if let (Ok(p_inner), Ok(a_inner)) = (
+                    self.extract_type_from_expression(p_inner_expr),
+                    self.extract_type_from_expression(a_inner_expr),
+                ) {
+                    self.infer_generic_types(&p_inner, &a_inner, mapping);
+                }
+            }
+            (Type::Map(p_k_expr, p_v_expr), Type::Map(a_k_expr, a_v_expr)) => {
+                if let (Ok(p_k), Ok(p_v), Ok(a_k), Ok(a_v)) = (
+                    self.extract_type_from_expression(p_k_expr),
+                    self.extract_type_from_expression(p_v_expr),
+                    self.extract_type_from_expression(a_k_expr),
+                    self.extract_type_from_expression(a_v_expr),
+                ) {
+                    self.infer_generic_types(&p_k, &a_k, mapping);
+                    self.infer_generic_types(&p_v, &a_v, mapping);
+                }
+            }
+            (Type::Set(p_inner_expr), Type::Set(a_inner_expr)) => {
+                if let (Ok(p_inner), Ok(a_inner)) = (
+                    self.extract_type_from_expression(p_inner_expr),
+                    self.extract_type_from_expression(a_inner_expr),
+                ) {
+                    self.infer_generic_types(&p_inner, &a_inner, mapping);
+                }
+            }
+            (Type::Nullable(p_inner), Type::Nullable(a_inner)) => {
+                self.infer_generic_types(p_inner, a_inner, mapping);
+            }
+            _ => {}
+        }
+    }
+
+    pub(crate) fn substitute_type(
+        &self,
+        ty: &Type,
+        mapping: &std::collections::HashMap<String, Type>,
+    ) -> Type {
+        match ty {
+            Type::Generic(name, _, _) => {
+                if let Some(subst) = mapping.get(name) {
+                    subst.clone()
+                } else {
+                    ty.clone()
+                }
+            }
+            Type::List(inner_expr) => {
+                if let Ok(inner) = self.extract_type_from_expression(inner_expr) {
+                    let subst_inner = self.substitute_type(&inner, mapping);
+                    Type::List(Box::new(self.create_type_expression(subst_inner)))
+                } else {
+                    ty.clone()
+                }
+            }
+            Type::Map(k_expr, v_expr) => {
+                if let (Ok(k), Ok(v)) = (
+                    self.extract_type_from_expression(k_expr),
+                    self.extract_type_from_expression(v_expr),
+                ) {
+                    Type::Map(
+                        Box::new(self.create_type_expression(self.substitute_type(&k, mapping))),
+                        Box::new(self.create_type_expression(self.substitute_type(&v, mapping))),
+                    )
+                } else {
+                    ty.clone()
+                }
+            }
+            Type::Set(inner_expr) => {
+                if let Ok(inner) = self.extract_type_from_expression(inner_expr) {
+                    let subst_inner = self.substitute_type(&inner, mapping);
+                    Type::Set(Box::new(self.create_type_expression(subst_inner)))
+                } else {
+                    ty.clone()
+                }
+            }
+            Type::Nullable(inner) => Type::Nullable(Box::new(self.substitute_type(inner, mapping))),
+            _ => ty.clone(),
+        }
+    }
+
+    pub(crate) fn define_generics(&mut self, generics: &[Expression], context: &mut Context) {
+        for gen in generics {
+            if let ExpressionKind::GenericType(name_expr, constraint_expr, kind) = &gen.node {
+                let name = if let ExpressionKind::Identifier(n, _) = &name_expr.node {
+                    n.clone()
+                } else {
+                    continue;
+                };
+
+                let constraint_type = constraint_expr
+                    .as_ref()
+                    .map(|c| self.resolve_type_expression(c, context));
+
+                context.define_type(
+                    name.clone(),
+                    TypeDefinition::Generic(GenericDefinition {
+                        name: name.clone(),
+                        constraint: constraint_type,
+                        kind: kind.clone(),
+                    }),
+                );
+            }
+        }
     }
 }
