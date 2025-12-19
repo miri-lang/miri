@@ -2,6 +2,12 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use super::utils::*;
+use miri::ast::{ExpressionKind, IdNode, Type};
+use miri::error::syntax::Span;
+
+fn type_expr(t: Type) -> miri::ast::Expression {
+    IdNode::new(0, ExpressionKind::Type(Box::new(t), false), Span::default())
+}
 
 #[test]
 fn test_for_loop_range() {
@@ -74,5 +80,150 @@ fn test_break_in_function_in_loop() {
     check_error(
         "for i in 0..10: fn foo(): break",
         "Break statement outside of loop",
+    );
+}
+
+#[test]
+fn test_while_condition_type() {
+    check_success("while true: 1");
+    check_error("while 1: 1", "While condition must be a boolean");
+}
+
+#[test]
+fn test_if_condition_type() {
+    check_success("if true: 1");
+    check_error("if 1: 1", "If condition must be a boolean");
+}
+
+#[test]
+fn test_for_loop_list() {
+    check_vars_type(
+        "
+let l = [1, 2, 3]
+for x in l
+    let y = x
+",
+        vec![("y", Type::Int)],
+    );
+}
+
+#[test]
+fn test_for_loop_string() {
+    check_vars_type(
+        "
+for c in \"hello\"
+    let y = c
+",
+        vec![("y", Type::String)],
+    );
+}
+
+#[test]
+fn test_for_loop_map() {
+    // Iterating over map yields tuples (key, value)
+    check_vars_type(
+        "
+let m = {\"a\": 1}
+for entry in m
+    let k = entry[0]
+    let v = entry[1]
+",
+        vec![("k", Type::String), ("v", Type::Int)],
+    );
+}
+
+#[test]
+fn test_for_loop_set() {
+    check_vars_type(
+        "
+let s = {1, 2, 3}
+for x in s
+    let y = x
+",
+        vec![("y", Type::Int)],
+    );
+}
+
+#[test]
+fn test_for_loop_destructuring_map() {
+    check_vars_type(
+        "
+let m = {\"a\": 1}
+for k, v in m
+    let key = k
+    let val = v
+",
+        vec![("key", Type::String), ("val", Type::Int)],
+    );
+}
+
+#[test]
+fn test_for_loop_destructuring_tuple_list() {
+    check_vars_type(
+        "
+let l = [(1, \"a\"), (2, \"b\")]
+for n, s in l
+    let num = n
+    let str = s
+",
+        vec![("num", Type::Int), ("str", Type::String)],
+    );
+}
+
+#[test]
+fn test_scope_leak() {
+    check_error(
+        "
+for i in 0..10: 1
+let x = i
+",
+        "Undefined variable: i",
+    );
+}
+
+#[test]
+fn test_return_in_loop() {
+    check_success(
+        "
+fn foo()
+    for i in 0..10
+        return
+",
+    );
+}
+
+#[test]
+fn test_break_continue_in_if_in_loop() {
+    check_success(
+        "
+for i in 0..10
+    if i > 5
+        break
+    else
+        continue
+",
+    );
+}
+
+#[test]
+fn test_unreachable_code_after_break() {
+    // Type checker might not catch this as error, but it shouldn't crash
+    check_success(
+        "
+while true
+    break
+    let x = 1
+",
+    );
+}
+
+#[test]
+fn test_unreachable_code_after_return() {
+    check_success(
+        "
+fn foo()
+    return
+    let x = 1
+",
     );
 }

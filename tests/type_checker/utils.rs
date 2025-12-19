@@ -4,6 +4,7 @@
 use miri::ast::{Statement, Type};
 use miri::error::compiler::CompilerError;
 use miri::pipeline::Pipeline;
+use miri::type_checker::TypeChecker;
 
 pub fn check_success(source: &str) {
     let pipeline = Pipeline::new();
@@ -88,6 +89,54 @@ pub fn check_exprs_type(cases: Vec<(&str, Type)>) {
     }
 }
 
+fn find_variable_type_in_statement(
+    stmt: &Statement,
+    var_name: &str,
+    type_checker: &TypeChecker,
+) -> Option<Type> {
+    match stmt {
+        Statement::Variable(decls, _) => {
+            for decl in decls {
+                if decl.name == var_name {
+                    if let Some(init) = &decl.initializer {
+                        return type_checker.get_type(init.id).cloned();
+                    }
+                }
+            }
+            None
+        }
+        Statement::Block(stmts) => find_variable_type_in_statements(stmts, var_name, type_checker),
+        Statement::If(_, then_block, else_block, _) => {
+            find_variable_type_in_statement(then_block, var_name, type_checker).or_else(|| {
+                else_block
+                    .as_ref()
+                    .and_then(|s| find_variable_type_in_statement(s, var_name, type_checker))
+            })
+        }
+        Statement::While(_, body, _) => {
+            find_variable_type_in_statement(body, var_name, type_checker)
+        }
+        Statement::For(_, _, body) => find_variable_type_in_statement(body, var_name, type_checker),
+        Statement::FunctionDeclaration(_, _, _, _, body, _) => {
+            find_variable_type_in_statement(body, var_name, type_checker)
+        }
+        _ => None,
+    }
+}
+
+fn find_variable_type_in_statements(
+    stmts: &[Statement],
+    var_name: &str,
+    type_checker: &TypeChecker,
+) -> Option<Type> {
+    for stmt in stmts {
+        if let Some(ty) = find_variable_type_in_statement(stmt, var_name, type_checker) {
+            return Some(ty);
+        }
+    }
+    None
+}
+
 pub fn check_vars_type(source: &str, expected_types: Vec<(&str, Type)>) {
     let pipeline = Pipeline::new();
     let result = match pipeline.frontend(source) {
@@ -96,30 +145,18 @@ pub fn check_vars_type(source: &str, expected_types: Vec<(&str, Type)>) {
     };
 
     for (var_name, expected_type) in expected_types {
-        let mut found = false;
-        for statement in &result.ast.body {
-            if let Statement::Variable(decls, _) = statement {
-                for decl in decls {
-                    if decl.name == var_name {
-                        if let Some(init) = &decl.initializer {
-                            if let Some(actual_type) = result.type_checker.get_type(init.id) {
-                                assert_eq!(
-                                    actual_type, &expected_type,
-                                    "Type mismatch for variable '{}'",
-                                    var_name
-                                );
-                                found = true;
-                            }
-                        }
-                    }
-                }
-            }
+        let actual_type =
+            find_variable_type_in_statements(&result.ast.body, var_name, &result.type_checker);
+
+        if let Some(ty) = actual_type {
+            assert_eq!(
+                &ty, &expected_type,
+                "Type mismatch for variable '{}'",
+                var_name
+            );
+        } else {
+            panic!("Variable '{}' not found or has no initializer", var_name);
         }
-        assert!(
-            found,
-            "Variable '{}' not found or has no initializer",
-            var_name
-        );
     }
 }
 
