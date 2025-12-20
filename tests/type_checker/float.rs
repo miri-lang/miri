@@ -213,3 +213,18 @@ y
         Type::Nullable(Box::new(Type::F32)),
     );
 }
+
+#[test]
+fn test_assignment_compatibility() {
+    // Float literal to specific type is allowed
+    check_success("let a f32 = 1.0");
+
+    // Specific type to Float (variable) - inferred as specific type
+    check_vars_type("let a f32 = 1.0\nlet b = a", vec![("b", Type::F32)]);
+
+    // Smaller to larger - allowed
+    check_vars_type("let a f32 = 1.0\nlet b f64 = a", vec![("b", Type::F64)]);
+
+    // Larger to smaller - fail
+    check_error("let a f64 = 1.0\nlet b f32 = a", "Type mismatch");
+}

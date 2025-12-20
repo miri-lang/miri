@@ -258,15 +258,11 @@ fn test_comparison_on_specific_types() {
 }
 
 #[test]
-fn test_comparison_mixed_types_fail() {
-    check_error(
-        "
-let a i8 = 1
-let b i16 = 2
-a < b
-",
-        "Type mismatch: cannot compare",
-    );
+fn test_comparison_mixed_types_success() {
+    check_exprs_type(vec![
+        ("let a i8 = 1\nlet b i16 = 2\na < b", Type::Boolean),
+        ("let a u32 = 1\nlet b u64 = 2\na == b", Type::Boolean),
+    ]);
 }
 
 #[test]
@@ -277,6 +273,9 @@ fn test_assignment_compatibility() {
     // Specific type to Int (variable) - inferred as specific type
     check_vars_type("let a i8 = 1\nlet b = a", vec![("b", Type::I8)]);
 
-    // Specific type to different specific type - fail
-    check_error("let a i8 = 1\nlet b i16 = a", "Type mismatch");
+    // Smaller to larger - allowed
+    check_vars_type("let a i8 = 1\nlet b i16 = a", vec![("b", Type::I16)]);
+
+    // Larger to smaller - fail
+    check_error("let a i16 = 1\nlet b i8 = a", "Type mismatch");
 }

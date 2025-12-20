@@ -41,7 +41,15 @@ impl TypeChecker {
             | BinaryOp::LessThanEqual
             | BinaryOp::GreaterThan
             | BinaryOp::GreaterThanEqual => {
-                if self.are_compatible(left, right, context) {
+                // Allow comparison between any integers
+                if self.is_integer(left) && self.is_integer(right) {
+                    Ok(Type::Boolean)
+                } else if (matches!(left, Type::Float | Type::F32 | Type::F64)
+                    && matches!(right, Type::Float | Type::F32 | Type::F64))
+                {
+                    // Allow comparison between any floats
+                    Ok(Type::Boolean)
+                } else if self.are_compatible(left, right, context) {
                     Ok(Type::Boolean)
                 } else {
                     Err(format!(
@@ -62,25 +70,12 @@ impl TypeChecker {
             }
             BinaryOp::BitwiseAnd | BinaryOp::BitwiseOr | BinaryOp::BitwiseXor => {
                 if self.is_integer(left) && self.is_integer(right) {
-                    if self.are_compatible(left, right, context) {
+                    if left == right || matches!(right, Type::Int) {
                         Ok(left.clone())
-                    } else if self.are_compatible(right, left, context) {
+                    } else if matches!(left, Type::Int) && self.are_compatible(right, left, context)
+                    {
                         Ok(right.clone())
                     } else {
-                        // If neither is compatible with the other (e.g. i8 and u8), fail?
-                        // Or maybe return Int?
-                        // For now, let's require compatibility or return the wider type if we implemented that.
-                        // Given are_compatible(I8, Int) is true, but are_compatible(Int, I8) is false (unless I change it).
-                        // Wait, I added `if matches!(t2, Type::Int) && self.is_integer(t1)`.
-                        // So `are_compatible(I8, Int)` is true.
-                        // `are_compatible(Int, I8)` is false.
-                        // So if we have `let x: i8 = 1; let y = x & 1`, left=I8, right=Int.
-                        // are_compatible(I8, Int) -> true. Returns I8. Correct.
-
-                        // What about `let x: i8 = 1; let y: u8 = 1; let z = x & y`?
-                        // are_compatible(I8, U8) -> false.
-                        // are_compatible(U8, I8) -> false.
-                        // Error. This is correct for strict typing.
                         Err(format!(
                             "Type mismatch: {:?} and {:?} are not compatible for bitwise operation",
                             left, right
@@ -217,6 +212,18 @@ impl TypeChecker {
         }
     }
 
+    pub(crate) fn get_integer_size(&self, t: &Type) -> Option<u8> {
+        match t {
+            Type::I8 | Type::U8 => Some(8),
+            Type::I16 | Type::U16 => Some(16),
+            Type::I32 | Type::U32 => Some(32),
+            Type::I64 | Type::U64 => Some(64),
+            Type::I128 | Type::U128 => Some(128),
+            Type::Int => Some(128), // Treat literal Int as max size for compatibility checks? Or handle separately.
+            _ => None,
+        }
+    }
+
     pub(crate) fn are_compatible(&self, t1: &Type, t2: &Type, context: &Context) -> bool {
         if t1 == t2 {
             return true;
@@ -248,6 +255,28 @@ impl TypeChecker {
 
         // Allow Type::Float (literals) to be assigned to any float type
         if matches!(t2, Type::Float) && matches!(t1, Type::F32 | Type::F64) {
+            return true;
+        }
+
+        // Integer widening: Allow assigning smaller integer to larger integer
+        // t1 is the target type (variable), t2 is the source type (value)
+        // e.g. let a: i16 = b (where b is i8). t1=I16, t2=I8.
+        if self.is_integer(t1) && self.is_integer(t2) {
+            if let (Some(s1), Some(s2)) = (self.get_integer_size(t1), self.get_integer_size(t2)) {
+                if s1 >= s2 {
+                    // Also check signedness compatibility?
+                    // For now, let's assume simple size check as requested "assigning smaller type to a larger".
+                    // Strict signedness check might be needed later.
+                    // e.g. u8 -> i16 (ok), i8 -> u16 (maybe not ok if negative?)
+                    // User said "assigning smaller type to a larger".
+                    // Let's stick to size for now.
+                    return true;
+                }
+            }
+        }
+
+        // Float widening
+        if matches!(t1, Type::F64) && matches!(t2, Type::F32) {
             return true;
         }
 
