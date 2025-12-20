@@ -61,8 +61,31 @@ impl TypeChecker {
                 }
             }
             BinaryOp::BitwiseAnd | BinaryOp::BitwiseOr | BinaryOp::BitwiseXor => {
-                if matches!(left, Type::Int) && matches!(right, Type::Int) {
-                    Ok(Type::Int)
+                if self.is_integer(left) && self.is_integer(right) {
+                    if self.are_compatible(left, right, context) {
+                        Ok(left.clone())
+                    } else if self.are_compatible(right, left, context) {
+                        Ok(right.clone())
+                    } else {
+                        // If neither is compatible with the other (e.g. i8 and u8), fail?
+                        // Or maybe return Int?
+                        // For now, let's require compatibility or return the wider type if we implemented that.
+                        // Given are_compatible(I8, Int) is true, but are_compatible(Int, I8) is false (unless I change it).
+                        // Wait, I added `if matches!(t2, Type::Int) && self.is_integer(t1)`.
+                        // So `are_compatible(I8, Int)` is true.
+                        // `are_compatible(Int, I8)` is false.
+                        // So if we have `let x: i8 = 1; let y = x & 1`, left=I8, right=Int.
+                        // are_compatible(I8, Int) -> true. Returns I8. Correct.
+
+                        // What about `let x: i8 = 1; let y: u8 = 1; let z = x & y`?
+                        // are_compatible(I8, U8) -> false.
+                        // are_compatible(U8, I8) -> false.
+                        // Error. This is correct for strict typing.
+                        Err(format!(
+                            "Type mismatch: {:?} and {:?} are not compatible for bitwise operation",
+                            left, right
+                        ))
+                    }
                 } else {
                     Err(format!(
                         "Invalid types for bitwise operation: {:?} and {:?}",
@@ -167,6 +190,23 @@ impl TypeChecker {
         )
     }
 
+    pub(crate) fn is_integer(&self, t: &Type) -> bool {
+        matches!(
+            t,
+            Type::Int
+                | Type::I8
+                | Type::I16
+                | Type::I32
+                | Type::I64
+                | Type::I128
+                | Type::U8
+                | Type::U16
+                | Type::U32
+                | Type::U64
+                | Type::U128
+        )
+    }
+
     pub(crate) fn check_visibility(&self, visibility: &MemberVisibility, module: &str) -> bool {
         match visibility {
             MemberVisibility::Public => true,
@@ -199,6 +239,16 @@ impl TypeChecker {
         // unless t2 is Nullable(Void) (None) which is definitely incompatible with non-nullable t1
         if let Type::Nullable(_) = t2 {
             return false;
+        }
+
+        // Allow Type::Int (literals) to be assigned to any integer type
+        if matches!(t2, Type::Int) && self.is_integer(t1) {
+            return true;
+        }
+
+        // Allow Type::Float (literals) to be assigned to any float type
+        if matches!(t2, Type::Float) && matches!(t1, Type::F32 | Type::F64) {
+            return true;
         }
 
         // Handle inheritance and interfaces

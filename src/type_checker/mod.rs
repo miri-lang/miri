@@ -58,6 +58,10 @@ impl TypeChecker {
         self.types.get(&id)
     }
 
+    pub fn get_variable_type(&self, name: &str) -> Option<&Type> {
+        self.global_scope.get(name).map(|info| &info.ty)
+    }
+
     /// Main entry point for type checking a program.
     pub fn check(&mut self, program: &Program) -> Result<(), Vec<TypeError>> {
         let mut context = Context::new();
