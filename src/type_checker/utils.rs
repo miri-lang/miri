@@ -487,12 +487,24 @@ impl TypeChecker {
                         Type::Nullable(Box::new(resolved_inner))
                     }
                     Type::Custom(name, args) => {
+                        // Resolve generic arguments recursively
+                        let resolved_args = if let Some(args_vec) = args {
+                            let mut resolved = Vec::new();
+                            for arg in args_vec {
+                                let resolved_type = self.resolve_type_expression(&arg, context);
+                                resolved.push(self.create_type_expression(resolved_type));
+                            }
+                            Some(resolved)
+                        } else {
+                            None
+                        };
+
                         let def = context.resolve_type_definition(&name);
                         if let Some(def) = def {
                             match def {
                                 TypeDefinition::Struct(struct_def) => {
                                     self.validate_generics(
-                                        &args,
+                                        &resolved_args,
                                         &struct_def.generics,
                                         context,
                                         expr.span.clone(),
@@ -502,7 +514,7 @@ impl TypeChecker {
                                     // TODO: Enum generics
                                 }
                                 TypeDefinition::Generic(gen_def) => {
-                                    if args.is_some() {
+                                    if resolved_args.is_some() {
                                         self.report_error(
                                             "Generic type parameter cannot have generic arguments"
                                                 .to_string(),
@@ -516,7 +528,7 @@ impl TypeChecker {
                                     );
                                 }
                                 TypeDefinition::Alias(alias_type) => {
-                                    if args.is_some() {
+                                    if resolved_args.is_some() {
                                         // TODO: Handle generic aliases
                                     }
                                     return alias_type.clone();
@@ -526,7 +538,7 @@ impl TypeChecker {
                             self.report_error(format!("Unknown type: {}", name), expr.span.clone());
                             return Type::Error;
                         }
-                        Type::Custom(name, args)
+                        Type::Custom(name, resolved_args)
                     }
                     _ => t,
                 }
@@ -597,6 +609,22 @@ impl TypeChecker {
             }
             (Type::Nullable(p_inner), Type::Nullable(a_inner)) => {
                 self.infer_generic_types(p_inner, a_inner, mapping);
+            }
+            (Type::Custom(p_name, p_args), Type::Custom(a_name, a_args)) => {
+                if p_name == a_name {
+                    if let (Some(p_args), Some(a_args)) = (p_args, a_args) {
+                        if p_args.len() == a_args.len() {
+                            for (p_arg_expr, a_arg_expr) in p_args.iter().zip(a_args.iter()) {
+                                if let (Ok(p_arg), Ok(a_arg)) = (
+                                    self.extract_type_from_expression(p_arg_expr),
+                                    self.extract_type_from_expression(a_arg_expr),
+                                ) {
+                                    self.infer_generic_types(&p_arg, &a_arg, mapping);
+                                }
+                            }
+                        }
+                    }
+                }
             }
             _ => {}
         }

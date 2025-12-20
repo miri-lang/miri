@@ -5,6 +5,7 @@ use super::context::{Context, TypeDefinition};
 use super::TypeChecker;
 use crate::ast::*;
 use crate::error::syntax::Span;
+use std::collections::HashMap;
 
 impl TypeChecker {
     pub(crate) fn infer_expression(&mut self, expr: &Expression, context: &mut Context) -> Type {
@@ -609,7 +610,7 @@ impl TypeChecker {
         };
 
         match obj_type {
-            Type::Custom(name, _) => {
+            Type::Custom(name, args) => {
                 // Instance member access (Struct field)
                 // We need to clone the definition to avoid borrowing issues with context
                 let def_opt = context
@@ -628,6 +629,23 @@ impl TypeChecker {
                             );
                             return Type::Error;
                         }
+
+                        // Substitute generic parameters if present
+                        if let Some(generics) = &def.generics {
+                            if let Some(type_args) = &args {
+                                if generics.len() == type_args.len() {
+                                    let mut mapping = HashMap::new();
+                                    for (param, arg_expr) in generics.iter().zip(type_args.iter()) {
+                                        let arg_type = self
+                                            .extract_type_from_expression(arg_expr)
+                                            .unwrap_or(Type::Error);
+                                        mapping.insert(param.name.clone(), arg_type);
+                                    }
+                                    return self.substitute_type(field_type, &mapping);
+                                }
+                            }
+                        }
+
                         field_type.clone()
                     } else {
                         self.report_error(
