@@ -207,13 +207,28 @@ impl TypeChecker {
         if let (Some(type_expr), Some(init)) = (&decl.typ, &decl.initializer) {
             let declared_type = self.resolve_type_expression(type_expr, context);
             if !self.are_compatible(&declared_type, &inferred_type, context) {
-                self.report_error(
-                    format!(
-                        "Type mismatch for variable '{}': expected {:?}, got {:?}",
-                        decl.name, declared_type, inferred_type
-                    ),
-                    init.span.clone(),
-                );
+                // Check for list literal compatibility (e.g. [1] -> [i16])
+                let mut compatible = false;
+                if let (Type::List(target_inner), ExpressionKind::List(elements)) =
+                    (&declared_type, &init.node)
+                {
+                    if let Ok(target_inner_type) = self.extract_type_from_expression(target_inner) {
+                        if self.is_integer(&target_inner_type) {
+                            compatible =
+                                self.check_integer_list_literal(elements, &target_inner_type);
+                        }
+                    }
+                }
+
+                if !compatible {
+                    self.report_error(
+                        format!(
+                            "Type mismatch for variable '{}': expected {:?}, got {:?}",
+                            decl.name, declared_type, inferred_type
+                        ),
+                        init.span.clone(),
+                    );
+                }
             } else {
                 // Check for warning: assigning non-nullable to nullable immutable variable
                 if let Type::Nullable(_) = &declared_type {
@@ -745,5 +760,98 @@ impl TypeChecker {
             visibility.clone(),
             self.current_module.clone(),
         );
+    }
+
+    fn check_integer_list_literal(&self, elements: &[Expression], target_type: &Type) -> bool {
+        let target_size = match self.get_integer_size(target_type) {
+            Some(s) => s,
+            None => return false,
+        };
+
+        for element in elements {
+            if let ExpressionKind::Literal(Literal::Integer(int_val)) = &element.node {
+                if !self.integer_fits(int_val, target_size, target_type) {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn integer_fits(&self, val: &IntegerLiteral, size: u8, target_type: &Type) -> bool {
+        let is_target_unsigned = matches!(
+            target_type,
+            Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::U128
+        );
+
+        match val {
+            IntegerLiteral::U128(v) => {
+                if is_target_unsigned {
+                    let max = match size {
+                        8 => u8::MAX as u128,
+                        16 => u16::MAX as u128,
+                        32 => u32::MAX as u128,
+                        64 => u64::MAX as u128,
+                        128 => u128::MAX,
+                        _ => return false,
+                    };
+                    *v <= max
+                } else {
+                    let max = match size {
+                        8 => i8::MAX as u128,
+                        16 => i16::MAX as u128,
+                        32 => i32::MAX as u128,
+                        64 => i64::MAX as u128,
+                        128 => i128::MAX as u128,
+                        _ => return false,
+                    };
+                    *v <= max
+                }
+            }
+            _ => {
+                let val_i128 = match val {
+                    IntegerLiteral::I8(v) => *v as i128,
+                    IntegerLiteral::I16(v) => *v as i128,
+                    IntegerLiteral::I32(v) => *v as i128,
+                    IntegerLiteral::I64(v) => *v as i128,
+                    IntegerLiteral::I128(v) => *v,
+                    IntegerLiteral::U8(v) => *v as i128,
+                    IntegerLiteral::U16(v) => *v as i128,
+                    IntegerLiteral::U32(v) => *v as i128,
+                    IntegerLiteral::U64(v) => *v as i128,
+                    _ => unreachable!(),
+                };
+
+                if is_target_unsigned {
+                    if val_i128 < 0 {
+                        return false;
+                    }
+                    let max = match size {
+                        8 => u8::MAX as i128,
+                        16 => u16::MAX as i128,
+                        32 => u32::MAX as i128,
+                        64 => u64::MAX as i128,
+                        128 => i128::MAX,
+                        _ => return false,
+                    };
+                    if size == 128 {
+                        return true;
+                    }
+                    val_i128 <= max
+                } else {
+                    let (min, max) = match size {
+                        8 => (i8::MIN as i128, i8::MAX as i128),
+                        16 => (i16::MIN as i128, i16::MAX as i128),
+                        32 => (i32::MIN as i128, i32::MAX as i128),
+                        64 => (i64::MIN as i128, i64::MAX as i128),
+                        128 => (i128::MIN, i128::MAX),
+                        _ => return false,
+                    };
+                    val_i128 >= min && val_i128 <= max
+                }
+            }
+        }
     }
 }

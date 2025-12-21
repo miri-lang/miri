@@ -66,7 +66,15 @@ impl TypeChecker {
     pub fn check(&mut self, program: &Program) -> Result<(), Vec<TypeError>> {
         let mut context = Context::new();
         for statement in &program.body {
-            self.check_statement(statement, &mut context);
+            // Flatten top-level blocks to ensure variables are declared in the global scope
+            // This handles cases where the entire program is indented (e.g. in tests)
+            if let Statement::Block(stmts) = statement {
+                for stmt in stmts {
+                    self.check_statement(stmt, &mut context);
+                }
+            } else {
+                self.check_statement(statement, &mut context);
+            }
         }
 
         if self.errors.is_empty() {

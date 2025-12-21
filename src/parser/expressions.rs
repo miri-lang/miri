@@ -230,6 +230,38 @@ impl<'source> Parser<'source> {
                     let span = expression.span.start..rparen_span.end;
                     ast::call_with_span(expression, args, span)
                 }
+                Some((Token::LessThan, _)) => {
+                    // Heuristic: If there is whitespace between the expression and '<', it's a comparison.
+                    // If there is no whitespace, it's a generic argument list.
+                    // e.g. `a < b` (comparison), `foo<T>` (generic)
+                    let prev_end = expression.span.end;
+                    let current_start = self._lookahead.as_ref().unwrap().1.start;
+
+                    if current_start > prev_end {
+                        break;
+                    }
+
+                    let args = self.multiple_element_type_expressions(
+                        "Generic arguments",
+                        &Token::LessThan,
+                        &Token::GreaterThan,
+                    )?;
+                    let end = args
+                        .last()
+                        .map(|a| a.span.end)
+                        .unwrap_or(expression.span.end);
+                    let span = expression.span.start..end;
+                    IdNode::new(
+                        0,
+                        ExpressionKind::TypeDeclaration(
+                            Box::new(expression),
+                            Some(args),
+                            TypeDeclarationKind::None,
+                            None,
+                        ),
+                        span,
+                    )
+                }
                 _ => break,
             };
         }

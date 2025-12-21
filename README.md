@@ -72,6 +72,7 @@ let u = User(id: 1, name: "Alice")
 ## Project Structure
 
 Miri enforces a clean project structure:
+
 - One public type per file.
 - File name matches the type name.
 - Folder structure defines the namespace.
@@ -99,17 +100,22 @@ cargo test
 To contribute to Miri, please ensure your code meets the quality standards:
 
 1. **Format your code**:
-   ```bash
-   cargo fmt
-   ```
+
+    ```bash
+    cargo fmt
+    ```
+
 2. **Run the linter**:
-   ```bash
-   cargo clippy -- -D warnings
-   ```
+
+    ```bash
+    cargo clippy -- -D warnings
+    ```
+
 3. **Run tests**:
-   ```bash
-   cargo test
-   ```
+
+    ```bash
+    cargo test
+    ```
 
 ## License
 

@@ -54,6 +54,15 @@ impl TypeChecker {
             ExpressionKind::Lambda(generics, params, return_type, body, properties) => {
                 self.infer_lambda(generics, params, return_type, body, properties, context)
             }
+            ExpressionKind::TypeDeclaration(expr, generics, kind, target) => self
+                .infer_generic_instantiation(
+                    expr,
+                    generics,
+                    kind,
+                    target,
+                    expr.span.clone(),
+                    context,
+                ),
             _ => Type::Int, // Default fallback for unimplemented expressions
         };
 
@@ -1079,5 +1088,65 @@ impl TypeChecker {
                 Type::Void
             }
         }
+    }
+
+    fn infer_generic_instantiation(
+        &mut self,
+        expr: &Expression,
+        generics: &Option<Vec<Expression>>,
+        kind: &TypeDeclarationKind,
+        target: &Option<Box<Expression>>,
+        span: Span,
+        context: &mut Context,
+    ) -> Type {
+        if *kind == TypeDeclarationKind::None && target.is_none() {
+            if let Some(args) = generics {
+                let expr_type = self.infer_expression(expr, context);
+                if let Type::Function(Some(params), func_params, ret) = expr_type {
+                    let mut mapping = HashMap::new();
+                    if params.len() != args.len() {
+                        self.report_error("Generic argument count mismatch".to_string(), span);
+                        return Type::Error;
+                    }
+
+                    for (i, param) in params.iter().enumerate() {
+                        if let ExpressionKind::GenericType(name_expr, _, _) = &param.node {
+                            if let ExpressionKind::Identifier(name, _) = &name_expr.node {
+                                let arg_type = self.resolve_type_expression(&args[i], context);
+                                mapping.insert(name.clone(), arg_type);
+                            }
+                        }
+                    }
+
+                    let mut new_params = Vec::new();
+                    for p in func_params {
+                        let p_type = self
+                            .extract_type_from_expression(&p.typ)
+                            .unwrap_or(Type::Error);
+                        let new_p_type = self.substitute_type(&p_type, &mapping);
+                        new_params.push(Parameter {
+                            name: p.name.clone(),
+                            typ: Box::new(self.create_type_expression(new_p_type)),
+                            guard: p.guard.clone(),
+                            default_value: p.default_value.clone(),
+                        });
+                    }
+
+                    let new_ret = if let Some(r) = ret {
+                        let r_type = self.extract_type_from_expression(&r).unwrap_or(Type::Error);
+                        let new_r_type = self.substitute_type(&r_type, &mapping);
+                        Some(Box::new(self.create_type_expression(new_r_type)))
+                    } else {
+                        None
+                    };
+
+                    return Type::Function(None, new_params, new_ret);
+                } else {
+                    self.report_error("Expected generic function".to_string(), span);
+                    return Type::Error;
+                }
+            }
+        }
+        Type::Error
     }
 }

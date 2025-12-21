@@ -453,7 +453,10 @@ pub(crate) fn is_less_than(token: &Token) -> bool {
 }
 
 pub(crate) fn is_member_expression_boundary(token: &Token) -> bool {
-    matches!(token, Token::LBracket | Token::Dot | Token::LParen)
+    matches!(
+        token,
+        Token::LBracket | Token::Dot | Token::LParen | Token::LessThan
+    )
 }
 
 pub(crate) fn is_inheritance_modifier(token: &Token) -> bool {

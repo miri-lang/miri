@@ -607,6 +607,10 @@ pub fn null_typ(t: Type) -> Expression {
     type_expression(t, true)
 }
 
+pub fn type_map(key_type: Type, value_type: Type) -> Type {
+    Type::Map(Box::new(typ(key_type)), Box::new(typ(value_type)))
+}
+
 pub fn type_declaration_expression(
     name: Expression,
     generic_types: Option<Vec<Expression>>,

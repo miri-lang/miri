@@ -258,6 +258,11 @@ impl TypeChecker {
             return true;
         }
 
+        // Allow F32/F64 to be assigned to Type::Float (variable)
+        if matches!(t1, Type::Float) && matches!(t2, Type::F32 | Type::F64) {
+            return true;
+        }
+
         // Integer widening: Allow assigning smaller integer to larger integer
         // t1 is the target type (variable), t2 is the source type (value)
         // e.g. let a: i16 = b (where b is i8). t1=I16, t2=I8.
@@ -288,6 +293,54 @@ impl TypeChecker {
         }
 
         match (t1, t2) {
+            (Type::List(inner1), Type::List(inner2)) => {
+                if let Ok(t2_inner) = self.extract_type_from_expression(inner2) {
+                    if matches!(t2_inner, Type::Void) {
+                        return true;
+                    }
+                    if let Ok(t1_inner) = self.extract_type_from_expression(inner1) {
+                        // If target is specific integer and source is generic Int (literal),
+                        // we return false to force value checking in check_variable_declaration
+                        if matches!(t2_inner, Type::Int)
+                            && self.is_integer(&t1_inner)
+                            && !matches!(t1_inner, Type::Int)
+                        {
+                            return false;
+                        }
+                        return self.are_compatible(&t1_inner, &t2_inner, context);
+                    }
+                }
+                false
+            }
+            (Type::Set(inner1), Type::Set(inner2)) => {
+                if let Ok(t2_inner) = self.extract_type_from_expression(inner2) {
+                    if matches!(t2_inner, Type::Void) {
+                        return true;
+                    }
+                    if let Ok(t1_inner) = self.extract_type_from_expression(inner1) {
+                        return self.are_compatible(&t1_inner, &t2_inner, context);
+                    }
+                }
+                false
+            }
+            (Type::Map(k1, v1), Type::Map(k2, v2)) => {
+                if let (Ok(k2_t), Ok(v2_t)) = (
+                    self.extract_type_from_expression(k2),
+                    self.extract_type_from_expression(v2),
+                ) {
+                    if matches!(k2_t, Type::Void) && matches!(v2_t, Type::Void) {
+                        return true;
+                    }
+                    if let (Ok(k1_t), Ok(v1_t)) = (
+                        self.extract_type_from_expression(k1),
+                        self.extract_type_from_expression(v1),
+                    ) {
+                        return self.are_compatible(&k1_t, &k2_t, context)
+                            && self.are_compatible(&v1_t, &v2_t, context);
+                    }
+                }
+                false
+            }
             (Type::Function(gen1, params1, ret1), Type::Function(gen2, params2, ret2)) => {
                 // Check generics count
                 if gen1.as_ref().map(|v| v.len()).unwrap_or(0)
@@ -566,6 +619,34 @@ impl TypeChecker {
                         Type::Nullable(Box::new(resolved_inner))
                     }
                     Type::Custom(name, args) => {
+                        // Handle built-in generic types
+                        if name == "map" {
+                            if let Some(args) = &args {
+                                if args.len() == 2 {
+                                    let k = self.resolve_type_expression(&args[0], context);
+                                    let v = self.resolve_type_expression(&args[1], context);
+                                    return Type::Map(
+                                        Box::new(self.create_type_expression(k)),
+                                        Box::new(self.create_type_expression(v)),
+                                    );
+                                }
+                            }
+                        } else if name == "list" {
+                            if let Some(args) = &args {
+                                if args.len() == 1 {
+                                    let t = self.resolve_type_expression(&args[0], context);
+                                    return Type::List(Box::new(self.create_type_expression(t)));
+                                }
+                            }
+                        } else if name == "set" {
+                            if let Some(args) = &args {
+                                if args.len() == 1 {
+                                    let t = self.resolve_type_expression(&args[0], context);
+                                    return Type::Set(Box::new(self.create_type_expression(t)));
+                                }
+                            }
+                        }
+
                         // Resolve generic arguments recursively
                         let resolved_args = if let Some(args_vec) = args {
                             let mut resolved = Vec::new();
@@ -721,6 +802,27 @@ impl TypeChecker {
                 } else {
                     ty.clone()
                 }
+            }
+            Type::Custom(name, args) => {
+                if args.is_none() {
+                    if let Some(subst) = mapping.get(name) {
+                        return subst.clone();
+                    }
+                }
+                // Also substitute in args if present
+                let new_args = args.as_ref().map(|args_vec| {
+                    args_vec
+                        .iter()
+                        .map(|arg| {
+                            let arg_type = self
+                                .extract_type_from_expression(arg)
+                                .unwrap_or(Type::Error);
+                            let subst_arg = self.substitute_type(&arg_type, mapping);
+                            self.create_type_expression(subst_arg)
+                        })
+                        .collect()
+                });
+                Type::Custom(name.clone(), new_args)
             }
             Type::List(inner_expr) => {
                 if let Ok(inner) = self.extract_type_from_expression(inner_expr) {
