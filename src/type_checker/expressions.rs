@@ -777,6 +777,12 @@ impl TypeChecker {
         _properties: &FunctionProperties,
         context: &mut Context,
     ) -> Type {
+        context.enter_scope();
+
+        if let Some(gens) = generics {
+            self.define_generics(gens, context);
+        }
+
         // Determine expected return type
         let expected_return_type = return_type_expr
             .as_ref()
@@ -789,8 +795,6 @@ impl TypeChecker {
             context.return_types.push(Type::Void); // Placeholder
             context.inferred_return_types.push(Some(Vec::new()));
         }
-
-        context.enter_scope();
 
         // Reset loop depth for function body as it's a new context
         let old_loop_depth = context.loop_depth;
