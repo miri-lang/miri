@@ -16,10 +16,12 @@ fn test_map_variable_definitions() {
         "
         let m1 {int: int} = { 10: 100, 20: 200 } 
         let m2 map<string, float> = { \"a\": 1.1, \"b\": 2.2 }
+        let m3 map<i128, f64> = { 1: 1.1, 2: 2.2 }
 ",
         vec![
             ("m1", type_map(Type::Int, Type::Int)),
             ("m2", type_map(Type::String, Type::Float)),
+            ("m3", type_map(Type::I128, Type::F64)),
         ],
     )
 }
@@ -111,7 +113,7 @@ fn test_empty_map_with_specified_types() {
 }
 
 #[test]
-fn test_empty_map_with_specified_types_2() {
+fn test_empty_map_with_specified_types_named() {
     check_vars_type(
         "
     let m2 map<string, float> = {}

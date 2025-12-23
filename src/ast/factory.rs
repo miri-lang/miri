@@ -611,6 +611,18 @@ pub fn type_map(key_type: Type, value_type: Type) -> Type {
     Type::Map(Box::new(typ(key_type)), Box::new(typ(value_type)))
 }
 
+pub fn type_list(element_type: Type) -> Type {
+    Type::List(Box::new(typ(element_type)))
+}
+
+pub fn type_set(element_type: Type) -> Type {
+    Type::Set(Box::new(typ(element_type)))
+}
+
+pub fn type_tuple(element_types: Vec<Type>) -> Type {
+    Type::Tuple(element_types.into_iter().map(typ).collect())
+}
+
 pub fn type_declaration_expression(
     name: Expression,
     generic_types: Option<Vec<Expression>>,

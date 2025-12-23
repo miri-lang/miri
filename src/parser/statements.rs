@@ -449,6 +449,19 @@ impl<'source> Parser<'source> {
     */
     pub(crate) fn expression_statement(&mut self) -> Result<Statement, SyntaxError> {
         let expression = self.expression()?;
+
+        // Special handling for block expressions (like Match) which might consume the Dedent
+        // and thus not require a trailing newline if followed by another statement.
+        if matches!(expression.node, ExpressionKind::Match(..)) {
+            // If we are at a statement start or end of block, we can skip eat_statement_end
+            if self.lookahead_is_statement_start()
+                || self.lookahead_is_dedent()
+                || self._lookahead.is_none()
+            {
+                return Ok(ast::expression_statement(expression));
+            }
+        }
+
         self.eat_statement_end()?;
         Ok(ast::expression_statement(expression))
     }

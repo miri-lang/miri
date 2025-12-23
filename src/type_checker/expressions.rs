@@ -751,11 +751,11 @@ impl TypeChecker {
         let mut first_branch_type = None;
 
         for branch in branches {
+            context.enter_scope();
             for pattern in &branch.patterns {
                 self.check_pattern(pattern, &subject_type, context, span.clone());
             }
 
-            context.enter_scope();
             let body_type = self.infer_statement_type(&branch.body, context);
             context.exit_scope();
 

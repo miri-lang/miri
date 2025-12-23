@@ -2,19 +2,37 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use super::utils::*;
-use miri::ast::{factory, Type};
+use miri::ast::factory::type_list;
+use miri::ast::Type;
 
 #[test]
 fn test_list_literal_int() {
-    check_expr_type("[1, 2, 3]", Type::List(Box::new(factory::typ(Type::Int))));
+    check_expr_type("[1, 2, 3]", type_list(Type::Int));
+}
+
+#[test]
+fn test_list_variable_definitions() {
+    check_vars_type(
+        "
+        let l1 [int] = [10, 20, 30]
+        let l2 list<string> = [\"a\", \"b\", \"c\"]
+        let l3 list<i128> = [1, 2, 3]
+        let l4 list<float> = [1.1, 2.2, 3.3]
+        let l5 list<f64> = [1.5, 2.5, 3.5]
+",
+        vec![
+            ("l1", type_list(Type::Int)),
+            ("l2", type_list(Type::String)),
+            ("l3", type_list(Type::I128)),
+            ("l4", type_list(Type::Float)),
+            ("l5", type_list(Type::F64)),
+        ],
+    )
 }
 
 #[test]
 fn test_list_literal_string() {
-    check_expr_type(
-        "[\"a\", \"b\"]",
-        Type::List(Box::new(factory::typ(Type::String))),
-    );
+    check_expr_type("[\"a\", \"b\"]", type_list(Type::String));
 }
 
 #[test]
@@ -74,17 +92,32 @@ let i = \"0\"
 
 #[test]
 fn test_empty_list() {
-    check_expr_type("[]", Type::List(Box::new(factory::typ(Type::Void))));
+    check_expr_type("[]", type_list(Type::Void));
+}
+
+#[test]
+fn test_empty_list_with_specified_types() {
+    check_vars_type(
+        "
+    let l1 [string] = []
+",
+        vec![("l1", type_list(Type::String))],
+    );
+}
+
+#[test]
+fn test_empty_list_with_specified_types_named() {
+    check_vars_type(
+        "
+    let l2 list<int> = []
+",
+        vec![("l2", type_list(Type::Int))],
+    );
 }
 
 #[test]
 fn test_nested_list() {
-    check_expr_type(
-        "[[1, 2], [3, 4]]",
-        Type::List(Box::new(factory::typ(Type::List(Box::new(factory::typ(
-            Type::Int,
-        )))))),
-    );
+    check_expr_type("[[1, 2], [3, 4]]", type_list(type_list(Type::Int)));
 }
 
 #[test]

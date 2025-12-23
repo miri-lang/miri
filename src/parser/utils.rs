@@ -125,6 +125,40 @@ impl<'source> Parser<'source> {
         self.match_lookahead_type(is_function_modifier)
     }
 
+    pub(crate) fn lookahead_is_statement_start(&self) -> bool {
+        self.match_lookahead_type(|t| {
+            matches!(
+                t,
+                Token::Public
+                    | Token::Protected
+                    | Token::Private
+                    | Token::Indent
+                    | Token::Let
+                    | Token::Var
+                    | Token::If
+                    | Token::Unless
+                    | Token::While
+                    | Token::Until
+                    | Token::Do
+                    | Token::Forever
+                    | Token::For
+                    | Token::Async
+                    | Token::Fn
+                    | Token::Gpu
+                    | Token::Return
+                    | Token::Use
+                    | Token::Type
+                    | Token::Break
+                    | Token::Continue
+                    | Token::Enum
+                    | Token::Struct
+                    | Token::Extends
+                    | Token::Implements
+                    | Token::Includes
+            )
+        })
+    }
+
     pub(crate) fn eat_additive_op(&mut self) -> Result<BinaryOp, Result<Expression, SyntaxError>> {
         let op = match self.eat_binary_op(is_additive_op) {
             Ok(token) => match token.0 {
