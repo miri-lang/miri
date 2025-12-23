@@ -32,12 +32,10 @@ impl TypeChecker {
             ExpressionKind::Range(start, end, kind) => {
                 self.infer_range(start, end, kind, expr.span.clone(), context)
             }
-            ExpressionKind::List(elements) => self.infer_list(elements, expr.span.clone(), context),
-            ExpressionKind::Map(entries) => self.infer_map(entries, expr.span.clone(), context),
-            ExpressionKind::Set(elements) => self.infer_set(elements, expr.span.clone(), context),
-            ExpressionKind::Tuple(elements) => {
-                self.infer_tuple(elements, expr.span.clone(), context)
-            }
+            ExpressionKind::List(elements) => self.infer_list(elements, context),
+            ExpressionKind::Map(entries) => self.infer_map(entries, context),
+            ExpressionKind::Set(elements) => self.infer_set(elements, context),
+            ExpressionKind::Tuple(elements) => self.infer_tuple(elements, context),
             ExpressionKind::Index(obj, index) => {
                 self.infer_index(obj, index, expr.span.clone(), context)
             }
@@ -376,32 +374,33 @@ impl TypeChecker {
         Type::Custom("Range".to_string(), Some(vec![type_expr]))
     }
 
-    fn infer_list(&mut self, elements: &[Expression], span: Span, context: &mut Context) -> Type {
+    fn infer_list(&mut self, elements: &[Expression], context: &mut Context) -> Type {
         if elements.is_empty() {
             return Type::List(Box::new(self.create_type_expression(Type::Void)));
         }
 
         let first_type = self.infer_expression(&elements[0], context);
+        let mut has_error = false;
+
         for element in &elements[1..] {
             let element_type = self.infer_expression(element, context);
             if !self.are_compatible(&first_type, &element_type, context) {
                 self.report_error(
                     "List elements must have the same type".to_string(),
-                    span.clone(),
+                    element.span.clone(),
                 );
-                return Type::Error;
+                has_error = true;
             }
+        }
+
+        if has_error {
+            return Type::Error;
         }
 
         Type::List(Box::new(self.create_type_expression(first_type)))
     }
 
-    fn infer_map(
-        &mut self,
-        entries: &[(Expression, Expression)],
-        span: Span,
-        context: &mut Context,
-    ) -> Type {
+    fn infer_map(&mut self, entries: &[(Expression, Expression)], context: &mut Context) -> Type {
         if entries.is_empty() {
             return Type::Map(
                 Box::new(self.create_type_expression(Type::Void)),
@@ -412,22 +411,30 @@ impl TypeChecker {
         let (first_key, first_val) = &entries[0];
         let key_type = self.infer_expression(first_key, context);
         let val_type = self.infer_expression(first_val, context);
+        let mut has_error = false;
 
         for (key, val) in &entries[1..] {
             let k_type = self.infer_expression(key, context);
             let v_type = self.infer_expression(val, context);
 
             if !self.are_compatible(&key_type, &k_type, context) {
-                self.report_error("Map keys must have the same type".to_string(), span.clone());
-                return Type::Error;
+                self.report_error(
+                    "Map keys must have the same type".to_string(),
+                    key.span.clone(),
+                );
+                has_error = true;
             }
             if !self.are_compatible(&val_type, &v_type, context) {
                 self.report_error(
                     "Map values must have the same type".to_string(),
-                    span.clone(),
+                    val.span.clone(),
                 );
-                return Type::Error;
+                has_error = true;
             }
+        }
+
+        if has_error {
+            return Type::Error;
         }
 
         Type::Map(
@@ -436,27 +443,33 @@ impl TypeChecker {
         )
     }
 
-    fn infer_set(&mut self, elements: &[Expression], span: Span, context: &mut Context) -> Type {
+    fn infer_set(&mut self, elements: &[Expression], context: &mut Context) -> Type {
         if elements.is_empty() {
             return Type::Set(Box::new(self.create_type_expression(Type::Void)));
         }
 
         let first_type = self.infer_expression(&elements[0], context);
+        let mut has_error = false;
+
         for element in &elements[1..] {
             let element_type = self.infer_expression(element, context);
             if !self.are_compatible(&first_type, &element_type, context) {
                 self.report_error(
                     "Set elements must have the same type".to_string(),
-                    span.clone(),
+                    element.span.clone(),
                 );
-                return Type::Error;
+                has_error = true;
             }
+        }
+
+        if has_error {
+            return Type::Error;
         }
 
         Type::Set(Box::new(self.create_type_expression(first_type)))
     }
 
-    fn infer_tuple(&mut self, elements: &[Expression], _span: Span, context: &mut Context) -> Type {
+    fn infer_tuple(&mut self, elements: &[Expression], context: &mut Context) -> Type {
         let mut element_types = Vec::new();
         for element in elements {
             let ty = self.infer_expression(element, context);
