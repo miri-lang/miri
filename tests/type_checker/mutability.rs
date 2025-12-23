@@ -31,8 +31,7 @@ let x = \"string\"
 fn test_shadowing_in_nested_scope() {
     let code = "
 let x = 1
-if true:
-    let x = \"string\"
+if true: let x = \"string\"
     ";
     check_success(code);
 }
