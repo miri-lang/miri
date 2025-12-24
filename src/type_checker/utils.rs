@@ -607,6 +607,12 @@ impl TypeChecker {
                     }
                     Type::Map(k, v) => {
                         let rk = self.resolve_type_expression(&k, context);
+                        if let Type::Nullable(_) = rk {
+                            self.report_error(
+                                "Map keys cannot be nullable".to_string(),
+                                k.span.clone(),
+                            );
+                        }
                         let rv = self.resolve_type_expression(&v, context);
                         Type::Map(
                             Box::new(self.create_type_expression(rk)),
@@ -624,6 +630,12 @@ impl TypeChecker {
                             if let Some(args) = &args {
                                 if args.len() == 2 {
                                     let k = self.resolve_type_expression(&args[0], context);
+                                    if let Type::Nullable(_) = k {
+                                        self.report_error(
+                                            "Map keys cannot be nullable".to_string(),
+                                            args[0].span.clone(),
+                                        );
+                                    }
                                     let v = self.resolve_type_expression(&args[1], context);
                                     return Type::Map(
                                         Box::new(self.create_type_expression(k)),

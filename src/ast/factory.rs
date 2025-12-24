@@ -623,6 +623,10 @@ pub fn type_tuple(element_types: Vec<Type>) -> Type {
     Type::Tuple(element_types.into_iter().map(typ).collect())
 }
 
+pub fn type_null(element_type: Type) -> Type {
+    Type::Nullable(Box::new(element_type))
+}
+
 pub fn type_declaration_expression(
     name: Expression,
     generic_types: Option<Vec<Expression>>,
