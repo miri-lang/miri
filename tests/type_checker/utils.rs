@@ -4,6 +4,8 @@
 use miri::ast::{Expression, ExpressionKind, IdNode, Statement, Type};
 use miri::error::compiler::CompilerError;
 use miri::error::syntax::Span;
+use miri::lexer::Lexer;
+use miri::parser::Parser;
 use miri::pipeline::Pipeline;
 use miri::type_checker::TypeChecker;
 
@@ -48,6 +50,47 @@ pub fn check_errors(source: &str, expected_errors: Vec<&str>) {
             }
         }
         Err(e) => panic!("Expected TypeErrors, but got: {:?}", e),
+    }
+}
+
+pub fn check_multi_module_success(modules: Vec<(&str, &str)>) {
+    let mut type_checker = TypeChecker::new();
+
+    for (module_name, source) in modules {
+        type_checker.set_current_module(module_name.to_string());
+
+        let mut lexer = Lexer::new(source);
+        let mut parser = Parser::new(&mut lexer, source);
+        let program = parser.parse().expect("Failed to parse module");
+
+        if let Err(errors) = type_checker.check(&program) {
+            panic!("Type check failed for module {}: {:?}", module_name, errors);
+        }
+    }
+}
+
+pub fn check_multi_module_error(modules: Vec<(&str, &str)>, expected_error: &str) {
+    let mut type_checker = TypeChecker::new();
+    let mut last_result = Ok(());
+
+    for (module_name, source) in modules {
+        type_checker.set_current_module(module_name.to_string());
+
+        let mut lexer = Lexer::new(source);
+        let mut parser = Parser::new(&mut lexer, source);
+        let program = parser.parse().expect("Failed to parse module");
+
+        last_result = type_checker.check(&program);
+    }
+
+    match last_result {
+        Ok(_) => panic!("Expected error '{}', but got success", expected_error),
+        Err(errors) => {
+            let found = errors.iter().any(|e| e.message.contains(expected_error));
+            if !found {
+                panic!("Expected error '{}', but got: {:?}", expected_error, errors);
+            }
+        }
     }
 }
 

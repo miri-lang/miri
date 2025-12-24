@@ -1,108 +1,70 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
-use miri::ast::*;
-use miri::type_checker::TypeChecker;
+use crate::type_checker::utils::{check_multi_module_error, check_multi_module_success};
 
 #[test]
 fn test_visibility_same_module() {
-    let mut tc = TypeChecker::new();
-    tc.set_current_module("A".to_string());
-
-    // private let x = 1
-    let stmt = Statement::Variable(
-        vec![VariableDeclaration {
-            name: "x".to_string(),
-            typ: None,
-            initializer: Some(Box::new(IdNode::new(
-                0,
-                ExpressionKind::Literal(Literal::Integer(IntegerLiteral::I32(1))),
-                0..0,
-            ))),
-            declaration_type: VariableDeclarationType::Immutable,
-        }],
-        MemberVisibility::Private,
-    );
-
-    let program = Program { body: vec![stmt] };
-    assert!(tc.check(&program).is_ok());
-
-    // Access x
-    // x
-    let expr = IdNode::new(1, ExpressionKind::Identifier("x".to_string(), None), 0..0);
-    let stmt2 = Statement::Expression(expr);
-    let program2 = Program { body: vec![stmt2] };
-    assert!(tc.check(&program2).is_ok());
+    check_multi_module_success(vec![("A", "private let x = 1"), ("A", "x")]);
 }
 
 #[test]
 fn test_visibility_different_module() {
-    let mut tc = TypeChecker::new();
-    tc.set_current_module("A".to_string());
-
-    // private let x = 1
-    let stmt = Statement::Variable(
-        vec![VariableDeclaration {
-            name: "x".to_string(),
-            typ: None,
-            initializer: Some(Box::new(IdNode::new(
-                0,
-                ExpressionKind::Literal(Literal::Integer(IntegerLiteral::I32(1))),
-                0..0,
-            ))),
-            declaration_type: VariableDeclarationType::Immutable,
-        }],
-        MemberVisibility::Private,
+    check_multi_module_error(
+        vec![("A", "private let x = 1"), ("B", "x")],
+        "Variable 'x' is not visible",
     );
-
-    let program = Program { body: vec![stmt] };
-    assert!(tc.check(&program).is_ok());
-
-    // Switch module
-    tc.set_current_module("B".to_string());
-
-    // Access x
-    // x
-    let expr = IdNode::new(1, ExpressionKind::Identifier("x".to_string(), None), 0..0);
-    let stmt2 = Statement::Expression(expr);
-    let program2 = Program { body: vec![stmt2] };
-
-    let result = tc.check(&program2);
-    assert!(result.is_err());
-    let errors = result.err().unwrap();
-    assert!(errors[0].message.contains("Variable 'x' is not visible"));
 }
 
 #[test]
 fn test_visibility_public_different_module() {
-    let mut tc = TypeChecker::new();
-    tc.set_current_module("A".to_string());
+    check_multi_module_success(vec![("A", "public let x = 1"), ("B", "x")]);
+}
 
-    // public let x = 1
-    let stmt = Statement::Variable(
-        vec![VariableDeclaration {
-            name: "x".to_string(),
-            typ: None,
-            initializer: Some(Box::new(IdNode::new(
-                0,
-                ExpressionKind::Literal(Literal::Integer(IntegerLiteral::I32(1))),
-                0..0,
-            ))),
-            declaration_type: VariableDeclarationType::Immutable,
-        }],
-        MemberVisibility::Public,
+#[test]
+fn test_function_visibility() {
+    // Public function - accessible
+    check_multi_module_success(vec![("A", "public fn foo()\n    1"), ("B", "foo()")]);
+
+    // Private function - not accessible
+    check_multi_module_error(
+        vec![("A", "private fn foo()\n    1"), ("B", "foo()")],
+        "Variable 'foo' is not visible",
     );
+}
 
-    let program = Program { body: vec![stmt] };
-    assert!(tc.check(&program).is_ok());
+#[test]
+fn test_struct_visibility() {
+    // Public struct - accessible
+    check_multi_module_success(vec![
+        ("A", "public struct Point: x int, y int"),
+        ("B", "let p = Point(x: 1, y: 2)"),
+    ]);
 
-    // Switch module
-    tc.set_current_module("B".to_string());
+    // Private struct - not accessible
+    check_multi_module_error(
+        vec![
+            ("A", "private struct Point: x int, y int"),
+            ("B", "let p = Point(x: 1, y: 2)"),
+        ],
+        "Variable 'Point' is not visible",
+    );
+}
 
-    // Access x
-    let expr = IdNode::new(1, ExpressionKind::Identifier("x".to_string(), None), 0..0);
-    let stmt2 = Statement::Expression(expr);
-    let program2 = Program { body: vec![stmt2] };
+#[test]
+fn test_enum_visibility() {
+    // Public enum - accessible
+    check_multi_module_success(vec![
+        ("A", "public enum Color: Red, Green"),
+        ("B", "let c = Color.Red"),
+    ]);
 
-    assert!(tc.check(&program2).is_ok());
+    // Private enum - not accessible
+    check_multi_module_error(
+        vec![
+            ("A", "private enum Color: Red, Green"),
+            ("B", "let c = Color.Red"),
+        ],
+        "Variable 'Color' is not visible",
+    );
 }

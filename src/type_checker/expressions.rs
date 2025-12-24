@@ -336,9 +336,12 @@ impl TypeChecker {
             }
             Type::Meta(inner_type) => {
                 if let Type::Custom(name, _) = &*inner_type {
-                    if let Some(TypeDefinition::Struct(def)) =
-                        context.resolve_type_definition(name).cloned()
-                    {
+                    let type_def = context
+                        .resolve_type_definition(name)
+                        .cloned()
+                        .or_else(|| self.global_type_definitions.get(name).cloned());
+
+                    if let Some(TypeDefinition::Struct(def)) = type_def {
                         let mut pos_iter = positional_args.iter();
 
                         for (field_name, field_type, _) in &def.fields {
