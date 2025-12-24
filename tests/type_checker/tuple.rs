@@ -2,6 +2,7 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use super::utils::*;
+use miri::ast::factory::type_list;
 use miri::ast::Type;
 
 #[test]
@@ -45,14 +46,12 @@ let i = 0
 }
 
 #[test]
-fn test_tuple_indexing_function_call_homogeneous() {
-    check_expr_type(
-        "
-fn get_index() int
-    return 0
+fn test_tuple_slicing() {
+    // Slicing homogeneous tuple returns a list
+    check_expr_type("(1, 2, 3)[0..1]", type_list(Type::Int));
+}
 
-(1, 2)[get_index()]
-",
-        Type::Int,
-    );
+#[test]
+fn test_tuple_slicing_heterogeneous_error() {
+    check_error("(1, \"a\")[0..1]", "Cannot slice heterogeneous tuple");
 }

@@ -137,7 +137,12 @@ pub fn lex_formatted_string(
         // The string had no expressions at all.
         tokens.push((
             Token::FormattedStringStart(final_literal.to_string()),
-            final_span,
+            final_span.clone(),
+        ));
+        // Also push an empty End token so the parser knows it ended.
+        tokens.push((
+            Token::FormattedStringEnd("".to_string()),
+            final_span.end..final_span.end,
         ));
     } else {
         tokens.push((

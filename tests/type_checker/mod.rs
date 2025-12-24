@@ -6,7 +6,6 @@ pub mod boolean;
 pub mod conditional_expression;
 pub mod control_flow;
 pub mod float;
-pub mod formatted_string;
 pub mod function;
 pub mod generics;
 pub mod integer;

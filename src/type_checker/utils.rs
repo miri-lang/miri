@@ -28,6 +28,18 @@ impl TypeChecker {
                     && matches!(right, Type::String)
                 {
                     Ok(Type::String)
+                } else if matches!(op, BinaryOp::Mul) {
+                    // String multiplication
+                    if (matches!(left, Type::String) && matches!(right, Type::Int))
+                        || (matches!(left, Type::Int) && matches!(right, Type::String))
+                    {
+                        Ok(Type::String)
+                    } else {
+                        Err(format!(
+                            "Invalid types for multiplication: {:?} and {:?}",
+                            left, right
+                        ))
+                    }
                 } else {
                     Err(format!(
                         "Invalid types for arithmetic operation: {:?} and {:?}",
@@ -119,6 +131,16 @@ impl TypeChecker {
                         Err(format!(
                             "Type mismatch: cannot check membership of {:?} in range of {:?}",
                             left, range_type
+                        ))
+                    }
+                }
+                Type::String => {
+                    if matches!(left, Type::String) {
+                        Ok(Type::Boolean)
+                    } else {
+                        Err(format!(
+                            "Type mismatch: cannot check membership of {:?} in String (expected String)",
+                            left
                         ))
                     }
                 }
@@ -668,6 +690,31 @@ impl TypeChecker {
                                     }
                                     return Type::Set(Box::new(self.create_type_expression(t)));
                                 }
+                            }
+                        } else if name == "range" {
+                            // Support explicit range type: range<int> or just range (defaults to int?)
+                            // The user example: let r1 range = 1..n
+                            // This implies `range` is a valid type name.
+                            // If no args, we might assume range<int> or generic range?
+                            // infer_range returns Type::Custom("Range", Some(vec![type_expr]))
+                            // So we should map "range" to Type::Custom("Range", ...)
+                            // Note: "Range" vs "range". infer_range uses "Range".
+                            // Let's normalize to "Range".
+                            if let Some(args) = &args {
+                                if args.len() == 1 {
+                                    let t = self.resolve_type_expression(&args[0], context);
+                                    return Type::Custom(
+                                        "Range".to_string(),
+                                        Some(vec![self.create_type_expression(t)]),
+                                    );
+                                }
+                            } else {
+                                // Default to range<int> if no generic provided? Or just Range<Any>?
+                                // For now let's default to Range<Int> as it's the most common.
+                                return Type::Custom(
+                                    "Range".to_string(),
+                                    Some(vec![self.create_type_expression(Type::Int)]),
+                                );
                             }
                         }
 

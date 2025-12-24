@@ -237,11 +237,18 @@ l[0] = 4
 }
 
 #[test]
-fn test_mutable_list_assignment() {
-    check_success(
+fn test_list_slicing() {
+    check_expr_type("[1, 2, 3][0..1]", type_list(Type::Int));
+    check_expr_type("[1, 2, 3][0..=1]", type_list(Type::Int));
+}
+
+#[test]
+fn test_list_slicing_variable() {
+    check_expr_type(
         "
-var l = [1, 2, 3]
-l[0] = 4
+let r = 0..1
+[1, 2, 3][r]
 ",
+        type_list(Type::Int),
     );
 }

@@ -10,7 +10,7 @@ pub mod expressions;
 pub mod statements;
 pub mod utils;
 
-use context::{Context, SymbolInfo, TypeDefinition, TypeRelation};
+use context::{Context, StructDefinition, SymbolInfo, TypeDefinition, TypeRelation};
 
 /// The TypeChecker struct is responsible for validating the type safety of the program.
 /// It traverses the AST, infers types for expressions, and ensures that operations
@@ -39,6 +39,18 @@ impl Default for TypeChecker {
 
 impl TypeChecker {
     pub fn new() -> Self {
+        let mut global_type_definitions = HashMap::new();
+
+        // Define built-in String type
+        global_type_definitions.insert(
+            "String".to_string(),
+            TypeDefinition::Struct(StructDefinition {
+                fields: vec![("length".to_string(), Type::Int, MemberVisibility::Public)],
+                generics: None,
+                module: "std".to_string(),
+            }),
+        );
+
         Self {
             types: HashMap::new(),
             errors: Vec::new(),
@@ -46,7 +58,7 @@ impl TypeChecker {
             hierarchy: HashMap::new(),
             current_module: "Main".to_string(),
             global_scope: HashMap::new(),
-            global_type_definitions: HashMap::new(),
+            global_type_definitions,
         }
     }
 

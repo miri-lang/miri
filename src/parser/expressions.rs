@@ -501,6 +501,18 @@ impl<'source> Parser<'source> {
             return Err(self.error_unexpected_lookahead_token(start_token_str));
         }
 
+        // Check for immediate end (f-string with no expressions)
+        if let Some((Token::FormattedStringEnd(end_text), _)) = self._lookahead.clone() {
+            self.eat(
+                |t| matches!(t, Token::FormattedStringEnd(_)),
+                &token_to_string(&Token::FormattedStringEnd("".to_string())),
+            )?;
+            if !end_text.is_empty() {
+                parts.push(ast::literal(ast::string_literal(&end_text)));
+            }
+            return Ok(ast::f_string(parts));
+        }
+
         while self._lookahead.is_some() {
             parts.push(self.expression()?);
 

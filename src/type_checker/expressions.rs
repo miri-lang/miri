@@ -495,6 +495,59 @@ impl TypeChecker {
         let obj_type = self.infer_expression(obj, context);
         let index_type = self.infer_expression(index, context);
 
+        // Check for Range index (Slicing)
+        if let Type::Custom(name, args) = &index_type {
+            if name == "Range" {
+                // Ensure range is of integer type
+                if let Some(args) = args {
+                    if args.len() == 1 {
+                        let range_inner = self.resolve_type_expression(&args[0], context);
+                        if !matches!(range_inner, Type::Int) {
+                            self.report_error(
+                                "Slice range must be of integer type".to_string(),
+                                index.span.clone(),
+                            );
+                            return Type::Error;
+                        }
+                    }
+                }
+
+                match obj_type {
+                    Type::String => return Type::String,
+                    Type::List(inner) => return Type::List(inner),
+                    Type::Tuple(elements) => {
+                        // Slicing a tuple returns a List of the common type if homogeneous,
+                        // or maybe a new Tuple if we could determine size (we can't easily).
+                        // For now, let's say slicing a tuple returns a List of the union of types?
+                        // Or restrict to homogeneous tuples?
+                        // "Lists and tuples, just list strings, can be sliced".
+                        // If I slice (1, 2, 3), I expect [1, 2] (List) or (1, 2) (Tuple).
+                        // Given dynamic range, List is safer.
+                        // Let's check if homogeneous.
+                        if elements.is_empty() {
+                            return Type::List(Box::new(self.create_type_expression(Type::Void)));
+                        }
+                        let first = self.resolve_type_expression(&elements[0], context);
+                        let is_homogeneous = elements.iter().all(|e| {
+                            let t = self.resolve_type_expression(e, context);
+                            self.are_compatible(&t, &first, context)
+                        });
+
+                        if is_homogeneous {
+                            return Type::List(Box::new(self.create_type_expression(first)));
+                        } else {
+                            self.report_error("Cannot slice heterogeneous tuple".to_string(), span);
+                            return Type::Error;
+                        }
+                    }
+                    _ => {
+                        self.report_error(format!("Type {:?} is not sliceable", obj_type), span);
+                        return Type::Error;
+                    }
+                }
+            }
+        }
+
         match obj_type {
             Type::List(inner_type_expr) => {
                 if index_type != Type::Int {
@@ -638,57 +691,63 @@ impl TypeChecker {
             return Type::Error;
         };
 
-        match obj_type {
-            Type::Custom(name, args) => {
-                // Instance member access (Struct field)
-                // We need to clone the definition to avoid borrowing issues with context
-                let def_opt = context
-                    .resolve_type_definition(&name)
-                    .cloned()
-                    .or_else(|| self.global_type_definitions.get(&name).cloned());
+        // Try to resolve the type definition for the object's type
+        let (type_name, type_args) = match &obj_type {
+            Type::String => (Some("String".to_string()), None),
+            Type::Custom(name, args) => (Some(name.clone()), args.clone()),
+            // Add others as needed
+            _ => (None, None),
+        };
 
-                if let Some(TypeDefinition::Struct(def)) = def_opt {
-                    if let Some((_, field_type, visibility)) =
-                        def.fields.iter().find(|(n, _, _)| n == prop_name)
-                    {
-                        if !self.check_visibility(visibility, &def.module) {
-                            self.report_error(
-                                format!("Field '{}' is not visible", prop_name),
-                                span,
-                            );
-                            return Type::Error;
-                        }
+        if let Some(name) = type_name {
+            // Instance member access (Struct field)
+            // We need to clone the definition to avoid borrowing issues with context
+            let def_opt = context
+                .resolve_type_definition(&name)
+                .cloned()
+                .or_else(|| self.global_type_definitions.get(&name).cloned());
 
-                        // Substitute generic parameters if present
-                        if let Some(generics) = &def.generics {
-                            if let Some(type_args) = &args {
-                                if generics.len() == type_args.len() {
-                                    let mut mapping = HashMap::new();
-                                    for (param, arg_expr) in generics.iter().zip(type_args.iter()) {
-                                        let arg_type = self
-                                            .extract_type_from_expression(arg_expr)
-                                            .unwrap_or(Type::Error);
-                                        mapping.insert(param.name.clone(), arg_type);
-                                    }
-                                    return self.substitute_type(field_type, &mapping);
+            if let Some(TypeDefinition::Struct(def)) = def_opt {
+                if let Some((_, field_type, visibility)) =
+                    def.fields.iter().find(|(n, _, _)| n == prop_name)
+                {
+                    if !self.check_visibility(visibility, &def.module) {
+                        self.report_error(format!("Field '{}' is not visible", prop_name), span);
+                        return Type::Error;
+                    }
+
+                    // Substitute generic parameters if present
+                    if let Some(generics) = &def.generics {
+                        if let Some(type_args) = &type_args {
+                            if generics.len() == type_args.len() {
+                                let mut mapping = HashMap::new();
+                                for (param, arg_expr) in generics.iter().zip(type_args.iter()) {
+                                    let arg_type = self
+                                        .extract_type_from_expression(arg_expr)
+                                        .unwrap_or(Type::Error);
+                                    mapping.insert(param.name.clone(), arg_type);
                                 }
+                                return self.substitute_type(field_type, &mapping);
                             }
                         }
-
-                        field_type.clone()
-                    } else {
-                        self.report_error(
-                            format!("Struct '{}' has no field '{}'", name, prop_name),
-                            span,
-                        );
-                        Type::Error
                     }
+
+                    return field_type.clone();
                 } else {
-                    // Could be an enum instance, but enums don't have fields yet (unless methods are added later)
-                    self.report_error(format!("Type '{}' does not have members", name), span);
-                    Type::Error
+                    self.report_error(
+                        format!("Type '{}' has no field '{}'", name, prop_name),
+                        span,
+                    );
+                    return Type::Error;
                 }
+            } else if let Some(TypeDefinition::Enum(_)) = def_opt {
+                // Could be an enum instance, but enums don't have fields yet (unless methods are added later)
+                self.report_error(format!("Type '{}' does not have members", name), span);
+                return Type::Error;
             }
+        }
+
+        match obj_type {
             Type::Meta(inner_type) => {
                 // Static member access (Enum variant)
                 if let Type::Custom(name, _) = *inner_type {

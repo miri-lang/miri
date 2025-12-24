@@ -108,7 +108,9 @@ fn test_f_string_empty() {
         r#"f"" f''"#,
         vec![
             Token::FormattedStringStart("".to_string()),
+            Token::FormattedStringEnd("".to_string()),
             Token::FormattedStringStart("".to_string()),
+            Token::FormattedStringEnd("".to_string()),
         ],
     );
 }
@@ -117,9 +119,10 @@ fn test_f_string_empty() {
 fn test_f_string_no_expressions() {
     lexer_test(
         r#"f"this is just a string""#,
-        vec![Token::FormattedStringStart(
-            "this is just a string".to_string(),
-        )],
+        vec![
+            Token::FormattedStringStart("this is just a string".to_string()),
+            Token::FormattedStringEnd("".to_string()),
+        ],
     );
 }
 
@@ -165,9 +168,10 @@ fn test_f_string_with_adjacent_expressions() {
 fn test_f_string_with_escaped_braces() {
     lexer_test(
         r#"f"Literal braces: \{ and \}""#,
-        vec![Token::FormattedStringStart(
-            "Literal braces: \\{ and \\}".to_string(),
-        )],
+        vec![
+            Token::FormattedStringStart("Literal braces: \\{ and \\}".to_string()),
+            Token::FormattedStringEnd("".to_string()),
+        ],
     );
 }
 
