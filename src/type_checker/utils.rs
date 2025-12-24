@@ -603,6 +603,12 @@ impl TypeChecker {
                     }
                     Type::Set(inner) => {
                         let resolved_inner = self.resolve_type_expression(&inner, context);
+                        if let Type::Nullable(_) = resolved_inner {
+                            self.report_error(
+                                "Set elements cannot be nullable".to_string(),
+                                inner.span.clone(),
+                            );
+                        }
                         Type::Set(Box::new(self.create_type_expression(resolved_inner)))
                     }
                     Type::Map(k, v) => {
@@ -654,6 +660,12 @@ impl TypeChecker {
                             if let Some(args) = &args {
                                 if args.len() == 1 {
                                     let t = self.resolve_type_expression(&args[0], context);
+                                    if let Type::Nullable(_) = t {
+                                        self.report_error(
+                                            "Set elements cannot be nullable".to_string(),
+                                            args[0].span.clone(),
+                                        );
+                                    }
                                     return Type::Set(Box::new(self.create_type_expression(t)));
                                 }
                             }

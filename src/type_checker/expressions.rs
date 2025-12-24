@@ -466,6 +466,13 @@ impl TypeChecker {
             return Type::Error;
         }
 
+        if let Type::Nullable(_) = first_type {
+            self.report_error(
+                "Set elements cannot be nullable".to_string(),
+                elements[0].span.clone(),
+            );
+        }
+
         Type::Set(Box::new(self.create_type_expression(first_type)))
     }
 

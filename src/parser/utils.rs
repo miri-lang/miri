@@ -183,7 +183,12 @@ impl<'source> Parser<'source> {
                 Token::LessThanEqual => BinaryOp::LessThanEqual,
                 Token::GreaterThanEqual => BinaryOp::GreaterThanEqual,
                 Token::GreaterThan => BinaryOp::GreaterThan,
-                _ => return Err(Err(self.error_unexpected_operator(token, "<, <=, >, >="))),
+                Token::In => BinaryOp::In,
+                _ => {
+                    return Err(Err(
+                        self.error_unexpected_operator(token, "<, <=, >, >=, in")
+                    ))
+                }
             },
             Err(err) => return Err(Err(err)),
         };
@@ -388,7 +393,11 @@ pub(crate) fn is_additive_op(token: &Token) -> bool {
 pub(crate) fn is_relational_op(token: &Token) -> bool {
     matches!(
         token,
-        Token::LessThan | Token::LessThanEqual | Token::GreaterThanEqual | Token::GreaterThan
+        Token::LessThan
+            | Token::LessThanEqual
+            | Token::GreaterThanEqual
+            | Token::GreaterThan
+            | Token::In
     )
 }
 
