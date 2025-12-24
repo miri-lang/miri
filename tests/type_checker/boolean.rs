@@ -207,7 +207,7 @@ fn f(b bool)
 
 f(1)
 ",
-        "Type mismatch for argument 1",
+        "Type mismatch for argument 'b'",
     );
 }
 

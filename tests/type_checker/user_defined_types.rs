@@ -76,3 +76,88 @@ let ok = Result.Ok(\"42\")
     ";
     check_error(code, "Type mismatch");
 }
+
+#[test]
+fn test_struct_instantiation_named_params() {
+    let code = "
+struct Point
+    x int
+    y int
+
+let p = Point(x: 1, y: 2)
+    ";
+    check_success(code);
+}
+
+#[test]
+fn test_struct_instantiation_named_params_reordered() {
+    let code = "
+struct Point
+    x int
+    y int
+
+let p = Point(y: 2, x: 1)
+    ";
+    check_success(code);
+}
+
+#[test]
+fn test_struct_instantiation_mixed_params() {
+    let code = "
+struct Point
+    x int
+    y int
+    z int
+
+let p = Point(1, z: 3, y: 2)
+    ";
+    check_success(code);
+}
+
+#[test]
+fn test_struct_instantiation_mixed_params_error() {
+    let code = "
+struct Point
+    x int
+    y int
+
+let p = Point(x: 1, 2)
+    ";
+    check_error(code, "Positional arguments cannot follow named arguments");
+}
+
+#[test]
+fn test_struct_instantiation_missing_field() {
+    let code = "
+struct Point
+    x int
+    y int
+
+let p = Point(x: 1)
+    ";
+    check_error(code, "Missing argument for field 'y'");
+}
+
+#[test]
+fn test_struct_instantiation_unknown_field() {
+    let code = "
+struct Point
+    x int
+    y int
+
+let p = Point(x: 1, y: 2, z: 3)
+    ";
+    check_error(code, "Unknown field 'z'");
+}
+
+#[test]
+fn test_struct_instantiation_duplicate_field() {
+    let code = "
+struct Point
+    x int
+    y int
+
+let p = Point(x: 1, x: 2)
+    ";
+    check_error(code, "Duplicate argument 'x'");
+}

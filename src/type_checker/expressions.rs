@@ -61,6 +61,7 @@ impl TypeChecker {
                     expr.span.clone(),
                     context,
                 ),
+            ExpressionKind::NamedArgument(_, value) => self.infer_expression(value, context),
             _ => Type::Int, // Default fallback for unimplemented expressions
         };
 
@@ -220,33 +221,62 @@ impl TypeChecker {
         context: &mut Context,
     ) -> Type {
         let func_type = self.infer_expression(func, context);
+
+        // Process arguments
+        let mut positional_args = Vec::new();
+        let mut named_args = HashMap::new();
+
+        for arg in args {
+            match &arg.node {
+                ExpressionKind::NamedArgument(name, value) => {
+                    if named_args.contains_key(name) {
+                        self.report_error(
+                            format!("Duplicate argument '{}'", name),
+                            arg.span.clone(),
+                        );
+                    } else {
+                        let ty = self.infer_expression(value, context);
+                        named_args.insert(name.clone(), (value, ty, arg.span.clone()));
+                    }
+                }
+                _ => {
+                    if !named_args.is_empty() {
+                        self.report_error(
+                            "Positional arguments cannot follow named arguments".to_string(),
+                            arg.span.clone(),
+                        );
+                    }
+                    let ty = self.infer_expression(arg, context);
+                    positional_args.push((arg, ty));
+                }
+            }
+        }
+
         match func_type {
             Type::Function(generics, params, return_type_expr) => {
                 let mut generic_map = std::collections::HashMap::new();
-
-                // Evaluate arguments in the current context (before entering generic scope)
-                let mut arg_types = Vec::new();
-                for arg in args {
-                    arg_types.push(self.infer_expression(arg, context));
-                }
 
                 if let Some(gens) = &generics {
                     context.enter_scope();
                     self.define_generics(gens, context);
                 }
 
-                let mut arg_iter = arg_types.iter();
-                // We also need the original arg expressions for error reporting (spans)
-                let mut arg_expr_iter = args.iter();
+                let mut pos_iter = positional_args.iter();
 
-                for (i, param) in params.iter().enumerate() {
+                for param in &params {
                     let param_type = self.resolve_type_expression(&param.typ, context);
 
-                    if let Some(arg_type) = arg_iter.next() {
-                        let arg_expr = arg_expr_iter.next().unwrap();
+                    let (arg_expr, arg_type) = if let Some((expr, ty)) = pos_iter.next() {
+                        (Some(*expr), Some(ty.clone()))
+                    } else if let Some((expr, ty, _)) = named_args.remove(&param.name) {
+                        (Some(&**expr), Some(ty))
+                    } else {
+                        (None, None)
+                    };
 
+                    if let Some(arg_type) = arg_type {
                         if generics.is_some() {
-                            self.infer_generic_types(&param_type, arg_type, &mut generic_map);
+                            self.infer_generic_types(&param_type, &arg_type, &mut generic_map);
                         }
 
                         let concrete_param_type = if generics.is_some() {
@@ -255,15 +285,13 @@ impl TypeChecker {
                             param_type.clone()
                         };
 
-                        if !self.are_compatible(&concrete_param_type, arg_type, context) {
+                        if !self.are_compatible(&concrete_param_type, &arg_type, context) {
                             self.report_error(
                                 format!(
-                                    "Type mismatch for argument {}: expected {:?}, got {:?}",
-                                    i + 1,
-                                    concrete_param_type,
-                                    arg_type
+                                    "Type mismatch for argument '{}': expected {:?}, got {:?}",
+                                    param.name, concrete_param_type, arg_type
                                 ),
-                                arg_expr.span.clone(),
+                                arg_expr.unwrap().span.clone(),
                             );
                         }
                     } else if param.default_value.is_none() {
@@ -274,15 +302,19 @@ impl TypeChecker {
                     }
                 }
 
-                if arg_iter.next().is_some() {
+                if pos_iter.next().is_some() {
                     self.report_error(
                         format!(
-                            "Incorrect number of arguments: expected {}, got {}",
+                            "Too many positional arguments: expected {}, got {}",
                             params.len(),
-                            args.len()
+                            positional_args.len()
                         ),
                         span.clone(),
                     );
+                }
+
+                for (name, (_, _, span)) in named_args {
+                    self.report_error(format!("Unknown argument '{}'", name), span);
                 }
 
                 let return_type = if let Some(rt_expr) = return_type_expr {
@@ -307,28 +339,50 @@ impl TypeChecker {
                     if let Some(TypeDefinition::Struct(def)) =
                         context.resolve_type_definition(name).cloned()
                     {
-                        if args.len() != def.fields.len() {
-                            self.report_error(
-                                format!("Incorrect number of arguments for struct constructor: expected {}, got {}", def.fields.len(), args.len()),
-                                span.clone()
-                            );
-                        }
+                        let mut pos_iter = positional_args.iter();
 
-                        for (i, arg) in args.iter().enumerate() {
-                            let arg_type = self.infer_expression(arg, context);
-                            if i < def.fields.len() {
-                                let (_, field_type, _) = &def.fields[i];
+                        for (field_name, field_type, _) in &def.fields {
+                            let (arg_expr, arg_type) = if let Some((expr, ty)) = pos_iter.next() {
+                                (Some(*expr), Some(ty.clone()))
+                            } else if let Some((expr, ty, _)) = named_args.remove(field_name) {
+                                (Some(&**expr), Some(ty))
+                            } else {
+                                (None, None)
+                            };
+
+                            if let Some(arg_type) = arg_type {
                                 if !self.are_compatible(field_type, &arg_type, context) {
                                     self.report_error(
                                         format!(
                                             "Type mismatch for field '{}': expected {:?}, got {:?}",
-                                            def.fields[i].0, field_type, arg_type
+                                            field_name, field_type, arg_type
                                         ),
-                                        arg.span.clone(),
+                                        arg_expr.unwrap().span.clone(),
                                     );
                                 }
+                            } else {
+                                self.report_error(
+                                    format!("Missing argument for field '{}'", field_name),
+                                    span.clone(),
+                                );
                             }
                         }
+
+                        if pos_iter.next().is_some() {
+                            self.report_error(
+                                format!(
+                                    "Too many positional arguments for struct constructor: expected {}, got {}",
+                                    def.fields.len(),
+                                    positional_args.len()
+                                ),
+                                span.clone(),
+                            );
+                        }
+
+                        for (name, (_, _, span)) in named_args {
+                            self.report_error(format!("Unknown field '{}'", name), span);
+                        }
+
                         return Type::Custom(name.clone(), None);
                     }
                 }

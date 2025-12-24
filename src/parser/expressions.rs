@@ -295,15 +295,31 @@ impl<'source> Parser<'source> {
     pub(crate) fn argument_list(&mut self) -> Result<Vec<Expression>, SyntaxError> {
         let mut args = Vec::new();
 
-        args.push(self.assignment_expression()?);
-
-        while self.lookahead_is_comma() {
-            self.eat_token(&Token::Comma)?;
-            // Allow an optional trailing comma before the closing parenthesis.
+        loop {
             if self.lookahead_is_rparen() {
                 break;
             }
-            args.push(self.assignment_expression()?);
+
+            let expr = self.assignment_expression()?;
+
+            if self.match_lookahead_type(|t| t == &Token::Colon) {
+                if let ExpressionKind::Identifier(name, None) = expr.node {
+                    self.eat_token(&Token::Colon)?;
+                    let value = self.assignment_expression()?;
+                    let span = expr.span.start..value.span.end;
+                    args.push(ast::named_argument_with_span(name, value, span));
+                } else {
+                    return Err(self.error_unexpected_token("identifier for named argument", ":"));
+                }
+            } else {
+                args.push(expr);
+            }
+
+            if self.lookahead_is_comma() {
+                self.eat_token(&Token::Comma)?;
+            } else {
+                break;
+            }
         }
 
         Ok(args)

@@ -861,3 +861,11 @@ pub fn lambda_expression(
         properties,
     ))
 }
+
+pub fn named_argument(name: String, value: Expression) -> Expression {
+    expr(ExpressionKind::NamedArgument(name, Box::new(value)))
+}
+
+pub fn named_argument_with_span(name: String, value: Expression, span: Span) -> Expression {
+    expr_with_span(ExpressionKind::NamedArgument(name, Box::new(value)), span)
+}

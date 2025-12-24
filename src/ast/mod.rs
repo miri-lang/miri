@@ -221,6 +221,8 @@ pub enum ExpressionKind {
     Match(Box<Expression>, Vec<MatchBranch>), // value, branches
 
     FormattedString(Vec<Expression>), // "hello #{name}"
+
+    NamedArgument(String, Box<Expression>), // name, value
 }
 
 pub type Expression = IdNode<ExpressionKind>;

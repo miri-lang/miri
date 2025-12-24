@@ -28,8 +28,8 @@ foo(\"wrong\", 1)
     check_errors(
         source,
         vec![
-            "Type mismatch for argument 1: expected Int, got String",
-            "Type mismatch for argument 2: expected Float, got Int",
+            "Type mismatch for argument 'a': expected Int, got String",
+            "Type mismatch for argument 'b': expected Float, got Int",
         ],
     );
 }

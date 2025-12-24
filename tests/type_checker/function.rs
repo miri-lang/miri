@@ -34,7 +34,7 @@ foo(true)
     ";
     check_error(
         source,
-        "Type mismatch for argument 1: expected Int, got Boolean",
+        "Type mismatch for argument 'a': expected Int, got Boolean",
     );
 }
 
@@ -46,7 +46,7 @@ fn foo(a int)
 
 foo(1, 2)
     ";
-    check_error(source, "Incorrect number of arguments: expected 1, got 2");
+    check_error(source, "Too many positional arguments: expected 1, got 2");
 }
 
 #[test]
@@ -361,4 +361,48 @@ fn foo(a int in [\"string\"])
 ",
         "Type mismatch",
     );
+}
+
+#[test]
+fn test_function_call_named_params() {
+    let code = "
+fn add(a int, b int) int
+    return a + b
+
+add(a: 1, b: 2)
+    ";
+    check_success(code);
+}
+
+#[test]
+fn test_function_call_named_params_reordered() {
+    let code = "
+fn add(a int, b int) int
+    return a + b
+
+add(b: 2, a: 1)
+    ";
+    check_success(code);
+}
+
+#[test]
+fn test_function_call_mixed_params() {
+    let code = "
+fn add(a int, b int, c int) int
+    return a + b + c
+
+add(1, c: 3, b: 2)
+    ";
+    check_success(code);
+}
+
+#[test]
+fn test_function_call_unknown_param() {
+    let code = "
+fn add(a int)
+    return
+
+add(b: 1)
+    ";
+    check_error(code, "Unknown argument 'b'");
 }
