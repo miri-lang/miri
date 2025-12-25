@@ -184,3 +184,68 @@ match num
 ";
     check_error(source, "Regex pattern requires string subject");
 }
+
+#[test]
+fn test_match_enum_exhaustive() {
+    let source = "
+enum Color
+    Red
+    Green
+    Blue
+
+let c = Color.Red
+match c
+    Color.Red: 'red'
+    Color.Green: 'green'
+    Color.Blue: 'blue'
+";
+    check_success(source);
+}
+
+#[test]
+fn test_match_enum_non_exhaustive() {
+    let source = "
+enum Color
+    Red
+    Green
+    Blue
+
+let c = Color.Red
+match c
+    Color.Red: 'red'
+    Color.Green: 'green'
+";
+    check_error(source, "Non-exhaustive match");
+}
+
+#[test]
+fn test_match_enum_default() {
+    let source = "
+enum Color
+    Red
+    Green
+    Blue
+
+let c = Color.Red
+match c
+    Color.Red: 'red'
+    default: 'other'
+";
+    check_success(source);
+}
+
+#[test]
+fn test_match_enum_variable_binding() {
+    let source = "
+enum Color
+    Red
+    Green
+    Blue
+
+let c = Color.Red
+match c
+    Color.Red: 'red'
+    other: 'other'
+";
+    check_success(source);
+}

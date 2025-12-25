@@ -7,7 +7,7 @@ use crate::ast::factory as ast_factory;
 use crate::ast::*;
 use crate::error::syntax::Span;
 use crate::error::utils::find_best_match;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 impl TypeChecker {
     pub(crate) fn infer_expression(&mut self, expr: &Expression, context: &mut Context) -> Type {
@@ -1041,6 +1041,72 @@ impl TypeChecker {
         context: &mut Context,
     ) -> Type {
         let subject_type = self.infer_expression(subject, context);
+
+        // Check exhaustiveness for Enums
+        if let Type::Custom(name, _) = &subject_type {
+            // Find enum definition
+            let mut enum_def_opt = None;
+
+            // Check local scopes first (reverse order)
+            for scope in context.type_definitions.iter().rev() {
+                if let Some(TypeDefinition::Enum(def)) = scope.get(name) {
+                    enum_def_opt = Some(def);
+                    break;
+                }
+            }
+
+            // Check global scope if not found locally
+            if enum_def_opt.is_none() {
+                if let Some(TypeDefinition::Enum(def)) = self.global_type_definitions.get(name) {
+                    enum_def_opt = Some(def);
+                }
+            }
+
+            if let Some(enum_def) = enum_def_opt {
+                let mut remaining_variants: HashSet<String> =
+                    enum_def.variants.keys().cloned().collect();
+                let mut is_exhaustive = false;
+
+                for branch in branches {
+                    for pattern in &branch.patterns {
+                        match pattern {
+                            Pattern::Default => {
+                                is_exhaustive = true;
+                            }
+                            Pattern::Identifier(_) => {
+                                // Variable binding covers everything
+                                is_exhaustive = true;
+                            }
+                            Pattern::Member(parent, member) => {
+                                // Check if parent is the enum name
+                                if let Pattern::Identifier(parent_name) = &**parent {
+                                    if parent_name == name {
+                                        remaining_variants.remove(member);
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    if is_exhaustive {
+                        break;
+                    }
+                }
+
+                if !is_exhaustive && !remaining_variants.is_empty() {
+                    let mut missing: Vec<_> = remaining_variants.into_iter().collect();
+                    missing.sort();
+                    self.report_error(
+                        format!(
+                            "Non-exhaustive match on Enum '{}'. Missing variants: {}",
+                            name,
+                            missing.join(", ")
+                        ),
+                        span.clone(),
+                    );
+                }
+            }
+        }
 
         if branches.is_empty() {
             return Type::Void;
