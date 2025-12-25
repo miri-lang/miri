@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
+use crate::error::utils::format_diagnostic;
+
 // Span type for tracking positions in source code
 pub type Span = std::ops::Range<usize>;
 
@@ -56,9 +58,6 @@ impl SyntaxError {
     }
 
     pub fn report(&self, source: &str) -> String {
-        let start_pos = self.span.start;
-        let (line_num, col_num, line_str) = find_line_info(source, start_pos);
-
         let (error_title, help_message): (&str, String) = match self.kind {
             SyntaxErrorKind::InvalidToken => (
                 "Invalid Token",
@@ -191,21 +190,12 @@ impl SyntaxError {
             ),
         };
 
-        let underline = "^".repeat(self.span.end - self.span.start);
-
-        // Syntax Error: Invalid Token
-        //   --> line 5:10
-        // 5 | let x = 10 % 2;
-        //   |           ^
-        //   = help: The '%' character is not a valid operator here.
-        format!(
-            "Syntax Error: {error_title}\n\
-              --> line {line_num}:{col_num}\n\
-               |\n\
-               | {line_str}\n\
-               | {padding}{underline}\n\
-               = help: {help_message}",
-            padding = " ".repeat(col_num - 1)
+        format_diagnostic(
+            source,
+            &self.span,
+            error_title,
+            "error",
+            Some(&help_message),
         )
     }
 }

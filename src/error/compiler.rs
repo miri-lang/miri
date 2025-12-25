@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
-use crate::error::syntax::{find_line_info, SyntaxError};
+use crate::error::syntax::SyntaxError;
 use crate::error::type_error::TypeError;
+use crate::error::utils::format_diagnostic;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -34,51 +35,11 @@ impl CompilerError {
         match self {
             CompilerError::Lexer(e) | CompilerError::Parser(e) => e.report(source),
             CompilerError::Type(e) => {
-                let (line_num, col_num, line_str) = find_line_info(source, e.span.start);
-                let len = if e.span.end > e.span.start {
-                    e.span.end - e.span.start
-                } else {
-                    1
-                };
-                let underline = "^".repeat(len);
-                format!(
-                    "Type Error: {}\n\
-                      --> line {}:{}\n\
-                       |\n\
-                       | {}\n\
-                       | {}{}\n",
-                    e.message,
-                    line_num,
-                    col_num,
-                    line_str,
-                    " ".repeat(col_num - 1),
-                    underline
-                )
+                format_diagnostic(source, &e.span, &e.message, "error", e.help.as_deref())
             }
             CompilerError::TypeErrors(errs) => errs
                 .iter()
-                .map(|e| {
-                    let (line_num, col_num, line_str) = find_line_info(source, e.span.start);
-                    let len = if e.span.end > e.span.start {
-                        e.span.end - e.span.start
-                    } else {
-                        1
-                    };
-                    let underline = "^".repeat(len);
-                    format!(
-                        "Type Error: {}\n\
-                          --> line {}:{}\n\
-                           |\n\
-                           | {}\n\
-                           | {}{}\n",
-                        e.message,
-                        line_num,
-                        col_num,
-                        line_str,
-                        " ".repeat(col_num - 1),
-                        underline
-                    )
-                })
+                .map(|e| format_diagnostic(source, &e.span, &e.message, "error", e.help.as_deref()))
                 .collect::<Vec<_>>()
                 .join("\n"),
             _ => format!("{}", self),

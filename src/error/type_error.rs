@@ -7,11 +7,21 @@ use crate::error::syntax::Span;
 pub struct TypeError {
     pub message: String,
     pub span: Span,
+    pub help: Option<String>,
 }
 
 impl TypeError {
     pub fn new(message: String, span: Span) -> Self {
-        Self { message, span }
+        Self {
+            message,
+            span,
+            help: None,
+        }
+    }
+
+    pub fn with_help(mut self, help: String) -> Self {
+        self.help = Some(help);
+        self
     }
 }
 

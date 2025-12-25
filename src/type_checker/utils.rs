@@ -6,6 +6,7 @@ use super::TypeChecker;
 use crate::ast::*;
 use crate::error::syntax::Span;
 use crate::error::type_error::TypeError;
+use crate::error::utils::find_best_match;
 
 impl TypeChecker {
     pub(crate) fn check_binary_op_types(
@@ -789,7 +790,31 @@ impl TypeChecker {
                                 }
                             }
                         } else {
-                            self.report_error(format!("Unknown type: {}", name), expr.span.clone());
+                            let mut candidates: Vec<&str> = Vec::new();
+                            for scope in &context.type_definitions {
+                                candidates.extend(scope.keys().map(|s| s.as_str()));
+                            }
+                            candidates
+                                .extend(self.global_type_definitions.keys().map(|s| s.as_str()));
+                            candidates.push("Int");
+                            candidates.push("Float");
+                            candidates.push("String");
+                            candidates.push("Bool");
+                            candidates.push("Void");
+                            candidates.push("Any");
+
+                            if let Some(suggestion) = find_best_match(&name, &candidates) {
+                                self.report_error_with_help(
+                                    format!("Unknown type: {}", name),
+                                    expr.span.clone(),
+                                    format!("Did you mean '{}'?", suggestion),
+                                );
+                            } else {
+                                self.report_error(
+                                    format!("Unknown type: {}", name),
+                                    expr.span.clone(),
+                                );
+                            }
                             return Type::Error;
                         }
                         Type::Custom(name, resolved_args)
@@ -816,6 +841,11 @@ impl TypeChecker {
 
     pub(crate) fn report_error(&mut self, message: String, span: Span) {
         self.errors.push(TypeError::new(message, span));
+    }
+
+    pub(crate) fn report_error_with_help(&mut self, message: String, span: Span, help: String) {
+        self.errors
+            .push(TypeError::new(message, span).with_help(help));
     }
 
     pub(crate) fn report_warning(&mut self, message: String, span: Span) {

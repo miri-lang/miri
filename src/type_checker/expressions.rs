@@ -6,6 +6,7 @@ use super::TypeChecker;
 use crate::ast::factory as ast_factory;
 use crate::ast::*;
 use crate::error::syntax::Span;
+use crate::error::utils::find_best_match;
 use std::collections::HashMap;
 
 impl TypeChecker {
@@ -240,7 +241,24 @@ impl TypeChecker {
             }
             info.ty
         } else {
-            self.report_error(format!("Undefined variable: {}", name), span);
+            let mut candidates: Vec<&str> = Vec::new();
+            for scope in &context.scopes {
+                candidates.extend(scope.keys().map(|s| s.as_str()));
+            }
+            candidates.extend(self.global_scope.keys().map(|s| s.as_str()));
+            candidates.push("None");
+            candidates.push("Ok");
+            candidates.push("Err");
+
+            if let Some(suggestion) = find_best_match(name, &candidates) {
+                self.report_error_with_help(
+                    format!("Undefined variable: {}", name),
+                    span,
+                    format!("Did you mean '{}'?", suggestion),
+                );
+            } else {
+                self.report_error(format!("Undefined variable: {}", name), span);
+            }
             Type::Error
         }
     }
@@ -915,10 +933,20 @@ impl TypeChecker {
 
                     return field_type.clone();
                 } else {
-                    self.report_error(
-                        format!("Type '{}' has no field '{}'", name, prop_name),
-                        span,
-                    );
+                    let candidates: Vec<&str> =
+                        def.fields.iter().map(|(n, _, _)| n.as_str()).collect();
+                    if let Some(suggestion) = find_best_match(prop_name, &candidates) {
+                        self.report_error_with_help(
+                            format!("Type '{}' has no field '{}'", name, prop_name),
+                            span,
+                            format!("Did you mean '{}'?", suggestion),
+                        );
+                    } else {
+                        self.report_error(
+                            format!("Type '{}' has no field '{}'", name, prop_name),
+                            span,
+                        );
+                    }
                     return Type::Error;
                 }
             } else if let Some(TypeDefinition::Enum(_)) = def_opt {
@@ -967,10 +995,20 @@ impl TypeChecker {
                                 )
                             }
                         } else {
-                            self.report_error(
-                                format!("Enum '{}' has no variant '{}'", name, prop_name),
-                                span,
-                            );
+                            let candidates: Vec<&str> =
+                                def.variants.keys().map(|s| s.as_str()).collect();
+                            if let Some(suggestion) = find_best_match(prop_name, &candidates) {
+                                self.report_error_with_help(
+                                    format!("Enum '{}' has no variant '{}'", name, prop_name),
+                                    span,
+                                    format!("Did you mean '{}'?", suggestion),
+                                );
+                            } else {
+                                self.report_error(
+                                    format!("Enum '{}' has no variant '{}'", name, prop_name),
+                                    span,
+                                );
+                            }
                             Type::Error
                         }
                     } else {
