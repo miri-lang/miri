@@ -433,6 +433,7 @@ pub enum Pattern {
     Tuple(Vec<Pattern>),
     Regex(RegexToken),
     Default,
+    Member(Box<Pattern>, String),
 }
 
 pub fn opt_expr(expr: Expression) -> Option<Box<Expression>> {

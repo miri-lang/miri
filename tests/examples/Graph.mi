@@ -37,9 +37,9 @@ fn graph=(val): _graph = val
 
 fn traverse
     // Example runs
-    puts "BFS Traversal: #{bfs('A').join(', ')}"
-    puts "DFS Iterative Traversal: #{dfs_iterative('A').join(', ')}"
-    puts "DFS Recursive Traversal: #{dfs_recursive('A').join(', ')}"
+    puts("BFS Traversal: #{bfs('A').join(', ')}")
+    puts("DFS Iterative Traversal: #{dfs_iterative('A').join(', ')}")
+    puts("DFS Recursive Traversal: #{dfs_recursive('A').join(', ')}")
 
 // Breadth-First Search (BFS)
 private fn bfs(start_node string) [string]

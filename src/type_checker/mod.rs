@@ -51,13 +51,42 @@ impl TypeChecker {
             }),
         );
 
+        let mut global_scope = HashMap::new();
+
+        // Define built-in print function: fn print<T>(value T)
+        let generic_t = Type::Generic("T".to_string(), None, TypeDeclarationKind::None);
+        let generic_decl = crate::ast::factory::generic_type_expression(
+            crate::ast::factory::identifier("T"),
+            None,
+            TypeDeclarationKind::None,
+        );
+
+        global_scope.insert(
+            "print".to_string(),
+            SymbolInfo {
+                ty: Type::Function(
+                    Some(vec![generic_decl]),
+                    vec![Parameter {
+                        name: "value".to_string(),
+                        typ: Box::new(crate::ast::factory::typ(generic_t)),
+                        guard: None,
+                        default_value: None,
+                    }],
+                    Some(Box::new(crate::ast::factory::typ(Type::Void))),
+                ),
+                mutable: false,
+                visibility: MemberVisibility::Public,
+                module: "std".to_string(),
+            },
+        );
+
         Self {
             types: HashMap::new(),
             errors: Vec::new(),
             warnings: Vec::new(),
             hierarchy: HashMap::new(),
             current_module: "Main".to_string(),
-            global_scope: HashMap::new(),
+            global_scope,
             global_type_definitions,
         }
     }

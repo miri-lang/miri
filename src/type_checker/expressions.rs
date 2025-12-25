@@ -1353,6 +1353,40 @@ impl TypeChecker {
                     );
                 }
             }
+            Pattern::Member(parent, member) => {
+                if let Pattern::Identifier(parent_name) = &**parent {
+                    if let Some(TypeDefinition::Enum(enum_def)) =
+                        self.global_type_definitions.get(parent_name)
+                    {
+                        if !enum_def.variants.contains_key(member) {
+                            self.report_error(
+                                format!("Enum '{}' has no variant '{}'", parent_name, member),
+                                span.clone(),
+                            );
+                        }
+                        // Check if subject type matches the enum type
+                        // We construct the expected type from the enum name
+                        // TODO: Handle generics
+                        let expected_type = Type::Custom(parent_name.clone(), None);
+                        if !self.are_compatible(subject_type, &expected_type, context) {
+                            self.report_error(
+                                format!(
+                                    "Pattern type mismatch: expected {:?}, got {:?}",
+                                    subject_type, expected_type
+                                ),
+                                span,
+                            );
+                        }
+                    } else {
+                        self.report_error(format!("'{}' is not an Enum", parent_name), span);
+                    }
+                } else {
+                    self.report_error(
+                        "Complex member patterns are not supported".to_string(),
+                        span,
+                    );
+                }
+            }
             Pattern::Regex(_) => {
                 if !matches!(subject_type, Type::String) {
                     self.report_error(

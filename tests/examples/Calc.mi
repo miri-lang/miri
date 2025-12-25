@@ -1,8 +1,8 @@
-add(a, b): a + b
+fn add(a int, b int) int: a + b
 
-sub(a, b): a - b
+fn sub(a int, b int) int: a - b
 
-div(a, b): a / b
+fn div(a int, b int) int: a / b
 
-mul(a, b): a * b
+fn mul(a int, b int) int: a * b
 

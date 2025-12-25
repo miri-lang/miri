@@ -697,7 +697,14 @@ impl<'source> Parser<'source> {
             }
             Some((Token::Identifier, _)) => {
                 let name = self.parse_simple_identifier()?;
-                Ok(Pattern::Identifier(name))
+                let mut pattern = Pattern::Identifier(name);
+
+                while self.match_lookahead_type(|t| t == &Token::Dot) {
+                    self.eat_token(&Token::Dot)?;
+                    let member = self.parse_simple_identifier()?;
+                    pattern = Pattern::Member(Box::new(pattern), member);
+                }
+                Ok(pattern)
             }
             Some((Token::LParen, _)) => self.tuple_pattern(),
             Some((Token::Regex(_), _)) => {

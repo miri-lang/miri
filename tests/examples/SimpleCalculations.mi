@@ -1,6 +1,6 @@
 use Calc
 
-calc = Calc.new
+calc = Calc()
 
 var x = 5
 var y = 10
