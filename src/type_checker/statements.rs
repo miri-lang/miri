@@ -18,7 +18,53 @@ pub(crate) struct FunctionDeclarationInfo<'a> {
     pub properties: &'a FunctionProperties,
 }
 
+#[derive(Debug, PartialEq)]
+enum ReturnStatus {
+    None,
+    Implicit,
+    Explicit,
+}
+
+fn check_returns(stmt: &Statement) -> ReturnStatus {
+    match &stmt.node {
+        StatementKind::Return(_) => ReturnStatus::Explicit,
+        StatementKind::While(_, _, WhileStatementType::Forever) => ReturnStatus::Explicit,
+        StatementKind::Expression(_) => ReturnStatus::Implicit,
+        StatementKind::Block(stmts) => {
+            for (i, s) in stmts.iter().enumerate() {
+                let status = check_returns(s);
+                if status == ReturnStatus::Explicit {
+                    return ReturnStatus::Explicit;
+                }
+                if i == stmts.len() - 1 && status == ReturnStatus::Implicit {
+                    return ReturnStatus::Implicit;
+                }
+            }
+            ReturnStatus::None
+        }
+        StatementKind::If(_, then_block, else_block, _) => {
+            if let Some(else_stmt) = else_block {
+                let then_status = check_returns(then_block);
+                let else_status = check_returns(else_stmt);
+
+                match (then_status, else_status) {
+                    (ReturnStatus::Explicit, ReturnStatus::Explicit) => ReturnStatus::Explicit,
+                    (ReturnStatus::None, _) | (_, ReturnStatus::None) => ReturnStatus::None,
+                    _ => ReturnStatus::Implicit,
+                }
+            } else {
+                ReturnStatus::None
+            }
+        }
+        _ => ReturnStatus::None,
+    }
+}
+
 impl TypeChecker {
+    /// Checks a statement for type correctness.
+    ///
+    /// This method handles variable declarations, control flow, function declarations,
+    /// and other statement types.
     pub(crate) fn check_statement(&mut self, statement: &Statement, context: &mut Context) {
         match &statement.node {
             StatementKind::Variable(decls, vis) => {
@@ -176,28 +222,7 @@ impl TypeChecker {
             let inferred_type = self.determine_variable_type(decl, context, span.clone());
             let is_mutable = matches!(decl.declaration_type, VariableDeclarationType::Mutable);
 
-            // Check for shadowing rules in the current scope
-            if let Some(current_scope) = context.scopes.last() {
-                if let Some(existing_info) = current_scope.get(&decl.name) {
-                    // Rule 2: var may not shadow in the same scope
-                    if is_mutable {
-                        self.report_error(
-                            format!("Variable '{}' is already defined in this scope. 'var' cannot shadow existing variables.", decl.name),
-                            span.clone(),
-                        );
-                    }
-                    // Rule 3: switching let <-> var via shadowing in the same scope is not allowed
-                    // We already know new is not mutable (from Rule 2 check above), so new is 'let'.
-                    // If existing is 'var' (mutable), then we are switching var -> let, which is disallowed.
-                    else if existing_info.mutable {
-                        self.report_error(
-                            format!("Cannot shadow mutable variable '{}' with an immutable one in the same scope.", decl.name),
-                            span.clone(),
-                        );
-                    }
-                    // Rule 1: let shadowing let is allowed (implicit else)
-                }
-            }
+            self.check_shadowing(&decl.name, is_mutable, context, span.clone());
 
             if context.scopes.len() == 1 {
                 self.global_scope.insert(
@@ -218,6 +243,31 @@ impl TypeChecker {
                 visibility.clone(),
                 self.current_module.clone(),
             );
+        }
+    }
+
+    fn check_shadowing(&mut self, name: &str, is_mutable: bool, context: &Context, span: Span) {
+        // Check for shadowing rules in the current scope
+        if let Some(current_scope) = context.scopes.last() {
+            if let Some(existing_info) = current_scope.get(name) {
+                // Rule 2: var may not shadow in the same scope
+                if is_mutable {
+                    self.report_error(
+                        format!("Variable '{}' is already defined in this scope. 'var' cannot shadow existing variables.", name),
+                        span,
+                    );
+                }
+                // Rule 3: switching let <-> var via shadowing in the same scope is not allowed
+                // We already know new is not mutable (from Rule 2 check above), so new is 'let'.
+                // If existing is 'var' (mutable), then we are switching var -> let, which is disallowed.
+                else if existing_info.mutable {
+                    self.report_error(
+                        format!("Cannot shadow mutable variable '{}' with an immutable one in the same scope.", name),
+                        span,
+                    );
+                }
+                // Rule 1: let shadowing let is allowed (implicit else)
+            }
         }
     }
 
@@ -630,6 +680,13 @@ impl TypeChecker {
             }
             _ => {
                 self.check_statement(body, context);
+            }
+        }
+
+        if return_type != Type::Void {
+            let status = check_returns(body);
+            if status == ReturnStatus::None {
+                self.report_error("Missing return statement".to_string(), body.span.clone());
             }
         }
 

@@ -195,3 +195,38 @@ x
     ";
     check_expr_type(source, Type::Int);
 }
+
+#[test]
+fn test_generic_struct_inference() {
+    let source = "
+struct Box<T>
+    value T
+
+let b = Box(1)
+";
+    check_success(source);
+}
+
+#[test]
+fn test_generic_struct_inference_mismatch() {
+    let source = "
+struct Box<T>
+    value T
+
+let b = Box(1)
+let s string = b.value
+";
+    check_error(source, "Type mismatch");
+}
+
+#[test]
+fn test_generic_struct_inference_correct_type() {
+    let source = "
+struct Box<T>
+    value T
+
+let b = Box(1)
+let i int = b.value
+";
+    check_success(source);
+}

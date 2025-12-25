@@ -18,139 +18,178 @@ impl TypeChecker {
     ) -> Result<Type, String> {
         match op {
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
-                if self.is_numeric(left) && self.is_numeric(right) {
-                    if self.are_compatible(left, right, context) {
-                        Ok(left.clone())
-                    } else {
-                        Err(format!("Type mismatch: {:?} and {:?} are not compatible for arithmetic operation", left, right))
-                    }
-                } else if matches!(op, BinaryOp::Add)
-                    && matches!(left, Type::String)
-                    && matches!(right, Type::String)
-                {
-                    Ok(Type::String)
-                } else if matches!(op, BinaryOp::Mul) {
-                    // String multiplication
-                    if (matches!(left, Type::String) && matches!(right, Type::Int))
-                        || (matches!(left, Type::Int) && matches!(right, Type::String))
-                    {
-                        Ok(Type::String)
-                    } else {
-                        Err(format!(
-                            "Invalid types for multiplication: {:?} and {:?}",
-                            left, right
-                        ))
-                    }
-                } else {
-                    Err(format!(
-                        "Invalid types for arithmetic operation: {:?} and {:?}",
-                        left, right
-                    ))
-                }
+                self.check_arithmetic_op(left, op, right, context)
             }
             BinaryOp::Equal
             | BinaryOp::NotEqual
             | BinaryOp::LessThan
             | BinaryOp::LessThanEqual
             | BinaryOp::GreaterThan
-            | BinaryOp::GreaterThanEqual => {
-                // Allow comparison between any integers
-                if self.is_integer(left) && self.is_integer(right) {
-                    Ok(Type::Boolean)
-                } else if (matches!(left, Type::Float | Type::F32 | Type::F64)
-                    && matches!(right, Type::Float | Type::F32 | Type::F64))
-                {
-                    // Allow comparison between any floats
-                    Ok(Type::Boolean)
-                } else if self.are_compatible(left, right, context) {
-                    Ok(Type::Boolean)
-                } else {
-                    Err(format!(
-                        "Type mismatch: cannot compare {:?} and {:?}",
-                        left, right
-                    ))
-                }
-            }
-            BinaryOp::And | BinaryOp::Or => {
-                if matches!(left, Type::Boolean) && matches!(right, Type::Boolean) {
-                    Ok(Type::Boolean)
-                } else {
-                    Err(format!(
-                        "Logical operations require booleans, got {:?} and {:?}",
-                        left, right
-                    ))
-                }
-            }
+            | BinaryOp::GreaterThanEqual => self.check_comparison_op(left, right, context),
+            BinaryOp::And | BinaryOp::Or => self.check_logical_op(left, right),
             BinaryOp::BitwiseAnd | BinaryOp::BitwiseOr | BinaryOp::BitwiseXor => {
-                if self.is_integer(left) && self.is_integer(right) {
-                    if left == right || matches!(right, Type::Int) {
-                        Ok(left.clone())
-                    } else if matches!(left, Type::Int) && self.are_compatible(right, left, context)
-                    {
-                        Ok(right.clone())
-                    } else {
-                        Err(format!(
-                            "Type mismatch: {:?} and {:?} are not compatible for bitwise operation",
-                            left, right
-                        ))
-                    }
+                self.check_bitwise_op(left, right, context)
+            }
+            BinaryOp::In => self.check_membership_op(left, right, context),
+            _ => Ok(Type::Boolean),
+        }
+    }
+
+    fn check_arithmetic_op(
+        &mut self,
+        left: &Type,
+        op: &BinaryOp,
+        right: &Type,
+        context: &Context,
+    ) -> Result<Type, String> {
+        if self.is_numeric(left) && self.is_numeric(right) {
+            if self.are_compatible(left, right, context) {
+                Ok(left.clone())
+            } else {
+                Err(format!(
+                    "Type mismatch: {:?} and {:?} are not compatible for arithmetic operation",
+                    left, right
+                ))
+            }
+        } else if matches!(op, BinaryOp::Add)
+            && matches!(left, Type::String)
+            && matches!(right, Type::String)
+        {
+            Ok(Type::String)
+        } else if matches!(op, BinaryOp::Mul) {
+            // String multiplication
+            if (matches!(left, Type::String) && matches!(right, Type::Int))
+                || (matches!(left, Type::Int) && matches!(right, Type::String))
+            {
+                Ok(Type::String)
+            } else {
+                Err(format!(
+                    "Invalid types for multiplication: {:?} and {:?}",
+                    left, right
+                ))
+            }
+        } else {
+            Err(format!(
+                "Invalid types for arithmetic operation: {:?} and {:?}",
+                left, right
+            ))
+        }
+    }
+
+    fn check_comparison_op(
+        &mut self,
+        left: &Type,
+        right: &Type,
+        context: &Context,
+    ) -> Result<Type, String> {
+        // Allow comparison between any integers
+        if self.is_integer(left) && self.is_integer(right) {
+            Ok(Type::Boolean)
+        } else if (matches!(left, Type::Float | Type::F32 | Type::F64)
+            && matches!(right, Type::Float | Type::F32 | Type::F64))
+        {
+            // Allow comparison between any floats
+            Ok(Type::Boolean)
+        } else if self.are_compatible(left, right, context) {
+            Ok(Type::Boolean)
+        } else {
+            Err(format!(
+                "Type mismatch: cannot compare {:?} and {:?}",
+                left, right
+            ))
+        }
+    }
+
+    fn check_logical_op(&self, left: &Type, right: &Type) -> Result<Type, String> {
+        if matches!(left, Type::Boolean) && matches!(right, Type::Boolean) {
+            Ok(Type::Boolean)
+        } else {
+            Err(format!(
+                "Logical operations require booleans, got {:?} and {:?}",
+                left, right
+            ))
+        }
+    }
+
+    fn check_bitwise_op(
+        &mut self,
+        left: &Type,
+        right: &Type,
+        context: &Context,
+    ) -> Result<Type, String> {
+        if self.is_integer(left) && self.is_integer(right) {
+            if left == right || matches!(right, Type::Int) {
+                Ok(left.clone())
+            } else if matches!(left, Type::Int) && self.are_compatible(right, left, context) {
+                Ok(right.clone())
+            } else {
+                Err(format!(
+                    "Type mismatch: {:?} and {:?} are not compatible for bitwise operation",
+                    left, right
+                ))
+            }
+        } else {
+            Err(format!(
+                "Invalid types for bitwise operation: {:?} and {:?}",
+                left, right
+            ))
+        }
+    }
+
+    fn check_membership_op(
+        &mut self,
+        left: &Type,
+        right: &Type,
+        context: &Context,
+    ) -> Result<Type, String> {
+        match right {
+            Type::List(inner_expr) | Type::Set(inner_expr) => {
+                let inner = self.resolve_type_expression(inner_expr, context);
+                if self.are_compatible(&inner, left, context) {
+                    Ok(Type::Boolean)
                 } else {
                     Err(format!(
-                        "Invalid types for bitwise operation: {:?} and {:?}",
-                        left, right
+                        "Type mismatch: cannot check membership of {:?} in collection of {:?}",
+                        left, inner
                     ))
                 }
             }
-            BinaryOp::In => match right {
-                Type::List(inner_expr) | Type::Set(inner_expr) => {
-                    let inner = self.resolve_type_expression(inner_expr, context);
-                    if self.are_compatible(&inner, left, context) {
-                        Ok(Type::Boolean)
-                    } else {
-                        Err(format!(
-                            "Type mismatch: cannot check membership of {:?} in collection of {:?}",
-                            left, inner
-                        ))
-                    }
+            Type::Map(key_expr, _) => {
+                let key = self.resolve_type_expression(key_expr, context);
+                if self.are_compatible(&key, left, context) {
+                    Ok(Type::Boolean)
+                } else {
+                    Err(format!(
+                        "Type mismatch: cannot check membership of {:?} in map with keys of {:?}",
+                        left, key
+                    ))
                 }
-                Type::Map(key_expr, _) => {
-                    let key = self.resolve_type_expression(key_expr, context);
-                    if self.are_compatible(&key, left, context) {
-                        Ok(Type::Boolean)
-                    } else {
-                        Err(format!(
-                            "Type mismatch: cannot check membership of {:?} in map with keys of {:?}",
-                            left, key
-                        ))
-                    }
+            }
+            Type::Custom(name, Some(args)) if name == "Range" && args.len() == 1 => {
+                let range_type = self.resolve_type_expression(&args[0], context);
+                if self.are_compatible(&range_type, left, context) {
+                    Ok(Type::Boolean)
+                } else {
+                    Err(format!(
+                        "Type mismatch: cannot check membership of {:?} in range of {:?}",
+                        left, range_type
+                    ))
                 }
-                Type::Custom(name, Some(args)) if name == "Range" && args.len() == 1 => {
-                    let range_type = self.resolve_type_expression(&args[0], context);
-                    if self.are_compatible(&range_type, left, context) {
-                        Ok(Type::Boolean)
-                    } else {
-                        Err(format!(
-                            "Type mismatch: cannot check membership of {:?} in range of {:?}",
-                            left, range_type
-                        ))
-                    }
+            }
+            Type::String => {
+                if matches!(left, Type::String) {
+                    Ok(Type::Boolean)
+                } else {
+                    Err(format!(
+                        "Type mismatch: cannot check membership of {:?} in String (expected String)",
+                        left
+                    ))
                 }
-                Type::String => {
-                    if matches!(left, Type::String) {
-                        Ok(Type::Boolean)
-                    } else {
-                        Err(format!(
-                            "Type mismatch: cannot check membership of {:?} in String (expected String)",
-                            left
-                        ))
-                    }
-                }
-                _ => Err(format!(
-                    "Invalid type for 'in' operator: expected collection, got {:?}",
-                    right
-                )),
-            },
-            _ => Ok(Type::Boolean),
+            }
+            _ => Err(format!(
+                "Invalid type for 'in' operator: expected collection, got {:?}",
+                right
+            )),
         }
     }
 
@@ -247,6 +286,13 @@ impl TypeChecker {
         }
     }
 
+    /// Checks if two types are compatible for assignment or operation.
+    ///
+    /// This function handles:
+    /// - Exact type equality
+    /// - Nullable type compatibility (e.g., `T` is compatible with `T?`, `None` is compatible with `T?`)
+    /// - Numeric type compatibility (literals, widening)
+    /// - Inheritance/Interface implementation (via `is_subtype`)
     pub(crate) fn are_compatible(&self, t1: &Type, t2: &Type, context: &Context) -> bool {
         if t1 == t2 {
             return true;

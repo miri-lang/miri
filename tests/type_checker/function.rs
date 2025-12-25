@@ -188,7 +188,7 @@ fn test_guard_type_mismatch() {
 fn foo(a int > \"0\")
     return
 ",
-        "Type mismatch", // Or "Invalid types for comparison"
+        "Type mismatch",
     );
 }
 
@@ -405,4 +405,25 @@ fn add(a int)
 add(b: 1)
     ";
     check_error(code, "Unknown argument 'b'");
+}
+
+#[test]
+fn test_missing_return_in_function() {
+    let source = "
+fn foo() int
+    let x = 1
+";
+    check_error(source, "Missing return statement");
+}
+
+#[test]
+fn test_missing_return_in_function_with_if() {
+    let source = "
+fn foo() int
+    if true
+        return 1
+    
+    // Missing return here
+";
+    check_error(source, "Missing return statement");
 }

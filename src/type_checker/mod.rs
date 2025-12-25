@@ -39,6 +39,20 @@ impl Default for TypeChecker {
 
 impl TypeChecker {
     pub fn new() -> Self {
+        let (global_scope, global_type_definitions) = Self::initialize_builtins();
+
+        Self {
+            types: HashMap::new(),
+            errors: Vec::new(),
+            warnings: Vec::new(),
+            hierarchy: HashMap::new(),
+            current_module: "Main".to_string(),
+            global_scope,
+            global_type_definitions,
+        }
+    }
+
+    fn initialize_builtins() -> (HashMap<String, SymbolInfo>, HashMap<String, TypeDefinition>) {
         let mut global_type_definitions = HashMap::new();
 
         // Define built-in String type
@@ -80,15 +94,7 @@ impl TypeChecker {
             },
         );
 
-        Self {
-            types: HashMap::new(),
-            errors: Vec::new(),
-            warnings: Vec::new(),
-            hierarchy: HashMap::new(),
-            current_module: "Main".to_string(),
-            global_scope,
-            global_type_definitions,
-        }
+        (global_scope, global_type_definitions)
     }
 
     pub fn set_current_module(&mut self, name: String) {

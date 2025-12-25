@@ -10,6 +10,10 @@ use crate::error::utils::find_best_match;
 use std::collections::{HashMap, HashSet};
 
 impl TypeChecker {
+    /// Infers the type of an expression.
+    ///
+    /// This is the main entry point for expression type checking. It delegates to specific
+    /// handler methods based on the expression kind.
     pub(crate) fn infer_expression(&mut self, expr: &Expression, context: &mut Context) -> Type {
         let ty = match &expr.node {
             ExpressionKind::Literal(lit) => self.infer_literal(lit),
@@ -138,6 +142,9 @@ impl TypeChecker {
         }
     }
 
+    /// Infers the type of a binary operation.
+    ///
+    /// Checks compatibility of operands and determines the result type.
     pub(crate) fn infer_binary(
         &mut self,
         left: &Expression,
@@ -456,6 +463,7 @@ impl TypeChecker {
 
                     if let Some(TypeDefinition::Struct(def)) = type_def {
                         let mut pos_iter = positional_args.iter();
+                        let mut generic_map = HashMap::new();
 
                         for (field_name, field_type, _) in &def.fields {
                             let (arg_expr, arg_type) = if let Some((expr, ty)) = pos_iter.next() {
@@ -467,11 +475,25 @@ impl TypeChecker {
                             };
 
                             if let Some(arg_type) = arg_type {
-                                if !self.are_compatible(field_type, &arg_type, context) {
+                                if def.generics.is_some() {
+                                    self.infer_generic_types(
+                                        field_type,
+                                        &arg_type,
+                                        &mut generic_map,
+                                    );
+                                }
+
+                                let concrete_field_type = if def.generics.is_some() {
+                                    self.substitute_type(field_type, &generic_map)
+                                } else {
+                                    field_type.clone()
+                                };
+
+                                if !self.are_compatible(&concrete_field_type, &arg_type, context) {
                                     self.report_error(
                                         format!(
                                             "Type mismatch for field '{}': expected {:?}, got {:?}",
-                                            field_name, field_type, arg_type
+                                            field_name, concrete_field_type, arg_type
                                         ),
                                         arg_expr.map(|e| e.span.clone()).unwrap_or(span.clone()),
                                     );
@@ -499,7 +521,14 @@ impl TypeChecker {
                             self.report_error(format!("Unknown field '{}'", name), span);
                         }
 
-                        return Type::Custom(name.clone(), None);
+                        let generic_args = def.generics.as_ref().map(|gens| {
+                            gens.iter()
+                                .map(|g| generic_map.get(&g.name).cloned().unwrap_or(Type::Error))
+                                .map(|t| self.create_type_expression(t))
+                                .collect()
+                        });
+
+                        return Type::Custom(name.clone(), generic_args);
                     }
                 }
                 self.report_error(format!("Type '{:?}' is not callable", inner_type), span);
