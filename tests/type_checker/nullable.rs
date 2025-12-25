@@ -196,3 +196,12 @@ fn test_nullable_boolean_assignment() {
     check_success("var x bool? = false");
     check_success("var x bool? = None");
 }
+
+#[test]
+fn test_option_methods() {
+    let source = "
+let o int? = 10
+o.is_some()
+    ";
+    check_expr_type(source, Type::Boolean);
+}

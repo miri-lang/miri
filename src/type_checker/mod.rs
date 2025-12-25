@@ -80,7 +80,7 @@ impl TypeChecker {
         for statement in &program.body {
             // Flatten top-level blocks to ensure variables are declared in the global scope
             // This handles cases where the entire program is indented (e.g. in tests)
-            if let Statement::Block(stmts) = statement {
+            if let StatementKind::Block(stmts) = &statement.node {
                 for stmt in stmts {
                     self.check_statement(stmt, &mut context);
                 }

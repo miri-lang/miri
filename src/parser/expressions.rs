@@ -858,7 +858,7 @@ impl<'source> Parser<'source> {
                 if self.lookahead_is_indent() {
                     self.block_statement()?
                 } else if self.lookahead_is_dedent() || self._lookahead.is_none() {
-                    Statement::Empty // No body, just an expression end
+                    ast::empty_statement() // No body, just an expression end
                 } else {
                     return Err(body_parsing_error);
                 }

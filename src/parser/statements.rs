@@ -49,7 +49,7 @@ impl<'source> Parser<'source> {
     */
     pub(crate) fn statement(&mut self) -> Result<Statement, SyntaxError> {
         if self._lookahead.is_none() {
-            return Ok(Statement::Empty);
+            return Ok(ast::empty_statement());
         }
 
         let statement = match &self._lookahead {
@@ -178,19 +178,22 @@ impl<'source> Parser<'source> {
         if self.lookahead_is_colon() {
             self.eat_token(&Token::Colon)?;
 
-            if self._lookahead.is_none()
-                || self.lookahead_is_expression_end()
-                || self.lookahead_is_dedent()
-                || self.lookahead_is_else()
-            {
-                self.try_eat_expression_end();
-                return Ok(Statement::Empty);
+            if self.lookahead_is_expression_end() {
+                self.eat_expression_end()?;
+                if self.lookahead_is_indent() {
+                    return self.block_statement();
+                }
+                return Ok(ast::empty_statement());
+            }
+
+            if self._lookahead.is_none() || self.lookahead_is_dedent() || self.lookahead_is_else() {
+                return Ok(ast::empty_statement());
             }
         } else if self.lookahead_is_expression_end() {
             self.eat_expression_end()?;
 
             if !self.lookahead_is_indent() {
-                return Ok(Statement::Empty);
+                return Ok(ast::empty_statement());
             }
         } else if self.match_lookahead_type(|t| t == &Token::If || t == &Token::Unless) {
             // To support `else if`
@@ -203,7 +206,7 @@ impl<'source> Parser<'source> {
             return self.statement();
         }
 
-        Ok(Statement::Empty)
+        Ok(ast::empty_statement())
     }
 
     /*
@@ -478,6 +481,6 @@ impl<'source> Parser<'source> {
             _ => self.statement_list()?,
         };
         self.eat_token(&Token::Dedent)?;
-        Ok(ast::block(body))
+        Ok(ast::block_statement(body))
     }
 }

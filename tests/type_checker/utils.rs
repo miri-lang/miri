@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
-use miri::ast::{Expression, ExpressionKind, IdNode, Statement, Type};
+use miri::ast::{Expression, ExpressionKind, IdNode, Statement, StatementKind, Type};
 use miri::error::compiler::CompilerError;
 use miri::error::syntax::Span;
 use miri::lexer::Lexer;
@@ -106,14 +106,14 @@ pub fn check_expr_type(source: &str, expected_type: Type) {
         .body
         .iter()
         .rev()
-        .find(|s| match s {
-            Statement::Empty => false,
-            Statement::Block(stmts) if stmts.is_empty() => false,
+        .find(|s| match &s.node {
+            StatementKind::Empty => false,
+            StatementKind::Block(stmts) if stmts.is_empty() => false,
             _ => true,
         })
         .expect("Program is empty or only contains empty statements");
 
-    if let Statement::Expression(expr) = last_stmt {
+    if let StatementKind::Expression(expr) = &last_stmt.node {
         let actual_type = result
             .type_checker
             .get_type(expr.id)
@@ -142,8 +142,8 @@ fn find_variable_type_in_statement(
     var_name: &str,
     type_checker: &TypeChecker,
 ) -> Option<Type> {
-    match stmt {
-        Statement::Variable(decls, _) => {
+    match &stmt.node {
+        StatementKind::Variable(decls, _) => {
             for decl in decls {
                 if decl.name == var_name {
                     if let Some(init) = &decl.initializer {
@@ -153,19 +153,23 @@ fn find_variable_type_in_statement(
             }
             None
         }
-        Statement::Block(stmts) => find_variable_type_in_statements(stmts, var_name, type_checker),
-        Statement::If(_, then_block, else_block, _) => {
+        StatementKind::Block(stmts) => {
+            find_variable_type_in_statements(stmts, var_name, type_checker)
+        }
+        StatementKind::If(_, then_block, else_block, _) => {
             find_variable_type_in_statement(then_block, var_name, type_checker).or_else(|| {
                 else_block
                     .as_ref()
                     .and_then(|s| find_variable_type_in_statement(s, var_name, type_checker))
             })
         }
-        Statement::While(_, body, _) => {
+        StatementKind::While(_, body, _) => {
             find_variable_type_in_statement(body, var_name, type_checker)
         }
-        Statement::For(_, _, body) => find_variable_type_in_statement(body, var_name, type_checker),
-        Statement::FunctionDeclaration(_, _, _, _, body, _) => {
+        StatementKind::For(_, _, body) => {
+            find_variable_type_in_statement(body, var_name, type_checker)
+        }
+        StatementKind::FunctionDeclaration(_, _, _, _, body, _) => {
             find_variable_type_in_statement(body, var_name, type_checker)
         }
         _ => None,

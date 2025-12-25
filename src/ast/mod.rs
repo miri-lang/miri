@@ -90,7 +90,7 @@ impl<T> IdNode<T> {
 }
 
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
-pub enum Statement {
+pub enum StatementKind {
     Empty, // Represents an empty statement, e.g., when a block is empty
 
     Break,
@@ -144,6 +144,8 @@ pub enum Statement {
 
     Includes(Vec<Expression>), // includes Module1, Module2
 }
+
+pub type Statement = IdNode<StatementKind>;
 
 /// Represents an expression
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

@@ -74,7 +74,10 @@ fn foo(x int)
     var x = 2
     x = 3
     ";
-    check_success(code);
+    check_error(
+        code,
+        "Variable 'x' is already defined in this scope. 'var' cannot shadow existing variables.",
+    );
 }
 
 #[test]

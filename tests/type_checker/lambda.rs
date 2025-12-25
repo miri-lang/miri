@@ -183,3 +183,16 @@ let f = fn(x int)
     ";
     check_error(source, "Incompatible return types in lambda");
 }
+
+#[test]
+fn test_nested_lambda_inference_complex() {
+    let source = "
+let f = fn(x int)
+    let g = fn(y int)
+        if y > 0: return y
+        return x
+    g(x)
+f(10)
+    ";
+    check_expr_type(source, Type::Int);
+}

@@ -363,6 +363,29 @@ impl TypeChecker {
                 }
                 false
             }
+            (Type::Nullable(inner1), Type::Nullable(inner2)) => {
+                if matches!(**inner2, Type::Void) {
+                    return true;
+                }
+                self.are_compatible(inner1, inner2, context)
+            }
+            (Type::Nullable(inner1), t2) => self.are_compatible(inner1, t2, context),
+            (Type::Result(ok1, err1), Type::Result(ok2, err2)) => {
+                if let (Ok(ok1_t), Ok(err1_t), Ok(ok2_t), Ok(err2_t)) = (
+                    self.extract_type_from_expression(ok1),
+                    self.extract_type_from_expression(err1),
+                    self.extract_type_from_expression(ok2),
+                    self.extract_type_from_expression(err2),
+                ) {
+                    let ok_compatible =
+                        matches!(ok2_t, Type::Void) || self.are_compatible(&ok1_t, &ok2_t, context);
+                    let err_compatible = matches!(err2_t, Type::Void)
+                        || self.are_compatible(&err1_t, &err2_t, context);
+
+                    return ok_compatible && err_compatible;
+                }
+                false
+            }
             (Type::Function(gen1, params1, ret1), Type::Function(gen2, params2, ret2)) => {
                 // Check generics count
                 if gen1.as_ref().map(|v| v.len()).unwrap_or(0)
@@ -925,6 +948,19 @@ impl TypeChecker {
                 }
             }
             Type::Nullable(inner) => Type::Nullable(Box::new(self.substitute_type(inner, mapping))),
+            Type::Result(ok_expr, err_expr) => {
+                if let (Ok(ok), Ok(err)) = (
+                    self.extract_type_from_expression(ok_expr),
+                    self.extract_type_from_expression(err_expr),
+                ) {
+                    Type::Result(
+                        Box::new(self.create_type_expression(self.substitute_type(&ok, mapping))),
+                        Box::new(self.create_type_expression(self.substitute_type(&err, mapping))),
+                    )
+                } else {
+                    ty.clone()
+                }
+            }
             _ => ty.clone(),
         }
     }

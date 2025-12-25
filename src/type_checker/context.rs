@@ -2,6 +2,7 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use crate::ast::{MemberVisibility, Type, TypeDeclarationKind};
+use crate::error::syntax::Span;
 use std::collections::HashMap;
 
 /// Represents information about a symbol (variable, function, etc.) in the scope.
@@ -65,7 +66,7 @@ pub struct Context {
     /// Stack of expected return types for the current function(s).
     pub return_types: Vec<Type>,
     /// Stack of inferred return types (used for lambdas/functions without explicit return type).
-    pub inferred_return_types: Vec<Option<Vec<Type>>>,
+    pub inferred_return_types: Vec<Option<Vec<(Type, Span)>>>,
     /// Current depth of nested loops (used to validate break/continue).
     pub loop_depth: usize,
 }

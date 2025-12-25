@@ -22,6 +22,18 @@ fn expr(kind: ExpressionKind) -> Expression {
     expr_with_span(kind, 0..0)
 }
 
+pub fn stmt_with_span(kind: StatementKind, span: Span) -> Statement {
+    Statement {
+        id: next_id(),
+        node: kind,
+        span,
+    }
+}
+
+pub fn stmt(kind: StatementKind) -> Statement {
+    stmt_with_span(kind, 0..0)
+}
+
 pub fn identifier_with_span(name: &str, span: Span) -> Expression {
     expr_with_span(ExpressionKind::Identifier(name.into(), None), span)
 }
@@ -219,7 +231,7 @@ pub fn struct_member_expression_with_span(
 }
 
 pub fn empty_statement() -> Statement {
-    Statement::Empty
+    stmt(StatementKind::Empty)
 }
 
 pub fn program(statements: Vec<Statement>) -> Program {
@@ -470,33 +482,38 @@ pub fn variable_statement(
     declarations: Vec<VariableDeclaration>,
     visibility: MemberVisibility,
 ) -> Statement {
-    Statement::Variable(declarations, visibility)
+    stmt(StatementKind::Variable(declarations, visibility))
 }
 
 pub fn expression_statement(expr: Expression) -> Statement {
-    Statement::Expression(expr)
+    let span = expr.span.clone();
+    stmt_with_span(StatementKind::Expression(expr), span)
+}
+
+pub fn block_statement(stmts: Vec<Statement>) -> Statement {
+    stmt(StatementKind::Block(stmts))
 }
 
 pub fn block(stmts: Vec<Statement>) -> Statement {
-    Statement::Block(stmts)
+    block_statement(stmts)
 }
 
 pub fn if_statement(cond: Expression, then: Statement, else_b: Option<Statement>) -> Statement {
-    Statement::If(
+    stmt(StatementKind::If(
         Box::new(cond),
         Box::new(then),
         else_b.map(Box::new),
         IfStatementType::If,
-    )
+    ))
 }
 
 pub fn unless_statement(cond: Expression, then: Statement, else_b: Option<Statement>) -> Statement {
-    Statement::If(
+    stmt(StatementKind::If(
         Box::new(cond),
         Box::new(then),
         else_b.map(Box::new),
         IfStatementType::Unless,
-    )
+    ))
 }
 
 pub fn while_statement_with_type(
@@ -504,7 +521,11 @@ pub fn while_statement_with_type(
     body: Statement,
     while_statement_type: WhileStatementType,
 ) -> Statement {
-    Statement::While(Box::new(cond), Box::new(body), while_statement_type)
+    stmt(StatementKind::While(
+        Box::new(cond),
+        Box::new(body),
+        while_statement_type,
+    ))
 }
 
 pub fn while_statement(cond: Expression, body: Statement) -> Statement {
@@ -532,11 +553,15 @@ pub fn for_statement(
     iterable: Expression,
     body: Statement,
 ) -> Statement {
-    Statement::For(variable_declarations, Box::new(iterable), Box::new(body))
+    stmt(StatementKind::For(
+        variable_declarations,
+        Box::new(iterable),
+        Box::new(body),
+    ))
 }
 
 pub fn return_statement(expr: Option<Box<Expression>>) -> Statement {
-    Statement::Return(expr)
+    stmt(StatementKind::Return(expr))
 }
 
 pub fn guard(op: GuardOp, expr_node: Expression) -> Expression {
@@ -580,7 +605,7 @@ pub fn import_path_multi(
 }
 
 pub fn use_statement(import_path: Expression, alias: Option<Box<Expression>>) -> Statement {
-    Statement::Use(Box::new(import_path), alias)
+    stmt(StatementKind::Use(Box::new(import_path), alias))
 }
 
 pub fn generic_type(name: &str, constraint: Option<Box<Expression>>) -> Expression {
@@ -627,6 +652,10 @@ pub fn type_null(element_type: Type) -> Type {
     Type::Nullable(Box::new(element_type))
 }
 
+pub fn type_result(ok_type: Type, err_type: Type) -> Type {
+    Type::Result(Box::new(typ(ok_type)), Box::new(typ(err_type)))
+}
+
 pub fn type_declaration_expression(
     name: Expression,
     generic_types: Option<Vec<Expression>>,
@@ -651,15 +680,15 @@ pub fn type_declaration(
 }
 
 pub fn type_statement(declarations: Vec<Expression>, visibility: MemberVisibility) -> Statement {
-    Statement::Type(declarations, visibility)
+    stmt(StatementKind::Type(declarations, visibility))
 }
 
 pub fn break_statement() -> Statement {
-    Statement::Break
+    stmt(StatementKind::Break)
 }
 
 pub fn continue_statement() -> Statement {
-    Statement::Continue
+    stmt(StatementKind::Continue)
 }
 
 pub fn enum_statement(
@@ -667,7 +696,7 @@ pub fn enum_statement(
     values: Vec<Expression>,
     visibility: MemberVisibility,
 ) -> Statement {
-    Statement::Enum(Box::new(name), values, visibility)
+    stmt(StatementKind::Enum(Box::new(name), values, visibility))
 }
 
 pub fn enum_value_expression(name: Expression, types: Vec<Expression>) -> Expression {
@@ -684,7 +713,12 @@ pub fn struct_statement(
     members: Vec<Expression>,
     visibility: MemberVisibility,
 ) -> Statement {
-    Statement::Struct(Box::new(name), generic_types, members, visibility)
+    stmt(StatementKind::Struct(
+        Box::new(name),
+        generic_types,
+        members,
+        visibility,
+    ))
 }
 
 pub fn struct_member_expression(name: Expression, typ: Expression) -> Expression {
@@ -696,15 +730,15 @@ pub fn struct_member(name: &str, typ: Expression) -> Expression {
 }
 
 pub fn extends(base: Expression) -> Statement {
-    Statement::Extends(Box::new(base))
+    stmt(StatementKind::Extends(Box::new(base)))
 }
 
 pub fn implements(traits: Vec<Expression>) -> Statement {
-    Statement::Implements(traits)
+    stmt(StatementKind::Implements(traits))
 }
 
 pub fn includes(modules: Vec<Expression>) -> Statement {
-    Statement::Includes(modules)
+    stmt(StatementKind::Includes(modules))
 }
 
 pub fn list(elements: Vec<Expression>) -> Expression {
@@ -791,14 +825,14 @@ impl FunctionBuilder {
     }
 
     pub fn build(self, body: Statement) -> Statement {
-        Statement::FunctionDeclaration(
+        stmt(StatementKind::FunctionDeclaration(
             self.name,
             self.generic_types,
             self.parameters,
             self.return_type,
             Box::new(body),
             self.properties,
-        )
+        ))
     }
 
     pub fn build_empty_body(self) -> Statement {
@@ -832,14 +866,14 @@ pub fn function_declaration(
     body: Statement,
     properties: FunctionProperties,
 ) -> Statement {
-    Statement::FunctionDeclaration(
+    stmt(StatementKind::FunctionDeclaration(
         name.into(),
         generic_types,
         parameters,
         return_type,
         Box::new(body),
         properties,
-    )
+    ))
 }
 
 pub fn lambda() -> FunctionBuilder {

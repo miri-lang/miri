@@ -108,7 +108,7 @@ if x
     x = 10
 ",
         identifier("x".into()),
-        Statement::Block(vec![expression_statement(assign(
+        block_statement(vec![expression_statement(assign(
             lhs_identifier("x".into()),
             AssignmentOp::Assign,
             int_literal_expression(10),

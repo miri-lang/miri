@@ -43,11 +43,11 @@ pub fn variable_declaration_test(
     expected: Vec<VariableDeclaration>,
     visibility: MemberVisibility,
 ) {
-    parser_test(input, vec![Statement::Variable(expected, visibility)]);
+    parser_test(input, vec![variable_statement(expected, visibility)]);
 }
 
 pub fn literal_test(input: &str, expected: Literal) {
-    parser_test(input, vec![Statement::Expression(literal(expected))]);
+    parser_test(input, vec![expression_statement(literal(expected))]);
 }
 
 pub fn run_literal_tests(inputs: Vec<(&str, Literal)>) {
@@ -77,7 +77,7 @@ pub fn run_float_tests(inputs: Vec<(&str, FloatLiteral)>) {
 }
 
 pub fn binary_expression_test(input: &str, left: Expression, op: BinaryOp, right: Expression) {
-    parser_test(input, vec![Statement::Expression(binary(left, op, right))]);
+    parser_test(input, vec![expression_statement(binary(left, op, right))]);
 }
 
 pub fn assignment_expression_test(
@@ -86,7 +86,7 @@ pub fn assignment_expression_test(
     op: AssignmentOp,
     right: Expression,
 ) {
-    parser_test(input, vec![Statement::Expression(assign(left, op, right))]);
+    parser_test(input, vec![expression_statement(assign(left, op, right))]);
 }
 
 pub fn if_statement_test(
@@ -98,12 +98,12 @@ pub fn if_statement_test(
 ) {
     parser_test(
         input,
-        vec![Statement::If(
+        vec![stmt(StatementKind::If(
             Box::new(condition),
             Box::new(then_block),
             else_block.map(Box::new),
             if_statement_type,
-        )],
+        ))],
     );
 }
 
@@ -130,7 +130,7 @@ pub fn combined_if_unless_test(
 }
 
 pub fn unary_expression_test(input: &str, op: UnaryOp, right: Expression) {
-    parser_test(input, vec![Statement::Expression(unary(op, right))]);
+    parser_test(input, vec![expression_statement(unary(op, right))]);
 }
 
 pub fn while_expression_test(
@@ -141,9 +141,9 @@ pub fn while_expression_test(
 ) {
     parser_test(
         input,
-        vec![Statement::While(
-            Box::new(condition),
-            Box::new(then_block),
+        vec![while_statement_with_type(
+            condition,
+            then_block,
             while_statement_type,
         )],
     );
@@ -187,11 +187,7 @@ pub fn for_statement_test(
 ) {
     parser_test(
         input,
-        vec![Statement::For(
-            variable_declarations,
-            Box::new(iterable),
-            Box::new(body),
-        )],
+        vec![for_statement(variable_declarations, iterable, body)],
     );
 }
 

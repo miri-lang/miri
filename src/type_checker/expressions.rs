@@ -3,6 +3,7 @@
 
 use super::context::{Context, TypeDefinition};
 use super::TypeChecker;
+use crate::ast::factory as ast_factory;
 use crate::ast::*;
 use crate::error::syntax::Span;
 use std::collections::HashMap;
@@ -62,11 +63,63 @@ impl TypeChecker {
                     context,
                 ),
             ExpressionKind::NamedArgument(_, value) => self.infer_expression(value, context),
+            ExpressionKind::EnumValue(name, values) => {
+                self.infer_enum_value(name, values, expr.span.clone(), context)
+            }
             _ => Type::Int, // Default fallback for unimplemented expressions
         };
 
         self.types.insert(expr.id, ty.clone());
         ty
+    }
+
+    fn infer_enum_value(
+        &mut self,
+        name: &Expression,
+        values: &[Expression],
+        span: Span,
+        context: &mut Context,
+    ) -> Type {
+        if let ExpressionKind::Identifier(id_name, _) = &name.node {
+            if id_name == "Ok" {
+                if values.len() != 1 {
+                    self.report_error("Ok expects exactly 1 argument".to_string(), span);
+                    return Type::Error;
+                }
+                let val_type = self.infer_expression(&values[0], context);
+                // Result<T, Void>
+                return Type::Result(
+                    Box::new(ast_factory::expr_with_span(
+                        ExpressionKind::Type(Box::new(val_type), false),
+                        span.clone(),
+                    )),
+                    Box::new(ast_factory::expr_with_span(
+                        ExpressionKind::Type(Box::new(Type::Void), false),
+                        span.clone(),
+                    )),
+                );
+            } else if id_name == "Err" {
+                if values.len() != 1 {
+                    self.report_error("Err expects exactly 1 argument".to_string(), span);
+                    return Type::Error;
+                }
+                let val_type = self.infer_expression(&values[0], context);
+                // Result<Void, E>
+                return Type::Result(
+                    Box::new(ast_factory::expr_with_span(
+                        ExpressionKind::Type(Box::new(Type::Void), false),
+                        span.clone(),
+                    )),
+                    Box::new(ast_factory::expr_with_span(
+                        ExpressionKind::Type(Box::new(val_type), false),
+                        span.clone(),
+                    )),
+                );
+            }
+        }
+
+        // TODO: Handle user-defined enums
+        Type::Error
     }
 
     fn infer_literal(&self, lit: &Literal) -> Type {
@@ -134,6 +187,48 @@ impl TypeChecker {
     }
 
     fn infer_identifier(&mut self, name: &str, span: Span, context: &Context) -> Type {
+        if name == "None" {
+            return Type::Nullable(Box::new(Type::Void));
+        }
+        if name == "Ok" {
+            // fn<T>(value: T) -> Result<T, Void>
+            let t_param = Type::Generic("T".to_string(), None, TypeDeclarationKind::None);
+            let t_expr = ast_factory::typ(t_param.clone());
+            let void_expr = ast_factory::typ(Type::Void);
+
+            let return_type = Type::Result(Box::new(t_expr.clone()), Box::new(void_expr));
+
+            return Type::Function(
+                Some(vec![t_expr.clone()]),
+                vec![Parameter {
+                    name: "value".to_string(),
+                    typ: Box::new(t_expr),
+                    guard: None,
+                    default_value: None,
+                }],
+                Some(Box::new(ast_factory::typ(return_type))),
+            );
+        }
+        if name == "Err" {
+            // fn<E>(error: E) -> Result<Void, E>
+            let e_param = Type::Generic("E".to_string(), None, TypeDeclarationKind::None);
+            let e_expr = ast_factory::typ(e_param.clone());
+            let void_expr = ast_factory::typ(Type::Void);
+
+            let return_type = Type::Result(Box::new(void_expr), Box::new(e_expr.clone()));
+
+            return Type::Function(
+                Some(vec![e_expr.clone()]),
+                vec![Parameter {
+                    name: "error".to_string(),
+                    typ: Box::new(e_expr),
+                    guard: None,
+                    default_value: None,
+                }],
+                Some(Box::new(ast_factory::typ(return_type))),
+            );
+        }
+
         let info_opt = context
             .resolve_info(name)
             .or_else(|| self.global_scope.get(name).cloned());
@@ -291,7 +386,7 @@ impl TypeChecker {
                                     "Type mismatch for argument '{}': expected {:?}, got {:?}",
                                     param.name, concrete_param_type, arg_type
                                 ),
-                                arg_expr.unwrap().span.clone(),
+                                arg_expr.map(|e| e.span.clone()).unwrap_or(span.clone()),
                             );
                         }
                     } else if param.default_value.is_none() {
@@ -360,7 +455,7 @@ impl TypeChecker {
                                             "Type mismatch for field '{}': expected {:?}, got {:?}",
                                             field_name, field_type, arg_type
                                         ),
-                                        arg_expr.unwrap().span.clone(),
+                                        arg_expr.map(|e| e.span.clone()).unwrap_or(span.clone()),
                                     );
                                 }
                             } else {
@@ -752,6 +847,35 @@ impl TypeChecker {
         let (type_name, type_args) = match &obj_type {
             Type::String => (Some("String".to_string()), None),
             Type::Custom(name, args) => (Some(name.clone()), args.clone()),
+            Type::Result(ok_type, _) => {
+                if prop_name == "unwrap" {
+                    let t = self.resolve_type_expression(ok_type, context);
+                    return Type::Function(None, vec![], Some(Box::new(ast_factory::typ(t))));
+                } else if prop_name == "is_ok" || prop_name == "is_err" {
+                    return Type::Function(
+                        None,
+                        vec![],
+                        Some(Box::new(ast_factory::typ(Type::Boolean))),
+                    );
+                }
+                (None, None)
+            }
+            Type::Nullable(inner_type) => {
+                if prop_name == "unwrap" {
+                    return Type::Function(
+                        None,
+                        vec![],
+                        Some(Box::new(ast_factory::typ(*inner_type.clone()))),
+                    );
+                } else if prop_name == "is_some" || prop_name == "is_none" {
+                    return Type::Function(
+                        None,
+                        vec![],
+                        Some(Box::new(ast_factory::typ(Type::Boolean))),
+                    );
+                }
+                (None, None)
+            }
             // Add others as needed
             _ => (None, None),
         };
@@ -957,13 +1081,13 @@ impl TypeChecker {
         }
 
         // Check body and infer implicit return type
-        let implicit_return_type = match body {
-            Statement::Block(stmts) => {
+        let implicit_return_type = match &body.node {
+            StatementKind::Block(stmts) => {
                 context.enter_scope();
                 let mut last_type = Type::Void;
                 for (i, stmt) in stmts.iter().enumerate() {
                     if i == stmts.len() - 1 {
-                        if let Statement::Expression(expr) = stmt {
+                        if let StatementKind::Expression(expr) = &stmt.node {
                             last_type = self.infer_expression(expr, context);
                         } else {
                             self.check_statement(stmt, context);
@@ -975,7 +1099,7 @@ impl TypeChecker {
                 context.exit_scope();
                 last_type
             }
-            Statement::Expression(expr) => self.infer_expression(expr, context),
+            StatementKind::Expression(expr) => self.infer_expression(expr, context),
             _ => {
                 self.check_statement(body, context);
                 Type::Void
@@ -989,15 +1113,15 @@ impl TypeChecker {
 
             if !is_void_expected && is_void_implicit {
                 // Check if the last statement was a return statement?
-                let ends_with_return = match body {
-                    Statement::Block(stmts) => {
+                let ends_with_return = match &body.node {
+                    StatementKind::Block(stmts) => {
                         if let Some(last) = stmts.last() {
-                            matches!(last, Statement::Return(_))
+                            matches!(last.node, StatementKind::Return(_))
                         } else {
                             false
                         }
                     }
-                    Statement::Return(_) => true,
+                    StatementKind::Return(_) => true,
                     _ => false,
                 };
 
@@ -1007,7 +1131,7 @@ impl TypeChecker {
                             "Invalid return type: expected {:?}, got {:?}",
                             expected, implicit_return_type
                         ),
-                        0..0, // TODO: Span
+                        body.span.clone(),
                     );
                 }
             } else if !self.are_compatible(&expected, &implicit_return_type, context)
@@ -1018,7 +1142,7 @@ impl TypeChecker {
                         "Invalid return type: expected {:?}, got {:?}",
                         expected, implicit_return_type
                     ),
-                    0..0, // TODO: Span
+                    body.span.clone(),
                 );
             }
             return_type_expr.clone()
@@ -1027,13 +1151,16 @@ impl TypeChecker {
             let collected_returns = context
                 .inferred_return_types
                 .pop()
-                .expect("Stack should not be empty")
-                .expect("Should be Some(Vec) for inference mode");
+                .unwrap_or_else(|| {
+                    // Should not happen if stack is balanced
+                    Some(Vec::new())
+                })
+                .unwrap_or_default();
             context.return_types.pop(); // Pop the placeholder
 
             let mut candidate = implicit_return_type;
 
-            for ret_ty in collected_returns {
+            for (ret_ty, ret_span) in collected_returns {
                 if candidate == Type::Void {
                     candidate = ret_ty;
                 } else if ret_ty != Type::Void {
@@ -1043,7 +1170,7 @@ impl TypeChecker {
                                 "Incompatible return types in lambda: {:?} and {:?}",
                                 candidate, ret_ty
                             ),
-                            0..0,
+                            ret_span,
                         );
                     }
                 } else {
@@ -1053,7 +1180,7 @@ impl TypeChecker {
                             "Incompatible return types in lambda: {:?} and {:?}",
                             candidate, ret_ty
                         ),
-                        0..0,
+                        ret_span,
                     );
                 }
             }
@@ -1204,9 +1331,9 @@ impl TypeChecker {
     }
 
     fn infer_statement_type(&mut self, stmt: &Statement, context: &mut Context) -> Type {
-        match stmt {
-            Statement::Expression(expr) => self.infer_expression(expr, context),
-            Statement::Block(stmts) => {
+        match &stmt.node {
+            StatementKind::Expression(expr) => self.infer_expression(expr, context),
+            StatementKind::Block(stmts) => {
                 context.enter_scope();
                 let mut last_type = Type::Void;
                 for (i, s) in stmts.iter().enumerate() {

@@ -20,41 +20,52 @@ pub(crate) struct FunctionDeclarationInfo<'a> {
 
 impl TypeChecker {
     pub(crate) fn check_statement(&mut self, statement: &Statement, context: &mut Context) {
-        match statement {
-            Statement::Variable(decls, vis) => self.check_variable_declaration(decls, vis, context),
-            Statement::Expression(expr) => {
+        match &statement.node {
+            StatementKind::Variable(decls, vis) => {
+                self.check_variable_declaration(decls, vis, context, statement.span.clone())
+            }
+            StatementKind::Expression(expr) => {
                 self.infer_expression(expr, context);
             }
-            Statement::Block(stmts) => self.check_block(stmts, context),
-            Statement::If(cond, then_block, else_block, _) => {
+            StatementKind::Block(stmts) => self.check_block(stmts, context),
+            StatementKind::If(cond, then_block, else_block, _) => {
                 self.check_if(cond, then_block, else_block, context)
             }
-            Statement::While(cond, body, _) => self.check_while(cond, body, context),
-            Statement::For(decls, iterable, body) => self.check_for(decls, iterable, body, context),
-            Statement::Break => self.check_break(context),
-            Statement::Continue => self.check_continue(context),
-            Statement::Return(expr) => self.check_return(expr, context),
-            Statement::FunctionDeclaration(name, generics, params, return_type, body, props) => {
-                self.check_function_declaration(
-                    FunctionDeclarationInfo {
-                        name,
-                        generics,
-                        params,
-                        return_type,
-                        body,
-                        properties: props,
-                    },
-                    context,
-                )
+            StatementKind::While(cond, body, _) => self.check_while(cond, body, context),
+            StatementKind::For(decls, iterable, body) => {
+                self.check_for(decls, iterable, body, context)
             }
-            Statement::Struct(name, generics, fields, vis) => {
+            StatementKind::Break => self.check_break(context, statement.span.clone()),
+            StatementKind::Continue => self.check_continue(context, statement.span.clone()),
+            StatementKind::Return(expr) => self.check_return(expr, context, statement.span.clone()),
+            StatementKind::FunctionDeclaration(
+                name,
+                generics,
+                params,
+                return_type,
+                body,
+                props,
+            ) => self.check_function_declaration(
+                FunctionDeclarationInfo {
+                    name,
+                    generics,
+                    params,
+                    return_type,
+                    body,
+                    properties: props,
+                },
+                context,
+            ),
+            StatementKind::Struct(name, generics, fields, vis) => {
                 self.check_struct(name, generics, fields, vis, context)
             }
-            Statement::Enum(name, variants, vis) => self.check_enum(name, variants, vis, context),
-            Statement::Extends(expr) => self.check_extends_statement(expr, context),
-            Statement::Implements(exprs) => self.check_implements_statement(exprs, context),
-            Statement::Includes(exprs) => self.check_includes_statement(exprs, context),
-            Statement::Type(exprs, visibility) => {
+            StatementKind::Enum(name, variants, vis) => {
+                self.check_enum(name, variants, vis, context)
+            }
+            StatementKind::Extends(expr) => self.check_extends_statement(expr, context),
+            StatementKind::Implements(exprs) => self.check_implements_statement(exprs, context),
+            StatementKind::Includes(exprs) => self.check_includes_statement(exprs, context),
+            StatementKind::Type(exprs, visibility) => {
                 self.check_type_statement(exprs, visibility, context)
             }
             _ => {}
@@ -159,10 +170,34 @@ impl TypeChecker {
         decls: &[VariableDeclaration],
         visibility: &MemberVisibility,
         context: &mut Context,
+        span: Span,
     ) {
         for decl in decls {
-            let inferred_type = self.determine_variable_type(decl, context);
+            let inferred_type = self.determine_variable_type(decl, context, span.clone());
             let is_mutable = matches!(decl.declaration_type, VariableDeclarationType::Mutable);
+
+            // Check for shadowing rules in the current scope
+            if let Some(current_scope) = context.scopes.last() {
+                if let Some(existing_info) = current_scope.get(&decl.name) {
+                    // Rule 2: var may not shadow in the same scope
+                    if is_mutable {
+                        self.report_error(
+                            format!("Variable '{}' is already defined in this scope. 'var' cannot shadow existing variables.", decl.name),
+                            span.clone(),
+                        );
+                    }
+                    // Rule 3: switching let <-> var via shadowing in the same scope is not allowed
+                    // We already know new is not mutable (from Rule 2 check above), so new is 'let'.
+                    // If existing is 'var' (mutable), then we are switching var -> let, which is disallowed.
+                    else if existing_info.mutable {
+                        self.report_error(
+                            format!("Cannot shadow mutable variable '{}' with an immutable one in the same scope.", decl.name),
+                            span.clone(),
+                        );
+                    }
+                    // Rule 1: let shadowing let is allowed (implicit else)
+                }
+            }
 
             if context.scopes.len() == 1 {
                 self.global_scope.insert(
@@ -190,6 +225,7 @@ impl TypeChecker {
         &mut self,
         decl: &VariableDeclaration,
         context: &mut Context,
+        span: Span,
     ) -> Type {
         let inferred_type = if let Some(init) = &decl.initializer {
             self.infer_expression(init, context)
@@ -198,8 +234,8 @@ impl TypeChecker {
         } else {
             self.report_error(
                 format!("Cannot infer type for variable '{}'", decl.name),
-                0..0,
-            ); // TODO: Span
+                span,
+            );
             Type::Error
         };
 
@@ -274,9 +310,17 @@ impl TypeChecker {
                 cond.span.clone(),
             );
         }
+
+        // Enter scope for then block
+        context.enter_scope();
         self.check_statement(then_block, context);
+        context.exit_scope();
+
         if let Some(else_stmt) = else_block {
+            // Enter scope for else block
+            context.enter_scope();
             self.check_statement(else_stmt, context);
+            context.exit_scope();
         }
     }
 
@@ -288,9 +332,11 @@ impl TypeChecker {
                 cond.span.clone(),
             );
         }
+        context.enter_scope();
         context.enter_loop();
         self.check_statement(body, context);
         context.exit_loop();
+        context.exit_scope();
     }
 
     fn check_for(
@@ -391,45 +437,45 @@ impl TypeChecker {
         }
     }
 
-    fn check_break(&mut self, context: &Context) {
+    fn check_break(&mut self, context: &Context, span: Span) {
         if context.loop_depth == 0 {
-            self.report_error("Break statement outside of loop".to_string(), 0..0);
+            self.report_error("Break statement outside of loop".to_string(), span);
         }
     }
 
-    fn check_continue(&mut self, context: &Context) {
+    fn check_continue(&mut self, context: &Context, span: Span) {
         if context.loop_depth == 0 {
-            self.report_error("Continue statement outside of loop".to_string(), 0..0);
+            self.report_error("Continue statement outside of loop".to_string(), span);
         }
     }
 
-    fn check_return(&mut self, expr_opt: &Option<Box<Expression>>, context: &mut Context) {
-        let actual_return_type = if let Some(expr) = expr_opt {
-            self.infer_expression(expr, context)
+    fn check_return(
+        &mut self,
+        expr_opt: &Option<Box<Expression>>,
+        context: &mut Context,
+        span: Span,
+    ) {
+        let (actual_return_type, return_span) = if let Some(expr) = expr_opt {
+            (self.infer_expression(expr, context), expr.span.clone())
         } else {
-            Type::Void
+            (Type::Void, span.clone())
         };
 
         // Check if we are inferring return types for the current function
         if let Some(Some(inferred_types)) = context.inferred_return_types.last_mut() {
-            inferred_types.push(actual_return_type);
+            inferred_types.push((actual_return_type, return_span));
             return;
         }
 
         let expected_return_type = context.return_types.last().unwrap_or(&Type::Void).clone();
 
         if !self.are_compatible(&expected_return_type, &actual_return_type, context) {
-            let span = if let Some(expr) = expr_opt {
-                expr.span.clone()
-            } else {
-                0..0 // TODO: Need span for return statement
-            };
             self.report_error(
                 format!(
                     "Invalid return type: expected {:?}, got {:?}",
                     expected_return_type, actual_return_type
                 ),
-                span,
+                return_span,
             );
         }
     }
@@ -539,13 +585,14 @@ impl TypeChecker {
             }
         }
 
-        match body {
-            Statement::Block(stmts) => {
-                context.enter_scope();
+        match &body.node {
+            StatementKind::Block(stmts) => {
+                // Do not enter a new scope here. The function body shares the scope with parameters.
+                // context.enter_scope();
                 let len = stmts.len();
                 for (i, stmt) in stmts.iter().enumerate() {
                     if i == len - 1 {
-                        if let Statement::Expression(expr) = stmt {
+                        if let StatementKind::Expression(expr) = &stmt.node {
                             let expr_type = self.infer_expression(expr, context);
                             if return_type != Type::Void
                                 && !self.are_compatible(&return_type, &expr_type, context)
@@ -565,9 +612,9 @@ impl TypeChecker {
                         self.check_statement(stmt, context);
                     }
                 }
-                context.exit_scope();
+                // context.exit_scope();
             }
-            Statement::Expression(expr) => {
+            StatementKind::Expression(expr) => {
                 let expr_type = self.infer_expression(expr, context);
                 if return_type != Type::Void
                     && !self.are_compatible(&return_type, &expr_type, context)
