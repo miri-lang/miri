@@ -13,11 +13,7 @@ pub struct CodeGen<'ctx> {
 }
 
 impl<'ctx> CodeGen<'ctx> {
-    pub fn new(
-        context: &'ctx Context,
-        module_name: &str,
-        type_checker: &'ctx TypeChecker,
-    ) -> Self {
+    pub fn new(context: &'ctx Context, module_name: &str, type_checker: &'ctx TypeChecker) -> Self {
         let module = context.create_module(module_name);
         let builder = context.create_builder();
         Self {
@@ -39,7 +35,7 @@ impl<'ctx> CodeGen<'ctx> {
 
         let ret_val = i64_type.const_int(0, false);
         self.builder.build_return(Some(&ret_val)).unwrap();
-        
+
         Ok(())
     }
 }

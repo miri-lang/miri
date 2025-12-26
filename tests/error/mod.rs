@@ -2,4 +2,3 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 pub mod formatting;
-pub mod utils;

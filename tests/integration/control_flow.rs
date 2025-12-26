@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
-use super::utils::{assert_invalid, assert_valid};
+use crate::test_utils::{assert_invalid, assert_valid};
 
 #[test]
 fn test_if_else() {

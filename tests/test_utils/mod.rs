@@ -1,9 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
+#![allow(dead_code)]
+
 use assert_cmd::Command;
 use std::io::Write;
 use tempfile::NamedTempFile;
+
+pub const BINARY_NAME: &str = "miri";
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[allow(deprecated)]
+pub fn miri_cmd() -> Command {
+    Command::cargo_bin(BINARY_NAME).unwrap()
+}
 
 pub struct CompilerResult {
     pub success: bool,
@@ -22,9 +32,7 @@ pub fn run_compiler(input: &str) -> CompilerResult {
     write!(file, "{}", input).unwrap();
     let path = file.path().to_str().unwrap().to_string();
 
-    let mut cmd = Command::cargo_bin("miri").unwrap();
-
-    // For now, we capture only output and status.
+    let mut cmd = miri_cmd();
     let output = cmd.arg("run").arg(&path).output().unwrap();
 
     CompilerResult {
@@ -32,6 +40,11 @@ pub fn run_compiler(input: &str) -> CompilerResult {
         stdout: String::from_utf8(output.stdout).unwrap(),
         stderr: String::from_utf8(output.stderr).unwrap(),
     }
+}
+
+pub fn strip_ansi(s: &str) -> String {
+    let re = regex::Regex::new(r"\x1b\[[0-9;]*m").unwrap();
+    re.replace_all(s, "").to_string()
 }
 
 pub fn assert_valid(code: &str) {
@@ -62,5 +75,20 @@ pub fn assert_invalid(code: &str, expected_errors: &[&str]) {
                 error, output
             );
         }
+    }
+}
+
+pub fn check_error_output(source: &str, expected_parts: &[&str]) {
+    let result = run_compiler(source);
+    let output = result.output();
+    let clean_output = strip_ansi(&output);
+
+    for part in expected_parts {
+        assert!(
+            clean_output.contains(part),
+            "Output did not contain expected part.\nExpected: '{}'\nActual Output:\n{}",
+            part,
+            clean_output
+        );
     }
 }

@@ -5,4 +5,3 @@ pub mod basics;
 pub mod control_flow;
 pub mod functions;
 pub mod types;
-pub mod utils;
