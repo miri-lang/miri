@@ -245,7 +245,7 @@ pub enum Token {
     InvalidOctalNumber,
 
     // Comments and Whitespace
-    #[regex("//.*", logos::skip)]
+    #[regex("//.*", logos::skip, allow_greedy = true)]
     InlineComment,
     #[regex(r"/\*")]
     MultilineComment,
@@ -258,7 +258,7 @@ pub enum Token {
 
     #[regex("[ \t\r]+", logos::skip)]
     Whitespace,
-    #[regex("#!.*", logos::skip)]
+    #[regex("#!.*", logos::skip, allow_greedy = true)]
     Shebang,
     #[token("\u{FEFF}", logos::skip)]
     ByteOrderMark,

@@ -28,6 +28,9 @@ pub enum CompilerError {
 
     #[error("Internal compiler error: {0}")]
     Internal(String),
+
+    #[error("Codegen Error: {0}")]
+    Codegen(String),
 }
 
 impl CompilerError {

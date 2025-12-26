@@ -92,7 +92,7 @@ impl TypeChecker {
                     return Type::Error;
                 }
                 let val_type = self.infer_expression(&values[0], context);
-                // Result<T, Void>
+                // result<T, Void>
                 return Type::Result(
                     Box::new(ast_factory::expr_with_span(
                         ExpressionKind::Type(Box::new(val_type), false),
@@ -109,7 +109,7 @@ impl TypeChecker {
                     return Type::Error;
                 }
                 let val_type = self.infer_expression(&values[0], context);
-                // Result<Void, E>
+                // result<Void, E>
                 return Type::Result(
                     Box::new(ast_factory::expr_with_span(
                         ExpressionKind::Type(Box::new(Type::Void), false),
@@ -138,7 +138,7 @@ impl TypeChecker {
             Literal::String(_) => Type::String,
             Literal::Symbol(_) => Type::Symbol,
             Literal::Regex(_) => Type::Custom("Regex".into(), None),
-            Literal::None => Type::Nullable(Box::new(Type::Void)), // None is compatible with any nullable type, treating as Nullable(Void) for now or special handling
+            Literal::None => Type::Nullable(Box::new(Type::Void)),
         }
     }
 
@@ -173,7 +173,6 @@ impl TypeChecker {
         span: Span,
         context: &mut Context,
     ) -> Type {
-        // Logical ops are binary ops in this AST, but we can treat them similarly
         self.infer_binary(left, op, right, span, context)
     }
 
@@ -199,7 +198,7 @@ impl TypeChecker {
             return Type::Nullable(Box::new(Type::Void));
         }
         if name == "Ok" {
-            // fn<T>(value: T) -> Result<T, Void>
+            // fn<T>(value T): result<T, Void>
             let t_param = Type::Generic("T".to_string(), None, TypeDeclarationKind::None);
             let t_expr = ast_factory::typ(t_param.clone());
             let void_expr = ast_factory::typ(Type::Void);
@@ -218,7 +217,7 @@ impl TypeChecker {
             );
         }
         if name == "Err" {
-            // fn<E>(error: E) -> Result<Void, E>
+            // fn<E>(error E): result<Void, E>
             let e_param = Type::Generic("E".to_string(), None, TypeDeclarationKind::None);
             let e_expr = ast_factory::typ(e_param.clone());
             let void_expr = ast_factory::typ(Type::Void);
@@ -715,14 +714,6 @@ impl TypeChecker {
                     Type::String => return Type::String,
                     Type::List(inner) => return Type::List(inner),
                     Type::Tuple(elements) => {
-                        // Slicing a tuple returns a List of the common type if homogeneous,
-                        // or maybe a new Tuple if we could determine size (we can't easily).
-                        // For now, let's say slicing a tuple returns a List of the union of types?
-                        // Or restrict to homogeneous tuples?
-                        // "Lists and tuples, just list strings, can be sliced".
-                        // If I slice (1, 2, 3), I expect [1, 2] (List) or (1, 2) (Tuple).
-                        // Given dynamic range, List is safer.
-                        // Let's check if homogeneous.
                         if elements.is_empty() {
                             return Type::List(Box::new(self.create_type_expression(Type::Void)));
                         }

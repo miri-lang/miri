@@ -2,9 +2,11 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use crate::ast::Program;
+use crate::codegen::CodeGen;
 use crate::error::compiler::CompilerError;
 use crate::lexer::Lexer;
 use crate::parser::Parser;
+use inkwell::context::Context;
 use std::fs;
 use std::path::PathBuf;
 
@@ -91,9 +93,19 @@ impl Pipeline {
 
         fs::write(&out_path, artifact_content)?;
 
-        // TODO: Hook for Code Generation, Optimization, and Linking
-        // let machine_code = codegen.compile(ir, opts)?;
-        // link(machine_code, &out_path)?;
+        let context = Context::create();
+        let codegen = CodeGen::new(&context, "main", &pipeline_result.type_checker);
+        codegen
+            .generate(&pipeline_result.ast)
+            .map_err(CompilerError::Codegen)?;
+
+        // Verify the module
+        if let Err(e) = codegen.module.verify() {
+            return Err(CompilerError::Codegen(e.to_string()));
+        }
+
+        // For now, just print the IR to stderr to verify it works
+        codegen.module.print_to_stderr();
 
         Ok(out_path)
     }

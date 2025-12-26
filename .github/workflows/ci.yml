@@ -22,6 +22,12 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
 
+      - name: Install LLVM
+        uses: KyleMayes/install-llvm-action@v1
+        with:
+          version: "21.1.8"
+          directory: ${{ runner.temp }}/llvm
+
       - name: Check formatting
         run: cargo fmt -- --check
 
