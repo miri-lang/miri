@@ -45,7 +45,8 @@ jobs:
             clang-21="$CANDIDATE" \
             llvm-21="$CANDIDATE" \
             llvm-21-dev="$CANDIDATE" \
-            libclang-21-dev="$CANDIDATE"
+            libclang-21-dev="$CANDIDATE" \
+            libpolly-21-dev="$CANDIDATE"
 
           clang-21 --version
           llvm-config-21 --version
