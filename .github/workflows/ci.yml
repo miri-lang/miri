@@ -1,4 +1,4 @@
-name: Rust CI
+name: CI
 
 on:
   push:
@@ -22,11 +22,18 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
 
-      - name: Install LLVM and Clang
-        uses: KyleMayes/install-llvm-action@v2.0.8
-        with:
-          version: "21.1.3"
-          directory: ${{ runner.temp }}/llvm
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install LLVM
+        run: sudo apt-get install -y llvm21-dev clang libclang21-dev
+
+      # - name: Install LLVM and Clang
+      #   uses: KyleMayes/install-llvm-action@v2.0.8
+      #   with:
+      #     version: "21.1.8"
+      #     directory: ${{ runner.temp }}/llvm
+      #     cached: true
 
       - name: Check formatting
         run: cargo fmt -- --check
@@ -35,7 +42,7 @@ jobs:
         run: cargo clippy -- -D warnings
 
       - name: Build project
-        run: cargo build --verbose
+        run: cargo build
 
       - name: Run tests
-        run: cargo test --verbose
+        run: cargo test
