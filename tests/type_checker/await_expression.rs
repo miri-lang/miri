@@ -2,7 +2,7 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use super::utils::{check_error, check_expr_type, check_success};
-use miri::{ast::factory::typ, ast::Type};
+use miri::ast::factory::*;
 
 #[test]
 fn test_await_future_variable() {
@@ -11,7 +11,7 @@ fn test_await_future_variable() {
 let f future<int>
 await f
 ",
-        Type::Int,
+        type_int(),
     );
 }
 
@@ -22,7 +22,7 @@ fn test_await_nested_future() {
 let f future<future<string>>
 await await f
 ",
-        Type::String,
+        type_string(),
     );
 }
 
@@ -44,7 +44,7 @@ fn test_await_in_expression() {
 let f future<int>
 (await f) + 1
 ",
-        Type::Int,
+        type_int(),
     );
 }
 
@@ -58,7 +58,7 @@ fn get_future() future<int>
 
 await get_future()
 ",
-        Type::Int,
+        type_int(),
     );
 }
 
@@ -69,7 +69,7 @@ fn test_await_list_future() {
 let f future<[int]>
 await f
 ",
-        Type::List(Box::new(typ(Type::Int))),
+        type_list(type_int()),
     );
 }
 
@@ -80,7 +80,7 @@ fn test_await_map_future() {
 let f future<map<string, int>>
 await f
 ",
-        Type::Map(Box::new(typ(Type::String)), Box::new(typ(Type::Int))),
+        type_map(type_string(), type_int()),
     );
 }
 
@@ -91,7 +91,7 @@ fn test_await_void_future() {
 let f future<void>
 await f
 ",
-        Type::Custom("void".to_string(), None),
+        type_custom("void", None),
     );
 }
 
@@ -102,7 +102,7 @@ fn test_await_nullable_future() {
 let f future<int?>
 await f
 ",
-        Type::Nullable(Box::new(Type::Int)),
+        type_null(type_int()),
     );
 }
 
@@ -116,7 +116,7 @@ struct User
 let f future<User>
 await f
 ",
-        Type::Custom("User".to_string(), None),
+        type_custom("User", None),
     );
 }
 
@@ -130,7 +130,7 @@ await f
 // let x future<int>
 // await unwrap<int>(x)
 // ",
-//         Type::Int,
+//         type_int(),
 //     );
 // }
 
@@ -141,7 +141,7 @@ fn test_await_in_conditional_expression() {
 let f future<bool>
 1 if await f else 0
 ",
-        Type::Int,
+        type_int(),
     );
 }
 

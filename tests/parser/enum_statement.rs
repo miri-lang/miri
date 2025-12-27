@@ -56,8 +56,14 @@ enum Message: Write(string), Move(int, int)
         vec![enum_statement(
             identifier("Message"),
             vec![
-                enum_value("Write", vec![typ(Type::String)]),
-                enum_value("Move", vec![typ(Type::Int), typ(Type::Int)]),
+                enum_value("Write", vec![type_expr_non_null(type_string())]),
+                enum_value(
+                    "Move",
+                    vec![
+                        type_expr_non_null(type_int()),
+                        type_expr_non_null(type_int()),
+                    ],
+                ),
             ],
             MemberVisibility::Public,
         )],
@@ -77,8 +83,14 @@ enum Event
             identifier("Event"),
             vec![
                 enum_value("Quit", vec![]),
-                enum_value("KeyPress", vec![typ(Type::Int)]),
-                enum_value("Click", vec![typ(Type::Int), typ(Type::Int)]),
+                enum_value("KeyPress", vec![type_expr_non_null(type_int())]),
+                enum_value(
+                    "Click",
+                    vec![
+                        type_expr_non_null(type_int()),
+                        type_expr_non_null(type_int()),
+                    ],
+                ),
             ],
             MemberVisibility::Public,
         )],
@@ -106,16 +118,10 @@ enum Data: Point([int]?), Config({string: bool})
         vec![enum_statement(
             identifier("Data"),
             vec![
-                enum_value(
-                    "Point",
-                    vec![null_typ(Type::List(Box::new(typ(Type::Int))))],
-                ),
+                enum_value("Point", vec![type_expr_null(type_list(type_int()))]),
                 enum_value(
                     "Config",
-                    vec![typ(Type::Map(
-                        Box::new(typ(Type::String)),
-                        Box::new(typ(Type::Boolean)),
-                    ))],
+                    vec![type_expr_non_null(type_map(type_string(), type_bool()))],
                 ),
             ],
             MemberVisibility::Public,
@@ -170,7 +176,7 @@ fn test_error_enum_malformed_value_type() {
         "enum E: V(int,)",
         vec![enum_statement(
             identifier("E"),
-            vec![enum_value("V", vec![typ(Type::Int)])],
+            vec![enum_value("V", vec![type_expr_non_null(type_int())])],
             MemberVisibility::Public,
         )],
     );

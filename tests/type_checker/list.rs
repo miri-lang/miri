@@ -2,12 +2,11 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use super::utils::*;
-use miri::ast::factory::type_list;
-use miri::ast::Type;
+use miri::ast::factory::*;
 
 #[test]
 fn test_list_literal_int() {
-    check_expr_type("[1, 2, 3]", type_list(Type::Int));
+    check_expr_type("[1, 2, 3]", type_list(type_int()));
 }
 
 #[test]
@@ -21,18 +20,18 @@ fn test_list_variable_definitions() {
         let l5 list<f64> = [1.5, 2.5, 3.5]
 ",
         vec![
-            ("l1", type_list(Type::Int)),
-            ("l2", type_list(Type::String)),
-            ("l3", type_list(Type::I128)),
-            ("l4", type_list(Type::Float)),
-            ("l5", type_list(Type::F64)),
+            ("l1", type_list(type_int())),
+            ("l2", type_list(type_string())),
+            ("l3", type_list(type_i128())),
+            ("l4", type_list(type_float())),
+            ("l5", type_list(type_f64())),
         ],
     )
 }
 
 #[test]
 fn test_list_literal_string() {
-    check_expr_type("[\"a\", \"b\"]", type_list(Type::String));
+    check_expr_type("[\"a\", \"b\"]", type_list(type_string()));
 }
 
 #[test]
@@ -42,7 +41,7 @@ fn test_list_literal_mixed_error() {
 
 #[test]
 fn test_list_indexing() {
-    check_expr_type("[1, 2, 3][0]", Type::Int);
+    check_expr_type("[1, 2, 3][0]", type_int());
 }
 
 #[test]
@@ -62,7 +61,7 @@ fn test_list_indexing_variable() {
 let i = 0
 [1, 2, 3][i]
 ",
-        Type::Int,
+        type_int(),
     );
 }
 
@@ -75,7 +74,7 @@ fn get_index() int
 
 [1, 2, 3][get_index()]
 ",
-        Type::Int,
+        type_int(),
     );
 }
 
@@ -92,7 +91,7 @@ let i = \"0\"
 
 #[test]
 fn test_empty_list() {
-    check_expr_type("[]", type_list(Type::Void));
+    check_expr_type("[]", type_list(type_void()));
 }
 
 #[test]
@@ -101,7 +100,7 @@ fn test_empty_list_with_specified_types() {
         "
     let l1 [string] = []
 ",
-        vec![("l1", type_list(Type::String))],
+        vec![("l1", type_list(type_string()))],
     );
 }
 
@@ -111,13 +110,13 @@ fn test_empty_list_with_specified_types_named() {
         "
     let l2 list<int> = []
 ",
-        vec![("l2", type_list(Type::Int))],
+        vec![("l2", type_list(type_int()))],
     );
 }
 
 #[test]
 fn test_nested_list() {
-    check_expr_type("[[1, 2], [3, 4]]", type_list(type_list(Type::Int)));
+    check_expr_type("[[1, 2], [3, 4]]", type_list(type_list(type_int())));
 }
 
 #[test]
@@ -238,8 +237,8 @@ l[0] = 4
 
 #[test]
 fn test_list_slicing() {
-    check_expr_type("[1, 2, 3][0..1]", type_list(Type::Int));
-    check_expr_type("[1, 2, 3][0..=1]", type_list(Type::Int));
+    check_expr_type("[1, 2, 3][0..1]", type_list(type_int()));
+    check_expr_type("[1, 2, 3][0..=1]", type_list(type_int()));
 }
 
 #[test]
@@ -249,6 +248,6 @@ fn test_list_slicing_variable() {
 let r = 0..1
 [1, 2, 3][r]
 ",
-        type_list(Type::Int),
+        type_list(type_int()),
     );
 }

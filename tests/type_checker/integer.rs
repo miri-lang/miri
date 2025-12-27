@@ -2,59 +2,59 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use super::utils::*;
-use miri::ast::Type;
+use miri::ast::factory::*;
 
 #[test]
 fn test_integer_literals() {
     check_exprs_type(vec![
-        ("1", Type::Int),
-        ("0", Type::Int),
-        ("-1", Type::Int),
-        ("1234567890", Type::Int),
+        ("1", type_int()),
+        ("0", type_int()),
+        ("-1", type_int()),
+        ("1234567890", type_int()),
     ]);
 }
 
 #[test]
 fn test_integer_arithmetic_expressions() {
     check_exprs_type(vec![
-        ("1 + 2", Type::Int),
-        ("1 - 2", Type::Int),
-        ("1 * 2", Type::Int),
-        ("1 / 2", Type::Int),
-        ("1 % 2", Type::Int),
-        ("1 + 2 * 3", Type::Int),
-        ("(1 + 2) * 3", Type::Int),
+        ("1 + 2", type_int()),
+        ("1 - 2", type_int()),
+        ("1 * 2", type_int()),
+        ("1 / 2", type_int()),
+        ("1 % 2", type_int()),
+        ("1 + 2 * 3", type_int()),
+        ("(1 + 2) * 3", type_int()),
     ]);
 }
 
 #[test]
 fn test_integer_unary_expressions() {
     check_exprs_type(vec![
-        ("-1", Type::Int),
-        ("+1", Type::Int),
-        ("-(1 + 2)", Type::Int),
+        ("-1", type_int()),
+        ("+1", type_int()),
+        ("-(1 + 2)", type_int()),
     ]);
 }
 
 #[test]
 fn test_integer_comparisons() {
     check_exprs_type(vec![
-        ("1 < 2", Type::Boolean),
-        ("1 <= 2", Type::Boolean),
-        ("1 > 2", Type::Boolean),
-        ("1 >= 2", Type::Boolean),
-        ("1 == 2", Type::Boolean),
-        ("1 != 2", Type::Boolean),
+        ("1 < 2", type_bool()),
+        ("1 <= 2", type_bool()),
+        ("1 > 2", type_bool()),
+        ("1 >= 2", type_bool()),
+        ("1 == 2", type_bool()),
+        ("1 != 2", type_bool()),
     ]);
 }
 
 #[test]
 fn test_integer_bitwise_operations() {
     check_exprs_type(vec![
-        ("1 & 2", Type::Int),
-        ("1 | 2", Type::Int),
-        ("1 ^ 2", Type::Int),
-        ("~1", Type::Int),
+        ("1 & 2", type_int()),
+        ("1 | 2", type_int()),
+        ("1 ^ 2", type_int()),
+        ("~1", type_int()),
     ]);
 }
 
@@ -68,10 +68,10 @@ let z = y / x
 let w = z % 2
 ",
         vec![
-            ("x", Type::Int),
-            ("y", Type::Int),
-            ("z", Type::Int),
-            ("w", Type::Int),
+            ("x", type_int()),
+            ("y", type_int()),
+            ("z", type_int()),
+            ("w", type_int()),
         ],
     );
 }
@@ -83,7 +83,7 @@ fn test_explicit_integer_type() {
 let x int = 1
 let y int = -5
 ",
-        vec![("x", Type::Int), ("y", Type::Int)],
+        vec![("x", type_int()), ("y", type_int())],
     );
 }
 
@@ -98,7 +98,7 @@ x *= 3
 x /= 2
 x %= 2
 ",
-        vec![("x", Type::Int)],
+        vec![("x", type_int())],
     );
 }
 
@@ -170,7 +170,7 @@ let x = 1 | true
 #[test]
 fn test_specific_integer_types() {
     // Test assignment of literals to specific types
-    // This checks if Type::Int (literal) is compatible with specific integer types
+    // This checks if type_int() (literal) is compatible with specific integer types
     check_vars_type(
         "
 let a i8 = 1
@@ -185,16 +185,16 @@ let i u64 = 9
 let j u128 = 10
 ",
         vec![
-            ("a", Type::I8),
-            ("b", Type::I16),
-            ("c", Type::I32),
-            ("d", Type::I64),
-            ("e", Type::I128),
-            ("f", Type::U8),
-            ("g", Type::U16),
-            ("h", Type::U32),
-            ("i", Type::U64),
-            ("j", Type::U128),
+            ("a", type_i8()),
+            ("b", type_i16()),
+            ("c", type_i32()),
+            ("d", type_i64()),
+            ("e", type_i128()),
+            ("f", type_u8()),
+            ("g", type_u16()),
+            ("h", type_u32()),
+            ("i", type_u64()),
+            ("j", type_u128()),
         ],
     );
 }
@@ -207,7 +207,7 @@ let a u8 = 1
 let b u8 = 2
 let c = a & b
 ",
-        vec![("c", Type::U8)],
+        vec![("c", type_u8())],
     );
 }
 
@@ -245,23 +245,23 @@ let b = -a
 let c i16 = 2
 let d = -c
 ",
-        vec![("b", Type::I8), ("d", Type::I16)],
+        vec![("b", type_i8()), ("d", type_i16())],
     );
 }
 
 #[test]
 fn test_comparison_on_specific_types() {
     check_exprs_type(vec![
-        ("let a i8 = 1\nlet b i8 = 2\na < b", Type::Boolean),
-        ("let a u32 = 1\nlet b u32 = 2\na == b", Type::Boolean),
+        ("let a i8 = 1\nlet b i8 = 2\na < b", type_bool()),
+        ("let a u32 = 1\nlet b u32 = 2\na == b", type_bool()),
     ]);
 }
 
 #[test]
 fn test_comparison_mixed_types_success() {
     check_exprs_type(vec![
-        ("let a i8 = 1\nlet b i16 = 2\na < b", Type::Boolean),
-        ("let a u32 = 1\nlet b u64 = 2\na == b", Type::Boolean),
+        ("let a i8 = 1\nlet b i16 = 2\na < b", type_bool()),
+        ("let a u32 = 1\nlet b u64 = 2\na == b", type_bool()),
     ]);
 }
 
@@ -271,10 +271,10 @@ fn test_assignment_compatibility() {
     check_success("let a i8 = 1");
 
     // Specific type to Int (variable) - inferred as specific type
-    check_vars_type("let a i8 = 1\nlet b = a", vec![("b", Type::I8)]);
+    check_vars_type("let a i8 = 1\nlet b = a", vec![("b", type_i8())]);
 
     // Smaller to larger - allowed
-    check_vars_type("let a i8 = 1\nlet b i16 = a", vec![("b", Type::I16)]);
+    check_vars_type("let a i8 = 1\nlet b i16 = a", vec![("b", type_i16())]);
 
     // Larger to smaller - fail
     check_error("let a i16 = 1\nlet b i8 = a", "Type mismatch");

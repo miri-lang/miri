@@ -3,6 +3,8 @@
 
 use super::context::{Context, GenericDefinition, TypeDefinition};
 use super::TypeChecker;
+use crate::ast::factory::make_type;
+use crate::ast::types::{Type, TypeDeclarationKind, TypeKind};
 use crate::ast::*;
 use crate::error::syntax::Span;
 use crate::error::type_error::TypeError;
@@ -31,7 +33,7 @@ impl TypeChecker {
                 self.check_bitwise_op(left, right, context)
             }
             BinaryOp::In => self.check_membership_op(left, right, context),
-            _ => Ok(Type::Boolean),
+            _ => Ok(crate::ast::factory::make_type(TypeKind::Boolean)),
         }
     }
 
@@ -47,30 +49,30 @@ impl TypeChecker {
                 Ok(left.clone())
             } else {
                 Err(format!(
-                    "Type mismatch: {:?} and {:?} are not compatible for arithmetic operation",
+                    "Type mismatch: {} and {} are not compatible for arithmetic operation",
                     left, right
                 ))
             }
         } else if matches!(op, BinaryOp::Add)
-            && matches!(left, Type::String)
-            && matches!(right, Type::String)
+            && matches!(left.kind, TypeKind::String)
+            && matches!(right.kind, TypeKind::String)
         {
-            Ok(Type::String)
+            Ok(crate::ast::factory::make_type(TypeKind::String))
         } else if matches!(op, BinaryOp::Mul) {
             // String multiplication
-            if (matches!(left, Type::String) && matches!(right, Type::Int))
-                || (matches!(left, Type::Int) && matches!(right, Type::String))
+            if (matches!(left.kind, TypeKind::String) && matches!(right.kind, TypeKind::Int))
+                || (matches!(left.kind, TypeKind::Int) && matches!(right.kind, TypeKind::String))
             {
-                Ok(Type::String)
+                Ok(crate::ast::factory::make_type(TypeKind::String))
             } else {
                 Err(format!(
-                    "Invalid types for multiplication: {:?} and {:?}",
+                    "Invalid types for multiplication: {} and {}",
                     left, right
                 ))
             }
         } else {
             Err(format!(
-                "Invalid types for arithmetic operation: {:?} and {:?}",
+                "Invalid types for arithmetic operation: {} and {}",
                 left, right
             ))
         }
@@ -84,28 +86,28 @@ impl TypeChecker {
     ) -> Result<Type, String> {
         // Allow comparison between any integers
         if self.is_integer(left) && self.is_integer(right) {
-            Ok(Type::Boolean)
-        } else if (matches!(left, Type::Float | Type::F32 | Type::F64)
-            && matches!(right, Type::Float | Type::F32 | Type::F64))
+            Ok(crate::ast::factory::make_type(TypeKind::Boolean))
+        } else if (matches!(left.kind, TypeKind::Float | TypeKind::F32 | TypeKind::F64)
+            && matches!(right.kind, TypeKind::Float | TypeKind::F32 | TypeKind::F64))
         {
             // Allow comparison between any floats
-            Ok(Type::Boolean)
+            Ok(crate::ast::factory::make_type(TypeKind::Boolean))
         } else if self.are_compatible(left, right, context) {
-            Ok(Type::Boolean)
+            Ok(crate::ast::factory::make_type(TypeKind::Boolean))
         } else {
             Err(format!(
-                "Type mismatch: cannot compare {:?} and {:?}",
+                "Type mismatch: cannot compare {} and {}",
                 left, right
             ))
         }
     }
 
     fn check_logical_op(&self, left: &Type, right: &Type) -> Result<Type, String> {
-        if matches!(left, Type::Boolean) && matches!(right, Type::Boolean) {
-            Ok(Type::Boolean)
+        if matches!(left.kind, TypeKind::Boolean) && matches!(right.kind, TypeKind::Boolean) {
+            Ok(crate::ast::factory::make_type(TypeKind::Boolean))
         } else {
             Err(format!(
-                "Logical operations require booleans, got {:?} and {:?}",
+                "Logical operations require booleans, got {} and {}",
                 left, right
             ))
         }
@@ -118,19 +120,21 @@ impl TypeChecker {
         context: &Context,
     ) -> Result<Type, String> {
         if self.is_integer(left) && self.is_integer(right) {
-            if left == right || matches!(right, Type::Int) {
+            if left == right || matches!(right.kind, TypeKind::Int) {
                 Ok(left.clone())
-            } else if matches!(left, Type::Int) && self.are_compatible(right, left, context) {
+            } else if matches!(left.kind, TypeKind::Int)
+                && self.are_compatible(right, left, context)
+            {
                 Ok(right.clone())
             } else {
                 Err(format!(
-                    "Type mismatch: {:?} and {:?} are not compatible for bitwise operation",
+                    "Type mismatch: {} and {} are not compatible for bitwise operation",
                     left, right
                 ))
             }
         } else {
             Err(format!(
-                "Invalid types for bitwise operation: {:?} and {:?}",
+                "Invalid types for bitwise operation: {} and {}",
                 left, right
             ))
         }
@@ -142,52 +146,52 @@ impl TypeChecker {
         right: &Type,
         context: &Context,
     ) -> Result<Type, String> {
-        match right {
-            Type::List(inner_expr) | Type::Set(inner_expr) => {
+        match &right.kind {
+            TypeKind::List(inner_expr) | TypeKind::Set(inner_expr) => {
                 let inner = self.resolve_type_expression(inner_expr, context);
                 if self.are_compatible(&inner, left, context) {
-                    Ok(Type::Boolean)
+                    Ok(crate::ast::factory::make_type(TypeKind::Boolean))
                 } else {
                     Err(format!(
-                        "Type mismatch: cannot check membership of {:?} in collection of {:?}",
+                        "Type mismatch: cannot check membership of {} in collection of {}",
                         left, inner
                     ))
                 }
             }
-            Type::Map(key_expr, _) => {
+            TypeKind::Map(key_expr, _) => {
                 let key = self.resolve_type_expression(key_expr, context);
                 if self.are_compatible(&key, left, context) {
-                    Ok(Type::Boolean)
+                    Ok(crate::ast::factory::make_type(TypeKind::Boolean))
                 } else {
                     Err(format!(
-                        "Type mismatch: cannot check membership of {:?} in map with keys of {:?}",
+                        "Type mismatch: cannot check membership of {} in map with keys of {}",
                         left, key
                     ))
                 }
             }
-            Type::Custom(name, Some(args)) if name == "Range" && args.len() == 1 => {
+            TypeKind::Custom(name, Some(args)) if name == "Range" && args.len() == 1 => {
                 let range_type = self.resolve_type_expression(&args[0], context);
                 if self.are_compatible(&range_type, left, context) {
-                    Ok(Type::Boolean)
+                    Ok(crate::ast::factory::make_type(TypeKind::Boolean))
                 } else {
                     Err(format!(
-                        "Type mismatch: cannot check membership of {:?} in range of {:?}",
+                        "Type mismatch: cannot check membership of {} in range of {}",
                         left, range_type
                     ))
                 }
             }
-            Type::String => {
-                if matches!(left, Type::String) {
-                    Ok(Type::Boolean)
+            TypeKind::String => {
+                if matches!(left.kind, TypeKind::String) {
+                    Ok(crate::ast::factory::make_type(TypeKind::Boolean))
                 } else {
                     Err(format!(
-                        "Type mismatch: cannot check membership of {:?} in String (expected String)",
+                        "Type mismatch: cannot check membership of {} in String (expected String)",
                         left
                     ))
                 }
             }
             _ => Err(format!(
-                "Invalid type for 'in' operator: expected collection, got {:?}",
+                "Invalid type for 'in' operator: expected collection, got {}",
                 right
             )),
         }
@@ -204,23 +208,23 @@ impl TypeChecker {
                     Ok(expr_type.clone())
                 } else {
                     Err(format!(
-                        "Unary operator requires numeric type, got {:?}",
+                        "Unary operator requires numeric type, got {}",
                         expr_type
                     ))
                 }
             }
             UnaryOp::Not => {
-                if matches!(expr_type, Type::Boolean) {
-                    Ok(Type::Boolean)
+                if matches!(expr_type.kind, TypeKind::Boolean) {
+                    Ok(crate::ast::factory::make_type(TypeKind::Boolean))
                 } else {
-                    Err(format!("Logical NOT requires boolean, got {:?}", expr_type))
+                    Err(format!("Logical NOT requires boolean, got {}", expr_type))
                 }
             }
             UnaryOp::Await => {
-                if let Type::Future(inner_expr) = expr_type {
+                if let TypeKind::Future(inner_expr) = &expr_type.kind {
                     self.extract_type_from_expression(inner_expr)
                 } else {
-                    Err(format!("Await requires a Future, got {:?}", expr_type))
+                    Err(format!("Await requires a Future, got {}", expr_type))
                 }
             }
             _ => Ok(expr_type.clone()),
@@ -229,38 +233,38 @@ impl TypeChecker {
 
     pub(crate) fn is_numeric(&self, t: &Type) -> bool {
         matches!(
-            t,
-            Type::Int
-                | Type::Float
-                | Type::I8
-                | Type::I16
-                | Type::I32
-                | Type::I64
-                | Type::I128
-                | Type::U8
-                | Type::U16
-                | Type::U32
-                | Type::U64
-                | Type::U128
-                | Type::F32
-                | Type::F64
+            t.kind,
+            TypeKind::Int
+                | TypeKind::Float
+                | TypeKind::I8
+                | TypeKind::I16
+                | TypeKind::I32
+                | TypeKind::I64
+                | TypeKind::I128
+                | TypeKind::U8
+                | TypeKind::U16
+                | TypeKind::U32
+                | TypeKind::U64
+                | TypeKind::U128
+                | TypeKind::F32
+                | TypeKind::F64
         )
     }
 
     pub(crate) fn is_integer(&self, t: &Type) -> bool {
         matches!(
-            t,
-            Type::Int
-                | Type::I8
-                | Type::I16
-                | Type::I32
-                | Type::I64
-                | Type::I128
-                | Type::U8
-                | Type::U16
-                | Type::U32
-                | Type::U64
-                | Type::U128
+            t.kind,
+            TypeKind::Int
+                | TypeKind::I8
+                | TypeKind::I16
+                | TypeKind::I32
+                | TypeKind::I64
+                | TypeKind::I128
+                | TypeKind::U8
+                | TypeKind::U16
+                | TypeKind::U32
+                | TypeKind::U64
+                | TypeKind::U128
         )
     }
 
@@ -275,13 +279,13 @@ impl TypeChecker {
     }
 
     pub(crate) fn get_integer_size(&self, t: &Type) -> Option<u8> {
-        match t {
-            Type::I8 | Type::U8 => Some(8),
-            Type::I16 | Type::U16 => Some(16),
-            Type::I32 | Type::U32 => Some(32),
-            Type::I64 | Type::U64 => Some(64),
-            Type::I128 | Type::U128 => Some(128),
-            Type::Int => Some(128), // Treat literal Int as max size for compatibility checks? Or handle separately.
+        match &t.kind {
+            TypeKind::I8 | TypeKind::U8 => Some(8),
+            TypeKind::I16 | TypeKind::U16 => Some(16),
+            TypeKind::I32 | TypeKind::U32 => Some(32),
+            TypeKind::I64 | TypeKind::U64 => Some(64),
+            TypeKind::I128 | TypeKind::U128 => Some(128),
+            TypeKind::Int => Some(128), // Treat literal Int as max size for compatibility checks? Or handle separately.
             _ => None,
         }
     }
@@ -299,10 +303,10 @@ impl TypeChecker {
         }
 
         // Handle Nullable types
-        if let Type::Nullable(inner) = t1 {
+        if let TypeKind::Nullable(inner) = &t1.kind {
             // Nullable(T) accepts T or None (Nullable(Void))
-            if let Type::Nullable(inner2) = t2 {
-                if let Type::Void = **inner2 {
+            if let TypeKind::Nullable(inner2) = &t2.kind {
+                if let TypeKind::Void = inner2.kind {
                     return true; // None is compatible with any nullable
                 }
                 return self.are_compatible(inner, inner2, context);
@@ -313,22 +317,22 @@ impl TypeChecker {
 
         // If t1 is NOT nullable, but t2 IS nullable (and not None), it's incompatible
         // unless t2 is Nullable(Void) (None) which is definitely incompatible with non-nullable t1
-        if let Type::Nullable(_) = t2 {
+        if let TypeKind::Nullable(_) = &t2.kind {
             return false;
         }
 
         // Allow Type::Int (literals) to be assigned to any integer type
-        if matches!(t2, Type::Int) && self.is_integer(t1) {
+        if matches!(t2.kind, TypeKind::Int) && self.is_integer(t1) {
             return true;
         }
 
         // Allow Type::Float (literals) to be assigned to any float type
-        if matches!(t2, Type::Float) && matches!(t1, Type::F32 | Type::F64) {
+        if matches!(t2.kind, TypeKind::Float) && matches!(t1.kind, TypeKind::F32 | TypeKind::F64) {
             return true;
         }
 
         // Allow F32/F64 to be assigned to Type::Float (variable)
-        if matches!(t1, Type::Float) && matches!(t2, Type::F32 | Type::F64) {
+        if matches!(t1.kind, TypeKind::Float) && matches!(t2.kind, TypeKind::F32 | TypeKind::F64) {
             return true;
         }
 
@@ -350,29 +354,29 @@ impl TypeChecker {
         }
 
         // Float widening
-        if matches!(t1, Type::F64) && matches!(t2, Type::F32) {
+        if matches!(t1.kind, TypeKind::F64) && matches!(t2.kind, TypeKind::F32) {
             return true;
         }
 
         // Handle inheritance and interfaces
-        if let (Type::Custom(n1, _), Type::Custom(n2, _)) = (t1, t2) {
+        if let (TypeKind::Custom(n1, _), TypeKind::Custom(n2, _)) = (&t1.kind, &t2.kind) {
             if self.is_subtype(n2, n1) {
                 return true;
             }
         }
 
-        match (t1, t2) {
-            (Type::List(inner1), Type::List(inner2)) => {
+        match (&t1.kind, &t2.kind) {
+            (TypeKind::List(inner1), TypeKind::List(inner2)) => {
                 if let Ok(t2_inner) = self.extract_type_from_expression(inner2) {
-                    if matches!(t2_inner, Type::Void) {
+                    if matches!(t2_inner.kind, TypeKind::Void) {
                         return true;
                     }
                     if let Ok(t1_inner) = self.extract_type_from_expression(inner1) {
                         // If target is specific integer and source is generic Int (literal),
                         // we return false to force value checking in check_variable_declaration
-                        if matches!(t2_inner, Type::Int)
+                        if matches!(t2_inner.kind, TypeKind::Int)
                             && self.is_integer(&t1_inner)
-                            && !matches!(t1_inner, Type::Int)
+                            && !matches!(t1_inner.kind, TypeKind::Int)
                         {
                             return false;
                         }
@@ -381,9 +385,9 @@ impl TypeChecker {
                 }
                 false
             }
-            (Type::Set(inner1), Type::Set(inner2)) => {
+            (TypeKind::Set(inner1), TypeKind::Set(inner2)) => {
                 if let Ok(t2_inner) = self.extract_type_from_expression(inner2) {
-                    if matches!(t2_inner, Type::Void) {
+                    if matches!(t2_inner.kind, TypeKind::Void) {
                         return true;
                     }
                     if let Ok(t1_inner) = self.extract_type_from_expression(inner1) {
@@ -392,12 +396,12 @@ impl TypeChecker {
                 }
                 false
             }
-            (Type::Map(k1, v1), Type::Map(k2, v2)) => {
+            (TypeKind::Map(k1, v1), TypeKind::Map(k2, v2)) => {
                 if let (Ok(k2_t), Ok(v2_t)) = (
                     self.extract_type_from_expression(k2),
                     self.extract_type_from_expression(v2),
                 ) {
-                    if matches!(k2_t, Type::Void) && matches!(v2_t, Type::Void) {
+                    if matches!(k2_t.kind, TypeKind::Void) && matches!(v2_t.kind, TypeKind::Void) {
                         return true;
                     }
                     if let (Ok(k1_t), Ok(v1_t)) = (
@@ -410,30 +414,30 @@ impl TypeChecker {
                 }
                 false
             }
-            (Type::Nullable(inner1), Type::Nullable(inner2)) => {
-                if matches!(**inner2, Type::Void) {
+            (TypeKind::Nullable(inner1), TypeKind::Nullable(inner2)) => {
+                if matches!(inner2.kind, TypeKind::Void) {
                     return true;
                 }
                 self.are_compatible(inner1, inner2, context)
             }
-            (Type::Nullable(inner1), t2) => self.are_compatible(inner1, t2, context),
-            (Type::Result(ok1, err1), Type::Result(ok2, err2)) => {
+            (TypeKind::Nullable(inner1), _) => self.are_compatible(inner1, t2, context),
+            (TypeKind::Result(ok1, err1), TypeKind::Result(ok2, err2)) => {
                 if let (Ok(ok1_t), Ok(err1_t), Ok(ok2_t), Ok(err2_t)) = (
                     self.extract_type_from_expression(ok1),
                     self.extract_type_from_expression(err1),
                     self.extract_type_from_expression(ok2),
                     self.extract_type_from_expression(err2),
                 ) {
-                    let ok_compatible =
-                        matches!(ok2_t, Type::Void) || self.are_compatible(&ok1_t, &ok2_t, context);
-                    let err_compatible = matches!(err2_t, Type::Void)
+                    let ok_compatible = matches!(ok2_t.kind, TypeKind::Void)
+                        || self.are_compatible(&ok1_t, &ok2_t, context);
+                    let err_compatible = matches!(err2_t.kind, TypeKind::Void)
                         || self.are_compatible(&err1_t, &err2_t, context);
 
                     return ok_compatible && err_compatible;
                 }
                 false
             }
-            (Type::Function(gen1, params1, ret1), Type::Function(gen2, params2, ret2)) => {
+            (TypeKind::Function(gen1, params1, ret1), TypeKind::Function(gen2, params2, ret2)) => {
                 // Check generics count
                 if gen1.as_ref().map(|v| v.len()).unwrap_or(0)
                     != gen2.as_ref().map(|v| v.len()).unwrap_or(0)
@@ -452,10 +456,10 @@ impl TypeChecker {
                     // (which happens in function types vs function declarations)
                     let t1 = self
                         .extract_type_from_expression(&p1.typ)
-                        .unwrap_or(Type::Error);
+                        .unwrap_or(crate::ast::factory::make_type(TypeKind::Error));
                     let t2 = self
                         .extract_type_from_expression(&p2.typ)
-                        .unwrap_or(Type::Error);
+                        .unwrap_or(crate::ast::factory::make_type(TypeKind::Error));
 
                     if !self.are_compatible(&t1, &t2, context) {
                         return false;
@@ -464,27 +468,29 @@ impl TypeChecker {
 
                 // Check return type
                 let r1 = if let Some(r) = ret1 {
-                    self.extract_type_from_expression(r).unwrap_or(Type::Void)
+                    self.extract_type_from_expression(r)
+                        .unwrap_or(crate::ast::factory::make_type(TypeKind::Void))
                 } else {
-                    Type::Void
+                    crate::ast::factory::make_type(TypeKind::Void)
                 };
 
                 let r2 = if let Some(r) = ret2 {
-                    self.extract_type_from_expression(r).unwrap_or(Type::Void)
+                    self.extract_type_from_expression(r)
+                        .unwrap_or(crate::ast::factory::make_type(TypeKind::Void))
                 } else {
-                    Type::Void
+                    crate::ast::factory::make_type(TypeKind::Void)
                 };
 
                 self.are_compatible(&r1, &r2, context)
             }
-            (Type::Generic(_, constraint, kind), t2) => {
+            (TypeKind::Generic(_, constraint, kind), _) => {
                 if let Some(c) = constraint {
                     self.satisfies_constraint(t2, c, kind, context)
                 } else {
                     true
                 }
             }
-            (t1, Type::Generic(_, Some(constraint), kind)) => match kind {
+            (_, TypeKind::Generic(_, Some(constraint), kind)) => match kind {
                 TypeDeclarationKind::Extends => self.are_compatible(t1, constraint, context),
                 _ => false,
             },
@@ -525,36 +531,38 @@ impl TypeChecker {
     }
 
     pub(crate) fn get_iterable_element_type(&mut self, ty: &Type, span: Span) -> Type {
-        match ty {
-            Type::List(inner) => self
+        match &ty.kind {
+            TypeKind::List(inner) => self
                 .extract_type_from_expression(inner)
-                .unwrap_or(Type::Error),
-            Type::String => Type::String,
-            Type::Set(inner) => self
+                .unwrap_or(crate::ast::factory::make_type(TypeKind::Error)),
+            TypeKind::String => crate::ast::factory::make_type(TypeKind::String),
+            TypeKind::Set(inner) => self
                 .extract_type_from_expression(inner)
-                .unwrap_or(Type::Error),
-            Type::Map(key, val) => Type::Tuple(vec![*key.clone(), *val.clone()]),
-            Type::Custom(name, args) if name == "Range" => {
+                .unwrap_or(crate::ast::factory::make_type(TypeKind::Error)),
+            TypeKind::Map(key, val) => {
+                crate::ast::factory::make_type(TypeKind::Tuple(vec![*key.clone(), *val.clone()]))
+            }
+            TypeKind::Custom(name, args) if name == "Range" => {
                 if let Some(args) = args {
                     if let Some(arg) = args.first() {
                         return self
                             .extract_type_from_expression(arg)
-                            .unwrap_or(Type::Error);
+                            .unwrap_or(crate::ast::factory::make_type(TypeKind::Error));
                     }
                 }
-                Type::Error
+                crate::ast::factory::make_type(TypeKind::Error)
             }
-            Type::Error => Type::Error,
+            TypeKind::Error => crate::ast::factory::make_type(TypeKind::Error),
             _ => {
-                self.report_error(format!("Type {:?} is not iterable", ty), span);
-                Type::Error
+                self.report_error(format!("Type {} is not iterable", ty), span);
+                crate::ast::factory::make_type(TypeKind::Error)
             }
         }
     }
 
     pub(crate) fn check_implements(&self, ty: &Type, constraint: &Type, context: &Context) -> bool {
         // Resolve constraint to StructDefinition
-        let constraint_def = if let Type::Custom(name, _) = constraint {
+        let constraint_def = if let TypeKind::Custom(name, _) = &constraint.kind {
             context
                 .resolve_type_definition(name)
                 .or_else(|| self.global_type_definitions.get(name))
@@ -569,7 +577,7 @@ impl TypeChecker {
         };
 
         // Resolve ty to StructDefinition
-        let ty_def = if let Type::Custom(name, _) = ty {
+        let ty_def = if let TypeKind::Custom(name, _) = &ty.kind {
             context
                 .resolve_type_definition(name)
                 .or_else(|| self.global_type_definitions.get(name))
@@ -643,7 +651,7 @@ impl TypeChecker {
                     if !self.satisfies_constraint(&arg_type, constraint, &param_def.kind, context) {
                         self.report_error(
                             format!(
-                                "Type {:?} does not satisfy constraint {:?} {:?}",
+                                "Type {} does not satisfy constraint {} {}",
                                 arg_type, param_def.kind, constraint
                             ),
                             arg_expr.span.clone(),
@@ -664,8 +672,8 @@ impl TypeChecker {
     pub(crate) fn extract_type_name(&self, expr: &Expression) -> Result<String, String> {
         match &expr.node {
             ExpressionKind::Identifier(name, _) => Ok(name.clone()),
-            ExpressionKind::Type(ty, _) => match &**ty {
-                Type::Custom(name, _) => Ok(name.clone()),
+            ExpressionKind::Type(ty, _) => match &ty.kind {
+                TypeKind::Custom(name, _) => Ok(name.clone()),
                 _ => Err("Expected custom type".to_string()),
             },
             _ => Err("Expected type identifier".to_string()),
@@ -676,7 +684,9 @@ impl TypeChecker {
         match &expr.node {
             ExpressionKind::Type(t, is_nullable) => {
                 if *is_nullable {
-                    Ok(Type::Nullable(t.clone()))
+                    Ok(crate::ast::factory::make_type(TypeKind::Nullable(
+                        t.clone(),
+                    )))
                 } else {
                     Ok(*t.clone())
                 }
@@ -688,77 +698,85 @@ impl TypeChecker {
     pub(crate) fn resolve_type_expression(&mut self, expr: &Expression, context: &Context) -> Type {
         match self.extract_type_from_expression(expr) {
             Ok(t) => {
-                match t {
-                    Type::List(inner) => {
+                match t.kind {
+                    TypeKind::List(inner) => {
                         let resolved_inner = self.resolve_type_expression(&inner, context);
-                        Type::List(Box::new(self.create_type_expression(resolved_inner)))
+                        crate::ast::factory::make_type(TypeKind::List(Box::new(
+                            self.create_type_expression(resolved_inner),
+                        )))
                     }
-                    Type::Set(inner) => {
+                    TypeKind::Set(inner) => {
                         let resolved_inner = self.resolve_type_expression(&inner, context);
-                        if let Type::Nullable(_) = resolved_inner {
+                        if let TypeKind::Nullable(_) = resolved_inner.kind {
                             self.report_error(
                                 "Set elements cannot be nullable".to_string(),
                                 inner.span.clone(),
                             );
                         }
-                        Type::Set(Box::new(self.create_type_expression(resolved_inner)))
+                        crate::ast::factory::make_type(TypeKind::Set(Box::new(
+                            self.create_type_expression(resolved_inner),
+                        )))
                     }
-                    Type::Map(k, v) => {
+                    TypeKind::Map(k, v) => {
                         let rk = self.resolve_type_expression(&k, context);
-                        if let Type::Nullable(_) = rk {
+                        if let TypeKind::Nullable(_) = rk.kind {
                             self.report_error(
                                 "Map keys cannot be nullable".to_string(),
                                 k.span.clone(),
                             );
                         }
                         let rv = self.resolve_type_expression(&v, context);
-                        Type::Map(
+                        crate::ast::factory::make_type(TypeKind::Map(
                             Box::new(self.create_type_expression(rk)),
                             Box::new(self.create_type_expression(rv)),
-                        )
+                        ))
                     }
-                    Type::Nullable(inner) => {
+                    TypeKind::Nullable(inner) => {
                         let inner_expr = self.create_type_expression(*inner);
                         let resolved_inner = self.resolve_type_expression(&inner_expr, context);
-                        Type::Nullable(Box::new(resolved_inner))
+                        crate::ast::factory::make_type(TypeKind::Nullable(Box::new(resolved_inner)))
                     }
-                    Type::Custom(name, args) => {
+                    TypeKind::Custom(name, args) => {
                         // Handle built-in generic types
                         if name == "map" {
                             if let Some(args) = &args {
                                 if args.len() == 2 {
                                     let k = self.resolve_type_expression(&args[0], context);
-                                    if let Type::Nullable(_) = k {
+                                    if let TypeKind::Nullable(_) = k.kind {
                                         self.report_error(
                                             "Map keys cannot be nullable".to_string(),
                                             args[0].span.clone(),
                                         );
                                     }
                                     let v = self.resolve_type_expression(&args[1], context);
-                                    return Type::Map(
+                                    return crate::ast::factory::make_type(TypeKind::Map(
                                         Box::new(self.create_type_expression(k)),
                                         Box::new(self.create_type_expression(v)),
-                                    );
+                                    ));
                                 }
                             }
                         } else if name == "list" {
                             if let Some(args) = &args {
                                 if args.len() == 1 {
                                     let t = self.resolve_type_expression(&args[0], context);
-                                    return Type::List(Box::new(self.create_type_expression(t)));
+                                    return crate::ast::factory::make_type(TypeKind::List(
+                                        Box::new(self.create_type_expression(t)),
+                                    ));
                                 }
                             }
                         } else if name == "set" {
                             if let Some(args) = &args {
                                 if args.len() == 1 {
                                     let t = self.resolve_type_expression(&args[0], context);
-                                    if let Type::Nullable(_) = t {
+                                    if let TypeKind::Nullable(_) = t.kind {
                                         self.report_error(
                                             "Set elements cannot be nullable".to_string(),
                                             args[0].span.clone(),
                                         );
                                     }
-                                    return Type::Set(Box::new(self.create_type_expression(t)));
+                                    return crate::ast::factory::make_type(TypeKind::Set(
+                                        Box::new(self.create_type_expression(t)),
+                                    ));
                                 }
                             }
                         } else if name == "range" {
@@ -773,18 +791,20 @@ impl TypeChecker {
                             if let Some(args) = &args {
                                 if args.len() == 1 {
                                     let t = self.resolve_type_expression(&args[0], context);
-                                    return Type::Custom(
+                                    return crate::ast::factory::make_type(TypeKind::Custom(
                                         "Range".to_string(),
                                         Some(vec![self.create_type_expression(t)]),
-                                    );
+                                    ));
                                 }
                             } else {
                                 // Default to range<int> if no generic provided? Or just Range<Any>?
                                 // For now let's default to Range<Int> as it's the most common.
-                                return Type::Custom(
+                                return crate::ast::factory::make_type(TypeKind::Custom(
                                     "Range".to_string(),
-                                    Some(vec![self.create_type_expression(Type::Int)]),
-                                );
+                                    Some(vec![self.create_type_expression(
+                                        crate::ast::factory::make_type(TypeKind::Int),
+                                    )]),
+                                ));
                             }
                         }
 
@@ -822,11 +842,11 @@ impl TypeChecker {
                                             expr.span.clone(),
                                         );
                                     }
-                                    return Type::Generic(
+                                    return crate::ast::factory::make_type(TypeKind::Generic(
                                         name.clone(),
                                         gen_def.constraint.clone().map(Box::new),
                                         gen_def.kind.clone(),
-                                    );
+                                    ));
                                 }
                                 TypeDefinition::Alias(alias_type) => {
                                     if resolved_args.is_some() {
@@ -861,16 +881,16 @@ impl TypeChecker {
                                     expr.span.clone(),
                                 );
                             }
-                            return Type::Error;
+                            return crate::ast::factory::make_type(TypeKind::Error);
                         }
-                        Type::Custom(name, resolved_args)
+                        crate::ast::factory::make_type(TypeKind::Custom(name, resolved_args))
                     }
-                    _ => t,
+                    _ => crate::ast::factory::make_type(t.kind),
                 }
             }
             Err(msg) => {
                 self.report_error(msg, expr.span.clone());
-                Type::Error
+                crate::ast::factory::make_type(TypeKind::Error)
             }
         }
     }
@@ -904,13 +924,13 @@ impl TypeChecker {
         arg_type: &Type,
         mapping: &mut std::collections::HashMap<String, Type>,
     ) {
-        match (param_type, arg_type) {
-            (Type::Generic(name, _, _), _) => {
+        match (&param_type.kind, &arg_type.kind) {
+            (TypeKind::Generic(name, _, _), _) => {
                 if !mapping.contains_key(name) {
                     mapping.insert(name.clone(), arg_type.clone());
                 }
             }
-            (Type::List(p_inner_expr), Type::List(a_inner_expr)) => {
+            (TypeKind::List(p_inner_expr), TypeKind::List(a_inner_expr)) => {
                 if let (Ok(p_inner), Ok(a_inner)) = (
                     self.extract_type_from_expression(p_inner_expr),
                     self.extract_type_from_expression(a_inner_expr),
@@ -918,7 +938,7 @@ impl TypeChecker {
                     self.infer_generic_types(&p_inner, &a_inner, mapping);
                 }
             }
-            (Type::Map(p_k_expr, p_v_expr), Type::Map(a_k_expr, a_v_expr)) => {
+            (TypeKind::Map(p_k_expr, p_v_expr), TypeKind::Map(a_k_expr, a_v_expr)) => {
                 if let (Ok(p_k), Ok(p_v), Ok(a_k), Ok(a_v)) = (
                     self.extract_type_from_expression(p_k_expr),
                     self.extract_type_from_expression(p_v_expr),
@@ -929,7 +949,7 @@ impl TypeChecker {
                     self.infer_generic_types(&p_v, &a_v, mapping);
                 }
             }
-            (Type::Set(p_inner_expr), Type::Set(a_inner_expr)) => {
+            (TypeKind::Set(p_inner_expr), TypeKind::Set(a_inner_expr)) => {
                 if let (Ok(p_inner), Ok(a_inner)) = (
                     self.extract_type_from_expression(p_inner_expr),
                     self.extract_type_from_expression(a_inner_expr),
@@ -937,10 +957,10 @@ impl TypeChecker {
                     self.infer_generic_types(&p_inner, &a_inner, mapping);
                 }
             }
-            (Type::Nullable(p_inner), Type::Nullable(a_inner)) => {
+            (TypeKind::Nullable(p_inner), TypeKind::Nullable(a_inner)) => {
                 self.infer_generic_types(p_inner, a_inner, mapping);
             }
-            (Type::Custom(p_name, p_args), Type::Custom(a_name, a_args)) => {
+            (TypeKind::Custom(p_name, p_args), TypeKind::Custom(a_name, a_args)) => {
                 if p_name == a_name {
                     if let (Some(p_args), Some(a_args)) = (p_args, a_args) {
                         if p_args.len() == a_args.len() {
@@ -965,15 +985,15 @@ impl TypeChecker {
         ty: &Type,
         mapping: &std::collections::HashMap<String, Type>,
     ) -> Type {
-        match ty {
-            Type::Generic(name, _, _) => {
+        match &ty.kind {
+            TypeKind::Generic(name, _, _) => {
                 if let Some(subst) = mapping.get(name) {
                     subst.clone()
                 } else {
                     ty.clone()
                 }
             }
-            Type::Custom(name, args) => {
+            TypeKind::Custom(name, args) => {
                 if args.is_none() {
                     if let Some(subst) = mapping.get(name) {
                         return subst.clone();
@@ -986,53 +1006,59 @@ impl TypeChecker {
                         .map(|arg| {
                             let arg_type = self
                                 .extract_type_from_expression(arg)
-                                .unwrap_or(Type::Error);
+                                .unwrap_or(make_type(TypeKind::Error));
                             let subst_arg = self.substitute_type(&arg_type, mapping);
                             self.create_type_expression(subst_arg)
                         })
                         .collect()
                 });
-                Type::Custom(name.clone(), new_args)
+                make_type(TypeKind::Custom(name.clone(), new_args))
             }
-            Type::List(inner_expr) => {
+            TypeKind::List(inner_expr) => {
                 if let Ok(inner) = self.extract_type_from_expression(inner_expr) {
                     let subst_inner = self.substitute_type(&inner, mapping);
-                    Type::List(Box::new(self.create_type_expression(subst_inner)))
+                    make_type(TypeKind::List(Box::new(
+                        self.create_type_expression(subst_inner),
+                    )))
                 } else {
                     ty.clone()
                 }
             }
-            Type::Map(k_expr, v_expr) => {
+            TypeKind::Map(k_expr, v_expr) => {
                 if let (Ok(k), Ok(v)) = (
                     self.extract_type_from_expression(k_expr),
                     self.extract_type_from_expression(v_expr),
                 ) {
-                    Type::Map(
+                    make_type(TypeKind::Map(
                         Box::new(self.create_type_expression(self.substitute_type(&k, mapping))),
                         Box::new(self.create_type_expression(self.substitute_type(&v, mapping))),
-                    )
+                    ))
                 } else {
                     ty.clone()
                 }
             }
-            Type::Set(inner_expr) => {
+            TypeKind::Set(inner_expr) => {
                 if let Ok(inner) = self.extract_type_from_expression(inner_expr) {
                     let subst_inner = self.substitute_type(&inner, mapping);
-                    Type::Set(Box::new(self.create_type_expression(subst_inner)))
+                    make_type(TypeKind::Set(Box::new(
+                        self.create_type_expression(subst_inner),
+                    )))
                 } else {
                     ty.clone()
                 }
             }
-            Type::Nullable(inner) => Type::Nullable(Box::new(self.substitute_type(inner, mapping))),
-            Type::Result(ok_expr, err_expr) => {
+            TypeKind::Nullable(inner) => make_type(TypeKind::Nullable(Box::new(
+                self.substitute_type(inner, mapping),
+            ))),
+            TypeKind::Result(ok_expr, err_expr) => {
                 if let (Ok(ok), Ok(err)) = (
                     self.extract_type_from_expression(ok_expr),
                     self.extract_type_from_expression(err_expr),
                 ) {
-                    Type::Result(
+                    make_type(TypeKind::Result(
                         Box::new(self.create_type_expression(self.substitute_type(&ok, mapping))),
                         Box::new(self.create_type_expression(self.substitute_type(&err, mapping))),
-                    )
+                    ))
                 } else {
                     ty.clone()
                 }

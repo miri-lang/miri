@@ -2,33 +2,32 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use super::utils::*;
-use miri::ast::factory::typ;
-use miri::ast::Type;
+use miri::ast::factory::*;
 
 #[test]
 fn test_float_literals() {
     check_exprs_type(vec![
-        ("1.5", Type::F32),
-        ("0.0", Type::F32),
-        ("-1.5", Type::F32),
-        ("1.1234567890123456789", Type::F64), // High precision forces F64
+        ("1.5", type_f32()),
+        ("0.0", type_f32()),
+        ("-1.5", type_f32()),
+        ("1.1234567890123456789", type_f64()), // High precision forces F64
     ]);
 }
 
 #[test]
 fn test_float_arithmetic_expressions() {
     check_exprs_type(vec![
-        ("1.0 + 2.0", Type::F32),
-        ("1.0 - 2.0", Type::F32),
-        ("1.0 * 2.0", Type::F32),
-        ("1.0 / 2.0", Type::F32),
-        ("1.0 % 2.0", Type::F32),
+        ("1.0 + 2.0", type_f32()),
+        ("1.0 - 2.0", type_f32()),
+        ("1.0 * 2.0", type_f32()),
+        ("1.0 / 2.0", type_f32()),
+        ("1.0 % 2.0", type_f32()),
     ]);
 }
 
 #[test]
 fn test_float_unary_expressions() {
-    check_exprs_type(vec![("-1.0", Type::F32)]);
+    check_exprs_type(vec![("-1.0", type_f32())]);
 }
 
 #[test]
@@ -43,12 +42,12 @@ let e = 1.0 == 2.0
 let f = 1.0 != 2.0
 ",
         vec![
-            ("a", Type::Boolean),
-            ("b", Type::Boolean),
-            ("c", Type::Boolean),
-            ("d", Type::Boolean),
-            ("e", Type::Boolean),
-            ("f", Type::Boolean),
+            ("a", type_bool()),
+            ("b", type_bool()),
+            ("c", type_bool()),
+            ("d", type_bool()),
+            ("e", type_bool()),
+            ("f", type_bool()),
         ],
     );
 }
@@ -61,7 +60,7 @@ let x = 1.5 + 2.5
 let y = x / 2.0
 let z = y * 3.0
 ",
-        vec![("x", Type::F32), ("y", Type::F32), ("z", Type::F32)],
+        vec![("x", type_f32()), ("y", type_f32()), ("z", type_f32())],
     );
 }
 
@@ -72,7 +71,7 @@ fn test_explicit_float_type() {
 let x f32 = 1.5
 let y f64 = 1.1234567890123456789
 ",
-        vec![("x", Type::F32), ("y", Type::F64)],
+        vec![("x", type_f32()), ("y", type_f64())],
     );
 }
 
@@ -130,7 +129,7 @@ fn test_float_assignment_operators() {
 var x = 1.0
 x += 2.0
 ",
-        vec![("x", Type::F32)],
+        vec![("x", type_f32())],
     );
 }
 
@@ -150,10 +149,10 @@ fn test_f64_arithmetic() {
     // Using high precision literals to force F64
     let f64_val = "1.1234567890123456789";
     check_exprs_type(vec![
-        (&format!("{} + {}", f64_val, f64_val), Type::F64),
-        (&format!("{} - {}", f64_val, f64_val), Type::F64),
-        (&format!("{} * {}", f64_val, f64_val), Type::F64),
-        (&format!("{} / {}", f64_val, f64_val), Type::F64),
+        (&format!("{} + {}", f64_val, f64_val), type_f64()),
+        (&format!("{} - {}", f64_val, f64_val), type_f64()),
+        (&format!("{} * {}", f64_val, f64_val), type_f64()),
+        (&format!("{} / {}", f64_val, f64_val), type_f64()),
     ]);
 }
 
@@ -171,7 +170,7 @@ fn test_float_bitwise_invalid() {
 
 #[test]
 fn test_float_unary_plus() {
-    check_expr_type("+1.0", Type::F32);
+    check_expr_type("+1.0", type_f32());
 }
 
 #[test]
@@ -188,7 +187,7 @@ let x = add(1.0, 2.0)
 
 #[test]
 fn test_float_list() {
-    check_expr_type("[1.0, 2.0, 3.0]", Type::List(Box::new(typ(Type::F32))));
+    check_expr_type("[1.0, 2.0, 3.0]", type_list(type_f32()));
 }
 
 #[test]
@@ -203,14 +202,14 @@ fn test_nullable_float() {
 let x f32? = 1.0
 x
 ",
-        Type::Nullable(Box::new(Type::F32)),
+        type_null(type_f32()),
     );
     check_expr_type(
         "
 let y f32? = None
 y
 ",
-        Type::Nullable(Box::new(Type::F32)),
+        type_null(type_f32()),
     );
 }
 
@@ -220,10 +219,10 @@ fn test_assignment_compatibility() {
     check_success("let a f32 = 1.0");
 
     // Specific type to Float (variable) - inferred as specific type
-    check_vars_type("let a f32 = 1.0\nlet b = a", vec![("b", Type::F32)]);
+    check_vars_type("let a f32 = 1.0\nlet b = a", vec![("b", type_f32())]);
 
     // Smaller to larger - allowed
-    check_vars_type("let a f32 = 1.0\nlet b f64 = a", vec![("b", Type::F64)]);
+    check_vars_type("let a f32 = 1.0\nlet b f64 = a", vec![("b", type_f64())]);
 
     // Larger to smaller - fail
     check_error("let a f64 = 1.0\nlet b f32 = a", "Type mismatch");

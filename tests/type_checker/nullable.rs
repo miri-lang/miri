@@ -1,21 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
-use miri::ast::{
-    factory::{type_list, type_map, type_null},
-    Type,
-};
-
 use super::utils::*;
+use miri::ast::factory::*;
 
 #[test]
 fn test_nullable_assignment() {
-    check_vars_type("var x int? = 5", vec![("x", type_null(Type::Int))]);
+    check_vars_type("var x int? = 5", vec![("x", type_null(type_int()))]);
 }
 
 #[test]
 fn test_none_assignment_to_nullable() {
-    check_vars_type("var x int? = None", vec![("x", type_null(Type::Int))]);
+    check_vars_type("var x int? = None", vec![("x", type_null(type_int()))]);
 }
 
 #[test]
@@ -36,12 +32,12 @@ fn test_nullable_list_of_non_nullable() {
     // [int]? - List itself can be None, but elements must be int
     check_vars_type(
         "var list [int]? = [1, 2, 3]",
-        vec![("list", type_null(type_list(Type::Int)))],
+        vec![("list", type_null(type_list(type_int())))],
     );
 
     check_vars_type(
         "var list [int]? = None",
-        vec![("list", type_null(type_list(Type::Int)))],
+        vec![("list", type_null(type_list(type_int())))],
     );
 
     check_error("var list [int]? = [1, None]", "Type mismatch");
@@ -70,7 +66,7 @@ inner[1] = None
 var list [int?]? = inner
 list = None
         ",
-        vec![("list", type_null(type_list(type_null(Type::Int))))],
+        vec![("list", type_null(type_list(type_null(type_int()))))],
     );
 }
 
@@ -94,7 +90,7 @@ fn test_nullable_map_itself() {
 var map {string: int}? = {\"a\": 1}
 map = None
     ",
-        vec![("map", type_null(type_map(Type::String, Type::Int)))],
+        vec![("map", type_null(type_map(type_string(), type_int())))],
     );
 }
 
@@ -203,5 +199,5 @@ fn test_option_methods() {
 let o int? = 10
 o.is_some()
     ";
-    check_expr_type(source, Type::Boolean);
+    check_expr_type(source, type_bool());
 }

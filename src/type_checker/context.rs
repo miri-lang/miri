@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
-use crate::ast::{MemberVisibility, Type, TypeDeclarationKind};
+use crate::ast::{types::*, MemberVisibility};
 use crate::error::syntax::Span;
 use std::collections::HashMap;
 

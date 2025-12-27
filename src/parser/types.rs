@@ -2,6 +2,7 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use crate::ast::factory as ast;
+use crate::ast::types::{Type, TypeKind};
 use crate::ast::*;
 use crate::error::syntax::SyntaxError;
 use crate::lexer::Token;
@@ -27,20 +28,24 @@ impl<'source> Parser<'source> {
             Some((Token::Identifier, _)) => {
                 let type_name = self.identifier_to_type_name()?;
                 let typ = self.type_name_to_type(type_name)?;
-                Some(ast::typ(typ))
+                Some(ast::type_expr_non_null(typ))
             }
             Some((Token::LBracket, _)) => {
                 self.eat_token(&Token::LBracket)?;
                 let element_type = self.element_type_expression("List element type")?;
                 self.eat_token(&Token::RBracket)?;
-                Some(ast::typ(Type::List(Box::new(element_type))))
+                Some(ast::type_expr_non_null(ast::make_type(TypeKind::List(
+                    Box::new(element_type),
+                ))))
             }
             Some((Token::LParen, _)) => {
                 self.eat_token(&Token::LParen)?;
                 if self.lookahead_is_rparen() {
                     self.eat_token(&Token::RParen)?;
                     // Empty tuple type `()`
-                    return Ok(Some(ast::typ(Type::Tuple(vec![]))));
+                    return Ok(Some(ast::type_expr_non_null(ast::make_type(
+                        TypeKind::Tuple(vec![]),
+                    ))));
                 }
 
                 let first_element =
@@ -56,7 +61,9 @@ impl<'source> Parser<'source> {
                         elements.push(self.element_type_expression("Tuple element type")?);
                     }
                     self.eat_token(&Token::RParen)?;
-                    Some(ast::typ(Type::Tuple(elements)))
+                    Some(ast::type_expr_non_null(ast::make_type(TypeKind::Tuple(
+                        elements,
+                    ))))
                 } else {
                     self.eat_token(&Token::RParen)?;
                     Some(first_element)
@@ -69,12 +76,12 @@ impl<'source> Parser<'source> {
                     self.eat_token(&Token::Colon)?;
                     let value_type = self.element_type_expression("Map value type")?;
                     self.eat_token(&Token::RBrace)?;
-                    Type::Map(Box::new(key_type), Box::new(value_type))
+                    TypeKind::Map(Box::new(key_type), Box::new(value_type))
                 } else {
                     self.eat_token(&Token::RBrace)?;
-                    Type::Set(Box::new(key_type))
+                    TypeKind::Set(Box::new(key_type))
                 };
-                Some(ast::typ(typ))
+                Some(ast::type_expr_non_null(ast::make_type(typ)))
             }
             Some((Token::Fn, _)) => {
                 self.eat_token(&Token::Fn)?;
@@ -125,8 +132,8 @@ impl<'source> Parser<'source> {
                                         "identifier",
                                     ));
                                 }
-                                match &**ty {
-                                    Type::Custom(name, None) => name.clone(),
+                                match &ty.kind {
+                                    TypeKind::Custom(name, None) => name.clone(),
                                     _ => {
                                         return Err(self.error_unexpected_token(
                                             "Parameter name must be a simple identifier",
@@ -178,8 +185,8 @@ impl<'source> Parser<'source> {
                 self.eat_token(&Token::RParen)?;
 
                 let return_type = self.return_type_expression()?;
-                let typ = Type::Function(generic_types, parameters, return_type);
-                Some(ast::typ(typ))
+                let typ = TypeKind::Function(generic_types, parameters, return_type);
+                Some(ast::type_expr_non_null(ast::make_type(typ)))
             }
             _ => return Ok(None),
         };
@@ -192,7 +199,7 @@ impl<'source> Parser<'source> {
         if self.match_lookahead_type(|t| t == &Token::QuestionMark) {
             self.eat_token(&Token::QuestionMark)?;
             if let ExpressionKind::Type(inner_type, _) = final_expr.node {
-                final_expr = ast::null_typ(*inner_type);
+                final_expr = ast::type_expr_null(*inner_type);
             }
         }
 
@@ -201,41 +208,41 @@ impl<'source> Parser<'source> {
 
     pub(crate) fn type_name_to_type(&mut self, type_name: String) -> Result<Type, SyntaxError> {
         Ok(match type_name.as_str() {
-            "int" => Type::Int,
-            "i8" => Type::I8,
-            "i16" => Type::I16,
-            "i32" => Type::I32,
-            "i64" => Type::I64,
-            "i128" => Type::I128,
-            "u8" => Type::U8,
-            "u16" => Type::U16,
-            "u32" => Type::U32,
-            "u64" => Type::U64,
-            "u128" => Type::U128,
-            "float" => Type::Float,
-            "f32" => Type::F32,
-            "f64" => Type::F64,
-            "string" => Type::String,
-            "bool" => Type::Boolean,
-            "symbol" => Type::Symbol,
+            "int" => ast::make_type(TypeKind::Int),
+            "i8" => ast::make_type(TypeKind::I8),
+            "i16" => ast::make_type(TypeKind::I16),
+            "i32" => ast::make_type(TypeKind::I32),
+            "i64" => ast::make_type(TypeKind::I64),
+            "i128" => ast::make_type(TypeKind::I128),
+            "u8" => ast::make_type(TypeKind::U8),
+            "u16" => ast::make_type(TypeKind::U16),
+            "u32" => ast::make_type(TypeKind::U32),
+            "u64" => ast::make_type(TypeKind::U64),
+            "u128" => ast::make_type(TypeKind::U128),
+            "float" => ast::make_type(TypeKind::Float),
+            "f32" => ast::make_type(TypeKind::F32),
+            "f64" => ast::make_type(TypeKind::F64),
+            "string" => ast::make_type(TypeKind::String),
+            "bool" => ast::make_type(TypeKind::Boolean),
+            "symbol" => ast::make_type(TypeKind::Symbol),
             "result" => self.generic_two_types_expression(
                 "Ok result type",
                 "Error result type",
-                Type::Result,
+                TypeKind::Result,
             )?,
             "map" => {
-                self.generic_two_types_expression("Map key type", "Map value type", Type::Map)?
+                self.generic_two_types_expression("Map key type", "Map value type", TypeKind::Map)?
             }
-            "future" => self.generic_one_type_expression("Future result type", Type::Future)?,
-            "list" => self.generic_one_type_expression("List element type", Type::List)?,
-            "set" => self.generic_one_type_expression("Set element type", Type::Set)?,
+            "future" => self.generic_one_type_expression("Future result type", TypeKind::Future)?,
+            "list" => self.generic_one_type_expression("List element type", TypeKind::List)?,
+            "set" => self.generic_one_type_expression("Set element type", TypeKind::Set)?,
             "tuple" => {
                 let inner = self.multiple_element_type_expressions(
                     "Tuple item type",
                     &Token::LessThan,
                     &Token::GreaterThan,
                 )?;
-                Type::Tuple(inner)
+                ast::make_type(TypeKind::Tuple(inner))
             }
             "fn" => {
                 // fn<T>(int) int
@@ -289,7 +296,7 @@ impl<'source> Parser<'source> {
                 self.eat_token(&Token::RParen)?;
 
                 let return_type = self.return_type_expression()?;
-                Type::Function(generic_types, parameters, return_type)
+                ast::make_type(TypeKind::Function(generic_types, parameters, return_type))
             }
             _ => match &self._lookahead {
                 Some((Token::LessThan, _)) => {
@@ -298,9 +305,9 @@ impl<'source> Parser<'source> {
                         &Token::LessThan,
                         &Token::GreaterThan,
                     )?;
-                    Type::Custom(type_name, Some(inner))
+                    ast::make_type(TypeKind::Custom(type_name, Some(inner)))
                 }
-                _ => Type::Custom(type_name, None),
+                _ => ast::make_type(TypeKind::Custom(type_name, None)),
             },
         })
     }
@@ -357,12 +364,12 @@ impl<'source> Parser<'source> {
         create_type: F,
     ) -> Result<Type, SyntaxError>
     where
-        F: FnOnce(Box<Expression>) -> Type,
+        F: FnOnce(Box<Expression>) -> TypeKind,
     {
         self.eat_token(&Token::LessThan)?;
         let inner_type = self.element_type_expression(expected)?;
         self.eat_token(&Token::GreaterThan)?;
-        Ok(create_type(Box::new(inner_type)))
+        Ok(ast::make_type(create_type(Box::new(inner_type))))
     }
 
     pub(crate) fn generic_two_types_expression<F>(
@@ -372,7 +379,7 @@ impl<'source> Parser<'source> {
         create_type: F,
     ) -> Result<Type, SyntaxError>
     where
-        F: FnOnce(Box<Expression>, Box<Expression>) -> Type,
+        F: FnOnce(Box<Expression>, Box<Expression>) -> TypeKind,
     {
         self.eat_token(&Token::LessThan)?;
         let a_type = self.element_type_expression(expected_a)?;
@@ -380,6 +387,9 @@ impl<'source> Parser<'source> {
         let b_type = self.element_type_expression(expected_b)?;
         self.eat_token(&Token::GreaterThan)?;
 
-        Ok(create_type(Box::new(a_type), Box::new(b_type)))
+        Ok(ast::make_type(create_type(
+            Box::new(a_type),
+            Box::new(b_type),
+        )))
     }
 }

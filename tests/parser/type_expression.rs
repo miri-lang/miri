@@ -8,7 +8,7 @@ use miri::error::syntax::SyntaxErrorKind;
 
 #[test]
 fn test_parse_list_type_in_variable() {
-    type_statement_test("[int]", typ(Type::List(Box::new(typ(Type::Int)))));
+    type_statement_test("[int]", type_expr_non_null(type_list(type_int())));
 }
 
 #[test]
@@ -21,10 +21,7 @@ fn process_data(data {string: bool}?)
         vec![func("process_data")
             .params(vec![parameter(
                 "data".into(),
-                null_typ(Type::Map(
-                    Box::new(typ(Type::String)),
-                    Box::new(typ(Type::Boolean)),
-                )),
+                type_expr_null(type_map(type_string(), type_bool())),
                 None,
                 None,
             )])
@@ -40,10 +37,10 @@ fn get_coordinates() (float, float?, float)?
     // body
 ",
         vec![func("get_coordinates")
-            .return_type(null_typ(Type::Tuple(vec![
-                typ(Type::Float),
-                null_typ(Type::Float),
-                typ(Type::Float),
+            .return_type(type_expr_null(type_tuple_expr(vec![
+                type_expr_non_null(type_float()),
+                type_expr_null(type_float()),
+                type_expr_non_null(type_float()),
             ])))
             .build_empty_body()],
     );
@@ -53,10 +50,7 @@ fn get_coordinates() (float, float?, float)?
 fn test_parse_generic_result_type() {
     type_statement_test(
         "result<int, string>",
-        typ(Type::Result(
-            Box::new(typ(Type::Int)),
-            Box::new(typ(Type::String)),
-        )),
+        type_expr_non_null(type_result(type_int(), type_string())),
     );
 }
 
@@ -68,11 +62,11 @@ fn get_data() MyContainer<[int]?, future<string>>
     // body
 ",
         vec![func("get_data")
-            .return_type(typ(Type::Custom(
-                "MyContainer".to_string(),
+            .return_type(type_expr_non_null(type_custom(
+                "MyContainer",
                 Some(vec![
-                    null_typ(Type::List(Box::new(typ(Type::Int)))), // [int]?
-                    typ(Type::Future(Box::new(typ(Type::String)))), // future<string>
+                    type_expr_null(type_list(type_int())),          // [int]?
+                    type_expr_non_null(type_future(type_string())), // future<string>
                 ]),
             )))
             .build_empty_body()],
@@ -81,7 +75,7 @@ fn get_data() MyContainer<[int]?, future<string>>
 
 #[test]
 fn test_parse_set_type() {
-    type_statement_test("{i64}", typ(Type::Set(Box::new(typ(Type::I64)))));
+    type_statement_test("{i64}", type_expr_non_null(type_set(type_i64())));
 }
 
 #[test]
@@ -122,38 +116,41 @@ fn test_error_empty_generic_parameters() {
 fn test_deeply_nested_collection_type() {
     type_statement_test(
         "[[{string: (int?, bool)}]?]?",
-        null_typ(
+        type_expr_null(
             // The outer list is nullable: `[...]`?
-            Type::List(Box::new(null_typ(
+            type_list_expr(type_expr_null(
                 // The inner list is nullable: `[{...}]?`
-                Type::List(Box::new(typ(Type::Map(
+                type_list_expr(type_expr_non_null(type_map_expr(
                     // The map itself is not nullable
-                    Box::new(typ(Type::String)),
-                    Box::new(typ(Type::Tuple(vec![
-                        null_typ(Type::Int), // int?
-                        typ(Type::Boolean),
-                    ]))),
-                )))),
-            ))),
+                    type_expr_non_null(type_string()),
+                    type_expr_non_null(type_tuple_expr(vec![
+                        type_expr_null(type_int()), // int?
+                        type_expr_non_null(type_bool()),
+                    ])),
+                ))),
+            )),
         ),
     );
 }
 
 #[test]
 fn test_grouping_parentheses_in_type() {
-    type_statement_test("(string)", typ(Type::String));
+    type_statement_test("(string)", type_expr_non_null(type_string()));
 }
 
 #[test]
 fn test_single_element_tuple_with_trailing_comma() {
-    type_statement_test("(string,)", typ(Type::Tuple(vec![typ(Type::String)])));
+    type_statement_test(
+        "(string,)",
+        type_expr_non_null(type_tuple(vec![type_string()])),
+    );
 }
 
 #[test]
 fn test_multi_element_tuple_with_trailing_comma() {
     type_statement_test(
         "(int, bool,)",
-        typ(Type::Tuple(vec![typ(Type::Int), typ(Type::Boolean)])),
+        type_expr_non_null(type_tuple(vec![type_int(), type_bool()])),
     );
 }
 
@@ -161,10 +158,15 @@ fn test_multi_element_tuple_with_trailing_comma() {
 fn test_nullable_function_type() {
     type_statement_test(
         "(fn(s string) bool)?",
-        null_typ(Type::Function(
+        type_expr_null(type_function(
             None,
-            vec![parameter("s".into(), typ(Type::String), None, None)],
-            opt_expr(typ(Type::Boolean)),
+            vec![parameter(
+                "s".into(),
+                type_expr_non_null(type_string()),
+                None,
+                None,
+            )],
+            opt_expr(type_expr_non_null(type_bool())),
         )),
     );
 }
@@ -176,10 +178,10 @@ fn test_error_ambiguous_nullable_function_return() {
         vec![variable_statement(
             vec![let_variable(
                 "x",
-                opt_expr(typ(Type::Function(
+                opt_expr(type_expr_non_null(type_function(
                     None,
                     vec![],
-                    opt_expr(null_typ(Type::Int)), // The `?` applies to the return type, not the function itself.
+                    opt_expr(type_expr_null(type_int())), // The `?` applies to the return type, not the function itself.
                 ))),
                 None,
             )],
@@ -190,7 +192,7 @@ fn test_error_ambiguous_nullable_function_return() {
 
 #[test]
 fn test_simple_nullable_built_in_type() {
-    type_statement_test("int?", null_typ(Type::Int));
+    type_statement_test("int?", type_expr_null(type_int()));
 }
 
 #[test]
@@ -228,43 +230,43 @@ fn test_error_double_nullable() {
 #[test]
 fn test_primitive_types() {
     let type_map = vec![
-        ("int", Type::Int),
-        ("i8", Type::I8),
-        ("i16", Type::I16),
-        ("i32", Type::I32),
-        ("i64", Type::I64),
-        ("i128", Type::I128),
-        ("u8", Type::U8),
-        ("u16", Type::U16),
-        ("u32", Type::U32),
-        ("u64", Type::U64),
-        ("u128", Type::U128),
-        ("float", Type::Float),
-        ("f32", Type::F32),
-        ("f64", Type::F64),
-        ("string", Type::String),
-        ("bool", Type::Boolean),
-        ("symbol", Type::Symbol),
+        ("int", type_int()),
+        ("i8", type_i8()),
+        ("i16", type_i16()),
+        ("i32", type_i32()),
+        ("i64", type_i64()),
+        ("i128", type_i128()),
+        ("u8", type_u8()),
+        ("u16", type_u16()),
+        ("u32", type_u32()),
+        ("u64", type_u64()),
+        ("u128", type_u128()),
+        ("float", type_float()),
+        ("f32", type_f32()),
+        ("f64", type_f64()),
+        ("string", type_string()),
+        ("bool", type_bool()),
+        ("symbol", type_symbol()),
         (
             "result<int, string>",
-            Type::Result(Box::new(typ(Type::Int)), Box::new(typ(Type::String))),
+            type_result(type_int(), type_string()),
         ),
-        ("list<float>", Type::List(Box::new(typ(Type::Float)))),
-        (
-            "map<string, int>",
-            Type::Map(Box::new(typ(Type::String)), Box::new(typ(Type::Int))),
-        ),
-        ("set<string>", Type::Set(Box::new(typ(Type::String)))),
-        ("future<string>", Type::Future(Box::new(typ(Type::String)))),
+        ("list<float>", type_list(type_float())),
+        ("map<string, int>", type_map(type_string(), type_int())),
+        ("set<string>", type_set(type_string())),
+        ("future<string>", type_future(type_string())),
         (
             "tuple<string, int, float>",
-            Type::Tuple(vec![typ(Type::String), typ(Type::Int), typ(Type::Float)]),
+            type_tuple(vec![type_string(), type_int(), type_float()]),
         ),
     ];
 
     for (name, mapped_type) in type_map {
-        type_statement_test(name, typ(mapped_type.clone()));
-        type_statement_test(format!("{}?", name).as_str(), null_typ(mapped_type.clone()));
+        type_statement_test(name, type_expr_non_null(mapped_type.clone()));
+        type_statement_test(
+            format!("{}?", name).as_str(),
+            type_expr_null(mapped_type.clone()),
+        );
     }
 }
 
@@ -272,13 +274,13 @@ fn test_primitive_types() {
 fn test_function_type_with_named_parameters() {
     type_statement_test(
         "fn(x int, y string?) bool",
-        typ(Type::Function(
+        type_expr_non_null(type_function(
             None, // no generics
             vec![
-                parameter("x".into(), typ(Type::Int), None, None),
-                parameter("y".into(), null_typ(Type::String), None, None),
+                parameter("x".into(), type_expr_non_null(type_int()), None, None),
+                parameter("y".into(), type_expr_null(type_string()), None, None),
             ],
-            opt_expr(typ(Type::Boolean)),
+            opt_expr(type_expr_non_null(type_bool())),
         )),
     );
 }
@@ -289,13 +291,18 @@ fn test_function_type_returning_function_type() {
     // Note: The inner function type must also have named parameters per current parser rules.
     type_statement_test(
         "fn() fn(x int) bool",
-        typ(Type::Function(
+        type_expr_non_null(type_function(
             None,
             vec![],
-            opt_expr(typ(Type::Function(
+            opt_expr(type_expr_non_null(type_function(
                 None,
-                vec![parameter("x".into(), typ(Type::Int), None, None)],
-                opt_expr(typ(Type::Boolean)),
+                vec![parameter(
+                    "x".into(),
+                    type_expr_non_null(type_int()),
+                    None,
+                    None,
+                )],
+                opt_expr(type_expr_non_null(type_bool())),
             ))),
         )),
     );
@@ -305,11 +312,16 @@ fn test_function_type_returning_function_type() {
 fn test_list_of_function_types() {
     type_statement_test(
         "[fn(s string) bool]",
-        typ(Type::List(Box::new(typ(Type::Function(
+        type_expr_non_null(type_list(type_function(
             None,
-            vec![parameter("s".into(), typ(Type::String), None, None)],
-            opt_expr(typ(Type::Boolean)),
-        ))))),
+            vec![parameter(
+                "s".into(),
+                type_expr_non_null(type_string()),
+                None,
+                None,
+            )],
+            opt_expr(type_expr_non_null(type_bool())),
+        ))),
     );
 }
 
@@ -317,15 +329,15 @@ fn test_list_of_function_types() {
 fn test_function_type_with_generics() {
     type_statement_test(
         "fn<T>(item T) T",
-        typ(Type::Function(
+        type_expr_non_null(type_function(
             Some(vec![generic_type("T", None)]),
             vec![parameter(
                 "item".into(),
-                typ(Type::Custom("T".into(), None)),
+                type_expr_non_null(type_custom("T", None)),
                 None,
                 None,
             )],
-            opt_expr(typ(Type::Custom("T".into(), None))),
+            opt_expr(type_expr_non_null(type_custom("T", None))),
         )),
     );
 }
@@ -334,38 +346,38 @@ fn test_function_type_with_generics() {
 fn test_crazy_nested_function_type() {
     type_statement_test(
         "fn<T>(cb fn(item T) bool, items [T]?) (fn() T)?",
-        typ(Type::Function(
+        type_expr_non_null(type_function(
             Some(vec![generic_type("T", None)]), // generics: <T>
             vec![
                 // parameters
                 parameter(
                     "cb".into(),
-                    typ(Type::Function(
+                    type_expr_non_null(type_function(
                         None,
                         vec![parameter(
                             "item".into(),
-                            typ(Type::Custom("T".into(), None)),
+                            type_expr_non_null(type_custom("T", None)),
                             None,
                             None,
                         )],
-                        opt_expr(typ(Type::Boolean)),
+                        opt_expr(type_expr_non_null(type_bool())),
                     )),
                     None,
                     None,
                 ),
                 parameter(
                     "items".into(),
-                    null_typ(Type::List(Box::new(typ(Type::Custom("T".into(), None))))),
+                    type_expr_null(type_list(type_custom("T", None))),
                     None,
                     None,
                 ),
             ],
             // return type: (fn() T)?
-            opt_expr(null_typ(Type::Function(
+            opt_expr(type_expr_null(type_function(
                 // <-- This is now a nullable function, not a tuple
                 None,
                 vec![],
-                opt_expr(typ(Type::Custom("T".into(), None))),
+                opt_expr(type_expr_non_null(type_custom("T", None))),
             ))),
         )),
     );
@@ -378,9 +390,14 @@ fn test_function_type_with_trailing_comma() {
         vec![variable_statement(
             vec![let_variable(
                 "x",
-                opt_expr(typ(Type::Function(
+                opt_expr(type_expr_non_null(type_function(
                     None,
-                    vec![parameter("a".into(), typ(Type::Int), None, None)],
+                    vec![parameter(
+                        "a".into(),
+                        type_expr_non_null(type_int()),
+                        None,
+                        None,
+                    )],
                     None,
                 ))),
                 None,

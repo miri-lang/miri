@@ -3,6 +3,7 @@
 
 use super::utils::*;
 use miri::ast::factory::*;
+use miri::ast::types::TypeDeclarationKind;
 use miri::ast::*;
 use miri::error::syntax::SyntaxErrorKind;
 
@@ -14,7 +15,12 @@ fn square(x int)
     x * x
 ",
         vec![func("square")
-            .params(vec![parameter("x".into(), typ(Type::Int), None, None)])
+            .params(vec![parameter(
+                "x".into(),
+                type_expr_non_null(type_int()),
+                None,
+                None,
+            )])
             .build(block(vec![expression_statement(binary(
                 identifier("x".into()),
                 BinaryOp::Mul,
@@ -33,7 +39,7 @@ fn square(x int > 0)
         vec![func("square")
             .params(vec![parameter(
                 "x".into(),
-                typ(Type::Int),
+                type_expr_non_null(type_int()),
                 opt_expr(guard(GuardOp::GreaterThan, int_literal_expression(0))),
                 None,
             )])
@@ -54,11 +60,11 @@ fn square(x int > 0) int: x * x
         vec![func("square")
             .params(vec![parameter(
                 "x".into(),
-                typ(Type::Int),
+                type_expr_non_null(type_int()),
                 opt_expr(guard(GuardOp::GreaterThan, int_literal_expression(0))),
                 None,
             )])
-            .return_type(typ(Type::Int))
+            .return_type(type_expr_non_null(type_int()))
             .build(expression_statement(binary(
                 identifier("x".into()),
                 BinaryOp::Mul,
@@ -74,7 +80,7 @@ fn test_function_no_parameters() {
 fn get_answer() int: 42
 ",
         vec![func("get_answer")
-            .return_type(typ(Type::Int))
+            .return_type(type_expr_non_null(type_int()))
             .build(expression_statement(int_literal_expression(42)))],
     );
 }
@@ -88,8 +94,8 @@ fn add(a int, b int)
 ",
         vec![func("add")
             .params(vec![
-                parameter("a".into(), typ(Type::Int), None, None),
-                parameter("b".into(), typ(Type::Int), None, None),
+                parameter("a".into(), type_expr_non_null(type_int()), None, None),
+                parameter("b".into(), type_expr_non_null(type_int()), None, None),
             ])
             .build(block(vec![return_statement(opt_expr(binary(
                 identifier("a".into()),
@@ -191,7 +197,7 @@ fn my_func<T extends SomeClass>()
         vec![func("my_func")
             .generics(vec![generic_type_with_kind(
                 "T",
-                opt_expr(typ(Type::Custom("SomeClass".into(), None))),
+                opt_expr(type_expr_non_null(type_custom("SomeClass", None))),
                 TypeDeclarationKind::Extends,
             )])
             .params(vec![])
@@ -211,7 +217,7 @@ fn my_func<K, V extends SomeTrait>()
                 generic_type("K", None),
                 generic_type_with_kind(
                     "V",
-                    opt_expr(typ(Type::Custom("SomeTrait".into(), None))),
+                    opt_expr(type_expr_non_null(type_custom("SomeTrait", None))),
                     TypeDeclarationKind::Extends,
                 ),
             ])
@@ -230,11 +236,11 @@ fn process<T>(data T) T: data
             .generics(vec![generic_type("T", None)])
             .params(vec![parameter(
                 "data".into(),
-                typ(Type::Custom("T".into(), None)),
+                type_expr_non_null(type_custom("T", None)),
                 None,
                 None,
             )])
-            .return_type(typ(Type::Custom("T".into(), None)))
+            .return_type(type_expr_non_null(type_custom("T", None)))
             .build(expression_statement(identifier("data")))],
     );
 }
@@ -275,7 +281,12 @@ fn my_func /* comment */ (a int)
     // body
 ",
         vec![func("my_func")
-            .params(vec![parameter("a".into(), typ(Type::Int), None, None)])
+            .params(vec![parameter(
+                "a".into(),
+                type_expr_non_null(type_int()),
+                None,
+                None,
+            )])
             .build_empty_body()],
     );
 }
@@ -428,13 +439,13 @@ fn my_func(a int = 10, b bool = true)
             .params(vec![
                 parameter(
                     "a".into(),
-                    typ(Type::Int),
+                    type_expr_non_null(type_int()),
                     None,
                     opt_expr(int_literal_expression(10)),
                 ),
                 parameter(
                     "b".into(),
-                    typ(Type::Boolean),
+                    type_expr_non_null(type_bool()),
                     None,
                     opt_expr(boolean_literal(true)),
                 ),
@@ -467,14 +478,11 @@ fn process<T>(data list<T>) list<T>: data
             .generics(vec![generic_type("T", None)])
             .params(vec![parameter(
                 "data".into(),
-                typ(Type::List(Box::new(typ(Type::Custom("T".into(), None))))),
+                type_expr_non_null(type_list(type_custom("T", None))),
                 None,
                 None,
             )])
-            .return_type(typ(Type::List(Box::new(typ(Type::Custom(
-                "T".into(),
-                None,
-            ))))))
+            .return_type(type_expr_non_null(type_list(type_custom("T", None))))
             .build(expression_statement(identifier("data")))],
     );
 }
@@ -488,8 +496,8 @@ fn my_func(a int, b string,)
 ",
         vec![func("my_func")
             .params(vec![
-                parameter("a".into(), typ(Type::Int), None, None),
-                parameter("b".into(), typ(Type::String), None, None),
+                parameter("a".into(), type_expr_non_null(type_int()), None, None),
+                parameter("b".into(), type_expr_non_null(type_string()), None, None),
             ])
             .build_empty_body()],
     );

@@ -2,7 +2,7 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use super::utils::*;
-use miri::ast::Type;
+use miri::ast::factory::*;
 
 #[test]
 fn test_for_loop_range() {
@@ -98,7 +98,7 @@ let l = [1, 2, 3]
 for x in l
     let y = x
 ",
-        vec![("y", Type::Int)],
+        vec![("y", type_int())],
     );
 }
 
@@ -109,7 +109,7 @@ fn test_for_loop_string() {
 for c in \"hello\"
     let y = c
 ",
-        vec![("y", Type::String)],
+        vec![("y", type_string())],
     );
 }
 
@@ -123,7 +123,7 @@ for entry in m
     let k = entry[0]
     let v = entry[1]
 ",
-        vec![("k", Type::String), ("v", Type::Int)],
+        vec![("k", type_string()), ("v", type_int())],
     );
 }
 
@@ -135,7 +135,7 @@ let s = {1, 2, 3}
 for x in s
     let y = x
 ",
-        vec![("y", Type::Int)],
+        vec![("y", type_int())],
     );
 }
 
@@ -148,7 +148,7 @@ for k, v in m
     let key = k
     let val = v
 ",
-        vec![("key", Type::String), ("val", Type::Int)],
+        vec![("key", type_string()), ("val", type_int())],
     );
 }
 
@@ -161,7 +161,7 @@ for n, s in l
     let num = n
     let str = s
 ",
-        vec![("num", Type::Int), ("str", Type::String)],
+        vec![("num", type_int()), ("str", type_string())],
     );
 }
 

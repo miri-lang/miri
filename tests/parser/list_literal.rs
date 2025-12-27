@@ -76,7 +76,12 @@ fn test_method_call_on_list_literal() {
                 identifier("each"),
             ),
             vec![lambda()
-                .params(vec![parameter("el".into(), typ(Type::Int), None, None)])
+                .params(vec![parameter(
+                    "el".into(),
+                    type_expr_non_null(type_int()),
+                    None,
+                    None,
+                )])
                 .build_lambda(expression_statement(call(
                     identifier("print"),
                     vec![identifier("el")],

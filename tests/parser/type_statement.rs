@@ -3,6 +3,7 @@
 
 use super::utils::*;
 use miri::ast::factory::*;
+use miri::ast::types::TypeDeclarationKind;
 use miri::ast::*;
 use miri::error::syntax::SyntaxErrorKind;
 
@@ -17,7 +18,7 @@ type MyInt is int
                 "MyInt",
                 None,
                 TypeDeclarationKind::Is,
-                opt_expr(typ(Type::Int)),
+                opt_expr(type_expr_non_null(type_int())),
             )],
             MemberVisibility::Public,
         )],
@@ -35,9 +36,9 @@ type UserMap is {string: User?}
                 "UserMap",
                 None,
                 TypeDeclarationKind::Is,
-                opt_expr(typ(Type::Map(
-                    Box::new(typ(Type::String)),
-                    Box::new(null_typ(Type::Custom("User".into(), None))),
+                opt_expr(type_expr_non_null(type_map_expr(
+                    type_expr_non_null(type_string()),
+                    type_expr_null(type_custom("User", None)),
                 ))),
             )],
             MemberVisibility::Public,
@@ -72,7 +73,7 @@ type T extends SomeClass
                 "T",
                 None,
                 TypeDeclarationKind::Extends,
-                opt_expr(typ(Type::Custom("SomeClass".into(), None))),
+                opt_expr(type_expr_non_null(type_custom("SomeClass", None))),
             )],
             MemberVisibility::Public,
         )],
@@ -92,13 +93,13 @@ type T, U extends Serializable, X implements IGraph
                     "U",
                     None,
                     TypeDeclarationKind::Extends,
-                    opt_expr(typ(Type::Custom("Serializable".into(), None))),
+                    opt_expr(type_expr_non_null(type_custom("Serializable", None))),
                 ),
                 type_declaration(
                     "X",
                     None,
                     TypeDeclarationKind::Implements,
-                    opt_expr(typ(Type::Custom("IGraph".into(), None))),
+                    opt_expr(type_expr_non_null(type_custom("IGraph", None))),
                 ),
             ],
             MemberVisibility::Public,
@@ -148,7 +149,7 @@ fn test_protected_type_alias() {
                 "MyInt",
                 None,
                 TypeDeclarationKind::Is,
-                opt_expr(typ(Type::Int)),
+                opt_expr(type_expr_non_null(type_int())),
             )],
             MemberVisibility::Protected,
         )],
@@ -164,7 +165,7 @@ fn test_generic_type_alias() {
                 "Optional",
                 Some(vec![generic_type("T", None)]),
                 TypeDeclarationKind::Is,
-                opt_expr(null_typ(Type::Custom("T".into(), None))),
+                opt_expr(type_expr_null(type_custom("T", None))),
             )],
             MemberVisibility::Public,
         )],

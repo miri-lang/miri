@@ -2,7 +2,7 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use super::utils::*;
-use miri::ast::Type;
+use miri::ast::factory::*;
 
 #[test]
 fn test_function_declaration_and_call() {
@@ -12,7 +12,7 @@ fn add(a int, b int) int
 
 add(1, 2)
     ";
-    check_expr_type(source, Type::Int);
+    check_expr_type(source, type_int());
 }
 
 #[test]
@@ -69,7 +69,7 @@ fn add(a int, b int) int
 
 add(add(1, 2), 3)
     ";
-    check_expr_type(source, Type::Int);
+    check_expr_type(source, type_int());
 }
 
 #[test]
@@ -81,7 +81,7 @@ fn factorial(n int) int
 
 factorial(5)
     ";
-    check_expr_type(source, Type::Int);
+    check_expr_type(source, type_int());
 }
 
 #[test]
@@ -93,7 +93,7 @@ fn add(a int, b int) int
 
 add(1, 2)
     ";
-    check_expr_type(source, Type::Int);
+    check_expr_type(source, type_int());
 }
 
 #[test]
@@ -103,7 +103,7 @@ fn add(a int, b int) int: a + b
 
 add(1, 2)
     ";
-    check_expr_type(source, Type::Int);
+    check_expr_type(source, type_int());
 }
 
 #[test]
@@ -144,7 +144,7 @@ fn foo() int
 
 foo()
     ";
-    check_expr_type(source, Type::Int);
+    check_expr_type(source, type_int());
 }
 
 #[test]
@@ -225,7 +225,7 @@ fn id<T>(x T) T
 
 id(1)
 ",
-        Type::Int,
+        type_int(),
     );
 }
 
@@ -241,7 +241,7 @@ fn square(x int) int
 
 apply(square, 5)
 ",
-        Type::Int,
+        type_int(),
     );
 }
 
@@ -322,7 +322,7 @@ fn first<T>(list [T]) T
 
 first([1, 2, 3])
 ",
-        Type::Int,
+        type_int(),
     );
 }
 
@@ -335,7 +335,7 @@ fn flatten<T>(list [[T]]) [T]
 
 flatten([[1], [2]])
 ",
-        Type::List(Box::new(type_expr(Type::Int))),
+        type_list(type_int()),
     );
 }
 
@@ -348,7 +348,7 @@ fn get_value<K, V>(map {K: V}, key K) V
 
 get_value({\"a\": 1}, \"a\")
 ",
-        Type::Int,
+        type_int(),
     );
 }
 

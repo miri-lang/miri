@@ -2,25 +2,20 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use super::utils::*;
-use miri::ast::{ExpressionKind, IdNode, Type};
-use miri::error::syntax::Span;
-
-fn type_expr(t: Type) -> miri::ast::Expression {
-    IdNode::new(0, ExpressionKind::Type(Box::new(t), false), Span::default())
-}
+use miri::ast::factory::*;
 
 #[test]
 fn test_boolean_literals() {
-    check_exprs_type(vec![("true", Type::Boolean), ("false", Type::Boolean)]);
+    check_exprs_type(vec![("true", type_bool()), ("false", type_bool())]);
 }
 
 #[test]
 fn test_boolean_expressions() {
     check_exprs_type(vec![
-        ("true and false", Type::Boolean),
-        ("true or false", Type::Boolean),
-        ("not true", Type::Boolean),
-        ("true and (false or true)", Type::Boolean),
+        ("true and false", type_bool()),
+        ("true or false", type_bool()),
+        ("not true", type_bool()),
+        ("true and (false or true)", type_bool()),
     ]);
 }
 
@@ -32,23 +27,19 @@ let x = true and false
 let y = not x
 let z = x or y
 ",
-        vec![
-            ("x", Type::Boolean),
-            ("y", Type::Boolean),
-            ("z", Type::Boolean),
-        ],
+        vec![("x", type_bool()), ("y", type_bool()), ("z", type_bool())],
     );
 }
 
 #[test]
 fn test_equality() {
     check_exprs_type(vec![
-        ("true == false", Type::Boolean),
-        ("true != false", Type::Boolean),
-        ("1 == 1", Type::Boolean),
-        ("1 != 2", Type::Boolean),
-        ("1.5 == 1.5", Type::Boolean),
-        // ("\"a\" == \"b\"", Type::Boolean), // TODO: Enable when string equality is supported
+        ("true == false", type_bool()),
+        ("true != false", type_bool()),
+        ("1 == 1", type_bool()),
+        ("1 != 2", type_bool()),
+        ("1.5 == 1.5", type_bool()),
+        // ("\"a\" == \"b\"", type_bool()), // TODO: Enable when string equality is supported
     ]);
 }
 
@@ -59,7 +50,7 @@ fn test_comparison() {
 let x = 1 > 2
 let y = 1.5 <= 2.5
 ",
-        vec![("x", Type::Boolean), ("y", Type::Boolean)],
+        vec![("x", type_bool()), ("y", type_bool())],
     );
 }
 
@@ -70,7 +61,7 @@ fn test_explicit_type() {
 let x bool = true
 let y bool = false
 ",
-        vec![("x", Type::Boolean), ("y", Type::Boolean)],
+        vec![("x", type_bool()), ("y", type_bool())],
     );
 }
 
@@ -121,7 +112,7 @@ fn test_boolean_comparison() {
         "
 let x = true > false
 ",
-        vec![("x", Type::Boolean)],
+        vec![("x", type_bool())],
     );
 }
 
@@ -214,10 +205,10 @@ f(1)
 #[test]
 fn test_boolean_comparison_comprehensive() {
     check_exprs_type(vec![
-        ("true < false", Type::Boolean),
-        ("true <= false", Type::Boolean),
-        ("true > false", Type::Boolean),
-        ("true >= false", Type::Boolean),
+        ("true < false", type_bool()),
+        ("true <= false", type_bool()),
+        ("true > false", type_bool()),
+        ("true >= false", type_bool()),
     ]);
 }
 
@@ -229,7 +220,7 @@ match true
     true: 1
     false: 0
 ",
-        Type::Int,
+        type_int(),
     );
 }
 
@@ -250,10 +241,7 @@ fn test_boolean_map_key() {
         "
 {true: 1, false: 0}
 ",
-        Type::Map(
-            Box::new(type_expr(Type::Boolean)),
-            Box::new(type_expr(Type::Int)),
-        ),
+        type_map(type_bool(), type_int()),
     );
 }
 
@@ -268,63 +256,41 @@ fn predicate(x int) bool: x > 0
     predicate(25) or 1 - 1 == 0: 'another crazy predicate'
 }
 ",
-        Type::Map(
-            Box::new(type_expr(Type::Boolean)),
-            Box::new(type_expr(Type::String)),
-        ),
+        type_map(type_bool(), type_string()),
     );
 }
 
 #[test]
 fn test_boolean_list() {
-    check_expr_type(
-        "[true, false, true]",
-        Type::List(Box::new(type_expr(Type::Boolean))),
-    );
+    check_expr_type("[true, false, true]", type_list(type_bool()));
 }
 
 #[test]
 fn test_boolean_list_expression() {
-    check_expr_type(
-        "[1 > 0, 1 == 1, true or false]",
-        Type::List(Box::new(type_expr(Type::Boolean))),
-    );
+    check_expr_type("[1 > 0, 1 == 1, true or false]", type_list(type_bool()));
 }
 
 #[test]
 fn test_boolean_tuple() {
-    check_expr_type(
-        "(true, false)",
-        Type::Tuple(vec![type_expr(Type::Boolean), type_expr(Type::Boolean)]),
-    );
+    check_expr_type("(true, false)", type_tuple(vec![type_bool(), type_bool()]));
 }
 
 #[test]
 fn test_boolean_tuple_mixed() {
     check_expr_type(
         "(true, 1, \"s\")",
-        Type::Tuple(vec![
-            type_expr(Type::Boolean),
-            type_expr(Type::Int),
-            type_expr(Type::String),
-        ]),
+        type_tuple(vec![type_bool(), type_int(), type_string()]),
     );
 }
 
 #[test]
 fn test_boolean_set() {
-    check_expr_type(
-        "{true, false}",
-        Type::Set(Box::new(type_expr(Type::Boolean))),
-    );
+    check_expr_type("{true, false}", type_set(type_bool()));
 }
 
 #[test]
 fn test_boolean_set_expression() {
-    check_expr_type(
-        "{1 > 0, 1 == 1}",
-        Type::Set(Box::new(type_expr(Type::Boolean))),
-    );
+    check_expr_type("{1 > 0, 1 == 1}", type_set(type_bool()));
 }
 
 #[test]
@@ -334,21 +300,21 @@ fn test_nullable_boolean_assignment() {
 let x bool? = true
 x
 ",
-        Type::Nullable(Box::new(Type::Boolean)),
+        type_null(type_bool()),
     );
     check_expr_type(
         "
 let y bool? = false
 y
 ",
-        Type::Nullable(Box::new(Type::Boolean)),
+        type_null(type_bool()),
     );
     check_expr_type(
         "
 let z bool? = None
 z
 ",
-        Type::Nullable(Box::new(Type::Boolean)),
+        type_null(type_bool()),
     );
 }
 

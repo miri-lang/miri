@@ -4,6 +4,7 @@
 use std::vec;
 
 use miri::ast::factory::*;
+use miri::ast::types::{Type, TypeKind};
 use miri::ast::*;
 use miri::error::syntax::{SyntaxError, SyntaxErrorKind};
 use miri::lexer::Lexer;
@@ -204,4 +205,16 @@ pub fn run_parser_error_tests(inputs: Vec<&str>, expected_kind: &SyntaxErrorKind
     for input in inputs {
         parser_error_test(input, &expected_kind);
     }
+}
+
+pub fn type_list_expr(inner: Expression) -> Type {
+    make_type(TypeKind::List(Box::new(inner)))
+}
+
+pub fn type_map_expr(key: Expression, value: Expression) -> Type {
+    make_type(TypeKind::Map(Box::new(key), Box::new(value)))
+}
+
+pub fn type_tuple_expr(elements: Vec<Expression>) -> Type {
+    make_type(TypeKind::Tuple(elements))
 }

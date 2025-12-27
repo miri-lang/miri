@@ -2,34 +2,34 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use super::utils::*;
-use miri::ast::Type;
+use miri::ast::factory::*;
 
 #[test]
 fn test_string_literals() {
     check_exprs_type(vec![
-        ("\"hello\"", Type::String),
-        ("\"\"", Type::String),
-        ("'hello'", Type::String),
+        ("\"hello\"", type_string()),
+        ("\"\"", type_string()),
+        ("'hello'", type_string()),
     ]);
 }
 
 #[test]
 fn test_string_concatenation() {
     check_exprs_type(vec![
-        ("\"hello\" + \" world\"", Type::String),
-        ("'a' + 'b'", Type::String),
+        ("\"hello\" + \" world\"", type_string()),
+        ("'a' + 'b'", type_string()),
     ]);
 }
 
 #[test]
 fn test_string_comparisons() {
     check_exprs_type(vec![
-        ("\"a\" == \"b\"", Type::Boolean),
-        ("\"a\" != \"b\"", Type::Boolean),
-        ("\"a\" < \"b\"", Type::Boolean),
-        ("\"a\" <= \"b\"", Type::Boolean),
-        ("\"a\" > \"b\"", Type::Boolean),
-        ("\"a\" >= \"b\"", Type::Boolean),
+        ("\"a\" == \"b\"", type_bool()),
+        ("\"a\" != \"b\"", type_bool()),
+        ("\"a\" < \"b\"", type_bool()),
+        ("\"a\" <= \"b\"", type_bool()),
+        ("\"a\" > \"b\"", type_bool()),
+        ("\"a\" >= \"b\"", type_bool()),
     ]);
 }
 
@@ -40,7 +40,7 @@ fn test_explicit_string_type() {
 let x string = \"hello\"
 let y string = 'world'
 ",
-        vec![("x", Type::String), ("y", Type::String)],
+        vec![("x", type_string()), ("y", type_string())],
     );
 }
 
@@ -51,7 +51,7 @@ fn test_string_assignment_operators() {
 var x = \"hello\"
 x += \" world\"
 ",
-        vec![("x", Type::String)],
+        vec![("x", type_string())],
     );
 }
 
@@ -89,9 +89,9 @@ x = 1
 #[test]
 fn test_formatted_string() {
     check_exprs_type(vec![
-        ("f\"hello {1}\"", Type::String),
-        ("f\"val: {true}\"", Type::String),
-        ("f\"{1} + {2} = {3}\"", Type::String),
+        ("f\"hello {1}\"", type_string()),
+        ("f\"val: {true}\"", type_string()),
+        ("f\"{1} + {2} = {3}\"", type_string()),
     ]);
 }
 
@@ -102,13 +102,13 @@ fn test_formatted_string_with_variables() {
 let name = \"World\"
 let greeting = f\"Hello {name}\"
 ",
-        vec![("greeting", Type::String)],
+        vec![("greeting", type_string())],
     );
 }
 
 #[test]
 fn test_formatted_string_nested_expressions() {
-    check_exprs_type(vec![("f\"result: {1 + 2}\"", Type::String)]);
+    check_exprs_type(vec![("f\"result: {1 + 2}\"", type_string())]);
 }
 
 #[test]
@@ -139,8 +139,8 @@ let s = f\"Hello {get_name()}\"
 
 #[test]
 fn test_formatted_string_complex_expression() {
-    check_expr_type("f\"Value: {1 + 2 * 3}\"", Type::String);
-    check_expr_type("f\"Bool: {true and false}\"", Type::String);
+    check_expr_type("f\"Value: {1 + 2 * 3}\"", type_string());
+    check_expr_type("f\"Bool: {true and false}\"", type_string());
 }
 
 #[test]
@@ -156,12 +156,12 @@ let s = f\"Point: {p.x}, {p.y}\"
 
 #[test]
 fn test_formatted_string_empty() {
-    check_expr_type("f\"\"", Type::String);
+    check_expr_type("f\"\"", type_string());
 }
 
 #[test]
 fn test_formatted_string_only_expression() {
-    check_expr_type("f\"{1}\"", Type::String);
+    check_expr_type("f\"{1}\"", type_string());
 }
 
 #[test]
@@ -183,19 +183,19 @@ fn test_formatted_string_multiline() {
     Line 1
     Line 2 {1}
     \"",
-        Type::String,
+        type_string(),
     );
 }
 
 #[test]
 fn test_string_indexing() {
-    check_expr_type("\"hello\"[0]", Type::String);
+    check_expr_type("\"hello\"[0]", type_string());
     check_expr_type(
         "
 let s = \"hello\"
 s[1]
 ",
-        Type::String,
+        type_string(),
     );
 }
 
@@ -206,24 +206,24 @@ fn test_string_indexing_invalid_index() {
 
 #[test]
 fn test_string_membership() {
-    check_expr_type("\"a\" in \"abc\"", Type::Boolean);
+    check_expr_type("\"a\" in \"abc\"", type_bool());
 }
 
 #[test]
 fn test_string_multiplication() {
-    check_expr_type("\"a\" * 3", Type::String);
-    check_expr_type("3 * \"a\"", Type::String);
+    check_expr_type("\"a\" * 3", type_string());
+    check_expr_type("3 * \"a\"", type_string());
 }
 
 #[test]
 fn test_string_slicing() {
-    check_expr_type("\"hello\"[0..1]", Type::String);
-    check_expr_type("\"hello\"[0..=1]", Type::String);
+    check_expr_type("\"hello\"[0..1]", type_string());
+    check_expr_type("\"hello\"[0..=1]", type_string());
 }
 
 #[test]
 fn test_string_property_access() {
-    check_expr_type("\"hello\".length", Type::Int);
+    check_expr_type("\"hello\".length", type_int());
 }
 
 #[test]

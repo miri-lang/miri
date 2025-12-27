@@ -4,6 +4,8 @@
 use super::context::{Context, TypeDefinition};
 use super::TypeChecker;
 use crate::ast::factory as ast_factory;
+use crate::ast::factory::make_type;
+use crate::ast::types::{Type, TypeDeclarationKind, TypeKind};
 use crate::ast::*;
 use crate::error::syntax::Span;
 use crate::error::utils::find_best_match;
@@ -71,7 +73,7 @@ impl TypeChecker {
             ExpressionKind::EnumValue(name, values) => {
                 self.infer_enum_value(name, values, expr.span.clone(), context)
             }
-            _ => Type::Int, // Default fallback for unimplemented expressions
+            _ => ast_factory::make_type(TypeKind::Int), // Default fallback for unimplemented expressions
         };
 
         self.types.insert(expr.id, ty.clone());
@@ -89,56 +91,64 @@ impl TypeChecker {
             if id_name == "Ok" {
                 if values.len() != 1 {
                     self.report_error("Ok expects exactly 1 argument".to_string(), span);
-                    return Type::Error;
+                    return ast_factory::make_type(TypeKind::Error);
                 }
                 let val_type = self.infer_expression(&values[0], context);
                 // result<T, Void>
-                return Type::Result(
+                return ast_factory::make_type(TypeKind::Result(
                     Box::new(ast_factory::expr_with_span(
                         ExpressionKind::Type(Box::new(val_type), false),
                         span.clone(),
                     )),
                     Box::new(ast_factory::expr_with_span(
-                        ExpressionKind::Type(Box::new(Type::Void), false),
+                        ExpressionKind::Type(
+                            Box::new(ast_factory::make_type(TypeKind::Void)),
+                            false,
+                        ),
                         span.clone(),
                     )),
-                );
+                ));
             } else if id_name == "Err" {
                 if values.len() != 1 {
                     self.report_error("Err expects exactly 1 argument".to_string(), span);
-                    return Type::Error;
+                    return ast_factory::make_type(TypeKind::Error);
                 }
                 let val_type = self.infer_expression(&values[0], context);
                 // result<Void, E>
-                return Type::Result(
+                return ast_factory::make_type(TypeKind::Result(
                     Box::new(ast_factory::expr_with_span(
-                        ExpressionKind::Type(Box::new(Type::Void), false),
+                        ExpressionKind::Type(
+                            Box::new(ast_factory::make_type(TypeKind::Void)),
+                            false,
+                        ),
                         span.clone(),
                     )),
                     Box::new(ast_factory::expr_with_span(
                         ExpressionKind::Type(Box::new(val_type), false),
                         span.clone(),
                     )),
-                );
+                ));
             }
         }
 
         // TODO: Handle user-defined enums
-        Type::Error
+        ast_factory::make_type(TypeKind::Error)
     }
 
     fn infer_literal(&self, lit: &Literal) -> Type {
         match lit {
-            Literal::Integer(_) => Type::Int,
+            Literal::Integer(_) => ast_factory::make_type(TypeKind::Int),
             Literal::Float(f) => match f {
-                FloatLiteral::F32(_) => Type::F32,
-                FloatLiteral::F64(_) => Type::F64,
+                FloatLiteral::F32(_) => ast_factory::make_type(TypeKind::F32),
+                FloatLiteral::F64(_) => ast_factory::make_type(TypeKind::F64),
             },
-            Literal::Boolean(_) => Type::Boolean,
-            Literal::String(_) => Type::String,
-            Literal::Symbol(_) => Type::Symbol,
-            Literal::Regex(_) => Type::Custom("Regex".into(), None),
-            Literal::None => Type::Nullable(Box::new(Type::Void)),
+            Literal::Boolean(_) => ast_factory::make_type(TypeKind::Boolean),
+            Literal::String(_) => ast_factory::make_type(TypeKind::String),
+            Literal::Symbol(_) => ast_factory::make_type(TypeKind::Symbol),
+            Literal::Regex(_) => ast_factory::make_type(TypeKind::Custom("Regex".into(), None)),
+            Literal::None => ast_factory::make_type(TypeKind::Nullable(Box::new(
+                ast_factory::make_type(TypeKind::Void),
+            ))),
         }
     }
 
@@ -160,7 +170,7 @@ impl TypeChecker {
             Ok(t) => t,
             Err(msg) => {
                 self.report_error(msg, span);
-                Type::Error
+                ast_factory::make_type(TypeKind::Error)
             }
         }
     }
@@ -188,24 +198,33 @@ impl TypeChecker {
             Ok(t) => t,
             Err(msg) => {
                 self.report_error(msg, span);
-                Type::Error
+                ast_factory::make_type(TypeKind::Error)
             }
         }
     }
 
     fn infer_identifier(&mut self, name: &str, span: Span, context: &Context) -> Type {
         if name == "None" {
-            return Type::Nullable(Box::new(Type::Void));
+            return ast_factory::make_type(TypeKind::Nullable(Box::new(ast_factory::make_type(
+                TypeKind::Void,
+            ))));
         }
         if name == "Ok" {
             // fn<T>(value T): result<T, Void>
-            let t_param = Type::Generic("T".to_string(), None, TypeDeclarationKind::None);
-            let t_expr = ast_factory::typ(t_param.clone());
-            let void_expr = ast_factory::typ(Type::Void);
+            let t_param = ast_factory::make_type(TypeKind::Generic(
+                "T".to_string(),
+                None,
+                TypeDeclarationKind::None,
+            ));
+            let t_expr = ast_factory::type_expr_non_null(t_param.clone());
+            let void_expr = ast_factory::type_expr_non_null(ast_factory::make_type(TypeKind::Void));
 
-            let return_type = Type::Result(Box::new(t_expr.clone()), Box::new(void_expr));
+            let return_type = ast_factory::make_type(TypeKind::Result(
+                Box::new(t_expr.clone()),
+                Box::new(void_expr),
+            ));
 
-            return Type::Function(
+            return ast_factory::make_type(TypeKind::Function(
                 Some(vec![t_expr.clone()]),
                 vec![Parameter {
                     name: "value".to_string(),
@@ -213,18 +232,25 @@ impl TypeChecker {
                     guard: None,
                     default_value: None,
                 }],
-                Some(Box::new(ast_factory::typ(return_type))),
-            );
+                Some(Box::new(ast_factory::type_expr_non_null(return_type))),
+            ));
         }
         if name == "Err" {
             // fn<E>(error E): result<Void, E>
-            let e_param = Type::Generic("E".to_string(), None, TypeDeclarationKind::None);
-            let e_expr = ast_factory::typ(e_param.clone());
-            let void_expr = ast_factory::typ(Type::Void);
+            let e_param = ast_factory::make_type(TypeKind::Generic(
+                "E".to_string(),
+                None,
+                TypeDeclarationKind::None,
+            ));
+            let e_expr = ast_factory::type_expr_non_null(e_param.clone());
+            let void_expr = ast_factory::type_expr_non_null(ast_factory::make_type(TypeKind::Void));
 
-            let return_type = Type::Result(Box::new(void_expr), Box::new(e_expr.clone()));
+            let return_type = ast_factory::make_type(TypeKind::Result(
+                Box::new(void_expr),
+                Box::new(e_expr.clone()),
+            ));
 
-            return Type::Function(
+            return ast_factory::make_type(TypeKind::Function(
                 Some(vec![e_expr.clone()]),
                 vec![Parameter {
                     name: "error".to_string(),
@@ -232,8 +258,8 @@ impl TypeChecker {
                     guard: None,
                     default_value: None,
                 }],
-                Some(Box::new(ast_factory::typ(return_type))),
-            );
+                Some(Box::new(ast_factory::type_expr_non_null(return_type))),
+            ));
         }
 
         let info_opt = context
@@ -243,7 +269,7 @@ impl TypeChecker {
         if let Some(info) = info_opt {
             if !self.check_visibility(&info.visibility, &info.module) {
                 self.report_error(format!("Variable '{}' is not visible", name), span);
-                return Type::Error;
+                return ast_factory::make_type(TypeKind::Error);
             }
             info.ty
         } else {
@@ -265,7 +291,7 @@ impl TypeChecker {
             } else {
                 self.report_error(format!("Undefined variable: {}", name), span);
             }
-            Type::Error
+            ast_factory::make_type(TypeKind::Error)
         }
     }
 
@@ -289,7 +315,7 @@ impl TypeChecker {
                     self.infer_identifier(name, id_expr.span.clone(), context)
                 } else {
                     self.report_error("Invalid assignment target".to_string(), span.clone());
-                    Type::Error
+                    ast_factory::make_type(TypeKind::Error)
                 }
             }
             LeftHandSideExpression::Member(member_expr) => {
@@ -302,7 +328,7 @@ impl TypeChecker {
                     }
                     self.infer_member(obj, prop, member_expr.span.clone(), context)
                 } else {
-                    Type::Error
+                    ast_factory::make_type(TypeKind::Error)
                 }
             }
             LeftHandSideExpression::Index(index_expr) => {
@@ -315,7 +341,7 @@ impl TypeChecker {
                     }
                     self.infer_index(obj, index, index_expr.span.clone(), context)
                 } else {
-                    Type::Error
+                    ast_factory::make_type(TypeKind::Error)
                 }
             }
         };
@@ -323,7 +349,7 @@ impl TypeChecker {
         if !self.are_compatible(&lhs_type, &rhs_type, context) {
             self.report_error(
                 format!(
-                    "Type mismatch in assignment: cannot assign {:?} to {:?}",
+                    "Type mismatch in assignment: cannot assign {} to {}",
                     rhs_type, lhs_type
                 ),
                 span,
@@ -371,8 +397,8 @@ impl TypeChecker {
             }
         }
 
-        match func_type {
-            Type::Function(generics, params, return_type_expr) => {
+        match &func_type.kind {
+            TypeKind::Function(generics, params, return_type_expr) => {
                 let mut generic_map = std::collections::HashMap::new();
 
                 if let Some(gens) = &generics {
@@ -382,7 +408,7 @@ impl TypeChecker {
 
                 let mut pos_iter = positional_args.iter();
 
-                for param in &params {
+                for param in params {
                     let param_type = self.resolve_type_expression(&param.typ, context);
 
                     let (arg_expr, arg_type) = if let Some((expr, ty)) = pos_iter.next() {
@@ -407,7 +433,7 @@ impl TypeChecker {
                         if !self.are_compatible(&concrete_param_type, &arg_type, context) {
                             self.report_error(
                                 format!(
-                                    "Type mismatch for argument '{}': expected {:?}, got {:?}",
+                                    "Type mismatch for argument '{}': expected {}, got {}",
                                     param.name, concrete_param_type, arg_type
                                 ),
                                 arg_expr.map(|e| e.span.clone()).unwrap_or(span.clone()),
@@ -437,14 +463,14 @@ impl TypeChecker {
                 }
 
                 let return_type = if let Some(rt_expr) = return_type_expr {
-                    let rt = self.resolve_type_expression(&rt_expr, context);
+                    let rt = self.resolve_type_expression(rt_expr, context);
                     if generics.is_some() {
                         self.substitute_type(&rt, &generic_map)
                     } else {
                         rt
                     }
                 } else {
-                    Type::Void
+                    ast_factory::make_type(TypeKind::Void)
                 };
 
                 if generics.is_some() {
@@ -453,8 +479,8 @@ impl TypeChecker {
 
                 return_type
             }
-            Type::Meta(inner_type) => {
-                if let Type::Custom(name, _) = &*inner_type {
+            TypeKind::Meta(inner_type) => {
+                if let TypeKind::Custom(name, _) = &inner_type.kind {
                     let type_def = context
                         .resolve_type_definition(name)
                         .cloned()
@@ -491,7 +517,7 @@ impl TypeChecker {
                                 if !self.are_compatible(&concrete_field_type, &arg_type, context) {
                                     self.report_error(
                                         format!(
-                                            "Type mismatch for field '{}': expected {:?}, got {:?}",
+                                            "Type mismatch for field '{}': expected {}, got {}",
                                             field_name, concrete_field_type, arg_type
                                         ),
                                         arg_expr.map(|e| e.span.clone()).unwrap_or(span.clone()),
@@ -522,24 +548,29 @@ impl TypeChecker {
 
                         let generic_args = def.generics.as_ref().map(|gens| {
                             gens.iter()
-                                .map(|g| generic_map.get(&g.name).cloned().unwrap_or(Type::Error))
+                                .map(|g| {
+                                    generic_map
+                                        .get(&g.name)
+                                        .cloned()
+                                        .unwrap_or(make_type(TypeKind::Error))
+                                })
                                 .map(|t| self.create_type_expression(t))
                                 .collect()
                         });
 
-                        return Type::Custom(name.clone(), generic_args);
+                        return make_type(TypeKind::Custom(name.clone(), generic_args));
                     }
                 }
-                self.report_error(format!("Type '{:?}' is not callable", inner_type), span);
-                Type::Error
+                self.report_error(format!("Type '{}' is not callable", inner_type), span);
+                make_type(TypeKind::Error)
             }
-            Type::Error => Type::Error,
+            _ if matches!(func_type.kind, TypeKind::Error) => make_type(TypeKind::Error),
             _ => {
                 self.report_error(
-                    format!("Expression is not callable: {:?}", func_type),
+                    format!("Expression is not callable: {}", func_type),
                     func.span.clone(),
                 );
-                Type::Error
+                make_type(TypeKind::Error)
             }
         }
     }
@@ -562,19 +593,21 @@ impl TypeChecker {
             let end_type = self.infer_expression(end_expr, context);
             if !self.are_compatible(&start_type, &end_type, context) {
                 self.report_error(
-                    format!("Range types mismatch: {:?} and {:?}", start_type, end_type),
+                    format!("Range types mismatch: {} and {}", start_type, end_type),
                     span,
                 );
             }
         }
 
         let type_expr = self.create_type_expression(start_type);
-        Type::Custom("Range".to_string(), Some(vec![type_expr]))
+        make_type(TypeKind::Custom("Range".to_string(), Some(vec![type_expr])))
     }
 
     fn infer_list(&mut self, elements: &[Expression], context: &mut Context) -> Type {
         if elements.is_empty() {
-            return Type::List(Box::new(self.create_type_expression(Type::Void)));
+            return make_type(TypeKind::List(Box::new(
+                self.create_type_expression(make_type(TypeKind::Void)),
+            )));
         }
 
         let first_type = self.infer_expression(&elements[0], context);
@@ -592,18 +625,20 @@ impl TypeChecker {
         }
 
         if has_error {
-            return Type::Error;
+            return make_type(TypeKind::Error);
         }
 
-        Type::List(Box::new(self.create_type_expression(first_type)))
+        make_type(TypeKind::List(Box::new(
+            self.create_type_expression(first_type),
+        )))
     }
 
     fn infer_map(&mut self, entries: &[(Expression, Expression)], context: &mut Context) -> Type {
         if entries.is_empty() {
-            return Type::Map(
-                Box::new(self.create_type_expression(Type::Void)),
-                Box::new(self.create_type_expression(Type::Void)),
-            );
+            return make_type(TypeKind::Map(
+                Box::new(self.create_type_expression(make_type(TypeKind::Void))),
+                Box::new(self.create_type_expression(make_type(TypeKind::Void))),
+            ));
         }
 
         let (first_key, first_val) = &entries[0];
@@ -632,18 +667,20 @@ impl TypeChecker {
         }
 
         if has_error {
-            return Type::Error;
+            return make_type(TypeKind::Error);
         }
 
-        Type::Map(
+        make_type(TypeKind::Map(
             Box::new(self.create_type_expression(key_type)),
             Box::new(self.create_type_expression(val_type)),
-        )
+        ))
     }
 
     fn infer_set(&mut self, elements: &[Expression], context: &mut Context) -> Type {
         if elements.is_empty() {
-            return Type::Set(Box::new(self.create_type_expression(Type::Void)));
+            return make_type(TypeKind::Set(Box::new(
+                self.create_type_expression(make_type(TypeKind::Void)),
+            )));
         }
 
         let first_type = self.infer_expression(&elements[0], context);
@@ -661,17 +698,19 @@ impl TypeChecker {
         }
 
         if has_error {
-            return Type::Error;
+            return make_type(TypeKind::Error);
         }
 
-        if let Type::Nullable(_) = first_type {
+        if let TypeKind::Nullable(_) = first_type.kind {
             self.report_error(
                 "Set elements cannot be nullable".to_string(),
                 elements[0].span.clone(),
             );
         }
 
-        Type::Set(Box::new(self.create_type_expression(first_type)))
+        make_type(TypeKind::Set(Box::new(
+            self.create_type_expression(first_type),
+        )))
     }
 
     fn infer_tuple(&mut self, elements: &[Expression], context: &mut Context) -> Type {
@@ -680,7 +719,7 @@ impl TypeChecker {
             let ty = self.infer_expression(element, context);
             element_types.push(self.create_type_expression(ty));
         }
-        Type::Tuple(element_types)
+        make_type(TypeKind::Tuple(element_types))
     }
 
     fn infer_index(
@@ -694,28 +733,30 @@ impl TypeChecker {
         let index_type = self.infer_expression(index, context);
 
         // Check for Range index (Slicing)
-        if let Type::Custom(name, args) = &index_type {
+        if let TypeKind::Custom(name, args) = &index_type.kind {
             if name == "Range" {
                 // Ensure range is of integer type
                 if let Some(args) = args {
                     if args.len() == 1 {
                         let range_inner = self.resolve_type_expression(&args[0], context);
-                        if !matches!(range_inner, Type::Int) {
+                        if !matches!(range_inner.kind, TypeKind::Int) {
                             self.report_error(
                                 "Slice range must be of integer type".to_string(),
                                 index.span.clone(),
                             );
-                            return Type::Error;
+                            return make_type(TypeKind::Error);
                         }
                     }
                 }
 
-                match obj_type {
-                    Type::String => return Type::String,
-                    Type::List(inner) => return Type::List(inner),
-                    Type::Tuple(elements) => {
+                match obj_type.kind {
+                    TypeKind::String => return make_type(TypeKind::String),
+                    TypeKind::List(inner) => return make_type(TypeKind::List(inner)),
+                    TypeKind::Tuple(elements) => {
                         if elements.is_empty() {
-                            return Type::List(Box::new(self.create_type_expression(Type::Void)));
+                            return make_type(TypeKind::List(Box::new(
+                                self.create_type_expression(make_type(TypeKind::Void)),
+                            )));
                         }
                         let first = self.resolve_type_expression(&elements[0], context);
                         let is_homogeneous = elements.iter().all(|e| {
@@ -724,40 +765,42 @@ impl TypeChecker {
                         });
 
                         if is_homogeneous {
-                            return Type::List(Box::new(self.create_type_expression(first)));
+                            return make_type(TypeKind::List(Box::new(
+                                self.create_type_expression(first),
+                            )));
                         } else {
                             self.report_error("Cannot slice heterogeneous tuple".to_string(), span);
-                            return Type::Error;
+                            return make_type(TypeKind::Error);
                         }
                     }
                     _ => {
-                        self.report_error(format!("Type {:?} is not sliceable", obj_type), span);
-                        return Type::Error;
+                        self.report_error(format!("Type {} is not sliceable", obj_type), span);
+                        return make_type(TypeKind::Error);
                     }
                 }
             }
         }
 
-        match obj_type {
-            Type::List(inner_type_expr) => {
-                if index_type != Type::Int {
+        match obj_type.kind {
+            TypeKind::List(inner_type_expr) => {
+                if !matches!(index_type.kind, TypeKind::Int) {
                     self.report_error(
                         "List index must be an integer".to_string(),
                         index.span.clone(),
                     );
-                    return Type::Error;
+                    return make_type(TypeKind::Error);
                 }
                 self.resolve_type_expression(&inner_type_expr, context)
             }
-            Type::Map(key_type_expr, val_type_expr) => {
+            TypeKind::Map(key_type_expr, val_type_expr) => {
                 let key_type = self.resolve_type_expression(&key_type_expr, context);
                 if !self.are_compatible(&key_type, &index_type, context) {
                     self.report_error("Invalid map key type".to_string(), index.span.clone());
-                    return Type::Error;
+                    return make_type(TypeKind::Error);
                 }
                 self.resolve_type_expression(&val_type_expr, context)
             }
-            Type::Tuple(element_type_exprs) => {
+            TypeKind::Tuple(element_type_exprs) => {
                 // Check if tuple is homogeneous
                 let is_homogeneous = if element_type_exprs.is_empty() {
                     true
@@ -774,12 +817,12 @@ impl TypeChecker {
                 };
 
                 if is_homogeneous {
-                    if index_type != Type::Int {
+                    if !matches!(index_type.kind, TypeKind::Int) {
                         self.report_error(
                             "Tuple index must be an integer".to_string(),
                             index.span.clone(),
                         );
-                        return Type::Error;
+                        return make_type(TypeKind::Error);
                     }
                     // If homogeneous, we can return the type of the first element (or any element)
                     if element_type_exprs.is_empty() {
@@ -788,7 +831,7 @@ impl TypeChecker {
                             "Tuple index out of bounds (empty tuple)".to_string(),
                             span,
                         );
-                        return Type::Error;
+                        return make_type(TypeKind::Error);
                     }
 
                     // If it's a literal, we can still check bounds
@@ -807,7 +850,7 @@ impl TypeChecker {
                         };
                         if idx >= element_type_exprs.len() {
                             self.report_error("Tuple index out of bounds".to_string(), span);
-                            return Type::Error;
+                            return make_type(TypeKind::Error);
                         }
                     }
 
@@ -832,7 +875,7 @@ impl TypeChecker {
                             self.resolve_type_expression(&element_type_exprs[idx], context)
                         } else {
                             self.report_error("Tuple index out of bounds".to_string(), span);
-                            Type::Error
+                            make_type(TypeKind::Error)
                         }
                     } else {
                         self.report_error(
@@ -840,24 +883,24 @@ impl TypeChecker {
                                 .to_string(),
                             index.span.clone(),
                         );
-                        Type::Error
+                        make_type(TypeKind::Error)
                     }
                 }
             }
-            Type::String => {
-                if index_type != Type::Int {
+            TypeKind::String => {
+                if !matches!(index_type.kind, TypeKind::Int) {
                     self.report_error(
                         "String index must be an integer".to_string(),
                         index.span.clone(),
                     );
-                    return Type::Error;
+                    return make_type(TypeKind::Error);
                 }
-                Type::String // Indexing a string returns a string (char)
+                make_type(TypeKind::String) // Indexing a string returns a string (char)
             }
-            Type::Error => Type::Error,
+            TypeKind::Error => make_type(TypeKind::Error),
             _ => {
-                self.report_error(format!("Type {:?} is not indexable", obj_type), span);
-                Type::Error
+                self.report_error(format!("Type {} is not indexable", obj_type), span);
+                make_type(TypeKind::Error)
             }
         }
     }
@@ -878,39 +921,49 @@ impl TypeChecker {
                 "Member property must be an identifier".to_string(),
                 prop.span.clone(),
             );
-            return Type::Error;
+            return make_type(TypeKind::Error);
         };
 
         // Try to resolve the type definition for the object's type
-        let (type_name, type_args) = match &obj_type {
-            Type::String => (Some("String".to_string()), None),
-            Type::Custom(name, args) => (Some(name.clone()), args.clone()),
-            Type::Result(ok_type, _) => {
+        let (type_name, type_args) = match &obj_type.kind {
+            TypeKind::String => (Some("String".to_string()), None),
+            TypeKind::Custom(name, args) => (Some(name.clone()), args.clone()),
+            TypeKind::Result(ok_type, _) => {
                 if prop_name == "unwrap" {
                     let t = self.resolve_type_expression(ok_type, context);
-                    return Type::Function(None, vec![], Some(Box::new(ast_factory::typ(t))));
-                } else if prop_name == "is_ok" || prop_name == "is_err" {
-                    return Type::Function(
+                    return make_type(TypeKind::Function(
                         None,
                         vec![],
-                        Some(Box::new(ast_factory::typ(Type::Boolean))),
-                    );
+                        Some(Box::new(ast_factory::type_expr_non_null(t))),
+                    ));
+                } else if prop_name == "is_ok" || prop_name == "is_err" {
+                    return make_type(TypeKind::Function(
+                        None,
+                        vec![],
+                        Some(Box::new(ast_factory::type_expr_non_null(make_type(
+                            TypeKind::Boolean,
+                        )))),
+                    ));
                 }
                 (None, None)
             }
-            Type::Nullable(inner_type) => {
+            TypeKind::Nullable(inner_type) => {
                 if prop_name == "unwrap" {
-                    return Type::Function(
+                    return make_type(TypeKind::Function(
                         None,
                         vec![],
-                        Some(Box::new(ast_factory::typ(*inner_type.clone()))),
-                    );
+                        Some(Box::new(ast_factory::type_expr_non_null(
+                            *inner_type.clone(),
+                        ))),
+                    ));
                 } else if prop_name == "is_some" || prop_name == "is_none" {
-                    return Type::Function(
+                    return make_type(TypeKind::Function(
                         None,
                         vec![],
-                        Some(Box::new(ast_factory::typ(Type::Boolean))),
-                    );
+                        Some(Box::new(ast_factory::type_expr_non_null(make_type(
+                            TypeKind::Boolean,
+                        )))),
+                    ));
                 }
                 (None, None)
             }
@@ -932,7 +985,7 @@ impl TypeChecker {
                 {
                     if !self.check_visibility(visibility, &def.module) {
                         self.report_error(format!("Field '{}' is not visible", prop_name), span);
-                        return Type::Error;
+                        return make_type(TypeKind::Error);
                     }
 
                     // Substitute generic parameters if present
@@ -943,7 +996,7 @@ impl TypeChecker {
                                 for (param, arg_expr) in generics.iter().zip(type_args.iter()) {
                                     let arg_type = self
                                         .extract_type_from_expression(arg_expr)
-                                        .unwrap_or(Type::Error);
+                                        .unwrap_or(make_type(TypeKind::Error));
                                     mapping.insert(param.name.clone(), arg_type);
                                 }
                                 return self.substitute_type(field_type, &mapping);
@@ -967,19 +1020,19 @@ impl TypeChecker {
                             span,
                         );
                     }
-                    return Type::Error;
+                    return make_type(TypeKind::Error);
                 }
             } else if let Some(TypeDefinition::Enum(_)) = def_opt {
                 // Could be an enum instance, but enums don't have fields yet (unless methods are added later)
                 self.report_error(format!("Type '{}' does not have members", name), span);
-                return Type::Error;
+                return make_type(TypeKind::Error);
             }
         }
 
-        match obj_type {
-            Type::Meta(inner_type) => {
+        match obj_type.kind {
+            TypeKind::Meta(inner_type) => {
                 // Static member access (Enum variant)
-                if let Type::Custom(name, _) = *inner_type {
+                if let TypeKind::Custom(name, _) = inner_type.kind {
                     let def_opt = context
                         .resolve_type_definition(&name)
                         .cloned()
@@ -990,7 +1043,7 @@ impl TypeChecker {
                             // If variant has no associated types, it's a value of the Enum type.
                             // If it has associated types, it's a constructor function.
                             if variant_types.is_empty() {
-                                Type::Custom(name.clone(), None)
+                                make_type(TypeKind::Custom(name.clone(), None))
                             } else {
                                 // Constructor function: (args) -> EnumType
                                 let params: Vec<Parameter> = variant_types
@@ -1003,16 +1056,13 @@ impl TypeChecker {
                                         default_value: None,
                                     })
                                     .collect();
-                                Type::Function(
+                                make_type(TypeKind::Function(
                                     None,
                                     params,
-                                    Some(Box::new(
-                                        self.create_type_expression(Type::Custom(
-                                            name.clone(),
-                                            None,
-                                        )),
-                                    )),
-                                )
+                                    Some(Box::new(self.create_type_expression(make_type(
+                                        TypeKind::Custom(name.clone(), None),
+                                    )))),
+                                ))
                             }
                         } else {
                             let candidates: Vec<&str> =
@@ -1029,26 +1079,26 @@ impl TypeChecker {
                                     span,
                                 );
                             }
-                            Type::Error
+                            make_type(TypeKind::Error)
                         }
                     } else {
                         self.report_error(
                             format!("Type '{}' does not have static members", name),
                             span,
                         );
-                        Type::Error
+                        make_type(TypeKind::Error)
                     }
                 } else {
                     self.report_error(
-                        format!("Type '{:?}' does not have static members", inner_type),
+                        format!("Type '{}' does not have static members", inner_type),
                         span,
                     );
-                    Type::Error
+                    make_type(TypeKind::Error)
                 }
             }
             _ => {
-                self.report_error(format!("Type '{:?}' does not have members", obj_type), span);
-                Type::Error
+                self.report_error(format!("Type '{}' does not have members", obj_type), span);
+                make_type(TypeKind::Error)
             }
         }
     }
@@ -1063,7 +1113,7 @@ impl TypeChecker {
         let subject_type = self.infer_expression(subject, context);
 
         // Check exhaustiveness for Enums
-        if let Type::Custom(name, _) = &subject_type {
+        if let TypeKind::Custom(name, _) = &subject_type.kind {
             // Find enum definition
             let mut enum_def_opt = None;
 
@@ -1129,7 +1179,7 @@ impl TypeChecker {
         }
 
         if branches.is_empty() {
-            return Type::Void;
+            return make_type(TypeKind::Void);
         }
 
         let mut first_branch_type = None;
@@ -1147,7 +1197,7 @@ impl TypeChecker {
                 if !self.are_compatible(first, &body_type, context) {
                     self.report_error(
                         format!(
-                            "Match branch types mismatch: expected {:?}, got {:?}",
+                            "Match branch types mismatch: expected {}, got {}",
                             first, body_type
                         ),
                         span.clone(),
@@ -1158,7 +1208,7 @@ impl TypeChecker {
             }
         }
 
-        first_branch_type.unwrap_or(Type::Void)
+        first_branch_type.unwrap_or(make_type(TypeKind::Void))
     }
 
     fn infer_lambda(
@@ -1185,7 +1235,7 @@ impl TypeChecker {
             context.return_types.push(rt.clone());
             context.inferred_return_types.push(None);
         } else {
-            context.return_types.push(Type::Void); // Placeholder
+            context.return_types.push(make_type(TypeKind::Void)); // Placeholder
             context.inferred_return_types.push(Some(Vec::new()));
         }
 
@@ -1208,7 +1258,7 @@ impl TypeChecker {
         let implicit_return_type = match &body.node {
             StatementKind::Block(stmts) => {
                 context.enter_scope();
-                let mut last_type = Type::Void;
+                let mut last_type = make_type(TypeKind::Void);
                 for (i, stmt) in stmts.iter().enumerate() {
                     if i == stmts.len() - 1 {
                         if let StatementKind::Expression(expr) = &stmt.node {
@@ -1226,14 +1276,14 @@ impl TypeChecker {
             StatementKind::Expression(expr) => self.infer_expression(expr, context),
             _ => {
                 self.check_statement(body, context);
-                Type::Void
+                make_type(TypeKind::Void)
             }
         };
 
         // Finalize return type
         let final_return_type_expr = if let Some(expected) = expected_return_type {
-            let is_void_implicit = matches!(implicit_return_type, Type::Void);
-            let is_void_expected = matches!(expected, Type::Void);
+            let is_void_implicit = matches!(implicit_return_type.kind, TypeKind::Void);
+            let is_void_expected = matches!(expected.kind, TypeKind::Void);
 
             if !is_void_expected && is_void_implicit {
                 // Check if the last statement was a return statement?
@@ -1252,18 +1302,18 @@ impl TypeChecker {
                 if !ends_with_return {
                     self.report_error(
                         format!(
-                            "Invalid return type: expected {:?}, got {:?}",
+                            "Invalid return type: expected {}, got {}",
                             expected, implicit_return_type
                         ),
                         body.span.clone(),
                     );
                 }
             } else if !self.are_compatible(&expected, &implicit_return_type, context)
-                && expected != Type::Void
+                && !matches!(expected.kind, TypeKind::Void)
             {
                 self.report_error(
                     format!(
-                        "Invalid return type: expected {:?}, got {:?}",
+                        "Invalid return type: expected {}, got {}",
                         expected, implicit_return_type
                     ),
                     body.span.clone(),
@@ -1285,13 +1335,13 @@ impl TypeChecker {
             let mut candidate = implicit_return_type;
 
             for (ret_ty, ret_span) in collected_returns {
-                if candidate == Type::Void {
+                if matches!(candidate.kind, TypeKind::Void) {
                     candidate = ret_ty;
-                } else if ret_ty != Type::Void {
+                } else if !matches!(ret_ty.kind, TypeKind::Void) {
                     if !self.are_compatible(&candidate, &ret_ty, context) {
                         self.report_error(
                             format!(
-                                "Incompatible return types in lambda: {:?} and {:?}",
+                                "Incompatible return types in lambda: {} and {}",
                                 candidate, ret_ty
                             ),
                             ret_span,
@@ -1301,7 +1351,7 @@ impl TypeChecker {
                     // candidate is not Void, ret_ty is Void.
                     self.report_error(
                         format!(
-                            "Incompatible return types in lambda: {:?} and {:?}",
+                            "Incompatible return types in lambda: {} and {}",
                             candidate, ret_ty
                         ),
                         ret_span,
@@ -1320,7 +1370,11 @@ impl TypeChecker {
         context.loop_depth = old_loop_depth;
         context.exit_scope();
 
-        Type::Function(generics.clone(), params.to_vec(), final_return_type_expr)
+        make_type(TypeKind::Function(
+            generics.clone(),
+            params.to_vec(),
+            final_return_type_expr,
+        ))
     }
 
     fn infer_conditional(
@@ -1332,12 +1386,9 @@ impl TypeChecker {
         context: &mut Context,
     ) -> Type {
         let cond_type = self.infer_expression(cond_expr, context);
-        if cond_type != Type::Boolean {
+        if !matches!(cond_type.kind, TypeKind::Boolean) {
             self.report_error(
-                format!(
-                    "Conditional condition must be a boolean, got {:?}",
-                    cond_type
-                ),
+                format!("Conditional condition must be a boolean, got {}", cond_type),
                 cond_expr.span.clone(),
             );
         }
@@ -1349,7 +1400,7 @@ impl TypeChecker {
             if !self.are_compatible(&then_type, &else_type, context) {
                 self.report_error(
                     format!(
-                        "Conditional branches must have the same type: expected {:?}, got {:?}",
+                        "Conditional branches must have the same type: expected {}, got {}",
                         then_type, else_type
                     ),
                     span,
@@ -1357,16 +1408,16 @@ impl TypeChecker {
             }
             then_type
         } else {
-            if !self.are_compatible(&then_type, &Type::Void, context) {
+            if !self.are_compatible(&then_type, &make_type(TypeKind::Void), context) {
                 self.report_error(
                     format!(
-                        "Conditional expression without else branch must return Void, got {:?}",
+                        "Conditional expression without else branch must return Void, got {}",
                         then_type
                     ),
                     span,
                 );
             }
-            Type::Void
+            make_type(TypeKind::Void)
         }
     }
 
@@ -1374,7 +1425,7 @@ impl TypeChecker {
         for part in parts {
             self.infer_expression(part, context);
         }
-        Type::String
+        make_type(TypeKind::String)
     }
 
     fn check_pattern(
@@ -1390,7 +1441,7 @@ impl TypeChecker {
                 if !self.are_compatible(subject_type, &lit_type, context) {
                     self.report_error(
                         format!(
-                            "Pattern type mismatch: expected {:?}, got {:?}",
+                            "Pattern type mismatch: expected {}, got {}",
                             subject_type, lit_type
                         ),
                         span,
@@ -1408,7 +1459,7 @@ impl TypeChecker {
                 ); // Immutable binding by default
             }
             Pattern::Tuple(patterns) => {
-                if let Type::Tuple(elem_types) = subject_type {
+                if let TypeKind::Tuple(elem_types) = &subject_type.kind {
                     if patterns.len() != elem_types.len() {
                         self.report_error(
                             format!(
@@ -1432,7 +1483,7 @@ impl TypeChecker {
                 } else {
                     self.report_error(
                         format!(
-                            "Expected tuple type for tuple pattern, got {:?}",
+                            "Expected tuple type for tuple pattern, got {}",
                             subject_type
                         ),
                         span,
@@ -1453,11 +1504,11 @@ impl TypeChecker {
                         // Check if subject type matches the enum type
                         // We construct the expected type from the enum name
                         // TODO: Handle generics
-                        let expected_type = Type::Custom(parent_name.clone(), None);
+                        let expected_type = make_type(TypeKind::Custom(parent_name.clone(), None));
                         if !self.are_compatible(subject_type, &expected_type, context) {
                             self.report_error(
                                 format!(
-                                    "Pattern type mismatch: expected {:?}, got {:?}",
+                                    "Pattern type mismatch: expected {}, got {}",
                                     subject_type, expected_type
                                 ),
                                 span,
@@ -1474,10 +1525,10 @@ impl TypeChecker {
                 }
             }
             Pattern::Regex(_) => {
-                if !matches!(subject_type, Type::String) {
+                if !matches!(subject_type.kind, TypeKind::String) {
                     self.report_error(
                         format!(
-                            "Regex pattern requires string subject, got {:?}",
+                            "Regex pattern requires string subject, got {}",
                             subject_type
                         ),
                         span,
@@ -1493,7 +1544,7 @@ impl TypeChecker {
             StatementKind::Expression(expr) => self.infer_expression(expr, context),
             StatementKind::Block(stmts) => {
                 context.enter_scope();
-                let mut last_type = Type::Void;
+                let mut last_type = make_type(TypeKind::Void);
                 for (i, s) in stmts.iter().enumerate() {
                     if i == stmts.len() - 1 {
                         last_type = self.infer_statement_type(s, context);
@@ -1506,7 +1557,7 @@ impl TypeChecker {
             }
             _ => {
                 self.check_statement(stmt, context);
-                Type::Void
+                make_type(TypeKind::Void)
             }
         }
     }
@@ -1523,11 +1574,11 @@ impl TypeChecker {
         if *kind == TypeDeclarationKind::None && target.is_none() {
             if let Some(args) = generics {
                 let expr_type = self.infer_expression(expr, context);
-                if let Type::Function(Some(params), func_params, ret) = expr_type {
+                if let TypeKind::Function(Some(params), func_params, ret) = expr_type.kind {
                     let mut mapping = HashMap::new();
                     if params.len() != args.len() {
                         self.report_error("Generic argument count mismatch".to_string(), span);
-                        return Type::Error;
+                        return make_type(TypeKind::Error);
                     }
 
                     for (i, param) in params.iter().enumerate() {
@@ -1543,7 +1594,7 @@ impl TypeChecker {
                     for p in func_params {
                         let p_type = self
                             .extract_type_from_expression(&p.typ)
-                            .unwrap_or(Type::Error);
+                            .unwrap_or(make_type(TypeKind::Error));
                         let new_p_type = self.substitute_type(&p_type, &mapping);
                         new_params.push(Parameter {
                             name: p.name.clone(),
@@ -1554,20 +1605,22 @@ impl TypeChecker {
                     }
 
                     let new_ret = if let Some(r) = ret {
-                        let r_type = self.extract_type_from_expression(&r).unwrap_or(Type::Error);
+                        let r_type = self
+                            .extract_type_from_expression(&r)
+                            .unwrap_or(make_type(TypeKind::Error));
                         let new_r_type = self.substitute_type(&r_type, &mapping);
                         Some(Box::new(self.create_type_expression(new_r_type)))
                     } else {
                         None
                     };
 
-                    return Type::Function(None, new_params, new_ret);
+                    return make_type(TypeKind::Function(None, new_params, new_ret));
                 } else {
                     self.report_error("Expected generic function".to_string(), span);
-                    return Type::Error;
+                    return make_type(TypeKind::Error);
                 }
             }
         }
-        Type::Error
+        make_type(TypeKind::Error)
     }
 }

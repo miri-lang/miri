@@ -3,6 +3,7 @@
 
 use super::utils::*;
 use miri::ast::factory::*;
+use miri::ast::types::TypeDeclarationKind;
 use miri::ast::*;
 use miri::error::syntax::SyntaxErrorKind;
 
@@ -16,8 +17,8 @@ struct Point: x int, y int
             identifier("Point"),
             None,
             vec![
-                struct_member("x", typ(Type::Int)),
-                struct_member("y", typ(Type::Int)),
+                struct_member("x", type_expr_non_null(type_int())),
+                struct_member("y", type_expr_non_null(type_int())),
             ],
             MemberVisibility::Public,
         )],
@@ -36,8 +37,8 @@ struct Point
             identifier("Point"),
             None,
             vec![
-                struct_member("x", typ(Type::Int)),
-                struct_member("y", typ(Type::Int)),
+                struct_member("x", type_expr_non_null(type_int())),
+                struct_member("y", type_expr_non_null(type_int())),
             ],
             MemberVisibility::Public,
         )],
@@ -57,14 +58,11 @@ struct UserProfile
             identifier("UserProfile"),
             None,
             vec![
-                struct_member("id", typ(Type::String)),
-                struct_member("aliases", null_typ(Type::List(Box::new(typ(Type::String))))),
+                struct_member("id", type_expr_non_null(type_string())),
+                struct_member("aliases", type_expr_null(type_list(type_string()))),
                 struct_member(
                     "preferences",
-                    typ(Type::Map(
-                        Box::new(typ(Type::String)),
-                        Box::new(typ(Type::Boolean)),
-                    )),
+                    type_expr_non_null(type_map(type_string(), type_bool())),
                 ),
             ],
             MemberVisibility::Public,
@@ -79,7 +77,7 @@ fn test_struct_with_single_member() {
         vec![struct_statement(
             identifier("Wrapper"),
             None,
-            vec![struct_member("value", typ(Type::Float))],
+            vec![struct_member("value", type_expr_non_null(type_float()))],
             MemberVisibility::Public,
         )],
     );
@@ -134,7 +132,7 @@ fn test_private_struct() {
         vec![struct_statement(
             identifier("Point"),
             None,
-            vec![struct_member("x", typ(Type::Int))],
+            vec![struct_member("x", type_expr_non_null(type_int()))],
             MemberVisibility::Private,
         )],
     );
@@ -149,7 +147,7 @@ fn test_generic_struct() {
             Some(vec![generic_type("T", None)]),
             vec![struct_member(
                 "value",
-                null_typ(Type::Custom("T".into(), None)),
+                type_expr_null(type_custom("T", None)),
             )],
             MemberVisibility::Public,
         )],
@@ -164,8 +162,8 @@ fn test_struct_with_multiple_generic_parameters() {
             identifier("Pair"),
             Some(vec![generic_type("K", None), generic_type("V", None)]),
             vec![
-                struct_member("key", typ(Type::Custom("K".into(), None))),
-                struct_member("value", typ(Type::Custom("V".into(), None))),
+                struct_member("key", type_expr_non_null(type_custom("K", None))),
+                struct_member("value", type_expr_non_null(type_custom("V", None))),
             ],
             MemberVisibility::Public,
         )],
@@ -180,10 +178,13 @@ fn test_generic_struct_with_constraint() {
             identifier("Node"),
             Some(vec![generic_type_with_kind(
                 "T",
-                Some(Box::new(typ(Type::Custom("Equatable".into(), None)))),
+                Some(Box::new(type_expr_non_null(type_custom("Equatable", None)))),
                 TypeDeclarationKind::Extends,
             )]),
-            vec![struct_member("value", typ(Type::Custom("T".into(), None)))],
+            vec![struct_member(
+                "value",
+                type_expr_non_null(type_custom("T", None)),
+            )],
             MemberVisibility::Public,
         )],
     );
@@ -198,10 +199,10 @@ fn test_struct_with_nested_generic_member() {
             Some(vec![generic_type("T", None)]),
             vec![struct_member(
                 "items",
-                typ(Type::List(Box::new(typ(Type::Custom(
-                    "Optional".into(),
-                    Some(vec![typ(Type::Custom("T".into(), None))]),
-                ))))),
+                type_expr_non_null(type_list(type_custom(
+                    "Optional",
+                    Some(vec![type_expr_non_null(type_custom("T", None))]),
+                ))),
             )],
             MemberVisibility::Public,
         )],

@@ -2,6 +2,7 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use crate::ast::factory as ast;
+use crate::ast::types::TypeDeclarationKind;
 use crate::ast::*;
 use crate::error::syntax::{SyntaxError, SyntaxErrorKind};
 use crate::lexer::Token;

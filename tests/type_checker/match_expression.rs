@@ -2,6 +2,7 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use super::utils::*;
+use miri::ast::factory::*;
 
 #[test]
 fn test_match_expression_basic() {
@@ -34,7 +35,7 @@ let res = match x
     val if val > 5: 'large'
     default: 'small'
 ";
-    check_vars_type(source, vec![("res", miri::ast::Type::String)]);
+    check_vars_type(source, vec![("res", type_string())]);
 }
 
 #[test]
@@ -75,7 +76,7 @@ match 10
 
 let z = val
 ";
-    check_vars_type(source, vec![("z", miri::ast::Type::String)]);
+    check_vars_type(source, vec![("z", type_string())]);
 }
 
 #[test]
@@ -102,7 +103,7 @@ let res = match x
     1: match y: 2: 'nested', default: 'other'
     default: 'outer'
 ";
-    check_vars_type(source, vec![("res", miri::ast::Type::String)]);
+    check_vars_type(source, vec![("res", type_string())]);
 }
 
 #[test]
@@ -114,7 +115,7 @@ let msg = match code
     404: 'Not Found'
     default: 'Unknown'
 ";
-    check_vars_type(source, vec![("msg", miri::ast::Type::String)]);
+    check_vars_type(source, vec![("msg", type_string())]);
 }
 
 #[test]
@@ -137,7 +138,7 @@ let msg = match point
     (x, 0): 'on x-axis'
     default: 'other'
 ";
-    check_vars_type(source, vec![("msg", miri::ast::Type::String)]);
+    check_vars_type(source, vec![("msg", type_string())]);
 }
 
 #[test]
@@ -171,7 +172,7 @@ let msg = match text
     re\"^[a-z]+$\": 'letters'
     default: 'other'
 ";
-    check_vars_type(source, vec![("msg", miri::ast::Type::String)]);
+    check_vars_type(source, vec![("msg", type_string())]);
 }
 
 #[test]

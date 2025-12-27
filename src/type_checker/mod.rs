@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
-use crate::ast::*;
+use crate::ast::types::{Type, TypeDeclarationKind};
+use crate::ast::{types::TypeKind, *};
 use crate::error::type_error::TypeError;
 use std::collections::HashMap;
 
@@ -59,7 +60,11 @@ impl TypeChecker {
         global_type_definitions.insert(
             "String".to_string(),
             TypeDefinition::Struct(StructDefinition {
-                fields: vec![("length".to_string(), Type::Int, MemberVisibility::Public)],
+                fields: vec![(
+                    "length".to_string(),
+                    crate::ast::factory::make_type(TypeKind::Int),
+                    MemberVisibility::Public,
+                )],
                 generics: None,
                 module: "std".to_string(),
             }),
@@ -68,7 +73,11 @@ impl TypeChecker {
         let mut global_scope = HashMap::new();
 
         // Define built-in print function: fn print<T>(value T)
-        let generic_t = Type::Generic("T".to_string(), None, TypeDeclarationKind::None);
+        let generic_t = crate::ast::factory::make_type(TypeKind::Generic(
+            "T".to_string(),
+            None,
+            TypeDeclarationKind::None,
+        ));
         let generic_decl = crate::ast::factory::generic_type_expression(
             crate::ast::factory::identifier("T"),
             None,
@@ -78,16 +87,18 @@ impl TypeChecker {
         global_scope.insert(
             "print".to_string(),
             SymbolInfo {
-                ty: Type::Function(
+                ty: crate::ast::factory::make_type(TypeKind::Function(
                     Some(vec![generic_decl]),
                     vec![Parameter {
                         name: "value".to_string(),
-                        typ: Box::new(crate::ast::factory::typ(generic_t)),
+                        typ: Box::new(crate::ast::factory::type_expr_non_null(generic_t)),
                         guard: None,
                         default_value: None,
                     }],
-                    Some(Box::new(crate::ast::factory::typ(Type::Void))),
-                ),
+                    Some(Box::new(crate::ast::factory::type_expr_non_null(
+                        crate::ast::factory::make_type(TypeKind::Void),
+                    ))),
+                )),
                 mutable: false,
                 visibility: MemberVisibility::Public,
                 module: "std".to_string(),

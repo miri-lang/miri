@@ -2,7 +2,7 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use super::utils::*;
-use miri::ast::{factory::type_result, Type};
+use miri::ast::factory::*;
 
 #[test]
 fn test_result_ok_inference() {
@@ -10,7 +10,7 @@ fn test_result_ok_inference() {
 let r = Ok(10)
 r
     ";
-    check_expr_type(source, type_result(Type::Int, Type::Void));
+    check_expr_type(source, type_result(type_int(), type_void()));
 }
 
 #[test]
@@ -19,7 +19,7 @@ fn test_result_err_inference() {
 let r = Err(\"error\")
 r
     ";
-    check_expr_type(source, type_result(Type::Void, Type::String));
+    check_expr_type(source, type_result(type_void(), type_string()));
 }
 
 #[test]
@@ -28,7 +28,7 @@ fn test_result_ok_assignment() {
 let r result<int, string> = Ok(10)
 r
     ";
-    check_expr_type(source, type_result(Type::Int, Type::String));
+    check_expr_type(source, type_result(type_int(), type_string()));
 }
 
 #[test]
@@ -37,7 +37,7 @@ fn test_result_err_assignment() {
 let r result<int, string> = Err(\"fail\")
 r
     ";
-    check_expr_type(source, type_result(Type::Int, Type::String));
+    check_expr_type(source, type_result(type_int(), type_string()));
 }
 
 #[test]
@@ -62,7 +62,7 @@ fn test_result_methods_is_ok() {
 let r = Ok(10)
 r.is_ok()
     ";
-    check_expr_type(source, Type::Boolean);
+    check_expr_type(source, type_bool());
 }
 
 #[test]
@@ -71,7 +71,7 @@ fn test_result_methods_is_err() {
 let r = Err(\"error\")
 r.is_err()
     ";
-    check_expr_type(source, Type::Boolean);
+    check_expr_type(source, type_bool());
 }
 
 #[test]
@@ -80,7 +80,7 @@ fn test_result_methods_unwrap() {
 let r = Ok(10)
 r.unwrap()
     ";
-    check_expr_type(source, Type::Int);
+    check_expr_type(source, type_int());
 }
 
 #[test]
@@ -90,7 +90,7 @@ let r = Err(\"error\")
 r.unwrap()
     ";
     // unwrap on Err returns Void because Ok type is Void
-    check_expr_type(source, Type::Void);
+    check_expr_type(source, type_void());
 }
 
 #[test]
@@ -100,7 +100,7 @@ let r result<int, string> = Err(\"error\")
 r.unwrap()
     ";
     // unwrap on typed Result returns the Ok type (Int)
-    check_expr_type(source, Type::Int);
+    check_expr_type(source, type_int());
 }
 
 #[test]
@@ -111,7 +111,7 @@ r
     ";
     check_expr_type(
         source,
-        type_result(type_result(Type::Int, Type::String), Type::Boolean),
+        type_result(type_result(type_int(), type_string()), type_bool()),
     );
 }
 
@@ -121,7 +121,7 @@ fn test_nested_result_unwrap() {
 let r result<result<int, string>, bool> = Ok(Ok(10))
 r.unwrap().unwrap()
     ";
-    check_expr_type(source, Type::Int);
+    check_expr_type(source, type_int());
 }
 
 #[test]
@@ -156,7 +156,7 @@ let r = Ok(10)
 match r
     x: x.unwrap()
     ";
-    check_expr_type(source, Type::Int);
+    check_expr_type(source, type_int());
 }
 
 #[test]
@@ -183,7 +183,7 @@ r
     ";
     check_expr_type(
         source,
-        type_result(Type::Int, Type::Custom("MyError".to_string(), None)),
+        type_result(type_int(), type_custom("MyError", None)),
     );
 }
 
@@ -215,6 +215,6 @@ fail()
     ";
     check_expr_type(
         source,
-        type_result(Type::Int, Type::Custom("MyError".to_string(), None)),
+        type_result(type_int(), type_custom("MyError", None)),
     );
 }

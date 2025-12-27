@@ -2,7 +2,7 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use super::utils::*;
-use miri::ast::Type;
+use miri::ast::factory::*;
 
 #[test]
 fn test_conditional_expression_basic() {
@@ -52,12 +52,12 @@ fn test_conditional_expression_no_else_non_void() {
 
 #[test]
 fn test_nested_conditional() {
-    check_expr_type("1 if true else (2 if false else 3)", Type::Int);
+    check_expr_type("1 if true else (2 if false else 3)", type_int());
 }
 
 #[test]
 fn test_complex_condition() {
-    check_expr_type("1 if (true and false) or (1 < 2) else 2", Type::Int);
+    check_expr_type("1 if (true and false) or (1 < 2) else 2", type_int());
 }
 
 #[test]
@@ -105,7 +105,7 @@ let b = B(1)
 
 let x = a if true else b
 ";
-    check_vars_type(source, vec![("x", Type::Custom("A".to_string(), None))]);
+    check_vars_type(source, vec![("x", type_custom("A", None))]);
 }
 
 #[test]

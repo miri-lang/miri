@@ -2,8 +2,7 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use super::utils::*;
-use miri::ast::factory::type_list;
-use miri::ast::Type;
+use miri::ast::factory::*;
 
 #[test]
 fn test_tuple_literal() {
@@ -12,8 +11,8 @@ fn test_tuple_literal() {
 
 #[test]
 fn test_tuple_indexing() {
-    check_expr_type("(1, \"a\")[0]", Type::Int);
-    check_expr_type("(1, \"a\")[1]", Type::String);
+    check_expr_type("(1, \"a\")[0]", type_int());
+    check_expr_type("(1, \"a\")[1]", type_string());
 }
 
 #[test]
@@ -29,7 +28,7 @@ fn test_tuple_indexing_variable_homogeneous() {
 let i = 0
 (1, 2)[i]
 ",
-        Type::Int,
+        type_int(),
     );
 }
 
@@ -48,7 +47,7 @@ let i = 0
 #[test]
 fn test_tuple_slicing() {
     // Slicing homogeneous tuple returns a list
-    check_expr_type("(1, 2, 3)[0..1]", type_list(Type::Int));
+    check_expr_type("(1, 2, 3)[0..1]", type_list(type_int()));
 }
 
 #[test]
@@ -69,13 +68,13 @@ fn test_empty_tuple_indexing() {
 #[test]
 fn test_nested_tuple() {
     check_success("((1, 2), (3, 4))");
-    check_expr_type("((1, 2), (3, 4))[0][0]", Type::Int);
+    check_expr_type("((1, 2), (3, 4))[0][0]", type_int());
 }
 
 #[test]
 fn test_nested_heterogeneous_tuple() {
     check_success("((1, \"a\"), (2, \"b\"))");
-    check_expr_type("((1, \"a\"), (2, \"b\"))[0][1]", Type::String);
+    check_expr_type("((1, \"a\"), (2, \"b\"))[0][1]", type_string());
 }
 
 #[test]
@@ -100,7 +99,7 @@ fn test_tuple_match_type_inference() {
 match (1, \"a\")
     (i, s): i
 ",
-        Type::Int,
+        type_int(),
     );
 }
 
@@ -133,7 +132,7 @@ fn test_tuple_match_nested() {
 match ((1, 2), 3)
     ((a, b), c): b
 ",
-        Type::Int,
+        type_int(),
     );
 }
 

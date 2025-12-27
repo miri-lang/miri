@@ -38,7 +38,7 @@ fn test_namespaced_type_in_variable_declaration() {
         "let client Http::Client",
         vec![let_variable(
             "client",
-            opt_expr(typ(Type::Custom("Http::Client".into(), None))),
+            opt_expr(type_expr_non_null(type_custom("Http::Client", None))),
             None,
         )],
         MemberVisibility::Public,
@@ -50,7 +50,7 @@ fn test_namespaced_type_in_function_return() {
     parser_test(
         "fn get_status() Http::Status: Http::Status.Ok",
         vec![func("get_status")
-            .return_type(typ(Type::Custom("Http::Status".into(), None)))
+            .return_type(type_expr_non_null(type_custom("Http::Status", None)))
             .build(expression_statement(member(
                 class_identifier("Http::Status"),
                 identifier("Ok"),
@@ -65,7 +65,7 @@ fn test_namespaced_type_in_function_parameter() {
         vec![func("set_status")
             .params(vec![parameter(
                 "s".into(),
-                typ(Type::Custom("Http::Status".into(), None)),
+                type_expr_non_null(type_custom("Http::Status", None)),
                 None,
                 None,
             )])

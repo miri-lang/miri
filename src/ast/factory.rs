@@ -3,6 +3,7 @@
 
 use crate::{ast::*, error::syntax::Span, lexer::RegexToken};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use types::*;
 
 static NEXT_ID: AtomicUsize = AtomicUsize::new(1);
 
@@ -624,36 +625,120 @@ pub fn type_expression(inner: Type, is_nullable: bool) -> Expression {
     expr(ExpressionKind::Type(Box::new(inner), is_nullable))
 }
 
-pub fn typ(t: Type) -> Expression {
+pub fn type_expr_non_null(t: Type) -> Expression {
     type_expression(t, false)
 }
 
-pub fn null_typ(t: Type) -> Expression {
+pub fn type_expr_null(t: Type) -> Expression {
     type_expression(t, true)
 }
 
-pub fn type_map(key_type: Type, value_type: Type) -> Type {
-    Type::Map(Box::new(typ(key_type)), Box::new(typ(value_type)))
+pub fn make_type(kind: TypeKind) -> Type {
+    Type::new(kind, 0..0)
 }
 
-pub fn type_list(element_type: Type) -> Type {
-    Type::List(Box::new(typ(element_type)))
+pub fn type_int() -> Type {
+    make_type(TypeKind::Int)
+}
+pub fn type_float() -> Type {
+    make_type(TypeKind::Float)
+}
+pub fn type_string() -> Type {
+    make_type(TypeKind::String)
+}
+pub fn type_bool() -> Type {
+    make_type(TypeKind::Boolean)
+}
+pub fn type_void() -> Type {
+    make_type(TypeKind::Void)
+}
+pub fn type_f64() -> Type {
+    make_type(TypeKind::F64)
+}
+pub fn type_f32() -> Type {
+    make_type(TypeKind::F32)
+}
+pub fn type_i128() -> Type {
+    make_type(TypeKind::I128)
+}
+pub fn type_i64() -> Type {
+    make_type(TypeKind::I64)
+}
+pub fn type_i32() -> Type {
+    make_type(TypeKind::I32)
+}
+pub fn type_i16() -> Type {
+    make_type(TypeKind::I16)
+}
+pub fn type_i8() -> Type {
+    make_type(TypeKind::I8)
+}
+pub fn type_u128() -> Type {
+    make_type(TypeKind::U128)
+}
+pub fn type_u64() -> Type {
+    make_type(TypeKind::U64)
+}
+pub fn type_u32() -> Type {
+    make_type(TypeKind::U32)
+}
+pub fn type_u16() -> Type {
+    make_type(TypeKind::U16)
+}
+pub fn type_u8() -> Type {
+    make_type(TypeKind::U8)
 }
 
-pub fn type_set(element_type: Type) -> Type {
-    Type::Set(Box::new(typ(element_type)))
+pub fn type_list(inner: Type) -> Type {
+    make_type(TypeKind::List(Box::new(type_expr_non_null(inner))))
 }
 
-pub fn type_tuple(element_types: Vec<Type>) -> Type {
-    Type::Tuple(element_types.into_iter().map(typ).collect())
+pub fn type_map(k: Type, v: Type) -> Type {
+    make_type(TypeKind::Map(
+        Box::new(type_expr_non_null(k)),
+        Box::new(type_expr_non_null(v)),
+    ))
 }
 
-pub fn type_null(element_type: Type) -> Type {
-    Type::Nullable(Box::new(element_type))
+pub fn type_set(inner: Type) -> Type {
+    make_type(TypeKind::Set(Box::new(type_expr_non_null(inner))))
 }
 
-pub fn type_result(ok_type: Type, err_type: Type) -> Type {
-    Type::Result(Box::new(typ(ok_type)), Box::new(typ(err_type)))
+pub fn type_tuple(elements: Vec<Type>) -> Type {
+    make_type(TypeKind::Tuple(
+        elements.into_iter().map(type_expr_non_null).collect(),
+    ))
+}
+
+pub fn type_null(inner: Type) -> Type {
+    make_type(TypeKind::Nullable(Box::new(inner)))
+}
+
+pub fn type_result(ok: Type, err: Type) -> Type {
+    make_type(TypeKind::Result(
+        Box::new(type_expr_non_null(ok)),
+        Box::new(type_expr_non_null(err)),
+    ))
+}
+
+pub fn type_custom(name: &str, args: Option<Vec<Expression>>) -> Type {
+    make_type(TypeKind::Custom(name.to_string(), args))
+}
+
+pub fn type_future(inner: Type) -> Type {
+    make_type(TypeKind::Future(Box::new(type_expr_non_null(inner))))
+}
+
+pub fn type_function(
+    generics: Option<Vec<Expression>>,
+    params: Vec<Parameter>,
+    return_type: Option<Box<Expression>>,
+) -> Type {
+    make_type(TypeKind::Function(generics, params, return_type))
+}
+
+pub fn type_symbol() -> Type {
+    make_type(TypeKind::Symbol)
 }
 
 pub fn type_declaration_expression(

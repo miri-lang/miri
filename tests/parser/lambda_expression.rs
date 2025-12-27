@@ -39,11 +39,11 @@ fn test_lambda_with_generics() {
                         .generics(vec![generic_type("T", None)])
                         .params(vec![parameter(
                             "x".into(),
-                            typ(Type::Custom("T".into(), None)),
+                            type_expr_non_null(type_custom("T", None)),
                             None,
                             None,
                         )])
-                        .return_type(typ(Type::Custom("T".into(), None)))
+                        .return_type(type_expr_non_null(type_custom("T", None)))
                         .build_lambda(expression_statement(identifier("x"))),
                 ),
             )],
@@ -62,10 +62,20 @@ fn test_nested_lambdas() {
                 None,
                 opt_expr(
                     lambda()
-                        .params(vec![parameter("x".into(), typ(Type::Int), None, None)])
+                        .params(vec![parameter(
+                            "x".into(),
+                            type_expr_non_null(type_int()),
+                            None,
+                            None,
+                        )])
                         .build_lambda(expression_statement(
                             lambda()
-                                .params(vec![parameter("y".into(), typ(Type::Int), None, None)])
+                                .params(vec![parameter(
+                                    "y".into(),
+                                    type_expr_non_null(type_int()),
+                                    None,
+                                    None,
+                                )])
                                 .build_lambda(expression_statement(binary(
                                     identifier("x"),
                                     BinaryOp::Add,
@@ -85,7 +95,12 @@ fn test_immediately_invoked_function_expression() {
         "(fn (x int): x * 2)(10)",
         vec![expression_statement(call(
             lambda()
-                .params(vec![parameter("x".into(), typ(Type::Int), None, None)])
+                .params(vec![parameter(
+                    "x".into(),
+                    type_expr_non_null(type_int()),
+                    None,
+                    None,
+                )])
                 .build_lambda(expression_statement(binary(
                     identifier("x"),
                     BinaryOp::Mul,
@@ -101,10 +116,14 @@ fn test_function_type_as_return_type() {
     parser_test(
         "fn counter() fn() int: fn() int: 1",
         vec![func("counter")
-            .return_type(typ(Type::Function(None, vec![], opt_expr(typ(Type::Int)))))
+            .return_type(type_expr_non_null(type_function(
+                None,
+                vec![],
+                opt_expr(type_expr_non_null(type_int())),
+            )))
             .build(expression_statement(
                 lambda()
-                    .return_type(typ(Type::Int))
+                    .return_type(type_expr_non_null(type_int()))
                     .build_lambda(expression_statement(int_literal_expression(1))),
             ))],
     );
@@ -178,7 +197,7 @@ fn test_lambda_with_parameter_guard() {
                     lambda()
                         .params(vec![parameter(
                             "x".into(),
-                            typ(Type::Int),
+                            type_expr_non_null(type_int()),
                             opt_expr(guard(GuardOp::GreaterThan, int_literal_expression(0))),
                             None,
                         )])
@@ -201,8 +220,8 @@ fn get_adder()
             func("get_adder").build(block(vec![return_statement(opt_expr(
                 lambda()
                     .params(vec![
-                        parameter("a".into(), typ(Type::Int), None, None),
-                        parameter("b".into(), typ(Type::Int), None, None),
+                        parameter("a".into(), type_expr_non_null(type_int()), None, None),
+                        parameter("b".into(), type_expr_non_null(type_int()), None, None),
                     ])
                     .build_lambda(expression_statement(binary(
                         identifier("a"),
@@ -235,8 +254,8 @@ func(
             vec![
                 lambda()
                     .params(vec![
-                        parameter("a".into(), typ(Type::Int), None, None),
-                        parameter("b".into(), typ(Type::Int), None, None),
+                        parameter("a".into(), type_expr_non_null(type_int()), None, None),
+                        parameter("b".into(), type_expr_non_null(type_int()), None, None),
                     ])
                     .build_lambda(expression_statement(binary(
                         identifier("a"),
@@ -245,9 +264,9 @@ func(
                     ))),
                 lambda()
                     .params(vec![
-                        parameter("c".into(), typ(Type::Int), None, None),
-                        parameter("d".into(), typ(Type::Int), None, None),
-                        parameter("e".into(), typ(Type::Int), None, None),
+                        parameter("c".into(), type_expr_non_null(type_int()), None, None),
+                        parameter("d".into(), type_expr_non_null(type_int()), None, None),
+                        parameter("e".into(), type_expr_non_null(type_int()), None, None),
                     ])
                     .build_lambda(block(vec![
                         variable_statement(
@@ -349,13 +368,13 @@ fn test_lambda_with_default_parameter_values() {
                         .params(vec![
                             parameter(
                                 "a".into(),
-                                typ(Type::Int),
+                                type_expr_non_null(type_int()),
                                 None,
                                 opt_expr(int_literal_expression(10)),
                             ),
                             parameter(
                                 "b".into(),
-                                typ(Type::Boolean),
+                                type_expr_non_null(type_bool()),
                                 None,
                                 opt_expr(boolean_literal(true)),
                             ),
@@ -390,8 +409,8 @@ fn test_lambda_with_trailing_comma_in_parameters() {
                 opt_expr(
                     lambda()
                         .params(vec![
-                            parameter("a".into(), typ(Type::Int), None, None),
-                            parameter("b".into(), typ(Type::String), None, None),
+                            parameter("a".into(), type_expr_non_null(type_int()), None, None),
+                            parameter("b".into(), type_expr_non_null(type_string()), None, None),
                         ])
                         .build_lambda(expression_statement(identifier("a"))),
                 ),

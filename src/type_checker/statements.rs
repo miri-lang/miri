@@ -5,6 +5,8 @@ use super::context::{
     Context, EnumDefinition, GenericDefinition, StructDefinition, TypeDefinition,
 };
 use super::TypeChecker;
+use crate::ast::factory::make_type;
+use crate::ast::types::{Type, TypeDeclarationKind, TypeKind};
 use crate::ast::*;
 use crate::error::syntax::Span;
 use std::collections::HashMap;
@@ -286,7 +288,7 @@ impl TypeChecker {
                 format!("Cannot infer type for variable '{}'", decl.name),
                 span,
             );
-            Type::Error
+            make_type(TypeKind::Error)
         };
 
         // If both type annotation and initializer exist, check compatibility
@@ -295,8 +297,8 @@ impl TypeChecker {
             if !self.are_compatible(&declared_type, &inferred_type, context) {
                 // Check for list literal compatibility (e.g. [1] -> [i16])
                 let mut compatible = false;
-                if let (Type::List(target_inner), ExpressionKind::List(elements)) =
-                    (&declared_type, &init.node)
+                if let (TypeKind::List(target_inner), ExpressionKind::List(elements)) =
+                    (&declared_type.kind, &init.node)
                 {
                     if let Ok(target_inner_type) = self.extract_type_from_expression(target_inner) {
                         if self.is_integer(&target_inner_type) {
@@ -309,7 +311,7 @@ impl TypeChecker {
                 if !compatible {
                     self.report_error(
                         format!(
-                            "Type mismatch for variable '{}': expected {:?}, got {:?}",
+                            "Type mismatch for variable '{}': expected {}, got {}",
                             decl.name, declared_type, inferred_type
                         ),
                         init.span.clone(),
@@ -317,10 +319,10 @@ impl TypeChecker {
                 }
             } else {
                 // Check for warning: assigning non-nullable to nullable immutable variable
-                if let Type::Nullable(_) = &declared_type {
+                if let TypeKind::Nullable(_) = &declared_type.kind {
                     if !matches!(decl.declaration_type, VariableDeclarationType::Mutable) {
                         // If inferred type is NOT nullable (and not None), warn
-                        if !matches!(inferred_type, Type::Nullable(_)) {
+                        if !matches!(inferred_type.kind, TypeKind::Nullable(_)) {
                             self.report_warning(
                                 format!(
                                     "Variable '{}' is immutable but declared as nullable. Consider removing '?' to make it non-nullable.",
@@ -354,9 +356,9 @@ impl TypeChecker {
         context: &mut Context,
     ) {
         let cond_type = self.infer_expression(cond, context);
-        if cond_type != Type::Boolean {
+        if !matches!(cond_type.kind, TypeKind::Boolean) {
             self.report_error(
-                format!("If condition must be a boolean, got {:?}", cond_type),
+                format!("If condition must be a boolean, got {}", cond_type),
                 cond.span.clone(),
             );
         }
@@ -376,9 +378,9 @@ impl TypeChecker {
 
     fn check_while(&mut self, cond: &Expression, body: &Statement, context: &mut Context) {
         let cond_type = self.infer_expression(cond, context);
-        if cond_type != Type::Boolean {
+        if !matches!(cond_type.kind, TypeKind::Boolean) {
             self.report_error(
-                format!("While condition must be a boolean, got {:?}", cond_type),
+                format!("While condition must be a boolean, got {}", cond_type),
                 cond.span.clone(),
             );
         }
@@ -423,7 +425,7 @@ impl TypeChecker {
                 if !self.are_compatible(&declared_type, element_type, context) {
                     self.report_error(
                         format!(
-                            "Type mismatch for loop variable '{}': expected {:?}, got {:?}",
+                            "Type mismatch for loop variable '{}': expected {}, got {}",
                             decl.name, declared_type, element_type
                         ),
                         type_expr.span.clone(),
@@ -442,14 +444,14 @@ impl TypeChecker {
                 self.current_module.clone(),
             );
         } else if decls.len() == 2 {
-            if let Type::Tuple(exprs) = element_type {
+            if let TypeKind::Tuple(exprs) = &element_type.kind {
                 if exprs.len() == 2 {
                     let key_type = self
                         .extract_type_from_expression(&exprs[0])
-                        .unwrap_or(Type::Error);
+                        .unwrap_or(make_type(TypeKind::Error));
                     let val_type = self
                         .extract_type_from_expression(&exprs[1])
-                        .unwrap_or(Type::Error);
+                        .unwrap_or(make_type(TypeKind::Error));
 
                     let is_mutable_0 =
                         matches!(decls[0].declaration_type, VariableDeclarationType::Mutable);
@@ -478,7 +480,7 @@ impl TypeChecker {
                 }
             } else {
                 self.report_error(
-                    format!("Expected tuple for destructuring, got {:?}", element_type),
+                    format!("Expected tuple for destructuring, got {}", element_type),
                     span,
                 );
             }
@@ -508,7 +510,7 @@ impl TypeChecker {
         let (actual_return_type, return_span) = if let Some(expr) = expr_opt {
             (self.infer_expression(expr, context), expr.span.clone())
         } else {
-            (Type::Void, span.clone())
+            (make_type(TypeKind::Void), span.clone())
         };
 
         // Check if we are inferring return types for the current function
@@ -517,12 +519,16 @@ impl TypeChecker {
             return;
         }
 
-        let expected_return_type = context.return_types.last().unwrap_or(&Type::Void).clone();
+        let expected_return_type = context
+            .return_types
+            .last()
+            .unwrap_or(&make_type(TypeKind::Void))
+            .clone();
 
         if !self.are_compatible(&expected_return_type, &actual_return_type, context) {
             self.report_error(
                 format!(
-                    "Invalid return type: expected {:?}, got {:?}",
+                    "Invalid return type: expected {}, got {}",
                     expected_return_type, actual_return_type
                 ),
                 return_span,
@@ -540,7 +546,11 @@ impl TypeChecker {
             properties,
         } = info;
 
-        let func_type = Type::Function(generics.clone(), params.to_vec(), return_type_expr.clone());
+        let func_type = make_type(TypeKind::Function(
+            generics.clone(),
+            params.to_vec(),
+            return_type_expr.clone(),
+        ));
 
         if context.scopes.len() == 1 {
             self.global_scope.insert(
@@ -571,7 +581,7 @@ impl TypeChecker {
         let return_type = if let Some(rt_expr) = return_type_expr {
             self.resolve_type_expression(rt_expr, context)
         } else {
-            Type::Void
+            make_type(TypeKind::Void)
         };
 
         context.return_types.push(return_type.clone());
@@ -589,7 +599,7 @@ impl TypeChecker {
                 if !self.are_compatible(&param_type, &default_val_type, context) {
                     self.report_error(
                         format!(
-                            "Type mismatch for default value: expected {:?}, got {:?}",
+                            "Type mismatch for default value: expected {}, got {}",
                             param_type, default_val_type
                         ),
                         default_val.span.clone(),
@@ -625,9 +635,9 @@ impl TypeChecker {
                     let guard_type =
                         self.infer_binary(&left, &bin_op, right, guard.span.clone(), context);
 
-                    if guard_type != Type::Boolean {
+                    if !matches!(guard_type.kind, TypeKind::Boolean) {
                         self.report_error(
-                            format!("Type mismatch: guard must be boolean, got {:?}", guard_type),
+                            format!("Type mismatch: guard must be boolean, got {}", guard_type),
                             guard.span.clone(),
                         );
                     }
@@ -644,12 +654,12 @@ impl TypeChecker {
                     if i == len - 1 {
                         if let StatementKind::Expression(expr) = &stmt.node {
                             let expr_type = self.infer_expression(expr, context);
-                            if return_type != Type::Void
+                            if !matches!(return_type.kind, TypeKind::Void)
                                 && !self.are_compatible(&return_type, &expr_type, context)
                             {
                                 self.report_error(
                                     format!(
-                                        "Invalid return type: expected {:?}, got {:?}",
+                                        "Invalid return type: expected {}, got {}",
                                         return_type, expr_type
                                     ),
                                     expr.span.clone(),
@@ -666,12 +676,12 @@ impl TypeChecker {
             }
             StatementKind::Expression(expr) => {
                 let expr_type = self.infer_expression(expr, context);
-                if return_type != Type::Void
+                if !matches!(return_type.kind, TypeKind::Void)
                     && !self.are_compatible(&return_type, &expr_type, context)
                 {
                     self.report_error(
                         format!(
-                            "Invalid return type: expected {:?}, got {:?}",
+                            "Invalid return type: expected {}, got {}",
                             return_type, expr_type
                         ),
                         expr.span.clone(),
@@ -683,7 +693,7 @@ impl TypeChecker {
             }
         }
 
-        if return_type != Type::Void {
+        if !matches!(return_type.kind, TypeKind::Void) {
             let status = check_returns(body);
             if status == ReturnStatus::None {
                 self.report_error("Missing return statement".to_string(), body.span.clone());
@@ -771,13 +781,13 @@ impl TypeChecker {
 
         // Define constructor/type symbol
         // The type of the struct name identifier is Meta(Custom(name))
-        let struct_type = Type::Custom(name.clone(), None); // TODO: Handle generics
+        let struct_type = make_type(TypeKind::Custom(name.clone(), None)); // TODO: Handle generics
 
         if context.scopes.len() == 1 {
             self.global_scope.insert(
                 name.clone(),
                 super::context::SymbolInfo {
-                    ty: Type::Meta(Box::new(struct_type.clone())),
+                    ty: make_type(TypeKind::Meta(Box::new(struct_type.clone()))),
                     mutable: false,
                     visibility: visibility.clone(),
                     module: self.current_module.clone(),
@@ -787,7 +797,7 @@ impl TypeChecker {
 
         context.define(
             name,
-            Type::Meta(Box::new(struct_type)),
+            make_type(TypeKind::Meta(Box::new(struct_type))),
             false,
             visibility.clone(),
             self.current_module.clone(),
@@ -843,13 +853,13 @@ impl TypeChecker {
         }
 
         // Define enum type symbol
-        let enum_type = Type::Custom(name.clone(), None);
+        let enum_type = make_type(TypeKind::Custom(name.clone(), None));
 
         if context.scopes.len() == 1 {
             self.global_scope.insert(
                 name.clone(),
                 super::context::SymbolInfo {
-                    ty: Type::Meta(Box::new(enum_type.clone())),
+                    ty: make_type(TypeKind::Meta(Box::new(enum_type.clone()))),
                     mutable: false,
                     visibility: visibility.clone(),
                     module: self.current_module.clone(),
@@ -859,7 +869,7 @@ impl TypeChecker {
 
         context.define(
             name,
-            Type::Meta(Box::new(enum_type)),
+            make_type(TypeKind::Meta(Box::new(enum_type))),
             false,
             visibility.clone(),
             self.current_module.clone(),
@@ -886,8 +896,8 @@ impl TypeChecker {
 
     fn integer_fits(&self, val: &IntegerLiteral, size: u8, target_type: &Type) -> bool {
         let is_target_unsigned = matches!(
-            target_type,
-            Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::U128
+            target_type.kind,
+            TypeKind::U8 | TypeKind::U16 | TypeKind::U32 | TypeKind::U64 | TypeKind::U128
         );
 
         match val {

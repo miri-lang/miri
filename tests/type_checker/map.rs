@@ -2,12 +2,14 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use super::utils::*;
-use miri::ast::factory::type_map;
-use miri::ast::Type;
+use miri::ast::factory::*;
 
 #[test]
 fn test_map_literal() {
-    check_expr_type("{ \"a\": 1, \"b\": 2 }", type_map(Type::String, Type::Int));
+    check_expr_type(
+        "{ \"a\": 1, \"b\": 2 }",
+        type_map(type_string(), type_int()),
+    );
 }
 
 #[test]
@@ -19,9 +21,9 @@ fn test_map_variable_definitions() {
         let m3 map<i128, f64> = { 1: 1.1, 2: 2.2 }
 ",
         vec![
-            ("m1", type_map(Type::Int, Type::Int)),
-            ("m2", type_map(Type::String, Type::Float)),
-            ("m3", type_map(Type::I128, Type::F64)),
+            ("m1", type_map(type_int(), type_int())),
+            ("m2", type_map(type_string(), type_float())),
+            ("m3", type_map(type_i128(), type_f64())),
         ],
     )
 }
@@ -41,7 +43,7 @@ fn test_map_literal_mixed_values_error() {
 
 #[test]
 fn test_map_indexing() {
-    check_expr_type("{ \"a\": 1 }[\"a\"]", Type::Int);
+    check_expr_type("{ \"a\": 1 }[\"a\"]", type_int());
 }
 
 #[test]
@@ -56,7 +58,7 @@ fn test_map_indexing_variable() {
 let k = \"a\"
 { \"a\": 1 }[k]
 ",
-        Type::Int,
+        type_int(),
     );
 }
 
@@ -69,7 +71,7 @@ fn get_key() string
 
 { \"a\": 1 }[get_key()]
 ",
-        Type::Int,
+        type_int(),
     );
 }
 
@@ -82,7 +84,7 @@ fn get_key<T>(key T) T
 
 { \"a\": 1.2 }[get_key<string>(\"a\")]
 ",
-        Type::F32,
+        type_f32(),
     );
 }
 
@@ -99,7 +101,7 @@ let k = 1
 
 #[test]
 fn test_empty_map() {
-    check_expr_type("{}", type_map(Type::Void, Type::Void));
+    check_expr_type("{}", type_map(type_void(), type_void()));
 }
 
 #[test]
@@ -108,7 +110,7 @@ fn test_empty_map_with_specified_types() {
         "
     let m1 {string: int} = {}
 ",
-        vec![("m1", type_map(Type::String, Type::Int))],
+        vec![("m1", type_map(type_string(), type_int()))],
     );
 }
 
@@ -118,7 +120,7 @@ fn test_empty_map_with_specified_types_named() {
         "
     let m2 map<string, float> = {}
 ",
-        vec![("m2", type_map(Type::String, Type::Float))],
+        vec![("m2", type_map(type_string(), type_float()))],
     );
 }
 
@@ -126,7 +128,7 @@ fn test_empty_map_with_specified_types_named() {
 fn test_nested_map() {
     check_expr_type(
         "{ \"a\": { \"b\": 1 } }",
-        type_map(Type::String, type_map(Type::String, Type::Int)),
+        type_map(type_string(), type_map(type_string(), type_int())),
     );
 }
 

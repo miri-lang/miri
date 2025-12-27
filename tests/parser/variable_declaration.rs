@@ -28,7 +28,11 @@ fn test_parse_variable_declaration_with_initializer() {
 fn test_parse_typed_variable_declaration() {
     variable_declaration_test(
         "let x float",
-        vec![let_variable("x", opt_expr(typ(Type::Float)), None)],
+        vec![let_variable(
+            "x",
+            opt_expr(type_expr_non_null(type_float())),
+            None,
+        )],
         MemberVisibility::Public,
     );
 }
@@ -39,7 +43,7 @@ fn test_parse_typed_variable_declaration_with_initializer() {
         "let x int = 5",
         vec![let_variable(
             "x",
-            opt_expr(typ(Type::Int)),
+            opt_expr(type_expr_non_null(type_int())),
             opt_expr(int_literal_expression(5)),
         )],
         MemberVisibility::Public,

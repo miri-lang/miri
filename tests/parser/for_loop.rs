@@ -150,7 +150,11 @@ fn test_for_loop_with_typed_variable() {
         "
 for i int in 1..=10: // do something
 ",
-        vec![let_variable("i".into(), opt_expr(typ(Type::Int)), None)],
+        vec![let_variable(
+            "i".into(),
+            opt_expr(type_expr_non_null(type_int())),
+            None,
+        )],
         range(
             int_literal_expression(1),
             opt_expr(int_literal_expression(10)),

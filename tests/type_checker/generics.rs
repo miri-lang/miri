@@ -2,7 +2,7 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use super::utils::{check_error, check_expr_type, check_success};
-use miri::ast::Type;
+use miri::ast::factory::*;
 
 #[test]
 fn test_generic_implements_constraint_variable() {
@@ -60,7 +60,7 @@ var b Box<int>
 b.value = 10
 b.value
     ";
-    check_expr_type(source, Type::Int);
+    check_expr_type(source, type_int());
 }
 
 #[test]
@@ -85,7 +85,7 @@ var b Box<Box<int>>
 b.value.value = 10
 b.value.value
     ";
-    check_expr_type(source, Type::Int);
+    check_expr_type(source, type_int());
 }
 
 #[test]
@@ -100,7 +100,7 @@ p.key = \"key\"
 p.value = 10
 p.value
     ";
-    check_expr_type(source, Type::Int);
+    check_expr_type(source, type_int());
 }
 
 #[test]
@@ -136,7 +136,7 @@ var c ListContainer<int>
 c.items = [1, 2, 3]
 c.items[0]
     ";
-    check_expr_type(source, Type::Int);
+    check_expr_type(source, type_int());
 }
 
 #[test]
@@ -149,7 +149,7 @@ var c MapContainer<string, int>
 c.items = {\"a\": 1}
 c.items[\"a\"]
     ";
-    check_expr_type(source, Type::Int);
+    check_expr_type(source, type_int());
 }
 
 #[test]
@@ -180,7 +180,7 @@ var b Box<int>
 b.value = 10
 unbox(b)
     ";
-    check_expr_type(source, Type::Int);
+    check_expr_type(source, type_int());
 }
 
 #[test]
@@ -193,7 +193,7 @@ let b Box<int>
 let x = b.value
 x
     ";
-    check_expr_type(source, Type::Int);
+    check_expr_type(source, type_int());
 }
 
 #[test]

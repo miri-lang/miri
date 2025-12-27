@@ -2,7 +2,7 @@
 // Copyright 2017–2025 Viacheslav Shynkarenko
 
 use super::utils::*;
-use miri::ast::Type;
+use miri::ast::factory::*;
 
 #[test]
 fn test_shadowing_same_scope_same_type() {
@@ -11,7 +11,7 @@ let x = 1
 let x = 2
 x
     ";
-    check_expr_type(source, Type::Int);
+    check_expr_type(source, type_int());
 }
 
 #[test]
@@ -21,7 +21,7 @@ let x = 1
 let x = \"string\"
 x
     ";
-    check_expr_type(source, Type::String);
+    check_expr_type(source, type_string());
 }
 
 #[test]
@@ -73,7 +73,7 @@ if true:
 x
     ";
     // Should be Int (outer x)
-    check_expr_type(source, Type::Int);
+    check_expr_type(source, type_int());
 }
 
 #[test]
@@ -85,7 +85,7 @@ fn foo(x int) string:
 
 foo(1)
     ";
-    check_expr_type(source, Type::String);
+    check_expr_type(source, type_string());
 }
 
 #[test]
@@ -127,5 +127,5 @@ fn foo() string:
 
 foo()
     ";
-    check_expr_type(source, Type::String);
+    check_expr_type(source, type_string());
 }
