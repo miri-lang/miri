@@ -10,8 +10,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -25,15 +24,29 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Install LLVM
-        run: sudo apt-get install -y llvm-21-dev clang libclang-21-dev
+      - name: Install LLVM/Clang 21 from apt.llvm.org (pin 21.1.8)
+        shell: bash
+        run: |
+          set -euxo pipefail
 
-      # - name: Install LLVM and Clang
-      #   uses: KyleMayes/install-llvm-action@v2.0.8
-      #   with:
-      #     version: "21.1.8"
-      #     directory: ${{ runner.temp }}/llvm
-      #     cached: true
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg lsb-release software-properties-common ca-certificates
+
+          # Add apt.llvm.org signing key + repo for LLVM 21
+          wget -O- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/llvm.gpg
+          echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-21 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm.list
+
+          sudo apt-get update
+
+          # Optional: verify the exact version exists before installing (strict)
+          apt-cache madison clang-21 | head -n 20
+          apt-cache madison llvm-21-dev | head -n 20
+
+          sudo apt-get install -y clang-21=21.1.8-1~ubuntu24.04.1 llvm-21-dev=21.1.8-1~ubuntu24.04.1 libclang-21-dev=21.1.8-1~ubuntu24.04.1 llvm-21=21.1.8-1~ubuntu24.04.1
+
+          clang-21 --version
+          llvm-config-21 --version
 
       - name: Check formatting
         run: cargo fmt -- --check
