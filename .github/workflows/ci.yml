@@ -23,7 +23,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Install LLVM and Clang
-        uses: KyleMayes/install-llvm-action@v2
+        uses: KyleMayes/install-llvm-action@v2.0.8
         with:
           version: "21.1.3"
           directory: ${{ runner.temp }}/llvm
