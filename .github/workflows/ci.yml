@@ -26,7 +26,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install LLVM
-        run: sudo apt-get install -y llvm21-dev clang libclang21-dev
+        run: sudo apt-get install -y llvm-21-dev clang libclang-21-dev
 
       # - name: Install LLVM and Clang
       #   uses: KyleMayes/install-llvm-action@v2.0.8
