@@ -22,10 +22,10 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
 
-      - name: Install LLVM
-        uses: KyleMayes/install-llvm-action@v1
+      - name: Install LLVM and Clang
+        uses: KyleMayes/install-llvm-action@v2
         with:
-          version: "21.1.8"
+          version: "21.1"
           directory: ${{ runner.temp }}/llvm
 
       - name: Check formatting
