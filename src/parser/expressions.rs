@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017–2025 Viacheslav Shynkarenko
+// Copyright 2017–2026 Viacheslav Shynkarenko
 
 use crate::ast::factory as ast;
 use crate::ast::types::TypeDeclarationKind;

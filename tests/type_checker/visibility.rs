@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017–2025 Viacheslav Shynkarenko
+// Copyright 2017–2026 Viacheslav Shynkarenko
 
 use crate::type_checker::utils::{check_multi_module_error, check_multi_module_success};
 

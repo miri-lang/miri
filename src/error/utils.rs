@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017–2025 Viacheslav Shynkarenko
+// Copyright 2017–2026 Viacheslav Shynkarenko
 
 use crate::error::syntax::find_line_info;
 use crate::error::syntax::Span;
