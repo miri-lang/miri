@@ -2,6 +2,8 @@
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
 pub mod context;
+pub mod control_flow;
+pub mod variable;
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::statement::{Statement, StatementKind};
@@ -60,52 +62,22 @@ pub fn lower_function(ast_func: &Statement, tc: &TypeChecker) -> Result<Body, St
     }
 }
 
-fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) {
+pub(crate) fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) {
     match &stmt.node {
         StatementKind::Block(stmts) => {
+            // A block defines a new scope. Variables declared within
+            // will be tracked and removed when the block ends.
+            ctx.push_scope();
             for s in stmts {
                 lower_statement(ctx, s);
             }
+            ctx.pop_scope();
         }
         StatementKind::Return(_) => {
             ctx.set_terminator(Terminator::new(TerminatorKind::Return, stmt.span.clone()));
         }
         StatementKind::Variable(decls, _) => {
-            for decl in decls {
-                let mut init_op = None;
-                let var_ty;
-
-                if let Some(init_expr) = &decl.initializer {
-                    let op = lower_expression(ctx, init_expr);
-
-                    // Try to get type from TypeChecker for the initializer expression
-                    if let Some(ty) = ctx.type_checker.get_type(init_expr.id) {
-                        var_ty = ty.clone();
-                    } else {
-                        // Fallback: infer from operand if constant or local
-                        var_ty = match &op {
-                            Operand::Constant(c) => c.ty.clone(),
-                            Operand::Copy(place) | Operand::Move(place) => {
-                                ctx.body.local_decls[place.local.0].ty.clone()
-                            }
-                        };
-                    }
-                    init_op = Some(op);
-                } else if let Some(type_expr) = &decl.typ {
-                    var_ty = resolve_type(ctx.type_checker, type_expr);
-                } else {
-                    panic!("Cannot determine type for variable '{}'", decl.name);
-                }
-
-                let local = ctx.push_local(decl.name.clone(), var_ty, stmt.span.clone());
-
-                if let Some(op) = init_op {
-                    ctx.push_statement(crate::mir::Statement {
-                        kind: MirStatementKind::Assign(Place::new(local), Rvalue::Use(op)),
-                        span: stmt.span.clone(),
-                    });
-                }
-            }
+            variable::lower_variable(ctx, decls, &stmt.span);
         }
         StatementKind::Expression(expr) => {
             let operand = lower_expression(ctx, expr);
@@ -124,11 +96,26 @@ fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) {
                 span: expr.span.clone(),
             });
         }
+        StatementKind::If(cond, then_block, else_block_opt, if_type) => {
+            control_flow::lower_if(ctx, &stmt.span, cond, then_block, else_block_opt, if_type);
+        }
+        StatementKind::Break => {
+            control_flow::lower_break(ctx, &stmt.span);
+        }
+        StatementKind::Continue => {
+            control_flow::lower_continue(ctx, &stmt.span);
+        }
+        StatementKind::While(cond, body, while_type) => {
+            control_flow::lower_while(ctx, &stmt.span, cond, body, while_type);
+        }
+        StatementKind::For(decls, iterable, body) => {
+            control_flow::lower_for(ctx, &stmt.span, decls, iterable, body);
+        }
         _ => {}
     }
 }
 
-fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> Operand {
+pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> Operand {
     match &expr.node {
         ExpressionKind::Literal(lit) => {
             let ty = match lit {
@@ -277,7 +264,7 @@ fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> Operand {
     }
 }
 
-fn resolve_type(tc: &TypeChecker, expr: &Expression) -> Type {
+pub(crate) fn resolve_type(tc: &TypeChecker, expr: &Expression) -> Type {
     if let Some(ty) = tc.get_type(expr.id) {
         return ty.clone();
     }
