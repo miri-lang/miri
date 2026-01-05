@@ -44,6 +44,7 @@ impl<'source> Parser<'source> {
     ) -> Result<Statement, SyntaxError> {
         let mut properties = FunctionProperties {
             is_async: false,
+            is_parallel: false,
             is_gpu: false,
             visibility,
         };
@@ -54,16 +55,40 @@ impl<'source> Parser<'source> {
                     self.eat_token(&Token::Async)?;
                     properties.is_async = true;
                 }
+                Some((Token::Parallel, _)) => {
+                    self.eat_token(&Token::Parallel)?;
+                    properties.is_parallel = true;
+                }
                 Some((Token::Gpu, _)) => {
                     self.eat_token(&Token::Gpu)?;
                     properties.is_gpu = true;
                 }
                 _ => {
-                    return Err(
-                        self.error_unexpected_lookahead_token("function modifier (async or gpu)")
-                    )
+                    return Err(self.error_unexpected_lookahead_token(
+                        "function modifier (async, parallel or gpu)",
+                    ))
                 }
             }
+        }
+
+        // Validate modifier combinations
+        if properties.is_async && properties.is_gpu {
+            return Err(SyntaxError::new(
+                SyntaxErrorKind::InvalidModifierCombination {
+                    combination: "async gpu".to_string(),
+                    reason: "GPU kernels are inherently asynchronous.".to_string(),
+                },
+                self.current_token_span(), // Approximation, ideally we track spans of modifiers
+            ));
+        }
+        if properties.is_async && properties.is_parallel {
+            return Err(SyntaxError::new(
+                SyntaxErrorKind::InvalidModifierCombination {
+                    combination: "async parallel".to_string(),
+                    reason: "Parallel functions represent a different execution model and cannot be async.".to_string(),
+                },
+                self.current_token_span(),
+            ));
         }
 
         self.eat_token(&Token::Fn)?;

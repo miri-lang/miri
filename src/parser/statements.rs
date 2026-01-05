@@ -76,9 +76,10 @@ impl<'source> Parser<'source> {
             Some((Token::Do, _)) => self.while_statement(WhileStatementType::DoWhile)?,
             Some((Token::Forever, _)) => self.while_statement(WhileStatementType::Forever)?,
             Some((Token::For, _)) => self.for_statement()?,
-            Some((Token::Async, _)) | Some((Token::Fn, _)) | Some((Token::Gpu, _)) => {
-                self.function_declaration(MemberVisibility::Public)?
-            }
+            Some((Token::Async, _))
+            | Some((Token::Fn, _))
+            | Some((Token::Gpu, _))
+            | Some((Token::Parallel, _)) => self.function_declaration(MemberVisibility::Public)?,
             Some((Token::Return, _)) => self.return_statement()?,
             Some((Token::Use, _)) => self.use_statement()?,
             Some((Token::Type, _)) => self.type_statement(MemberVisibility::Public)?,

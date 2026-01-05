@@ -32,11 +32,24 @@ impl<'source> Parser<'source> {
             }
             Some((Token::LBracket, _)) => {
                 self.eat_token(&Token::LBracket)?;
-                let element_type = self.element_type_expression("List element type")?;
-                self.eat_token(&Token::RBracket)?;
-                Some(ast::type_expr_non_null(ast::make_type(TypeKind::List(
-                    Box::new(element_type),
-                ))))
+                let element_type = self.element_type_expression("List or Array element type")?;
+
+                if self.match_lookahead_type(|t| t == &Token::Semicolon) {
+                    // It's a [Type; Size] array
+                    self.eat_token(&Token::Semicolon)?;
+                    let size_expr = self.expression()?;
+                    self.eat_token(&Token::RBracket)?;
+                    Some(ast::type_expr_non_null(ast::make_type(TypeKind::Array(
+                        Box::new(element_type),
+                        Box::new(size_expr),
+                    ))))
+                } else {
+                    // It's a [Type] list
+                    self.eat_token(&Token::RBracket)?;
+                    Some(ast::type_expr_non_null(ast::make_type(TypeKind::List(
+                        Box::new(element_type),
+                    ))))
+                }
             }
             Some((Token::LParen, _)) => {
                 self.eat_token(&Token::LParen)?;
@@ -234,6 +247,7 @@ impl<'source> Parser<'source> {
                 self.generic_two_types_expression("Map key type", "Map value type", TypeKind::Map)?
             }
             "future" => self.generic_one_type_expression("Future result type", TypeKind::Future)?,
+            "array" => self.generic_array_type_expression()?,
             "list" => self.generic_one_type_expression("List element type", TypeKind::List)?,
             "set" => self.generic_one_type_expression("Set element type", TypeKind::Set)?,
             "tuple" => {
@@ -390,6 +404,19 @@ impl<'source> Parser<'source> {
         Ok(ast::make_type(create_type(
             Box::new(a_type),
             Box::new(b_type),
+        )))
+    }
+
+    pub(crate) fn generic_array_type_expression(&mut self) -> Result<Type, SyntaxError> {
+        self.eat_token(&Token::LessThan)?;
+        let element_type = self.element_type_expression("Array element type")?;
+        self.eat_token(&Token::Comma)?;
+        let size_expr = self.additive_expression()?;
+        self.eat_token(&Token::GreaterThan)?;
+
+        Ok(ast::make_type(TypeKind::Array(
+            Box::new(element_type),
+            Box::new(size_expr),
         )))
     }
 }

@@ -345,3 +345,42 @@ pub fn lower_for(
         panic!("For loop only supports Range iterables for now");
     }
 }
+
+pub fn lower_call(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    call_expr_id: usize, // New argument
+    func: &Expression,
+    args: &[Expression],
+) -> Operand {
+    let func_op = lower_expression(ctx, func);
+    let arg_ops: Vec<Operand> = args.iter().map(|arg| lower_expression(ctx, arg)).collect();
+
+    // Determine return type (void for now, or from type checker)
+    // In a real scenario, we'd lookup the function signature.
+    // For now, let's assume Int/Void based on usage or just Void if unknown.
+    // Better: check if function is known in TypeChecker
+    let mut return_ty = Type::new(TypeKind::Void, span.clone());
+
+    // Attempt to resolve return type from TypeChecker using the Call expression ID
+    if let Some(ty) = ctx.type_checker.get_type(call_expr_id) {
+        return_ty = ty.clone();
+    }
+
+    let destination = ctx.push_temp(return_ty, span.clone());
+    let target_bb = ctx.new_basic_block();
+
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func: func_op,
+            args: arg_ops,
+            destination: Place::new(destination),
+            target: Some(target_bb),
+        },
+        span.clone(),
+    ));
+
+    ctx.set_current_block(target_bb);
+
+    Operand::Copy(Place::new(destination))
+}

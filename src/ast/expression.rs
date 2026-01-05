@@ -114,6 +114,8 @@ pub enum ExpressionKind {
 
     List(Vec<Expression>), // A list literal, e.g., [1, 2, 3]
 
+    Array(Vec<Expression>, Box<Expression>), // An array literal, e.g., [1, 2, 3] (fixed size)
+
     Map(Vec<(Expression, Expression)>), // A map literal, e.g., {'a': 1, 'b': 2}
 
     Tuple(Vec<Expression>), // A tuple literal, e.g., (1, 'a', true)

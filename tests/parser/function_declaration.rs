@@ -315,30 +315,56 @@ gpu fn my_gpu_func()
 
 #[test]
 fn test_async_gpu_function_declaration() {
-    parser_test(
+    parser_error_test(
         "
 async gpu fn my_async_gpu_func()
     // body
 ",
-        vec![func("my_async_gpu_func")
-            .set_async()
-            .set_gpu()
-            .build_empty_body()],
+        &SyntaxErrorKind::InvalidModifierCombination {
+            combination: "async gpu".to_string(),
+            reason: "GPU kernels are inherently asynchronous.".to_string(),
+        },
     );
 }
 
 #[test]
 fn test_gpu_async_function_declaration_order() {
-    // The order of modifiers should not matter.
-    parser_test(
+    // The order of modifiers should not matter for the error.
+    parser_error_test(
         "
 gpu async fn my_gpu_async_func()
     // body
 ",
-        vec![func("my_gpu_async_func")
-            .set_gpu()
-            .set_async()
-            .build_empty_body()],
+        &SyntaxErrorKind::InvalidModifierCombination {
+            combination: "async gpu".to_string(),
+            reason: "GPU kernels are inherently asynchronous.".to_string(),
+        },
+    );
+}
+
+#[test]
+fn test_parallel_function_declaration() {
+    parser_test(
+        "
+parallel fn foo()
+    // body
+",
+        vec![func("foo").set_parallel().build_empty_body()],
+    );
+}
+
+#[test]
+fn test_async_parallel_function_declaration() {
+    parser_error_test(
+        "
+async parallel fn foo()
+    // body
+",
+        &SyntaxErrorKind::InvalidModifierCombination {
+            combination: "async parallel".to_string(),
+            reason: "Parallel functions represent a different execution model and cannot be async."
+                .to_string(),
+        },
     );
 }
 
@@ -358,16 +384,15 @@ private gpu fn my_private_gpu_func()
 
 #[test]
 fn test_all_modifiers_function_declaration() {
-    parser_test(
+    parser_error_test(
         "
 private async gpu fn my_uber_func()
     // body
 ",
-        vec![func("my_uber_func")
-            .set_private()
-            .set_async()
-            .set_gpu()
-            .build_empty_body()],
+        &SyntaxErrorKind::InvalidModifierCombination {
+            combination: "async gpu".to_string(),
+            reason: "GPU kernels are inherently asynchronous.".to_string(),
+        },
     );
 }
 
@@ -395,13 +420,12 @@ fn test_protected_function() {
 
 #[test]
 fn test_private_async_gpu_function() {
-    parser_test(
+    parser_error_test(
         "private async gpu fn complex_func(): x",
-        vec![func("complex_func")
-            .set_private()
-            .set_async()
-            .set_gpu()
-            .build(expression_statement(identifier("x")))],
+        &SyntaxErrorKind::InvalidModifierCombination {
+            combination: "async gpu".to_string(),
+            reason: "GPU kernels are inherently asynchronous.".to_string(),
+        },
     );
 }
 

@@ -693,6 +693,10 @@ pub fn type_list(inner: Type) -> Type {
     make_type(TypeKind::List(Box::new(type_expr_non_null(inner))))
 }
 
+pub fn type_array(inner: Type, size: Box<Expression>) -> Type {
+    make_type(TypeKind::Array(Box::new(type_expr_non_null(inner)), size))
+}
+
 pub fn type_map(k: Type, v: Type) -> Type {
     make_type(TypeKind::Map(
         Box::new(type_expr_non_null(k)),
@@ -830,6 +834,10 @@ pub fn list(elements: Vec<Expression>) -> Expression {
     expr(ExpressionKind::List(elements))
 }
 
+pub fn array(elements: Vec<Expression>, size: Box<Expression>) -> Expression {
+    expr(ExpressionKind::Array(elements, size))
+}
+
 pub fn map(pairs: Vec<(Expression, Expression)>) -> Expression {
     expr(ExpressionKind::Map(pairs))
 }
@@ -863,7 +871,9 @@ impl FunctionBuilder {
             return_type: None,
             properties: FunctionProperties {
                 is_async: false,
+                is_parallel: false,
                 is_gpu: false,
+
                 visibility: MemberVisibility::Public,
             },
         }
@@ -891,6 +901,11 @@ impl FunctionBuilder {
 
     pub fn set_async(mut self) -> Self {
         self.properties.is_async = true;
+        self
+    }
+
+    pub fn set_parallel(mut self) -> Self {
+        self.properties.is_parallel = true;
         self
     }
 
@@ -987,4 +1002,11 @@ pub fn named_argument(name: String, value: Expression) -> Expression {
 
 pub fn named_argument_with_span(name: String, value: Expression, span: Span) -> Expression {
     expr_with_span(ExpressionKind::NamedArgument(name, Box::new(value)), span)
+}
+
+pub fn type_from_expr(expr: Expression) -> Type {
+    match expr.node {
+        ExpressionKind::Type(t, _) => *t,
+        _ => make_type(TypeKind::Error),
+    }
 }

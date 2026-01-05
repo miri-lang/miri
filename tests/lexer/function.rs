@@ -273,7 +273,7 @@ let f = fn()
 }
 
 #[test]
-fn test_async_and_gpu_functions() {
+fn test_function_modifiers() {
     lexer_test(
         "async fn async_task()",
         vec![
@@ -289,6 +289,17 @@ fn test_async_and_gpu_functions() {
         "gpu fn kernel()",
         vec![
             Token::Gpu,
+            Token::Fn,
+            Token::Identifier,
+            Token::LParen,
+            Token::RParen,
+        ],
+    );
+
+    lexer_test(
+        "parallel fn parallel_task()",
+        vec![
+            Token::Parallel,
             Token::Fn,
             Token::Identifier,
             Token::LParen,

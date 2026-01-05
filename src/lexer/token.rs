@@ -28,6 +28,8 @@ pub enum Token {
     Await,
     #[token("spawn")]
     Spawn,
+    #[token("parallel")]
+    Parallel,
     #[token("gpu")]
     Gpu,
     #[token("if")]
@@ -100,6 +102,8 @@ pub enum Token {
     Private,
 
     // Symbols and Operators
+    #[token(";")]
+    Semicolon,
     #[token(":")]
     Colon,
     #[token("::")]

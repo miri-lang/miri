@@ -87,6 +87,8 @@ pub trait Visitor {
             Rvalue::UnaryOp(_, val) => self.visit_operand(val),
             Rvalue::Cast(op, _) => self.visit_operand(op),
             Rvalue::Len(place) => self.visit_place(place, PlaceContext::NonMutatingUse),
+            Rvalue::GpuThreadIdx(_) => {}
+            Rvalue::GpuBlockIdx(_) => {}
         }
     }
 

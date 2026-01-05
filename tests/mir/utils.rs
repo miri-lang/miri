@@ -14,7 +14,20 @@ pub fn lower_code(source: &str) -> Body {
         .ast
         .body
         .iter()
-        .find(|stmt| matches!(stmt.node, StatementKind::FunctionDeclaration(..)))
+        .find(|stmt| {
+            if let StatementKind::FunctionDeclaration(name, ..) = &stmt.node {
+                name == "main"
+            } else {
+                false
+            }
+        })
+        .or_else(|| {
+            result
+                .ast
+                .body
+                .iter()
+                .find(|stmt| matches!(stmt.node, StatementKind::FunctionDeclaration(..)))
+        })
         .expect("No function declaration found in source");
 
     lower_function(func_stmt, &result.type_checker).expect("Lowering failed")

@@ -8,6 +8,14 @@ use crate::lexer::{token_to_string, Token, TokenSpan};
 use super::Parser;
 
 impl<'source> Parser<'source> {
+    pub(crate) fn current_token_span(&self) -> Span {
+        self._lookahead
+            .as_ref()
+            .map_or(self.source.len()..self.source.len(), |(_, span)| {
+                span.clone()
+            })
+    }
+
     pub(crate) fn eat(
         &mut self,
         expected: impl Fn(&Token) -> bool,
@@ -144,6 +152,7 @@ impl<'source> Parser<'source> {
                     | Token::For
                     | Token::Async
                     | Token::Fn
+                    | Token::Parallel
                     | Token::Gpu
                     | Token::Return
                     | Token::Use
@@ -507,5 +516,5 @@ pub(crate) fn is_inheritance_modifier(token: &Token) -> bool {
 }
 
 pub(crate) fn is_function_modifier(token: &Token) -> bool {
-    matches!(token, Token::Async | Token::Gpu)
+    matches!(token, Token::Async | Token::Gpu | Token::Parallel)
 }

@@ -17,16 +17,20 @@ pub struct Body {
     /// The number of arguments the function takes.
     pub arg_count: usize,
     /// The span of the entire function body.
+    /// The span of the entire function body.
     pub span: Span,
+    /// Whether this function is a GPU kernel/function.
+    pub is_gpu: bool,
 }
 
 impl Body {
-    pub fn new(arg_count: usize, span: Span) -> Self {
+    pub fn new(arg_count: usize, span: Span, is_gpu: bool) -> Self {
         Self {
             basic_blocks: Vec::new(),
             local_decls: Vec::new(),
             arg_count,
             span,
+            is_gpu,
         }
     }
 

@@ -13,7 +13,7 @@ fn test_mir_pretty_print() {
     let int_type = type_int();
 
     let span = Span::default();
-    let mut body = Body::new(2, span.clone());
+    let mut body = Body::new(2, span.clone(), false);
 
     // _0: Return value
     body.new_local(LocalDecl::new(int_type.clone(), span.clone()));

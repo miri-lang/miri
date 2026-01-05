@@ -14,6 +14,7 @@ pub enum MemberVisibility {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FunctionProperties {
     pub is_async: bool,
+    pub is_parallel: bool,
     pub is_gpu: bool,
     pub visibility: MemberVisibility,
 }

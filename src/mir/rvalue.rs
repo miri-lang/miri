@@ -21,6 +21,10 @@ pub enum Rvalue {
     Cast(Box<Operand>, Type),
     /// Get the length of an array/slice.
     Len(Place),
+    /// GPU Thread Index (dimension 0=x, 1=y, 2=z).
+    GpuThreadIdx(usize),
+    /// GPU Block Index (dimension 0=x, 1=y, 2=z).
+    GpuBlockIdx(usize),
     // Aggregate constructions (tuples, arrays, structs) could go here.
 }
 
@@ -33,6 +37,8 @@ impl fmt::Display for Rvalue {
             Rvalue::UnaryOp(op, val) => write!(f, "{:?}({})", op, val),
             Rvalue::Cast(op, ty) => write!(f, "{} as {}", op, ty),
             Rvalue::Len(place) => write!(f, "Len({})", place),
+            Rvalue::GpuThreadIdx(dim) => write!(f, "gpu_thread_idx({})", dim),
+            Rvalue::GpuBlockIdx(dim) => write!(f, "gpu_block_idx({})", dim),
         }
     }
 }

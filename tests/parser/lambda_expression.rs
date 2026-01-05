@@ -8,21 +8,43 @@ use miri::error::syntax::SyntaxErrorKind;
 
 #[test]
 fn test_gpu_async_lambda() {
-    parser_test(
+    parser_error_test(
         "let f = gpu async fn (): 1",
+        &SyntaxErrorKind::InvalidModifierCombination {
+            combination: "async gpu".to_string(),
+            reason: "GPU kernels are inherently asynchronous.".to_string(),
+        },
+    );
+}
+
+#[test]
+fn test_parallel_lambda() {
+    parser_test(
+        "let f = parallel fn (): 1",
         vec![variable_statement(
             vec![let_variable(
                 "f",
                 None,
                 opt_expr(
                     lambda()
-                        .set_gpu()
-                        .set_async()
+                        .set_parallel()
                         .build_lambda(expression_statement(int_literal_expression(1))),
                 ),
             )],
             MemberVisibility::Public,
         )],
+    );
+}
+
+#[test]
+fn test_async_parallel_lambda() {
+    parser_error_test(
+        "let f = async parallel fn (): 1",
+        &SyntaxErrorKind::InvalidModifierCombination {
+            combination: "async parallel".to_string(),
+            reason: "Parallel functions represent a different execution model and cannot be async."
+                .to_string(),
+        },
     );
 }
 

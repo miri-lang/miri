@@ -22,14 +22,14 @@ pub fn lower_function(ast_func: &Statement, tc: &TypeChecker) -> Result<Body, St
         params,
         _ret_type,
         body_stmt,
-        _props,
+        props,
     ) = &ast_func.node
     {
         // For now, assume return type is Void if not specified, or handle it properly.
         // In a real compiler, we'd look up the type from the TypeChecker.
         let ret_ty = Type::new(TypeKind::Void, ast_func.span.clone());
 
-        let mut body = Body::new(params.len(), ast_func.span.clone());
+        let mut body = Body::new(params.len(), ast_func.span.clone(), props.is_gpu);
 
         // _0: Return value
         body.new_local(LocalDecl::new(ret_ty, ast_func.span.clone()));
@@ -81,6 +81,24 @@ pub(crate) fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) {
         }
         StatementKind::Expression(expr) => {
             let operand = lower_expression(ctx, expr);
+
+            // If the expression was a call (or other terminator-producing expr),
+            // the current block might have changed or been terminated.
+            // We only need to assign if it produced a value we care about,
+            // but for expression statements, we usually discard the result unless it's a side-effect.
+            // However, lower_expression typically returns an Operand which is valid in the
+            // block active *after* the expression evaluation.
+
+            // If the expression was a call, lower_expression emitted a call terminator
+            // and switched to a new continuation block. The returned operand is a copy of the
+            // destination temp in that new block.
+            // We don't strictly *need* an assignment here if it's just an expression statement,
+            // but for consistency with other expressions we can assign it to a temp.
+            // The important part is that lower_expression handles the control flow.
+
+            // Check if we need to emit an assignment.
+            // If it's a call returning void, maybe we can skip assignment?
+            // For now, keep generic behavior: assign to temp.
 
             let ty = match &operand {
                 Operand::Constant(c) => c.ty.clone(),
@@ -147,7 +165,13 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
             if let Some(local) = ctx.variable_map.get(name) {
                 Operand::Copy(Place::new(*local))
             } else {
-                panic!("Unknown variable: {}", name);
+                // Assume global function/symbol
+                // In a real compiler we would check if it exists in globals
+                Operand::Constant(Box::new(Constant {
+                    span: expr.span.clone(),
+                    ty: Type::new(TypeKind::Symbol, expr.span.clone()),
+                    literal: crate::ast::literal::Literal::Symbol(name.clone()),
+                }))
             }
         }
         ExpressionKind::Assignment(lhs, op, rhs) => {
@@ -257,6 +281,33 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
             });
 
             Operand::Copy(Place::new(temp))
+        }
+        ExpressionKind::Call(func, args) => {
+            // Check for GPU intrinsics
+            if let ExpressionKind::Identifier(name, _) = &func.node {
+                let intrinsic_rvalue = match name.as_str() {
+                    "gpu_thread_idx_x" => Some(Rvalue::GpuThreadIdx(0)),
+                    "gpu_thread_idx_y" => Some(Rvalue::GpuThreadIdx(1)),
+                    "gpu_thread_idx_z" => Some(Rvalue::GpuThreadIdx(2)),
+                    "gpu_block_idx_x" => Some(Rvalue::GpuBlockIdx(0)),
+                    "gpu_block_idx_y" => Some(Rvalue::GpuBlockIdx(1)),
+                    "gpu_block_idx_z" => Some(Rvalue::GpuBlockIdx(2)),
+                    _ => None,
+                };
+
+                if let Some(rvalue) = intrinsic_rvalue {
+                    let temp = ctx.push_temp(
+                        Type::new(TypeKind::Int, expr.span.clone()),
+                        expr.span.clone(),
+                    );
+                    ctx.push_statement(crate::mir::Statement {
+                        kind: MirStatementKind::Assign(Place::new(temp), rvalue),
+                        span: expr.span.clone(),
+                    });
+                    return Operand::Copy(Place::new(temp));
+                }
+            }
+            control_flow::lower_call(ctx, &expr.span, expr.id, func, args)
         }
         _ => {
             panic!("Unsupported expression kind in lowering: {:?}", expr.node);

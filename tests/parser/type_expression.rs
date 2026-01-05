@@ -12,6 +12,14 @@ fn test_parse_list_type_in_variable() {
 }
 
 #[test]
+fn test_fixed_size_array_type() {
+    type_statement_test(
+        "[int; 3]",
+        type_expr_non_null(type_array(type_int(), Box::new(int_literal_expression(3)))),
+    );
+}
+
+#[test]
 fn test_parse_nullable_map_type_in_parameter() {
     parser_test(
         "
@@ -228,7 +236,7 @@ fn test_error_double_nullable() {
 }
 
 #[test]
-fn test_primitive_types() {
+fn test_system_types() {
     let type_map = vec![
         ("int", type_int()),
         ("i8", type_i8()),
@@ -258,6 +266,10 @@ fn test_primitive_types() {
         (
             "tuple<string, int, float>",
             type_tuple(vec![type_string(), type_int(), type_float()]),
+        ),
+        (
+            "array<string, 3>",
+            type_array(type_string(), Box::new(int_literal_expression(3))),
         ),
     ];
 

@@ -39,6 +39,7 @@ pub enum TypeKind {
     Boolean,
     Symbol,
     List(Box<Expression>),                    // [i32]
+    Array(Box<Expression>, Box<Expression>),  // [i32; 4] or array<i32, 4>
     Map(Box<Expression>, Box<Expression>),    // {string: i32}
     Tuple(Vec<Expression>),                   // (i32, String)
     Set(Box<Expression>),                     // {i32}
@@ -96,6 +97,7 @@ impl fmt::Display for TypeKind {
             TypeKind::Boolean => write!(f, "Boolean"),
             TypeKind::Symbol => write!(f, "Symbol"),
             TypeKind::List(inner) => write!(f, "List({})", inner.node),
+            TypeKind::Array(inner, size) => write!(f, "Array({}, {})", inner.node, size.node),
             TypeKind::Map(k, v) => write!(f, "Map({}, {})", k.node, v.node),
             TypeKind::Tuple(elements) => {
                 write!(f, "Tuple(")?;

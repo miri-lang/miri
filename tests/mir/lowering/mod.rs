@@ -3,7 +3,9 @@
 
 pub mod binary;
 pub mod block;
+pub mod call;
 pub mod function;
+mod gpu;
 pub mod if_statement;
 pub mod literal;
 pub mod r#loop;

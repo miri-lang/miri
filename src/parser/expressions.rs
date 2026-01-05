@@ -4,7 +4,7 @@
 use crate::ast::factory as ast;
 use crate::ast::types::TypeDeclarationKind;
 use crate::ast::*;
-use crate::error::syntax::{Span, SyntaxError};
+use crate::error::syntax::{Span, SyntaxError, SyntaxErrorKind};
 use crate::lexer::{token_to_string, Token};
 
 use super::utils::{
@@ -486,9 +486,10 @@ impl<'source> Parser<'source> {
         match &self._lookahead {
             Some((Token::LParen, _)) => self.parenthesized_expression(),
             Some((Token::Identifier, _)) => self.identifier(),
-            Some((Token::Async, _)) | Some((Token::Fn, _)) | Some((Token::Gpu, _)) => {
-                self.lambda_expression()
-            }
+            Some((Token::Async, _))
+            | Some((Token::Fn, _))
+            | Some((Token::Gpu, _))
+            | Some((Token::Parallel, _)) => self.lambda_expression(),
             Some((Token::LBracket, _)) => self.list_literal_expression(),
             Some((Token::LBrace, _)) => self.brace_expression(),
             Some((Token::Match, _)) => self.match_expression(),
@@ -828,6 +829,7 @@ impl<'source> Parser<'source> {
     pub(crate) fn lambda_expression(&mut self) -> Result<Expression, SyntaxError> {
         let mut properties = FunctionProperties {
             is_async: false,
+            is_parallel: false,
             is_gpu: false,
             visibility: MemberVisibility::Public,
         };
@@ -838,12 +840,36 @@ impl<'source> Parser<'source> {
                     self.eat_token(&Token::Async)?;
                     properties.is_async = true;
                 }
+                Some((Token::Parallel, _)) => {
+                    self.eat_token(&Token::Parallel)?;
+                    properties.is_parallel = true;
+                }
                 Some((Token::Gpu, _)) => {
                     self.eat_token(&Token::Gpu)?;
                     properties.is_gpu = true;
                 }
                 _ => break,
             }
+        }
+
+        // Validate modifier combinations
+        if properties.is_async && properties.is_gpu {
+            return Err(SyntaxError::new(
+                SyntaxErrorKind::InvalidModifierCombination {
+                    combination: "async gpu".to_string(),
+                    reason: "GPU kernels are inherently asynchronous.".to_string(),
+                },
+                self.current_token_span(),
+            ));
+        }
+        if properties.is_async && properties.is_parallel {
+            return Err(SyntaxError::new(
+                SyntaxErrorKind::InvalidModifierCombination {
+                    combination: "async parallel".to_string(),
+                    reason: "Parallel functions represent a different execution model and cannot be async.".to_string(),
+                },
+                self.current_token_span(),
+            ));
         }
 
         self.eat_token(&Token::Fn)?;

@@ -50,6 +50,8 @@ pub enum SyntaxErrorKind {
 
     DuplicateMatchPattern,
     MissingMatchBranches,
+
+    InvalidModifierCombination { combination: String, reason: String },
 }
 
 impl SyntaxError {
@@ -187,6 +189,10 @@ impl SyntaxError {
             SyntaxErrorKind::MissingTypeExpression => (
                 "Missing Type Expression",
                 "Type expression is required but not provided.".to_string(),
+            ),
+            SyntaxErrorKind::InvalidModifierCombination { ref combination, ref reason } => (
+                "Invalid Modifier Combination",
+                format!("The modifiers '{combination}' cannot be used together. {reason}"),
             ),
         };
 

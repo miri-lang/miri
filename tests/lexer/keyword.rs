@@ -49,6 +49,7 @@ fn test_all_keywords_in_various_contexts() {
         ("public", Token::Public),
         ("protected", Token::Protected),
         ("private", Token::Private),
+        ("parallel", Token::Parallel),
     ];
 
     for (keyword, token) in keyword_map {

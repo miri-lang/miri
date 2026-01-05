@@ -9,10 +9,10 @@ use miri::error::syntax::SyntaxErrorKind;
 #[test]
 fn test_list_literal_assignment() {
     parser_test(
-        "let arr = [1, 2, 3]",
+        "let lst = [1, 2, 3]",
         vec![variable_statement(
             vec![let_variable(
-                "arr",
+                "lst",
                 None,
                 opt_expr(list(vec![
                     int_literal_expression(1),
@@ -28,10 +28,10 @@ fn test_list_literal_assignment() {
 #[test]
 fn test_list_index_access() {
     parser_test(
-        "print(arr[0])",
+        "print(lst[0])",
         vec![expression_statement(call(
             identifier("print"),
-            vec![index(identifier("arr"), int_literal_expression(0))],
+            vec![index(identifier("lst"), int_literal_expression(0))],
         ))],
     );
 }

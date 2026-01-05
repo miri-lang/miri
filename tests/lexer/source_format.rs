@@ -126,6 +126,6 @@ fn test_invalid_utf8_replacement_character() {
     // invalid byte sequences become the Unicode replacement character '' (U+FFFD).
     // The lexer should treat this character as an invalid token, as it's not part
     // of any valid token definition.
-    let invalid_utf8_string = "let x = ;";
+    let invalid_utf8_string = "let x = \u{FFFD};";
     lexer_error_test(invalid_utf8_string, &SyntaxErrorKind::InvalidToken);
 }
