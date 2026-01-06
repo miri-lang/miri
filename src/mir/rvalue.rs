@@ -6,6 +6,24 @@ use crate::mir::operand::Operand;
 use crate::mir::place::Place;
 use std::fmt;
 
+/// Kind of aggregate being constructed.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AggregateKind {
+    /// A tuple, e.g., `(1, "hello", true)` - fixed size, heterogeneous
+    Tuple,
+    /// An array, e.g., `[1, 2, 3; 3]` - fixed size, homogeneous
+    Array,
+    /// A struct, e.g., `Point { x: 1, y: 2 }` - named fields
+    Struct(Type),
+    /// A list, e.g., `[1, 2, 3]` - dynamic size, homogeneous
+    List,
+    /// A set, e.g., `{1, 2, 3}` - dynamic size, unique elements
+    Set,
+    /// A map, e.g., `{"a": 1, "b": 2}` - key-value pairs
+    /// Operands alternate: key1, val1, key2, val2, ...
+    Map,
+}
+
 /// Right-hand value: the result of a computation.
 ///
 /// An `Rvalue` produces a value that can be assigned to a `Place`.
@@ -26,8 +44,13 @@ pub enum Rvalue {
     Len(Place),
     /// GPU intrinsic operation (thread index, block index, etc.)
     GpuIntrinsic(GpuIntrinsic),
-    // TODO: Aggregate constructions (tuples, arrays, structs) will be added
-    // as the language matures. Should support both literal and runtime aggregates.
+    /// Construct an aggregate value from operands.
+    /// - Tuple: operands are tuple elements in order
+    /// - Array/List: operands are elements in order
+    /// - Set: operands are unique elements
+    /// - Map: operands alternate key1, val1, key2, val2, ...
+    /// - Struct: operands are field values in declaration order
+    Aggregate(AggregateKind, Vec<Operand>),
 }
 
 impl fmt::Display for Rvalue {
@@ -40,6 +63,60 @@ impl fmt::Display for Rvalue {
             Rvalue::Cast(op, ty) => write!(f, "{} as {}", op, ty),
             Rvalue::Len(place) => write!(f, "Len({})", place),
             Rvalue::GpuIntrinsic(intrinsic) => write!(f, "{}", intrinsic),
+            Rvalue::Aggregate(kind, ops) => match kind {
+                AggregateKind::Tuple => {
+                    write!(f, "(")?;
+                    for (i, op) in ops.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", op)?;
+                    }
+                    write!(f, ")")
+                }
+                AggregateKind::Array | AggregateKind::List => {
+                    write!(f, "[")?;
+                    for (i, op) in ops.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", op)?;
+                    }
+                    write!(f, "]")
+                }
+                AggregateKind::Set => {
+                    write!(f, "{{")?;
+                    for (i, op) in ops.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", op)?;
+                    }
+                    write!(f, "}}")
+                }
+                AggregateKind::Map => {
+                    write!(f, "{{")?;
+                    for (i, chunk) in ops.chunks(2).enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        if chunk.len() == 2 {
+                            write!(f, "{}: {}", chunk[0], chunk[1])?;
+                        }
+                    }
+                    write!(f, "}}")
+                }
+                AggregateKind::Struct(ty) => {
+                    write!(f, "{} {{ ", ty)?;
+                    for (i, op) in ops.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", op)?;
+                    }
+                    write!(f, " }}")
+                }
+            },
         }
     }
 }

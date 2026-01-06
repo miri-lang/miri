@@ -1,28 +1,60 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
-use super::super::utils::lower_code;
-use miri::mir::{BinOp, Operand, Rvalue};
+use super::utils::lowering_test_binary_op;
+use miri::mir::BinOp;
 
 #[test]
-fn test_lower_binary_expression_body() {
-    let source = "fn main(): 1 + 2";
-    let body = lower_code(source);
+fn test_add() {
+    lowering_test_binary_op("fn main(): 1 + 2", BinOp::Add);
+}
 
-    let bb0 = &body.basic_blocks[0];
+#[test]
+fn test_sub() {
+    lowering_test_binary_op("fn main(): 5 - 3", BinOp::Sub);
+}
 
-    // Find the Add operation
-    let mut found_add = false;
-    for stmt in &bb0.statements {
-        if let miri::mir::StatementKind::Assign(_, Rvalue::BinaryOp(op, lhs, rhs)) = &stmt.kind {
-            if *op == BinOp::Add {
-                found_add = true;
-                match (&**lhs, &**rhs) {
-                    (Operand::Constant(_), Operand::Constant(_)) => {}
-                    _ => panic!("Expected constants for Add operands"),
-                }
-            }
-        }
-    }
-    assert!(found_add, "Did not find Add operation");
+#[test]
+fn test_mul() {
+    lowering_test_binary_op("fn main(): 2 * 3", BinOp::Mul);
+}
+
+#[test]
+fn test_div() {
+    lowering_test_binary_op("fn main(): 10 / 2", BinOp::Div);
+}
+
+#[test]
+fn test_mod() {
+    lowering_test_binary_op("fn main(): 10 % 3", BinOp::Rem);
+}
+
+#[test]
+fn test_eq() {
+    lowering_test_binary_op("fn main(): 1 == 1", BinOp::Eq);
+}
+
+#[test]
+fn test_ne() {
+    lowering_test_binary_op("fn main(): 1 != 2", BinOp::Ne);
+}
+
+#[test]
+fn test_lt() {
+    lowering_test_binary_op("fn main(): 1 < 2", BinOp::Lt);
+}
+
+#[test]
+fn test_le() {
+    lowering_test_binary_op("fn main(): 1 <= 2", BinOp::Le);
+}
+
+#[test]
+fn test_gt() {
+    lowering_test_binary_op("fn main(): 2 > 1", BinOp::Gt);
+}
+
+#[test]
+fn test_ge() {
+    lowering_test_binary_op("fn main(): 2 >= 1", BinOp::Ge);
 }

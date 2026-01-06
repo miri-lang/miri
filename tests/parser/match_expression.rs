@@ -421,3 +421,139 @@ fn test_error_on_empty_match() {
     parser_error_test("match x:", &SyntaxErrorKind::MissingMatchBranches);
     parser_error_test("match x\n    \n", &SyntaxErrorKind::MissingMatchBranches);
 }
+
+#[test]
+fn test_match_enum() {
+    parser_test(
+        "
+enum Color: Red, Green, Blue
+let c = Color.Red
+match c
+    Color.Red: 1
+    Color.Green: 2
+    Color.Blue: 3
+",
+        vec![
+            enum_statement(
+                identifier("Color"),
+                vec![
+                    enum_value("Red", vec![]),
+                    enum_value("Green", vec![]),
+                    enum_value("Blue", vec![]),
+                ],
+                MemberVisibility::Public,
+            ),
+            variable_statement(
+                vec![let_variable(
+                    "c",
+                    None,
+                    opt_expr(member(identifier("Color".into()), identifier("Red").into())),
+                )],
+                MemberVisibility::Public,
+            ),
+            expression_statement(match_expression(
+                identifier("c"),
+                vec![
+                    MatchBranch {
+                        patterns: vec![Pattern::Member(
+                            Box::new(Pattern::Identifier("Color".to_string())),
+                            "Red".to_string(),
+                        )],
+                        guard: None,
+                        body: Box::new(expression_statement(int_literal_expression(1))),
+                    },
+                    MatchBranch {
+                        patterns: vec![Pattern::Member(
+                            Box::new(Pattern::Identifier("Color".to_string())),
+                            "Green".to_string(),
+                        )],
+                        guard: None,
+                        body: Box::new(expression_statement(int_literal_expression(2))),
+                    },
+                    MatchBranch {
+                        patterns: vec![Pattern::Member(
+                            Box::new(Pattern::Identifier("Color".to_string())),
+                            "Blue".to_string(),
+                        )],
+                        guard: None,
+                        body: Box::new(expression_statement(int_literal_expression(3))),
+                    },
+                ],
+            )),
+        ],
+    );
+}
+
+#[test]
+fn test_match_enum_with_binding() {
+    parser_test(
+        "
+enum Color: Red(string), Green(string), Blue(string)
+let c = Color.Red('#ff0000')
+match c
+    Color.Red(x): x
+    Color.Green(x): x
+    Color.Blue(x): x
+",
+        vec![
+            enum_statement(
+                identifier("Color"),
+                vec![
+                    enum_value("Red", vec![type_expr_non_null(type_string())]),
+                    enum_value("Green", vec![type_expr_non_null(type_string())]),
+                    enum_value("Blue", vec![type_expr_non_null(type_string())]),
+                ],
+                MemberVisibility::Public,
+            ),
+            variable_statement(
+                vec![let_variable(
+                    "c",
+                    None,
+                    opt_expr(call(
+                        member(identifier("Color".into()), identifier("Red").into()),
+                        vec![string_literal_expression("#ff0000")],
+                    )),
+                )],
+                MemberVisibility::Public,
+            ),
+            expression_statement(match_expression(
+                identifier("c"),
+                vec![
+                    MatchBranch {
+                        patterns: vec![Pattern::EnumVariant(
+                            Box::new(Pattern::Member(
+                                Box::new(Pattern::Identifier("Color".to_string())),
+                                "Red".to_string(),
+                            )),
+                            vec![Pattern::Identifier("x".to_string())],
+                        )],
+                        guard: None,
+                        body: Box::new(expression_statement(identifier("x"))),
+                    },
+                    MatchBranch {
+                        patterns: vec![Pattern::EnumVariant(
+                            Box::new(Pattern::Member(
+                                Box::new(Pattern::Identifier("Color".to_string())),
+                                "Green".to_string(),
+                            )),
+                            vec![Pattern::Identifier("x".to_string())],
+                        )],
+                        guard: None,
+                        body: Box::new(expression_statement(identifier("x"))),
+                    },
+                    MatchBranch {
+                        patterns: vec![Pattern::EnumVariant(
+                            Box::new(Pattern::Member(
+                                Box::new(Pattern::Identifier("Color".to_string())),
+                                "Blue".to_string(),
+                            )),
+                            vec![Pattern::Identifier("x".to_string())],
+                        )],
+                        guard: None,
+                        body: Box::new(expression_statement(identifier("x"))),
+                    },
+                ],
+            )),
+        ],
+    );
+}

@@ -101,6 +101,11 @@ pub trait Visitor {
             Rvalue::Cast(op, _) => self.visit_operand(op),
             Rvalue::Len(place) => self.visit_place(place, PlaceContext::NonMutatingUse),
             Rvalue::GpuIntrinsic(_) => {}
+            Rvalue::Aggregate(_, ops) => {
+                for op in ops {
+                    self.visit_operand(op);
+                }
+            }
         }
     }
 

@@ -1,16 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
-//! Tests for lowering AST blocks to MIR.
-//!
-//! Note: Control flow statements (if, while, for) are not yet lowered.
-//! These tests focus on:
-//! - Statement ordering within blocks
-//! - Linear block structure (no extra basic blocks)
-//! - Block terminators
-//! - Variable declarations and assignments
-//! - Inline vs indented block syntax
-
 use super::super::utils::{
     assert_locals, assert_terminator, count_assignments, count_assignments_to, find_local_idx,
     get_assignment_order, has_local, lower_code,

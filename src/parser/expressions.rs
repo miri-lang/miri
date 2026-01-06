@@ -706,6 +706,14 @@ impl<'source> Parser<'source> {
                     let member = self.parse_simple_identifier()?;
                     pattern = Pattern::Member(Box::new(pattern), member);
                 }
+
+                // Check for enum variant with bindings: Color.Red(x, y)
+                if self.match_lookahead_type(|t| t == &Token::LParen) {
+                    if let Pattern::Tuple(bindings) = self.tuple_pattern()? {
+                        pattern = Pattern::EnumVariant(Box::new(pattern), bindings);
+                    }
+                }
+
                 Ok(pattern)
             }
             Some((Token::LParen, _)) => self.tuple_pattern(),

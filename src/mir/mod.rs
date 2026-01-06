@@ -32,6 +32,6 @@ pub use block::{BasicBlock, BasicBlockData};
 pub use body::{Body, ExecutionModel, LocalDecl, StorageClass};
 pub use operand::{Constant, Operand};
 pub use place::{Local, Place, PlaceElem};
-pub use rvalue::{BinOp, Dimension, GpuIntrinsic, Rvalue, UnOp};
+pub use rvalue::{AggregateKind, BinOp, Dimension, GpuIntrinsic, Rvalue, UnOp};
 pub use statement::{Statement, StatementKind};
 pub use terminator::{Terminator, TerminatorKind};

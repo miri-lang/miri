@@ -23,4 +23,7 @@ pub enum Pattern {
     Regex(RegexToken),
     Default,
     Member(Box<Pattern>, String),
+    /// Enum variant with bindings: Color.Red(x, y)
+    /// First is the enum path (e.g., Color.Red), second is the binding patterns
+    EnumVariant(Box<Pattern>, Vec<Pattern>),
 }

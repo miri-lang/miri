@@ -1214,6 +1214,15 @@ impl TypeChecker {
                                     }
                                 }
                             }
+                            Pattern::EnumVariant(parent, _) => {
+                                if let Pattern::Member(enum_name_pat, variant_name) = &**parent {
+                                    if let Pattern::Identifier(enum_name_str) = &**enum_name_pat {
+                                        if enum_name_str == name {
+                                            remaining_variants.remove(variant_name);
+                                        }
+                                    }
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -1595,6 +1604,85 @@ impl TypeChecker {
                 }
             }
             Pattern::Default => {}
+            Pattern::EnumVariant(parent_pattern, bindings) => {
+                // Extract enum name and variant name from parent pattern
+                let (enum_name, variant_name) = match &**parent_pattern {
+                    Pattern::Member(enum_pat, variant) => {
+                        if let Pattern::Identifier(name) = &**enum_pat {
+                            (name.clone(), variant.clone())
+                        } else {
+                            self.report_error(
+                                "Complex member patterns are not supported".to_string(),
+                                span.clone(),
+                            );
+                            return;
+                        }
+                    }
+                    Pattern::Identifier(name) => {
+                        // Could be just a variant if subject type is known enum
+                        self.report_error(
+                            format!("Expected enum variant pattern like EnumName.{}", name),
+                            span,
+                        );
+                        return;
+                    }
+                    _ => {
+                        self.report_error("Invalid enum variant pattern".to_string(), span);
+                        return;
+                    }
+                };
+
+                // Look up enum definition
+                let enum_def_opt = context
+                    .resolve_type_definition(&enum_name)
+                    .cloned()
+                    .or_else(|| self.global_type_definitions.get(&enum_name).cloned());
+                if let Some(TypeDefinition::Enum(enum_def)) = enum_def_opt {
+                    if let Some(variant_types) = enum_def.variants.get(&variant_name) {
+                        // Check binding count matches
+                        if bindings.len() != variant_types.len() {
+                            self.report_error(
+                                format!(
+                                    "Enum variant '{}' expects {} bindings, got {}",
+                                    variant_name,
+                                    variant_types.len(),
+                                    bindings.len()
+                                ),
+                                span.clone(),
+                            );
+                            return;
+                        }
+
+                        // Clone to avoid borrowing issues
+                        let variant_types_cloned = variant_types.clone();
+
+                        // Bind each pattern with its type
+                        for (binding, var_type) in bindings.iter().zip(variant_types_cloned.iter())
+                        {
+                            self.check_pattern(binding, var_type, context, span.clone());
+                        }
+
+                        // Check if subject type matches the enum type
+                        let expected_type = make_type(TypeKind::Custom(enum_name.clone(), None));
+                        if !self.are_compatible(subject_type, &expected_type, context) {
+                            self.report_error(
+                                format!(
+                                    "Pattern type mismatch: expected {}, got {}",
+                                    subject_type, expected_type
+                                ),
+                                span,
+                            );
+                        }
+                    } else {
+                        self.report_error(
+                            format!("Enum '{}' has no variant '{}'", enum_name, variant_name),
+                            span,
+                        );
+                    }
+                } else {
+                    self.report_error(format!("'{}' is not an Enum", enum_name), span);
+                }
+            }
         }
     }
 

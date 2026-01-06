@@ -2,27 +2,28 @@
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
 use super::super::utils::lower_code;
-use miri::mir::{Operand, Rvalue, UnOp};
+use miri::mir::{Rvalue, UnOp};
+
+fn assert_unary_op(source: &str, expected_op: UnOp) {
+    let body = lower_code(source);
+    let found = body.basic_blocks.iter().any(|bb| {
+        bb.statements.iter().any(|stmt| {
+            if let miri::mir::StatementKind::Assign(_, Rvalue::UnaryOp(op, _)) = &stmt.kind {
+                *op == expected_op
+            } else {
+                false
+            }
+        })
+    });
+    assert!(found, "Expected {:?} operation in MIR", expected_op);
+}
 
 #[test]
-fn test_lower_unary_expression() {
-    let source = "fn main(): -1";
-    let body = lower_code(source);
+fn test_neg() {
+    assert_unary_op("fn main(): -1", UnOp::Neg);
+}
 
-    let bb0 = &body.basic_blocks[0];
-
-    // Find the Neg operation
-    let mut found_neg = false;
-    for stmt in &bb0.statements {
-        if let miri::mir::StatementKind::Assign(_, Rvalue::UnaryOp(op, operand)) = &stmt.kind {
-            if *op == UnOp::Neg {
-                found_neg = true;
-                match &**operand {
-                    Operand::Constant(_) => {}
-                    _ => panic!("Expected constant for Neg operand"),
-                }
-            }
-        }
-    }
-    assert!(found_neg, "Did not find Neg operation");
+#[test]
+fn test_not() {
+    assert_unary_op("fn main(): not true", UnOp::Not);
 }
