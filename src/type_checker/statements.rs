@@ -221,6 +221,41 @@ impl TypeChecker {
         span: Span,
     ) {
         for decl in decls {
+            // Shared Memory Validation
+            if decl.is_shared {
+                if !context.in_gpu_function {
+                    self.report_error(
+                        "Shared variables can only be declared inside 'gpu' functions".to_string(),
+                        span.clone(),
+                    );
+                }
+
+                if let Some(typ_expr) = &decl.typ {
+                    let resolved_type = self.resolve_type_expression(typ_expr, context);
+                    if !matches!(resolved_type.kind, TypeKind::Array(_, _)) {
+                        self.report_error(
+                            format!(
+                                "Shared variable '{}' must be an array, got {}",
+                                decl.name, resolved_type
+                            ),
+                            span.clone(),
+                        );
+                    }
+                } else {
+                    self.report_error(
+                        format!("Shared variable '{}' must have an explicit type", decl.name),
+                        span.clone(),
+                    );
+                }
+
+                if decl.initializer.is_some() {
+                    self.report_error(
+                        format!("Shared variable '{}' cannot have an initializer", decl.name),
+                        span.clone(),
+                    );
+                }
+            }
+
             let inferred_type = self.determine_variable_type(decl, context, span.clone());
             let is_mutable = matches!(decl.declaration_type, VariableDeclarationType::Mutable);
 
@@ -645,6 +680,57 @@ impl TypeChecker {
             }
         }
 
+        // Handle GPU functions
+        let previous_in_gpu = context.in_gpu_function;
+        if properties.is_gpu {
+            context.in_gpu_function = true;
+
+            // Enforce NO explicit return type in source code
+            if let Some(rt_expr) = return_type_expr {
+                self.report_error(
+                    "GPU functions must not have an explicit return type".to_string(),
+                    rt_expr.span.clone(),
+                );
+            }
+
+            // Implicitly set return type to Kernel
+            // Note: The `func_type` symbol stored in global_scope above was created using `return_type_expr`.
+            // We need to update that symbol to return `Kernel` so that calls to it are typed correctly.
+            let kernel_return_type = make_type(TypeKind::Custom("Kernel".to_string(), None));
+
+            if let Some(info) = self.global_scope.get_mut(name) {
+                if let TypeKind::Function(gens, params, _) = &info.ty.kind {
+                    info.ty = make_type(TypeKind::Function(
+                        gens.clone(),
+                        params.clone(),
+                        Some(Box::new(crate::ast::factory::type_expr_non_null(
+                            kernel_return_type.clone(),
+                        ))),
+                    ));
+                }
+            }
+            context.update_symbol_type(
+                name,
+                make_type(TypeKind::Function(
+                    generics.clone(),
+                    params.to_vec(),
+                    Some(Box::new(crate::ast::factory::type_expr_non_null(
+                        kernel_return_type.clone(),
+                    ))),
+                )),
+            );
+
+            // Inject 'gpu_context' object (type GpuContext)
+            let gpu_context_type = make_type(TypeKind::Custom("GpuContext".to_string(), None));
+            context.define(
+                "gpu_context".to_string(),
+                gpu_context_type,
+                false, // Immutable
+                MemberVisibility::Public,
+                self.current_module.clone(),
+            );
+        }
+
         match &body.node {
             StatementKind::Block(stmts) => {
                 // Do not enter a new scope here. The function body shares the scope with parameters.
@@ -700,6 +786,7 @@ impl TypeChecker {
             }
         }
 
+        context.in_gpu_function = previous_in_gpu;
         context.loop_depth = old_loop_depth;
         context.exit_scope();
         context.return_types.pop();

@@ -381,6 +381,7 @@ pub fn let_variable(
         typ,
         initializer: init,
         declaration_type: VariableDeclarationType::Immutable,
+        is_shared: false,
     }
 }
 
@@ -394,6 +395,7 @@ pub fn var(
         typ,
         initializer: init,
         declaration_type: VariableDeclarationType::Mutable,
+        is_shared: false,
     }
 }
 

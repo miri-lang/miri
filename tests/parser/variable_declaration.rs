@@ -188,3 +188,30 @@ fn test_error_on_missing_variable_name() {
         },
     );
 }
+
+#[test]
+fn test_parse_shared_variable_declaration() {
+    // Shared variable: shared name type
+    // Syntax: shared cache [float; 256]
+
+    let expected_decl = VariableDeclaration {
+        name: "cache".into(),
+        typ: Some(Box::new(type_expr_non_null(type_array(
+            type_float(),
+            Box::new(int_literal_expression(256)),
+        )))),
+        initializer: None,
+        declaration_type: VariableDeclarationType::Mutable, // Shared is mutable
+        is_shared: true,
+    };
+
+    // We cannot use variable_declaration_test easily because it expects Let/Var token.
+    // So let's use parser_test directly.
+    parser_test(
+        "shared cache [float; 256]",
+        vec![variable_statement(
+            vec![expected_decl],
+            MemberVisibility::Public,
+        )],
+    );
+}

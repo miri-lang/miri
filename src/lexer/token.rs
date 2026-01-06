@@ -98,6 +98,8 @@ pub enum Token {
     Public,
     #[token("protected")]
     Protected,
+    #[token("shared")]
+    Shared,
     #[token("private")]
     Private,
 

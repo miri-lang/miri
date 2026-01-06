@@ -36,6 +36,7 @@ pub struct VariableDeclaration {
     pub typ: Option<Box<Expression>>, // Type can be specified, e.g., "i32", "String"
     pub initializer: Option<Box<Expression>>, // Optional initializer expression
     pub declaration_type: VariableDeclarationType, // Whether the variable is mutable
+    pub is_shared: bool,
 }
 
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]

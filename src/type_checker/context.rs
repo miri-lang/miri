@@ -69,6 +69,8 @@ pub struct Context {
     pub inferred_return_types: Vec<Option<Vec<(Type, Span)>>>,
     /// Current depth of nested loops (used to validate break/continue).
     pub loop_depth: usize,
+    /// Whether we are currently inside a GPU function.
+    pub in_gpu_function: bool,
 }
 
 impl Context {
@@ -79,6 +81,7 @@ impl Context {
             return_types: Vec::new(),
             inferred_return_types: Vec::new(),
             loop_depth: 0,
+            in_gpu_function: false,
         }
     }
 
@@ -132,6 +135,16 @@ impl Context {
     pub fn define_type(&mut self, name: String, def: TypeDefinition) {
         if let Some(scope) = self.type_definitions.last_mut() {
             scope.insert(name, def);
+        }
+    }
+
+    /// Updates the type of a defined symbol in the current (innermost) scope.
+    pub fn update_symbol_type(&mut self, name: &str, new_type: Type) {
+        for scope in self.scopes.iter_mut().rev() {
+            if let Some(info) = scope.get_mut(name) {
+                info.ty = new_type;
+                return;
+            }
         }
     }
 

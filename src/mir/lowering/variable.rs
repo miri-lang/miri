@@ -3,7 +3,7 @@
 
 use crate::ast::statement::VariableDeclaration;
 use crate::error::syntax::Span;
-use crate::mir::{Operand, Place, Rvalue, StatementKind as MirStatementKind};
+use crate::mir::{Operand, Place, Rvalue, StatementKind as MirStatementKind, StorageClass};
 
 use super::{lower_expression, resolve_type, LoweringContext};
 
@@ -35,6 +35,10 @@ pub fn lower_variable(ctx: &mut LoweringContext, decls: &[VariableDeclaration], 
         }
 
         let local = ctx.push_local(decl.name.clone(), var_ty, span.clone());
+
+        if decl.is_shared {
+            ctx.body.local_decls[local.0].storage_class = StorageClass::GpuShared;
+        }
 
         if let Some(op) = init_op {
             ctx.push_statement(crate::mir::Statement {

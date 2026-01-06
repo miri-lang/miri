@@ -4,8 +4,8 @@
 use miri::ast::factory::*;
 use miri::error::syntax::Span;
 use miri::mir::{
-    BasicBlockData, BinOp, Body, Local, LocalDecl, Operand, Place, Rvalue, Statement,
-    StatementKind, Terminator, TerminatorKind,
+    BasicBlockData, BinOp, Body, ExecutionModel, Local, LocalDecl, Operand, Place, Rvalue,
+    Statement, StatementKind, Terminator, TerminatorKind,
 };
 
 #[test]
@@ -13,7 +13,7 @@ fn test_mir_pretty_print() {
     let int_type = type_int();
 
     let span = Span::default();
-    let mut body = Body::new(2, span.clone(), false);
+    let mut body = Body::new(2, span.clone(), ExecutionModel::Cpu);
 
     // _0: Return value
     body.new_local(LocalDecl::new(int_type.clone(), span.clone()));

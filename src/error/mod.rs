@@ -2,11 +2,13 @@
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
 pub mod compiler;
+pub mod lowering;
 pub mod syntax;
 pub mod type_error;
 pub mod utils;
 
 pub use compiler::*;
+pub use lowering::*;
 pub use syntax::*;
 pub use type_error::*;
 pub use utils::*;

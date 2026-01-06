@@ -427,3 +427,59 @@ fn foo() int
 ";
     check_error(source, "Missing return statement");
 }
+
+#[test]
+fn test_gpu_function_must_return_void() {
+    check_error(
+        "gpu fn my_kernel() int: 1",
+        "GPU functions must not have an explicit return type",
+    );
+}
+
+#[test]
+fn test_gpu_function_implicit_return() {
+    let input = "
+gpu fn my_kernel()
+    let x = 1
+";
+    check_success(input);
+}
+
+#[test]
+fn test_gpu_function_cannot_have_explicit_return() {
+    let input = "
+gpu fn my_kernel() void
+    return
+";
+    check_error(input, "GPU functions must not have an explicit return type");
+}
+
+#[test]
+fn test_gpu_function_cannot_call_print() {
+    let input = "
+gpu fn my_kernel()
+    print(1)
+";
+    check_error(
+        input,
+        "Host function 'print' cannot be called from a GPU kernel",
+    );
+}
+
+#[test]
+fn test_gpu_function_can_use_builtins() {
+    let input = "
+gpu fn my_kernel()
+    let x = gpu_context.thread_idx.x
+";
+    check_success(input);
+}
+
+#[test]
+fn test_gpu_function_block_dim() {
+    let input = "
+gpu fn my_kernel()
+    let x = gpu_context.block_dim.x
+";
+    check_success(input);
+}

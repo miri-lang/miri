@@ -73,6 +73,19 @@ pub trait Visitor {
                 }
                 self.visit_place(destination, PlaceContext::MutatingUse);
             }
+
+            TerminatorKind::GpuLaunch {
+                kernel,
+                grid,
+                block,
+                destination,
+                target: _,
+            } => {
+                self.visit_operand(kernel);
+                self.visit_operand(grid);
+                self.visit_operand(block);
+                self.visit_place(destination, PlaceContext::MutatingUse);
+            }
         }
     }
 
@@ -87,8 +100,7 @@ pub trait Visitor {
             Rvalue::UnaryOp(_, val) => self.visit_operand(val),
             Rvalue::Cast(op, _) => self.visit_operand(op),
             Rvalue::Len(place) => self.visit_place(place, PlaceContext::NonMutatingUse),
-            Rvalue::GpuThreadIdx(_) => {}
-            Rvalue::GpuBlockIdx(_) => {}
+            Rvalue::GpuIntrinsic(_) => {}
         }
     }
 

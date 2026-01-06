@@ -11,7 +11,9 @@ pub mod expressions;
 pub mod statements;
 pub mod utils;
 
-use context::{Context, StructDefinition, SymbolInfo, TypeDefinition, TypeRelation};
+use context::{
+    Context, GenericDefinition, StructDefinition, SymbolInfo, TypeDefinition, TypeRelation,
+};
 
 /// The TypeChecker struct is responsible for validating the type safety of the program.
 /// It traverses the AST, infers types for expressions, and ensures that operations
@@ -66,6 +68,91 @@ impl TypeChecker {
                     MemberVisibility::Public,
                 )],
                 generics: None,
+                module: "std".to_string(),
+            }),
+        );
+
+        // Define built-in Dim3 type
+        let dim3_def = TypeDefinition::Struct(StructDefinition {
+            fields: vec![
+                (
+                    "x".to_string(),
+                    crate::ast::factory::make_type(TypeKind::Int),
+                    MemberVisibility::Public,
+                ),
+                (
+                    "y".to_string(),
+                    crate::ast::factory::make_type(TypeKind::Int),
+                    MemberVisibility::Public,
+                ),
+                (
+                    "z".to_string(),
+                    crate::ast::factory::make_type(TypeKind::Int),
+                    MemberVisibility::Public,
+                ),
+            ],
+            generics: None,
+            module: "std".to_string(),
+        });
+        global_type_definitions.insert("Dim3".to_string(), dim3_def.clone());
+
+        // Define built-in GpuContext type (formerly Kernel)
+        let dim3_type = crate::ast::factory::make_type(TypeKind::Custom("Dim3".to_string(), None));
+        global_type_definitions.insert(
+            "GpuContext".to_string(),
+            TypeDefinition::Struct(StructDefinition {
+                fields: vec![
+                    (
+                        "thread_idx".to_string(),
+                        dim3_type.clone(),
+                        MemberVisibility::Public,
+                    ),
+                    (
+                        "block_idx".to_string(),
+                        dim3_type.clone(),
+                        MemberVisibility::Public,
+                    ),
+                    (
+                        "block_dim".to_string(),
+                        dim3_type.clone(),
+                        MemberVisibility::Public,
+                    ),
+                    (
+                        "grid_dim".to_string(),
+                        dim3_type.clone(),
+                        MemberVisibility::Public,
+                    ),
+                ],
+                generics: None,
+                module: "std".to_string(),
+            }),
+        );
+
+        // Define built-in Kernel type (opaque handle)
+        global_type_definitions.insert(
+            "Kernel".to_string(),
+            TypeDefinition::Struct(StructDefinition {
+                fields: vec![],
+                generics: None,
+                module: "std".to_string(),
+            }),
+        );
+
+        // Define built-in Future<T> type
+        let _generic_t_future = crate::ast::factory::make_type(TypeKind::Generic(
+            "T".to_string(),
+            None,
+            TypeDeclarationKind::None,
+        ));
+        global_type_definitions.insert(
+            "Future".to_string(),
+            TypeDefinition::Struct(StructDefinition {
+                fields: vec![], // Opaque
+                generics: Some(vec![GenericDefinition {
+                    name: "T".to_string(),
+                    constraint: None,
+                    kind: TypeDeclarationKind::None,
+                }]),
                 module: "std".to_string(),
             }),
         );

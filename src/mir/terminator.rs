@@ -56,6 +56,24 @@ impl fmt::Display for Terminator {
                     write!(f, "unwind")
                 }
             }
+            TerminatorKind::GpuLaunch {
+                kernel,
+                grid,
+                block,
+                destination,
+                target,
+            } => {
+                write!(
+                    f,
+                    "{} = launch({}, grid: {}, block: {}) -> ",
+                    destination, kernel, grid, block
+                )?;
+                if let Some(t) = target {
+                    write!(f, "{}", t)
+                } else {
+                    write!(f, "unwind")
+                }
+            }
         }
     }
 }
@@ -78,6 +96,14 @@ pub enum TerminatorKind {
     Call {
         func: Operand,
         args: Vec<Operand>,
+        destination: Place,
+        target: Option<BasicBlock>,
+    },
+    /// GPU Kernel Launch.
+    GpuLaunch {
+        kernel: Operand,
+        grid: Operand,
+        block: Operand,
         destination: Place,
         target: Option<BasicBlock>,
     },

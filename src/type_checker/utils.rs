@@ -223,6 +223,20 @@ impl TypeChecker {
             UnaryOp::Await => {
                 if let TypeKind::Future(inner_expr) = &expr_type.kind {
                     self.extract_type_from_expression(inner_expr)
+                } else if let TypeKind::Custom(name, args) = &expr_type.kind {
+                    if name == "Future" {
+                        if let Some(args) = args {
+                            if let Some(arg) = args.first() {
+                                self.extract_type_from_expression(arg)
+                            } else {
+                                Ok(crate::ast::factory::make_type(TypeKind::Void))
+                            }
+                        } else {
+                            Ok(crate::ast::factory::make_type(TypeKind::Void))
+                        }
+                    } else {
+                        Err(format!("Await requires a Future, got {}", expr_type))
+                    }
                 } else {
                     Err(format!("Await requires a Future, got {}", expr_type))
                 }
@@ -820,7 +834,10 @@ impl TypeChecker {
                             None
                         };
 
-                        let def = context.resolve_type_definition(&name);
+                        let def = context
+                            .resolve_type_definition(&name)
+                            .cloned()
+                            .or_else(|| self.global_type_definitions.get(&name).cloned());
                         if let Some(def) = def {
                             match def {
                                 TypeDefinition::Struct(struct_def) => {

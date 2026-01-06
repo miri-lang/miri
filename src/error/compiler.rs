@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
+use crate::error::lowering::LoweringError;
 use crate::error::syntax::SyntaxError;
 use crate::error::type_error::TypeError;
 use crate::error::utils::format_diagnostic;
@@ -31,6 +32,9 @@ pub enum CompilerError {
 
     #[error("Codegen Error: {0}")]
     Codegen(String),
+
+    #[error("Lowering Error: {0}")]
+    Lowering(LoweringError),
 }
 
 impl CompilerError {
@@ -45,6 +49,7 @@ impl CompilerError {
                 .map(|e| format_diagnostic(source, &e.span, &e.message, "error", e.help.as_deref()))
                 .collect::<Vec<_>>()
                 .join("\n"),
+            CompilerError::Lowering(e) => e.report(source),
             _ => format!("{}", self),
         }
     }

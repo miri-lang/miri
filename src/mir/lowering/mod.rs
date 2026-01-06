@@ -9,8 +9,8 @@ use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::statement::{Statement, StatementKind};
 use crate::ast::types::{Type, TypeKind};
 use crate::mir::{
-    BinOp, Body, Constant, LocalDecl, Operand, Place, Rvalue, StatementKind as MirStatementKind,
-    Terminator, TerminatorKind, UnOp,
+    BinOp, Body, Constant, Dimension, ExecutionModel, GpuIntrinsic, LocalDecl, Operand, Place,
+    PlaceElem, Rvalue, StatementKind as MirStatementKind, Terminator, TerminatorKind, UnOp,
 };
 use crate::type_checker::TypeChecker;
 use context::LoweringContext;
@@ -25,22 +25,26 @@ pub fn lower_function(ast_func: &Statement, tc: &TypeChecker) -> Result<Body, St
         props,
     ) = &ast_func.node
     {
-        // For now, assume return type is Void if not specified, or handle it properly.
-        // In a real compiler, we'd look up the type from the TypeChecker.
+        // TODO: Return type is currently assumed to be Void. Should look up the
+        // actual return type from the function signature via the TypeChecker.
         let ret_ty = Type::new(TypeKind::Void, ast_func.span.clone());
 
-        let mut body = Body::new(params.len(), ast_func.span.clone(), props.is_gpu);
+        let execution_model = if props.is_gpu {
+            ExecutionModel::GpuKernel
+        } else {
+            ExecutionModel::Cpu
+        };
+        let mut body = Body::new(params.len(), ast_func.span.clone(), execution_model);
 
         // _0: Return value
         body.new_local(LocalDecl::new(ret_ty, ast_func.span.clone()));
 
         let mut ctx = LoweringContext::new(body, tc);
 
-        // Add parameters as locals
         for param in params {
-            // We need to resolve the type of the parameter.
-            // For now, let's use a dummy type or try to extract it if simple.
-            let param_ty = Type::new(TypeKind::Int, param.typ.span.clone()); // Placeholder
+            // TODO: Parameter type resolution is currently a placeholder. Should resolve
+            // the actual type from param.typ expression via the TypeChecker.
+            let param_ty = Type::new(TypeKind::Int, param.typ.span.clone());
             ctx.push_local(param.name.clone(), param_ty, param.typ.span.clone());
         }
 
@@ -283,15 +287,27 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
             Operand::Copy(Place::new(temp))
         }
         ExpressionKind::Call(func, args) => {
-            // Check for GPU intrinsics
+            // Check for legacy GPU intrinsic function names (gpu_thread_idx_x etc.)
             if let ExpressionKind::Identifier(name, _) = &func.node {
                 let intrinsic_rvalue = match name.as_str() {
-                    "gpu_thread_idx_x" => Some(Rvalue::GpuThreadIdx(0)),
-                    "gpu_thread_idx_y" => Some(Rvalue::GpuThreadIdx(1)),
-                    "gpu_thread_idx_z" => Some(Rvalue::GpuThreadIdx(2)),
-                    "gpu_block_idx_x" => Some(Rvalue::GpuBlockIdx(0)),
-                    "gpu_block_idx_y" => Some(Rvalue::GpuBlockIdx(1)),
-                    "gpu_block_idx_z" => Some(Rvalue::GpuBlockIdx(2)),
+                    "gpu_thread_idx_x" => {
+                        Some(Rvalue::GpuIntrinsic(GpuIntrinsic::ThreadIdx(Dimension::X)))
+                    }
+                    "gpu_thread_idx_y" => {
+                        Some(Rvalue::GpuIntrinsic(GpuIntrinsic::ThreadIdx(Dimension::Y)))
+                    }
+                    "gpu_thread_idx_z" => {
+                        Some(Rvalue::GpuIntrinsic(GpuIntrinsic::ThreadIdx(Dimension::Z)))
+                    }
+                    "gpu_block_idx_x" => {
+                        Some(Rvalue::GpuIntrinsic(GpuIntrinsic::BlockIdx(Dimension::X)))
+                    }
+                    "gpu_block_idx_y" => {
+                        Some(Rvalue::GpuIntrinsic(GpuIntrinsic::BlockIdx(Dimension::Y)))
+                    }
+                    "gpu_block_idx_z" => {
+                        Some(Rvalue::GpuIntrinsic(GpuIntrinsic::BlockIdx(Dimension::Z)))
+                    }
                     _ => None,
                 };
 
@@ -308,6 +324,116 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                 }
             }
             control_flow::lower_call(ctx, &expr.span, expr.id, func, args)
+        }
+        ExpressionKind::Member(obj, prop) => {
+            let obj_operand = lower_expression(ctx, obj);
+
+            // Handle GPU Intrinsics (gpu_context.thread_idx.x, etc.)
+            // This uses a two-step lowering: gpu_context.thread_idx => intermediate symbol,
+            // then intermediate_symbol.x => actual GpuIntrinsic rvalue.
+            if let Operand::Constant(c) = &obj_operand {
+                if let crate::ast::literal::Literal::Symbol(sym) = &c.literal {
+                    if sym == "gpu_context" {
+                        if let ExpressionKind::Identifier(prop_name, _) = &prop.node {
+                            // Return intermediate symbol for chained access
+                            return Operand::Constant(Box::new(Constant {
+                                span: expr.span.clone(),
+                                ty: Type::new(TypeKind::Void, expr.span.clone()),
+                                literal: crate::ast::literal::Literal::Symbol(format!(
+                                    "gpu_context.{}",
+                                    prop_name
+                                )),
+                            }));
+                        }
+                    } else if sym.starts_with("gpu_context.") {
+                        if let ExpressionKind::Identifier(prop_name, _) = &prop.node {
+                            let dim = match prop_name.as_str() {
+                                "x" => Dimension::X,
+                                "y" => Dimension::Y,
+                                "z" => Dimension::Z,
+                                _ => panic!("Invalid dimension for GPU intrinsic: {}", prop_name),
+                            };
+
+                            let rvalue = match sym.as_str() {
+                                "gpu_context.thread_idx" => {
+                                    Rvalue::GpuIntrinsic(GpuIntrinsic::ThreadIdx(dim))
+                                }
+                                "gpu_context.block_idx" => {
+                                    Rvalue::GpuIntrinsic(GpuIntrinsic::BlockIdx(dim))
+                                }
+                                "gpu_context.block_dim" => {
+                                    Rvalue::GpuIntrinsic(GpuIntrinsic::BlockDim(dim))
+                                }
+                                "gpu_context.grid_dim" => {
+                                    Rvalue::GpuIntrinsic(GpuIntrinsic::GridDim(dim))
+                                }
+                                _ => panic!("Unknown GPU intrinsic: {}", sym),
+                            };
+
+                            let temp = ctx.push_temp(
+                                Type::new(TypeKind::Int, expr.span.clone()),
+                                expr.span.clone(),
+                            );
+                            ctx.push_statement(crate::mir::Statement {
+                                kind: MirStatementKind::Assign(Place::new(temp), rvalue),
+                                span: expr.span.clone(),
+                            });
+                            return Operand::Copy(Place::new(temp));
+                        }
+                    }
+                }
+            }
+
+            // 2. Handle General Struct Member Access
+            let obj_ty = if let Some(ty) = ctx.type_checker.get_type(obj.id) {
+                ty
+            } else {
+                panic!("Type not found for expression ID {}", obj.id);
+            };
+
+            if let TypeKind::Custom(struct_name, _) = &obj_ty.kind {
+                // Find field index
+                // We need to look up the struct definition in the type checker.
+                // The type checker doesn't expose a direct "get_field_index" method,
+                // but we can look up the definition.
+                // Note: Global type definitions are available.
+                if let Some(crate::type_checker::context::TypeDefinition::Struct(def)) =
+                    ctx.type_checker.global_type_definitions.get(struct_name)
+                {
+                    if let ExpressionKind::Identifier(field_name, _) = &prop.node {
+                        if let Some(idx) = def.fields.iter().position(|(f, _, _)| f == field_name) {
+                            // Ensure obj is a Place (copy to temp if constant)
+                            let place = match obj_operand {
+                                Operand::Copy(p) | Operand::Move(p) => p,
+                                Operand::Constant(c) => {
+                                    let temp = ctx.push_temp(c.ty.clone(), obj.span.clone());
+                                    ctx.push_statement(crate::mir::Statement {
+                                        kind: MirStatementKind::Assign(
+                                            Place::new(temp),
+                                            Rvalue::Use(Operand::Constant(c)),
+                                        ),
+                                        span: obj.span.clone(),
+                                    });
+                                    Place::new(temp)
+                                }
+                            };
+
+                            // Create new place with projection
+                            let mut new_place = place.clone();
+                            new_place.projection.push(PlaceElem::Field(idx));
+
+                            return Operand::Copy(new_place);
+                        } else {
+                            panic!(
+                                "Field '{}' not found in struct '{}'",
+                                field_name, struct_name
+                            );
+                        }
+                    }
+                }
+            }
+
+            panic!("Unsupported member access on type: {}", obj_ty);
         }
         _ => {
             panic!("Unsupported expression kind in lowering: {:?}", expr.node);

@@ -69,6 +69,7 @@ impl<'source> Parser<'source> {
             Some((Token::Let, _)) | Some((Token::Var, _)) => {
                 self.variable_statement(MemberVisibility::Public)?
             }
+            Some((Token::Shared, _)) => self.shared_variable_statement(MemberVisibility::Public)?,
             Some((Token::If, _)) => self.if_statement(IfStatementType::If)?,
             Some((Token::Unless, _)) => self.if_statement(IfStatementType::Unless)?,
             Some((Token::While, _)) => self.while_statement(WhileStatementType::While)?,
@@ -112,8 +113,45 @@ impl<'source> Parser<'source> {
         };
 
         self.eat_token(&token)?;
-        let declarations = self.variable_declaration_list(&variable_declaration_type, true)?;
+        let declarations =
+            self.variable_declaration_list(&variable_declaration_type, true, false)?;
         Ok(ast::variable_statement(declarations, visibility))
+    }
+
+    /*
+        SharedVariableStatement
+            : 'shared' Identifier Type EXPRESSION_END
+            ;
+    */
+    pub(crate) fn shared_variable_statement(
+        &mut self,
+        visibility: MemberVisibility,
+    ) -> Result<Statement, SyntaxError> {
+        self.eat_token(&Token::Shared)?;
+
+        let name = self.parse_simple_identifier()?;
+
+        // Type is mandatory for shared variables
+        let typ_expr = self.type_expression()?;
+        let typ = match typ_expr {
+            Some(t) => Some(Box::new(t)),
+            None => return Err(self.error_unexpected_lookahead_token("type definition")),
+        };
+
+        // Shared variables cannot have initializers
+
+        let declaration = VariableDeclaration {
+            name,
+            typ,
+            initializer: None,
+            declaration_type: VariableDeclarationType::Mutable,
+            is_shared: true,
+        };
+
+        self.eat_statement_end()?;
+
+        // Reuse variable_statement node but set is_shared logic inside VariableDeclaration
+        Ok(ast::variable_statement(vec![declaration], visibility))
     }
 
     /*
@@ -126,13 +164,18 @@ impl<'source> Parser<'source> {
         &mut self,
         declaration_type: &VariableDeclarationType,
         accept_initializer: bool,
+        is_shared: bool,
     ) -> Result<Vec<VariableDeclaration>, SyntaxError> {
         let mut declarations =
-            vec![self.variable_declaration(declaration_type, accept_initializer)?];
+            vec![self.variable_declaration(declaration_type, accept_initializer, is_shared)?];
 
         while self.lookahead_is_comma() {
             self.eat_token(&Token::Comma)?;
-            declarations.push(self.variable_declaration(declaration_type, accept_initializer)?);
+            declarations.push(self.variable_declaration(
+                declaration_type,
+                accept_initializer,
+                is_shared,
+            )?);
         }
 
         Ok(declarations)
@@ -150,6 +193,7 @@ impl<'source> Parser<'source> {
         &mut self,
         declaration_type: &VariableDeclarationType,
         accept_initializer: bool,
+        is_shared: bool,
     ) -> Result<VariableDeclaration, SyntaxError> {
         let name = self.parse_simple_identifier()?;
 
@@ -172,6 +216,7 @@ impl<'source> Parser<'source> {
             typ,
             initializer,
             declaration_type: declaration_type.clone(),
+            is_shared,
         })
     }
 
@@ -309,7 +354,7 @@ impl<'source> Parser<'source> {
 
         // For loop has immutable variable declarations without initializers
         let variable_declarations =
-            self.variable_declaration_list(&VariableDeclarationType::Immutable, false)?;
+            self.variable_declaration_list(&VariableDeclarationType::Immutable, false, false)?;
         self.eat_token(&Token::In)?;
         let iterable_expr = self.range_expression()?;
 

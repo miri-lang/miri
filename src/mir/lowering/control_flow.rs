@@ -353,6 +353,57 @@ pub fn lower_call(
     func: &Expression,
     args: &[Expression],
 ) -> Operand {
+    // Check for kernel launch: kernel_handle.launch(grid, block)
+    if let ExpressionKind::Member(obj, prop) = &func.node {
+        if let ExpressionKind::Identifier(name, _) = &prop.node {
+            if name == "launch" {
+                // Check if the object is of type Kernel
+                // We need to resolve the type of 'obj'
+                // We can check if TypeChecker says it's Kernel
+                // Note: infer_expression puts types in ctx.type_checker.types map by ID.
+                if let Some(ty) = ctx.type_checker.get_type(obj.id) {
+                    // Check if type name is Kernel
+                    if let TypeKind::Custom(type_name, _) = &ty.kind {
+                        if type_name == "Kernel" {
+                            // This is a GPU kernel launch!
+                            let kernel_op = lower_expression(ctx, obj);
+
+                            if args.len() != 2 {
+                                panic!("GPU launch expects exactly 2 arguments (grid, block)");
+                            }
+
+                            let grid_op = lower_expression(ctx, &args[0]);
+                            let block_op = lower_expression(ctx, &args[1]);
+
+                            let mut return_ty = Type::new(TypeKind::Void, span.clone());
+                            if let Some(ty) = ctx.type_checker.get_type(call_expr_id) {
+                                return_ty = ty.clone();
+                            }
+
+                            let destination = ctx.push_temp(return_ty, span.clone());
+                            let target_bb = ctx.new_basic_block();
+
+                            ctx.set_terminator(Terminator::new(
+                                TerminatorKind::GpuLaunch {
+                                    kernel: kernel_op,
+                                    grid: grid_op,
+                                    block: block_op,
+                                    destination: Place::new(destination),
+                                    target: Some(target_bb),
+                                },
+                                span.clone(),
+                            ));
+
+                            ctx.set_current_block(target_bb);
+
+                            return Operand::Copy(Place::new(destination));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let func_op = lower_expression(ctx, func);
     let arg_ops: Vec<Operand> = args.iter().map(|arg| lower_expression(ctx, arg)).collect();
 

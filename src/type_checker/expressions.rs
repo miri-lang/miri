@@ -204,6 +204,7 @@ impl TypeChecker {
     }
 
     fn infer_identifier(&mut self, name: &str, span: Span, context: &Context) -> Type {
+        // println!("Inferring identifier: {}", name);
         if name == "None" {
             return ast_factory::make_type(TypeKind::Nullable(Box::new(ast_factory::make_type(
                 TypeKind::Void,
@@ -271,28 +272,35 @@ impl TypeChecker {
                 self.report_error(format!("Variable '{}' is not visible", name), span);
                 return ast_factory::make_type(TypeKind::Error);
             }
-            info.ty
-        } else {
-            let mut candidates: Vec<&str> = Vec::new();
-            for scope in &context.scopes {
-                candidates.extend(scope.keys().map(|s| s.as_str()));
-            }
-            candidates.extend(self.global_scope.keys().map(|s| s.as_str()));
-            candidates.push("None");
-            candidates.push("Ok");
-            candidates.push("Err");
-
-            if let Some(suggestion) = find_best_match(name, &candidates) {
-                self.report_error_with_help(
-                    format!("Undefined variable: {}", name),
-                    span,
-                    format!("Did you mean '{}'?", suggestion),
-                );
-            } else {
-                self.report_error(format!("Undefined variable: {}", name), span);
-            }
-            ast_factory::make_type(TypeKind::Error)
+            return info.ty;
         }
+
+        // Check if it is a known type (struct/enum/alias) being used as a value (constructor/meta)
+        if self.global_type_definitions.contains_key(name) {
+            return ast_factory::make_type(TypeKind::Meta(Box::new(ast_factory::make_type(
+                TypeKind::Custom(name.to_string(), None),
+            ))));
+        }
+
+        let mut candidates: Vec<&str> = Vec::new();
+        for scope in &context.scopes {
+            candidates.extend(scope.keys().map(|s| s.as_str()));
+        }
+        candidates.extend(self.global_scope.keys().map(|s| s.as_str()));
+        candidates.push("None");
+        candidates.push("Ok");
+        candidates.push("Err");
+
+        if let Some(suggestion) = find_best_match(name, &candidates) {
+            self.report_error_with_help(
+                format!("Undefined variable: {}", name),
+                span,
+                format!("Did you mean '{}'?", suggestion),
+            );
+        } else {
+            self.report_error(format!("Undefined variable: {}", name), span);
+        }
+        ast_factory::make_type(TypeKind::Error)
     }
 
     fn infer_assignment(
@@ -475,6 +483,23 @@ impl TypeChecker {
 
                 if generics.is_some() {
                     context.exit_scope();
+                }
+
+                // GPU Semantic Check: Forbid calling non-GPU functions (currently strict: no calls except built-ins/other user functions?)
+                // Actually, the requirement says "Cannot call host functions like print".
+                // Since we don't have a way to tag "gpu" vs "host" on imported functions yet (except if they are gpu fn),
+                // we will specifically ban "print" for now as per plan.
+                // Longer term: check `is_gpu` on the function being called.
+                if context.in_gpu_function {
+                    if let ExpressionKind::Identifier(name, _) = &func.node {
+                        if name == "print" {
+                            self.report_error(
+                                "Host function 'print' cannot be called from a GPU kernel"
+                                    .to_string(),
+                                span,
+                            );
+                        }
+                    }
                 }
 
                 return_type
@@ -970,6 +995,40 @@ impl TypeChecker {
             // Add others as needed
             _ => (None, None),
         };
+
+        if let Some(name) = &type_name {
+            if name == "Kernel" && prop_name == "launch" {
+                // Method signature: fn(grid: Dim3, block: Dim3) -> Future<void>
+                let dim3_type = ast_factory::make_type(TypeKind::Custom("Dim3".to_string(), None));
+                let dim3_expr = Box::new(ast_factory::type_expr_non_null(dim3_type.clone()));
+
+                let future_void_type = ast_factory::make_type(TypeKind::Custom(
+                    "Future".to_string(),
+                    Some(vec![ast_factory::type_expr_non_null(
+                        ast_factory::make_type(TypeKind::Void),
+                    )]),
+                ));
+
+                return ast_factory::make_type(TypeKind::Function(
+                    None,
+                    vec![
+                        Parameter {
+                            name: "grid".to_string(),
+                            typ: dim3_expr.clone(),
+                            guard: None,
+                            default_value: None,
+                        },
+                        Parameter {
+                            name: "block".to_string(),
+                            typ: dim3_expr,
+                            guard: None,
+                            default_value: None,
+                        },
+                    ],
+                    Some(Box::new(ast_factory::type_expr_non_null(future_void_type))),
+                ));
+            }
+        }
 
         if let Some(name) = type_name {
             // Instance member access (Struct field)
