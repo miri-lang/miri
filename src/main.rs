@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use walkdir::WalkDir;
 
 use miri::cli::repl;
-use miri::cli::{Cli, Commands, TestFormat};
+use miri::cli::{Cli, Commands, CpuBackend, TestFormat};
 use miri::pipeline::{BuildOptions, Pipeline};
 
 pub fn main() -> Result<()> {
@@ -17,13 +17,19 @@ pub fn main() -> Result<()> {
 
     match cli.command {
         Some(command) => match command {
-            Commands::Run { path, program_args } => run_file(path, program_args, cli.verbose),
+            Commands::Run {
+                path,
+                interpret,
+                program_args,
+            } => run_file(path, interpret, program_args, cli.verbose),
             Commands::Build {
                 path,
                 out,
                 release,
                 opt_level,
-            } => build_file(path, out, release, opt_level, cli.verbose),
+                cpu_backend,
+            } => build_file(path, out, release, opt_level, cpu_backend, cli.verbose),
+            Commands::Check { path } => check_file(path, cli.verbose),
             Commands::Test {
                 filter,
                 format,
@@ -34,21 +40,45 @@ pub fn main() -> Result<()> {
     }
 }
 
-fn run_file(path: PathBuf, _program_args: Vec<String>, _verbose: u8) -> Result<()> {
+fn run_file(
+    path: PathBuf,
+    interpret: bool,
+    _program_args: Vec<String>,
+    _verbose: u8,
+) -> Result<()> {
     let source = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read file: {}", path.display()))?;
 
     let pipeline = Pipeline::new();
-    match pipeline.run(&source) {
-        Ok(exit_code) => {
-            if exit_code != 0 {
-                std::process::exit(exit_code);
+
+    if interpret {
+        // Use interpreter (faster, for development)
+        match pipeline.interpret(&source) {
+            Ok(value) => {
+                // Print non-None results
+                if !matches!(value, miri::interpreter::Value::None) {
+                    println!("{}", value);
+                }
+                Ok(())
             }
-            Ok(())
+            Err(e) => {
+                eprintln!("{}", e.report(&source));
+                std::process::exit(1);
+            }
         }
-        Err(e) => {
-            eprintln!("{}", e.report(&source));
-            std::process::exit(1);
+    } else {
+        // Use compiler (native binary)
+        match pipeline.run(&source) {
+            Ok(exit_code) => {
+                if exit_code != 0 {
+                    std::process::exit(exit_code);
+                }
+                Ok(())
+            }
+            Err(e) => {
+                eprintln!("{}", e.report(&source));
+                std::process::exit(1);
+            }
         }
     }
 }
@@ -58,6 +88,7 @@ fn build_file(
     out: Option<PathBuf>,
     release: bool,
     opt_level: u8,
+    cpu_backend: CpuBackend,
     _verbose: u8,
 ) -> Result<()> {
     let source = fs::read_to_string(&path)
@@ -68,11 +99,29 @@ fn build_file(
         out_path: out,
         release,
         opt_level,
+        cpu_backend,
     };
 
     match pipeline.build(&source, &build_options) {
         Ok(artifact_path) => {
             println!("Build successful. Artifact at: {}", artifact_path.display());
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("{}", e.report(&source));
+            std::process::exit(1);
+        }
+    }
+}
+
+fn check_file(path: PathBuf, _verbose: u8) -> Result<()> {
+    let source = fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read file: {}", path.display()))?;
+
+    let pipeline = Pipeline::new();
+    match pipeline.frontend(&source) {
+        Ok(_) => {
+            println!("Check passed. No errors found.");
             Ok(())
         }
         Err(e) => {

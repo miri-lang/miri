@@ -146,7 +146,18 @@ pub(crate) fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) {
             }
             ctx.pop_scope();
         }
-        StatementKind::Return(_) => {
+        StatementKind::Return(ret_expr) => {
+            // If there's a return value, assign it to _0 (the return place)
+            if let Some(expr) = ret_expr {
+                let ret_val = lower_expression(ctx, expr);
+                ctx.push_statement(crate::mir::Statement {
+                    kind: MirStatementKind::Assign(
+                        Place::new(crate::mir::Local(0)), // _0 is the return place
+                        Rvalue::Use(ret_val),
+                    ),
+                    span: stmt.span.clone(),
+                });
+            }
             ctx.set_terminator(Terminator::new(TerminatorKind::Return, stmt.span.clone()));
         }
         StatementKind::Variable(decls, _) => {

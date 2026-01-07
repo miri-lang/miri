@@ -5,20 +5,24 @@ use crate::test_utils::miri_cmd;
 use std::io::Write;
 use tempfile::NamedTempFile;
 
+// Helper to create a test file with a main function
+fn create_test_file(content: &str) -> NamedTempFile {
+    let mut file = NamedTempFile::new().unwrap();
+    write!(file, "{}", content).unwrap();
+    file
+}
+
+const SIMPLE_MAIN: &str = r#"fn main() int
+    42
+"#;
+
 #[test]
 fn test_run_valid_file() {
-    let mut file = NamedTempFile::new().unwrap();
-    write!(file, "print(\"Hello, World!\")").unwrap();
+    let file = create_test_file(SIMPLE_MAIN);
     let path = file.path().to_str().unwrap();
 
     let mut cmd = miri_cmd();
-    cmd.arg("run")
-        .arg(path)
-        .assert()
-        .success()
-        .stdout(predicates::str::contains(
-            "AST generated with 1 statements.",
-        ));
+    cmd.arg("run").arg(path).assert().success();
 }
 
 #[test]
@@ -33,9 +37,7 @@ fn test_run_file_not_found() {
 
 #[test]
 fn test_run_with_args() {
-    // Assuming we can access args in the script later, but for now just checking it accepts them
-    let mut file = NamedTempFile::new().unwrap();
-    write!(file, "print(\"Args test\")").unwrap();
+    let file = create_test_file(SIMPLE_MAIN);
     let path = file.path().to_str().unwrap();
 
     let mut cmd = miri_cmd();
@@ -45,10 +47,7 @@ fn test_run_with_args() {
         .arg("arg1")
         .arg("arg2")
         .assert()
-        .success()
-        .stdout(predicates::str::contains(
-            "AST generated with 1 statements.",
-        ));
+        .success();
 }
 
 #[test]

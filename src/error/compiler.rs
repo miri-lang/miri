@@ -35,6 +35,9 @@ pub enum CompilerError {
 
     #[error("Lowering Error: {0}")]
     Lowering(LoweringError),
+
+    #[error("Runtime Error: {0}")]
+    Runtime(String),
 }
 
 impl CompilerError {

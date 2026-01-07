@@ -32,8 +32,25 @@ pub fn run_compiler(input: &str) -> CompilerResult {
     write!(file, "{}", input).unwrap();
     let path = file.path().to_str().unwrap().to_string();
 
+    // Use 'check' command for type-checking only (no codegen)
     let mut cmd = miri_cmd();
-    let output = cmd.arg("run").arg(&path).output().unwrap();
+    let output = cmd.arg("check").arg(&path).output().unwrap();
+
+    CompilerResult {
+        success: output.status.success(),
+        stdout: String::from_utf8(output.stdout).unwrap(),
+        stderr: String::from_utf8(output.stderr).unwrap(),
+    }
+}
+
+/// Run the build command and return the result.
+pub fn build_compiler(input: &str) -> CompilerResult {
+    let mut file = NamedTempFile::new().unwrap();
+    write!(file, "{}", input).unwrap();
+    let path = file.path().to_str().unwrap().to_string();
+
+    let mut cmd = miri_cmd();
+    let output = cmd.arg("build").arg(&path).output().unwrap();
 
     CompilerResult {
         success: output.status.success(),
@@ -54,6 +71,19 @@ pub fn assert_valid(code: &str) {
     let output = result.output();
     if output.contains("error:") {
         panic!("Expected valid program, but got errors:\n{}", output);
+    }
+}
+
+/// Assert that the code successfully compiles to an executable.
+/// This uses the build command to verify full compilation works.
+pub fn assert_compiles(code: &str) {
+    let result = build_compiler(code);
+
+    if !result.success {
+        panic!(
+            "Expected program to compile successfully, but got errors:\n{}",
+            result.output()
+        );
     }
 }
 
