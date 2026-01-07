@@ -237,4 +237,6 @@ pub enum BinOp {
 pub enum UnOp {
     Not,
     Neg,
+    /// Await an async operation
+    Await,
 }

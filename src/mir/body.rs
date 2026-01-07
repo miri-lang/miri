@@ -70,6 +70,8 @@ pub enum ExecutionModel {
     /// Standard CPU execution (default for most functions)
     #[default]
     Cpu,
+    /// Async function (returns a future/promise)
+    Async,
     /// GPU kernel / compute shader entry point.
     /// Can be launched from CPU code via `GpuLaunch` terminator.
     GpuKernel,
@@ -81,6 +83,7 @@ impl fmt::Display for ExecutionModel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ExecutionModel::Cpu => write!(f, "cpu"),
+            ExecutionModel::Async => write!(f, "async"),
             ExecutionModel::GpuKernel => write!(f, "gpu_kernel"),
             ExecutionModel::GpuDevice => write!(f, "gpu_device"),
         }

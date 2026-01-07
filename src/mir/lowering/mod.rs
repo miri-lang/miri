@@ -22,17 +22,22 @@ pub fn lower_function(ast_func: &Statement, tc: &TypeChecker) -> Result<Body, St
         _name,
         _generics,
         params,
-        _ret_type,
+        ret_type_expr,
         body_stmt,
         props,
     ) = &ast_func.node
     {
-        // TODO: Return type is currently assumed to be Void. Should look up the
-        // actual return type from the function signature via the TypeChecker.
-        let ret_ty = Type::new(TypeKind::Void, ast_func.span.clone());
+        // Resolve return type from the function signature
+        let ret_ty = if let Some(ret_expr) = ret_type_expr {
+            resolve_type(tc, ret_expr)
+        } else {
+            Type::new(TypeKind::Void, ast_func.span.clone())
+        };
 
         let execution_model = if props.is_gpu {
             ExecutionModel::GpuKernel
+        } else if props.is_async {
+            ExecutionModel::Async
         } else {
             ExecutionModel::Cpu
         };
@@ -44,10 +49,72 @@ pub fn lower_function(ast_func: &Statement, tc: &TypeChecker) -> Result<Body, St
         let mut ctx = LoweringContext::new(body, tc);
 
         for param in params {
-            // TODO: Parameter type resolution is currently a placeholder. Should resolve
-            // the actual type from param.typ expression via the TypeChecker.
-            let param_ty = Type::new(TypeKind::Int, param.typ.span.clone());
+            // Resolve parameter type from the type expression
+            let param_ty = resolve_type(tc, &param.typ);
             ctx.push_local(param.name.clone(), param_ty, param.typ.span.clone());
+        }
+
+        // Emit guard checks for parameters with guards
+        for param in params {
+            if let Some(guard) = &param.guard {
+                if let Some(&param_local) = ctx.variable_map.get(&param.name) {
+                    // Lower the guard expression to get the comparison value
+                    if let ExpressionKind::Guard(guard_op, guard_value) = &guard.node {
+                        let guard_val = lower_expression(&mut ctx, guard_value);
+
+                        // Convert GuardOp to BinOp for the comparison
+                        let bin_op = match guard_op {
+                            crate::ast::operator::GuardOp::GreaterThan => BinOp::Gt,
+                            crate::ast::operator::GuardOp::GreaterThanEqual => BinOp::Ge,
+                            crate::ast::operator::GuardOp::LessThan => BinOp::Lt,
+                            crate::ast::operator::GuardOp::LessThanEqual => BinOp::Le,
+                            crate::ast::operator::GuardOp::NotEqual => BinOp::Ne,
+                            _ => continue, // Skip In/NotIn/Not for now
+                        };
+
+                        // Compare parameter against guard value
+                        let check_result = ctx.push_temp(
+                            Type::new(TypeKind::Boolean, guard.span.clone()),
+                            guard.span.clone(),
+                        );
+                        ctx.push_statement(crate::mir::Statement {
+                            kind: MirStatementKind::Assign(
+                                Place::new(check_result),
+                                Rvalue::BinaryOp(
+                                    bin_op,
+                                    Box::new(Operand::Copy(Place::new(param_local))),
+                                    Box::new(guard_val),
+                                ),
+                            ),
+                            span: guard.span.clone(),
+                        });
+
+                        // If check fails, branch to unreachable (panic)
+                        // For now we just emit the check - backends can handle the failure
+                        let continue_bb = ctx.new_basic_block();
+                        let fail_bb = ctx.new_basic_block();
+
+                        ctx.set_terminator(Terminator::new(
+                            TerminatorKind::SwitchInt {
+                                discr: Operand::Copy(Place::new(check_result)),
+                                targets: vec![(1, continue_bb)], // true = pass
+                                otherwise: fail_bb,              // false = fail
+                            },
+                            guard.span.clone(),
+                        ));
+
+                        // Fail block - unreachable (will panic at runtime)
+                        ctx.set_current_block(fail_bb);
+                        ctx.set_terminator(Terminator::new(
+                            TerminatorKind::Unreachable,
+                            guard.span.clone(),
+                        ));
+
+                        // Continue with guard passed
+                        ctx.set_current_block(continue_bb);
+                    }
+                }
+            }
         }
 
         // Lower body
@@ -186,18 +253,56 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                     if let ExpressionKind::Identifier(name, _) = &id_expr.node {
                         let val = lower_expression(ctx, rhs);
 
-                        if let Some(local) = ctx.variable_map.get(name) {
+                        if let Some(&local) = ctx.variable_map.get(name) {
                             match op {
                                 crate::ast::operator::AssignmentOp::Assign => {
                                     ctx.push_statement(crate::mir::Statement {
                                         kind: MirStatementKind::Assign(
-                                            Place::new(*local),
+                                            Place::new(local),
                                             Rvalue::Use(val.clone()),
                                         ),
                                         span: expr.span.clone(),
                                     });
                                 }
-                                _ => panic!("Unsupported assignment operator: {:?}", op),
+                                crate::ast::operator::AssignmentOp::AssignAdd
+                                | crate::ast::operator::AssignmentOp::AssignSub
+                                | crate::ast::operator::AssignmentOp::AssignMul
+                                | crate::ast::operator::AssignmentOp::AssignDiv
+                                | crate::ast::operator::AssignmentOp::AssignMod => {
+                                    // Desugar: x op= y -> x = x op y
+                                    let bin_op = match op {
+                                        crate::ast::operator::AssignmentOp::AssignAdd => BinOp::Add,
+                                        crate::ast::operator::AssignmentOp::AssignSub => BinOp::Sub,
+                                        crate::ast::operator::AssignmentOp::AssignMul => BinOp::Mul,
+                                        crate::ast::operator::AssignmentOp::AssignDiv => BinOp::Div,
+                                        crate::ast::operator::AssignmentOp::AssignMod => BinOp::Rem,
+                                        _ => unreachable!(),
+                                    };
+
+                                    let lhs_op = Operand::Copy(Place::new(local));
+                                    let result_ty = ctx.body.local_decls[local.0].ty.clone();
+                                    let temp = ctx.push_temp(result_ty, expr.span.clone());
+
+                                    ctx.push_statement(crate::mir::Statement {
+                                        kind: MirStatementKind::Assign(
+                                            Place::new(temp),
+                                            Rvalue::BinaryOp(
+                                                bin_op,
+                                                Box::new(lhs_op),
+                                                Box::new(val.clone()),
+                                            ),
+                                        ),
+                                        span: expr.span.clone(),
+                                    });
+
+                                    ctx.push_statement(crate::mir::Statement {
+                                        kind: MirStatementKind::Assign(
+                                            Place::new(local),
+                                            Rvalue::Use(Operand::Copy(Place::new(temp))),
+                                        ),
+                                        span: expr.span.clone(),
+                                    });
+                                }
                             }
 
                             // Assignment evaluates to the assigned value
@@ -267,6 +372,7 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
             let un_op = match op {
                 crate::ast::operator::UnaryOp::Negate => UnOp::Neg,
                 crate::ast::operator::UnaryOp::Not => UnOp::Not,
+                crate::ast::operator::UnaryOp::Await => UnOp::Await,
                 _ => panic!("Unsupported unary operator: {:?}", op),
             };
 
@@ -766,6 +872,298 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
 
             ctx.set_current_block(join_bb);
             Operand::Copy(Place::new(result_local))
+        }
+        ExpressionKind::Logical(lhs, op, rhs) => {
+            // Short-circuit evaluation for logical operators:
+            // - and: if lhs is false, skip rhs and return false
+            // - or: if lhs is true, skip rhs and return true
+
+            let result_ty = Type::new(TypeKind::Boolean, expr.span.clone());
+            let result_local = ctx.push_temp(result_ty.clone(), expr.span.clone());
+
+            // Evaluate LHS
+            let lhs_op = lower_expression(ctx, lhs);
+
+            // Create blocks for short-circuit evaluation
+            let rhs_bb = ctx.new_basic_block();
+            let done_bb = ctx.new_basic_block();
+
+            match op {
+                crate::ast::operator::BinaryOp::And => {
+                    // and: if lhs is true, evaluate rhs; else return false
+                    ctx.set_terminator(Terminator::new(
+                        TerminatorKind::SwitchInt {
+                            discr: lhs_op.clone(),
+                            targets: vec![(1, rhs_bb)], // true -> evaluate rhs
+                            otherwise: done_bb,         // false -> done with false
+                        },
+                        expr.span.clone(),
+                    ));
+
+                    // In done_bb after short-circuit (lhs was false), assign false
+                    ctx.set_current_block(done_bb);
+                    ctx.push_statement(crate::mir::Statement {
+                        kind: MirStatementKind::Assign(
+                            Place::new(result_local),
+                            Rvalue::Use(Operand::Constant(Box::new(Constant {
+                                span: expr.span.clone(),
+                                ty: result_ty.clone(),
+                                literal: crate::ast::literal::Literal::Boolean(false),
+                            }))),
+                        ),
+                        span: expr.span.clone(),
+                    });
+                }
+                crate::ast::operator::BinaryOp::Or => {
+                    // or: if lhs is false, evaluate rhs; else return true
+                    ctx.set_terminator(Terminator::new(
+                        TerminatorKind::SwitchInt {
+                            discr: lhs_op.clone(),
+                            targets: vec![(0, rhs_bb)], // false -> evaluate rhs
+                            otherwise: done_bb,         // true -> done with true
+                        },
+                        expr.span.clone(),
+                    ));
+
+                    // In done_bb after short-circuit (lhs was true), assign true
+                    ctx.set_current_block(done_bb);
+                    ctx.push_statement(crate::mir::Statement {
+                        kind: MirStatementKind::Assign(
+                            Place::new(result_local),
+                            Rvalue::Use(Operand::Constant(Box::new(Constant {
+                                span: expr.span.clone(),
+                                ty: result_ty.clone(),
+                                literal: crate::ast::literal::Literal::Boolean(true),
+                            }))),
+                        ),
+                        span: expr.span.clone(),
+                    });
+                }
+                _ => panic!("Unsupported logical operator: {:?}", op),
+            }
+
+            // Create final join block
+            let final_bb = ctx.new_basic_block();
+            ctx.set_terminator(Terminator::new(
+                TerminatorKind::Goto { target: final_bb },
+                expr.span.clone(),
+            ));
+
+            // Evaluate RHS in rhs_bb
+            ctx.set_current_block(rhs_bb);
+            let rhs_op = lower_expression(ctx, rhs);
+            ctx.push_statement(crate::mir::Statement {
+                kind: MirStatementKind::Assign(Place::new(result_local), Rvalue::Use(rhs_op)),
+                span: expr.span.clone(),
+            });
+            ctx.set_terminator(Terminator::new(
+                TerminatorKind::Goto { target: final_bb },
+                expr.span.clone(),
+            ));
+
+            ctx.set_current_block(final_bb);
+            Operand::Copy(Place::new(result_local))
+        }
+        ExpressionKind::Conditional(then_expr, cond_expr, else_expr_opt, if_type) => {
+            // Inline if/unless expression: `value if condition else other`
+            // then_expr is returned if condition is true (or false for unless)
+
+            let result_ty = resolve_type(ctx.type_checker, expr);
+            let result_local = ctx.push_temp(result_ty, expr.span.clone());
+
+            // Evaluate condition first
+            let cond_op = lower_expression(ctx, cond_expr);
+
+            let then_bb = ctx.new_basic_block();
+            let else_bb = ctx.new_basic_block();
+            let join_bb = ctx.new_basic_block();
+
+            // For `if`: true -> then, false -> else
+            // For `unless`: true -> else, false -> then
+            let (true_target, false_target) = match if_type {
+                crate::ast::statement::IfStatementType::If => (then_bb, else_bb),
+                crate::ast::statement::IfStatementType::Unless => (else_bb, then_bb),
+            };
+
+            ctx.set_terminator(Terminator::new(
+                TerminatorKind::SwitchInt {
+                    discr: cond_op,
+                    targets: vec![(1, true_target)],
+                    otherwise: false_target,
+                },
+                cond_expr.span.clone(),
+            ));
+
+            // Then block
+            ctx.set_current_block(then_bb);
+            let then_op = lower_expression(ctx, then_expr);
+            ctx.push_statement(crate::mir::Statement {
+                kind: MirStatementKind::Assign(Place::new(result_local), Rvalue::Use(then_op)),
+                span: then_expr.span.clone(),
+            });
+            ctx.set_terminator(Terminator::new(
+                TerminatorKind::Goto { target: join_bb },
+                then_expr.span.clone(),
+            ));
+
+            // Else block
+            ctx.set_current_block(else_bb);
+            if let Some(else_expr) = else_expr_opt {
+                let else_op = lower_expression(ctx, else_expr);
+                ctx.push_statement(crate::mir::Statement {
+                    kind: MirStatementKind::Assign(Place::new(result_local), Rvalue::Use(else_op)),
+                    span: else_expr.span.clone(),
+                });
+            }
+            ctx.set_terminator(Terminator::new(
+                TerminatorKind::Goto { target: join_bb },
+                expr.span.clone(),
+            ));
+
+            ctx.set_current_block(join_bb);
+            Operand::Copy(Place::new(result_local))
+        }
+        ExpressionKind::Range(start_expr, end_expr_opt, range_type) => {
+            // Lower range expression to a tuple aggregate (start, end, is_inclusive)
+            // This provides enough info for backends to iterate the range
+
+            let start_op = lower_expression(ctx, start_expr);
+
+            // End value - if not provided, create a "max" sentinel or just use start
+            let end_op = if let Some(end_expr) = end_expr_opt {
+                lower_expression(ctx, end_expr)
+            } else {
+                // Range with no end (used for iterable objects) - use start as placeholder
+                start_op.clone()
+            };
+
+            // is_inclusive flag
+            let is_inclusive = matches!(
+                range_type,
+                crate::ast::expression::RangeExpressionType::Inclusive
+            );
+            let inclusive_op = Operand::Constant(Box::new(Constant {
+                span: expr.span.clone(),
+                ty: Type::new(TypeKind::Boolean, expr.span.clone()),
+                literal: crate::ast::literal::Literal::Boolean(is_inclusive),
+            }));
+
+            // Create tuple aggregate (start, end, is_inclusive)
+            let ty = resolve_type(ctx.type_checker, expr);
+            let temp = ctx.push_temp(ty, expr.span.clone());
+            ctx.push_statement(crate::mir::Statement {
+                kind: MirStatementKind::Assign(
+                    Place::new(temp),
+                    Rvalue::Aggregate(AggregateKind::Tuple, vec![start_op, end_op, inclusive_op]),
+                ),
+                span: expr.span.clone(),
+            });
+            Operand::Copy(Place::new(temp))
+        }
+        ExpressionKind::Lambda(_generics, params, ret_type_expr, body, props) => {
+            // Lambda expressions create an anonymous function.
+            // For now, we represent them as a symbol that can be called later.
+            // A more complete implementation would create a closure with captured variables.
+
+            // Create a unique name for the lambda
+            let lambda_id = expr.id;
+            let lambda_name = format!("__lambda_{}", lambda_id);
+
+            // Resolve the lambda's type (function type) from the type checker
+            let lambda_ty = resolve_type(ctx.type_checker, expr);
+
+            // Create a constant symbol representing the lambda
+            // The actual body will need to be lowered separately when generating code
+            let temp = ctx.push_temp(lambda_ty.clone(), expr.span.clone());
+
+            // Store the lambda as a symbol constant
+            // Backends will need to look up the lambda body by this name
+            ctx.push_statement(crate::mir::Statement {
+                kind: MirStatementKind::Assign(
+                    Place::new(temp),
+                    Rvalue::Use(Operand::Constant(Box::new(Constant {
+                        span: expr.span.clone(),
+                        ty: lambda_ty,
+                        literal: crate::ast::literal::Literal::Symbol(lambda_name.clone()),
+                    }))),
+                ),
+                span: expr.span.clone(),
+            });
+
+            // Note: In a complete implementation, we would:
+            // 1. Lower the lambda body to a separate MIR Body
+            // 2. Track captured variables for closure support
+            // 3. Store the Body in a registry accessible during code generation
+            // For now, we record params and body info as metadata that can be accessed
+            // by looking up the expression ID in the type checker
+
+            // Mark the lambda params and return type for debugging/introspection
+            let _ = (params, ret_type_expr, body, props);
+
+            Operand::Copy(Place::new(temp))
+        }
+        ExpressionKind::FormattedString(parts) => {
+            // Formatted string: f"Hello, {name}"
+            // Lower each part (string literals and expressions) and combine into a list
+            // The backend will concatenate them into a single string
+
+            let ops: Vec<Operand> = parts
+                .iter()
+                .map(|part| lower_expression(ctx, part))
+                .collect();
+
+            let ty = Type::new(TypeKind::String, expr.span.clone());
+            let temp = ctx.push_temp(ty, expr.span.clone());
+
+            // Create a list aggregate of parts - backend will concatenate
+            ctx.push_statement(crate::mir::Statement {
+                kind: MirStatementKind::Assign(
+                    Place::new(temp),
+                    Rvalue::Aggregate(AggregateKind::List, ops),
+                ),
+                span: expr.span.clone(),
+            });
+
+            Operand::Copy(Place::new(temp))
+        }
+        ExpressionKind::Guard(guard_op, guard_expr) => {
+            // Guard expressions are used in function parameter validation
+            // e.g., fn divide(a int, b int > 0) - the `> 0` is a guard
+            // We lower guards to comparison operations that return bool
+
+            let operand = lower_expression(ctx, guard_expr);
+
+            // Convert GuardOp to BinOp
+            let _bin_op = match guard_op {
+                crate::ast::operator::GuardOp::GreaterThan => BinOp::Gt,
+                crate::ast::operator::GuardOp::GreaterThanEqual => BinOp::Ge,
+                crate::ast::operator::GuardOp::LessThan => BinOp::Lt,
+                crate::ast::operator::GuardOp::LessThanEqual => BinOp::Le,
+                crate::ast::operator::GuardOp::NotEqual => BinOp::Ne,
+                crate::ast::operator::GuardOp::Not => {
+                    // Not is a unary op, apply directly
+                    let result_ty = Type::new(TypeKind::Boolean, expr.span.clone());
+                    let temp = ctx.push_temp(result_ty, expr.span.clone());
+                    ctx.push_statement(crate::mir::Statement {
+                        kind: MirStatementKind::Assign(
+                            Place::new(temp),
+                            Rvalue::UnaryOp(UnOp::Not, Box::new(operand)),
+                        ),
+                        span: expr.span.clone(),
+                    });
+                    return Operand::Copy(Place::new(temp));
+                }
+                crate::ast::operator::GuardOp::In | crate::ast::operator::GuardOp::NotIn => {
+                    // In/NotIn guards require membership test - for now create placeholder
+                    return operand;
+                }
+            };
+
+            // Guards already have their RHS value baked in from parsing
+            // The operand IS the guard expression (e.g., the `0` in `> 0`)
+            // The LHS (the parameter) would need to be provided by the caller
+            // For now, just return the guard expression value
+            operand
         }
         _ => {
             panic!("Unsupported expression kind in lowering: {:?}", expr.node);
