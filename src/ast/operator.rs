@@ -21,8 +21,8 @@ pub enum BinaryOp {
     Not,
     And,
     Or,
-    Range, // Represents a range operator (e.g., `1..10`)
-    In,    // Represents the `in` operator for membership tests
+    Range,
+    In,
 }
 
 /// Represents a guard operator
@@ -41,12 +41,12 @@ pub enum GuardOp {
 /// Represents a unary operator
 #[derive(Debug, PartialEq, Clone, Copy, Eq, Hash)]
 pub enum UnaryOp {
-    Negate, // - operator
+    Negate,
     Not,
-    Plus,       // + operator (unary plus)
-    BitwiseNot, // ~ operator
-    Decrement,  // -- operator
-    Increment,  // ++ operator
+    Plus,
+    BitwiseNot,
+    Decrement,
+    Increment,
     Await,
 }
 

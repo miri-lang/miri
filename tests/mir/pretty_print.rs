@@ -58,10 +58,10 @@ fn test_mir_pretty_print() {
 
     let output = format!("{}", body);
     let expected = r#"
-    let _0: Int;
-    let _1: Int; // arg0
-    let _2: Int; // arg1
-    let _3: Int; // temp
+    let _0: int;
+    let _1: int; // arg0
+    let _2: int; // arg1
+    let _3: int; // temp
 
     bb0: {
         _3 = Add(_1, _2);

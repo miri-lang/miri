@@ -11,7 +11,7 @@ fn test_for_loop_range() {
 
 #[test]
 fn test_for_loop_range_variable_type() {
-    // i should be Int
+    // i should be int
     check_success("for i in 0..10: let x = i");
 }
 
@@ -30,7 +30,7 @@ fn test_for_loop_range_mismatch() {
 
 #[test]
 fn test_for_loop_not_iterable() {
-    check_error("for i in true: 1", "Type Boolean is not iterable");
+    check_error("for i in true: 1", "Type boolean is not iterable");
 }
 
 #[test]

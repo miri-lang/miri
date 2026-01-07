@@ -31,6 +31,6 @@ fn test_shared_memory_non_array() {
 gpu fn kernel():
     shared cache float
         ",
-        "Shared variable 'cache' must be an array, got Float",
+        "Shared variable 'cache' must be an array, got float",
     );
 }

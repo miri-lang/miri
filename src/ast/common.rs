@@ -24,6 +24,6 @@ pub struct FunctionProperties {
 pub struct Parameter {
     pub name: String,
     pub typ: Box<Expression>,
-    pub guard: Option<Box<Expression>>, // Optional guard expression
-    pub default_value: Option<Box<Expression>>, // Optional default value
+    pub guard: Option<Box<Expression>>,
+    pub default_value: Option<Box<Expression>>,
 }

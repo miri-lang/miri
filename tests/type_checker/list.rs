@@ -51,7 +51,7 @@ fn test_list_indexing_invalid_index_type() {
 
 #[test]
 fn test_list_indexing_on_non_list() {
-    check_error("1[0]", "Type Int is not indexable");
+    check_error("1[0]", "Type int is not indexable");
 }
 
 #[test]

@@ -13,8 +13,8 @@ let y bool = 123
     check_errors(
         source,
         vec![
-            "Type mismatch for variable 'x': expected Int, got String",
-            "Type mismatch for variable 'y': expected Boolean, got Int",
+            "Type mismatch for variable 'x': expected int, got string",
+            "Type mismatch for variable 'y': expected boolean, got int",
         ],
     );
 }
@@ -28,8 +28,8 @@ foo(\"wrong\", 1)
     check_errors(
         source,
         vec![
-            "Type mismatch for argument 'a': expected Int, got String",
-            "Type mismatch for argument 'b': expected Float, got Int",
+            "Type mismatch for argument 'a': expected int, got string",
+            "Type mismatch for argument 'b': expected float, got int",
         ],
     );
 }
@@ -74,8 +74,8 @@ match x
     check_errors(
         source,
         vec![
-            "Match branch types mismatch: expected String, got Int",
-            "Match branch types mismatch: expected String, got Boolean",
+            "Match branch types mismatch: expected string, got int",
+            "Match branch types mismatch: expected string, got boolean",
         ],
     );
 }
@@ -89,8 +89,8 @@ let p = Point(true, \"str\")
     check_errors(
         source,
         vec![
-            "Type mismatch for field 'x': expected Int, got Boolean",
-            "Type mismatch for field 'y': expected Int, got String",
+            "Type mismatch for field 'x': expected int, got boolean",
+            "Type mismatch for field 'y': expected int, got string",
         ],
     );
 }

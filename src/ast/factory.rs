@@ -11,6 +11,7 @@ fn next_id() -> usize {
     NEXT_ID.fetch_add(1, Ordering::Relaxed)
 }
 
+/// Creates an expression with a specific span.
 pub fn expr_with_span(kind: ExpressionKind, span: Span) -> Expression {
     Expression {
         id: next_id(),
@@ -23,6 +24,7 @@ fn expr(kind: ExpressionKind) -> Expression {
     expr_with_span(kind, 0..0)
 }
 
+/// Creates a statement with a specific span.
 pub fn stmt_with_span(kind: StatementKind, span: Span) -> Statement {
     Statement {
         id: next_id(),
@@ -35,6 +37,7 @@ pub fn stmt(kind: StatementKind) -> Statement {
     stmt_with_span(kind, 0..0)
 }
 
+/// Creates an identifier expression with a specific span.
 pub fn identifier_with_span(name: &str, span: Span) -> Expression {
     expr_with_span(ExpressionKind::Identifier(name.into(), None), span)
 }
@@ -43,10 +46,12 @@ pub fn identifier_with_class_and_span(name: &str, class: Option<String>, span: S
     expr_with_span(ExpressionKind::Identifier(name.into(), class), span)
 }
 
+/// Creates a literal expression with a specific span.
 pub fn literal_with_span(value: Literal, span: Span) -> Expression {
     expr_with_span(ExpressionKind::Literal(value), span)
 }
 
+/// Creates a binary expression with a specific span.
 pub fn binary_with_span(
     left: Expression,
     op: BinaryOp,
@@ -59,6 +64,7 @@ pub fn binary_with_span(
     )
 }
 
+/// Creates a unary expression with a specific span.
 pub fn unary_with_span(op: UnaryOp, expr_node: Expression, span: Span) -> Expression {
     expr_with_span(ExpressionKind::Unary(op, Box::new(expr_node)), span)
 }
@@ -231,30 +237,37 @@ pub fn struct_member_expression_with_span(
     )
 }
 
+/// Creates an empty statement.
 pub fn empty_statement() -> Statement {
     stmt(StatementKind::Empty)
 }
 
+/// Creates a program from a list of statements.
 pub fn program(statements: Vec<Statement>) -> Program {
     Program { body: statements }
 }
 
+/// Creates an initially empty list of statements.
 pub fn empty_program() -> Vec<Statement> {
     vec![]
 }
 
+/// Creates an identifier expression with an optional class qualifier.
 pub fn identifier_with_class(name: &str, class: Option<String>) -> Expression {
     expr(ExpressionKind::Identifier(name.into(), class))
 }
 
+/// Creates a simple identifier expression.
 pub fn identifier(name: &str) -> Expression {
     identifier_with_class(name, None)
 }
 
+/// Creates a literal expression.
 pub fn literal(value: Literal) -> Expression {
     expr(ExpressionKind::Literal(value))
 }
 
+/// Creates a class identifier (e.g., `Class::StaticMember`).
 pub fn class_identifier(name: &str) -> Expression {
     let parts = name.split("::").collect::<Vec<&str>>();
     let class = parts[0].to_string();
@@ -263,6 +276,7 @@ pub fn class_identifier(name: &str) -> Expression {
     expr(ExpressionKind::Identifier(id_name, Some(class)))
 }
 
+/// Creates the smallest possible integer literal from an i128 value.
 pub fn int(val: i128) -> IntegerLiteral {
     match val {
         v if v >= i8::MIN as i128 && v <= i8::MAX as i128 => IntegerLiteral::I8(v as i8),
@@ -273,18 +287,22 @@ pub fn int(val: i128) -> IntegerLiteral {
     }
 }
 
+/// Creates an integer literal.
 pub fn int_literal(val: i128) -> Literal {
     Literal::Integer(int(val))
 }
 
+/// Creates an integer literal expression.
 pub fn int_literal_expression(val: i128) -> Expression {
     expr(ExpressionKind::Literal(int_literal(val)))
 }
 
+/// Creates a 32-bit float literal.
 pub fn float32(val: f32) -> FloatLiteral {
     FloatLiteral::F32(val.to_bits())
 }
 
+/// Creates a 64-bit float literal.
 pub fn float64(val: f64) -> FloatLiteral {
     FloatLiteral::F64(val.to_bits())
 }
@@ -307,38 +325,47 @@ pub fn float64_literal_expression(val: f64) -> Expression {
     literal(float64_literal(val))
 }
 
+/// Creates a string literal.
 pub fn string_literal(val: &str) -> Literal {
     Literal::String(val.to_string())
 }
 
+/// Creates a string literal expression.
 pub fn string_literal_expression(val: &str) -> Expression {
     expr(ExpressionKind::Literal(string_literal(val)))
 }
 
+/// Creates an f-string expression (interpolated string).
 pub fn f_string(parts: Vec<Expression>) -> Expression {
     expr(ExpressionKind::FormattedString(parts))
 }
 
+/// Creates a boolean literal.
 pub fn boolean(val: bool) -> Literal {
     Literal::Boolean(val)
 }
 
+/// Creates a boolean literal expression.
 pub fn boolean_literal(val: bool) -> Expression {
     expr(ExpressionKind::Literal(boolean(val)))
 }
 
+/// Creates a symbol literal.
 pub fn symbol(val: &str) -> Literal {
     Literal::Symbol(val.to_string())
 }
 
+/// Creates a symbol literal expression.
 pub fn symbol_literal(val: &str) -> Expression {
     expr(ExpressionKind::Literal(symbol(val)))
 }
 
+/// Creates a regex literal from a token.
 pub fn regex_literal_from_token(value: RegexToken) -> Literal {
     Literal::Regex(value)
 }
 
+/// Creates a regex literal expression from pattern and flags strings.
 pub fn regex_literal(body: &str, flags: &str) -> Expression {
     let token = RegexToken {
         body: body.to_string(),
@@ -351,18 +378,22 @@ pub fn regex_literal(body: &str, flags: &str) -> Expression {
     expr(ExpressionKind::Literal(regex_literal_from_token(token)))
 }
 
+/// Creates a binary expression.
 pub fn binary(left: Expression, op: BinaryOp, right: Expression) -> Expression {
     expr(ExpressionKind::Binary(Box::new(left), op, Box::new(right)))
 }
 
+/// Creates a unary expression.
 pub fn unary(op: UnaryOp, expr_node: Expression) -> Expression {
     expr(ExpressionKind::Unary(op, Box::new(expr_node)))
 }
 
+/// Creates a logical binary expression.
 pub fn logical(left: Expression, op: BinaryOp, right: Expression) -> Expression {
     expr(ExpressionKind::Logical(Box::new(left), op, Box::new(right)))
 }
 
+/// Creates an assignment expression.
 pub fn assign(left: LeftHandSideExpression, op: AssignmentOp, right: Expression) -> Expression {
     expr(ExpressionKind::Assignment(
         Box::new(left),
@@ -371,6 +402,7 @@ pub fn assign(left: LeftHandSideExpression, op: AssignmentOp, right: Expression)
     ))
 }
 
+/// Creates an immutable variable declaration structure.
 pub fn let_variable(
     name: &str,
     typ: Option<Box<Expression>>,
@@ -385,6 +417,7 @@ pub fn let_variable(
     }
 }
 
+/// Creates a mutable variable declaration structure.
 pub fn var(
     name: &str,
     typ: Option<Box<Expression>>,
@@ -399,6 +432,7 @@ pub fn var(
     }
 }
 
+/// Creates a conditional expression (ternary or if-else expr).
 pub fn conditional(
     then: Expression,
     cond: Expression,
@@ -413,6 +447,7 @@ pub fn conditional(
     ))
 }
 
+/// Creates an `if` expression.
 pub fn if_conditional(
     then: Expression,
     cond: Expression,
@@ -421,6 +456,7 @@ pub fn if_conditional(
     conditional(then, cond, else_b, IfStatementType::If)
 }
 
+/// Creates an `unless` expression.
 pub fn unless_conditional(
     then: Expression,
     cond: Expression,
@@ -429,6 +465,7 @@ pub fn unless_conditional(
     conditional(then, cond, else_b, IfStatementType::Unless)
 }
 
+/// Creates a range expression.
 pub fn range(
     start: Expression,
     end: Option<Box<Expression>>,
@@ -437,6 +474,7 @@ pub fn range(
     expr(ExpressionKind::Range(Box::new(start), end, range_type))
 }
 
+/// Creates an iterable object expression (from a range).
 pub fn iter_obj(start: Expression) -> Expression {
     expr(ExpressionKind::Range(
         Box::new(start),
@@ -445,42 +483,52 @@ pub fn iter_obj(start: Expression) -> Expression {
     ))
 }
 
+/// Creates a member access expression.
 pub fn member(object: Expression, property: Expression) -> Expression {
     expr(ExpressionKind::Member(Box::new(object), Box::new(property)))
 }
 
+/// Creates an index access expression.
 pub fn index(object: Expression, index: Expression) -> Expression {
     expr(ExpressionKind::Index(Box::new(object), Box::new(index)))
 }
 
+/// Wraps an expression as a left-hand side identifier.
 pub fn lhs_identifier_from_expr(expr: Expression) -> LeftHandSideExpression {
     LeftHandSideExpression::Identifier(Box::new(expr))
 }
 
+/// Creates a left-hand side identifier from a string name.
 pub fn lhs_identifier(name: &str) -> LeftHandSideExpression {
     lhs_identifier_from_expr(identifier(name))
 }
 
+/// Wraps an expression as a left-hand side member access.
 pub fn lhs_member_from_expr(expr: Expression) -> LeftHandSideExpression {
     LeftHandSideExpression::Member(Box::new(expr))
 }
 
+/// Creates a left-hand side member access.
 pub fn lhs_member(object: Expression, property: Expression) -> LeftHandSideExpression {
     lhs_member_from_expr(member(object, property))
 }
 
+/// Wraps an expression as a left-hand side index access.
 pub fn lhs_index_from_expr(expr: Expression) -> LeftHandSideExpression {
     LeftHandSideExpression::Index(Box::new(expr))
 }
 
+/// Creates a left-hand side index access.
 pub fn lhs_index(object: Expression, idx: Expression) -> LeftHandSideExpression {
     lhs_index_from_expr(index(object, idx))
 }
 
+/// Creates a function call expression.
 pub fn call(callee: Expression, args: Vec<Expression>) -> Expression {
     expr(ExpressionKind::Call(Box::new(callee), args))
 }
 
+/// Creates a variable declaration statement.
 pub fn variable_statement(
     declarations: Vec<VariableDeclaration>,
     visibility: MemberVisibility,
@@ -488,19 +536,23 @@ pub fn variable_statement(
     stmt(StatementKind::Variable(declarations, visibility))
 }
 
+/// Creates an expression statement (expression used as a statement).
 pub fn expression_statement(expr: Expression) -> Statement {
     let span = expr.span.clone();
     stmt_with_span(StatementKind::Expression(expr), span)
 }
 
+/// Creates a block statement.
 pub fn block_statement(stmts: Vec<Statement>) -> Statement {
     stmt(StatementKind::Block(stmts))
 }
 
+/// Alias for `block_statement`.
 pub fn block(stmts: Vec<Statement>) -> Statement {
     block_statement(stmts)
 }
 
+/// Creates an `if` statement.
 pub fn if_statement(cond: Expression, then: Statement, else_b: Option<Statement>) -> Statement {
     stmt(StatementKind::If(
         Box::new(cond),
@@ -510,6 +562,7 @@ pub fn if_statement(cond: Expression, then: Statement, else_b: Option<Statement>
     ))
 }
 
+/// Creates an `unless` statement.
 pub fn unless_statement(cond: Expression, then: Statement, else_b: Option<Statement>) -> Statement {
     stmt(StatementKind::If(
         Box::new(cond),
@@ -519,6 +572,7 @@ pub fn unless_statement(cond: Expression, then: Statement, else_b: Option<Statem
     ))
 }
 
+/// Creates a loop statement of a specific type (while, do-while, etc).
 pub fn while_statement_with_type(
     cond: Expression,
     body: Statement,
@@ -531,18 +585,22 @@ pub fn while_statement_with_type(
     ))
 }
 
+/// Creates a `while` loop statement.
 pub fn while_statement(cond: Expression, body: Statement) -> Statement {
     while_statement_with_type(cond, body, WhileStatementType::While)
 }
 
+/// Creates a `do-while` loop statement.
 pub fn do_while_statement(cond: Expression, body: Statement) -> Statement {
     while_statement_with_type(cond, body, WhileStatementType::DoWhile)
 }
 
+/// Creates an `until` loop statement.
 pub fn until_statement(cond: Expression, body: Statement) -> Statement {
     while_statement_with_type(cond, body, WhileStatementType::Until)
 }
 
+/// Creates an infinite loop statement.
 pub fn forever_statement(body: Statement) -> Statement {
     while_statement_with_type(
         expr(ExpressionKind::Literal(Literal::Boolean(true))),
@@ -551,6 +609,7 @@ pub fn forever_statement(body: Statement) -> Statement {
     )
 }
 
+/// Creates a `for` loop statement.
 pub fn for_statement(
     variable_declarations: Vec<VariableDeclaration>,
     iterable: Expression,
@@ -563,14 +622,17 @@ pub fn for_statement(
     ))
 }
 
+/// Creates a return statement.
 pub fn return_statement(expr: Option<Box<Expression>>) -> Statement {
     stmt(StatementKind::Return(expr))
 }
 
+/// Creates a guard expression.
 pub fn guard(op: GuardOp, expr_node: Expression) -> Expression {
     expr(ExpressionKind::Guard(op, Box::new(expr_node)))
 }
 
+/// Creates a function parameter.
 pub fn parameter(
     name: String,
     typ: Expression,
@@ -585,20 +647,24 @@ pub fn parameter(
     }
 }
 
+/// Creates an import path expression.
 pub fn import_path_expression(segments: Vec<Expression>, kind: ImportPathKind) -> Expression {
     expr(ExpressionKind::ImportPath(segments, kind))
 }
 
+/// Creates a simple import path from a dotted string.
 pub fn import_path(path: &str) -> Expression {
     let segments: Vec<Expression> = path.split(".").map(|s| identifier(s.trim())).collect();
     import_path_expression(segments, ImportPathKind::Simple)
 }
 
+/// Creates a wildcard import path.
 pub fn import_path_wildcard(path: &str) -> Expression {
     let segments: Vec<Expression> = path.split(".").map(|s| identifier(s.trim())).collect();
     import_path_expression(segments, ImportPathKind::Wildcard)
 }
 
+/// Creates a multi-import path.
 pub fn import_path_multi(
     path: &str,
     items: Vec<(Expression, Option<Box<Expression>>)>,
@@ -607,14 +673,17 @@ pub fn import_path_multi(
     import_path_expression(segments, ImportPathKind::Multi(items))
 }
 
+/// Creates a use statement.
 pub fn use_statement(import_path: Expression, alias: Option<Box<Expression>>) -> Statement {
     stmt(StatementKind::Use(Box::new(import_path), alias))
 }
 
+/// Creates a generic type expression bound to a name.
 pub fn generic_type(name: &str, constraint: Option<Box<Expression>>) -> Expression {
     generic_type_expression(identifier(name), constraint, TypeDeclarationKind::None)
 }
 
+/// Creates a generic type with a specific declaration kind.
 pub fn generic_type_with_kind(
     name: &str,
     constraint: Option<Box<Expression>>,
@@ -623,82 +692,106 @@ pub fn generic_type_with_kind(
     generic_type_expression(identifier(name), constraint, kind)
 }
 
+/// Creates a type expression wrapping a Type.
 pub fn type_expression(inner: Type, is_nullable: bool) -> Expression {
     expr(ExpressionKind::Type(Box::new(inner), is_nullable))
 }
 
+/// Creates a non-nullable type expression.
 pub fn type_expr_non_null(t: Type) -> Expression {
     type_expression(t, false)
 }
 
+/// Creates a nullable type expression.
 pub fn type_expr_null(t: Type) -> Expression {
     type_expression(t, true)
 }
 
+/// Creates a Type of a specific kind with a default span.
 pub fn make_type(kind: TypeKind) -> Type {
     Type::new(kind, 0..0)
 }
 
+/// Creates an `Int` (arbitrary precision) type.
 pub fn type_int() -> Type {
     make_type(TypeKind::Int)
 }
+/// Creates a `Float` (arbitrary precision) type.
 pub fn type_float() -> Type {
     make_type(TypeKind::Float)
 }
+/// Creates a `String` type.
 pub fn type_string() -> Type {
     make_type(TypeKind::String)
 }
+/// Creates a `Boolean` type.
 pub fn type_bool() -> Type {
     make_type(TypeKind::Boolean)
 }
+/// Creates a `Void` type.
 pub fn type_void() -> Type {
     make_type(TypeKind::Void)
 }
+/// Creates an `F64` type.
 pub fn type_f64() -> Type {
     make_type(TypeKind::F64)
 }
+/// Creates an `F32` type.
 pub fn type_f32() -> Type {
     make_type(TypeKind::F32)
 }
+/// Creates an `I128` type.
 pub fn type_i128() -> Type {
     make_type(TypeKind::I128)
 }
+/// Creates an `I64` type.
 pub fn type_i64() -> Type {
     make_type(TypeKind::I64)
 }
+/// Creates an `I32` type.
 pub fn type_i32() -> Type {
     make_type(TypeKind::I32)
 }
+/// Creates an `I16` type.
 pub fn type_i16() -> Type {
     make_type(TypeKind::I16)
 }
+/// Creates an `I8` type.
 pub fn type_i8() -> Type {
     make_type(TypeKind::I8)
 }
+/// Creates a `U128` type.
 pub fn type_u128() -> Type {
     make_type(TypeKind::U128)
 }
+/// Creates a `U64` type.
 pub fn type_u64() -> Type {
     make_type(TypeKind::U64)
 }
+/// Creates a `U32` type.
 pub fn type_u32() -> Type {
     make_type(TypeKind::U32)
 }
+/// Creates a `U16` type.
 pub fn type_u16() -> Type {
     make_type(TypeKind::U16)
 }
+/// Creates a `U8` type.
 pub fn type_u8() -> Type {
     make_type(TypeKind::U8)
 }
 
+/// Creates a `List` type.
 pub fn type_list(inner: Type) -> Type {
     make_type(TypeKind::List(Box::new(type_expr_non_null(inner))))
 }
 
+/// Creates an `Array` type.
 pub fn type_array(inner: Type, size: Box<Expression>) -> Type {
     make_type(TypeKind::Array(Box::new(type_expr_non_null(inner)), size))
 }
 
+/// Creates a `Map` type.
 pub fn type_map(k: Type, v: Type) -> Type {
     make_type(TypeKind::Map(
         Box::new(type_expr_non_null(k)),
@@ -706,20 +799,24 @@ pub fn type_map(k: Type, v: Type) -> Type {
     ))
 }
 
+/// Creates a `Set` type.
 pub fn type_set(inner: Type) -> Type {
     make_type(TypeKind::Set(Box::new(type_expr_non_null(inner))))
 }
 
+/// Creates a `Tuple` type.
 pub fn type_tuple(elements: Vec<Type>) -> Type {
     make_type(TypeKind::Tuple(
         elements.into_iter().map(type_expr_non_null).collect(),
     ))
 }
 
+/// Creates a nullable wrapped type.
 pub fn type_null(inner: Type) -> Type {
     make_type(TypeKind::Nullable(Box::new(inner)))
 }
 
+/// Creates a `Result` type.
 pub fn type_result(ok: Type, err: Type) -> Type {
     make_type(TypeKind::Result(
         Box::new(type_expr_non_null(ok)),
@@ -727,14 +824,17 @@ pub fn type_result(ok: Type, err: Type) -> Type {
     ))
 }
 
+/// Creates a custom type (e.g., struct or class instance).
 pub fn type_custom(name: &str, args: Option<Vec<Expression>>) -> Type {
     make_type(TypeKind::Custom(name.to_string(), args))
 }
 
+/// Creates a `Future` type.
 pub fn type_future(inner: Type) -> Type {
     make_type(TypeKind::Future(Box::new(type_expr_non_null(inner))))
 }
 
+/// Creates a function signature type.
 pub fn type_function(
     generics: Option<Vec<Expression>>,
     params: Vec<Parameter>,
@@ -743,10 +843,12 @@ pub fn type_function(
     make_type(TypeKind::Function(generics, params, return_type))
 }
 
+/// Creates a `Symbol` type.
 pub fn type_symbol() -> Type {
     make_type(TypeKind::Symbol)
 }
 
+/// Creates a type declaration expression (e.g., `T extends Number`).
 pub fn type_declaration_expression(
     name: Expression,
     generic_types: Option<Vec<Expression>>,
@@ -761,6 +863,7 @@ pub fn type_declaration_expression(
     ))
 }
 
+/// Creates a type declaration from a string name.
 pub fn type_declaration(
     name: &str,
     generic_types: Option<Vec<Expression>>,
@@ -770,18 +873,22 @@ pub fn type_declaration(
     type_declaration_expression(identifier(name), generic_types, kind, type_expr)
 }
 
+/// Creates a type alias statement.
 pub fn type_statement(declarations: Vec<Expression>, visibility: MemberVisibility) -> Statement {
     stmt(StatementKind::Type(declarations, visibility))
 }
 
+/// Creates a break statement.
 pub fn break_statement() -> Statement {
     stmt(StatementKind::Break)
 }
 
+/// Creates a continue statement.
 pub fn continue_statement() -> Statement {
     stmt(StatementKind::Continue)
 }
 
+/// Creates an enum declaration statement.
 pub fn enum_statement(
     name: Expression,
     values: Vec<Expression>,
@@ -790,10 +897,12 @@ pub fn enum_statement(
     stmt(StatementKind::Enum(Box::new(name), values, visibility))
 }
 
+/// Creates an enum value expression (variant).
 pub fn enum_value_expression(name: Expression, types: Vec<Expression>) -> Expression {
     expr(ExpressionKind::EnumValue(Box::new(name), types))
 }
 
+/// Creates an enum value (variant) from a string name.
 pub fn enum_value(name: &str, types: Vec<Expression>) -> Expression {
     enum_value_expression(identifier(name), types)
 }
@@ -856,6 +965,7 @@ pub fn match_expression(subject: Expression, branches: Vec<MatchBranch>) -> Expr
     expr(ExpressionKind::Match(Box::new(subject), branches))
 }
 
+/// Represents a function builder, used to create functions with a more readable syntax.
 pub struct FunctionBuilder {
     name: String,
     generic_types: Option<Vec<Expression>>,
@@ -956,10 +1066,12 @@ impl FunctionBuilder {
     }
 }
 
+/// Creates a function builder.
 pub fn func(name: &str) -> FunctionBuilder {
     FunctionBuilder::new(name)
 }
 
+/// Creates a function declaration statement.
 pub fn function_declaration(
     name: &str,
     generic_types: Option<Vec<Expression>>,
@@ -978,10 +1090,12 @@ pub fn function_declaration(
     ))
 }
 
+/// Creates a lambda function builder.
 pub fn lambda() -> FunctionBuilder {
     FunctionBuilder::new("")
 }
 
+/// Creates a lambda function expression.
 pub fn lambda_expression(
     generic_types: Option<Vec<Expression>>,
     parameters: Vec<Parameter>,
@@ -998,14 +1112,17 @@ pub fn lambda_expression(
     ))
 }
 
+/// Creates a named argument expression.
 pub fn named_argument(name: String, value: Expression) -> Expression {
     expr(ExpressionKind::NamedArgument(name, Box::new(value)))
 }
 
+/// Creates a named argument expression with a span.
 pub fn named_argument_with_span(name: String, value: Expression, span: Span) -> Expression {
     expr_with_span(ExpressionKind::NamedArgument(name, Box::new(value)), span)
 }
 
+/// Creates a type from an expression.
 pub fn type_from_expr(expr: Expression) -> Type {
     match expr.node {
         ExpressionKind::Type(t, _) => *t,

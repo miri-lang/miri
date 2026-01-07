@@ -21,43 +21,74 @@ impl Type {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeKind {
+    /// System-dependent arbitrary precision integer (int32 or int64).
     Int,
+    /// 8-bit signed integer.
     I8,
+    /// 16-bit signed integer.
     I16,
+    /// 32-bit signed integer.
     I32,
+    /// 64-bit signed integer.
     I64,
+    /// 128-bit signed integer.
     I128,
+    /// 8-bit unsigned integer.
     U8,
+    /// 16-bit unsigned integer.
     U16,
+    /// 32-bit unsigned integer.
     U32,
+    /// 64-bit unsigned integer.
     U64,
+    /// 128-bit unsigned integer.
     U128,
+    /// Arbitrary precision float.
     Float,
+    /// 32-bit floating point.
     F32,
+    /// 64-bit floating point.
     F64,
+    /// String type.
     String,
+    /// Boolean type.
     Boolean,
+    /// Symbol type.
     Symbol,
-    List(Box<Expression>),                    // [i32]
-    Array(Box<Expression>, Box<Expression>),  // [i32; 4] or array<i32, 4>
-    Map(Box<Expression>, Box<Expression>),    // {string: i32}
-    Tuple(Vec<Expression>),                   // (i32, String)
-    Set(Box<Expression>),                     // {i32}
-    Result(Box<Expression>, Box<Expression>), // result<i32, String>
-    Future(Box<Expression>),                  // future<i32>
+    /// List type (e.g., `[i32]`).
+    List(Box<Expression>),
+    /// Array type (e.g., `[i32; 4]`).
+    Array(Box<Expression>, Box<Expression>),
+    /// Map type (e.g., `{string: i32}`).
+    Map(Box<Expression>, Box<Expression>),
+    /// Tuple type (e.g., `(i32, string)`).
+    Tuple(Vec<Expression>),
+    /// Set type (e.g., `{i32}`).
+    Set(Box<Expression>),
+    /// Result type (e.g., `result<i32, string>`).
+    Result(Box<Expression>, Box<Expression>),
+    /// Future type (e.g., `future<i32>`).
+    Future(Box<Expression>),
+    /// Function type (e.g., `fn<T>(x int) float`).
     Function(
         Option<Vec<Expression>>,
         Vec<Parameter>,
         Option<Box<Expression>>,
-    ), // fn<T>(x int) float
+    ),
 
-    Generic(String, Option<Box<Type>>, TypeDeclarationKind), // T extends Number
+    /// Generic type (e.g., `T extends SomeClass`).
+    Generic(String, Option<Box<Type>>, TypeDeclarationKind),
 
-    Custom(String, Option<Vec<Expression>>), // a custom type, e.g., MyStruct<T, U>
-    Meta(Box<Type>), // Represents the type of a type itself, e.g. the type of the identifier `Point` is `Meta(Custom("Point"))`
-    Nullable(Box<Type>), // Represents a nullable type, e.g., `int?`
-    Void,            // Represents void type
-    Error,           // Represents a type error
+    /// Custom type (e.g., struct name).
+    Custom(String, Option<Vec<Expression>>),
+    /// Metatype (type of a type).
+    Meta(Box<Type>),
+    /// Nullable type wrapper.
+    Nullable(Box<Type>),
+    /// Void type.
+    Void,
+    /// Error type (for type checking).
+    Error,
 }
 
 /// Represents a type declaration kind
@@ -79,28 +110,28 @@ impl fmt::Display for Type {
 impl fmt::Display for TypeKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TypeKind::Int => write!(f, "Int"),
-            TypeKind::I8 => write!(f, "I8"),
-            TypeKind::I16 => write!(f, "I16"),
-            TypeKind::I32 => write!(f, "I32"),
-            TypeKind::I64 => write!(f, "I64"),
-            TypeKind::I128 => write!(f, "I128"),
-            TypeKind::U8 => write!(f, "U8"),
-            TypeKind::U16 => write!(f, "U16"),
-            TypeKind::U32 => write!(f, "U32"),
-            TypeKind::U64 => write!(f, "U64"),
-            TypeKind::U128 => write!(f, "U128"),
-            TypeKind::Float => write!(f, "Float"),
-            TypeKind::F32 => write!(f, "F32"),
-            TypeKind::F64 => write!(f, "F64"),
-            TypeKind::String => write!(f, "String"),
-            TypeKind::Boolean => write!(f, "Boolean"),
-            TypeKind::Symbol => write!(f, "Symbol"),
-            TypeKind::List(inner) => write!(f, "List({})", inner.node),
-            TypeKind::Array(inner, size) => write!(f, "Array({}, {})", inner.node, size.node),
-            TypeKind::Map(k, v) => write!(f, "Map({}, {})", k.node, v.node),
+            TypeKind::Int => write!(f, "int"),
+            TypeKind::I8 => write!(f, "i8"),
+            TypeKind::I16 => write!(f, "i16"),
+            TypeKind::I32 => write!(f, "i32"),
+            TypeKind::I64 => write!(f, "i64"),
+            TypeKind::I128 => write!(f, "i128"),
+            TypeKind::U8 => write!(f, "u8"),
+            TypeKind::U16 => write!(f, "u16"),
+            TypeKind::U32 => write!(f, "u32"),
+            TypeKind::U64 => write!(f, "u64"),
+            TypeKind::U128 => write!(f, "u128"),
+            TypeKind::Float => write!(f, "float"),
+            TypeKind::F32 => write!(f, "f32"),
+            TypeKind::F64 => write!(f, "f64"),
+            TypeKind::String => write!(f, "string"),
+            TypeKind::Boolean => write!(f, "boolean"),
+            TypeKind::Symbol => write!(f, "symbol"),
+            TypeKind::List(inner) => write!(f, "list({})", inner.node),
+            TypeKind::Array(inner, size) => write!(f, "array({}, {})", inner.node, size.node),
+            TypeKind::Map(k, v) => write!(f, "map({}, {})", k.node, v.node),
             TypeKind::Tuple(elements) => {
-                write!(f, "Tuple(")?;
+                write!(f, "tuple(")?;
                 for (i, e) in elements.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
@@ -109,11 +140,11 @@ impl fmt::Display for TypeKind {
                 }
                 write!(f, ")")
             }
-            TypeKind::Set(inner) => write!(f, "Set({})", inner.node),
-            TypeKind::Result(ok, err) => write!(f, "Result({}, {})", ok.node, err.node),
-            TypeKind::Future(inner) => write!(f, "Future({})", inner.node),
+            TypeKind::Set(inner) => write!(f, "set({})", inner.node),
+            TypeKind::Result(ok, err) => write!(f, "result({}, {})", ok.node, err.node),
+            TypeKind::Future(inner) => write!(f, "future({})", inner.node),
             TypeKind::Function(_, params, ret) => {
-                write!(f, "Function(")?;
+                write!(f, "function(")?;
                 for (i, p) in params.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
@@ -141,10 +172,10 @@ impl fmt::Display for TypeKind {
                 }
                 Ok(())
             }
-            TypeKind::Meta(inner) => write!(f, "Meta({})", inner),
-            TypeKind::Nullable(inner) => write!(f, "Nullable({})", inner),
-            TypeKind::Void => write!(f, "Void"),
-            TypeKind::Error => write!(f, "Error"),
+            TypeKind::Meta(inner) => write!(f, "meta({})", inner),
+            TypeKind::Nullable(inner) => write!(f, "nullable({})", inner),
+            TypeKind::Void => write!(f, "void"),
+            TypeKind::Error => write!(f, "error"),
         }
     }
 }

@@ -28,7 +28,7 @@ fn main()
 ";
     check_error(
         input,
-        "Type mismatch for argument 'grid': expected Dim3, got Int",
+        "Type mismatch for argument 'grid': expected Dim3, got int",
     );
 }
 
@@ -44,7 +44,7 @@ fn main()
 ";
     // Check for correct error message for non-kernel type.
     // If not_kernel returns Void, it has no members.
-    check_error(input, "Type 'Void' does not have members");
+    check_error(input, "Type 'void' does not have members");
 }
 
 #[test]

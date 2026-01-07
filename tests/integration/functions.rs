@@ -8,10 +8,6 @@
 
 use crate::test_utils::{assert_compiles, assert_invalid, assert_valid};
 
-// =============================================================================
-// Simple function definitions (compile without calls)
-// =============================================================================
-
 #[test]
 fn test_single_function_returns_constant() {
     assert_compiles(
@@ -43,10 +39,6 @@ fn main() int
 "#,
     );
 }
-
-// =============================================================================
-// These tests verify type-checking of function calls (not yet in codegen)
-// =============================================================================
 
 #[test]
 fn test_function_call_typecheck() {
@@ -92,11 +84,7 @@ fn main()
     );
 }
 
-// Note: Mutual recursion (forward declarations) is not yet supported
-
-// =============================================================================
-// Error cases
-// =============================================================================
+// TODO: Mutual recursion (forward declarations) is not yet supported
 
 #[test]
 fn test_missing_argument_error() {
@@ -133,7 +121,7 @@ fn test_return_type_mismatch_error() {
 fn get_number() int
     return "string"
 "#,
-        &["Invalid return type", "expected Int", "got String"],
+        &["Invalid return type", "expected int", "got string"],
     );
 }
 

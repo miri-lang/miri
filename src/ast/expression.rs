@@ -50,18 +50,25 @@ impl LeftHandSideExpression {
 /// Represents an expression
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ExpressionKind {
+    /// A literal value (e.g., number, string, boolean).
     Literal(Literal),
 
+    /// An identifier (e.g., variable name) with an optional class qualifier.
     Identifier(String, Option<String>), // name, optional class e.g. x or Http::Status
 
+    /// A binary operation (e.g., `a + b`).
     Binary(Box<Expression>, BinaryOp, Box<Expression>),
 
+    /// A logical operation (e.g., `a && b`).
     Logical(Box<Expression>, BinaryOp, Box<Expression>),
 
+    /// A unary operation (e.g., `-a`, `!a`).
     Unary(UnaryOp, Box<Expression>),
 
+    /// An assignment operation (e.g., `a = b`).
     Assignment(Box<LeftHandSideExpression>, AssignmentOp, Box<Expression>),
 
+    /// A conditional expression (e.g., `a ? b : c` or `if a then b else c`).
     Conditional(
         Box<Expression>,
         Box<Expression>,
@@ -69,30 +76,39 @@ pub enum ExpressionKind {
         IfStatementType,
     ), // then_expr, condition, else_expr
 
+    /// A range expression (e.g., `1..10`).
     Range(
         Box<Expression>,
         Option<Box<Expression>>,
         RangeExpressionType,
     ), // start, end, range_type
 
+    /// A guard expression.
     Guard(GuardOp, Box<Expression>), // guard operator and expression
 
+    /// A member access expression (e.g., `object.property`).
     Member(Box<Expression>, Box<Expression>), // object.property
 
+    /// An index access expression (e.g., `object[index]`).
     Index(Box<Expression>, Box<Expression>), // object[index]
 
-    Call(Box<Expression>, Vec<Expression>), // function, args
+    /// A function call (e.g., `foo(a, b)`).
+    Call(Box<Expression>, Vec<Expression>),
 
-    ImportPath(Vec<Expression>, ImportPathKind), // Represents an import path, e.g., `use a.b.c`
+    /// An import path (e.g., `use a.b.c`).
+    ImportPath(Vec<Expression>, ImportPathKind),
 
-    Type(Box<Type>, bool), // Represents a type expression, e.g., `i32`, `string`, etc.
+    /// A type expression wrapper (e.g., when a type is used as an expression).
+    Type(Box<Type>, bool),
 
+    /// A generic type reference (e.g., `List<T>`).
     GenericType(
         Box<Expression>,
         Option<Box<Expression>>,
         TypeDeclarationKind,
     ), // Represents a generic type, e.g., <T is MyClass>
 
+    /// A type declaration expression.
     TypeDeclaration(
         Box<Expression>,
         Option<Vec<Expression>>,
@@ -100,10 +116,13 @@ pub enum ExpressionKind {
         Option<Box<Expression>>,
     ), // T extends SomeClass
 
-    EnumValue(Box<Expression>, Vec<Expression>), // Represents an enum value, e.g., Ok, Err(string)
+    /// An enum value reference (e.g., `Option::Some(5)`).
+    EnumValue(Box<Expression>, Vec<Expression>),
 
-    StructMember(Box<Expression>, Box<Expression>), // Represents a struct member, e.g., `x int`
+    /// A struct member declaration (e.g., in a struct definition `x int`).
+    StructMember(Box<Expression>, Box<Expression>),
 
+    /// A lambda function (e.g., `fn (x int) int: x + 1`).
     Lambda(
         Option<Vec<Expression>>,
         Vec<Parameter>,
@@ -112,25 +131,35 @@ pub enum ExpressionKind {
         FunctionProperties,
     ), // generic_types, parameters, return type, body
 
-    List(Vec<Expression>), // A list literal, e.g., [1, 2, 3]
+    /// A list literal (e.g., `[1, 2, 3]`).
+    List(Vec<Expression>),
 
-    Array(Vec<Expression>, Box<Expression>), // An array literal, e.g., [1, 2, 3] (fixed size)
+    /// An array literal (fixed size).
+    Array(Vec<Expression>, Box<Expression>),
 
-    Map(Vec<(Expression, Expression)>), // A map literal, e.g., {'a': 1, 'b': 2}
+    /// A map literal (e.g., `{'a': 1, 'b': 2}`).
+    Map(Vec<(Expression, Expression)>),
 
-    Tuple(Vec<Expression>), // A tuple literal, e.g., (1, 'a', true)
+    /// A tuple literal (e.g., `(1, "a")`).
+    Tuple(Vec<Expression>),
 
-    Set(Vec<Expression>), // A set literal, e.g., {1, 2, 3}
+    /// A set literal (e.g., `{1, 2, 3}`).
+    Set(Vec<Expression>),
 
+    /// A match expression.
     Match(Box<Expression>, Vec<MatchBranch>), // value, branches
 
-    FormattedString(Vec<Expression>), // "hello #{name}"
+    /// An interpolated string (f-string e.g. `"hello #{name}"`).
+    FormattedString(Vec<Expression>),
 
-    NamedArgument(String, Box<Expression>), // name, value
+    /// A named argument in a function call (e.g., `foo(a: 1)`).
+    NamedArgument(String, Box<Expression>),
 }
 
+/// Represents an expression
 pub type Expression = IdNode<ExpressionKind>;
 
+/// Returns an optional expression
 pub fn opt_expr(expr: Expression) -> Option<Box<Expression>> {
     Some(Box::new(expr))
 }

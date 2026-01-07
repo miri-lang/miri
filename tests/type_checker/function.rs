@@ -21,7 +21,7 @@ fn test_function_return_type_mismatch() {
 fn foo() int
     return true
     ";
-    check_error(source, "Invalid return type: expected Int, got Boolean");
+    check_error(source, "Invalid return type: expected int, got boolean");
 }
 
 #[test]
@@ -34,7 +34,7 @@ foo(true)
     ";
     check_error(
         source,
-        "Type mismatch for argument 'a': expected Int, got Boolean",
+        "Type mismatch for argument 'a': expected int, got boolean",
     );
 }
 
@@ -123,7 +123,7 @@ fn test_void_function_explicit_return_value_error() {
 fn dummy_add(a int, b int)
    return a + b
     ";
-    check_error(source, "Invalid return type: expected Void, got Int");
+    check_error(source, "Invalid return type: expected void, got int");
 }
 
 #[test]
@@ -132,7 +132,7 @@ fn test_implicit_return_type_mismatch() {
 fn foo() int
     true
     ";
-    check_error(source, "Invalid return type: expected Int, got Boolean");
+    check_error(source, "Invalid return type: expected int, got boolean");
 }
 
 #[test]

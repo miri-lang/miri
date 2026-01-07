@@ -135,7 +135,7 @@ fn test_integer_float_mismatch() {
         "
 let x = 1 + 1.5
 ",
-        "Type mismatch: Int and F32 are not compatible for arithmetic operation",
+        "Type mismatch: int and f32 are not compatible for arithmetic operation",
     );
 }
 
@@ -216,11 +216,11 @@ fn test_mixed_integer_arithmetic_fail() {
     // Strict typing: i8 + i16 should fail without cast
     check_error(
         "
-let a i8 = 1
-let b i16 = 2
-let c = a + b
+let x i8 = 1
+let y i16 = 2
+x + y
 ",
-        "Type mismatch: I8 and I16 are not compatible for arithmetic operation",
+        "Type mismatch: i8 and i16 are not compatible for arithmetic operation",
     );
 }
 
@@ -228,11 +228,11 @@ let c = a + b
 fn test_mixed_integer_bitwise_fail() {
     check_error(
         "
-let a u8 = 1
-let b u16 = 2
-let c = a & b
+let x u8 = 1
+let y u16 = 2
+x & y
 ",
-        "Type mismatch: U8 and U16 are not compatible for bitwise operation",
+        "Type mismatch: u8 and u16 are not compatible for bitwise operation",
     );
 }
 

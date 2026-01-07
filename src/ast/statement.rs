@@ -33,37 +33,48 @@ pub enum VariableDeclarationType {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct VariableDeclaration {
     pub name: String,
-    pub typ: Option<Box<Expression>>, // Type can be specified, e.g., "i32", "String"
-    pub initializer: Option<Box<Expression>>, // Optional initializer expression
-    pub declaration_type: VariableDeclarationType, // Whether the variable is mutable
+    pub typ: Option<Box<Expression>>,
+    pub initializer: Option<Box<Expression>>,
+    pub declaration_type: VariableDeclarationType,
     pub is_shared: bool,
 }
 
+/// Represents a statement kind
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub enum StatementKind {
-    Empty, // Represents an empty statement, e.g., when a block is empty
+    /// An empty statement (does nothing).
+    Empty,
 
+    /// A break statement (for loops).
     Break,
 
+    /// A continue statement (for loops).
     Continue,
 
+    /// A statement consisting of a single expression.
     Expression(Expression),
 
+    /// A block of statements.
     Block(Vec<Statement>),
 
+    /// A variable declaration.
     Variable(Vec<VariableDeclaration>, MemberVisibility),
 
+    /// An if statement (or unless).
     If(
         Box<Expression>,
         Box<Statement>,
         Option<Box<Statement>>,
         IfStatementType,
-    ), // condition, then_block, else_block, type
+    ),
 
-    While(Box<Expression>, Box<Statement>, WhileStatementType), // condition, then_block, type
+    /// A while/until/do-while loop.
+    While(Box<Expression>, Box<Statement>, WhileStatementType),
 
-    For(Vec<VariableDeclaration>, Box<Expression>, Box<Statement>), // variable_declarations, iterable, body
+    /// A for loop.
+    For(Vec<VariableDeclaration>, Box<Expression>, Box<Statement>),
 
+    /// A function declaration.
     FunctionDeclaration(
         String,
         Option<Vec<Expression>>,
@@ -71,28 +82,37 @@ pub enum StatementKind {
         Option<Box<Expression>>,
         Box<Statement>,
         FunctionProperties,
-    ), // name, generic_types, parameters, return type, body
+    ),
 
-    Return(Option<Box<Expression>>), // Optional return expression
+    /// A return statement.
+    Return(Option<Box<Expression>>),
 
+    /// A use statement (import).
     Use(Box<Expression>, Option<Box<Expression>>),
 
-    Type(Vec<Expression>, MemberVisibility), // type X, Y, Z extends A
+    /// A type alias declaration.
+    Type(Vec<Expression>, MemberVisibility),
 
-    Enum(Box<Expression>, Vec<Expression>, MemberVisibility), // enum Colors: Red, Green, Blue(string)
+    /// An enum declaration.
+    Enum(Box<Expression>, Vec<Expression>, MemberVisibility),
 
+    /// A struct declaration.
     Struct(
         Box<Expression>,
         Option<Vec<Expression>>,
         Vec<Expression>,
         MemberVisibility,
-    ), // struct Point<T>: x T, y int
+    ),
 
-    Extends(Box<Expression>), // extends BaseClass
+    /// An extends clause (for inheritance).
+    Extends(Box<Expression>),
 
-    Implements(Vec<Expression>), // implements Trait1, Trait2
+    /// An implements clause (for interfaces).
+    Implements(Vec<Expression>),
 
-    Includes(Vec<Expression>), // includes Module1, Module2
+    /// An includes clause (for mixins/traits).
+    Includes(Vec<Expression>),
 }
 
+/// Represents a statement
 pub type Statement = IdNode<StatementKind>;
