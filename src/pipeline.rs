@@ -136,13 +136,7 @@ impl Pipeline {
         for warning in &type_checker.warnings {
             eprintln!(
                 "{}",
-                crate::error::format_diagnostic(
-                    source,
-                    &warning.span,
-                    &warning.message,
-                    "warning",
-                    warning.help.as_deref()
-                )
+                crate::error::format::format_diagnostic_full(source, warning)
             );
         }
 

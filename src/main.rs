@@ -124,13 +124,7 @@ fn check_file(path: PathBuf, _verbose: u8) -> Result<()> {
             for warning in &result.type_checker.warnings {
                 eprintln!(
                     "{}",
-                    miri::error::format_diagnostic(
-                        &source,
-                        &warning.span,
-                        &warning.message,
-                        "warning",
-                        warning.help.as_deref()
-                    )
+                    miri::error::format::format_diagnostic_full(&source, warning)
                 );
             }
             println!("Check passed. No errors found.");

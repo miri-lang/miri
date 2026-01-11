@@ -7,9 +7,9 @@
 //! indicating that LLVM support is not yet implemented.
 
 use crate::codegen::backend::{Backend, CompiledArtifact};
+use crate::error::CodegenError;
 use crate::mir::Body;
 use std::fmt;
-use thiserror::Error;
 
 /// LLVM backend placeholder.
 ///
@@ -24,16 +24,8 @@ pub struct LlvmOptions {
     pub opt_level: u8,
 }
 
-/// Errors from the LLVM backend.
-#[derive(Debug, Error)]
-pub enum LlvmError {
-    /// LLVM backend is not yet implemented.
-    #[error("LLVM backend is not yet supported. Stay tuned!")]
-    NotYetSupported,
-}
-
 impl Backend for LlvmBackend {
-    type Error = LlvmError;
+    type Error = CodegenError;
     type Options = LlvmOptions;
 
     fn compile(
@@ -41,7 +33,7 @@ impl Backend for LlvmBackend {
         _bodies: &[(&str, &Body)],
         _options: &Self::Options,
     ) -> Result<CompiledArtifact, Self::Error> {
-        Err(LlvmError::NotYetSupported)
+        Err(CodegenError::not_supported("LLVM"))
     }
 
     fn name(&self) -> &'static str {

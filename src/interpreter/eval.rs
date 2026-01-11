@@ -4,7 +4,7 @@
 //! Core evaluation logic for the MIR interpreter.
 
 use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
-use crate::interpreter::error::InterpreterError;
+use crate::error::InterpreterError;
 use crate::interpreter::frame::Frame;
 use crate::interpreter::value::Value;
 use crate::interpreter::Interpreter;

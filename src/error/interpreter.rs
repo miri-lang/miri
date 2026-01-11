@@ -2,7 +2,12 @@
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
 //! Interpreter errors.
+//!
+//! Error types for the MIR interpreter, consolidated in the error module
+//! for consistent formatting and reporting.
 
+use crate::error::codes;
+use crate::error::diagnostic::{Diagnostic, Reportable, Severity};
 use std::fmt;
 
 /// Errors that can occur during MIR interpretation.
@@ -36,6 +41,58 @@ pub enum InterpreterError {
     NotImplemented(String),
     /// Internal interpreter error.
     Internal(String),
+}
+
+impl InterpreterError {
+    /// Get the error code for this interpreter error.
+    pub fn code(&self) -> &'static str {
+        match self {
+            InterpreterError::UndefinedFunction(_) => codes::runtime::UNDEFINED_FUNCTION,
+            InterpreterError::TypeMismatch { .. } => codes::runtime::TYPE_MISMATCH,
+            InterpreterError::DivisionByZero => codes::runtime::DIVISION_BY_ZERO,
+            InterpreterError::RemainderByZero => codes::runtime::REMAINDER_BY_ZERO,
+            InterpreterError::Overflow => codes::runtime::OVERFLOW,
+            InterpreterError::InvalidOperand { .. } => codes::runtime::INVALID_OPERAND,
+            InterpreterError::UndefinedLocal(_) => codes::runtime::UNDEFINED_LOCAL,
+            InterpreterError::UninitializedLocal(_) => codes::runtime::UNINITIALIZED_LOCAL,
+            InterpreterError::InvalidBlock(_) => codes::runtime::INVALID_BLOCK,
+            InterpreterError::StackOverflow => codes::runtime::STACK_OVERFLOW,
+            InterpreterError::NotImplemented(_) => codes::runtime::NOT_IMPLEMENTED,
+            InterpreterError::Internal(_) => codes::runtime::INTERNAL,
+        }
+    }
+
+    /// Get the human-readable title for this error.
+    pub fn title(&self) -> &'static str {
+        match self {
+            InterpreterError::UndefinedFunction(_) => "Undefined Function",
+            InterpreterError::TypeMismatch { .. } => "Type Mismatch",
+            InterpreterError::DivisionByZero => "Division by Zero",
+            InterpreterError::RemainderByZero => "Remainder by Zero",
+            InterpreterError::Overflow => "Integer Overflow",
+            InterpreterError::InvalidOperand { .. } => "Invalid Operand",
+            InterpreterError::UndefinedLocal(_) => "Undefined Local Variable",
+            InterpreterError::UninitializedLocal(_) => "Uninitialized Local Variable",
+            InterpreterError::InvalidBlock(_) => "Invalid Block",
+            InterpreterError::StackOverflow => "Stack Overflow",
+            InterpreterError::NotImplemented(_) => "Not Implemented",
+            InterpreterError::Internal(_) => "Internal Error",
+        }
+    }
+}
+
+impl Reportable for InterpreterError {
+    fn to_diagnostic(&self) -> Diagnostic {
+        Diagnostic {
+            severity: Severity::Error,
+            code: Some(self.code()),
+            title: self.title().to_string(),
+            message: self.to_string(),
+            span: None, // Interpreter errors don't have source spans
+            help: None,
+            notes: Vec::new(),
+        }
+    }
 }
 
 impl fmt::Display for InterpreterError {

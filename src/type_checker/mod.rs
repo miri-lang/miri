@@ -3,6 +3,7 @@
 
 use crate::ast::types::{Type, TypeDeclarationKind};
 use crate::ast::{types::TypeKind, *};
+use crate::error::diagnostic::Diagnostic;
 use crate::error::type_error::TypeError;
 use std::collections::HashMap;
 
@@ -25,7 +26,7 @@ pub struct TypeChecker {
     /// Collects all type errors encountered during checking.
     pub(crate) errors: Vec<TypeError>,
     /// Collects all type warnings encountered during checking.
-    pub warnings: Vec<TypeError>,
+    pub warnings: Vec<Diagnostic>,
     /// Stores type hierarchy relationships (extends, implements, includes)
     pub(crate) hierarchy: HashMap<String, TypeRelation>,
     /// Name of the current module/class being checked

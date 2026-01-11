@@ -7,8 +7,8 @@ use crate::ast::factory as ast_factory;
 use crate::ast::factory::make_type;
 use crate::ast::types::{Type, TypeDeclarationKind, TypeKind};
 use crate::ast::*;
+use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
-use crate::error::utils::find_best_match;
 use std::collections::{HashMap, HashSet};
 
 impl TypeChecker {

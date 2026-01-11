@@ -9,12 +9,12 @@
 //! The interpreter shares the same frontend (lexer, parser, type checker) and MIR
 //! lowering as the compiled backends, ensuring consistent semantics.
 
-mod error;
 mod eval;
 mod frame;
 mod value;
 
-pub use error::InterpreterError;
+// Re-export InterpreterError from centralized error module
+pub use crate::error::InterpreterError;
 pub use value::Value;
 
 use crate::mir::Body;

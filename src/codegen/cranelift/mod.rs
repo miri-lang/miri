@@ -10,6 +10,7 @@ mod translator;
 mod types;
 
 use crate::codegen::backend::{ArtifactFormat, Backend, CompiledArtifact};
+use crate::error::CodegenError;
 use crate::mir::Body;
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_codegen::settings::{self, Configurable};
@@ -19,7 +20,6 @@ use cranelift_object::{ObjectBuilder, ObjectModule};
 use std::fmt;
 use std::sync::Arc;
 use target_lexicon::{DeploymentTarget, OperatingSystem, Triple};
-use thiserror::Error;
 
 pub use translator::FunctionTranslator;
 pub use types::translate_type;
@@ -71,37 +71,9 @@ impl Default for CraneliftOptions {
     }
 }
 
-/// Errors from the Cranelift backend.
-#[derive(Debug, Error)]
-pub enum CraneliftError {
-    /// Failed to create target ISA.
-    #[error("Failed to create target ISA: {0}")]
-    TargetIsa(String),
-
-    /// Failed to create module.
-    #[error("Failed to create module: {0}")]
-    Module(String),
-
-    /// Failed to declare function.
-    #[error("Failed to declare function '{0}': {1}")]
-    DeclareFunction(String, String),
-
-    /// Failed to define function.
-    #[error("Failed to define function '{0}': {1}")]
-    DefineFunction(String, String),
-
-    /// Failed to translate MIR to Cranelift IR.
-    #[error("Failed to translate function '{0}': {1}")]
-    Translation(String, String),
-
-    /// Failed to emit object file.
-    #[error("Failed to emit object file: {0}")]
-    Emit(String),
-}
-
 impl CraneliftBackend {
     /// Create a new Cranelift backend for the host platform.
-    pub fn new() -> Result<Self, CraneliftError> {
+    pub fn new() -> Result<Self, CodegenError> {
         let mut target = Triple::host();
         // If we are on macOS (Darwin), we need to specify a version so that Cranelift
         // emits the LC_BUILD_VERSION load command. Without this, the linker will warn.
@@ -119,19 +91,19 @@ impl CraneliftBackend {
     }
 
     /// Create a new Cranelift backend for a specific target.
-    pub fn for_target(target: Triple) -> Result<Self, CraneliftError> {
+    pub fn for_target(target: Triple) -> Result<Self, CodegenError> {
         let mut settings_builder = settings::builder();
 
         settings_builder
             .set("opt_level", "none")
-            .map_err(|e| CraneliftError::TargetIsa(e.to_string()))?;
+            .map_err(|e| CodegenError::TargetIsa(e.to_string()))?;
 
         let flags = settings::Flags::new(settings_builder);
 
         let isa = cranelift_codegen::isa::lookup(target)
-            .map_err(|e| CraneliftError::TargetIsa(e.to_string()))?
+            .map_err(|e| CodegenError::TargetIsa(e.to_string()))?
             .finish(flags)
-            .map_err(|e| CraneliftError::TargetIsa(e.to_string()))?;
+            .map_err(|e| CodegenError::TargetIsa(e.to_string()))?;
 
         Ok(Self { isa })
     }
@@ -149,7 +121,7 @@ impl Default for CraneliftBackend {
 }
 
 impl Backend for CraneliftBackend {
-    type Error = CraneliftError;
+    type Error = CodegenError;
     type Options = CraneliftOptions;
 
     fn compile(
@@ -168,21 +140,21 @@ impl Backend for CraneliftBackend {
 
         settings_builder
             .set("opt_level", opt_level_str)
-            .map_err(|e| CraneliftError::Module(e.to_string()))?;
+            .map_err(|e| CodegenError::Module(e.to_string()))?;
 
         if options.pic {
             settings_builder
                 .set("is_pic", "true")
-                .map_err(|e| CraneliftError::Module(e.to_string()))?;
+                .map_err(|e| CodegenError::Module(e.to_string()))?;
         }
 
         let flags = settings::Flags::new(settings_builder);
 
         // Rebuild ISA with new flags
         let isa = cranelift_codegen::isa::lookup(self.isa.triple().clone())
-            .map_err(|e| CraneliftError::TargetIsa(e.to_string()))?
+            .map_err(|e| CodegenError::TargetIsa(e.to_string()))?
             .finish(flags)
-            .map_err(|e| CraneliftError::TargetIsa(e.to_string()))?;
+            .map_err(|e| CodegenError::TargetIsa(e.to_string()))?;
 
         // Create object module
         let object_builder = ObjectBuilder::new(
@@ -190,7 +162,7 @@ impl Backend for CraneliftBackend {
             "miri_module",
             cranelift_module::default_libcall_names(),
         )
-        .map_err(|e| CraneliftError::Module(e.to_string()))?;
+        .map_err(|e| CodegenError::Module(e.to_string()))?;
 
         let mut module = ObjectModule::new(object_builder);
         let mut ctx = Context::new();
@@ -219,7 +191,7 @@ impl Backend for CraneliftBackend {
 
         let object = product
             .emit()
-            .map_err(|e| CraneliftError::Emit(e.to_string()))?;
+            .map_err(|e| CodegenError::Emit(e.to_string()))?;
 
         Ok(CompiledArtifact {
             bytes: object,
@@ -240,20 +212,20 @@ impl CraneliftBackend {
         name: &str,
         body: &Body,
         isa: &Arc<dyn TargetIsa>,
-    ) -> Result<(), CraneliftError> {
+    ) -> Result<(), CodegenError> {
         // Create function translator
         let mut translator = FunctionTranslator::new(isa, body);
 
         // Translate MIR to Cranelift IR
         translator
             .translate(body)
-            .map_err(|e| CraneliftError::Translation(name.to_string(), e))?;
+            .map_err(|e| CodegenError::translation(name, e))?;
 
         // Get the function signature and declare it
         let sig = translator.signature().clone();
         let func_id = module
             .declare_function(name, Linkage::Export, &sig)
-            .map_err(|e| CraneliftError::DeclareFunction(name.to_string(), e.to_string()))?;
+            .map_err(|e| CodegenError::declare_function(name, e.to_string()))?;
 
         // Set the function in context
         ctx.func = translator.into_function();
@@ -261,7 +233,7 @@ impl CraneliftBackend {
         // Define the function
         module
             .define_function(func_id, ctx)
-            .map_err(|e| CraneliftError::DefineFunction(name.to_string(), e.to_string()))?;
+            .map_err(|e| CodegenError::define_function(name, e.to_string()))?;
 
         // Clear context for next function
         ctx.clear();

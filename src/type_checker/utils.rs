@@ -6,9 +6,9 @@ use super::TypeChecker;
 use crate::ast::factory::make_type;
 use crate::ast::types::{Type, TypeDeclarationKind, TypeKind};
 use crate::ast::*;
+use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
 use crate::error::type_error::TypeError;
-use crate::error::utils::find_best_match;
 
 impl TypeChecker {
     pub(crate) fn check_binary_op_types(
@@ -953,7 +953,16 @@ impl TypeChecker {
     }
 
     pub(crate) fn report_warning(&mut self, message: String, span: Span) {
-        self.warnings.push(TypeError::new(message, span));
+        use crate::error::diagnostic::{Diagnostic, Severity};
+        self.warnings.push(Diagnostic {
+            severity: Severity::Warning,
+            code: None,
+            title: message.clone(),
+            message,
+            span: Some(span),
+            help: None,
+            notes: Vec::new(),
+        });
     }
 
     pub(crate) fn infer_generic_types(

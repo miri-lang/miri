@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
+use crate::error::format::format_diagnostic;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::SyntaxError;
 use crate::error::type_error::TypeError;
-use crate::error::utils::format_diagnostic;
 use thiserror::Error;
 
 #[derive(Error, Debug)]

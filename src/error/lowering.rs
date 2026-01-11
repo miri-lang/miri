@@ -3,8 +3,9 @@
 
 //! Error types for MIR lowering.
 
+use crate::error::diagnostic::{Diagnostic, Reportable, Severity};
+use crate::error::format::format_diagnostic;
 use crate::error::syntax::Span;
-use crate::error::utils::format_diagnostic;
 
 /// Errors that can occur during MIR lowering.
 #[derive(Debug, Clone, PartialEq)]
@@ -59,7 +60,26 @@ impl LoweringError {
         Self::new(format!("unsupported left-hand side: {}", desc), span)
     }
 
+    /// Report the error using the legacy format function.
     pub fn report(&self, source: &str) -> String {
+        Reportable::report(self, source)
+    }
+}
+
+impl Reportable for LoweringError {
+    fn to_diagnostic(&self) -> Diagnostic {
+        Diagnostic {
+            severity: Severity::Error,
+            code: None, // Lowering errors use dynamic messages
+            title: self.message.clone(),
+            message: self.message.clone(),
+            span: Some(self.span.clone()),
+            help: self.help.clone(),
+            notes: Vec::new(),
+        }
+    }
+
+    fn report(&self, source: &str) -> String {
         format_diagnostic(
             source,
             &self.span,
