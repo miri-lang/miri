@@ -7,7 +7,7 @@
 //! formatting across all compiler phases.
 
 pub mod codegen;
-pub mod codes;
+
 pub mod compiler;
 pub mod diagnostic;
 pub mod format;

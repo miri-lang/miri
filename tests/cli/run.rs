@@ -13,7 +13,7 @@ fn create_test_file(content: &str) -> NamedTempFile {
 }
 
 const SIMPLE_MAIN: &str = r#"fn main() int
-    42
+    0
 "#;
 
 #[test]

@@ -70,8 +70,8 @@ x
 
     assert_compiler_error(
         r#"
-        let x = 10
-        x = 20
+let x = 10
+x = 20
         "#,
         "Cannot assign to immutable variable 'x'",
     );

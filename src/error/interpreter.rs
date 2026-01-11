@@ -6,13 +6,17 @@
 //! Error types for the MIR interpreter, consolidated in the error module
 //! for consistent formatting and reporting.
 
-use crate::error::codes;
-use crate::error::diagnostic::{Diagnostic, Reportable, Severity};
+use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable, Severity};
 use std::fmt;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InterpreterError {
+    pub kind: InterpreterErrorKind,
+}
+
 /// Errors that can occur during MIR interpretation.
-#[derive(Debug, Clone)]
-pub enum InterpreterError {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InterpreterErrorKind {
     /// Attempted to call an undefined function.
     UndefinedFunction(String),
     /// Type mismatch during execution.
@@ -43,53 +47,173 @@ pub enum InterpreterError {
     Internal(String),
 }
 
-impl InterpreterError {
-    /// Get the error code for this interpreter error.
-    pub fn code(&self) -> &'static str {
+impl InterpreterErrorKind {
+    pub fn properties(&self) -> ErrorProperties {
         match self {
-            InterpreterError::UndefinedFunction(_) => codes::runtime::UNDEFINED_FUNCTION,
-            InterpreterError::TypeMismatch { .. } => codes::runtime::TYPE_MISMATCH,
-            InterpreterError::DivisionByZero => codes::runtime::DIVISION_BY_ZERO,
-            InterpreterError::RemainderByZero => codes::runtime::REMAINDER_BY_ZERO,
-            InterpreterError::Overflow => codes::runtime::OVERFLOW,
-            InterpreterError::InvalidOperand { .. } => codes::runtime::INVALID_OPERAND,
-            InterpreterError::UndefinedLocal(_) => codes::runtime::UNDEFINED_LOCAL,
-            InterpreterError::UninitializedLocal(_) => codes::runtime::UNINITIALIZED_LOCAL,
-            InterpreterError::InvalidBlock(_) => codes::runtime::INVALID_BLOCK,
-            InterpreterError::StackOverflow => codes::runtime::STACK_OVERFLOW,
-            InterpreterError::NotImplemented(_) => codes::runtime::NOT_IMPLEMENTED,
-            InterpreterError::Internal(_) => codes::runtime::INTERNAL,
+            Self::UndefinedFunction(name) => ErrorProperties {
+                code: "E0403",
+                title: "Undefined Function",
+                message: Some(format!("Undefined function: {}", name)),
+                help: Some("Ensure the function is defined and imported correctly.".to_string()),
+            },
+            Self::TypeMismatch {
+                expected,
+                got,
+                context,
+            } => ErrorProperties {
+                code: "E0404",
+                title: "Type Mismatch",
+                message: Some(format!(
+                    "Type mismatch in {}: expected {}, got {}",
+                    context, expected, got
+                )),
+                help: Some("Ensure types match the expected values.".to_string()),
+            },
+            Self::DivisionByZero => ErrorProperties {
+                code: "E0400",
+                title: "Division by Zero",
+                message: Some("attempt to divide by zero".to_string()),
+                help: Some("Check the divisor to ensure it is not zero.".to_string()),
+            },
+            Self::RemainderByZero => ErrorProperties {
+                code: "E0401",
+                title: "Remainder by Zero",
+                message: Some(
+                    "attempt to calculate the remainder with a divisor of zero".to_string(),
+                ),
+                help: Some("Check the divisor to ensure it is not zero.".to_string()),
+            },
+            Self::Overflow => ErrorProperties {
+                code: "E0402",
+                title: "Integer Overflow",
+                message: Some("Integer overflow".to_string()),
+                help: Some(
+                    "The result of the operation exceeds the integer type limits.".to_string(),
+                ),
+            },
+            Self::InvalidOperand { operation, operand } => ErrorProperties {
+                code: "E0405",
+                title: "Invalid Operand",
+                message: Some(format!("Invalid operand for {}: {}", operation, operand)),
+                help: Some("Ensure the operand is valid for the operation.".to_string()),
+            },
+            Self::UndefinedLocal(idx) => ErrorProperties {
+                code: "E0406",
+                title: "Undefined Local Variable",
+                message: Some(format!("Undefined local variable: _{}", idx)),
+                help: Some("Internal error: Local variable accessed but not defined.".to_string()),
+            },
+            Self::UninitializedLocal(idx) => ErrorProperties {
+                code: "E0407",
+                title: "Uninitialized Local Variable",
+                message: Some(format!("Uninitialized local variable: _{}", idx)),
+                help: Some(
+                    "Internal error: Local variable accessed before initialization.".to_string(),
+                ),
+            },
+            Self::InvalidBlock(idx) => ErrorProperties {
+                code: "E0408",
+                title: "Invalid Block",
+                message: Some(format!("Invalid basic block: bb{}", idx)),
+                help: Some("Internal error: Jump to a non-existent basic block.".to_string()),
+            },
+            Self::StackOverflow => ErrorProperties {
+                code: "E0409",
+                title: "Stack Overflow",
+                message: Some("Stack overflow".to_string()),
+                help: Some("Recursion depth exceeded the limit.".to_string()),
+            },
+            Self::NotImplemented(feature) => ErrorProperties {
+                code: "E0410",
+                title: "Not Implemented",
+                message: Some(format!("Not implemented: {}", feature)),
+                help: Some("This feature is not yet supported.".to_string()),
+            },
+            Self::Internal(msg) => ErrorProperties {
+                code: "E0411",
+                title: "Internal Error",
+                message: Some(format!("Internal error: {}", msg)),
+                help: Some("Please report this issue to the Miri developers.".to_string()),
+            },
         }
     }
+}
 
-    /// Get the human-readable title for this error.
-    pub fn title(&self) -> &'static str {
-        match self {
-            InterpreterError::UndefinedFunction(_) => "Undefined Function",
-            InterpreterError::TypeMismatch { .. } => "Type Mismatch",
-            InterpreterError::DivisionByZero => "Division by Zero",
-            InterpreterError::RemainderByZero => "Remainder by Zero",
-            InterpreterError::Overflow => "Integer Overflow",
-            InterpreterError::InvalidOperand { .. } => "Invalid Operand",
-            InterpreterError::UndefinedLocal(_) => "Undefined Local Variable",
-            InterpreterError::UninitializedLocal(_) => "Uninitialized Local Variable",
-            InterpreterError::InvalidBlock(_) => "Invalid Block",
-            InterpreterError::StackOverflow => "Stack Overflow",
-            InterpreterError::NotImplemented(_) => "Not Implemented",
-            InterpreterError::Internal(_) => "Internal Error",
-        }
+impl InterpreterError {
+    pub fn new(kind: InterpreterErrorKind) -> Self {
+        Self { kind }
+    }
+
+    pub fn undefined_function(name: impl Into<String>) -> Self {
+        Self::new(InterpreterErrorKind::UndefinedFunction(name.into()))
+    }
+
+    pub fn type_mismatch(
+        expected: impl Into<String>,
+        got: impl Into<String>,
+        context: impl Into<String>,
+    ) -> Self {
+        Self::new(InterpreterErrorKind::TypeMismatch {
+            expected: expected.into(),
+            got: got.into(),
+            context: context.into(),
+        })
+    }
+
+    pub fn division_by_zero() -> Self {
+        Self::new(InterpreterErrorKind::DivisionByZero)
+    }
+
+    pub fn remainder_by_zero() -> Self {
+        Self::new(InterpreterErrorKind::RemainderByZero)
+    }
+
+    pub fn overflow() -> Self {
+        Self::new(InterpreterErrorKind::Overflow)
+    }
+
+    pub fn invalid_operand(operation: impl Into<String>, operand: impl Into<String>) -> Self {
+        Self::new(InterpreterErrorKind::InvalidOperand {
+            operation: operation.into(),
+            operand: operand.into(),
+        })
+    }
+
+    pub fn undefined_local(idx: usize) -> Self {
+        Self::new(InterpreterErrorKind::UndefinedLocal(idx))
+    }
+
+    pub fn uninitialized_local(idx: usize) -> Self {
+        Self::new(InterpreterErrorKind::UninitializedLocal(idx))
+    }
+
+    pub fn invalid_block(idx: usize) -> Self {
+        Self::new(InterpreterErrorKind::InvalidBlock(idx))
+    }
+
+    pub fn stack_overflow() -> Self {
+        Self::new(InterpreterErrorKind::StackOverflow)
+    }
+
+    pub fn not_implemented(feature: impl Into<String>) -> Self {
+        Self::new(InterpreterErrorKind::NotImplemented(feature.into()))
+    }
+
+    pub fn internal(msg: impl Into<String>) -> Self {
+        Self::new(InterpreterErrorKind::Internal(msg.into()))
     }
 }
 
 impl Reportable for InterpreterError {
     fn to_diagnostic(&self) -> Diagnostic {
+        let props = self.kind.properties();
         Diagnostic {
             severity: Severity::Error,
-            code: Some(self.code()),
-            title: self.title().to_string(),
-            message: self.to_string(),
+            code: Some(props.code),
+            title: props.title.to_string(),
+            message: props.message.unwrap_or_else(|| props.title.to_string()),
             span: None, // Interpreter errors don't have source spans
-            help: None,
+            help: props.help,
             notes: Vec::new(),
         }
     }
@@ -97,46 +221,8 @@ impl Reportable for InterpreterError {
 
 impl fmt::Display for InterpreterError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            InterpreterError::UndefinedFunction(name) => {
-                write!(f, "Undefined function: {}", name)
-            }
-            InterpreterError::TypeMismatch {
-                expected,
-                got,
-                context,
-            } => {
-                write!(
-                    f,
-                    "Type mismatch in {}: expected {}, got {}",
-                    context, expected, got
-                )
-            }
-            InterpreterError::DivisionByZero => {
-                write!(f, "{}", crate::error::RuntimeError::DivisionByZero)
-            }
-            InterpreterError::RemainderByZero => {
-                write!(f, "{}", crate::error::RuntimeError::RemainderByZero)
-            }
-            InterpreterError::Overflow => write!(f, "Integer overflow"),
-            InterpreterError::InvalidOperand { operation, operand } => {
-                write!(f, "Invalid operand for {}: {}", operation, operand)
-            }
-            InterpreterError::UndefinedLocal(idx) => {
-                write!(f, "Undefined local variable: _{}", idx)
-            }
-            InterpreterError::UninitializedLocal(idx) => {
-                write!(f, "Uninitialized local variable: _{}", idx)
-            }
-            InterpreterError::InvalidBlock(idx) => {
-                write!(f, "Invalid basic block: bb{}", idx)
-            }
-            InterpreterError::StackOverflow => write!(f, "Stack overflow"),
-            InterpreterError::NotImplemented(feature) => {
-                write!(f, "Not implemented: {}", feature)
-            }
-            InterpreterError::Internal(msg) => write!(f, "Internal error: {}", msg),
-        }
+        let props = self.kind.properties();
+        write!(f, "{}", props.message.as_deref().unwrap_or(props.title))
     }
 }
 

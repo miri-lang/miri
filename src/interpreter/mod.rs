@@ -10,7 +10,6 @@
 //! lowering as the compiled backends, ensuring consistent semantics.
 
 mod eval;
-mod frame;
 mod value;
 
 // Re-export InterpreterError from centralized error module
@@ -55,7 +54,7 @@ impl Interpreter {
         let body = self
             .functions
             .get(name)
-            .ok_or_else(|| InterpreterError::UndefinedFunction(name.to_string()))?
+            .ok_or_else(|| InterpreterError::undefined_function(name.to_string()))?
             .clone();
 
         eval::execute_function(self, &body, args)

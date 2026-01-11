@@ -21,7 +21,9 @@ pub fn check_error(source: &str, expected_error: &str) {
     match pipeline.frontend(source) {
         Ok(_) => panic!("Expected error '{}', but got success", expected_error),
         Err(CompilerError::TypeErrors(errors)) => {
-            let found = errors.iter().any(|e| e.message.contains(expected_error));
+            let found = errors
+                .iter()
+                .any(|e| e.to_string().contains(expected_error));
             if !found {
                 panic!("Expected error '{}', but got: {:?}", expected_error, errors);
             }
@@ -35,7 +37,8 @@ pub fn check_errors(source: &str, expected_errors: Vec<&str>) {
     match pipeline.frontend(source) {
         Ok(_) => panic!("Expected errors, but got success"),
         Err(CompilerError::TypeErrors(errors)) => {
-            let error_messages: Vec<String> = errors.iter().map(|e| e.message.clone()).collect();
+            let error_messages: Vec<String> =
+                errors.iter().map(|e| e.to_string().clone()).collect();
             for expected in expected_errors {
                 if !error_messages.iter().any(|msg| msg.contains(expected)) {
                     panic!(
@@ -82,7 +85,9 @@ pub fn check_multi_module_error(modules: Vec<(&str, &str)>, expected_error: &str
     match last_result {
         Ok(_) => panic!("Expected error '{}', but got success", expected_error),
         Err(errors) => {
-            let found = errors.iter().any(|e| e.message.contains(expected_error));
+            let found = errors
+                .iter()
+                .any(|e| e.to_string().contains(expected_error));
             if !found {
                 panic!("Expected error '{}', but got: {:?}", expected_error, errors);
             }

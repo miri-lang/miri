@@ -28,8 +28,37 @@ pub fn lower_function(ast_func: &Statement, tc: &TypeChecker) -> Result<Body, St
     ) = &ast_func.node
     {
         // Resolve return type from the function signature
+        // Resolve return type from the function signature or TypeChecker (for inferred types)
+        let name_str = if let StatementKind::FunctionDeclaration(n, ..) = &ast_func.node {
+            n
+        } else {
+            ""
+        };
+
         let ret_ty = if let Some(ret_expr) = ret_type_expr {
             resolve_type(tc, ret_expr)
+        } else if let Some(ty) = tc.get_variable_type(name_str) {
+            // If implicit return type (e.g. main), it might have been inferred and stored in Global Scope
+            if let TypeKind::Function(_, _, Some(rt)) = &ty.kind {
+                // rt is Box<TypeExpression>... wait, SymbolInfo stores Type which has TypeKind.
+                // TypeKind::Function stores (generics, params, return_type_expr).
+                // return_type_expr IS TypeExpression (Expression).
+                // We need the RESOLVED Type.
+                // The TypeChecker stores resolved type in SymbolInfo?
+                // Let's check TypeChecker::check_function_declaration.
+                // It stores `func_type` in global_scope.
+                // `func_type` is make_type(TypeKind::Function(...)).
+                // The return type inside TypeKind::Function is `Option<Box<Expression>>`.
+                // It is NOT a resolved Type. It is an Expression.
+
+                // However, check_function_declaration updates info.ty with a NEW TypeKind::Function
+                // where the return_type_expr is a TypeExpression containing the resolved type!
+                // crate::ast::factory::type_expr_non_null(expr_type)
+
+                resolve_type(tc, rt)
+            } else {
+                Type::new(TypeKind::Void, ast_func.span.clone())
+            }
         } else {
             Type::new(TypeKind::Void, ast_func.span.clone())
         };
@@ -44,7 +73,7 @@ pub fn lower_function(ast_func: &Statement, tc: &TypeChecker) -> Result<Body, St
         let mut body = Body::new(params.len(), ast_func.span.clone(), execution_model);
 
         // _0: Return value
-        body.new_local(LocalDecl::new(ret_ty, ast_func.span.clone()));
+        body.new_local(LocalDecl::new(ret_ty.clone(), ast_func.span.clone()));
 
         let mut ctx = LoweringContext::new(body, tc);
 
@@ -118,7 +147,8 @@ pub fn lower_function(ast_func: &Statement, tc: &TypeChecker) -> Result<Body, St
         }
 
         // Lower body
-        lower_statement(&mut ctx, body_stmt);
+        // Lower body with support for implicit return
+        lower_as_return(&mut ctx, body_stmt, &ret_ty);
 
         // Ensure the last block has a terminator
         let last_block_idx = ctx.current_block.0;
@@ -1392,5 +1422,97 @@ fn bind_pattern(
         }
         // Literal, Default, Regex, Member - no bindings needed
         _ => {}
+    }
+}
+
+/// Recursively lowers statements to assign the final expression to `_0` (return place).
+fn lower_as_return(ctx: &mut LoweringContext, stmt: &Statement, ret_ty: &Type) {
+    if matches!(ret_ty.kind, TypeKind::Void) {
+        lower_statement(ctx, stmt);
+        return;
+    }
+
+    match &stmt.node {
+        StatementKind::Expression(expr) => {
+            let operand = lower_expression(ctx, expr);
+            ctx.push_statement(crate::mir::Statement {
+                kind: MirStatementKind::Assign(
+                    Place::new(crate::mir::Local(0)),
+                    Rvalue::Use(operand),
+                ),
+                span: expr.span.clone(),
+            });
+        }
+        StatementKind::Block(stmts) => {
+            ctx.push_scope();
+
+            // Find the index of the last non-empty statement for return value
+            // (skip trailing empty blocks which can be created by trailing whitespace)
+            let last_meaningful_idx = stmts
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, s)| !matches!(&s.node, StatementKind::Block(inner) if inner.is_empty()))
+                .map(|(i, _)| i);
+
+            for (i, s) in stmts.iter().enumerate() {
+                if Some(i) == last_meaningful_idx {
+                    lower_as_return(ctx, s, ret_ty);
+                } else {
+                    lower_statement(ctx, s);
+                }
+            }
+            ctx.pop_scope();
+        }
+        StatementKind::If(cond, then_stmt, else_stmt, if_type) => {
+            let cond_op = lower_expression(ctx, cond);
+            let then_bb = ctx.new_basic_block();
+            let else_bb = ctx.new_basic_block();
+            let join_bb = ctx.new_basic_block();
+
+            let (target_val, other_target) = match if_type {
+                crate::ast::statement::IfStatementType::If => (1, else_bb),
+                crate::ast::statement::IfStatementType::Unless => (0, else_bb),
+            };
+
+            ctx.set_terminator(Terminator::new(
+                TerminatorKind::SwitchInt {
+                    discr: cond_op,
+                    targets: vec![(target_val, then_bb)],
+                    otherwise: other_target,
+                },
+                stmt.span.clone(),
+            ));
+
+            // Lower Then
+            ctx.set_current_block(then_bb);
+            lower_as_return(ctx, then_stmt, ret_ty);
+            if ctx.body.basic_blocks[ctx.current_block.0]
+                .terminator
+                .is_none()
+            {
+                ctx.set_terminator(Terminator::new(
+                    TerminatorKind::Goto { target: join_bb },
+                    stmt.span.clone(),
+                ));
+            }
+
+            // Lower Else
+            ctx.set_current_block(else_bb);
+            if let Some(else_s) = else_stmt {
+                lower_as_return(ctx, else_s, ret_ty);
+            }
+            if ctx.body.basic_blocks[ctx.current_block.0]
+                .terminator
+                .is_none()
+            {
+                ctx.set_terminator(Terminator::new(
+                    TerminatorKind::Goto { target: join_bb },
+                    stmt.span.clone(),
+                ));
+            }
+            ctx.set_current_block(join_bb);
+        }
+        _ => lower_statement(ctx, stmt),
     }
 }

@@ -65,6 +65,15 @@ pub struct Diagnostic {
     pub notes: Vec<String>,
 }
 
+/// Consolidated error properties to keep widely scattered match statements in check.
+#[derive(Debug, Clone)]
+pub struct ErrorProperties {
+    pub code: &'static str,
+    pub title: &'static str,
+    pub message: Option<String>,
+    pub help: Option<String>,
+}
+
 impl Diagnostic {
     /// Create a new error diagnostic.
     pub fn error(title: impl Into<String>) -> DiagnosticBuilder {

@@ -7,72 +7,97 @@
 //! (Cranelift, LLVM, etc.). Errors are consolidated here for consistent
 //! formatting and reporting.
 
-use crate::error::codes;
-use crate::error::diagnostic::{Diagnostic, Reportable, Severity};
-use thiserror::Error;
+use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable, Severity};
+use std::fmt;
 
 /// Unified error type for all code generation backends.
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub enum CodegenError {
     /// Failed to create target ISA (instruction set architecture).
-    #[error("Failed to create target ISA: {0}")]
     TargetIsa(String),
 
     /// Failed to create code generation module.
-    #[error("Failed to create module: {0}")]
     Module(String),
 
     /// Failed to declare a function.
-    #[error("Failed to declare function '{name}': {details}")]
     DeclareFunction { name: String, details: String },
 
     /// Failed to define a function.
-    #[error("Failed to define function '{name}': {details}")]
     DefineFunction { name: String, details: String },
 
     /// Failed to translate MIR to backend IR.
-    #[error("Failed to translate function '{name}': {details}")]
     Translation { name: String, details: String },
 
     /// Failed to emit object file.
-    #[error("Failed to emit object file: {0}")]
     Emit(String),
 
     /// Backend is not yet supported.
-    #[error("{backend} backend is not yet supported. Stay tuned!")]
     NotSupported { backend: String },
 
     /// Internal backend error.
-    #[error("Internal codegen error: {0}")]
     Internal(String),
 }
 
 impl CodegenError {
-    /// Get the error code for this codegen error.
-    pub fn code(&self) -> &'static str {
+    pub fn properties(&self) -> ErrorProperties {
         match self {
-            CodegenError::TargetIsa(_) => codes::codegen::TARGET_ISA,
-            CodegenError::Module(_) => codes::codegen::MODULE_CREATION,
-            CodegenError::DeclareFunction { .. } => codes::codegen::FUNCTION_DECLARATION,
-            CodegenError::DefineFunction { .. } => codes::codegen::FUNCTION_DEFINITION,
-            CodegenError::Translation { .. } => codes::codegen::TRANSLATION,
-            CodegenError::Emit(_) => codes::codegen::EMIT,
-            CodegenError::NotSupported { .. } => codes::codegen::NOT_SUPPORTED,
-            CodegenError::Internal(_) => codes::codegen::EMIT, // Reuse emit code for internal
-        }
-    }
-
-    /// Get the human-readable title for this error.
-    pub fn title(&self) -> &'static str {
-        match self {
-            CodegenError::TargetIsa(_) => "Target ISA Error",
-            CodegenError::Module(_) => "Module Creation Error",
-            CodegenError::DeclareFunction { .. } => "Function Declaration Error",
-            CodegenError::DefineFunction { .. } => "Function Definition Error",
-            CodegenError::Translation { .. } => "Translation Error",
-            CodegenError::Emit(_) => "Emit Error",
-            CodegenError::NotSupported { .. } => "Backend Not Supported",
-            CodegenError::Internal(_) => "Internal Codegen Error",
+            CodegenError::TargetIsa(msg) => ErrorProperties {
+                code: "E0300",
+                title: "Target ISA Error",
+                message: Some(format!("Failed to create target ISA: {}", msg)),
+                help: None,
+            },
+            CodegenError::Module(msg) => ErrorProperties {
+                code: "E0301",
+                title: "Module Creation Error",
+                message: Some(format!("Failed to create module: {}", msg)),
+                help: None,
+            },
+            CodegenError::DeclareFunction { name, details } => ErrorProperties {
+                code: "E0302",
+                title: "Function Declaration Error",
+                message: Some(format!(
+                    "Failed to declare function '{}': {}",
+                    name, details
+                )),
+                help: None,
+            },
+            CodegenError::DefineFunction { name, details } => ErrorProperties {
+                code: "E0303",
+                title: "Function Definition Error",
+                message: Some(format!("Failed to define function '{}': {}", name, details)),
+                help: None,
+            },
+            CodegenError::Translation { name, details } => ErrorProperties {
+                code: "E0304",
+                title: "Translation Error",
+                message: Some(format!(
+                    "Failed to translate function '{}': {}",
+                    name, details
+                )),
+                help: None,
+            },
+            CodegenError::Emit(msg) => ErrorProperties {
+                code: "E0305",
+                title: "Emit Error",
+                message: Some(format!("Failed to emit object file: {}", msg)),
+                help: None,
+            },
+            CodegenError::NotSupported { backend } => ErrorProperties {
+                code: "E0306",
+                title: "Backend Not Supported",
+                message: Some(format!(
+                    "{} backend is not yet supported. Stay tuned!",
+                    backend
+                )),
+                help: None,
+            },
+            CodegenError::Internal(msg) => ErrorProperties {
+                code: "E0305", // Reuse emit code for internal
+                title: "Internal Codegen Error",
+                message: Some(format!("Internal codegen error: {}", msg)),
+                help: None,
+            },
         }
     }
 
@@ -127,14 +152,24 @@ impl CodegenError {
 
 impl Reportable for CodegenError {
     fn to_diagnostic(&self) -> Diagnostic {
+        let props = self.properties();
         Diagnostic {
             severity: Severity::Error,
-            code: Some(self.code()),
-            title: self.title().to_string(),
-            message: self.to_string(),
+            code: Some(props.code),
+            title: props.title.to_string(),
+            message: props.message.unwrap_or_else(|| props.title.to_string()),
             span: None, // Codegen errors don't have source spans
-            help: None,
+            help: props.help,
             notes: Vec::new(),
         }
     }
 }
+
+impl fmt::Display for CodegenError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let props = self.properties();
+        write!(f, "{}", props.message.as_deref().unwrap_or(props.title))
+    }
+}
+
+impl std::error::Error for CodegenError {}

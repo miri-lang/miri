@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
-use crate::error::format::format_diagnostic;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::SyntaxError;
 use crate::error::type_error::TypeError;
@@ -44,12 +43,10 @@ impl CompilerError {
     pub fn report(&self, source: &str) -> String {
         match self {
             CompilerError::Lexer(e) | CompilerError::Parser(e) => e.report(source),
-            CompilerError::Type(e) => {
-                format_diagnostic(source, &e.span, &e.message, "error", e.help.as_deref())
-            }
+            CompilerError::Type(e) => e.report(source),
             CompilerError::TypeErrors(errs) => errs
                 .iter()
-                .map(|e| format_diagnostic(source, &e.span, &e.message, "error", e.help.as_deref()))
+                .map(|e| e.report(source))
                 .collect::<Vec<_>>()
                 .join("\n"),
             CompilerError::Lowering(e) => e.report(source),

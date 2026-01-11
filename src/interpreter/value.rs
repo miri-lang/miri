@@ -131,4 +131,20 @@ impl Value {
     pub fn is_numeric(&self) -> bool {
         matches!(self, Value::Int(_) | Value::Float(_))
     }
+    /// Get the type name of the value.
+    pub fn type_name(&self) -> String {
+        match self {
+            Value::Int(_) => "integer".to_string(),
+            Value::Float(_) => "float".to_string(),
+            Value::Bool(_) => "boolean".to_string(),
+            Value::String(_) => "string".to_string(),
+            Value::Tuple(_) => "tuple".to_string(),
+            Value::Struct(name, _) => name.clone(),
+            Value::Enum(name, variant, _) => format!("{}::{}", name, variant),
+            Value::Array(_) => "array".to_string(),
+            Value::Map(_) => "map".to_string(),
+            Value::None => "none".to_string(),
+            Value::Ref(_) => "reference".to_string(),
+        }
+    }
 }

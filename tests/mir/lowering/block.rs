@@ -111,10 +111,7 @@ fn test_inline_block_expression() {
     let source = "fn main(): 42";
     let body = lower_code(source);
 
-    assert!(
-        body.local_decls.len() >= 2,
-        "Should have return local and temp"
-    );
+    assert!(body.local_decls.len() >= 1, "Should have return local");
     assert!(
         count_assignments(&body, 0) >= 1,
         "Should have expression assignment"

@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
-use crate::error::codes;
-use crate::error::diagnostic::{Diagnostic, Reportable, Severity};
+use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable, Severity};
 use crate::error::format::format_diagnostic;
 
 // Span type for tracking positions in source code
@@ -57,190 +56,194 @@ pub enum SyntaxErrorKind {
 }
 
 impl SyntaxErrorKind {
-    /// Get the error code for this syntax error kind.
-    pub fn code(&self) -> &'static str {
+    pub fn properties(&self) -> ErrorProperties {
         match self {
-            SyntaxErrorKind::InvalidToken => codes::syntax::INVALID_TOKEN,
-            SyntaxErrorKind::UnclosedMultilineComment => codes::syntax::UNCLOSED_MULTILINE_COMMENT,
-            SyntaxErrorKind::IndentationMismatch => codes::syntax::INDENTATION_MISMATCH,
-            SyntaxErrorKind::UnclosedStringLiteral => codes::syntax::UNCLOSED_STRING_LITERAL,
-            SyntaxErrorKind::UnexpectedToken { .. } => codes::syntax::UNEXPECTED_TOKEN,
-            SyntaxErrorKind::UnexpectedOperator { .. } => codes::syntax::UNEXPECTED_OPERATOR,
-            SyntaxErrorKind::UnexpectedEOF => codes::syntax::UNEXPECTED_EOF,
-            SyntaxErrorKind::InvalidTypeDeclaration { .. } => {
-                codes::syntax::INVALID_TYPE_DECLARATION
-            }
-            SyntaxErrorKind::InvalidLeftHandSideExpression => codes::syntax::INVALID_LHS_EXPRESSION,
-            SyntaxErrorKind::InvalidAssignmentTarget => codes::syntax::INVALID_ASSIGNMENT_TARGET,
-            SyntaxErrorKind::IntegerLiteralOverflow => codes::syntax::INTEGER_OVERFLOW,
-            SyntaxErrorKind::InvalidNumberLiteral => codes::syntax::INVALID_NUMBER_LITERAL,
-            SyntaxErrorKind::InvalidIntegerLiteral => codes::syntax::INVALID_INTEGER_LITERAL,
-            SyntaxErrorKind::InvalidBinaryLiteral => codes::syntax::INVALID_BINARY_LITERAL,
-            SyntaxErrorKind::InvalidOctalLiteral => codes::syntax::INVALID_OCTAL_LITERAL,
-            SyntaxErrorKind::InvalidHexLiteral => codes::syntax::INVALID_HEX_LITERAL,
-            SyntaxErrorKind::InvalidFloatLiteral => codes::syntax::INVALID_FLOAT_LITERAL,
-            SyntaxErrorKind::InvalidStringLiteral => codes::syntax::INVALID_STRING_LITERAL,
-            SyntaxErrorKind::InvalidBooleanLiteral => codes::syntax::INVALID_BOOLEAN_LITERAL,
-            SyntaxErrorKind::InvalidInheritanceIdentifier => {
-                codes::syntax::INVALID_INHERITANCE_IDENTIFIER
-            }
-            SyntaxErrorKind::InvalidRegexLiteral => codes::syntax::INVALID_REGEX_LITERAL,
-            SyntaxErrorKind::InvalidFormattedString => codes::syntax::INVALID_FORMATTED_STRING,
-            SyntaxErrorKind::InvalidFormattedStringExpression => {
-                codes::syntax::INVALID_FORMATTED_STRING_EXPR
-            }
-            SyntaxErrorKind::BackslashInFStringExpression => codes::syntax::BACKSLASH_IN_FSTRING,
-            SyntaxErrorKind::MissingStructMemberType => codes::syntax::MISSING_STRUCT_MEMBER_TYPE,
-            SyntaxErrorKind::MissingStructMembers => codes::syntax::MISSING_STRUCT_MEMBERS,
-            SyntaxErrorKind::MissingEnumMembers => codes::syntax::MISSING_ENUM_MEMBERS,
-            SyntaxErrorKind::MissingTypeExpression => codes::syntax::MISSING_TYPE_EXPRESSION,
-            SyntaxErrorKind::DuplicateMatchPattern => codes::syntax::DUPLICATE_MATCH_PATTERN,
-            SyntaxErrorKind::MissingMatchBranches => codes::syntax::MISSING_MATCH_BRANCHES,
-            SyntaxErrorKind::InvalidModifierCombination { .. } => {
-                codes::syntax::INVALID_MODIFIER_COMBINATION
-            }
-        }
-    }
-
-    /// Get the human-readable title for this error.
-    fn title(&self) -> &'static str {
-        match self {
-            SyntaxErrorKind::InvalidToken => "Invalid Token",
-            SyntaxErrorKind::UnclosedMultilineComment => "Unclosed Multiline Comment",
-            SyntaxErrorKind::IndentationMismatch => "Indentation Mismatch",
-            SyntaxErrorKind::UnclosedStringLiteral => "Unclosed String Literal",
-            SyntaxErrorKind::UnexpectedToken { .. } => "Unexpected Token",
-            SyntaxErrorKind::UnexpectedOperator { .. } => "Unexpected Operator",
-            SyntaxErrorKind::UnexpectedEOF => "Unexpected End of File",
-            SyntaxErrorKind::InvalidTypeDeclaration { .. } => "Invalid Type Declaration",
-            SyntaxErrorKind::InvalidLeftHandSideExpression => "Invalid Left-Hand Side Expression",
-            SyntaxErrorKind::InvalidAssignmentTarget => "Invalid Assignment Target",
-            SyntaxErrorKind::IntegerLiteralOverflow => "Integer Literal Overflow",
-            SyntaxErrorKind::InvalidNumberLiteral => "Invalid Number Literal",
-            SyntaxErrorKind::InvalidIntegerLiteral => "Invalid Integer Literal",
-            SyntaxErrorKind::InvalidBinaryLiteral => "Invalid Binary Literal",
-            SyntaxErrorKind::InvalidOctalLiteral => "Invalid Octal Literal",
-            SyntaxErrorKind::InvalidHexLiteral => "Invalid Hexadecimal Literal",
-            SyntaxErrorKind::InvalidFloatLiteral => "Invalid Float Literal",
-            SyntaxErrorKind::InvalidStringLiteral => "Invalid String Literal",
-            SyntaxErrorKind::InvalidBooleanLiteral => "Invalid Boolean Literal",
-            SyntaxErrorKind::InvalidInheritanceIdentifier => "Invalid Inheritance Identifier",
-            SyntaxErrorKind::InvalidRegexLiteral => "Invalid Regex Literal",
-            SyntaxErrorKind::InvalidFormattedString => "Invalid Formatted String",
-            SyntaxErrorKind::InvalidFormattedStringExpression => {
-                "Invalid Formatted String Expression"
-            }
-            SyntaxErrorKind::BackslashInFStringExpression => "Invalid Backslash",
-            SyntaxErrorKind::MissingStructMemberType => "Missing Struct Member Type",
-            SyntaxErrorKind::MissingStructMembers => "Missing Struct Members",
-            SyntaxErrorKind::MissingEnumMembers => "Missing Enum Members",
-            SyntaxErrorKind::MissingTypeExpression => "Missing Type Expression",
-            SyntaxErrorKind::DuplicateMatchPattern => "Duplicate Match Pattern",
-            SyntaxErrorKind::MissingMatchBranches => "Missing Match Branches",
-            SyntaxErrorKind::InvalidModifierCombination { .. } => "Invalid Modifier Combination",
-        }
-    }
-
-    /// Get the help message for this error.
-    fn help(&self) -> String {
-        match self {
-            SyntaxErrorKind::InvalidToken => {
-                "The character or sequence of characters here is not a valid part of the language.".to_string()
-            }
-            SyntaxErrorKind::UnclosedMultilineComment => {
-                "Multiline comments must be closed with '*/'.".to_string()
-            }
-            SyntaxErrorKind::IndentationMismatch => {
-                "This line's indentation does not match any previous level. Check your spaces or tabs.".to_string()
-            }
-            SyntaxErrorKind::UnclosedStringLiteral => {
-                "String literals must be closed with a matching quote.".to_string()
-            }
-            SyntaxErrorKind::UnexpectedToken { expected, found } => {
-                if expected.is_empty() {
-                    format!("The token '{found}' is not expected in this context.")
-                } else {
-                    format!("Expected {expected}, but found '{found}' instead.")
-                }
-            }
-            SyntaxErrorKind::UnexpectedOperator { found, expected } => {
-                format!("The operator '{found}' is not supported. Expected one of: {expected}.")
-            }
-            SyntaxErrorKind::UnexpectedEOF => {
-                "The file ended abruptly. An expression or statement may be incomplete.".to_string()
-            }
-            SyntaxErrorKind::InvalidTypeDeclaration { expected } => {
-                format!("The type expression is not correct. Expected: {expected}.")
-            }
-            SyntaxErrorKind::InvalidLeftHandSideExpression => {
-                "The left-hand side expression is not valid. Ensure it is a valid identifier or property.".to_string()
-            }
-            SyntaxErrorKind::InvalidAssignmentTarget => {
-                "The left-hand side of an assignment must be a variable or a property.".to_string()
-            }
-            SyntaxErrorKind::IntegerLiteralOverflow => {
-                "The integer literal exceeds the maximum value for its type.".to_string()
-            }
-            SyntaxErrorKind::InvalidNumberLiteral => {
-                "Number literals must be valid integers or floats, which cannot begin or end with underscores.".to_string()
-            }
-            SyntaxErrorKind::InvalidIntegerLiteral => {
-                "The integer literal is not valid. Ensure it is a valid number without invalid characters.".to_string()
-            }
-            SyntaxErrorKind::InvalidBinaryLiteral => {
-                "Binary literals must start with '0b' followed by binary digits (0 or 1).".to_string()
-            }
-            SyntaxErrorKind::InvalidOctalLiteral => {
-                "Octal literals must start with '0o' followed by octal digits (0 to 7).".to_string()
-            }
-            SyntaxErrorKind::InvalidHexLiteral => {
-                "Hexadecimal literals must start with '0x' followed by hexadecimal digits (0-9, a-f, A-F).".to_string()
-            }
-            SyntaxErrorKind::InvalidFloatLiteral => {
-                "The float literal is not valid. Ensure it is a valid number with a decimal point and optional exponent.".to_string()
-            }
-            SyntaxErrorKind::InvalidStringLiteral => {
-                "String literals must be enclosed in matching quotes (single or double).".to_string()
-            }
-            SyntaxErrorKind::InvalidBooleanLiteral => {
-                "Boolean literals must be either 'true' or 'false'.".to_string()
-            }
-            SyntaxErrorKind::InvalidInheritanceIdentifier => {
-                "The inheritance identifier is not valid. You can only extend, implement or include a class, imported via the `use` statement.".to_string()
-            }
-            SyntaxErrorKind::InvalidRegexLiteral => {
-                "Regex literals must be enclosed in matching quote characters (e.g., re\".../\" or re'...').".to_string()
-            }
-            SyntaxErrorKind::InvalidFormattedString => {
-                "Formatted strings must be enclosed in matching quote characters (e.g., f\"...\" or f'...').".to_string()
-            }
-            SyntaxErrorKind::InvalidFormattedStringExpression => {
-                "The formatted string is malformed, likely due to an unclosed expression brace `{`.".to_string()
-            }
-            SyntaxErrorKind::BackslashInFStringExpression => {
-                "The expression part of a formatted string cannot contain backslashes.".to_string()
-            }
-            SyntaxErrorKind::MissingStructMemberType => {
-                "Struct members must have a type declaration.".to_string()
-            }
-            SyntaxErrorKind::MissingStructMembers => {
-                "Structs must have at least one member.".to_string()
-            }
-            SyntaxErrorKind::MissingEnumMembers => {
-                "Enums must have at least one member.".to_string()
-            }
-            SyntaxErrorKind::MissingTypeExpression => {
-                "Type expression is required but not provided.".to_string()
-            }
-            SyntaxErrorKind::DuplicateMatchPattern => {
-                "This pattern is a duplicate of a previous pattern in the same match expression.".to_string()
-            }
-            SyntaxErrorKind::MissingMatchBranches => {
-                "Match expressions must have at least one branch.".to_string()
-            }
-            SyntaxErrorKind::InvalidModifierCombination { combination, reason } => {
-                format!("The modifiers '{combination}' cannot be used together. {reason}")
-            }
+            Self::InvalidToken => ErrorProperties {
+                code: "E0001",
+                title: "Invalid Token",
+                message: None,
+                help: Some("The character or sequence of characters here is not a valid part of the language.".to_string()),
+            },
+            Self::UnclosedMultilineComment => ErrorProperties {
+                code: "E0002",
+                title: "Unclosed Multiline Comment",
+                message: None,
+                help: Some("Add '*/' to close the comment.".to_string()),
+            },
+            Self::IndentationMismatch => ErrorProperties {
+                code: "E0003",
+                title: "Indentation Mismatch",
+                message: None,
+                help: Some("Ensure the indentation level matches the surrounding code block.".to_string()),
+            },
+            Self::UnclosedStringLiteral => ErrorProperties {
+                code: "E0004",
+                title: "Unclosed String Literal",
+                message: None,
+                help: Some("Add a closing quote to the string literal.".to_string()),
+            },
+            Self::UnexpectedToken { expected, found } => ErrorProperties {
+                code: "E0005",
+                title: "Unexpected Token",
+                message: Some(format!("Expected {}, but found {}", expected, found)),
+                help: None,
+            },
+            Self::UnexpectedEOF => ErrorProperties {
+                code: "E0006",
+                title: "Unexpected End of File",
+                message: Some("Unexpected end of file".to_string()),
+                help: Some("The file ended unexpectedly. Check for unclosed blocks or expressions.".to_string()),
+            },
+            Self::InvalidTypeDeclaration { expected: _ } => ErrorProperties {
+                code: "E0007",
+                title: "Invalid Type Declaration",
+                message: None,
+                help: Some("Types must be declared with a valid identifier.".to_string()),
+            },
+            Self::InvalidAssignmentTarget => ErrorProperties {
+                code: "E0008",
+                title: "Invalid Assignment Target",
+                message: None,
+                help: Some("You can only assign values to variables or mutable properties.".to_string()),
+            },
+            Self::IntegerLiteralOverflow => ErrorProperties {
+                code: "E0009",
+                title: "Integer Overflow",
+                message: None,
+                help: Some("The integer literal is too large for the target type.".to_string()),
+            },
+            Self::InvalidIntegerLiteral => ErrorProperties {
+                code: "E0010",
+                title: "Invalid Integer Literal",
+                message: None,
+                help: Some("Ensure the integer literal format is correct.".to_string()),
+            },
+            Self::InvalidBinaryLiteral => ErrorProperties {
+                code: "E0011",
+                title: "Invalid Binary Literal",
+                message: None,
+                help: Some("Binary literals must start with '0b' followed by 0s and 1s.".to_string()),
+            },
+            Self::InvalidOctalLiteral => ErrorProperties {
+                code: "E0012",
+                title: "Invalid Octal Literal",
+                message: None,
+                help: Some("Octal literals must start with '0o' followed by digits 0-7.".to_string()),
+            },
+            Self::InvalidHexLiteral => ErrorProperties {
+                code: "E0013",
+                title: "Invalid Hex Literal",
+                message: None,
+                help: Some("Hexadecimal literals must start with '0x' followed by hex digits.".to_string()),
+            },
+            Self::InvalidFloatLiteral => ErrorProperties {
+                code: "E0014",
+                title: "Invalid Float Literal",
+                message: None,
+                help: Some("Ensure the float literal format is correct.".to_string()),
+            },
+            Self::InvalidStringLiteral => ErrorProperties {
+                code: "E0015",
+                title: "Invalid String Literal",
+                message: None,
+                help: Some("Ensure the string literal is properly quoted and escaped.".to_string()),
+            },
+            Self::InvalidBooleanLiteral => ErrorProperties {
+                code: "E0016",
+                title: "Invalid Boolean Literal",
+                message: None,
+                help: Some("Boolean literals must be 'true' or 'false'.".to_string()),
+            },
+            Self::UnexpectedOperator { expected: _, found: _ } => ErrorProperties {
+                code: "E0017",
+                title: "Unexpected Operator",
+                message: None,
+                help: Some("This operator cannot be used in this context.".to_string()),
+            },
+            Self::InvalidLeftHandSideExpression => ErrorProperties {
+                code: "E0018",
+                title: "Invalid Left-Hand Side Expression",
+                message: None,
+                help: Some("The expression on the left side of the assignment is not valid.".to_string()),
+            },
+            Self::MissingStructMemberType => ErrorProperties {
+                code: "E0019",
+                title: "Missing Struct Member Type",
+                message: None,
+                help: Some("Struct members must have a type annotation.".to_string()),
+            },
+            Self::InvalidInheritanceIdentifier => ErrorProperties {
+                code: "E0020",
+                title: "Invalid Inheritance Identifier",
+                message: None,
+                help: Some("Parent type in inheritance must be a valid identifier.".to_string()),
+            },
+            Self::DuplicateMatchPattern => ErrorProperties {
+                code: "E0021",
+                title: "Duplicate Match Pattern",
+                message: None,
+                help: Some("This pattern is already covered in a previous branch.".to_string()),
+            },
+            Self::MissingMatchBranches => ErrorProperties {
+                code: "E0022",
+                title: "Missing Match Branches",
+                message: None,
+                help: Some("The match expression must cover all possible cases.".to_string()),
+            },
+            Self::InvalidRegexLiteral => ErrorProperties {
+                code: "E0023",
+                title: "Invalid Regex Literal",
+                message: None,
+                help: Some("Ensure the regex pattern is valid.".to_string()),
+            },
+            Self::InvalidFormattedString => ErrorProperties {
+                code: "E0024",
+                title: "Invalid Formatted String",
+                message: None,
+                help: Some("The format string syntax is incorrect.".to_string()),
+            },
+            Self::InvalidFormattedStringExpression => ErrorProperties {
+                code: "E0025",
+                title: "Invalid Formatted String Expression",
+                message: None,
+                help: Some("The expression inside the format string is invalid.".to_string()),
+            },
+            Self::BackslashInFStringExpression => ErrorProperties {
+                code: "E0026",
+                title: "Backslash in Format String",
+                message: None,
+                help: Some("Backslashes are not allowed in format string expressions.".to_string()),
+            },
+            Self::InvalidNumberLiteral => ErrorProperties {
+                code: "E0027",
+                title: "Invalid Number Literal",
+                message: None,
+                help: Some("Ensure the number literal format is correct.".to_string()),
+            },
+            Self::MissingStructMembers => ErrorProperties {
+                code: "E0028",
+                title: "Missing Struct Members",
+                message: None,
+                help: Some("All struct fields must be initialized.".to_string()),
+            },
+            Self::MissingEnumMembers => ErrorProperties {
+                code: "E0029",
+                title: "Missing Enum Members",
+                message: None,
+                help: Some("All enum variants must be handled.".to_string()),
+            },
+            Self::MissingTypeExpression => ErrorProperties {
+                code: "E0030",
+                title: "Missing Type Expression",
+                message: None,
+                help: Some("A type expression is expected here.".to_string()),
+            },
+            Self::InvalidModifierCombination { combination: _, reason: _ } => ErrorProperties {
+                code: "E0031",
+                title: "Invalid Modifier Combination",
+                message: None,
+                help: Some("These modifiers cannot be used together.".to_string()),
+            },
         }
     }
 }
@@ -260,25 +263,27 @@ impl SyntaxError {
 
 impl Reportable for SyntaxError {
     fn to_diagnostic(&self) -> Diagnostic {
+        let props = self.kind.properties();
         Diagnostic {
             severity: Severity::Error,
-            code: Some(self.kind.code()),
-            title: self.kind.title().to_string(),
-            message: self.kind.title().to_string(),
+            code: Some(props.code),
+            title: props.title.to_string(),
+            message: props.message.unwrap_or_else(|| props.title.to_string()),
             span: Some(self.span.clone()),
-            help: Some(self.kind.help()),
+            help: props.help,
             notes: Vec::new(),
         }
     }
 
     fn report(&self, source: &str) -> String {
+        let props = self.kind.properties();
         // Use the legacy format function for backward compatibility with existing tests
         format_diagnostic(
             source,
             &self.span,
-            self.kind.title(),
+            props.title,
             "error",
-            Some(&self.kind.help()),
+            props.help.as_deref(),
         )
     }
 }

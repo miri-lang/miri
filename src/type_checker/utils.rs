@@ -944,12 +944,12 @@ impl TypeChecker {
     }
 
     pub(crate) fn report_error(&mut self, message: String, span: Span) {
-        self.errors.push(TypeError::new(message, span));
+        self.errors.push(TypeError::custom(message, span, None));
     }
 
     pub(crate) fn report_error_with_help(&mut self, message: String, span: Span, help: String) {
         self.errors
-            .push(TypeError::new(message, span).with_help(help));
+            .push(TypeError::custom(message, span, Some(help)));
     }
 
     pub(crate) fn report_warning(&mut self, message: String, span: Span) {
