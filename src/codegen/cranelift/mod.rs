@@ -108,8 +108,8 @@ impl CraneliftBackend {
         match target.operating_system {
             OperatingSystem::Darwin(_) | OperatingSystem::MacOSX(_) => {
                 target.operating_system = OperatingSystem::MacOSX(Some(DeploymentTarget {
-                    major: 10,
-                    minor: 15,
+                    major: 12,
+                    minor: 0,
                     patch: 0,
                 }));
             }
@@ -201,8 +201,23 @@ impl Backend for CraneliftBackend {
         }
 
         // Emit the object file
-        let object = module
-            .finish()
+        let mut product = module.finish();
+
+        // If we are on macOS (Darwin), we need to inject the Mach-O build version load command.
+        // cranelift-object currently doesn't do this automatically even if the target is set correctly.
+        if matches!(
+            self.target().operating_system,
+            OperatingSystem::Darwin(_) | OperatingSystem::MacOSX(_)
+        ) {
+            // Platform 1 = macOS. Version 0x000C0000 = 12.0.0. SDK 0 = none.
+            let mut info = cranelift_object::object::write::MachOBuildVersion::default();
+            info.platform = 1;
+            info.minos = 0x000C0000;
+            info.sdk = 0;
+            product.object.set_macho_build_version(info);
+        }
+
+        let object = product
             .emit()
             .map_err(|e| CraneliftError::Emit(e.to_string()))?;
 

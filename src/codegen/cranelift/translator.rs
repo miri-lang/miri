@@ -70,9 +70,8 @@ impl FunctionTranslator {
         for (idx, local_decl) in body.local_decls.iter().enumerate() {
             let local = Local(idx);
             let cl_type = translate_type(&local_decl.ty);
-            let var = Variable::from_u32(idx as u32);
+            let var = builder.declare_var(cl_type);
 
-            builder.declare_var(var, cl_type);
             locals.insert(local, var);
         }
 

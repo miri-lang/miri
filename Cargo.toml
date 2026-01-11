@@ -26,11 +26,11 @@ thiserror = "2.0.17"
 walkdir = "2.5.0"
 
 # Cranelift backend (default)
-cranelift-codegen = { version = "0.116", optional = true }
-cranelift-frontend = { version = "0.116", optional = true }
-cranelift-module = { version = "0.116", optional = true }
-cranelift-object = { version = "0.116", optional = true }
-cranelift-native = { version = "0.116", optional = true }
+cranelift-codegen = { version = "0.127.1", optional = true }
+cranelift-frontend = { version = "0.127.1", optional = true }
+cranelift-module = { version = "0.127.1", optional = true }
+cranelift-object = { version = "0.127.1", optional = true }
+cranelift-native = { version = "0.127.1", optional = true }
 target-lexicon = { version = "0.13", optional = true }
 
 # LLVM backend (optional, requires LLVM installation)
