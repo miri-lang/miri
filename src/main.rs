@@ -120,7 +120,19 @@ fn check_file(path: PathBuf, _verbose: u8) -> Result<()> {
 
     let pipeline = Pipeline::new();
     match pipeline.frontend(&source) {
-        Ok(_) => {
+        Ok(result) => {
+            for warning in &result.type_checker.warnings {
+                eprintln!(
+                    "{}",
+                    miri::error::format_diagnostic(
+                        &source,
+                        &warning.span,
+                        &warning.message,
+                        "warning",
+                        warning.help.as_deref()
+                    )
+                );
+            }
             println!("Check passed. No errors found.");
             Ok(())
         }

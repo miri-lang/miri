@@ -18,6 +18,8 @@ pub enum InterpreterError {
     },
     /// Division by zero.
     DivisionByZero,
+    /// Remainder by zero.
+    RemainderByZero,
     /// Integer overflow.
     Overflow,
     /// Invalid operand for operation.
@@ -53,7 +55,12 @@ impl fmt::Display for InterpreterError {
                     context, expected, got
                 )
             }
-            InterpreterError::DivisionByZero => write!(f, "Division by zero"),
+            InterpreterError::DivisionByZero => {
+                write!(f, "{}", crate::error::RuntimeError::DivisionByZero)
+            }
+            InterpreterError::RemainderByZero => {
+                write!(f, "{}", crate::error::RuntimeError::RemainderByZero)
+            }
             InterpreterError::Overflow => write!(f, "Integer overflow"),
             InterpreterError::InvalidOperand { operation, operand } => {
                 write!(f, "Invalid operand for {}: {}", operation, operand)

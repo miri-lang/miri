@@ -44,6 +44,27 @@ impl TypeChecker {
         right: &Type,
         context: &Context,
     ) -> Result<Type, String> {
+        // First, check for mixed int/float operations - these are not allowed
+        let left_is_int = self.is_integer(left);
+        let left_is_float = matches!(left.kind, TypeKind::Float | TypeKind::F32 | TypeKind::F64);
+        let right_is_int = self.is_integer(right);
+        let right_is_float = matches!(right.kind, TypeKind::Float | TypeKind::F32 | TypeKind::F64);
+
+        if (left_is_int && right_is_float) || (left_is_float && right_is_int) {
+            let op_name = match op {
+                BinaryOp::Add => "add",
+                BinaryOp::Sub => "subtract",
+                BinaryOp::Mul => "multiply",
+                BinaryOp::Div => "divide",
+                BinaryOp::Mod => "modulo",
+                _ => "operate on",
+            };
+            return Err(format!(
+                "Type mismatch: cannot {} a float to an integer",
+                op_name
+            ));
+        }
+
         if self.is_numeric(left) && self.is_numeric(right) {
             if self.are_compatible(left, right, context) {
                 Ok(left.clone())

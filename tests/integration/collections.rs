@@ -2,6 +2,6 @@
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
 #[test]
-fn test_functions() {
-    // TODO: Implement tests for function calls, recursion, and lambdas
+fn test_collections() {
+    // TODO: Implement tests for lists, maps, tuples, and sets
 }

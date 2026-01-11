@@ -384,7 +384,50 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                 crate::ast::operator::UnaryOp::Negate => UnOp::Neg,
                 crate::ast::operator::UnaryOp::Not => UnOp::Not,
                 crate::ast::operator::UnaryOp::Await => UnOp::Await,
-                _ => panic!("Unsupported unary operator: {:?}", op),
+                // Decrement (--x) is treated as double negation: -(-x) = x
+                // We recursively lower the operand and then negate twice
+                crate::ast::operator::UnaryOp::Decrement => {
+                    // First negate
+                    let first_neg_ty = match &op_val {
+                        Operand::Constant(c) => c.ty.clone(),
+                        Operand::Copy(place) | Operand::Move(place) => {
+                            ctx.body.local_decls[place.local.0].ty.clone()
+                        }
+                    };
+                    let first_neg = ctx.push_temp(first_neg_ty.clone(), expr.span.clone());
+                    ctx.push_statement(crate::mir::Statement {
+                        kind: MirStatementKind::Assign(
+                            Place::new(first_neg),
+                            Rvalue::UnaryOp(UnOp::Neg, Box::new(op_val)),
+                        ),
+                        span: expr.span.clone(),
+                    });
+
+                    // Second negate
+                    let second_neg = ctx.push_temp(first_neg_ty, expr.span.clone());
+                    ctx.push_statement(crate::mir::Statement {
+                        kind: MirStatementKind::Assign(
+                            Place::new(second_neg),
+                            Rvalue::UnaryOp(
+                                UnOp::Neg,
+                                Box::new(Operand::Copy(Place::new(first_neg))),
+                            ),
+                        ),
+                        span: expr.span.clone(),
+                    });
+
+                    return Operand::Copy(Place::new(second_neg));
+                }
+                // Increment (++x) is a no-op for value (not implemented as mutation)
+                crate::ast::operator::UnaryOp::Increment => {
+                    return op_val;
+                }
+                // Plus is identity
+                crate::ast::operator::UnaryOp::Plus => {
+                    return op_val;
+                }
+                // BitwiseNot - similar to Not
+                crate::ast::operator::UnaryOp::BitwiseNot => UnOp::Not,
             };
 
             let result_ty = match &op_val {
@@ -1175,6 +1218,11 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
             // The LHS (the parameter) would need to be provided by the caller
             // For now, just return the guard expression value
             operand
+        }
+        ExpressionKind::NamedArgument(_name, value_expr) => {
+            // Named argument: extract the value and lower it
+            // The name is used by the type checker for struct field matching
+            lower_expression(ctx, value_expr)
         }
         _ => {
             panic!("Unsupported expression kind in lowering: {:?}", expr.node);

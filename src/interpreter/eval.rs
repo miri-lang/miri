@@ -412,7 +412,7 @@ fn eval_binop(op: BinOp, lhs: Value, rhs: Value) -> Result<Value, InterpreterErr
             }),
         },
         BinOp::Rem => match (lhs, rhs) {
-            (_, Value::Int(0)) => Err(InterpreterError::DivisionByZero),
+            (_, Value::Int(0)) => Err(InterpreterError::RemainderByZero),
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a % b)),
             (a, b) => Err(InterpreterError::InvalidOperand {
                 operation: "rem".into(),

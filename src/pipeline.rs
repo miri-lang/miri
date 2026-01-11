@@ -43,9 +43,18 @@ fn is_wrappable_stmt(stmt: &Statement) -> bool {
 /// Wrap a script (without functions) in a synthetic main function.
 /// The last expression becomes the return value.
 /// Only wraps simple scripts - not type definitions.
+/// Also wraps empty programs to create a valid entry point.
 fn wrap_script_in_main(program: &mut Program) {
     // Don't wrap if already has functions
-    if has_functions(program) || program.body.is_empty() {
+    if has_functions(program) {
+        return;
+    }
+
+    // Handle empty program - create empty main
+    if program.body.is_empty() {
+        let body = crate::ast::factory::block(vec![]);
+        let main_fn = func("main").build(body);
+        program.body = vec![main_fn];
         return;
     }
 
@@ -123,6 +132,20 @@ impl Pipeline {
             .check(&ast)
             .map_err(CompilerError::TypeErrors)?;
 
+        // Print any warnings
+        for warning in &type_checker.warnings {
+            eprintln!(
+                "{}",
+                crate::error::format_diagnostic(
+                    source,
+                    &warning.span,
+                    &warning.message,
+                    "warning",
+                    warning.help.as_deref()
+                )
+            );
+        }
+
         Ok(PipelineResult { ast, type_checker })
     }
 
@@ -141,7 +164,8 @@ impl Pipeline {
 
     pub fn run(&self, source: &str) -> Result<i32, CompilerError> {
         // Build the program to a temporary location
-        let temp_dir = std::env::temp_dir().join("miri_run");
+        // Use a process-unique temporary directory to avoid collisions
+        let temp_dir = std::env::temp_dir().join(format!("miri_run_{}", std::process::id()));
         fs::create_dir_all(&temp_dir)?;
 
         let executable_path = temp_dir.join("program");
@@ -173,7 +197,8 @@ impl Pipeline {
     }
 
     pub fn build(&self, source: &str, opts: &BuildOptions) -> Result<PathBuf, CompilerError> {
-        let pipeline_result = self.frontend(source)?;
+        // Use frontend_script to wrap scripts without functions in a main
+        let pipeline_result = self.frontend_script(source)?;
 
         // Lower AST to MIR
         let mir_bodies = self.lower_to_mir(&pipeline_result)?;
@@ -227,9 +252,12 @@ impl Pipeline {
 
         // Determine output paths
         let (work_dir, out_path) = if let Some(out) = opts.out_path.clone() {
-            // User specified output - use target dir for object file
-            let target_dir = if opts.release { "release" } else { "debug" };
-            let work_dir = PathBuf::from("target").join(target_dir);
+            // User specified output - place object file in the same directory as the output
+            // This avoids race conditions on shared directories like target/debug
+            let work_dir = out
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| PathBuf::from("."));
             (work_dir, out)
         } else {
             // No output specified - use unique temp directory
@@ -238,9 +266,11 @@ impl Pipeline {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            let unique_dir = std::env::temp_dir()
-                .join("miri_build")
-                .join(format!("{}", timestamp));
+            let unique_dir = std::env::temp_dir().join("miri_build").join(format!(
+                "{}_{}",
+                timestamp,
+                std::process::id()
+            ));
             let out = unique_dir.join("a.out");
             (unique_dir, out)
         };
@@ -279,6 +309,18 @@ impl Pipeline {
         }
 
         Ok(bodies)
+    }
+
+    /// Get MIR as a string for debugging purposes.
+    pub fn get_mir(&self, source: &str) -> Result<String, CompilerError> {
+        let pipeline_result = self.frontend_script(source)?;
+        let mir_bodies = self.lower_to_mir(&pipeline_result)?;
+
+        let mut output = String::new();
+        for (name, body) in &mir_bodies {
+            output.push_str(&format!("=== MIR for {} ===\n{}\n\n", name, body));
+        }
+        Ok(output)
     }
 
     /// Link an object file to an executable using the system linker.

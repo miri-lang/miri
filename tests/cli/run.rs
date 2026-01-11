@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
-use crate::test_utils::miri_cmd;
+use crate::utils::miri_cmd;
 use std::io::Write;
 use tempfile::NamedTempFile;
 

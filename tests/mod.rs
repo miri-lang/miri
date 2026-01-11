@@ -7,5 +7,5 @@ pub mod integration;
 pub mod lexer;
 pub mod mir;
 pub mod parser;
-pub mod test_utils;
 pub mod type_checker;
+pub mod utils;

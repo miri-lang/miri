@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
-use crate::test_utils::check_error_output;
+use crate::utils::check_error_output;
 
 #[test]
 fn test_undefined_variable_suggestion() {

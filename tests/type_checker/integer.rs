@@ -135,7 +135,7 @@ fn test_integer_float_mismatch() {
         "
 let x = 1 + 1.5
 ",
-        "Type mismatch: int and f32 are not compatible for arithmetic operation",
+        "Type mismatch: cannot add a float to an integer",
     );
 }
 

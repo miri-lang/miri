@@ -3,12 +3,14 @@
 
 pub mod compiler;
 pub mod lowering;
+pub mod runtime;
 pub mod syntax;
 pub mod type_error;
 pub mod utils;
 
 pub use compiler::*;
 pub use lowering::*;
+pub use runtime::*;
 pub use syntax::*;
 pub use type_error::*;
 pub use utils::*;

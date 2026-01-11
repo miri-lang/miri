@@ -18,7 +18,7 @@ use cranelift_module::{Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use std::fmt;
 use std::sync::Arc;
-use target_lexicon::Triple;
+use target_lexicon::{DeploymentTarget, OperatingSystem, Triple};
 use thiserror::Error;
 
 pub use translator::FunctionTranslator;
@@ -102,7 +102,20 @@ pub enum CraneliftError {
 impl CraneliftBackend {
     /// Create a new Cranelift backend for the host platform.
     pub fn new() -> Result<Self, CraneliftError> {
-        Self::for_target(Triple::host())
+        let mut target = Triple::host();
+        // If we are on macOS (Darwin), we need to specify a version so that Cranelift
+        // emits the LC_BUILD_VERSION load command. Without this, the linker will warn.
+        match target.operating_system {
+            OperatingSystem::Darwin(_) | OperatingSystem::MacOSX(_) => {
+                target.operating_system = OperatingSystem::MacOSX(Some(DeploymentTarget {
+                    major: 10,
+                    minor: 15,
+                    patch: 0,
+                }));
+            }
+            _ => {}
+        }
+        Self::for_target(target)
     }
 
     /// Create a new Cranelift backend for a specific target.

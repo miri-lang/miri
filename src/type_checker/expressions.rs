@@ -193,6 +193,15 @@ impl TypeChecker {
         span: Span,
         context: &mut Context,
     ) -> Type {
+        // Check for double negation pattern (--x)
+        if matches!(op, UnaryOp::Negate) {
+            if let ExpressionKind::Unary(UnaryOp::Negate, _) = &operand.node {
+                self.report_warning("use of a double negation".to_string(), span.clone());
+            }
+        } else if matches!(op, UnaryOp::Decrement) {
+            self.report_warning("use of a double negation".to_string(), span.clone());
+        }
+
         let expr_ty = self.infer_expression(operand, context);
         match self.check_unary_op_types(op, &expr_ty) {
             Ok(t) => t,

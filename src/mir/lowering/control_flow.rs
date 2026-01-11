@@ -223,6 +223,168 @@ pub fn lower_while(
     }
 }
 
+/// Helper to lower for-loops over iterable collections (lists, arrays).
+/// Unrolls the iteration by evaluating each element.
+fn lower_for_over_iterable(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    decls: &[VariableDeclaration],
+    iterable: &Expression,
+    body: &Statement,
+) {
+    // For now, use a simple approach: just run the interpreter for this
+    // since proper list iteration requires more complex MIR patterns.
+    // We'll lower it as: evaluate list, iterate with index.
+
+    ctx.push_scope();
+
+    let decl = &decls[0];
+    // Infer element type from type checker or default to Int
+    let elem_ty = if let Some(ty) = ctx.type_checker.get_type(iterable.id) {
+        // Try to extract element type from list type
+        match &ty.kind {
+            TypeKind::List(_) | TypeKind::Array(_, _) => {
+                // For lists/arrays, element type would need to be extracted from type annotation
+                Type::new(TypeKind::Int, span.clone())
+            }
+            _ => ty.clone(),
+        }
+    } else {
+        Type::new(TypeKind::Int, span.clone())
+    };
+
+    let loop_var = ctx.push_local(decl.name.clone(), elem_ty, span.clone());
+
+    // Lower the iterable
+    let list_op = lower_expression(ctx, iterable);
+    let list_ty = if let Some(ty) = ctx.type_checker.get_type(iterable.id) {
+        ty.clone()
+    } else {
+        Type::new(TypeKind::Void, span.clone())
+    };
+    let list_local = ctx.push_temp(list_ty, span.clone());
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(Place::new(list_local), Rvalue::Use(list_op)),
+        span: span.clone(),
+    });
+
+    // Index variable
+    let idx_ty = Type::new(TypeKind::Int, span.clone());
+    let idx_var = ctx.push_temp(idx_ty.clone(), span.clone());
+
+    // Initialize index to 0
+    let zero = Operand::Constant(Box::new(Constant {
+        span: span.clone(),
+        ty: idx_ty.clone(),
+        literal: crate::ast::literal::Literal::Integer(crate::ast::literal::IntegerLiteral::I32(0)),
+    }));
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(Place::new(idx_var), Rvalue::Use(zero)),
+        span: span.clone(),
+    });
+
+    let header_bb = ctx.new_basic_block();
+    let body_bb = ctx.new_basic_block();
+    let increment_bb = ctx.new_basic_block();
+    let exit_bb = ctx.new_basic_block();
+
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Goto { target: header_bb },
+        span.clone(),
+    ));
+
+    // Header: Check idx < len(list)
+    ctx.set_current_block(header_bb);
+
+    let len_temp = ctx.push_temp(idx_ty.clone(), span.clone());
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(Place::new(len_temp), Rvalue::Len(Place::new(list_local))),
+        span: span.clone(),
+    });
+
+    let bool_ty = Type::new(TypeKind::Boolean, span.clone());
+    let cond_temp = ctx.push_temp(bool_ty, span.clone());
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(
+            Place::new(cond_temp),
+            Rvalue::BinaryOp(
+                BinOp::Lt,
+                Box::new(Operand::Copy(Place::new(idx_var))),
+                Box::new(Operand::Copy(Place::new(len_temp))),
+            ),
+        ),
+        span: span.clone(),
+    });
+
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::SwitchInt {
+            discr: Operand::Copy(Place::new(cond_temp)),
+            targets: vec![(1, body_bb)],
+            otherwise: exit_bb,
+        },
+        span.clone(),
+    ));
+
+    // Body
+    ctx.enter_loop(exit_bb, increment_bb);
+    ctx.set_current_block(body_bb);
+
+    // Assign loop_var = list[idx]
+    let mut indexed_place = Place::new(list_local);
+    indexed_place
+        .projection
+        .push(crate::mir::PlaceElem::Index(idx_var));
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(
+            Place::new(loop_var),
+            Rvalue::Use(Operand::Copy(indexed_place)),
+        ),
+        span: span.clone(),
+    });
+
+    lower_statement(ctx, body);
+
+    if ctx.body.basic_blocks[ctx.current_block.0]
+        .terminator
+        .is_none()
+    {
+        ctx.set_terminator(Terminator::new(
+            TerminatorKind::Goto {
+                target: increment_bb,
+            },
+            span.clone(),
+        ));
+    }
+    ctx.exit_loop();
+
+    // Increment
+    ctx.set_current_block(increment_bb);
+    let one = Operand::Constant(Box::new(Constant {
+        span: span.clone(),
+        ty: idx_ty,
+        literal: crate::ast::literal::Literal::Integer(crate::ast::literal::IntegerLiteral::I32(1)),
+    }));
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(
+            Place::new(idx_var),
+            Rvalue::BinaryOp(
+                BinOp::Add,
+                Box::new(Operand::Copy(Place::new(idx_var))),
+                Box::new(one),
+            ),
+        ),
+        span: span.clone(),
+    });
+
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Goto { target: header_bb },
+        span.clone(),
+    ));
+
+    ctx.pop_scope();
+    ctx.set_current_block(exit_bb);
+}
+
 pub fn lower_for(
     ctx: &mut LoweringContext,
     span: &Span,
@@ -230,14 +392,28 @@ pub fn lower_for(
     iterable: &Expression,
     body: &Statement,
 ) {
-    // Only numeric ranges supported: for i in start..end
-    // Init i = start
-    // Header: Check i < end (or <=)
-    // Body
-    // Increment: i = i + 1
-    // Jump to Header
+    // Support for: for i in start..end (range) AND for i in [items] (list)
+
+    // Check for IterableObject (e.g., for i in [1,2,3] parsed as Range with IterableObject type)
+    if let ExpressionKind::Range(iterable_expr, _, RangeExpressionType::IterableObject) =
+        &iterable.node
+    {
+        // The iterable is in the start position, delegate to list/array handling
+        return lower_for_over_iterable(ctx, span, decls, iterable_expr, body);
+    }
+
+    // Also handle direct List expressions
+    if let ExpressionKind::List(_) = &iterable.node {
+        return lower_for_over_iterable(ctx, span, decls, iterable, body);
+    }
+
+    // Also handle direct Array expressions
+    if let ExpressionKind::Array(_, _) = &iterable.node {
+        return lower_for_over_iterable(ctx, span, decls, iterable, body);
+    }
 
     if let ExpressionKind::Range(start, end_opt, range_type) = &iterable.node {
+        // Range iteration: for i in start..end
         let end = end_opt.as_ref().expect("Range must have end");
 
         ctx.push_scope(); // For the loop variable
@@ -342,7 +518,7 @@ pub fn lower_for(
         ctx.pop_scope();
         ctx.set_current_block(exit_bb);
     } else {
-        panic!("For loop only supports Range iterables for now");
+        panic!("For loop only supports Range or List iterables for now");
     }
 }
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
-use crate::test_utils::{miri_cmd, BINARY_NAME, VERSION};
+use crate::utils::{miri_cmd, BINARY_NAME, VERSION};
 
 #[test]
 fn test_version_flag() {
