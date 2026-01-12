@@ -98,8 +98,8 @@ impl TypeChecker {
         expr_type: Type,
         context: &mut Context,
     ) {
-        if let Some(mut last) = context.return_types.pop() {
-            last = expr_type.clone();
+        if context.return_types.pop().is_some() {
+            let last = expr_type.clone();
             context.return_types.push(last);
         }
 
