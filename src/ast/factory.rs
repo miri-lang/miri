@@ -941,6 +941,88 @@ pub fn includes(modules: Vec<Expression>) -> Statement {
     stmt(StatementKind::Includes(modules))
 }
 
+/// Creates a class declaration statement.
+pub fn class_statement(
+    name: Expression,
+    generic_types: Option<Vec<Expression>>,
+    base_class: Option<Box<Expression>>,
+    traits: Vec<Expression>,
+    body: Vec<Statement>,
+    visibility: MemberVisibility,
+) -> Statement {
+    stmt(StatementKind::Class(
+        Box::new(name),
+        generic_types,
+        base_class,
+        traits,
+        body,
+        visibility,
+    ))
+}
+
+/// Creates a class declaration from string name.
+pub fn class_decl(
+    name: &str,
+    generic_types: Option<Vec<Expression>>,
+    base_class: Option<&str>,
+    traits: Vec<&str>,
+    body: Vec<Statement>,
+    visibility: MemberVisibility,
+) -> Statement {
+    class_statement(
+        identifier(name),
+        generic_types,
+        base_class.map(|s| Box::new(identifier(s))),
+        traits.into_iter().map(identifier).collect(),
+        body,
+        visibility,
+    )
+}
+
+/// Creates a trait declaration statement.
+pub fn trait_statement(
+    name: Expression,
+    generic_types: Option<Vec<Expression>>,
+    parent_traits: Vec<Expression>,
+    body: Vec<Statement>,
+    visibility: MemberVisibility,
+) -> Statement {
+    stmt(StatementKind::Trait(
+        Box::new(name),
+        generic_types,
+        parent_traits,
+        body,
+        visibility,
+    ))
+}
+
+/// Creates a trait declaration from string name.
+pub fn trait_decl(
+    name: &str,
+    generic_types: Option<Vec<Expression>>,
+    parent_traits: Vec<&str>,
+    body: Vec<Statement>,
+    visibility: MemberVisibility,
+) -> Statement {
+    trait_statement(
+        identifier(name),
+        generic_types,
+        parent_traits.into_iter().map(identifier).collect(),
+        body,
+        visibility,
+    )
+}
+
+/// Creates a super expression for calling parent class methods.
+pub fn super_expression() -> Expression {
+    expr(ExpressionKind::Super)
+}
+
+/// Creates a super expression with a specific span.
+pub fn super_expression_with_span(span: Span) -> Expression {
+    expr_with_span(ExpressionKind::Super, span)
+}
+
 pub fn list(elements: Vec<Expression>) -> Expression {
     expr(ExpressionKind::List(elements))
 }

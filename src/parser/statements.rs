@@ -88,6 +88,9 @@ impl<'source> Parser<'source> {
             Some((Token::Continue, _)) => self.continue_statement()?,
             Some((Token::Enum, _)) => self.enum_statement(MemberVisibility::Public)?,
             Some((Token::Struct, _)) => self.struct_statement(MemberVisibility::Public)?,
+            Some((Token::Class, _)) => self.class_statement(MemberVisibility::Public)?,
+            Some((Token::Trait, _)) => self.trait_statement(MemberVisibility::Public)?,
+            // DEPRECATED: Top-level extends/implements/includes - will be removed in cleanup phase
             Some((Token::Extends, _)) => self.extends_statement()?,
             Some((Token::Implements, _)) => self.implements_statement()?,
             Some((Token::Includes, _)) => self.includes_statement()?,

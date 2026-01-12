@@ -104,13 +104,37 @@ pub enum StatementKind {
         MemberVisibility,
     ),
 
+    /// A class declaration.
+    /// (name, generics, base_class, traits, body, visibility)
+    Class(
+        Box<Expression>,         // Class name
+        Option<Vec<Expression>>, // Generic type parameters
+        Option<Box<Expression>>, // Base class (single, via extends)
+        Vec<Expression>,         // Implemented traits (via implements)
+        Vec<Statement>,          // Class body (fields + methods)
+        MemberVisibility,        // Class visibility
+    ),
+
+    /// A trait declaration.
+    /// (name, generics, parent_traits, body, visibility)
+    Trait(
+        Box<Expression>,         // Trait name
+        Option<Vec<Expression>>, // Generic type parameters
+        Vec<Expression>,         // Parent traits (multiple, via extends)
+        Vec<Statement>,          // Trait body (method signatures)
+        MemberVisibility,        // Trait visibility
+    ),
+
     /// An extends clause (for inheritance).
+    /// DEPRECATED: Will be removed. Use Class/Trait statement instead.
     Extends(Box<Expression>),
 
     /// An implements clause (for interfaces).
+    /// DEPRECATED: Will be removed. Use Class statement instead.
     Implements(Vec<Expression>),
 
     /// An includes clause (for mixins/traits).
+    /// DEPRECATED: Will be removed entirely.
     Includes(Vec<Expression>),
 }
 

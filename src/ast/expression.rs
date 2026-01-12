@@ -154,6 +154,9 @@ pub enum ExpressionKind {
 
     /// A named argument in a function call (e.g., `foo(a: 1)`).
     NamedArgument(String, Box<Expression>),
+
+    /// A super reference for calling parent class methods (e.g., `super.init()`).
+    Super,
 }
 
 /// Represents an expression

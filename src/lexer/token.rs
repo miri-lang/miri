@@ -94,6 +94,12 @@ pub enum Token {
     Enum,
     #[token("struct")]
     Struct,
+    #[token("class")]
+    Class,
+    #[token("trait")]
+    Trait,
+    #[token("super")]
+    Super,
     #[token("public")]
     Public,
     #[token("protected")]

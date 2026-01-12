@@ -2,6 +2,7 @@
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
 pub mod basic;
+pub mod class;
 pub mod comment;
 pub mod conditional_expressions;
 pub mod function;

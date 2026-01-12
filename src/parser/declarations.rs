@@ -405,6 +405,156 @@ impl<'source> Parser<'source> {
     }
 
     /*
+        ClassStatement
+            : 'class' Identifier [GenericTypesDeclaration] ['extends' Identifier]
+              ['implements' IdentifierList] EXPRESSION_END BlockStatement
+            ;
+    */
+    pub(crate) fn class_statement(
+        &mut self,
+        visibility: MemberVisibility,
+    ) -> Result<Statement, SyntaxError> {
+        self.eat_token(&Token::Class)?;
+        let name = self.identifier()?;
+        let generic_types = self.generic_types_expression()?;
+
+        // Parse optional 'extends' clause (single base class)
+        let base_class = if self.match_lookahead_type(|t| t == &Token::Extends) {
+            self.eat_token(&Token::Extends)?;
+            Some(Box::new(self.inheritance_identifier()?))
+        } else {
+            None
+        };
+
+        // Parse optional 'implements' clause (multiple traits)
+        let traits = if self.match_lookahead_type(|t| t == &Token::Implements) {
+            self.eat_token(&Token::Implements)?;
+            let mut trait_list = vec![self.inheritance_identifier()?];
+            while self.lookahead_is_comma() {
+                self.eat_token(&Token::Comma)?;
+                // Stop if we hit expression end (for trailing comma support)
+                if self.lookahead_is_expression_end() {
+                    break;
+                }
+                trait_list.push(self.inheritance_identifier()?);
+            }
+            trait_list
+        } else {
+            vec![]
+        };
+
+        // Parse class body (block only, no inline syntax)
+        let body = self.class_body()?;
+
+        Ok(ast::class_statement(
+            name,
+            generic_types,
+            base_class,
+            traits,
+            body,
+            visibility,
+        ))
+    }
+
+    /*
+        TraitStatement
+            : 'trait' Identifier [GenericTypesDeclaration] ['extends' IdentifierList]
+              EXPRESSION_END BlockStatement
+            ;
+    */
+    pub(crate) fn trait_statement(
+        &mut self,
+        visibility: MemberVisibility,
+    ) -> Result<Statement, SyntaxError> {
+        self.eat_token(&Token::Trait)?;
+        let name = self.identifier()?;
+        let generic_types = self.generic_types_expression()?;
+
+        // Parse optional 'extends' clause (multiple parent traits for traits)
+        let parent_traits = if self.match_lookahead_type(|t| t == &Token::Extends) {
+            self.eat_token(&Token::Extends)?;
+            let mut trait_list = vec![self.inheritance_identifier()?];
+            while self.lookahead_is_comma() {
+                self.eat_token(&Token::Comma)?;
+                if self.lookahead_is_expression_end() {
+                    break;
+                }
+                trait_list.push(self.inheritance_identifier()?);
+            }
+            trait_list
+        } else {
+            vec![]
+        };
+
+        // Parse trait body (block only)
+        let body = self.class_body()?;
+
+        Ok(ast::trait_statement(
+            name,
+            generic_types,
+            parent_traits,
+            body,
+            visibility,
+        ))
+    }
+
+    /// Parses a class or trait body block containing fields and methods.
+    fn class_body(&mut self) -> Result<Vec<Statement>, SyntaxError> {
+        // Expect expression end then indented block
+        self.eat_expression_end()?;
+
+        if !self.lookahead_is_indent() {
+            // Empty body - return empty vec (will be validated elsewhere)
+            return Ok(vec![]);
+        }
+
+        self.eat_token(&Token::Indent)?;
+        let mut statements = vec![];
+
+        while !self.lookahead_is_dedent() && self._lookahead.is_some() {
+            let stmt = self.class_member_or_statement()?;
+            statements.push(stmt);
+            self.try_eat_expression_end();
+        }
+
+        self.eat_token(&Token::Dedent)?;
+        Ok(statements)
+    }
+
+    /// Parses a class member (field or method) with optional visibility modifier.
+    fn class_member_or_statement(&mut self) -> Result<Statement, SyntaxError> {
+        // Check for visibility modifiers
+        let visibility = match &self._lookahead {
+            Some((Token::Public, _)) => {
+                self.eat_token(&Token::Public)?;
+                MemberVisibility::Public
+            }
+            Some((Token::Protected, _)) => {
+                self.eat_token(&Token::Protected)?;
+                MemberVisibility::Protected
+            }
+            Some((Token::Private, _)) => {
+                self.eat_token(&Token::Private)?;
+                MemberVisibility::Private
+            }
+            _ => MemberVisibility::Private, // Default visibility is private
+        };
+
+        // Parse based on token
+        match &self._lookahead {
+            Some((Token::Let, _)) | Some((Token::Var, _)) => self.variable_statement(visibility),
+            Some((Token::Async, _))
+            | Some((Token::Fn, _))
+            | Some((Token::Gpu, _))
+            | Some((Token::Parallel, _)) => self.function_declaration(visibility),
+            Some((Token::Type, _)) => self.type_statement(visibility),
+            _ => Err(self.error_unexpected_lookahead_token(
+                "class member (let, var, fn, async, gpu, or type)",
+            )),
+        }
+    }
+
+    /*
         StructMember
             : Identifier TypeExpression
             ;

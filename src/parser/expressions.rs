@@ -486,6 +486,10 @@ impl<'source> Parser<'source> {
         match &self._lookahead {
             Some((Token::LParen, _)) => self.parenthesized_expression(),
             Some((Token::Identifier, _)) => self.identifier(),
+            Some((Token::Super, _)) => {
+                let (_, span) = self.eat_token(&Token::Super)?;
+                Ok(ast::super_expression_with_span(span))
+            }
             Some((Token::Async, _))
             | Some((Token::Fn, _))
             | Some((Token::Gpu, _))
