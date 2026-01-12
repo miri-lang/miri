@@ -16,7 +16,10 @@
 pub mod backend;
 pub mod block;
 pub mod body;
+pub mod declaration;
+pub mod lambda;
 pub mod lowering;
+pub mod module;
 pub mod operand;
 pub mod place;
 pub mod rvalue;
@@ -30,6 +33,9 @@ pub use backend::{
 };
 pub use block::{BasicBlock, BasicBlockData};
 pub use body::{Body, ExecutionModel, LocalDecl, StorageClass};
+pub use declaration::{Declaration, EnumDecl, FieldDecl, StructDecl, TypeAliasDecl, VariantDecl};
+pub use lambda::{CapturedVar, LambdaInfo, LambdaRegistry};
+pub use module::{Import, ImportItem, ImportKind, ImportSource};
 pub use operand::{Constant, Operand};
 pub use place::{Local, Place, PlaceElem};
 pub use rvalue::{AggregateKind, BinOp, Dimension, GpuIntrinsic, Rvalue, UnOp};

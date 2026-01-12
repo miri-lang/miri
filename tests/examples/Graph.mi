@@ -2,9 +2,6 @@ extends BasicGraph
 implements IBasicGraph
 includes Mod1
 
-type T, U extends Serializable, X implements IGraph, P includes Mod2
-type F is map<string, int>
-
 enum Status
     Ok
     Error
@@ -16,6 +13,9 @@ struct Coordinates
     y int
 
 struct 3dCoordinates: x int, y int, z int
+
+type T, U extends Serializable, X implements IGraph, P includes Mod2
+type F is map<string, int>
 
 // Define the graph as an adjacency list
 private let _graph map<string, list<string>>

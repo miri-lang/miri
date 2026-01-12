@@ -1,0 +1,16 @@
+use calc.*
+
+let x = 5
+let y = 10
+
+var z = add(x, y)
+print('{x} + {y} = {z}', z)
+
+z = sub(x, y)
+print('{x} - {y} = {z}', z)
+
+z = mul(x, y)
+print('{x} * {y} = {z}', z)
+
+z = div(x, y)
+print('{x} / {y} = {z}', z)

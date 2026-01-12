@@ -319,9 +319,30 @@ includes Mixin1, Mixin2
 ## Imports
 
 ```miri
-use System.Math
-use System.IO.*
-use System.{IO, Net as Network}
+// Imports all public entities from the math module.
+// NOTE: `system` is the reserved keyword for the standard library.
+use system.math
+
+// Imports all public entities from the io module
+use system.io
+
+// Imports only the print and println functions from the io module
+use system.io.{print, println}
+
+// Imports the io and net modules, renaming net to network
+// Notice how it's possible to selectively import not just entities, 
+// but also modules 
+use system.{io, net as network}
+
+// Imports all public entities from the local.users.user module
+// `local` is the reserved keyword for the current project.
+// NOTE: local modules must always be imported with the full path, starting 
+// with `local.`, even if it's in the same folder.
+use local.users.user
+
+// Imports all public entities from the module1.module2 module of the package.
+// This is an example of how to import a module from an external package.
+use some_package.module1.module2
 ```
 
 ---

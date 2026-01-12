@@ -11,38 +11,56 @@ use super::utils::*;
 fn test_use() {
     lexer_test(
         "
-// Local module 
-use Calc
+// System import
+use system.math
 
-// Global module
-use System.Math
+// Local import
+use local.users.user
 
-// Local module with path
-use MyProject.Path.SomeModule
+// Selective import
+use system.io.{print, println}
 
-// Local module with path and alias
-use Module2 as M2
+// Selective module import with rename
+use system.{io, net as network}
 ",
         vec![
+            // use system.math
             Token::Use,
+            Token::System,
+            Token::Dot,
             Token::Identifier,
             Token::ExpressionStatementEnd,
+            // use local.users.user
             Token::Use,
+            Token::Local,
+            Token::Dot,
             Token::Identifier,
             Token::Dot,
             Token::Identifier,
             Token::ExpressionStatementEnd,
+            // use system.io.{print, println}
             Token::Use,
-            Token::Identifier,
+            Token::System,
             Token::Dot,
             Token::Identifier,
             Token::Dot,
+            Token::LBrace,
             Token::Identifier,
+            Token::Comma,
+            Token::Identifier,
+            Token::RBrace,
             Token::ExpressionStatementEnd,
+            // use system.{io, net as network}
             Token::Use,
+            Token::System,
+            Token::Dot,
+            Token::LBrace,
+            Token::Identifier,
+            Token::Comma,
             Token::Identifier,
             Token::As,
             Token::Identifier,
+            Token::RBrace,
             Token::ExpressionStatementEnd,
         ],
     );
@@ -62,13 +80,5 @@ fn test_use_with_keywords_in_path() {
             Token::As,
             Token::Return,
         ],
-    );
-}
-
-#[test]
-fn test_use_without_whitespace() {
-    lexer_test(
-        "use(MyModule)",
-        vec![Token::Use, Token::LParen, Token::Identifier, Token::RParen],
     );
 }

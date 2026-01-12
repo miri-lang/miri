@@ -7,13 +7,13 @@ use miri::ast::*;
 use miri::error::syntax::SyntaxErrorKind;
 
 #[test]
-fn test_use_statement_local_module() {
+fn test_use_statement_package_module() {
     parser_test(
         "
-// Local module 
-use Calc
+// Package module 
+use calc
 ",
-        vec![use_statement(import_path("Calc".into()), None)],
+        vec![use_statement(import_path("calc".into()), None)],
     );
 }
 
@@ -21,11 +21,11 @@ use Calc
 fn test_use_statement_multiple_segments() {
     parser_test(
         "
-// Local module with path
-use MyProject.Path.SomeModule
+// Package module with path
+use calc.path.some_module
 ",
         vec![use_statement(
-            import_path("MyProject.Path.SomeModule".into()),
+            import_path("calc.path.some_module".into()),
             None,
         )],
     );
@@ -35,11 +35,11 @@ use MyProject.Path.SomeModule
 fn test_use_statement_alias() {
     parser_test(
         "
-// Module with path
-use System.Math as M
+// System module with alias
+use system.math as M
 ",
         vec![use_statement(
-            import_path("System.Math".into()),
+            import_path("system.math".into()),
             opt_expr(identifier("M".into())),
         )],
     );
@@ -48,22 +48,22 @@ use System.Math as M
 #[test]
 fn test_use_statement_wildcard() {
     parser_test(
-        "use System.IO.*",
-        vec![use_statement(import_path_wildcard("System.IO"), None)],
+        "use system.io.*",
+        vec![use_statement(import_path_wildcard("system.io"), None)],
     );
 }
 
 #[test]
 fn test_use_statement_multi_import() {
     parser_test(
-        "use System.{IO, Net, Text as T}",
+        "use system.{io, net, text as T}",
         vec![use_statement(
             import_path_multi(
-                "System",
+                "system",
                 vec![
-                    (identifier("IO"), None),
-                    (identifier("Net"), None),
-                    (identifier("Text"), opt_expr(identifier("T"))),
+                    (identifier("io"), None),
+                    (identifier("net"), None),
+                    (identifier("text"), opt_expr(identifier("T"))),
                 ],
             ),
             None,
@@ -74,7 +74,7 @@ fn test_use_statement_multi_import() {
 #[test]
 fn test_error_on_trailing_dot() {
     parser_error_test(
-        "use MyModule.",
+        "use calc.path.some_module.",
         &SyntaxErrorKind::UnexpectedToken {
             expected: "identifier".into(),
             found: "end of file".into(),
@@ -85,7 +85,7 @@ fn test_error_on_trailing_dot() {
 #[test]
 fn test_error_on_missing_alias() {
     parser_error_test(
-        "use MyModule as",
+        "use calc.path.some_module as",
         &SyntaxErrorKind::UnexpectedToken {
             expected: "identifier".into(),
             found: "end of file".into(),
@@ -96,10 +96,43 @@ fn test_error_on_missing_alias() {
 #[test]
 fn test_error_on_invalid_multi_import() {
     parser_error_test(
-        "use System.{IO,",
+        "use system.{io,",
         &SyntaxErrorKind::UnexpectedToken {
             expected: "identifier".to_string(),
             found: "end of file".to_string(),
         },
+    );
+}
+
+#[test]
+fn test_use_multiple_statements() {
+    parser_test(
+        "
+use system.math
+use local.users.user
+use system.io.{print, println}
+use system.{io, net as network}
+",
+        vec![
+            use_statement(import_path("system.math".into()), None),
+            use_statement(import_path("local.users.user".into()), None),
+            use_statement(
+                import_path_multi(
+                    "system.io",
+                    vec![(identifier("print"), None), (identifier("println"), None)],
+                ),
+                None,
+            ),
+            use_statement(
+                import_path_multi(
+                    "system",
+                    vec![
+                        (identifier("io"), None),
+                        (identifier("net"), Some(Box::new(identifier("network")))),
+                    ],
+                ),
+                None,
+            ),
+        ],
     );
 }

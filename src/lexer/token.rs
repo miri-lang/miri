@@ -102,6 +102,10 @@ pub enum Token {
     Shared,
     #[token("private")]
     Private,
+    #[token("system")]
+    System,
+    #[token("local")]
+    Local,
 
     // Symbols and Operators
     #[token(";")]

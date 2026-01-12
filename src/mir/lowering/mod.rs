@@ -9,11 +9,17 @@ use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::pattern::Pattern;
 use crate::ast::statement::{Statement, StatementKind};
 use crate::ast::types::{Type, TypeKind};
+use crate::mir::declaration::{
+    Declaration, EnumDecl, FieldDecl, StructDecl, TypeAliasDecl, VariantDecl,
+};
+use crate::mir::lambda::{CapturedVar, LambdaInfo};
+use crate::mir::module::{Import, ImportItem, ImportKind, ImportSource};
 use crate::mir::{
     AggregateKind, BinOp, Body, Constant, Dimension, ExecutionModel, GpuIntrinsic, LocalDecl,
     Operand, Place, PlaceElem, Rvalue, StatementKind as MirStatementKind, Terminator,
     TerminatorKind, UnOp,
 };
+use crate::type_checker::context::TypeDefinition;
 use crate::type_checker::TypeChecker;
 use context::LoweringContext;
 
@@ -243,6 +249,153 @@ pub(crate) fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) {
         StatementKind::For(decls, iterable, body) => {
             control_flow::lower_for(ctx, &stmt.span, decls, iterable, body);
         }
+        StatementKind::Struct(name_expr, _generics, _members, _vis) => {
+            // Lower struct declaration by looking up the type definition from type checker
+            if let ExpressionKind::Identifier(name, _) = &name_expr.node {
+                if let Some(TypeDefinition::Struct(def)) =
+                    ctx.type_checker.global_type_definitions.get(name)
+                {
+                    let fields = def
+                        .fields
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, (field_name, ty, vis))| FieldDecl {
+                            name: field_name.clone(),
+                            ty: ty.clone(),
+                            visibility: vis.clone(),
+                            index: idx,
+                        })
+                        .collect();
+
+                    let generics = def
+                        .generics
+                        .as_ref()
+                        .map(|gs| gs.iter().map(|g| g.name.clone()).collect())
+                        .unwrap_or_default();
+
+                    ctx.declarations.push(Declaration::Struct(StructDecl {
+                        name: name.clone(),
+                        fields,
+                        generics,
+                        module: def.module.clone(),
+                    }));
+                }
+            }
+        }
+        StatementKind::Enum(name_expr, _variants, _vis) => {
+            // Lower enum declaration by looking up the type definition from type checker
+            if let ExpressionKind::Identifier(name, _) = &name_expr.node {
+                if let Some(TypeDefinition::Enum(def)) =
+                    ctx.type_checker.global_type_definitions.get(name)
+                {
+                    let variants = def
+                        .variants
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, (variant_name, associated_types))| VariantDecl {
+                            name: variant_name.clone(),
+                            fields: associated_types.clone(),
+                            discriminant: idx,
+                        })
+                        .collect();
+
+                    ctx.declarations.push(Declaration::Enum(EnumDecl {
+                        name: name.clone(),
+                        variants,
+                        module: def.module.clone(),
+                    }));
+                }
+            }
+        }
+        StatementKind::Type(decls, _vis) => {
+            // Lower type alias declarations
+            for decl in decls {
+                if let ExpressionKind::TypeDeclaration(name_expr, _generics, _kind, target_type) =
+                    &decl.node
+                {
+                    if let ExpressionKind::Identifier(name, _) = &name_expr.node {
+                        if let Some(target) = target_type {
+                            let resolved_ty = resolve_type(ctx.type_checker, target);
+                            ctx.declarations.push(Declaration::TypeAlias(TypeAliasDecl {
+                                name: name.clone(),
+                                target: resolved_ty,
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+        StatementKind::Use(import_path_expr, alias_opt) => {
+            // Lower use/import statements
+            if let ExpressionKind::ImportPath(segments, kind) = &import_path_expr.node {
+                // Extract path segments as strings
+                let path_strs: Vec<String> = segments
+                    .iter()
+                    .filter_map(|seg| {
+                        if let ExpressionKind::Identifier(name, _) = &seg.node {
+                            Some(name.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                if path_strs.is_empty() {
+                    return;
+                }
+
+                // Determine import source from first segment
+                let (source, module_path) = match path_strs[0].as_str() {
+                    "system" => (ImportSource::System, path_strs[1..].to_vec()),
+                    "local" => (ImportSource::Local, path_strs[1..].to_vec()),
+                    package_name => (
+                        ImportSource::Package(package_name.to_string()),
+                        path_strs[1..].to_vec(),
+                    ),
+                };
+
+                // Determine import kind
+                let import_kind = match kind {
+                    crate::ast::expression::ImportPathKind::Simple => ImportKind::All,
+                    crate::ast::expression::ImportPathKind::Wildcard => ImportKind::All,
+                    crate::ast::expression::ImportPathKind::Multi(items) => {
+                        let import_items: Vec<ImportItem> = items
+                            .iter()
+                            .filter_map(|(name_expr, alias_expr)| {
+                                if let ExpressionKind::Identifier(name, _) = &name_expr.node {
+                                    let alias = alias_expr.as_ref().and_then(|a| {
+                                        if let ExpressionKind::Identifier(alias_name, _) = &a.node {
+                                            Some(alias_name.clone())
+                                        } else {
+                                            None
+                                        }
+                                    });
+                                    Some(ImportItem {
+                                        name: name.clone(),
+                                        alias,
+                                    })
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        ImportKind::Named(import_items)
+                    }
+                };
+
+                // Create import
+                let mut import = Import::new(source, module_path, import_kind);
+
+                // Handle module alias (e.g., `use system.io as input_output`)
+                if let Some(alias_box) = alias_opt {
+                    if let ExpressionKind::Identifier(alias_name, _) = &alias_box.node {
+                        import = import.with_alias(alias_name.clone());
+                    }
+                }
+
+                ctx.imports.push(import);
+            }
+        }
         _ => {}
     }
 }
@@ -355,10 +508,262 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                         panic!("Expected identifier in assignment LHS");
                     }
                 }
-                _ => panic!("Unsupported LHS in assignment: {:?}", lhs),
+                crate::ast::expression::LeftHandSideExpression::Member(member_expr) => {
+                    // Member assignment: a.b = x
+                    // Lower the member expression to get the object and field
+                    if let ExpressionKind::Member(obj, prop) = &member_expr.node {
+                        let val = lower_expression(ctx, rhs);
+
+                        // Get the object operand
+                        let obj_operand = lower_expression(ctx, obj);
+
+                        // Get the object's type to find field index
+                        let obj_ty = ctx
+                            .type_checker
+                            .get_type(obj.id)
+                            .expect("Object type not found");
+
+                        if let TypeKind::Custom(struct_name, _) = &obj_ty.kind {
+                            if let Some(crate::type_checker::context::TypeDefinition::Struct(def)) =
+                                ctx.type_checker.global_type_definitions.get(struct_name)
+                            {
+                                if let ExpressionKind::Identifier(field_name, _) = &prop.node {
+                                    if let Some(idx) =
+                                        def.fields.iter().position(|(f, _, _)| f == field_name)
+                                    {
+                                        // Ensure obj is a Place
+                                        let obj_place = match obj_operand {
+                                            Operand::Copy(p) | Operand::Move(p) => p,
+                                            Operand::Constant(c) => {
+                                                let temp =
+                                                    ctx.push_temp(c.ty.clone(), obj.span.clone());
+                                                ctx.push_statement(crate::mir::Statement {
+                                                    kind: MirStatementKind::Assign(
+                                                        Place::new(temp),
+                                                        Rvalue::Use(Operand::Constant(c)),
+                                                    ),
+                                                    span: obj.span.clone(),
+                                                });
+                                                Place::new(temp)
+                                            }
+                                        };
+
+                                        // Create field projection
+                                        let mut target_place = obj_place;
+                                        target_place.projection.push(PlaceElem::Field(idx));
+
+                                        // Handle simple assignment vs compound assignment
+                                        match op {
+                                            crate::ast::operator::AssignmentOp::Assign => {
+                                                ctx.push_statement(crate::mir::Statement {
+                                                    kind: MirStatementKind::Assign(
+                                                        target_place,
+                                                        Rvalue::Use(val.clone()),
+                                                    ),
+                                                    span: expr.span.clone(),
+                                                });
+                                            }
+                                            crate::ast::operator::AssignmentOp::AssignAdd
+                                            | crate::ast::operator::AssignmentOp::AssignSub
+                                            | crate::ast::operator::AssignmentOp::AssignMul
+                                            | crate::ast::operator::AssignmentOp::AssignDiv
+                                            | crate::ast::operator::AssignmentOp::AssignMod => {
+                                                let bin_op = match op {
+                                                    crate::ast::operator::AssignmentOp::AssignAdd => BinOp::Add,
+                                                    crate::ast::operator::AssignmentOp::AssignSub => BinOp::Sub,
+                                                    crate::ast::operator::AssignmentOp::AssignMul => BinOp::Mul,
+                                                    crate::ast::operator::AssignmentOp::AssignDiv => BinOp::Div,
+                                                    crate::ast::operator::AssignmentOp::AssignMod => BinOp::Rem,
+                                                    _ => unreachable!(),
+                                                };
+
+                                                let lhs_op = Operand::Copy(target_place.clone());
+                                                let result_ty =
+                                                    resolve_type(ctx.type_checker, prop);
+                                                let temp =
+                                                    ctx.push_temp(result_ty, expr.span.clone());
+
+                                                ctx.push_statement(crate::mir::Statement {
+                                                    kind: MirStatementKind::Assign(
+                                                        Place::new(temp),
+                                                        Rvalue::BinaryOp(
+                                                            bin_op,
+                                                            Box::new(lhs_op),
+                                                            Box::new(val.clone()),
+                                                        ),
+                                                    ),
+                                                    span: expr.span.clone(),
+                                                });
+
+                                                ctx.push_statement(crate::mir::Statement {
+                                                    kind: MirStatementKind::Assign(
+                                                        target_place,
+                                                        Rvalue::Use(Operand::Copy(Place::new(
+                                                            temp,
+                                                        ))),
+                                                    ),
+                                                    span: expr.span.clone(),
+                                                });
+                                            }
+                                        }
+                                        return val;
+                                    }
+                                }
+                            }
+                        }
+                        panic!("Cannot assign to member of non-struct type: {:?}", obj_ty);
+                    } else {
+                        panic!("Expected Member expression in Member LHS");
+                    }
+                }
+                #[allow(clippy::needless_return)]
+                crate::ast::expression::LeftHandSideExpression::Index(index_expr) => {
+                    // Index assignment: a[i] = x
+                    if let ExpressionKind::Index(obj, idx) = &index_expr.node {
+                        let val = lower_expression(ctx, rhs);
+
+                        // Get the object operand
+                        let obj_operand = lower_expression(ctx, obj);
+
+                        // Ensure obj is a Place
+                        let obj_place = match obj_operand {
+                            Operand::Copy(p) | Operand::Move(p) => p,
+                            Operand::Constant(c) => {
+                                let temp = ctx.push_temp(c.ty.clone(), obj.span.clone());
+                                ctx.push_statement(crate::mir::Statement {
+                                    kind: MirStatementKind::Assign(
+                                        Place::new(temp),
+                                        Rvalue::Use(Operand::Constant(c)),
+                                    ),
+                                    span: obj.span.clone(),
+                                });
+                                Place::new(temp)
+                            }
+                        };
+
+                        // Lower index expression
+                        let index_operand = lower_expression(ctx, idx);
+
+                        // Ensure index is in a local
+                        let index_local = match index_operand {
+                            Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => {
+                                p.local
+                            }
+                            _ => {
+                                let ty =
+                                    ctx.type_checker.get_type(idx.id).cloned().unwrap_or_else(
+                                        || Type::new(TypeKind::Int, idx.span.clone()),
+                                    );
+                                let temp = ctx.push_temp(ty, idx.span.clone());
+                                ctx.push_statement(crate::mir::Statement {
+                                    kind: MirStatementKind::Assign(
+                                        Place::new(temp),
+                                        Rvalue::Use(index_operand),
+                                    ),
+                                    span: idx.span.clone(),
+                                });
+                                temp
+                            }
+                        };
+
+                        // Create indexed place
+                        let mut target_place = obj_place;
+                        target_place.projection.push(PlaceElem::Index(index_local));
+
+                        // Handle simple assignment vs compound assignment
+                        match op {
+                            crate::ast::operator::AssignmentOp::Assign => {
+                                ctx.push_statement(crate::mir::Statement {
+                                    kind: MirStatementKind::Assign(
+                                        target_place,
+                                        Rvalue::Use(val.clone()),
+                                    ),
+                                    span: expr.span.clone(),
+                                });
+                            }
+                            crate::ast::operator::AssignmentOp::AssignAdd
+                            | crate::ast::operator::AssignmentOp::AssignSub
+                            | crate::ast::operator::AssignmentOp::AssignMul
+                            | crate::ast::operator::AssignmentOp::AssignDiv
+                            | crate::ast::operator::AssignmentOp::AssignMod => {
+                                let bin_op = match op {
+                                    crate::ast::operator::AssignmentOp::AssignAdd => BinOp::Add,
+                                    crate::ast::operator::AssignmentOp::AssignSub => BinOp::Sub,
+                                    crate::ast::operator::AssignmentOp::AssignMul => BinOp::Mul,
+                                    crate::ast::operator::AssignmentOp::AssignDiv => BinOp::Div,
+                                    crate::ast::operator::AssignmentOp::AssignMod => BinOp::Rem,
+                                    _ => unreachable!(),
+                                };
+
+                                let lhs_op = Operand::Copy(target_place.clone());
+                                let result_ty = ctx
+                                    .type_checker
+                                    .get_type(index_expr.id)
+                                    .cloned()
+                                    .unwrap_or_else(|| Type::new(TypeKind::Int, expr.span.clone()));
+                                let temp = ctx.push_temp(result_ty, expr.span.clone());
+
+                                ctx.push_statement(crate::mir::Statement {
+                                    kind: MirStatementKind::Assign(
+                                        Place::new(temp),
+                                        Rvalue::BinaryOp(
+                                            bin_op,
+                                            Box::new(lhs_op),
+                                            Box::new(val.clone()),
+                                        ),
+                                    ),
+                                    span: expr.span.clone(),
+                                });
+
+                                ctx.push_statement(crate::mir::Statement {
+                                    kind: MirStatementKind::Assign(
+                                        target_place,
+                                        Rvalue::Use(Operand::Copy(Place::new(temp))),
+                                    ),
+                                    span: expr.span.clone(),
+                                });
+                            }
+                        }
+                        return val;
+                    } else {
+                        panic!("Expected Index expression in Index LHS");
+                    }
+                }
             }
         }
         ExpressionKind::Binary(lhs, op, rhs) => {
+            // Handle `In` operator specially - it's a membership test
+            if matches!(op, crate::ast::operator::BinaryOp::In) {
+                let lhs_op = lower_expression(ctx, lhs);
+                let rhs_op = lower_expression(ctx, rhs);
+
+                // For now, implement as a call to built-in `contains` function
+                // Backend will handle the actual membership test
+                let result_ty = Type::new(TypeKind::Boolean, expr.span.clone());
+                let temp = ctx.push_temp(result_ty, expr.span.clone());
+
+                // Create call to __contains(collection, element) -> bool
+                let contains_fn = Operand::Constant(Box::new(Constant {
+                    span: expr.span.clone(),
+                    ty: Type::new(TypeKind::Symbol, expr.span.clone()),
+                    literal: crate::ast::literal::Literal::Symbol("__contains".to_string()),
+                }));
+
+                let target_bb = ctx.new_basic_block();
+                ctx.set_terminator(Terminator::new(
+                    TerminatorKind::Call {
+                        func: contains_fn,
+                        args: vec![rhs_op, lhs_op], // (collection, element)
+                        destination: Place::new(temp),
+                        target: Some(target_bb),
+                    },
+                    expr.span.clone(),
+                ));
+                ctx.set_current_block(target_bb);
+
+                return Operand::Copy(Place::new(temp));
+            }
+
             let lhs_op = lower_expression(ctx, lhs);
             let rhs_op = lower_expression(ctx, rhs);
 
@@ -377,7 +782,8 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                 crate::ast::operator::BinaryOp::LessThanEqual => BinOp::Le,
                 crate::ast::operator::BinaryOp::GreaterThan => BinOp::Gt,
                 crate::ast::operator::BinaryOp::GreaterThanEqual => BinOp::Ge,
-                _ => panic!("Unsupported binary operator: {:?}", op),
+                // Range and In are handled separately, And/Or via Logical
+                _ => panic!("Unsupported binary operator in Binary expression: {:?}", op),
             };
 
             let result_ty = match op {
@@ -1146,8 +1552,7 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
         }
         ExpressionKind::Lambda(_generics, params, ret_type_expr, body, props) => {
             // Lambda expressions create an anonymous function.
-            // For now, we represent them as a symbol that can be called later.
-            // A more complete implementation would create a closure with captured variables.
+            // We lower the body to a separate MIR Body and track captured variables.
 
             // Create a unique name for the lambda
             let lambda_id = expr.id;
@@ -1156,33 +1561,97 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
             // Resolve the lambda's type (function type) from the type checker
             let lambda_ty = resolve_type(ctx.type_checker, expr);
 
-            // Create a constant symbol representing the lambda
-            // The actual body will need to be lowered separately when generating code
-            let temp = ctx.push_temp(lambda_ty.clone(), expr.span.clone());
+            // Resolve return type
+            let ret_ty = if let Some(ret_expr) = ret_type_expr {
+                resolve_type(ctx.type_checker, ret_expr)
+            } else {
+                Type::new(TypeKind::Void, expr.span.clone())
+            };
 
-            // Store the lambda as a symbol constant
-            // Backends will need to look up the lambda body by this name
+            // Determine execution model
+            let execution_model = if props.is_gpu {
+                ExecutionModel::GpuKernel
+            } else if props.is_async {
+                ExecutionModel::Async
+            } else {
+                ExecutionModel::Cpu
+            };
+
+            // Create a new Body for the lambda
+            let mut lambda_body = Body::new(params.len(), expr.span.clone(), execution_model);
+
+            // _0: Return value
+            lambda_body.new_local(LocalDecl::new(ret_ty.clone(), expr.span.clone()));
+
+            // Create a nested context for the lambda
+            // Note: We need to track which outer variables are captured
+            let outer_variable_map = ctx.variable_map.clone();
+            let mut lambda_ctx = LoweringContext::new(lambda_body, ctx.type_checker);
+
+            // Add parameters to lambda context
+            for param in params {
+                let param_ty = resolve_type(ctx.type_checker, &param.typ);
+                lambda_ctx.push_local(param.name.clone(), param_ty, param.typ.span.clone());
+            }
+
+            // Lower the lambda body
+            lower_as_return(&mut lambda_ctx, body, &ret_ty);
+
+            // Ensure the last block has a terminator
+            let last_block_idx = lambda_ctx.current_block.0;
+            if lambda_ctx.body.basic_blocks[last_block_idx]
+                .terminator
+                .is_none()
+            {
+                lambda_ctx
+                    .set_terminator(Terminator::new(TerminatorKind::Return, expr.span.clone()));
+            }
+
+            // Detect captured variables: variables referenced in lambda that are
+            // from the outer scope (not parameters)
+            let mut captures: Vec<CapturedVar> = Vec::new();
+            for (name, &outer_local) in &outer_variable_map {
+                // Check if this outer variable was referenced in the lambda
+                // by looking for it in the lambda's variable map
+                if lambda_ctx.variable_map.contains_key(name) {
+                    // If it's also a parameter, skip it (not a capture)
+                    if params.iter().any(|p| &p.name == name) {
+                        continue;
+                    }
+                    // This is a captured variable - for now we just track it
+                    // A more complete implementation would copy the value into the closure
+                    if let Some(&lambda_local) = lambda_ctx.variable_map.get(name) {
+                        captures.push(CapturedVar {
+                            name: name.clone(),
+                            lambda_local,
+                            outer_local,
+                        });
+                    }
+                }
+            }
+
+            // Store the lambda info
+            let lambda_info = LambdaInfo {
+                name: lambda_name.clone(),
+                body: lambda_ctx.body,
+                captures,
+            };
+            ctx.lambda_bodies.push(lambda_info);
+
+            // Create a constant symbol representing the lambda
+            // Backends will look up the lambda body by this name
+            let temp = ctx.push_temp(lambda_ty.clone(), expr.span.clone());
             ctx.push_statement(crate::mir::Statement {
                 kind: MirStatementKind::Assign(
                     Place::new(temp),
                     Rvalue::Use(Operand::Constant(Box::new(Constant {
                         span: expr.span.clone(),
                         ty: lambda_ty,
-                        literal: crate::ast::literal::Literal::Symbol(lambda_name.clone()),
+                        literal: crate::ast::literal::Literal::Symbol(lambda_name),
                     }))),
                 ),
                 span: expr.span.clone(),
             });
-
-            // Note: In a complete implementation, we would:
-            // 1. Lower the lambda body to a separate MIR Body
-            // 2. Track captured variables for closure support
-            // 3. Store the Body in a registry accessible during code generation
-            // For now, we record params and body info as metadata that can be accessed
-            // by looking up the expression ID in the type checker
-
-            // Mark the lambda params and return type for debugging/introspection
-            let _ = (params, ret_type_expr, body, props);
 
             Operand::Copy(Place::new(temp))
         }

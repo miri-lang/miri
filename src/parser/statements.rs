@@ -446,7 +446,17 @@ impl<'source> Parser<'source> {
             ;
     */
     pub(crate) fn import_path_expression(&mut self) -> Result<Expression, SyntaxError> {
-        let mut segments = vec![self.identifier()?];
+        let mut segments = vec![];
+
+        if self.match_lookahead_type(|t| t == &Token::System) {
+            let (_, span) = self.eat_token(&Token::System)?;
+            segments.push(ast::identifier_with_span("system", span));
+        } else if self.match_lookahead_type(|t| t == &Token::Local) {
+            let (_, span) = self.eat_token(&Token::Local)?;
+            segments.push(ast::identifier_with_span("local", span));
+        } else {
+            segments.push(self.identifier()?);
+        }
         let mut kind = ImportPathKind::Simple;
 
         while self.match_lookahead_type(|t| t == &Token::Dot) {

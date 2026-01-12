@@ -1,8 +1,8 @@
-// SPDX-License-Identifier: Apache-2.0
-// Copyright 2017–2026 Viacheslav Shynkarenko
-
 use crate::ast::types::Type;
 use crate::error::syntax::Span;
+use crate::mir::declaration::Declaration;
+use crate::mir::lambda::LambdaInfo;
+use crate::mir::module::Import;
 use crate::mir::place::Local;
 use crate::mir::{BasicBlock, BasicBlockData, Body, LocalDecl, Terminator};
 use std::collections::HashMap;
@@ -46,6 +46,12 @@ pub struct LoweringContext<'a> {
     pub scope_stack: Vec<ScopeData>,
     /// Stack of loops for tracking break/continue targets
     pub loop_stack: Vec<LoopContext>,
+    /// Lambda bodies collected during lowering
+    pub lambda_bodies: Vec<LambdaInfo>,
+    /// Type declarations collected during lowering
+    pub declarations: Vec<Declaration>,
+    /// Imports collected during lowering
+    pub imports: Vec<Import>,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -58,6 +64,9 @@ impl<'a> LoweringContext<'a> {
             // Start with a root scope
             scope_stack: vec![ScopeData::new()],
             loop_stack: Vec::new(),
+            lambda_bodies: Vec::new(),
+            declarations: Vec::new(),
+            imports: Vec::new(),
         };
         // Create the first basic block
         ctx.body.basic_blocks.push(BasicBlockData::new(None));
