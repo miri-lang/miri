@@ -36,11 +36,22 @@ impl<'source> Parser<'source> {
         FunctionDeclaration
             : 'async'? 'gpu'? 'fn' Identifier [GenericTypesDeclaration] '(' ParameterList ')' [ReturnType] EXPRESSION_END BlockStatement
             | 'async'? 'gpu'? 'fn' Identifier [GenericTypesDeclaration] '(' ParameterList ')' [ReturnType] ':' ExpressionStatement EXPRESSION_END
+            | 'async'? 'gpu'? 'fn' Identifier [GenericTypesDeclaration] '(' ParameterList ')' [ReturnType] EXPRESSION_END  // Abstract (no body) - only in traits/abstract classes
             ;
     */
     pub(crate) fn function_declaration(
         &mut self,
         visibility: MemberVisibility,
+    ) -> Result<Statement, SyntaxError> {
+        self.function_declaration_with_context(visibility, false)
+    }
+
+    /// Parses a function declaration, optionally allowing abstract functions (no body).
+    /// Abstract functions are only valid in traits and abstract classes.
+    pub(crate) fn function_declaration_with_context(
+        &mut self,
+        visibility: MemberVisibility,
+        allow_abstract: bool,
     ) -> Result<Statement, SyntaxError> {
         let mut properties = FunctionProperties {
             is_async: false,
@@ -116,14 +127,22 @@ impl<'source> Parser<'source> {
                 // An inline lambda body is a single expression, not a full statement.
                 // We parse it and wrap it in an ExpressionStatement for the AST.
                 let expr = self.expression()?;
-                ast::expression_statement(expr)
+                Some(ast::expression_statement(expr))
             } else {
                 // A block lambda body is a normal block statement, which statement_body handles correctly.
-                self.statement_body()?
+                Some(self.statement_body()?)
             }
         } else {
-            // This is a named function. Its body is always a full statement.
-            self.statement_body()?
+            // This is a named function. Parse its body.
+            let body_stmt = self.statement_body()?;
+
+            // Check if this is an abstract function (returns empty statement in abstract context)
+            if allow_abstract && matches!(body_stmt.node, StatementKind::Empty) {
+                // Abstract function - no body
+                None
+            } else {
+                Some(body_stmt)
+            }
         };
 
         if name.is_empty() {
@@ -131,19 +150,28 @@ impl<'source> Parser<'source> {
                 generic_types,
                 parameters,
                 return_type,
-                body,
+                body.expect("Lambda must have a body"),
                 properties,
             )));
         }
 
-        Ok(ast::function_declaration(
-            &name,
-            generic_types,
-            parameters,
-            return_type,
-            body,
-            properties,
-        ))
+        match body {
+            Some(body_stmt) => Ok(ast::function_declaration(
+                &name,
+                generic_types,
+                parameters,
+                return_type,
+                body_stmt,
+                properties,
+            )),
+            None => Ok(ast::abstract_function_declaration(
+                &name,
+                generic_types,
+                parameters,
+                return_type,
+                properties,
+            )),
+        }
     }
 
     /*
@@ -457,6 +485,59 @@ impl<'source> Parser<'source> {
     }
 
     /*
+        AbstractClassStatement
+            : 'abstract' 'class' Identifier [GenericTypesDeclaration] ['extends' Identifier]
+              ['implements' IdentifierList] EXPRESSION_END BlockStatement
+            ;
+    */
+    pub(crate) fn abstract_class_statement(
+        &mut self,
+        visibility: MemberVisibility,
+    ) -> Result<Statement, SyntaxError> {
+        // Note: 'abstract' token should already be consumed by caller
+        self.eat_token(&Token::Class)?;
+        let name = self.identifier()?;
+        let generic_types = self.generic_types_expression()?;
+
+        // Parse optional 'extends' clause (single base class)
+        let base_class = if self.match_lookahead_type(|t| t == &Token::Extends) {
+            self.eat_token(&Token::Extends)?;
+            Some(Box::new(self.inheritance_identifier()?))
+        } else {
+            None
+        };
+
+        // Parse optional 'implements' clause (multiple traits)
+        let traits = if self.match_lookahead_type(|t| t == &Token::Implements) {
+            self.eat_token(&Token::Implements)?;
+            let mut trait_list = vec![self.inheritance_identifier()?];
+            while self.lookahead_is_comma() {
+                self.eat_token(&Token::Comma)?;
+                // Stop if we hit expression end (for trailing comma support)
+                if self.lookahead_is_expression_end() {
+                    break;
+                }
+                trait_list.push(self.inheritance_identifier()?);
+            }
+            trait_list
+        } else {
+            vec![]
+        };
+
+        // Parse abstract class body (block only) - abstract classes allow abstract functions
+        let body = self.class_body_with_abstract(true)?;
+
+        Ok(ast::abstract_class_statement(
+            name,
+            generic_types,
+            base_class,
+            traits,
+            body,
+            visibility,
+        ))
+    }
+
+    /*
         TraitStatement
             : 'trait' Identifier [GenericTypesDeclaration] ['extends' IdentifierList]
               EXPRESSION_END BlockStatement
@@ -486,8 +567,8 @@ impl<'source> Parser<'source> {
             vec![]
         };
 
-        // Parse trait body (block only)
-        let body = self.class_body()?;
+        // Parse trait body (block only) - traits allow abstract functions
+        let body = self.class_body_with_abstract(true)?;
 
         Ok(ast::trait_statement(
             name,
@@ -500,6 +581,15 @@ impl<'source> Parser<'source> {
 
     /// Parses a class or trait body block containing fields and methods.
     fn class_body(&mut self) -> Result<Vec<Statement>, SyntaxError> {
+        self.class_body_with_abstract(false)
+    }
+
+    /// Parses a class or trait body block containing fields and methods.
+    /// If allow_abstract is true, functions without bodies are allowed.
+    fn class_body_with_abstract(
+        &mut self,
+        allow_abstract: bool,
+    ) -> Result<Vec<Statement>, SyntaxError> {
         // Expect expression end then indented block
         self.eat_expression_end()?;
 
@@ -512,7 +602,7 @@ impl<'source> Parser<'source> {
         let mut statements = vec![];
 
         while !self.lookahead_is_dedent() && self._lookahead.is_some() {
-            let stmt = self.class_member_or_statement()?;
+            let stmt = self.class_member_or_statement_with_abstract(allow_abstract)?;
             statements.push(stmt);
             self.try_eat_expression_end();
         }
@@ -522,7 +612,17 @@ impl<'source> Parser<'source> {
     }
 
     /// Parses a class member (field or method) with optional visibility modifier.
+    #[allow(dead_code)]
     fn class_member_or_statement(&mut self) -> Result<Statement, SyntaxError> {
+        self.class_member_or_statement_with_abstract(false)
+    }
+
+    /// Parses a class member (field or method) with optional visibility modifier.
+    /// If allow_abstract is true, functions without bodies are allowed.
+    fn class_member_or_statement_with_abstract(
+        &mut self,
+        allow_abstract: bool,
+    ) -> Result<Statement, SyntaxError> {
         // Check for visibility modifiers
         let visibility = match &self._lookahead {
             Some((Token::Public, _)) => {
@@ -546,7 +646,9 @@ impl<'source> Parser<'source> {
             Some((Token::Async, _))
             | Some((Token::Fn, _))
             | Some((Token::Gpu, _))
-            | Some((Token::Parallel, _)) => self.function_declaration(visibility),
+            | Some((Token::Parallel, _)) => {
+                self.function_declaration_with_context(visibility, allow_abstract)
+            }
             Some((Token::Type, _)) => self.type_statement(visibility),
             _ => Err(self.error_unexpected_lookahead_token(
                 "class member (let, var, fn, async, gpu, or type)",

@@ -112,6 +112,8 @@ pub enum Token {
     System,
     #[token("local")]
     Local,
+    #[token("abstract")]
+    Abstract,
 
     // Symbols and Operators
     #[token(";")]

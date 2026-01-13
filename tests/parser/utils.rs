@@ -260,3 +260,25 @@ pub fn trait_statement_test(
         )],
     );
 }
+
+pub fn abstract_class_statement_test(
+    input: &str,
+    name: Expression,
+    generic_types: Option<Vec<Expression>>,
+    base_class: Option<Box<Expression>>,
+    traits: Vec<Expression>,
+    body: Vec<Statement>,
+    visibility: MemberVisibility,
+) {
+    parser_test(
+        input,
+        vec![abstract_class_statement(
+            name,
+            generic_types,
+            base_class,
+            traits,
+            body,
+            visibility,
+        )],
+    );
+}

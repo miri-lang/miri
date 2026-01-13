@@ -75,12 +75,14 @@ pub enum StatementKind {
     For(Vec<VariableDeclaration>, Box<Expression>, Box<Statement>),
 
     /// A function declaration.
+    /// (name, generics, params, return_type, body, properties)
+    /// Note: body is None for abstract functions in traits/abstract classes.
     FunctionDeclaration(
         String,
         Option<Vec<Expression>>,
         Vec<Parameter>,
         Option<Box<Expression>>,
-        Box<Statement>,
+        Option<Box<Statement>>, // None for abstract functions
         FunctionProperties,
     ),
 
@@ -105,7 +107,7 @@ pub enum StatementKind {
     ),
 
     /// A class declaration.
-    /// (name, generics, base_class, traits, body, visibility)
+    /// (name, generics, base_class, traits, body, visibility, is_abstract)
     Class(
         Box<Expression>,         // Class name
         Option<Vec<Expression>>, // Generic type parameters
@@ -113,6 +115,7 @@ pub enum StatementKind {
         Vec<Expression>,         // Implemented traits (via implements)
         Vec<Statement>,          // Class body (fields + methods)
         MemberVisibility,        // Class visibility
+        bool,                    // is_abstract
     ),
 
     /// A trait declaration.

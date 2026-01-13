@@ -153,9 +153,11 @@ pub fn lower_function(ast_func: &Statement, tc: &TypeChecker) -> Result<Body, St
             }
         }
 
-        // Lower body
         // Lower body with support for implicit return
-        lower_as_return(&mut ctx, body_stmt, &ret_ty);
+        // Abstract functions have no body, so we skip lowering for them
+        if let Some(body_box) = body_stmt {
+            lower_as_return(&mut ctx, body_box, &ret_ty);
+        }
 
         // Ensure the last block has a terminator
         let last_block_idx = ctx.current_block.0;
@@ -309,7 +311,15 @@ pub(crate) fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) {
                 }
             }
         }
-        StatementKind::Class(name_expr, _generics, _base_class, _traits, _body, _vis) => {
+        StatementKind::Class(
+            name_expr,
+            _generics,
+            _base_class,
+            _traits,
+            _body,
+            _vis,
+            _is_abstract,
+        ) => {
             // Lower class declaration by looking up the type definition from type checker
             if let ExpressionKind::Identifier(name, _) = &name_expr.node {
                 if let Some(TypeDefinition::Class(def)) =

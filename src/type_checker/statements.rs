@@ -17,7 +17,7 @@ pub(crate) struct FunctionDeclarationInfo<'a> {
     pub generics: &'a Option<Vec<Expression>>,
     pub params: &'a [Parameter],
     pub return_type: &'a Option<Box<Expression>>,
-    pub body: &'a Statement,
+    pub body: Option<&'a Statement>, // None for abstract functions
     pub properties: &'a FunctionProperties,
 }
 
@@ -157,7 +157,7 @@ impl TypeChecker {
                     generics,
                     params,
                     return_type,
-                    body,
+                    body: body.as_ref().map(|b| b.as_ref()),
                     properties: props,
                 },
                 context,
@@ -168,8 +168,8 @@ impl TypeChecker {
             StatementKind::Enum(name, variants, vis) => {
                 self.check_enum(name, variants, vis, context)
             }
-            StatementKind::Class(name, generics, base_class, traits, body, vis) => self
-                .check_class(
+            StatementKind::Class(name, generics, base_class, traits, body, vis, is_abstract) => {
+                self.check_class(
                     name,
                     generics,
                     base_class,
@@ -178,7 +178,9 @@ impl TypeChecker {
                     vis,
                     context,
                     statement.span.clone(),
-                ),
+                    *is_abstract,
+                )
+            }
             StatementKind::Trait(name, generics, parent_traits, body, vis) => self.check_trait(
                 name,
                 generics,
@@ -774,91 +776,97 @@ impl TypeChecker {
             );
         }
 
-        match &body.node {
-            StatementKind::Block(stmts) => {
-                // Note: Do not enter a new scope here - the function body shares the scope with parameters.
+        // Only check function body if it exists (abstract functions have no body)
+        if let Some(body) = body {
+            match &body.node {
+                StatementKind::Block(stmts) => {
+                    // Note: Do not enter a new scope here - the function body shares the scope with parameters.
 
-                // First, check all statements normally
-                for stmt in stmts.iter() {
-                    self.check_statement(stmt, context);
-                }
-
-                // For implicit return inference, find the last meaningful statement
-                // (skip trailing empty blocks which can be created by trailing whitespace)
-                if infer_main_return {
-                    // Find the last non-empty statement that could provide a return value
-                    let last_meaningful_stmt = stmts.iter().rev().find(|stmt| {
-                        !matches!(&stmt.node, StatementKind::Block(inner) if inner.is_empty())
-                    });
-
-                    if let Some(stmt) = last_meaningful_stmt {
-                        if let Some(expr_type) = self.resolve_implicit_return_type(stmt) {
-                            self.register_implicit_main_return(name, expr_type, context);
-                        }
+                    // First, check all statements normally
+                    for stmt in stmts.iter() {
+                        self.check_statement(stmt, context);
                     }
-                } else if !matches!(return_type.kind, TypeKind::Void) {
-                    // For non-main functions with explicit return type, check the last expression
-                    if let Some(last_stmt) = stmts.last() {
-                        if let StatementKind::Expression(expr) = &last_stmt.node {
-                            let expr_type = self.infer_expression(expr, context);
-                            if !self.are_compatible(&return_type, &expr_type, context) {
-                                self.report_error(
-                                    format!(
-                                        "Invalid return type: expected {}, got {}",
-                                        return_type, expr_type
-                                    ),
-                                    expr.span.clone(),
-                                );
+
+                    // For implicit return inference, find the last meaningful statement
+                    // (skip trailing empty blocks which can be created by trailing whitespace)
+                    if infer_main_return {
+                        // Find the last non-empty statement that could provide a return value
+                        let last_meaningful_stmt = stmts.iter().rev().find(|stmt| {
+                            !matches!(&stmt.node, StatementKind::Block(inner) if inner.is_empty())
+                        });
+
+                        if let Some(stmt) = last_meaningful_stmt {
+                            if let Some(expr_type) = self.resolve_implicit_return_type(stmt) {
+                                self.register_implicit_main_return(name, expr_type, context);
+                            }
+                        }
+                    } else if !matches!(return_type.kind, TypeKind::Void) {
+                        // For non-main functions with explicit return type, check the last expression
+                        if let Some(last_stmt) = stmts.last() {
+                            if let StatementKind::Expression(expr) = &last_stmt.node {
+                                let expr_type = self.infer_expression(expr, context);
+                                if !self.are_compatible(&return_type, &expr_type, context) {
+                                    self.report_error(
+                                        format!(
+                                            "Invalid return type: expected {}, got {}",
+                                            return_type, expr_type
+                                        ),
+                                        expr.span.clone(),
+                                    );
+                                }
                             }
                         }
                     }
                 }
-            }
-            StatementKind::Expression(expr) => {
-                let expr_type = self.infer_expression(expr, context);
+                StatementKind::Expression(expr) => {
+                    let expr_type = self.infer_expression(expr, context);
 
-                if !infer_main_return
-                    && !matches!(return_type.kind, TypeKind::Void)
-                    && !self.are_compatible(&return_type, &expr_type, context)
-                {
-                    self.report_error(
-                        format!(
-                            "Invalid return type: expected {}, got {}",
-                            return_type, expr_type
-                        ),
-                        expr.span.clone(),
-                    );
+                    if !infer_main_return
+                        && !matches!(return_type.kind, TypeKind::Void)
+                        && !self.are_compatible(&return_type, &expr_type, context)
+                    {
+                        self.report_error(
+                            format!(
+                                "Invalid return type: expected {}, got {}",
+                                return_type, expr_type
+                            ),
+                            expr.span.clone(),
+                        );
+                    }
+
+                    if infer_main_return {
+                        // Implicit return for single-expression main
+                        self.register_implicit_main_return(name, expr_type, context);
+                    }
                 }
-
-                if infer_main_return {
-                    // Implicit return for single-expression main
-                    self.register_implicit_main_return(name, expr_type, context);
+                _ => {
+                    self.check_statement(body, context);
                 }
             }
-            _ => {
-                self.check_statement(body, context);
-            }
-        }
 
-        if !matches!(return_type.kind, TypeKind::Void) {
-            let status = check_returns(body);
-            if status == ReturnStatus::None {
-                // If implicit return was used (Expression or If), check_returns detects Implicit.
-                // But check_returns logic: Expression -> Implicit. Block -> Last stmt Implicit?
-                // Let's rely on existing check_returns logic and hope it handles Blocks/Ifs correctly.
-                // Given `scope_visibility` passed compilation (only execution failed), type checking is likely fine.
-                // Except now we made it non-Void, so strict check applies.
-                // We should ensure check_returns handles If implicit return?
-                // `check_return` handles explicit return.
-                // Implicit return inside If is handled where?
-                // Typically dynamic languages or Rust-like check block result.
-                // check_block doesn't check result.
-
-                // But for now, let's assume TypeChecker is lenient enough or existing logic covers it.
-                // We only fixed correct return type inference for Main.
-
+            if !matches!(return_type.kind, TypeKind::Void) {
+                let status = check_returns(body);
                 if status == ReturnStatus::None {
-                    self.report_error("Missing return statement".to_string(), body.span.clone());
+                    // If implicit return was used (Expression or If), check_returns detects Implicit.
+                    // But check_returns logic: Expression -> Implicit. Block -> Last stmt Implicit?
+                    // Let's rely on existing check_returns logic and hope it handles Blocks/Ifs correctly.
+                    // Given `scope_visibility` passed compilation (only execution failed), type checking is likely fine.
+                    // Except now we made it non-Void, so strict check applies.
+                    // We should ensure check_returns handles If implicit return?
+                    // `check_return` handles explicit return.
+                    // Implicit return inside If is handled where?
+                    // Typically dynamic languages or Rust-like check block result.
+                    // check_block doesn't check result.
+
+                    // But for now, let's assume TypeChecker is lenient enough or existing logic covers it.
+                    // We only fixed correct return type inference for Main.
+
+                    if status == ReturnStatus::None {
+                        self.report_error(
+                            "Missing return statement".to_string(),
+                            body.span.clone(),
+                        );
+                    }
                 }
             }
         }
@@ -1051,6 +1059,7 @@ impl TypeChecker {
         visibility: &MemberVisibility,
         context: &mut Context,
         span: Span,
+        _is_abstract: bool,
     ) {
         // Extract class name
         let name = match self.extract_type_name(name_expr) {
@@ -1167,7 +1176,7 @@ impl TypeChecker {
                             generics: _method_generics,
                             params,
                             return_type,
-                            body: method_body,
+                            body: method_body.as_ref().map(|b| b.as_ref()),
                             properties: props,
                         },
                         context,
@@ -1326,7 +1335,7 @@ impl TypeChecker {
                             generics: _method_generics,
                             params,
                             return_type,
-                            body: method_body,
+                            body: method_body.as_ref().map(|b| b.as_ref()),
                             properties: props,
                         },
                         context,

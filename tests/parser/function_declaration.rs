@@ -526,3 +526,130 @@ fn my_func(a int, b string,)
             .build_empty_body()],
     );
 }
+
+#[test]
+fn test_toplevel_function_no_body_becomes_empty() {
+    // A top-level function with no body (just newline) gets an empty statement body
+    // This is the current parser behavior, but type checker should catch this
+    parser_test(
+        "
+fn no_body()
+",
+        vec![func("no_body").build(empty_statement())],
+    );
+}
+
+#[test]
+fn test_toplevel_functions_with_blank_lines() {
+    parser_test(
+        "
+fn a()
+    1
+
+
+fn b()
+    2
+
+
+fn c()
+    3
+",
+        vec![
+            func("a").build(block(vec![expression_statement(int_literal_expression(1))])),
+            func("b").build(block(vec![expression_statement(int_literal_expression(2))])),
+            func("c").build(block(vec![expression_statement(int_literal_expression(3))])),
+        ],
+    );
+}
+
+#[test]
+fn test_toplevel_function_multiline_params() {
+    // Function with parameters on multiple lines
+    parser_test(
+        "
+fn create(
+    name string,
+    age int,
+    active bool
+)
+    x
+",
+        vec![func("create")
+            .params(vec![
+                parameter("name".into(), type_expr_non_null(type_string()), None, None),
+                parameter("age".into(), type_expr_non_null(type_int()), None, None),
+                parameter("active".into(), type_expr_non_null(type_bool()), None, None),
+            ])
+            .build(block(vec![expression_statement(identifier("x"))]))],
+    );
+}
+
+#[test]
+fn test_function_implicit_return() {
+    // Function with implicit return (last expression)
+    parser_test(
+        "
+fn compute() int
+    x + y
+",
+        vec![func("compute")
+            .return_type(type_expr_non_null(type_int()))
+            .build(block(vec![expression_statement(binary(
+                identifier("x"),
+                BinaryOp::Add,
+                identifier("y"),
+            ))]))],
+    );
+}
+
+#[test]
+fn test_function_with_guard_multiple_params() {
+    // Multiple parameters with guards
+    parser_test(
+        "
+fn divide(a int > 0, b int > 0) int
+    a / b
+",
+        vec![func("divide")
+            .params(vec![
+                parameter(
+                    "a".into(),
+                    type_expr_non_null(type_int()),
+                    opt_expr(guard(GuardOp::GreaterThan, int_literal_expression(0))),
+                    None,
+                ),
+                parameter(
+                    "b".into(),
+                    type_expr_non_null(type_int()),
+                    opt_expr(guard(GuardOp::GreaterThan, int_literal_expression(0))),
+                    None,
+                ),
+            ])
+            .return_type(type_expr_non_null(type_int()))
+            .build(block(vec![expression_statement(binary(
+                identifier("a"),
+                BinaryOp::Div,
+                identifier("b"),
+            ))]))],
+    );
+}
+
+#[test]
+fn test_function_very_long_parameter_list() {
+    // Function with many parameters
+    parser_test(
+        "
+fn manyParams(a int, b int, c int, d int, e int)
+    a
+",
+        vec![func("manyParams")
+            .params(vec![
+                parameter("a".into(), type_expr_non_null(type_int()), None, None),
+                parameter("b".into(), type_expr_non_null(type_int()), None, None),
+                parameter("c".into(), type_expr_non_null(type_int()), None, None),
+                parameter("d".into(), type_expr_non_null(type_int()), None, None),
+                parameter("e".into(), type_expr_non_null(type_int()), None, None),
+            ])
+            .build(block(vec![expression_statement(identifier("a"))]))],
+    );
+}

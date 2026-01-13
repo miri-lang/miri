@@ -170,9 +170,9 @@ fn find_variable_type_in_statement(
         StatementKind::For(_, _, body) => {
             find_variable_type_in_statement(body, var_name, type_checker)
         }
-        StatementKind::FunctionDeclaration(_, _, _, _, body, _) => {
-            find_variable_type_in_statement(body, var_name, type_checker)
-        }
+        StatementKind::FunctionDeclaration(_, _, _, _, body, _) => body
+            .as_ref()
+            .and_then(|b| find_variable_type_in_statement(b, var_name, type_checker)),
         _ => None,
     }
 }

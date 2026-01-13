@@ -90,6 +90,10 @@ impl<'source> Parser<'source> {
             Some((Token::Struct, _)) => self.struct_statement(MemberVisibility::Public)?,
             Some((Token::Class, _)) => self.class_statement(MemberVisibility::Public)?,
             Some((Token::Trait, _)) => self.trait_statement(MemberVisibility::Public)?,
+            Some((Token::Abstract, _)) => {
+                self.eat_token(&Token::Abstract)?;
+                self.abstract_class_statement(MemberVisibility::Public)?
+            }
             _ => self.expression_statement()?,
         };
         Ok(statement)

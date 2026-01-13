@@ -938,6 +938,27 @@ pub fn class_statement(
     body: Vec<Statement>,
     visibility: MemberVisibility,
 ) -> Statement {
+    class_statement_with_abstract(
+        name,
+        generic_types,
+        base_class,
+        traits,
+        body,
+        visibility,
+        false,
+    )
+}
+
+/// Creates a class declaration statement with abstract flag.
+pub fn class_statement_with_abstract(
+    name: Expression,
+    generic_types: Option<Vec<Expression>>,
+    base_class: Option<Box<Expression>>,
+    traits: Vec<Expression>,
+    body: Vec<Statement>,
+    visibility: MemberVisibility,
+    is_abstract: bool,
+) -> Statement {
     stmt(StatementKind::Class(
         Box::new(name),
         generic_types,
@@ -945,7 +966,28 @@ pub fn class_statement(
         traits,
         body,
         visibility,
+        is_abstract,
     ))
+}
+
+/// Creates an abstract class declaration statement.
+pub fn abstract_class_statement(
+    name: Expression,
+    generic_types: Option<Vec<Expression>>,
+    base_class: Option<Box<Expression>>,
+    traits: Vec<Expression>,
+    body: Vec<Statement>,
+    visibility: MemberVisibility,
+) -> Statement {
+    class_statement_with_abstract(
+        name,
+        generic_types,
+        base_class,
+        traits,
+        body,
+        visibility,
+        true,
+    )
 }
 
 /// Creates a class declaration from string name.
@@ -1112,7 +1154,18 @@ impl FunctionBuilder {
             self.generic_types,
             self.parameters,
             self.return_type,
-            Box::new(body),
+            Some(Box::new(body)),
+            self.properties,
+        ))
+    }
+
+    pub fn build_abstract(self) -> Statement {
+        stmt(StatementKind::FunctionDeclaration(
+            self.name,
+            self.generic_types,
+            self.parameters,
+            self.return_type,
+            None,
             self.properties,
         ))
     }
@@ -1155,7 +1208,25 @@ pub fn function_declaration(
         generic_types,
         parameters,
         return_type,
-        Box::new(body),
+        Some(Box::new(body)),
+        properties,
+    ))
+}
+
+/// Creates an abstract function declaration (no body).
+pub fn abstract_function_declaration(
+    name: &str,
+    generic_types: Option<Vec<Expression>>,
+    parameters: Vec<Parameter>,
+    return_type: Option<Box<Expression>>,
+    properties: FunctionProperties,
+) -> Statement {
+    stmt(StatementKind::FunctionDeclaration(
+        name.into(),
+        generic_types,
+        parameters,
+        return_type,
+        None,
         properties,
     ))
 }
