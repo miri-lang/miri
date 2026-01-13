@@ -218,3 +218,45 @@ pub fn type_map_expr(key: Expression, value: Expression) -> Type {
 pub fn type_tuple_expr(elements: Vec<Expression>) -> Type {
     make_type(TypeKind::Tuple(elements))
 }
+
+pub fn class_statement_test(
+    input: &str,
+    name: Expression,
+    generic_types: Option<Vec<Expression>>,
+    base_class: Option<Box<Expression>>,
+    traits: Vec<Expression>,
+    body: Vec<Statement>,
+    visibility: MemberVisibility,
+) {
+    parser_test(
+        input,
+        vec![class_statement(
+            name,
+            generic_types,
+            base_class,
+            traits,
+            body,
+            visibility,
+        )],
+    );
+}
+
+pub fn trait_statement_test(
+    input: &str,
+    name: Expression,
+    generic_types: Option<Vec<Expression>>,
+    parent_traits: Vec<Expression>,
+    body: Vec<Statement>,
+    visibility: MemberVisibility,
+) {
+    parser_test(
+        input,
+        vec![trait_statement(
+            name,
+            generic_types,
+            parent_traits,
+            body,
+            visibility,
+        )],
+    );
+}

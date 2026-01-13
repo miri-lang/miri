@@ -602,50 +602,6 @@ impl<'source> Parser<'source> {
     }
 
     /*
-        ExtendsStatement
-            : 'extends' Identifier
-            ;
-    */
-    pub(crate) fn extends_statement(&mut self) -> Result<Statement, SyntaxError> {
-        self.eat_token(&Token::Extends)?;
-        let base = self.inheritance_identifier()?;
-        self.eat_statement_end()?;
-        Ok(ast::extends(base))
-    }
-
-    /*
-        ImplementsStatement
-            : 'implements' Identifier (',' Identifier)*
-            ;
-    */
-    pub(crate) fn implements_statement(&mut self) -> Result<Statement, SyntaxError> {
-        self.eat_token(&Token::Implements)?;
-        let mut trait_names = vec![self.inheritance_identifier()?];
-        while self.lookahead_is_comma() {
-            self.eat_token(&Token::Comma)?;
-            trait_names.push(self.inheritance_identifier()?);
-        }
-        self.eat_statement_end()?;
-        Ok(ast::implements(trait_names))
-    }
-
-    /*
-        IncludesStatement
-            : 'includes' Identifier (',' Identifier)*
-            ;
-    */
-    pub(crate) fn includes_statement(&mut self) -> Result<Statement, SyntaxError> {
-        self.eat_token(&Token::Includes)?;
-        let mut module_names = vec![self.inheritance_identifier()?];
-        while self.lookahead_is_comma() {
-            self.eat_token(&Token::Comma)?;
-            module_names.push(self.inheritance_identifier()?);
-        }
-        self.eat_statement_end()?;
-        Ok(ast::includes(module_names))
-    }
-
-    /*
         TypeDeclaration
             : Identifier ('is' | 'extends' | 'implements' | 'includes') TypeExpression
             ;

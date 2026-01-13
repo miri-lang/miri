@@ -2,7 +2,8 @@
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
 use super::context::{
-    Context, EnumDefinition, GenericDefinition, StructDefinition, TypeDefinition,
+    ClassDefinition, Context, EnumDefinition, FieldInfo, GenericDefinition, MethodInfo,
+    StructDefinition, TraitDefinition, TypeDefinition,
 };
 use super::TypeChecker;
 use crate::ast::factory::make_type;
@@ -167,48 +168,30 @@ impl TypeChecker {
             StatementKind::Enum(name, variants, vis) => {
                 self.check_enum(name, variants, vis, context)
             }
-            StatementKind::Extends(expr) => self.check_extends_statement(expr, context),
-            StatementKind::Implements(exprs) => self.check_implements_statement(exprs, context),
-            StatementKind::Includes(exprs) => self.check_includes_statement(exprs, context),
+            StatementKind::Class(name, generics, base_class, traits, body, vis) => self
+                .check_class(
+                    name,
+                    generics,
+                    base_class,
+                    traits,
+                    body,
+                    vis,
+                    context,
+                    statement.span.clone(),
+                ),
+            StatementKind::Trait(name, generics, parent_traits, body, vis) => self.check_trait(
+                name,
+                generics,
+                parent_traits,
+                body,
+                vis,
+                context,
+                statement.span.clone(),
+            ),
             StatementKind::Type(exprs, visibility) => {
                 self.check_type_statement(exprs, visibility, context)
             }
             _ => {}
-        }
-    }
-
-    // --- Statement Checkers ---
-
-    fn check_extends_statement(&mut self, expr: &Expression, _context: &mut Context) {
-        if let Ok(parent) = self.extract_type_name(expr) {
-            self.hierarchy
-                .entry(self.current_module.clone())
-                .or_default()
-                .extends = Some(parent);
-        }
-    }
-
-    fn check_implements_statement(&mut self, exprs: &[Expression], _context: &mut Context) {
-        for expr in exprs {
-            if let Ok(interface) = self.extract_type_name(expr) {
-                self.hierarchy
-                    .entry(self.current_module.clone())
-                    .or_default()
-                    .implements
-                    .push(interface);
-            }
-        }
-    }
-
-    fn check_includes_statement(&mut self, exprs: &[Expression], _context: &mut Context) {
-        for expr in exprs {
-            if let Ok(mixin) = self.extract_type_name(expr) {
-                self.hierarchy
-                    .entry(self.current_module.clone())
-                    .or_default()
-                    .includes
-                    .push(mixin);
-            }
         }
     }
 
@@ -1055,6 +1038,399 @@ impl TypeChecker {
             visibility.clone(),
             self.current_module.clone(),
         );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn check_class(
+        &mut self,
+        name_expr: &Expression,
+        generics: &Option<Vec<Expression>>,
+        base_class: &Option<Box<Expression>>,
+        traits: &[Expression],
+        body: &[Statement],
+        visibility: &MemberVisibility,
+        context: &mut Context,
+        span: Span,
+    ) {
+        // Extract class name
+        let name = match self.extract_type_name(name_expr) {
+            Ok(n) => n,
+            Err(_) => {
+                self.report_error("Invalid class name".to_string(), name_expr.span.clone());
+                return;
+            }
+        };
+
+        // Check for duplicate type definitions
+        if self.global_type_definitions.contains_key(&name) {
+            self.report_error(format!("Type '{}' is already defined", name), span.clone());
+            return;
+        }
+
+        // Process generics
+        let generic_defs = generics
+            .as_ref()
+            .map(|gens| self.extract_generic_definitions(gens, context));
+
+        // Validate base class exists
+        let base_class_name = if let Some(base_expr) = base_class {
+            match self.extract_type_name(base_expr) {
+                Ok(base_name) => {
+                    // Check base class exists
+                    if !self.global_type_definitions.contains_key(&base_name) {
+                        self.report_error(
+                            format!("Base class '{}' is not defined", base_name),
+                            base_expr.span.clone(),
+                        );
+                    }
+                    Some(base_name)
+                }
+                Err(_) => {
+                    self.report_error(
+                        "Invalid base class name".to_string(),
+                        base_expr.span.clone(),
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // Validate traits exist
+        let mut trait_names = Vec::new();
+        for trait_expr in traits {
+            if let Ok(trait_name) = self.extract_type_name(trait_expr) {
+                if !self.global_type_definitions.contains_key(&trait_name) {
+                    self.report_error(
+                        format!("Trait '{}' is not defined", trait_name),
+                        trait_expr.span.clone(),
+                    );
+                }
+                trait_names.push(trait_name);
+            }
+        }
+
+        // Enter class scope
+        context.enter_scope();
+
+        // Define generics in scope
+        if let Some(gens) = generics {
+            self.define_generics(gens, context);
+        }
+
+        // Process class body to collect fields and methods
+        let mut fields: HashMap<String, FieldInfo> = HashMap::new();
+        let mut methods: HashMap<String, MethodInfo> = HashMap::new();
+
+        for stmt in body {
+            match &stmt.node {
+                StatementKind::Variable(decls, vis) => {
+                    for decl in decls {
+                        let field_type = if let Some(type_expr) = &decl.typ {
+                            self.resolve_type_expression(type_expr, context)
+                        } else if let Some(init) = &decl.initializer {
+                            self.infer_expression(init, context)
+                        } else {
+                            self.report_error(
+                                format!("Cannot infer type for field '{}'", decl.name),
+                                stmt.span.clone(),
+                            );
+                            make_type(TypeKind::Error)
+                        };
+
+                        let is_mutable =
+                            matches!(decl.declaration_type, VariableDeclarationType::Mutable);
+
+                        fields.insert(
+                            decl.name.clone(),
+                            FieldInfo {
+                                ty: field_type,
+                                mutable: is_mutable,
+                                visibility: vis.clone(),
+                            },
+                        );
+                    }
+                }
+                StatementKind::FunctionDeclaration(
+                    method_name,
+                    _method_generics,
+                    params,
+                    return_type,
+                    method_body,
+                    props,
+                ) => {
+                    // Check the function declaration normally
+                    self.check_function_declaration(
+                        FunctionDeclarationInfo {
+                            name: method_name,
+                            generics: _method_generics,
+                            params,
+                            return_type,
+                            body: method_body,
+                            properties: props,
+                        },
+                        context,
+                    );
+
+                    // Collect method info
+                    let return_ty = if let Some(rt_expr) = return_type {
+                        self.resolve_type_expression(rt_expr, context)
+                    } else {
+                        make_type(TypeKind::Void)
+                    };
+
+                    let param_types: Vec<(String, Type)> = params
+                        .iter()
+                        .map(|p| {
+                            (
+                                p.name.clone(),
+                                self.resolve_type_expression(&p.typ, context),
+                            )
+                        })
+                        .collect();
+
+                    methods.insert(
+                        method_name.clone(),
+                        MethodInfo {
+                            params: param_types,
+                            return_type: return_ty,
+                            visibility: props.visibility.clone(),
+                            is_constructor: method_name == "init",
+                        },
+                    );
+                }
+                _ => {
+                    self.report_error(
+                        "Only field and method declarations are allowed in class body".to_string(),
+                        stmt.span.clone(),
+                    );
+                }
+            }
+        }
+
+        context.exit_scope();
+
+        // Create class definition
+        let class_def = ClassDefinition {
+            name: name.clone(),
+            generics: generic_defs,
+            base_class: base_class_name,
+            traits: trait_names,
+            fields,
+            methods,
+            module: self.current_module.clone(),
+        };
+
+        // Register class type definition
+        context.define_type(name.clone(), TypeDefinition::Class(class_def.clone()));
+        if context.scopes.len() == 1 {
+            self.global_type_definitions
+                .insert(name.clone(), TypeDefinition::Class(class_def));
+        }
+
+        // Define class type symbol (as a constructor/type)
+        let class_type = make_type(TypeKind::Custom(name.clone(), None));
+
+        if context.scopes.len() == 1 {
+            self.global_scope.insert(
+                name.clone(),
+                super::context::SymbolInfo {
+                    ty: make_type(TypeKind::Meta(Box::new(class_type.clone()))),
+                    mutable: false,
+                    visibility: visibility.clone(),
+                    module: self.current_module.clone(),
+                },
+            );
+        }
+
+        context.define(
+            name,
+            make_type(TypeKind::Meta(Box::new(class_type))),
+            false,
+            visibility.clone(),
+            self.current_module.clone(),
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn check_trait(
+        &mut self,
+        name_expr: &Expression,
+        generics: &Option<Vec<Expression>>,
+        parent_traits: &[Expression],
+        body: &[Statement],
+        visibility: &MemberVisibility,
+        context: &mut Context,
+        span: Span,
+    ) {
+        // Extract trait name
+        let name = match self.extract_type_name(name_expr) {
+            Ok(n) => n,
+            Err(_) => {
+                self.report_error("Invalid trait name".to_string(), name_expr.span.clone());
+                return;
+            }
+        };
+
+        // Check for duplicate type definitions
+        if self.global_type_definitions.contains_key(&name) {
+            self.report_error(format!("Type '{}' is already defined", name), span.clone());
+            return;
+        }
+
+        // Process generics
+        let generic_defs = generics
+            .as_ref()
+            .map(|gens| self.extract_generic_definitions(gens, context));
+
+        // Validate parent traits exist
+        let mut parent_trait_names = Vec::new();
+        for trait_expr in parent_traits {
+            if let Ok(trait_name) = self.extract_type_name(trait_expr) {
+                if !self.global_type_definitions.contains_key(&trait_name) {
+                    self.report_error(
+                        format!("Parent trait '{}' is not defined", trait_name),
+                        trait_expr.span.clone(),
+                    );
+                }
+                parent_trait_names.push(trait_name);
+            }
+        }
+
+        // Enter trait scope
+        context.enter_scope();
+
+        // Define generics in scope
+        if let Some(gens) = generics {
+            self.define_generics(gens, context);
+        }
+
+        // Process trait body to collect methods
+        let mut methods: HashMap<String, MethodInfo> = HashMap::new();
+
+        for stmt in body {
+            match &stmt.node {
+                StatementKind::FunctionDeclaration(
+                    method_name,
+                    _method_generics,
+                    params,
+                    return_type,
+                    method_body,
+                    props,
+                ) => {
+                    // Check the function declaration
+                    self.check_function_declaration(
+                        FunctionDeclarationInfo {
+                            name: method_name,
+                            generics: _method_generics,
+                            params,
+                            return_type,
+                            body: method_body,
+                            properties: props,
+                        },
+                        context,
+                    );
+
+                    // Collect method info
+                    let return_ty = if let Some(rt_expr) = return_type {
+                        self.resolve_type_expression(rt_expr, context)
+                    } else {
+                        make_type(TypeKind::Void)
+                    };
+
+                    let param_types: Vec<(String, Type)> = params
+                        .iter()
+                        .map(|p| {
+                            (
+                                p.name.clone(),
+                                self.resolve_type_expression(&p.typ, context),
+                            )
+                        })
+                        .collect();
+
+                    methods.insert(
+                        method_name.clone(),
+                        MethodInfo {
+                            params: param_types,
+                            return_type: return_ty,
+                            visibility: props.visibility.clone(),
+                            is_constructor: false,
+                        },
+                    );
+                }
+                _ => {
+                    self.report_error(
+                        "Only method declarations are allowed in trait body".to_string(),
+                        stmt.span.clone(),
+                    );
+                }
+            }
+        }
+
+        context.exit_scope();
+
+        // Create trait definition
+        let trait_def = TraitDefinition {
+            name: name.clone(),
+            generics: generic_defs,
+            parent_traits: parent_trait_names,
+            methods,
+            module: self.current_module.clone(),
+        };
+
+        // Register trait type definition
+        context.define_type(name.clone(), TypeDefinition::Trait(trait_def.clone()));
+        if context.scopes.len() == 1 {
+            self.global_type_definitions
+                .insert(name.clone(), TypeDefinition::Trait(trait_def));
+        }
+
+        // Define trait type symbol
+        let trait_type = make_type(TypeKind::Custom(name.clone(), None));
+
+        if context.scopes.len() == 1 {
+            self.global_scope.insert(
+                name.clone(),
+                super::context::SymbolInfo {
+                    ty: make_type(TypeKind::Meta(Box::new(trait_type.clone()))),
+                    mutable: false,
+                    visibility: visibility.clone(),
+                    module: self.current_module.clone(),
+                },
+            );
+        }
+
+        context.define(
+            name,
+            make_type(TypeKind::Meta(Box::new(trait_type))),
+            false,
+            visibility.clone(),
+            self.current_module.clone(),
+        );
+    }
+
+    fn extract_generic_definitions(
+        &mut self,
+        generics: &[Expression],
+        context: &mut Context,
+    ) -> Vec<GenericDefinition> {
+        let mut result = Vec::new();
+        for gen_expr in generics {
+            if let ExpressionKind::GenericType(name_expr, constraint_expr, kind) = &gen_expr.node {
+                if let Ok(gen_name) = self.extract_type_name(name_expr) {
+                    let constraint = constraint_expr
+                        .as_ref()
+                        .map(|c| self.resolve_type_expression(c, context));
+                    result.push(GenericDefinition {
+                        name: gen_name,
+                        constraint,
+                        kind: kind.clone(),
+                    });
+                }
+            }
+        }
+        result
     }
 
     fn check_integer_list_literal(&self, elements: &[Expression], target_type: &Type) -> bool {

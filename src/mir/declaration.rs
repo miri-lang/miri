@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
-//! MIR type declarations for structs, enums, and type aliases.
+//! MIR type declarations for structs, enums, classes, traits, and type aliases.
 //!
 //! These declarations represent the lowered form of user-defined types,
 //! ready for code generation. Unlike the AST representations, MIR declarations
@@ -10,7 +10,7 @@
 use crate::ast::types::Type;
 use crate::ast::MemberVisibility;
 
-/// A field in a struct declaration.
+/// A field in a struct or class declaration.
 #[derive(Debug, Clone)]
 pub struct FieldDecl {
     /// The field name
@@ -21,6 +21,8 @@ pub struct FieldDecl {
     pub visibility: MemberVisibility,
     /// Field index in the struct
     pub index: usize,
+    /// Whether the field is mutable
+    pub mutable: bool,
 }
 
 /// A struct declaration in MIR.
@@ -67,6 +69,55 @@ pub struct TypeAliasDecl {
     pub target: Type,
 }
 
+/// A method declaration in MIR.
+#[derive(Debug, Clone)]
+pub struct MethodDecl {
+    /// The method name
+    pub name: String,
+    /// Parameter names and types
+    pub params: Vec<(String, Type)>,
+    /// Return type
+    pub return_type: Type,
+    /// Method visibility
+    pub visibility: MemberVisibility,
+    /// Whether this is a constructor (init)
+    pub is_constructor: bool,
+}
+
+/// A class declaration in MIR.
+#[derive(Debug, Clone)]
+pub struct ClassDecl {
+    /// The class name
+    pub name: String,
+    /// The class's fields in declaration order
+    pub fields: Vec<FieldDecl>,
+    /// The class's methods
+    pub methods: Vec<MethodDecl>,
+    /// Generic type parameter names (if any)
+    pub generics: Vec<String>,
+    /// Base class name (single inheritance)
+    pub base_class: Option<String>,
+    /// Implemented trait names
+    pub traits: Vec<String>,
+    /// Source module
+    pub module: String,
+}
+
+/// A trait declaration in MIR.
+#[derive(Debug, Clone)]
+pub struct TraitDecl {
+    /// The trait name
+    pub name: String,
+    /// The trait's method signatures
+    pub methods: Vec<MethodDecl>,
+    /// Generic type parameter names (if any)
+    pub generics: Vec<String>,
+    /// Parent trait names (multiple inheritance for traits)
+    pub parent_traits: Vec<String>,
+    /// Source module
+    pub module: String,
+}
+
 /// A top-level declaration in MIR.
 #[derive(Debug, Clone)]
 pub enum Declaration {
@@ -76,6 +127,10 @@ pub enum Declaration {
     Enum(EnumDecl),
     /// A type alias declaration
     TypeAlias(TypeAliasDecl),
+    /// A class type declaration
+    Class(ClassDecl),
+    /// A trait type declaration
+    Trait(TraitDecl),
 }
 
 impl Declaration {
@@ -85,6 +140,8 @@ impl Declaration {
             Declaration::Struct(s) => &s.name,
             Declaration::Enum(e) => &e.name,
             Declaration::TypeAlias(t) => &t.name,
+            Declaration::Class(c) => &c.name,
+            Declaration::Trait(t) => &t.name,
         }
     }
 }

@@ -3,15 +3,16 @@
 
 use crate::ast::expression::Expression;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum MemberVisibility {
+    #[default]
     Public,
     Protected,
     Private,
 }
 
 /// Represents the properties of a function declaration
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct FunctionProperties {
     pub is_async: bool,
     pub is_parallel: bool,

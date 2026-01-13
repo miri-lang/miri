@@ -47,6 +47,45 @@ pub struct GenericDefinition {
     pub kind: TypeDeclarationKind,
 }
 
+/// Information about a class field.
+#[derive(Debug, Clone)]
+pub struct FieldInfo {
+    pub ty: Type,
+    pub mutable: bool,
+    pub visibility: MemberVisibility,
+}
+
+/// Information about a method.
+#[derive(Debug, Clone)]
+pub struct MethodInfo {
+    pub params: Vec<(String, Type)>,
+    pub return_type: Type,
+    pub visibility: MemberVisibility,
+    pub is_constructor: bool,
+}
+
+/// Definition of a class type.
+#[derive(Debug, Clone)]
+pub struct ClassDefinition {
+    pub name: String,
+    pub generics: Option<Vec<GenericDefinition>>,
+    pub base_class: Option<String>,
+    pub traits: Vec<String>,
+    pub fields: HashMap<String, FieldInfo>,
+    pub methods: HashMap<String, MethodInfo>,
+    pub module: String,
+}
+
+/// Definition of a trait type.
+#[derive(Debug, Clone)]
+pub struct TraitDefinition {
+    pub name: String,
+    pub generics: Option<Vec<GenericDefinition>>,
+    pub parent_traits: Vec<String>,
+    pub methods: HashMap<String, MethodInfo>,
+    pub module: String,
+}
+
 /// Enum wrapper for different type definitions.
 #[derive(Debug, Clone)]
 pub enum TypeDefinition {
@@ -54,6 +93,8 @@ pub enum TypeDefinition {
     Enum(EnumDefinition),
     Generic(GenericDefinition),
     Alias(Type),
+    Class(ClassDefinition),
+    Trait(TraitDefinition),
 }
 
 /// Context holds the current state of the type checking process, including

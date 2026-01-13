@@ -5,8 +5,6 @@ use miri::lexer::Token;
 
 use super::utils::*;
 
-// ===== Basic Token Tests =====
-
 #[test]
 fn test_class_keyword() {
     lexer_test("class", vec![Token::Class]);
@@ -21,8 +19,6 @@ fn test_trait_keyword() {
 fn test_super_keyword() {
     lexer_test("super", vec![Token::Super]);
 }
-
-// ===== Keyword Context Tests =====
 
 #[test]
 fn test_class_in_contexts() {
@@ -63,8 +59,6 @@ fn test_super_in_contexts() {
         ],
     );
 }
-
-// ===== Class Declaration Tokenization =====
 
 #[test]
 fn test_simple_class_declaration() {
@@ -144,8 +138,6 @@ fn test_class_with_generic_constraint() {
     );
 }
 
-// ===== Trait Declaration Tokenization =====
-
 #[test]
 fn test_simple_trait_declaration() {
     lexer_test("trait Drawable", vec![Token::Trait, Token::Identifier]);
@@ -165,8 +157,6 @@ fn test_trait_with_multiple_extends() {
         ],
     );
 }
-
-// ===== Super Expression Tokenization =====
 
 #[test]
 fn test_super_dot_init() {
@@ -196,8 +186,6 @@ fn test_super_method_call() {
         ],
     );
 }
-
-// ===== Class Body Tokenization =====
 
 #[test]
 fn test_class_field_declaration() {
@@ -253,8 +241,6 @@ fn test_visibility_modifiers_in_class() {
         ],
     );
 }
-
-// ===== Indentation Tests =====
 
 #[test]
 fn test_class_body_indentation() {
@@ -323,8 +309,6 @@ fn test_nested_indentation_in_class() {
     );
 }
 
-// ===== Case Sensitivity Tests =====
-
 #[test]
 fn test_class_case_sensitivity() {
     // Keywords are lowercase only
@@ -340,8 +324,6 @@ fn test_trait_case_sensitivity() {
 fn test_super_case_sensitivity() {
     lexer_test("Super SUPER", vec![Token::Identifier, Token::Identifier]);
 }
-
-// ===== Boundary Tests =====
 
 #[test]
 fn test_keyword_operator_boundary() {

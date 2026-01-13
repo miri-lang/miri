@@ -929,18 +929,6 @@ pub fn struct_member(name: &str, typ: Expression) -> Expression {
     struct_member_expression(identifier(name), typ)
 }
 
-pub fn extends(base: Expression) -> Statement {
-    stmt(StatementKind::Extends(Box::new(base)))
-}
-
-pub fn implements(traits: Vec<Expression>) -> Statement {
-    stmt(StatementKind::Implements(traits))
-}
-
-pub fn includes(modules: Vec<Expression>) -> Statement {
-    stmt(StatementKind::Includes(modules))
-}
-
 /// Creates a class declaration statement.
 pub fn class_statement(
     name: Expression,

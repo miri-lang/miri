@@ -35,6 +35,9 @@ A modern, minimal, AI-friendly programming language for high-performance, concur
   - [Structs](#structs)
   - [Enums](#enums)
   - [OOP Features](#oop-features)
+    - [Classes](#classes)
+    - [Traits](#traits)
+    - [Super Calls](#super-calls)
   - [Imports](#imports)
   - [Symbols](#symbols)
 
@@ -111,7 +114,7 @@ fn identity<T>(x T) T
 async fn fetchData() string
     // ...
 
-gpu async fn compute(data [float]) [float]
+gpu fn compute(data [float]) [float]
     // ...
 ```
 
@@ -306,12 +309,84 @@ enum Status: Ok, Error(string)
 
 ## OOP Features
 
-Miri supports object-oriented programming patterns via `extends`, `implements`, and `includes`.
+### Classes
+
+Miri supports object-oriented programming via `class` declarations with single inheritance and trait implementation.
 
 ```miri
-extends BaseClass
-implements Interface1, Interface2
-includes Mixin1, Mixin2
+class Animal
+    var name String
+    
+    fn init(name String)
+        self.name = name
+    
+    fn speak()
+        println("...")
+
+class Dog extends Animal
+    fn speak()
+        println(f"{self.name} says: Woof!")
+
+class Cat extends Animal implements Serializable
+    fn speak()
+        println(f"{self.name} says: Meow!")
+
+    fn serialize() String
+        return f"Cat({self.name})"s
+```
+
+Generic classes:
+
+```miri
+class Box<T>
+    var value T
+    
+    fn init(value T)
+        self.value = value
+```
+
+### Traits
+
+Traits define interfaces that classes can implement:
+
+```miri
+trait Drawable
+    fn draw()
+
+trait Resizable
+    fn resize(width int, height int)
+
+trait Shape extends Drawable, Resizable
+    fn area() float
+```
+
+Implementing traits:
+
+```miri
+class Rectangle implements Shape
+    var width float
+    var height float
+    
+    fn draw()
+        println(f"Rectangle: {self.width}x{self.height}")
+    
+    fn resize(w int, h int)
+        self.width = w
+        self.height = h
+    
+    fn area() float
+        self.width * self.height
+```
+
+### Super Calls
+
+Use `super` to call parent class methods:
+
+```miri
+class SpecialDog extends Dog
+    fn speak()
+        super.speak()
+        println("And I'm special!")
 ```
 
 ---

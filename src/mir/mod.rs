@@ -33,7 +33,10 @@ pub use backend::{
 };
 pub use block::{BasicBlock, BasicBlockData};
 pub use body::{Body, ExecutionModel, LocalDecl, StorageClass};
-pub use declaration::{Declaration, EnumDecl, FieldDecl, StructDecl, TypeAliasDecl, VariantDecl};
+pub use declaration::{
+    ClassDecl, Declaration, EnumDecl, FieldDecl, MethodDecl, StructDecl, TraitDecl, TypeAliasDecl,
+    VariantDecl,
+};
 pub use lambda::{CapturedVar, LambdaInfo, LambdaRegistry};
 pub use module::{Import, ImportItem, ImportKind, ImportSource};
 pub use operand::{Constant, Operand};

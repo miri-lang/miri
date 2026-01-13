@@ -3,6 +3,7 @@
 
 pub mod await_expression;
 pub mod boolean;
+pub mod class;
 pub mod conditional_expression;
 pub mod control_flow;
 pub mod float;

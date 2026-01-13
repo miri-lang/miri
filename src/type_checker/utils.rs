@@ -892,6 +892,22 @@ impl TypeChecker {
                                     }
                                     return alias_type.clone();
                                 }
+                                TypeDefinition::Class(class_def) => {
+                                    self.validate_generics(
+                                        &resolved_args,
+                                        &class_def.generics,
+                                        context,
+                                        expr.span.clone(),
+                                    );
+                                }
+                                TypeDefinition::Trait(trait_def) => {
+                                    self.validate_generics(
+                                        &resolved_args,
+                                        &trait_def.generics,
+                                        context,
+                                        expr.span.clone(),
+                                    );
+                                }
                             }
                         } else {
                             let mut candidates: Vec<&str> = Vec::new();

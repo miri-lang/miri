@@ -7,18 +7,19 @@ Miri is a modern, minimal, GPU-first, statically-typed programming language desi
 - **Indentation-sensitive syntax**: Clean and readable code without curly braces.
 - **Static Typing**: Catch errors at compile time with powerful type inference.
 - **Immutable by Default**: Variables are immutable unless declared with `var`.
-- **Built-in Testing**: Tests are first-class citizens.
 - **No Nulls**: Null safety is built into the type system.
 
 ## Quick Start
 
 ### Hello World
 
-Create a file named `HelloWorld.mi`:
+Create a file named `hello.mi`:
 
 ```miri
+use system.io.{println}
+
 fn main()
-    print("Hello, World!")
+    println("Hello, World!")
 ```
 
 ### Variables
@@ -27,7 +28,7 @@ fn main()
 let x = 10           // Immutable integer
 var y = 20           // Mutable integer
 y = 30               // OK
-let name string = "Miri" // Explicit type
+let name String = "Miri" // Explicit type
 ```
 
 ### Functions
@@ -54,9 +55,11 @@ for i in 1..5
 ### Collections
 
 ```miri
-let list = [1, 2, 3]
+let array = [1, 2, 3]
+let list List<int> = [1, 2, 3]
 let map = {"key": "value"}
 let tuple = (1, true)
+let set = {1, 2, 3}
 ```
 
 ### Structs

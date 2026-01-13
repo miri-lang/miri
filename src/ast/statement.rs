@@ -124,18 +124,6 @@ pub enum StatementKind {
         Vec<Statement>,          // Trait body (method signatures)
         MemberVisibility,        // Trait visibility
     ),
-
-    /// An extends clause (for inheritance).
-    /// DEPRECATED: Will be removed. Use Class/Trait statement instead.
-    Extends(Box<Expression>),
-
-    /// An implements clause (for interfaces).
-    /// DEPRECATED: Will be removed. Use Class statement instead.
-    Implements(Vec<Expression>),
-
-    /// An includes clause (for mixins/traits).
-    /// DEPRECATED: Will be removed entirely.
-    Includes(Vec<Expression>),
 }
 
 /// Represents a statement

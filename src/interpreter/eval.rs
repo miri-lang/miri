@@ -356,7 +356,7 @@ impl<'a> EvalContext<'a> {
     fn apply_projection(&self, value: Value, proj: &PlaceElem) -> Result<Value, InterpreterError> {
         match proj {
             PlaceElem::Field(idx) => match value {
-                Value::Struct(_name, fields) => {
+                Value::Struct(_name, fields) | Value::Class(_name, fields) => {
                     fields.values().nth(*idx).cloned().ok_or_else(|| {
                         InterpreterError::internal(format!("Field {} not found", idx))
                     })

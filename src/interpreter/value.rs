@@ -21,6 +21,9 @@ pub enum Value {
     Tuple(Vec<Value>),
     /// Struct instance: (type name, field values).
     Struct(String, HashMap<String, Value>),
+    /// Class instance: (class name, field values).
+    /// Note: Methods are resolved via the type checker's ClassDefinition.
+    Class(String, HashMap<String, Value>),
     /// Enum variant: (type name, variant name, optional associated value).
     Enum(String, String, Option<Box<Value>>),
     /// Array/list of values.
@@ -51,7 +54,7 @@ impl fmt::Display for Value {
                 }
                 write!(f, ")")
             }
-            Value::Struct(name, fields) => {
+            Value::Struct(name, fields) | Value::Class(name, fields) => {
                 write!(f, "{}(", name)?;
                 for (i, (k, v)) in fields.iter().enumerate() {
                     if i > 0 {
@@ -139,7 +142,7 @@ impl Value {
             Value::Bool(_) => "boolean".to_string(),
             Value::String(_) => "string".to_string(),
             Value::Tuple(_) => "tuple".to_string(),
-            Value::Struct(name, _) => name.clone(),
+            Value::Struct(name, _) | Value::Class(name, _) => name.clone(),
             Value::Enum(name, variant, _) => format!("{}::{}", name, variant),
             Value::Array(_) => "array".to_string(),
             Value::Map(_) => "map".to_string(),

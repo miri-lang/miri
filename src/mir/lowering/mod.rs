@@ -10,7 +10,8 @@ use crate::ast::pattern::Pattern;
 use crate::ast::statement::{Statement, StatementKind};
 use crate::ast::types::{Type, TypeKind};
 use crate::mir::declaration::{
-    Declaration, EnumDecl, FieldDecl, StructDecl, TypeAliasDecl, VariantDecl,
+    ClassDecl, Declaration, EnumDecl, FieldDecl, MethodDecl, StructDecl, TraitDecl, TypeAliasDecl,
+    VariantDecl,
 };
 use crate::mir::lambda::{CapturedVar, LambdaInfo};
 use crate::mir::module::{Import, ImportItem, ImportKind, ImportSource};
@@ -264,6 +265,7 @@ pub(crate) fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) {
                             ty: ty.clone(),
                             visibility: vis.clone(),
                             index: idx,
+                            mutable: false, // Struct fields are immutable by default
                         })
                         .collect();
 
@@ -302,6 +304,89 @@ pub(crate) fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) {
                     ctx.declarations.push(Declaration::Enum(EnumDecl {
                         name: name.clone(),
                         variants,
+                        module: def.module.clone(),
+                    }));
+                }
+            }
+        }
+        StatementKind::Class(name_expr, _generics, _base_class, _traits, _body, _vis) => {
+            // Lower class declaration by looking up the type definition from type checker
+            if let ExpressionKind::Identifier(name, _) = &name_expr.node {
+                if let Some(TypeDefinition::Class(def)) =
+                    ctx.type_checker.global_type_definitions.get(name)
+                {
+                    let fields = def
+                        .fields
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, (field_name, field_info))| FieldDecl {
+                            name: field_name.clone(),
+                            ty: field_info.ty.clone(),
+                            visibility: field_info.visibility.clone(),
+                            index: idx,
+                            mutable: field_info.mutable,
+                        })
+                        .collect();
+
+                    let methods = def
+                        .methods
+                        .iter()
+                        .map(|(method_name, method_info)| MethodDecl {
+                            name: method_name.clone(),
+                            params: method_info.params.clone(),
+                            return_type: method_info.return_type.clone(),
+                            visibility: method_info.visibility.clone(),
+                            is_constructor: method_info.is_constructor,
+                        })
+                        .collect();
+
+                    let generics = def
+                        .generics
+                        .as_ref()
+                        .map(|gs| gs.iter().map(|g| g.name.clone()).collect())
+                        .unwrap_or_default();
+
+                    ctx.declarations.push(Declaration::Class(ClassDecl {
+                        name: name.clone(),
+                        fields,
+                        methods,
+                        generics,
+                        base_class: def.base_class.clone(),
+                        traits: def.traits.clone(),
+                        module: def.module.clone(),
+                    }));
+                }
+            }
+        }
+        StatementKind::Trait(name_expr, _generics, _parent_traits, _body, _vis) => {
+            // Lower trait declaration by looking up the type definition from type checker
+            if let ExpressionKind::Identifier(name, _) = &name_expr.node {
+                if let Some(TypeDefinition::Trait(def)) =
+                    ctx.type_checker.global_type_definitions.get(name)
+                {
+                    let methods = def
+                        .methods
+                        .iter()
+                        .map(|(method_name, method_info)| MethodDecl {
+                            name: method_name.clone(),
+                            params: method_info.params.clone(),
+                            return_type: method_info.return_type.clone(),
+                            visibility: method_info.visibility.clone(),
+                            is_constructor: method_info.is_constructor,
+                        })
+                        .collect();
+
+                    let generics = def
+                        .generics
+                        .as_ref()
+                        .map(|gs| gs.iter().map(|g| g.name.clone()).collect())
+                        .unwrap_or_default();
+
+                    ctx.declarations.push(Declaration::Trait(TraitDecl {
+                        name: name.clone(),
+                        methods,
+                        generics,
+                        parent_traits: def.parent_traits.clone(),
                         module: def.module.clone(),
                     }));
                 }
