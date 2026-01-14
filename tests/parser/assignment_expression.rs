@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use super::utils::*;
-use miri::ast::factory::*;
-use miri::ast::*;
+use super::utils::{assignment_expression_test, run_parser_error_tests};
+use miri::ast::factory::{assign, binary, int_literal_expression, lhs_identifier};
+use miri::ast::{AssignmentOp, BinaryOp};
 use miri::error::syntax::SyntaxErrorKind;
 
 #[test]

@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use super::utils::*;
-use miri::ast::factory::*;
-use miri::ast::*;
+use super::utils::{parser_error_test, trait_statement_test};
+use miri::ast::factory::{
+    abstract_function_declaration, block, boolean_literal, expression_statement,
+    function_declaration, generic_type, generic_type_with_kind, identifier, int_literal_expression,
+    parameter, string_literal_expression, type_bool, type_custom, type_expr_non_null, type_int,
+    type_string,
+};
+use miri::ast::types::TypeDeclarationKind;
+use miri::ast::{opt_expr, FunctionProperties, MemberVisibility};
 use miri::error::syntax::SyntaxErrorKind;
 
 #[test]

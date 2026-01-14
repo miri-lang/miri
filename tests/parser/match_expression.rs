@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use super::utils::*;
-use miri::ast::factory::*;
-use miri::ast::*;
+use super::utils::{parser_error_test, parser_test};
+use miri::ast::factory::{
+    binary, block, call, enum_statement, enum_value, expression_statement, identifier, int_literal,
+    int_literal_expression, let_variable, match_expression, member, string_literal_expression,
+    type_expr_non_null, type_string, variable_statement,
+};
+use miri::ast::{opt_expr, BinaryOp, MatchBranch, MemberVisibility, Pattern};
 use miri::error::syntax::SyntaxErrorKind;
 use miri::lexer::RegexToken;
 

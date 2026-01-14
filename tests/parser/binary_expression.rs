@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use super::utils::*;
-use miri::ast::factory::*;
-use miri::ast::*;
+use super::utils::{binary_expression_test, parser_error_test, parser_test};
+use miri::ast::factory::{
+    binary, expression_statement, identifier, int_literal_expression, logical,
+};
+use miri::ast::BinaryOp;
 use miri::error::syntax::SyntaxErrorKind;
 
 #[test]
@@ -124,12 +126,13 @@ fn test_parse_incomplete_expression() {
 fn test_very_long_chain_of_binary_operators() {
     // Stress test the loop-based expression parsing to ensure it doesn't have performance issues
     // or stack overflows (which it shouldn't, but this is a good sanity check).
+    let mut input = "1".to_string();
+    for _ in 0..500 {
+        input.push_str(" + 1");
+    }
 
-    // We don't need to build the full AST here, just confirm it parses without crashing.
-    // A more dedicated test could build the deeply nested tree if desired.
-    // For now, we just check that `parser.parse()` returns Ok.
-    let long_expr = "1 + ".repeat(500) + "1";
-    parse_program(&long_expr);
+    // Just verify it parses successfully, we don't strictly need to verify the exact AST structure for this stress test.
+    super::utils::parse_program(&input);
 }
 
 #[test]

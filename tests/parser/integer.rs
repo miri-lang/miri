@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use miri::ast::*;
+use super::utils::{parser_error_test, parser_test, run_int_tests};
+use miri::ast::factory::{
+    binary, call, expression_statement, identifier, int, int_literal_expression, let_variable,
+    member, unary, variable_statement,
+};
+use miri::ast::{opt_expr, BinaryOp, MemberVisibility, UnaryOp};
 use miri::error::syntax::SyntaxErrorKind;
-
-use super::utils::*;
-use miri::ast::factory::*;
 
 #[test]
 fn test_parse_integer_literal() {

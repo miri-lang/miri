@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use super::utils::*;
-use miri::ast::factory::*;
-use miri::ast::*;
+use super::utils::{parser_error_test, parser_test, variable_declaration_test};
+use miri::ast::factory::{
+    assign, int_literal_expression, let_variable, lhs_identifier, string_literal_expression,
+    type_array, type_expr_non_null, type_float, type_int, var, variable_statement,
+};
+use miri::ast::{
+    opt_expr, AssignmentOp, MemberVisibility, VariableDeclaration, VariableDeclarationType,
+};
 use miri::error::syntax::SyntaxErrorKind;
 
 #[test]
@@ -205,8 +210,6 @@ fn test_parse_shared_variable_declaration() {
         is_shared: true,
     };
 
-    // We cannot use variable_declaration_test easily because it expects Let/Var token.
-    // So let's use parser_test directly.
     parser_test(
         "shared cache [float; 256]",
         vec![variable_statement(

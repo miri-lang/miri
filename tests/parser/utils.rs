@@ -282,3 +282,230 @@ pub fn abstract_class_statement_test(
         )],
     );
 }
+
+// ============= Edge Case Utilities =============
+
+/// Assert that a program parses successfully and has the expected number of statements
+pub fn assert_statement_count(input: &str, expected_count: usize) {
+    let program = parse_program(input);
+    assert_eq!(
+        program.body.len(),
+        expected_count,
+        "Expected {} statements, got {} for input:\n{}",
+        expected_count,
+        program.body.len(),
+        input
+    );
+}
+
+/// Assert that deeply nested while loops parse correctly and have the expected structure.
+/// Traverses the AST to verify the nesting depth and that the innermost statement is a break.
+pub fn assert_nested_while_structure(input: &str, expected_depth: usize) {
+    let program = parse_program(input);
+    assert_eq!(
+        program.body.len(),
+        1,
+        "Expected exactly 1 top-level statement"
+    );
+
+    let mut current_stmt = &program.body[0];
+    for depth in 0..expected_depth {
+        match &current_stmt.node {
+            StatementKind::While(_, body, ..) => {
+                // For inline syntax, body is directly the inner statement
+                // For block syntax, body is a Block containing statements
+                match &body.node {
+                    StatementKind::Block(stmts) => {
+                        assert_eq!(
+                            stmts.len(),
+                            1,
+                            "Expected block with 1 statement at depth {}",
+                            depth
+                        );
+                        current_stmt = &stmts[0];
+                    }
+                    StatementKind::While(..) => {
+                        // Inline syntax - body is directly the next while
+                        current_stmt = body;
+                    }
+                    StatementKind::Break => {
+                        assert_eq!(
+                            depth,
+                            expected_depth - 1,
+                            "Found break at depth {}, expected at depth {}",
+                            depth,
+                            expected_depth - 1
+                        );
+                        return;
+                    }
+                    other => {
+                        panic!(
+                            "Expected While, Block, or Break at depth {}, found {:?}",
+                            depth, other
+                        );
+                    }
+                }
+            }
+            StatementKind::Break => {
+                assert_eq!(
+                    depth, expected_depth,
+                    "Found break at depth {}, expected at depth {}",
+                    depth, expected_depth
+                );
+                return;
+            }
+            other => {
+                panic!(
+                    "Expected While statement at depth {}, found {:?}",
+                    depth, other
+                );
+            }
+        }
+    }
+}
+
+/// Assert that deeply nested if statements parse correctly.
+/// Traverses the AST to verify the nesting depth.
+pub fn assert_nested_if_structure(input: &str, expected_depth: usize) {
+    let program = parse_program(input);
+    assert_eq!(
+        program.body.len(),
+        1,
+        "Expected exactly 1 top-level statement"
+    );
+
+    let mut current_stmt = &program.body[0];
+    for depth in 0..expected_depth {
+        match &current_stmt.node {
+            StatementKind::If(_, then_block, ..) => match &then_block.node {
+                StatementKind::Block(stmts) => {
+                    assert_eq!(
+                        stmts.len(),
+                        1,
+                        "Expected block with 1 statement at depth {}",
+                        depth
+                    );
+                    current_stmt = &stmts[0];
+                }
+                StatementKind::If(..) => {
+                    current_stmt = then_block;
+                }
+                StatementKind::Expression(_) => {
+                    assert_eq!(
+                        depth,
+                        expected_depth - 1,
+                        "Found expression at depth {}, expected at depth {}",
+                        depth,
+                        expected_depth - 1
+                    );
+                    return;
+                }
+                other => {
+                    panic!(
+                        "Expected If, Block, or Expression at depth {}, found {:?}",
+                        depth, other
+                    );
+                }
+            },
+            StatementKind::Expression(_) => {
+                assert_eq!(
+                    depth, expected_depth,
+                    "Found expression at depth {}, expected at depth {}",
+                    depth, expected_depth
+                );
+                return;
+            }
+            other => {
+                panic!(
+                    "Expected If statement at depth {}, found {:?}",
+                    depth, other
+                );
+            }
+        }
+    }
+}
+
+/// Assert that deeply nested for loops parse correctly.
+pub fn assert_nested_for_structure(input: &str, expected_depth: usize) {
+    let program = parse_program(input);
+    assert_eq!(
+        program.body.len(),
+        1,
+        "Expected exactly 1 top-level statement"
+    );
+
+    let mut current_stmt = &program.body[0];
+    for depth in 0..expected_depth {
+        match &current_stmt.node {
+            StatementKind::For(_, _, body) => match &body.node {
+                StatementKind::Block(stmts) => {
+                    assert_eq!(
+                        stmts.len(),
+                        1,
+                        "Expected block with 1 statement at depth {}",
+                        depth
+                    );
+                    current_stmt = &stmts[0];
+                }
+                StatementKind::For(..) => {
+                    current_stmt = body;
+                }
+                StatementKind::Expression(_) | StatementKind::Empty => {
+                    assert_eq!(
+                        depth,
+                        expected_depth - 1,
+                        "Found terminal statement at depth {}, expected at depth {}",
+                        depth,
+                        expected_depth - 1
+                    );
+                    return;
+                }
+                other => {
+                    panic!(
+                        "Expected For, Block, or terminal at depth {}, found {:?}",
+                        depth, other
+                    );
+                }
+            },
+            StatementKind::Expression(_) | StatementKind::Empty => {
+                assert_eq!(
+                    depth, expected_depth,
+                    "Found terminal at depth {}, expected at depth {}",
+                    depth, expected_depth
+                );
+                return;
+            }
+            other => {
+                panic!(
+                    "Expected For statement at depth {}, found {:?}",
+                    depth, other
+                );
+            }
+        }
+    }
+}
+
+/// Assert that a function declaration parses with the expected number of parameters
+pub fn assert_function_parameter_count(input: &str, expected_count: usize) {
+    let program = parse_program(input);
+    assert_eq!(
+        program.body.len(),
+        1,
+        "Expected exactly 1 top-level statement"
+    );
+
+    match &program.body[0].node {
+        StatementKind::FunctionDeclaration(_, _, params, ..) => {
+            assert_eq!(
+                params.len(),
+                expected_count,
+                "Expected {} parameters, got {}",
+                expected_count,
+                params.len()
+            );
+        }
+        other => {
+            panic!("Expected function declaration, found {:?}", other);
+        }
+    }
+}

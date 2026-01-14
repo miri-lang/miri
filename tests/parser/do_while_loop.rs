@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use super::utils::*;
-use miri::ast::factory::*;
-use miri::ast::*;
+use super::utils::{combined_do_while_until_test, parser_error_test, while_expression_test};
+use miri::ast::factory::{
+    assign, binary, block, break_statement, continue_statement, do_while_statement,
+    empty_statement, expression_statement, identifier, if_statement, int_literal_expression,
+    lhs_identifier,
+};
+use miri::ast::{AssignmentOp, BinaryOp, WhileStatementType};
 use miri::error::syntax::SyntaxErrorKind;
 
 #[test]

@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use super::utils::*;
-use miri::ast::factory::*;
+use super::utils::{parser_error_test, parser_test, run_parser_error_tests};
+use miri::ast::factory::{
+    generic_type, generic_type_with_kind, identifier, struct_member, struct_statement, type_bool,
+    type_custom, type_expr_non_null, type_expr_null, type_float, type_int, type_list, type_map,
+    type_string,
+};
 use miri::ast::types::TypeDeclarationKind;
-use miri::ast::*;
+use miri::ast::MemberVisibility;
 use miri::error::syntax::SyntaxErrorKind;
 
 #[test]

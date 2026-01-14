@@ -5,8 +5,11 @@ use miri::ast::BinaryOp;
 use miri::ast::UnaryOp;
 use miri::error::syntax::SyntaxErrorKind;
 
-use super::utils::*;
-use miri::ast::factory::*;
+use super::utils::{parser_error_test, parser_test};
+use miri::ast::factory::{
+    binary, boolean_literal, call, expression_statement, identifier, index, int_literal_expression,
+    list, map, member, set, string_literal_expression, unary,
+};
 
 #[test]
 fn test_function_call() {

@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use super::utils::*;
-use miri::ast::factory::*;
-use miri::ast::*;
+use super::utils::parser_test;
+use miri::ast::factory::{
+    binary, block, boolean_literal, call, expression_statement, func, identifier, if_conditional,
+    int_literal_expression, let_variable, member, unary, variable_statement,
+};
+use miri::ast::{opt_expr, BinaryOp, MemberVisibility, UnaryOp};
 
 #[test]
 fn test_await_expression() {

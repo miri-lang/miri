@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use miri::ast::opt_expr;
-use miri::ast::AssignmentOp;
-use miri::ast::BinaryOp;
+use super::utils::{parser_error_test, parser_test};
+use miri::ast::factory::{
+    assign, binary, block, break_statement, call, continue_statement, empty_statement,
+    expression_statement, forever_statement, identifier, if_statement, int_literal_expression,
+    lhs_identifier, return_statement,
+};
+use miri::ast::{opt_expr, AssignmentOp, BinaryOp};
 use miri::error::syntax::SyntaxErrorKind;
-
-use super::utils::*;
-use miri::ast::factory::*;
 
 #[test]
 fn test_forever_loop() {

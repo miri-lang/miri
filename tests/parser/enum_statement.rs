@@ -3,9 +3,12 @@
 
 use std::vec;
 
-use super::utils::*;
-use miri::ast::factory::*;
-use miri::ast::*;
+use super::utils::{parser_error_test, parser_test};
+use miri::ast::factory::{
+    enum_statement, enum_value, identifier, type_bool, type_expr_non_null, type_expr_null,
+    type_int, type_list, type_map, type_string,
+};
+use miri::ast::MemberVisibility;
 use miri::error::syntax::SyntaxErrorKind;
 
 #[test]

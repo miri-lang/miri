@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use super::utils::*;
-use miri::ast::factory::*;
-use miri::ast::*;
+use super::utils::parser_test;
+use miri::ast::factory::{binary, identifier, int_literal_expression, return_statement};
+use miri::ast::{opt_expr, BinaryOp};
 
 #[test]
 fn test_return_statement() {

@@ -11,6 +11,7 @@ pub mod class_statement;
 pub mod conditional_expression;
 pub mod continue_statement;
 pub mod do_while_loop;
+pub mod edge_cases;
 pub mod enum_statement;
 pub mod equality_expression;
 pub mod float;

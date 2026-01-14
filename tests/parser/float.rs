@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use miri::ast::opt_expr;
-use miri::ast::BinaryOp;
-use miri::ast::MemberVisibility;
-use miri::ast::UnaryOp;
+use super::utils::{parser_error_test, parser_test, run_float_tests};
+use miri::ast::factory::{
+    binary, call, expression_statement, float32, float32_literal_expression, float64, identifier,
+    let_variable, member, unary, variable_statement,
+};
+use miri::ast::{opt_expr, BinaryOp, MemberVisibility, UnaryOp};
 use miri::error::syntax::SyntaxErrorKind;
-
-use super::utils::*;
-use miri::ast::factory::*;
 
 #[test]
 fn test_parse_float_literal() {

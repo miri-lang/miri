@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use miri::ast::opt_expr;
-use miri::ast::BinaryOp;
-use miri::ast::MemberVisibility;
-
-use super::utils::*;
-use miri::ast::factory::*;
+use super::utils::{parser_test, run_literal_tests};
+use miri::ast::factory::{
+    boolean, boolean_literal, call, expression_statement, identifier, let_variable, logical,
+    member, variable_statement,
+};
+use miri::ast::{opt_expr, BinaryOp, MemberVisibility};
 
 #[test]
 fn test_parse_boolean_literal() {
