@@ -67,7 +67,7 @@ fn test_valid_numbers() {
 
 #[test]
 fn test_float_precision_boundaries() {
-    lexer_test(
+    lexer_token_test(
         "3.4028235e38 1.7976931348623157e308",
         vec![
             Token::Float, // f32 max
@@ -78,7 +78,7 @@ fn test_float_precision_boundaries() {
 
 #[test]
 fn test_integer_overflow_edge_cases() {
-    lexer_test(
+    lexer_token_test(
         "9223372036854775807 9223372036854775808",
         vec![
             Token::Int, // i64::MAX
@@ -89,7 +89,7 @@ fn test_integer_overflow_edge_cases() {
 
 #[test]
 fn test_very_large_numbers() {
-    lexer_test(
+    lexer_token_test(
         "999999999999999999999999999999",
         vec![
             Token::Int, // Should tokenize even if unparseable
@@ -151,7 +151,7 @@ fn test_invalid_hex() {
 fn test_number_followed_by_dot_method_call() {
     // This is a critical test to ensure `1.to_string()` is not confused with a float.
     // The `FloatOrRange` logic should correctly see the `t` and treat `1.` as member call of an integer,
-    lexer_test(
+    lexer_token_test(
         "1.to_string()",
         vec![
             Token::Int,

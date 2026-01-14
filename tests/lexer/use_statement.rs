@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
-use std::vec;
-
 use miri::lexer::Token;
 
-use super::utils::*;
+use super::utils::lexer_token_test;
 
 #[test]
 fn test_use() {
-    lexer_test(
+    lexer_token_test(
         "
 // System import
 use system.math
@@ -68,7 +66,7 @@ use system.{io, net as network}
 
 #[test]
 fn test_use_with_keywords_in_path() {
-    lexer_test(
+    lexer_token_test(
         "use My.if.Path as return",
         vec![
             Token::Use,

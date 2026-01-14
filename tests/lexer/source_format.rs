@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
-use super::utils::*;
+use super::utils::{lexer_error_test, lexer_token_test};
 use miri::{error::syntax::SyntaxErrorKind, lexer::Token};
-use std::vec;
 
 #[test]
 fn test_windows_line_endings_crlf() {
-    lexer_test(
+    lexer_token_test(
         "if x > 0\r\n    print(x)\r\nelse\r\n    print(0)",
         vec![
             Token::If,
@@ -36,7 +35,7 @@ fn test_windows_line_endings_crlf() {
 
 #[test]
 fn test_mixed_line_endings_lf_and_crlf() {
-    lexer_test(
+    lexer_token_test(
         "if x > 0\n    print(x)\r\nelse\n    print(0)",
         vec![
             Token::If,
@@ -66,7 +65,7 @@ fn test_mixed_line_endings_lf_and_crlf() {
 #[test]
 fn test_tab_indentation() {
     // The lexer should correctly interpret tabs as a multiple of spaces (e.g., 4).
-    lexer_test(
+    lexer_token_test(
         "fn my_func()\n\tprint(\"hello\")\n\tlet y = 1",
         vec![
             Token::Fn,
@@ -98,7 +97,7 @@ fn test_mixed_spaces_and_tabs_indentation_error() {
 
 #[test]
 fn test_unicode_in_strings_and_comments() {
-    lexer_test(
+    lexer_token_test(
         "// Коментар українською\nlet greeting = \"Слава Україні!\"",
         vec![Token::Let, Token::Identifier, Token::Assign, Token::String],
     );
@@ -114,7 +113,7 @@ fn test_wide_range_of_unicode_in_strings_and_comments() {
     // The lexer should handle various Unicode characters from different scripts
     // within strings and comments without errors. The regexes for strings and
     // comments are byte-oriented and should not break on multi-byte characters.
-    lexer_test(
+    lexer_token_test(
         "// Ελληνικό σχόλιο\nlet s = \"你好世界\" // CJK\n// Emoji: ✨",
         vec![Token::Let, Token::Identifier, Token::Assign, Token::String],
     );

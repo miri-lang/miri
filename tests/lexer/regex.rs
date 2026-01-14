@@ -1,20 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
-use std::vec;
-
 use miri::{error::syntax::SyntaxErrorKind, lexer::Token};
 
-use super::utils::*;
+use super::utils::{lexer_error_test, lexer_token_test, regex_token};
 
 #[test]
 fn test_simple_regex_literal() {
-    lexer_test(r#"re"abc""#, vec![Token::Regex(regex_token("abc", ""))]);
+    lexer_token_test(r#"re"abc""#, vec![Token::Regex(regex_token("abc", ""))]);
 }
 
 #[test]
 fn test_regex_with_all_flags() {
-    lexer_test(
+    lexer_token_test(
         r#"re"[a-z]+"igmsu"#,
         vec![Token::Regex(regex_token("[a-z]+", "igmsu"))],
     );
@@ -22,7 +20,7 @@ fn test_regex_with_all_flags() {
 
 #[test]
 fn test_regex_with_some_flags() {
-    lexer_test(
+    lexer_token_test(
         r#"re"^\d+$"im"#,
         vec![Token::Regex(regex_token("^\\d+$", "im"))],
     );
@@ -30,7 +28,7 @@ fn test_regex_with_some_flags() {
 
 #[test]
 fn test_regex_with_escaped_quotes_and_slashes() {
-    lexer_test(
+    lexer_token_test(
         r#"re"a\"b\\c""#,
         vec![Token::Regex(regex_token("a\\\"b\\\\c", ""))],
     );
@@ -38,13 +36,13 @@ fn test_regex_with_escaped_quotes_and_slashes() {
 
 #[test]
 fn test_empty_regex() {
-    lexer_test(r#"re""g"#, vec![Token::Regex(regex_token("", "g"))]);
+    lexer_token_test(r#"re""g"#, vec![Token::Regex(regex_token("", "g"))]);
 }
 
 #[test]
 fn test_regex_is_not_a_string() {
     // Ensure re"..." is tokenized differently from a normal string followed by an identifier.
-    lexer_test(
+    lexer_token_test(
         "re\"abc\" \"abc\"g",
         vec![
             Token::Regex(regex_token("abc", "")),
@@ -57,7 +55,7 @@ fn test_regex_is_not_a_string() {
 #[test]
 fn test_regex_with_invalid_flags() {
     // The lexer should parse the valid flags and treat the rest as a separate token.
-    lexer_test(
+    lexer_token_test(
         r#"re"abc"ixyz"#,
         vec![
             Token::Regex(regex_token("abc", "i")),
@@ -68,7 +66,7 @@ fn test_regex_with_invalid_flags() {
 
 #[test]
 fn test_regex_in_expression() {
-    lexer_test(
+    lexer_token_test(
         r#"let pattern = re"^\w+$"i"#,
         vec![
             Token::Let,
@@ -88,12 +86,12 @@ fn test_error_unclosed_regex() {
 #[test]
 fn test_error_regex_without_re_prefix() {
     // This should be parsed as a string followed by an identifier.
-    lexer_test(r#""[a-z]+"g"#, vec![Token::String, Token::Identifier]);
+    lexer_token_test(r#""[a-z]+"g"#, vec![Token::String, Token::Identifier]);
 }
 
 #[test]
 fn test_single_quoted_regex_literals() {
-    lexer_test(
+    lexer_token_test(
         r#"re'abc' re'a\'b'i re''"#,
         vec![
             Token::Regex(regex_token("abc", "")),
@@ -105,7 +103,7 @@ fn test_single_quoted_regex_literals() {
 
 #[test]
 fn test_regex_with_various_escapes() {
-    lexer_test(
+    lexer_token_test(
         r#"re"line\n\t\{[0-9]+\}""#,
         vec![Token::Regex(regex_token("line\\n\\t\\{[0-9]+\\}", ""))],
     );
@@ -114,7 +112,7 @@ fn test_regex_with_various_escapes() {
 #[test]
 fn test_regex_with_repeated_flags() {
     // The lexer should just set the flag to true once, behavior is idempotent.
-    lexer_test(
+    lexer_token_test(
         r#"re"abc"iig"#,
         vec![Token::Regex(regex_token("abc", "ig"))],
     );

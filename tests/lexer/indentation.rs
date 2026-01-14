@@ -5,11 +5,11 @@ use std::vec;
 
 use miri::{error::syntax::SyntaxErrorKind, lexer::Token};
 
-use super::utils::*;
+use super::utils::{lexer_error_test, lexer_token_test};
 
 #[test]
 fn test_nested_function() {
-    lexer_test(
+    lexer_token_test(
         "
 // Nested function
 fn nested_func(a int) int
@@ -91,7 +91,7 @@ nested_func(5)
 
 #[test]
 fn test_windows_line_endings() {
-    lexer_test(
+    lexer_token_test(
         "line1\r\nline2\r\n",
         vec![
             Token::Identifier,
@@ -104,7 +104,7 @@ fn test_windows_line_endings() {
 
 #[test]
 fn test_mixed_whitespace_types() {
-    lexer_test(
+    lexer_token_test(
         "fn func()\n\t  mixed_indent",
         vec![
             Token::Fn,
@@ -169,7 +169,7 @@ fn func()
 
 #[test]
 fn test_indent_dedent_func() {
-    lexer_test(
+    lexer_token_test(
         "
 // Indented call
 func(10,
@@ -192,7 +192,7 @@ func(10,
 
 #[test]
 fn test_indent_dedent_func_nested() {
-    lexer_test(
+    lexer_token_test(
         "
 // Indented call with nested indentation
 func(10,
@@ -261,7 +261,7 @@ func(10,
 
 #[test]
 fn test_indent_dedent_func_arg_new_lines() {
-    lexer_test(
+    lexer_token_test(
         "
 // Indented call with all arguments on new lines
 func(
@@ -283,7 +283,7 @@ func(
 
 #[test]
 fn test_empty_lines_preserve_indentation_context() {
-    lexer_test(
+    lexer_token_test(
         "
 fn func()
     statement1
@@ -316,7 +316,7 @@ fn func()
 
 #[test]
 fn test_empty_lines_dont_prevent_dedent() {
-    lexer_test(
+    lexer_token_test(
         "
 statement1
   statement2
@@ -347,7 +347,7 @@ statement5
 
 #[test]
 fn test_multiple_dedent_levels() {
-    lexer_test(
+    lexer_token_test(
         "
 fn func()
     fn level1()
@@ -387,7 +387,7 @@ back_to_root
 
 #[test]
 fn test_indent_dedent_comments() {
-    lexer_test(
+    lexer_token_test(
         "
      // this is just a comment
 
@@ -412,7 +412,7 @@ fn test_indent_dedent_comments() {
 
 #[test]
 fn test_indentation_within_brackets_is_ignored() {
-    lexer_test(
+    lexer_token_test(
         "
 let x = [
     1,
@@ -436,7 +436,7 @@ let x = [
 
 #[test]
 fn test_indentation_within_braces_is_ignored() {
-    lexer_test(
+    lexer_token_test(
         "
 let y = {
     'key': 'value',
@@ -463,7 +463,7 @@ let y = {
 
 #[test]
 fn test_indented_line_with_only_a_comment() {
-    lexer_test(
+    lexer_token_test(
         "
 fn my_func()
     // This line is just a comment.
@@ -488,7 +488,7 @@ fn my_func()
 
 #[test]
 fn test_indented_line_with_multiple_inline_comments() {
-    lexer_test(
+    lexer_token_test(
         "
 fn my_func()
     // This line is just a comment.
@@ -514,7 +514,7 @@ fn my_func()
 
 #[test]
 fn test_indented_line_with_multiline_comment() {
-    lexer_test(
+    lexer_token_test(
         "
 fn my_func()
     /*
@@ -544,7 +544,7 @@ fn my_func()
 
 #[test]
 fn test_indent_after_inline_comment() {
-    lexer_test(
+    lexer_token_test(
         "
 fn my_func() // comment
     let x = 1
@@ -568,7 +568,7 @@ fn my_func() // comment
 
 #[test]
 fn test_dedent_to_zero_after_empty_line_with_spaces() {
-    lexer_test(
+    lexer_token_test(
         "
 fn func()
     let x = 1
@@ -601,7 +601,7 @@ let y = 2
 
 #[test]
 fn test_dedent_to_zero_after_empty_line_with_tabs() {
-    lexer_test(
+    lexer_token_test(
         "
 fn func()
 \t\tlet x = 1
@@ -633,7 +633,7 @@ let y = 2
 
 #[test]
 fn test_dedent_to_inconsistent_level() {
-    lexer_test(
+    lexer_token_test(
         "
 fn func()
     let level1 = 1
@@ -666,7 +666,7 @@ fn func()
 
 #[test]
 fn test_file_starting_with_indentation_and_comment() {
-    lexer_test(
+    lexer_token_test(
         "
     // File starts with an indented comment
 let x = 1
@@ -683,7 +683,7 @@ let x = 1
 
 #[test]
 fn test_indentation_rules_after_nested_brackets() {
-    lexer_test(
+    lexer_token_test(
         "
 let x = [
     1, // Indentation is ignored here
@@ -742,14 +742,14 @@ fn test_large_nested_structure() {
         expected.push(Token::Dedent);
     }
 
-    lexer_test(&input, expected);
+    lexer_token_test(&input, expected);
 }
 
 #[test]
 fn test_dedent_followed_by_empty_line() {
     // The lexer should correctly dedent and then process the empty line
     // without getting confused about the indentation level.
-    lexer_test(
+    lexer_token_test(
         "
 if true
     statement1
@@ -773,7 +773,7 @@ statement2
 #[test]
 fn test_file_with_only_comments_and_whitespace() {
     // A file containing nothing but comments and whitespace should produce no tokens.
-    lexer_test(
+    lexer_token_test(
         "
     // Indented comment
   /*
@@ -790,7 +790,7 @@ fn test_file_with_only_comments_and_whitespace() {
 fn test_indentation_change_on_line_with_only_comment() {
     // The indentation level of a line containing only a comment should be ignored.
     // It should not trigger an Indent, Dedent, or IndentationMismatch error.
-    lexer_test(
+    lexer_token_test(
         "
 if true
     statement1
@@ -814,7 +814,7 @@ if true
 #[test]
 fn test_dedent_on_line_with_only_comment() {
     // A dedent should not be triggered by a comment's indentation level.
-    lexer_test(
+    lexer_token_test(
         "
 if true
     if false

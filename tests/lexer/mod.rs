@@ -5,6 +5,7 @@ pub mod basic;
 pub mod class;
 pub mod comment;
 pub mod conditional_expressions;
+pub mod edge_cases;
 pub mod function;
 pub mod identifier;
 pub mod if_statement;

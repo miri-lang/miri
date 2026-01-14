@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
-use std::vec;
-
 use miri::lexer::Token;
 
-use super::utils::*;
+use super::utils::lexer_token_test;
 
 #[test]
 fn test_conditional_expression() {
-    lexer_test(
+    lexer_token_test(
         "
 let x = 10 if y > 5 else 20
 ",
@@ -31,7 +29,7 @@ let x = 10 if y > 5 else 20
 
 #[test]
 fn test_conditional_expression_no_else() {
-    lexer_test(
+    lexer_token_test(
         "
 let x = 10 if y > 5
 ",
@@ -51,7 +49,7 @@ let x = 10 if y > 5
 
 #[test]
 fn test_ternary_if_else_expression() {
-    lexer_test(
+    lexer_token_test(
         "let x = 10 if y > 5 else 20",
         vec![
             Token::Let,
@@ -70,7 +68,7 @@ fn test_ternary_if_else_expression() {
 
 #[test]
 fn test_chained_ternary_expressions() {
-    lexer_test(
+    lexer_token_test(
         "let x = 1 if a else 2 if b else 3",
         vec![
             Token::Let,
@@ -91,7 +89,7 @@ fn test_chained_ternary_expressions() {
 
 #[test]
 fn test_ternary_as_return_value() {
-    lexer_test(
+    lexer_token_test(
         "return 1 if x else 0",
         vec![
             Token::Return,
@@ -106,7 +104,7 @@ fn test_ternary_as_return_value() {
 
 #[test]
 fn test_ternary_in_function_call() {
-    lexer_test(
+    lexer_token_test(
         "print(10 if x else 20)",
         vec![
             Token::Identifier,
@@ -123,7 +121,7 @@ fn test_ternary_in_function_call() {
 
 #[test]
 fn test_ternary_in_array_literal() {
-    lexer_test(
+    lexer_token_test(
         "let a = [1, 2, 10 if x else 20]",
         vec![
             Token::Let,
@@ -146,7 +144,7 @@ fn test_ternary_in_array_literal() {
 
 #[test]
 fn test_multiline_ternary_expression() {
-    lexer_test(
+    lexer_token_test(
         "let x = 10 if y > 5\nelse 20",
         vec![
             Token::Let,

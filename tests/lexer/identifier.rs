@@ -1,16 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
-use std::vec;
-
 use miri::{error::syntax::SyntaxErrorKind, lexer::Token};
 
-use super::utils::*;
+use super::utils::{lexer_token_test, run_lexer_error_tests, run_lexer_tests};
 
 #[test]
 fn test_very_long_identifier() {
     let long_name = "a".repeat(1000);
-    lexer_test(&long_name, vec![Token::Identifier]);
+    lexer_token_test(&long_name, vec![Token::Identifier]);
 }
 
 #[test]
@@ -50,8 +48,6 @@ fn test_keywords_as_parts_of_identifiers() {
 
 #[test]
 fn test_case_sensitivity_of_keywords() {
-    // Keywords are case-sensitive and must be lowercase.
-    // Uppercase or mixed-case versions should be treated as identifiers.
     run_lexer_tests(vec![
         ("IF", vec![Token::Identifier]),
         ("TRUE", vec![Token::Identifier]),
@@ -61,7 +57,6 @@ fn test_case_sensitivity_of_keywords() {
 
 #[test]
 fn test_identifiers_with_underscores() {
-    // Identifiers can start with, end with, or consist solely of underscores.
     run_lexer_tests(vec![
         ("_private", vec![Token::Identifier]),
         ("normal_", vec![Token::Identifier]),
@@ -72,8 +67,6 @@ fn test_identifiers_with_underscores() {
 
 #[test]
 fn test_identifier_operator_boundaries() {
-    // The lexer should correctly separate identifiers from adjacent operators
-    // without requiring whitespace.
     run_lexer_tests(vec![
         ("my_var+1", vec![Token::Identifier, Token::Plus, Token::Int]),
         ("counter++", vec![Token::Identifier, Token::Increment]),

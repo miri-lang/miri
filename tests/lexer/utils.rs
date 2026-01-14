@@ -6,21 +6,34 @@ use miri::{
     lexer::{Lexer, RegexToken, Token},
 };
 
-pub fn lexer_test(input: &str, expected: Vec<Token>) {
+/// Executes a standard "Green Path" lexer test.
+/// Asserts that the input string produces the expected sequence of tokens.
+/// Panics if the lexer encounters an error or if the tokens do not match.
+pub fn lexer_token_test(input: &str, expected: Vec<Token>) {
     let lexer = Lexer::new(input);
     let results: Vec<_> = lexer.collect();
+
+    // Check for lexer errors first
     for res in &results {
         if let Err(err) = res {
-            panic!("Lexer error: {:?}\nInput: {}", err, input);
+            panic!("Lexer failed eagerly: {:?}\nInput: {}", err, input);
         }
     }
+
     let tokens: Vec<Token> = results
         .into_iter()
         .filter_map(|result| result.ok().map(|(token, _)| token))
         .collect();
-    assert_eq!(tokens, expected);
+
+    assert_eq!(
+        tokens, expected,
+        "\nInput: {}\nExpected: {:?}\nActual:   {:?}\n",
+        input, expected, tokens
+    );
 }
 
+/// Executes a "Red Path" lexer test.
+/// Asserts that the lexer produces a specific error kind.
 pub fn lexer_error_test(input: &str, expected_kind: &SyntaxErrorKind) {
     let lexer = Lexer::new(input);
     let results: Vec<_> = lexer.collect();
@@ -29,14 +42,14 @@ pub fn lexer_error_test(input: &str, expected_kind: &SyntaxErrorKind) {
 
     assert!(
         error.is_some(),
-        "Expected a lexer error, but it succeeded without errors for input: {}",
+        "Expected a lexer error, but it succeeded for input: {}",
         input
     );
     let error_kind = error.unwrap().kind;
     assert_eq!(
         error_kind, *expected_kind,
-        "Lexer produced an error of the wrong kind {:?}.",
-        error_kind
+        "Lexer produced wrong error kind.\nExpected: {:?}\nActual:   {:?}",
+        expected_kind, error_kind
     );
 }
 
@@ -48,7 +61,7 @@ pub fn run_lexer_error_tests(inputs: Vec<&str>, expected_kind: &SyntaxErrorKind)
 
 pub fn run_lexer_tests(tests: Vec<(&str, Vec<Token>)>) {
     for (input, expected) in tests {
-        lexer_test(input, expected);
+        lexer_token_test(input, expected);
     }
 }
 

@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
-use std::vec;
-
 use miri::lexer::Token;
 
-use super::utils::*;
+use super::utils::lexer_token_test;
 
 #[test]
 fn test_if_statement() {
-    lexer_test(
+    lexer_token_test(
         "
 if x
     x = 10
@@ -40,7 +38,7 @@ else
 
 #[test]
 fn test_if_block_else_inline() {
-    lexer_test(
+    lexer_token_test(
         "
 if x
     x = 10
@@ -68,7 +66,7 @@ else: x = 20
 
 #[test]
 fn test_if_inline_else_block() {
-    lexer_test(
+    lexer_token_test(
         "
 if x: x = 10
 else
@@ -96,7 +94,7 @@ else
 
 #[test]
 fn test_if_statement_with_assignment() {
-    lexer_test(
+    lexer_token_test(
         "
 let y = if x > 10
     10
@@ -128,7 +126,7 @@ else
 
 #[test]
 fn test_if_statement_inline() {
-    lexer_test(
+    lexer_token_test(
         "
 if x: x = 10 else: x = 20
 ",
@@ -151,7 +149,7 @@ if x: x = 10 else: x = 20
 
 #[test]
 fn test_if_statement_inline_with_assignment() {
-    lexer_test(
+    lexer_token_test(
         "
 let x = 50
 let y = if x % 2 == 0: x * x else: x / x
@@ -187,7 +185,7 @@ let y = if x % 2 == 0: x * x else: x / x
 
 #[test]
 fn test_if_with_empty_block() {
-    lexer_test(
+    lexer_token_test(
         "
 if x
     // empty then
@@ -212,7 +210,7 @@ else
 
 #[test]
 fn test_if_with_empty_block_no_else() {
-    lexer_test(
+    lexer_token_test(
         "
 if x
     // TODO
@@ -223,7 +221,7 @@ if x
 
 #[test]
 fn test_if_with_comment_in_empty_block() {
-    lexer_test(
+    lexer_token_test(
         "
 if x
     // This block is empty
@@ -244,7 +242,7 @@ let y = 1
 
 #[test]
 fn test_if_with_empty_else_block_with_followup() {
-    lexer_test(
+    lexer_token_test(
         "
 if x
     x = 1

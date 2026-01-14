@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
-use std::vec;
-
 use miri::lexer::Token;
 
-use super::utils::*;
+use super::utils::lexer_token_test;
 
 #[test]
 fn test_while_loop_nested_empty() {
-    lexer_test(
+    lexer_token_test(
         "
 while x > 0
     while y < 5
@@ -34,7 +32,7 @@ while x > 0
 
 #[test]
 fn test_for_loop_nested_empty() {
-    lexer_test(
+    lexer_token_test(
         "
 for i in 1..3
     for c in \"ab\"
@@ -61,7 +59,7 @@ for i in 1..3
 
 #[test]
 fn test_until_loop() {
-    lexer_test(
+    lexer_token_test(
         "until x <= 0: x = x - 1",
         vec![
             Token::Until,
@@ -80,7 +78,7 @@ fn test_until_loop() {
 
 #[test]
 fn test_forever_loop() {
-    lexer_test(
+    lexer_token_test(
         "
 forever
     if condition(): break
@@ -103,7 +101,7 @@ forever
 
 #[test]
 fn test_do_while_loop() {
-    lexer_test(
+    lexer_token_test(
         "
 do
     x = x + 1
@@ -131,7 +129,7 @@ while x < 10
 
 #[test]
 fn test_for_loop_with_inclusive_range() {
-    lexer_test(
+    lexer_token_test(
         "for i in 1..=10",
         vec![
             Token::For,
@@ -146,7 +144,7 @@ fn test_for_loop_with_inclusive_range() {
 
 #[test]
 fn test_for_loop_over_identifier() {
-    lexer_test(
+    lexer_token_test(
         "for item in my_list: print(item)",
         vec![
             Token::For,
@@ -164,7 +162,7 @@ fn test_for_loop_over_identifier() {
 
 #[test]
 fn test_loop_with_multiline_condition() {
-    lexer_test(
+    lexer_token_test(
         "
 while (x > 0 and
        y < 0)

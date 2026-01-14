@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
-use std::vec;
-
 use miri::{error::syntax::SyntaxErrorKind, lexer::Token};
 
-use super::utils::*;
+use super::utils::{lexer_error_test, lexer_token_test};
 
 #[test]
 fn test_inline_comments() {
-    lexer_test(
+    lexer_token_test(
         r#"
 var x = 10 // simple inline comment
 
@@ -47,7 +45,7 @@ x = x + 1 // math: x becomes x + 1
 
 #[test]
 fn test_multiline_comments() {
-    lexer_test(
+    lexer_token_test(
         r#"
 /**/
 
@@ -113,7 +111,7 @@ print("Hello") /* inline comment */
 
 #[test]
 fn test_deeply_nested_comments() {
-    lexer_test(
+    lexer_token_test(
         "before /* outer /* inner /* deepest */ inner */ outer */ after",
         vec![Token::Identifier, Token::Identifier],
     );
@@ -129,17 +127,17 @@ fn test_unclosed_nested_comment() {
 
 #[test]
 fn test_comment_with_code_like_content() {
-    lexer_test("/* func(): if else */ real_code", vec![Token::Identifier]);
+    lexer_token_test("/* func(): if else */ real_code", vec![Token::Identifier]);
 }
 
 #[test]
 fn test_comment_at_eof() {
-    lexer_test("code // comment with no newline", vec![Token::Identifier]);
+    lexer_token_test("code // comment with no newline", vec![Token::Identifier]);
 }
 
 #[test]
 fn test_nested_comments_with_strings() {
-    lexer_test(
+    lexer_token_test(
         r#"/* outer /* "string inside comment" */ outer */ code"#,
         vec![Token::Identifier],
     );
@@ -147,8 +145,8 @@ fn test_nested_comments_with_strings() {
 
 #[test]
 fn test_multiline_comment_at_eof() {
-    lexer_test("code /* comment */", vec![Token::Identifier]);
-    lexer_test("/* comment */", vec![]);
+    lexer_token_test("code /* comment */", vec![Token::Identifier]);
+    lexer_token_test("/* comment */", vec![]);
 }
 
 #[test]
@@ -162,11 +160,11 @@ fn test_unclosed_comment_at_eof() {
 
 #[test]
 fn test_comment_markers_inside_strings() {
-    lexer_test(
+    lexer_token_test(
         r#"let s1 = "This is not a // comment""#,
         vec![Token::Let, Token::Identifier, Token::Assign, Token::String],
     );
-    lexer_test(
+    lexer_token_test(
         r#"let s2 = "This is not a /* comment */""#,
         vec![Token::Let, Token::Identifier, Token::Assign, Token::String],
     );
@@ -175,7 +173,7 @@ fn test_comment_markers_inside_strings() {
 #[test]
 fn test_malformed_comment_delimiters() {
     // A lone closing comment delimiter is just a star and a slash, not a comment.
-    lexer_test(
+    lexer_token_test(
         "a */ b",
         vec![
             Token::Identifier,
@@ -185,7 +183,7 @@ fn test_malformed_comment_delimiters() {
         ],
     );
     // A space breaks the opening delimiter.
-    lexer_test(
+    lexer_token_test(
         "a / * b",
         vec![
             Token::Identifier,

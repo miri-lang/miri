@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
-use std::vec;
-
 use miri::lexer::Token;
 
-use super::utils::*;
+use super::utils::lexer_token_test;
 
 #[test]
 fn test_function_with_no_params() {
-    lexer_test(
+    lexer_token_test(
         "
 // Function with no parameters
 fn fancy_print()
@@ -32,7 +30,7 @@ fn fancy_print()
 
 #[test]
 fn test_function_with_params() {
-    lexer_test(
+    lexer_token_test(
         "
 /* Function with parameters */
 fn square(x int) int
@@ -80,7 +78,7 @@ fn add(a int, b int) int
 
 #[test]
 fn test_inline_function() {
-    lexer_test(
+    lexer_token_test(
         "
 // Inline function
 fn multiply(a int, b int) int: a * b
@@ -107,7 +105,7 @@ fn multiply(a int, b int) int: a * b
 
 #[test]
 fn test_lambda_function() {
-    lexer_test(
+    lexer_token_test(
         "
 // Lambda function
 let f = fn (x int) int: x * x
@@ -133,7 +131,7 @@ let f = fn (x int) int: x * x
 
 #[test]
 fn test_multiline_lambda_function() {
-    lexer_test(
+    lexer_token_test(
         "
 // Multiline lambda function
 let f1 = fn (a float, b float)
@@ -175,7 +173,7 @@ let f1 = fn (a float, b float)
 
 #[test]
 fn test_function_call() {
-    lexer_test(
+    lexer_token_test(
         "
 // Call with parentheses
 fancy_print()
@@ -205,7 +203,7 @@ f1(5.0, 3.0)
 
 #[test]
 fn test_function_call_with_codeblock() {
-    lexer_test(
+    lexer_token_test(
         "
 // Code block
 let y = arr.map(
@@ -237,7 +235,7 @@ let y = arr.map(
 
 #[test]
 fn test_namespaced_function_call() {
-    lexer_test(
+    lexer_token_test(
         "
 Http::new(url)
 ",
@@ -255,7 +253,7 @@ Http::new(url)
 
 #[test]
 fn test_lambda_with_empty_body() {
-    lexer_test(
+    lexer_token_test(
         "
 let f = fn()
     // empty body
@@ -274,7 +272,7 @@ let f = fn()
 
 #[test]
 fn test_function_modifiers() {
-    lexer_test(
+    lexer_token_test(
         "async fn async_task()",
         vec![
             Token::Async,
@@ -285,7 +283,7 @@ fn test_function_modifiers() {
         ],
     );
 
-    lexer_test(
+    lexer_token_test(
         "gpu fn kernel()",
         vec![
             Token::Gpu,
@@ -296,7 +294,7 @@ fn test_function_modifiers() {
         ],
     );
 
-    lexer_test(
+    lexer_token_test(
         "parallel fn parallel_task()",
         vec![
             Token::Parallel,
@@ -308,7 +306,7 @@ fn test_function_modifiers() {
     );
 
     // The order of modifiers should not matter to the lexer.
-    lexer_test(
+    lexer_token_test(
         "async gpu fn parallel_kernel()",
         vec![
             Token::Async,
@@ -319,7 +317,7 @@ fn test_function_modifiers() {
             Token::RParen,
         ],
     );
-    lexer_test(
+    lexer_token_test(
         "gpu async fn another_kernel()",
         vec![
             Token::Gpu,
@@ -336,7 +334,7 @@ fn test_function_modifiers() {
 fn test_function_with_multiline_parameters() {
     // The lexer should not insert Indent/Dedent or ExpressionStatementEnd tokens
     // inside a parameter list that spans multiple lines.
-    lexer_test(
+    lexer_token_test(
         "
 fn complex_func(
     a int,
@@ -373,7 +371,7 @@ fn complex_func(
 
 #[test]
 fn test_nested_function_calls() {
-    lexer_test(
+    lexer_token_test(
         "a(b(c(1)))",
         vec![
             Token::Identifier,
@@ -392,7 +390,7 @@ fn test_nested_function_calls() {
 
 #[test]
 fn test_lambda_edge_cases() {
-    lexer_test(
+    lexer_token_test(
         "let l = fn(): 1",
         vec![
             Token::Let,
@@ -406,7 +404,7 @@ fn test_lambda_edge_cases() {
         ],
     );
 
-    lexer_test(
+    lexer_token_test(
         "let l = fn()\n  1",
         vec![
             Token::Let,

@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
-use std::vec;
-
 use miri::{error::syntax::SyntaxErrorKind, lexer::Token};
 
-use super::utils::*;
+use super::utils::{lexer_error_test, lexer_token_test, run_lexer_tests};
 
 #[test]
 fn test_symbols_and_operators() {
@@ -53,7 +51,7 @@ fn test_symbols_and_operators() {
 
 #[test]
 fn test_operators_without_spaces() {
-    lexer_test(
+    lexer_token_test(
         "a+=b*=c/=d%=e==f!=g>=h<=i",
         vec![
             Token::Identifier,
@@ -79,7 +77,7 @@ fn test_operators_without_spaces() {
 
 #[test]
 fn test_complex_assignment_chains() {
-    lexer_test(
+    lexer_token_test(
         "a = b = c += d *= e",
         vec![
             Token::Identifier,

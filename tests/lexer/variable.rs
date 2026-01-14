@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
-use std::vec;
-
 use miri::lexer::Token;
 
-use super::utils::*;
+use super::utils::lexer_token_test;
 
 #[test]
 fn test_declaration() {
-    lexer_test(
+    lexer_token_test(
         "
 let x = 10                                   // inferred
 var y = 20                                   // mutable
@@ -140,7 +138,7 @@ let dict2 {string: int} = {key1: 1, key2: 2} // dictionary with type
 
 #[test]
 fn test_expression_end_after_collections() {
-    lexer_test(
+    lexer_token_test(
         "
 let a = [1]
 let b = 2
@@ -161,7 +159,7 @@ let b = 2
         ],
     );
 
-    lexer_test(
+    lexer_token_test(
         "
 let c = {k:1}
 let d = 2
@@ -188,7 +186,7 @@ let d = 2
 #[test]
 fn test_keywords_as_variable_names() {
     // The lexer should tokenize these as keywords. The parser will later reject this.
-    lexer_test(
+    lexer_token_test(
         "
 let let = 1
 var if = 2
@@ -210,7 +208,7 @@ var if = 2
 
 #[test]
 fn test_declaration_without_whitespace() {
-    lexer_test(
+    lexer_token_test(
         "
 let x=10
 var y=20
@@ -232,7 +230,7 @@ var y=20
 
 #[test]
 fn test_multiple_declarations_on_one_line() {
-    lexer_test(
+    lexer_token_test(
         "let x, y = 1, 2",
         vec![
             Token::Let,

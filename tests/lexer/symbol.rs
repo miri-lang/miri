@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
-use std::vec;
-
 use miri::lexer::Token;
 
-use super::utils::*;
+use super::utils::{lexer_token_test, run_lexer_tests};
 
 #[test]
 fn test_symbols_with_numbers() {
-    lexer_test(
+    lexer_token_test(
         ":symbol123 :test_2 :_private",
         vec![Token::Symbol, Token::Symbol, Token::Symbol],
     );

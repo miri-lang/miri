@@ -1,20 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2017–2026 Viacheslav Shynkarenko
 
-use std::vec;
-
 use miri::{error::syntax::SyntaxErrorKind, lexer::Token};
 
-use super::utils::*;
+use super::utils::{lexer_error_test, lexer_token_test};
 
 #[test]
 fn test_empty_input() {
-    lexer_test("", vec![]);
+    lexer_token_test("", vec![]);
 }
 
 #[test]
 fn test_whitespace_only() {
-    lexer_test("   \t  \n  \r\n  ", vec![]);
+    lexer_token_test("   \t  \n  \r\n  ", vec![]);
 }
 
 #[test]
@@ -24,7 +22,7 @@ fn test_invalid_characters() {
 
 #[test]
 fn test_shebang() {
-    lexer_test(
+    lexer_token_test(
         "#!/usr/bin/env miri\nlet x = 1",
         vec![Token::Let, Token::Identifier, Token::Assign, Token::Int],
     );
@@ -32,7 +30,7 @@ fn test_shebang() {
 
 #[test]
 fn test_input_with_bom() {
-    lexer_test(
+    lexer_token_test(
         "\u{FEFF}let x = 1",
         vec![Token::Let, Token::Identifier, Token::Assign, Token::Int],
     );
