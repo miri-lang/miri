@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017–2026 Viacheslav Shynkarenko
+// Copyright (c) Viacheslav Shynkarenko
 
 //! Mid-level Intermediate Representation (MIR) for Miri.
 //!

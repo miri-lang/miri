@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017–2026 Viacheslav Shynkarenko
+// Copyright (c) Viacheslav Shynkarenko
 
 use crate::ast::factory::func;
 use crate::ast::statement::{Statement, StatementKind};

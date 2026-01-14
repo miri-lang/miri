@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017–2026 Viacheslav Shynkarenko
+// Copyright (c) Viacheslav Shynkarenko
 
 use super::token::{RegexToken, Token};
 use crate::error::syntax::{SyntaxError, SyntaxErrorKind};

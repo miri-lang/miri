@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017–2026 Viacheslav Shynkarenko
+// Copyright (c) Viacheslav Shynkarenko
 
 use crate::mir::utils::lower_code;
 use miri::ast::literal::{IntegerLiteral, Literal};

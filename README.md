@@ -1,4 +1,4 @@
-# Miri Programming Language
+# The Miri Programming Language
 
 Miri is a modern, minimal, GPU-first, statically-typed programming language designed for high performance and developer productivity. It combines the readability of Ruby and Python with the safety and speed of Rust. This is essential to balance in the age of Generative AI, when lots of code is written by machines, and should be understood by humans.
 

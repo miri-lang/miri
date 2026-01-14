@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017–2026 Viacheslav Shynkarenko
+// Copyright (c) Viacheslav Shynkarenko
 
 use super::super::utils::{
     assert_locals, assert_terminator, count_assignments, count_assignments_to, find_local_idx,

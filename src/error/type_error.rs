@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017–2026 Viacheslav Shynkarenko
+// Copyright (c) Viacheslav Shynkarenko
 
 use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable, Severity};
 use crate::error::format::format_diagnostic;

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017–2026 Viacheslav Shynkarenko
+// Copyright (c) Viacheslav Shynkarenko
 
 use super::utils::{lexer_error_test, lexer_token_test};
 use miri::{error::syntax::SyntaxErrorKind, lexer::Token};

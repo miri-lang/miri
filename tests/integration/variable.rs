@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017–2026 Viacheslav Shynkarenko
+// Copyright (c) Viacheslav Shynkarenko
 
 use crate::integration::utils::{
     assert_compiler_error, assert_returns, assert_returns_many, assert_runs, assert_runs_many,

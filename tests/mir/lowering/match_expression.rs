@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017–2026 Viacheslav Shynkarenko
+// Copyright (c) Viacheslav Shynkarenko
 
 use super::utils::{lowering_test_has_local, lowering_test_switch_int};
 use crate::mir::utils::lower_code;
