@@ -73,6 +73,7 @@ impl TypeChecker {
             ExpressionKind::EnumValue(name, values) => {
                 self.infer_enum_value(name, values, expr.span.clone(), context)
             }
+            ExpressionKind::Super => self.infer_super(expr.span.clone(), context),
             _ => ast_factory::make_type(TypeKind::Int), // Default fallback for unimplemented expressions
         };
 
@@ -149,6 +150,44 @@ impl TypeChecker {
             Literal::None => ast_factory::make_type(TypeKind::Nullable(Box::new(
                 ast_factory::make_type(TypeKind::Void),
             ))),
+        }
+    }
+
+    /// Infers the type of a 'self' expression.
+    ///
+    /// `self` refers to the current class instance. It can only be used inside a class method.
+    fn infer_self(&mut self, span: Span, context: &Context) -> Type {
+        if let Some(class_type) = &context.current_class_type {
+            class_type.clone()
+        } else {
+            self.report_error(
+                "'self' can only be used inside a class method".to_string(),
+                span,
+            );
+            ast_factory::make_type(TypeKind::Error)
+        }
+    }
+
+    /// Infers the type of a 'super' expression.
+    ///
+    /// `super` refers to the parent class. It can only be used inside a class that extends another.
+    fn infer_super(&mut self, span: Span, context: &Context) -> Type {
+        if context.current_class.is_none() {
+            self.report_error(
+                "'super' can only be used inside a class method".to_string(),
+                span,
+            );
+            return ast_factory::make_type(TypeKind::Error);
+        }
+
+        if let Some(base_class) = &context.current_base_class {
+            ast_factory::make_type(TypeKind::Custom(base_class.clone(), None))
+        } else {
+            self.report_error(
+                "'super' can only be used in a class that extends another class".to_string(),
+                span,
+            );
+            ast_factory::make_type(TypeKind::Error)
         }
     }
 
@@ -270,6 +309,11 @@ impl TypeChecker {
                 }],
                 Some(Box::new(ast_factory::type_expr_non_null(return_type))),
             ));
+        }
+
+        // Handle 'self' keyword - refers to current class instance
+        if name == "self" {
+            return self.infer_self(span, context);
         }
 
         let info_opt = context
@@ -1090,6 +1134,57 @@ impl TypeChecker {
                     }
                     return make_type(TypeKind::Error);
                 }
+            } else if let Some(TypeDefinition::Class(def)) = def_opt {
+                // Check fields first
+                if let Some(field_info) = def.fields.get(prop_name) {
+                    // TODO: Add visibility check for class fields
+                    return field_info.ty.clone();
+                }
+
+                // Check methods
+                if let Some(method_info) = def.methods.get(prop_name) {
+                    // TODO: Add visibility check for class methods
+                    // Build a function type from the method signature
+                    let params: Vec<Parameter> = method_info
+                        .params
+                        .iter()
+                        .map(|(name, ty)| Parameter {
+                            name: name.clone(),
+                            typ: Box::new(self.create_type_expression(ty.clone())),
+                            guard: None,
+                            default_value: None,
+                        })
+                        .collect();
+
+                    let return_type_expr = if matches!(method_info.return_type.kind, TypeKind::Void)
+                    {
+                        None
+                    } else {
+                        Some(Box::new(
+                            self.create_type_expression(method_info.return_type.clone()),
+                        ))
+                    };
+
+                    return make_type(TypeKind::Function(None, params, return_type_expr));
+                }
+
+                // No field or method found
+                let mut candidates: Vec<&str> = def.fields.keys().map(|s| s.as_str()).collect();
+                candidates.extend(def.methods.keys().map(|s| s.as_str()));
+
+                if let Some(suggestion) = find_best_match(prop_name, &candidates) {
+                    self.report_error_with_help(
+                        format!("Type '{}' has no field or method '{}'", name, prop_name),
+                        span,
+                        format!("Did you mean '{}'?", suggestion),
+                    );
+                } else {
+                    self.report_error(
+                        format!("Type '{}' has no field or method '{}'", name, prop_name),
+                        span,
+                    );
+                }
+                return make_type(TypeKind::Error);
             } else if let Some(TypeDefinition::Enum(_)) = def_opt {
                 // Could be an enum instance, but enums don't have fields yet (unless methods are added later)
                 self.report_error(format!("Type '{}' does not have members", name), span);

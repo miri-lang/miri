@@ -952,8 +952,36 @@ impl TypeChecker {
     #[allow(clippy::only_used_in_recursion)]
     pub(crate) fn is_mutable_expression(&self, expr: &Expression, context: &Context) -> bool {
         match &expr.node {
-            ExpressionKind::Identifier(name, _) => context.is_mutable(name),
-            ExpressionKind::Member(obj, _) => self.is_mutable_expression(obj, context),
+            ExpressionKind::Identifier(name, _) => {
+                // 'self' is considered mutable for assignment purposes
+                // (individual field mutability is checked at the field level)
+                if name == "self" {
+                    return true;
+                }
+                context.is_mutable(name)
+            }
+            ExpressionKind::Member(obj, prop) => {
+                // For member expressions, check if the field itself is mutable
+                // First check if object is self
+                if let ExpressionKind::Identifier(name, _) = &obj.node {
+                    if name == "self" {
+                        // Check field mutability in current class
+                        if let Some(class_name) = &context.current_class {
+                            if let Some(super::context::TypeDefinition::Class(def)) =
+                                self.global_type_definitions.get(class_name)
+                            {
+                                if let ExpressionKind::Identifier(field_name, _) = &prop.node {
+                                    if let Some(field_info) = def.fields.get(field_name) {
+                                        return field_info.mutable;
+                                    }
+                                }
+                            }
+                        }
+                        return true; // Default to mutable if we can't find the field info
+                    }
+                }
+                self.is_mutable_expression(obj, context)
+            }
             ExpressionKind::Index(obj, _) => self.is_mutable_expression(obj, context),
             _ => false,
         }

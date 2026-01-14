@@ -1128,9 +1128,15 @@ impl TypeChecker {
             self.define_generics(gens, context);
         }
 
-        // Process class body to collect fields and methods
+        // Set class context for self/super resolution
+        let class_type = make_type(TypeKind::Custom(name.clone(), None));
+        context.enter_class(name.clone(), base_class_name.clone(), class_type);
+
+        // PASS 1: Collect fields and method signatures (without checking bodies)
         let mut fields: HashMap<String, FieldInfo> = HashMap::new();
         let mut methods: HashMap<String, MethodInfo> = HashMap::new();
+        // Store method info for second pass body checking
+        let mut method_statements: Vec<&Statement> = Vec::new();
 
         for stmt in body {
             match &stmt.node {
@@ -1166,23 +1172,10 @@ impl TypeChecker {
                     _method_generics,
                     params,
                     return_type,
-                    method_body,
+                    _method_body,
                     props,
                 ) => {
-                    // Check the function declaration normally
-                    self.check_function_declaration(
-                        FunctionDeclarationInfo {
-                            name: method_name,
-                            generics: _method_generics,
-                            params,
-                            return_type,
-                            body: method_body.as_ref().map(|b| b.as_ref()),
-                            properties: props,
-                        },
-                        context,
-                    );
-
-                    // Collect method info
+                    // Collect method signature only (don't check body yet)
                     let return_ty = if let Some(rt_expr) = return_type {
                         self.resolve_type_expression(rt_expr, context)
                     } else {
@@ -1208,6 +1201,9 @@ impl TypeChecker {
                             is_constructor: method_name == "init",
                         },
                     );
+
+                    // Save for second pass
+                    method_statements.push(stmt);
                 }
                 _ => {
                     self.report_error(
@@ -1218,9 +1214,7 @@ impl TypeChecker {
             }
         }
 
-        context.exit_scope();
-
-        // Create class definition
+        // Create and register class definition BEFORE checking method bodies
         let class_def = ClassDefinition {
             name: name.clone(),
             generics: generic_defs,
@@ -1231,21 +1225,26 @@ impl TypeChecker {
             module: self.current_module.clone(),
         };
 
-        // Register class type definition
+        // Register class type definition so self.* lookups work
         context.define_type(name.clone(), TypeDefinition::Class(class_def.clone()));
-        if context.scopes.len() == 1 {
+        // scopes.len() == 2 because we're in [base_scope, class_scope]
+        if context.scopes.len() == 2 {
             self.global_type_definitions
-                .insert(name.clone(), TypeDefinition::Class(class_def));
+                .insert(name.clone(), TypeDefinition::Class(class_def.clone()));
         }
 
         // Define class type symbol (as a constructor/type)
-        let class_type = make_type(TypeKind::Custom(name.clone(), None));
+        let class_type_meta = make_type(TypeKind::Meta(Box::new(make_type(TypeKind::Custom(
+            name.clone(),
+            None,
+        )))));
 
-        if context.scopes.len() == 1 {
+        // scopes.len() == 2 because we're in [base_scope, class_scope]
+        if context.scopes.len() == 2 {
             self.global_scope.insert(
                 name.clone(),
                 super::context::SymbolInfo {
-                    ty: make_type(TypeKind::Meta(Box::new(class_type.clone()))),
+                    ty: class_type_meta.clone(),
                     mutable: false,
                     visibility: visibility.clone(),
                     module: self.current_module.clone(),
@@ -1254,12 +1253,41 @@ impl TypeChecker {
         }
 
         context.define(
-            name,
-            make_type(TypeKind::Meta(Box::new(class_type))),
+            name.clone(),
+            class_type_meta,
             false,
             visibility.clone(),
             self.current_module.clone(),
         );
+
+        // PASS 2: Check method bodies (now class is registered)
+        for stmt in method_statements {
+            if let StatementKind::FunctionDeclaration(
+                method_name,
+                method_generics,
+                params,
+                return_type,
+                method_body,
+                props,
+            ) = &stmt.node
+            {
+                self.check_function_declaration(
+                    FunctionDeclarationInfo {
+                        name: method_name,
+                        generics: method_generics,
+                        params,
+                        return_type,
+                        body: method_body.as_ref().map(|b| b.as_ref()),
+                        properties: props,
+                    },
+                    context,
+                );
+            }
+        }
+
+        // Exit class context
+        context.exit_class();
+        context.exit_scope();
     }
 
     #[allow(clippy::too_many_arguments)]

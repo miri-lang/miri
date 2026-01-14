@@ -112,6 +112,12 @@ pub struct Context {
     pub loop_depth: usize,
     /// Whether we are currently inside a GPU function.
     pub in_gpu_function: bool,
+    /// Name of the current class being checked (for self resolution).
+    pub current_class: Option<String>,
+    /// Name of the base class of the current class (for super resolution).
+    pub current_base_class: Option<String>,
+    /// The type of the current class (for self expression type inference).
+    pub current_class_type: Option<Type>,
 }
 
 impl Context {
@@ -123,6 +129,9 @@ impl Context {
             inferred_return_types: Vec::new(),
             loop_depth: 0,
             in_gpu_function: false,
+            current_class: None,
+            current_base_class: None,
+            current_class_type: None,
         }
     }
 
@@ -217,6 +226,30 @@ impl Context {
             }
         }
         None
+    }
+
+    /// Enters a class context for self/super resolution.
+    pub fn enter_class(
+        &mut self,
+        class_name: String,
+        base_class: Option<String>,
+        class_type: Type,
+    ) {
+        self.current_class = Some(class_name);
+        self.current_base_class = base_class;
+        self.current_class_type = Some(class_type);
+    }
+
+    /// Exits the current class context.
+    pub fn exit_class(&mut self) {
+        self.current_class = None;
+        self.current_base_class = None;
+        self.current_class_type = None;
+    }
+
+    /// Returns true if we are currently inside a class context.
+    pub fn in_class(&self) -> bool {
+        self.current_class.is_some()
     }
 }
 

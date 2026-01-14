@@ -19,6 +19,7 @@ pub mod multiple_errors;
 pub mod mutability;
 pub mod nullable;
 pub mod result;
+pub mod self_super;
 pub mod set;
 pub mod shadowing;
 pub mod shared_memory;
