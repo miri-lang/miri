@@ -564,6 +564,25 @@ impl TypeChecker {
                         .cloned()
                         .or_else(|| self.global_type_definitions.get(name).cloned());
 
+                    // Check for Class constructor
+                    if let Some(TypeDefinition::Class(def)) = &type_def {
+                        // Prevent instantiation of abstract classes
+                        if def.is_abstract {
+                            self.report_error(
+                                format!(
+                                    "Cannot instantiate abstract class '{}'. Abstract classes cannot be instantiated directly.",
+                                    name
+                                ),
+                                span.clone(),
+                            );
+                            return make_type(TypeKind::Error);
+                        }
+
+                        // Class constructors are handled via init method
+                        // For now, just return the class type
+                        return make_type(TypeKind::Custom(name.clone(), None));
+                    }
+
                     if let Some(TypeDefinition::Struct(def)) = type_def {
                         let mut pos_iter = positional_args.iter();
                         let mut generic_map = HashMap::new();
@@ -1045,6 +1064,25 @@ impl TypeChecker {
                 }
                 (None, None)
             }
+            // For generic types with constraints (T extends SomeClass), use constraint for member lookup
+            TypeKind::Generic(_, Some(constraint), _) => {
+                // Use the constraint type for member lookup
+                match &constraint.kind {
+                    TypeKind::Custom(name, args) => (Some(name.clone()), args.clone()),
+                    _ => (None, None),
+                }
+            }
+            TypeKind::Generic(name, None, _) => {
+                // Generic without constraint - no members
+                self.report_error(
+                    format!(
+                        "Generic type '{}' without constraints has no known members",
+                        name
+                    ),
+                    span,
+                );
+                return make_type(TypeKind::Error);
+            }
             // Add others as needed
             _ => (None, None),
         };
@@ -1135,44 +1173,116 @@ impl TypeChecker {
                     return make_type(TypeKind::Error);
                 }
             } else if let Some(TypeDefinition::Class(def)) = def_opt {
-                // Check fields first
-                if let Some(field_info) = def.fields.get(prop_name) {
-                    // TODO: Add visibility check for class fields
-                    return field_info.ty.clone();
+                // Walk up the inheritance chain to find the member
+                let mut search_class_def = def.clone();
+
+                loop {
+                    // Check fields in current class
+                    if let Some(field_info) = search_class_def.fields.get(prop_name) {
+                        // Check visibility for class field
+                        if !self.check_member_visibility(
+                            &field_info.visibility,
+                            &search_class_def.name,
+                            context.current_class.as_deref(),
+                        ) {
+                            self.report_error(
+                                format!(
+                                    "Field '{}' of class '{}' is {:?} and cannot be accessed from here",
+                                    prop_name, search_class_def.name, field_info.visibility
+                                ),
+                                span,
+                            );
+                            return make_type(TypeKind::Error);
+                        }
+                        return field_info.ty.clone();
+                    }
+
+                    // Check methods in current class
+                    if let Some(method_info) = search_class_def.methods.get(prop_name) {
+                        // Check visibility for class method
+                        if !self.check_member_visibility(
+                            &method_info.visibility,
+                            &search_class_def.name,
+                            context.current_class.as_deref(),
+                        ) {
+                            self.report_error(
+                                format!(
+                                    "Method '{}' of class '{}' is {:?} and cannot be accessed from here",
+                                    prop_name, search_class_def.name, method_info.visibility
+                                ),
+                                span,
+                            );
+                            return make_type(TypeKind::Error);
+                        }
+
+                        // Build a function type from the method signature
+                        let params: Vec<Parameter> = method_info
+                            .params
+                            .iter()
+                            .map(|(name, ty)| Parameter {
+                                name: name.clone(),
+                                typ: Box::new(self.create_type_expression(ty.clone())),
+                                guard: None,
+                                default_value: None,
+                            })
+                            .collect();
+
+                        let return_type_expr =
+                            if matches!(method_info.return_type.kind, TypeKind::Void) {
+                                None
+                            } else {
+                                Some(Box::new(
+                                    self.create_type_expression(method_info.return_type.clone()),
+                                ))
+                            };
+
+                        return make_type(TypeKind::Function(None, params, return_type_expr));
+                    }
+
+                    // If not found, try the base class
+                    if let Some(base_class_name) = &search_class_def.base_class {
+                        let base_def_opt = context
+                            .resolve_type_definition(base_class_name)
+                            .cloned()
+                            .or_else(|| self.global_type_definitions.get(base_class_name).cloned());
+
+                        if let Some(TypeDefinition::Class(base_def)) = base_def_opt {
+                            search_class_def = base_def;
+                            continue;
+                        }
+                    }
+
+                    // No more base classes, member not found
+                    break;
                 }
 
-                // Check methods
-                if let Some(method_info) = def.methods.get(prop_name) {
-                    // TODO: Add visibility check for class methods
-                    // Build a function type from the method signature
-                    let params: Vec<Parameter> = method_info
-                        .params
-                        .iter()
-                        .map(|(name, ty)| Parameter {
-                            name: name.clone(),
-                            typ: Box::new(self.create_type_expression(ty.clone())),
-                            guard: None,
-                            default_value: None,
-                        })
-                        .collect();
+                // Collect all candidates from the class hierarchy for suggestions
+                let mut candidates: Vec<String> = Vec::new();
+                let mut collect_class_name = name.clone();
+                loop {
+                    let collect_def_opt = context
+                        .resolve_type_definition(&collect_class_name)
+                        .cloned()
+                        .or_else(|| {
+                            self.global_type_definitions
+                                .get(&collect_class_name)
+                                .cloned()
+                        });
 
-                    let return_type_expr = if matches!(method_info.return_type.kind, TypeKind::Void)
-                    {
-                        None
-                    } else {
-                        Some(Box::new(
-                            self.create_type_expression(method_info.return_type.clone()),
-                        ))
-                    };
+                    if let Some(TypeDefinition::Class(collect_def)) = collect_def_opt {
+                        candidates.extend(collect_def.fields.keys().cloned());
+                        candidates.extend(collect_def.methods.keys().cloned());
 
-                    return make_type(TypeKind::Function(None, params, return_type_expr));
+                        if let Some(base_name) = &collect_def.base_class {
+                            collect_class_name = base_name.clone();
+                            continue;
+                        }
+                    }
+                    break;
                 }
 
-                // No field or method found
-                let mut candidates: Vec<&str> = def.fields.keys().map(|s| s.as_str()).collect();
-                candidates.extend(def.methods.keys().map(|s| s.as_str()));
-
-                if let Some(suggestion) = find_best_match(prop_name, &candidates) {
+                let candidate_refs: Vec<&str> = candidates.iter().map(|s| s.as_str()).collect();
+                if let Some(suggestion) = find_best_match(prop_name, &candidate_refs) {
                     self.report_error_with_help(
                         format!("Type '{}' has no field or method '{}'", name, prop_name),
                         span,

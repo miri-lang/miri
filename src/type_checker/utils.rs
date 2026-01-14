@@ -313,6 +313,33 @@ impl TypeChecker {
         }
     }
 
+    /// Checks if a class member can be accessed from the current context.
+    /// - `public`: always accessible
+    /// - `private`: only accessible from within the same class
+    /// - `protected`: accessible from same class or subclasses
+    pub(crate) fn check_member_visibility(
+        &self,
+        visibility: &MemberVisibility,
+        member_class: &str,
+        current_class: Option<&str>,
+    ) -> bool {
+        match visibility {
+            MemberVisibility::Public => true,
+            MemberVisibility::Private => {
+                // Private members only accessible from same class
+                current_class == Some(member_class)
+            }
+            MemberVisibility::Protected => {
+                // Protected members accessible from same class or subclasses
+                if let Some(curr) = current_class {
+                    curr == member_class || self.is_subtype(curr, member_class)
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
     pub(crate) fn get_integer_size(&self, t: &Type) -> Option<u8> {
         match &t.kind {
             TypeKind::I8 | TypeKind::U8 => Some(8),
@@ -596,29 +623,42 @@ impl TypeChecker {
     }
 
     pub(crate) fn check_implements(&self, ty: &Type, constraint: &Type, context: &Context) -> bool {
-        // Resolve constraint to StructDefinition
-        let constraint_def = if let TypeKind::Custom(name, _) = &constraint.kind {
-            context
-                .resolve_type_definition(name)
-                .or_else(|| self.global_type_definitions.get(name))
+        // Get constraint name
+        let constraint_name = if let TypeKind::Custom(name, _) = &constraint.kind {
+            name.clone()
         } else {
             return false;
         };
 
+        // Get type name
+        let ty_name = if let TypeKind::Custom(name, _) = &ty.kind {
+            name.clone()
+        } else {
+            return false;
+        };
+
+        // Check if ty implements constraint via hierarchy (for classes/traits)
+        // is_subtype checks extends and implements chains
+        if self.is_subtype(&ty_name, &constraint_name) {
+            return true;
+        }
+
+        // For structs with interface-like pattern (structural typing)
+        let constraint_def = context
+            .resolve_type_definition(&constraint_name)
+            .or_else(|| self.global_type_definitions.get(&constraint_name));
+
         let constraint_fields = if let Some(TypeDefinition::Struct(def)) = constraint_def {
             &def.fields
         } else {
-            return false; // Constraint must be a struct (interface)
+            // Constraint is a trait or class - hierarchy check above should have handled it
+            return false;
         };
 
-        // Resolve ty to StructDefinition
-        let ty_def = if let TypeKind::Custom(name, _) = &ty.kind {
-            context
-                .resolve_type_definition(name)
-                .or_else(|| self.global_type_definitions.get(name))
-        } else {
-            return false; // Only structs can implement interfaces for now
-        };
+        // Resolve ty to StructDefinition for structural typing
+        let ty_def = context
+            .resolve_type_definition(&ty_name)
+            .or_else(|| self.global_type_definitions.get(&ty_name));
 
         let ty_fields = if let Some(TypeDefinition::Struct(def)) = ty_def {
             &def.fields
@@ -626,7 +666,7 @@ impl TypeChecker {
             return false;
         };
 
-        // Check if ty has all fields of constraint
+        // Check if ty has all fields of constraint (structural typing for structs)
         for (c_name, c_type, _) in constraint_fields {
             if let Some((_, t_type, _)) = ty_fields.iter().find(|(t_name, _, _)| t_name == c_name) {
                 if !self.are_compatible(c_type, t_type, context) {

@@ -1059,7 +1059,7 @@ impl TypeChecker {
         visibility: &MemberVisibility,
         context: &mut Context,
         span: Span,
-        _is_abstract: bool,
+        is_abstract: bool,
     ) {
         // Extract class name
         let name = match self.extract_type_name(name_expr) {
@@ -1106,6 +1106,36 @@ impl TypeChecker {
             None
         };
 
+        // Check for circular inheritance
+        if let Some(ref base_name) = base_class_name {
+            let mut visited = std::collections::HashSet::new();
+            visited.insert(name.clone());
+            let mut current = base_name.clone();
+            loop {
+                if visited.contains(&current) {
+                    self.report_error(
+                        format!(
+                            "Circular inheritance detected: class '{}' eventually extends itself",
+                            name
+                        ),
+                        span.clone(),
+                    );
+                    break;
+                }
+                visited.insert(current.clone());
+                // Get the base class of current
+                if let Some(relation) = self.hierarchy.get(&current) {
+                    if let Some(ref next_base) = relation.extends {
+                        current = next_base.clone();
+                    } else {
+                        break; // No more base classes
+                    }
+                } else {
+                    break; // Class not in hierarchy yet (could be defined later)
+                }
+            }
+        }
+
         // Validate traits exist
         let mut trait_names = Vec::new();
         for trait_expr in traits {
@@ -1117,6 +1147,17 @@ impl TypeChecker {
                     );
                 }
                 trait_names.push(trait_name);
+            }
+        }
+
+        // Register class in hierarchy for is_subtype checks (protected visibility, etc.)
+        {
+            let entry = self.hierarchy.entry(name.clone()).or_default();
+            if let Some(ref base_name) = base_class_name {
+                entry.extends = Some(base_name.clone());
+            }
+            for trait_name in &trait_names {
+                entry.implements.push(trait_name.clone());
             }
         }
 
@@ -1192,6 +1233,13 @@ impl TypeChecker {
                         })
                         .collect();
 
+                    // Method is abstract if it has no body OR has an empty body
+                    // Parser creates empty_statement() for abstract methods, not None
+                    let method_is_abstract = _method_body.as_ref().is_none_or(|body| {
+                        matches!(&body.node, StatementKind::Empty)
+                            || matches!(&body.node, StatementKind::Block(stmts) if stmts.is_empty())
+                    });
+
                     methods.insert(
                         method_name.clone(),
                         MethodInfo {
@@ -1199,6 +1247,7 @@ impl TypeChecker {
                             return_type: return_ty,
                             visibility: props.visibility.clone(),
                             is_constructor: method_name == "init",
+                            is_abstract: method_is_abstract,
                         },
                     );
 
@@ -1214,15 +1263,305 @@ impl TypeChecker {
             }
         }
 
+        // Validate: non-abstract classes cannot have abstract methods
+        if !is_abstract {
+            for (method_name, method_info) in &methods {
+                if method_info.is_abstract {
+                    self.report_error(
+                        format!(
+                            "Non-abstract class '{}' cannot have abstract method '{}'",
+                            name, method_name
+                        ),
+                        span.clone(),
+                    );
+                }
+            }
+        }
+
+        // Validate: method overrides must have compatible signatures
+        let override_errors: Vec<String> = if let Some(ref base_name) = base_class_name {
+            let mut errors = Vec::new();
+            // Walk up the inheritance chain to find parent methods
+            let mut current_base = Some(base_name.clone());
+            while let Some(ref class_name) = current_base {
+                if let Some(TypeDefinition::Class(base_def)) =
+                    self.global_type_definitions.get(class_name)
+                {
+                    for (method_name, child_method) in &methods {
+                        // Skip constructor (init) - constructors can have different signatures
+                        if method_name == "init" {
+                            continue;
+                        }
+                        if let Some(parent_method) = base_def.methods.get(method_name) {
+                            // Check parameter count
+                            if child_method.params.len() != parent_method.params.len() {
+                                errors.push(format!(
+                                    "Method '{}' has incompatible parameter count: parent has {} parameters, child has {}",
+                                    method_name,
+                                    parent_method.params.len(),
+                                    child_method.params.len()
+                                ));
+                            } else {
+                                // Check parameter types
+                                for (i, ((child_name, child_type), (_, parent_type))) in
+                                    child_method
+                                        .params
+                                        .iter()
+                                        .zip(parent_method.params.iter())
+                                        .enumerate()
+                                {
+                                    if child_type.kind != parent_type.kind {
+                                        errors.push(format!(
+                                            "Method '{}' has incompatible parameter type for '{}' (position {}): expected {}, got {}",
+                                            method_name,
+                                            child_name,
+                                            i + 1,
+                                            parent_type,
+                                            child_type
+                                        ));
+                                    }
+                                }
+                            }
+
+                            // Check return type
+                            if child_method.return_type.kind != parent_method.return_type.kind {
+                                errors.push(format!(
+                                    "Method '{}' has incompatible return type: expected {}, got {}",
+                                    method_name,
+                                    parent_method.return_type,
+                                    child_method.return_type
+                                ));
+                            }
+                        }
+                    }
+                    // Move to the next ancestor
+                    current_base = base_def.base_class.clone();
+                } else {
+                    break;
+                }
+            }
+            errors
+        } else {
+            Vec::new()
+        };
+
+        // Report override errors
+        for error in override_errors {
+            self.report_error(error, span.clone());
+        }
+
+        // Validate: child class init must call super.init() when parent has accessible init
+        if let Some(ref base_name) = base_class_name {
+            // Check if parent has an accessible init method
+            let parent_has_init = {
+                let mut has_init = false;
+                let mut current_base = Some(base_name.clone());
+                while let Some(ref check_class) = current_base {
+                    if let Some(TypeDefinition::Class(base_def)) =
+                        self.global_type_definitions.get(check_class)
+                    {
+                        if let Some(init_method) = base_def.methods.get("init") {
+                            // Parent's init must be accessible (public or protected)
+                            if matches!(
+                                init_method.visibility,
+                                MemberVisibility::Public | MemberVisibility::Protected
+                            ) {
+                                has_init = true;
+                                break;
+                            }
+                        }
+                        current_base = base_def.base_class.clone();
+                    } else {
+                        break;
+                    }
+                }
+                has_init
+            };
+
+            // If parent has init and child has init, check for super.init() call
+            if parent_has_init {
+                if let Some(child_init) = methods.get("init") {
+                    // We need to check if super.init() is called in the init body
+                    // Look through method_statements to find the init body
+                    let mut found_super_init = false;
+                    for stmt in &method_statements {
+                        if let StatementKind::FunctionDeclaration(
+                            method_name,
+                            _,
+                            _,
+                            _,
+                            Some(method_body),
+                            _,
+                        ) = &stmt.node
+                        {
+                            if method_name == "init" {
+                                // Check if body contains super.init()
+                                found_super_init = self.contains_super_init_call(method_body);
+                                break;
+                            }
+                        }
+                    }
+
+                    if !found_super_init && !child_init.is_abstract {
+                        self.report_error(
+                            format!(
+                                "Constructor 'init' in class '{}' must call super.init() because parent class '{}' has a constructor",
+                                name, base_name
+                            ),
+                            span.clone(),
+                        );
+                    }
+                }
+            }
+        }
+
+        // Validate: non-abstract classes must implement all abstract methods from inheritance chain
+        if !is_abstract {
+            if let Some(ref base_name) = base_class_name {
+                // Collect all abstract methods from the entire inheritance chain
+                let missing_methods: Vec<(String, String)> = {
+                    let mut missing = Vec::new();
+                    let mut current_base = Some(base_name.clone());
+
+                    while let Some(ref class_name) = current_base {
+                        if let Some(TypeDefinition::Class(base_def)) =
+                            self.global_type_definitions.get(class_name)
+                        {
+                            for (method_name, method_info) in &base_def.methods {
+                                if method_info.is_abstract && !methods.contains_key(method_name) {
+                                    missing.push((method_name.clone(), class_name.clone()));
+                                }
+                            }
+                            // Move to the next ancestor
+                            current_base = base_def.base_class.clone();
+                        } else {
+                            break;
+                        }
+                    }
+                    missing
+                };
+
+                // Report errors for missing methods
+                for (method_name, origin_class) in missing_methods {
+                    self.report_error(
+                        format!(
+                            "Class '{}' must implement abstract method '{}' from class '{}'",
+                            name, method_name, origin_class
+                        ),
+                        span.clone(),
+                    );
+                }
+            }
+        }
+
+        // Validate: classes must implement all required trait methods (including parent traits)
+        for trait_name in &trait_names {
+            // Collect all methods from trait hierarchy (including parent traits)
+            let all_trait_methods: HashMap<String, (MethodInfo, String)> = {
+                let mut all_methods = HashMap::new();
+                let mut traits_to_check = vec![trait_name.clone()];
+                let mut visited_traits = std::collections::HashSet::new();
+
+                while let Some(current_trait_name) = traits_to_check.pop() {
+                    if visited_traits.contains(&current_trait_name) {
+                        continue;
+                    }
+                    visited_traits.insert(current_trait_name.clone());
+
+                    if let Some(TypeDefinition::Trait(trait_def)) =
+                        self.global_type_definitions.get(&current_trait_name)
+                    {
+                        // Add methods from this trait
+                        for (method_name, method_info) in &trait_def.methods {
+                            // Don't overwrite if already added (child trait methods take precedence)
+                            if !all_methods.contains_key(method_name) {
+                                all_methods.insert(
+                                    method_name.clone(),
+                                    (method_info.clone(), current_trait_name.clone()),
+                                );
+                            }
+                        }
+
+                        // Add parent traits to check
+                        for parent_trait in &trait_def.parent_traits {
+                            traits_to_check.push(parent_trait.clone());
+                        }
+                    }
+                }
+                all_methods
+            };
+
+            // Collect missing and mismatched methods
+            let mut missing_methods: Vec<(String, String)> = Vec::new();
+            let mut mismatched_methods: Vec<(String, String)> = Vec::new();
+
+            for (method_name, (method_info, origin_trait)) in &all_trait_methods {
+                // Check if method is required (abstract, no default implementation)
+                if method_info.is_abstract && !methods.contains_key(method_name) {
+                    missing_methods.push((method_name.clone(), origin_trait.clone()));
+                }
+
+                // Check signature compatibility if method exists
+                if let Some(class_method) = methods.get(method_name) {
+                    let params_match = method_info.params.len() == class_method.params.len()
+                        && method_info
+                            .params
+                            .iter()
+                            .zip(class_method.params.iter())
+                            .all(|((_, t1), (_, t2))| t1.kind == t2.kind);
+                    let return_match =
+                        method_info.return_type.kind == class_method.return_type.kind;
+
+                    if !params_match || !return_match {
+                        let expected = format!(
+                            "fn {}({}) -> {:?}",
+                            method_name,
+                            method_info
+                                .params
+                                .iter()
+                                .map(|(n, t)| format!("{}: {:?}", n, t.kind))
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            method_info.return_type.kind
+                        );
+                        mismatched_methods.push((method_name.clone(), expected));
+                    }
+                }
+            }
+
+            // Report errors for missing methods
+            for (method_name, origin_trait) in missing_methods {
+                self.report_error(
+                    format!(
+                        "Class '{}' must implement method '{}' from trait '{}'",
+                        name, method_name, origin_trait
+                    ),
+                    span.clone(),
+                );
+            }
+
+            // Report errors for signature mismatches
+            for (method_name, expected_sig) in mismatched_methods {
+                self.report_error(
+                    format!(
+                        "Method '{}' in class '{}' does not match trait '{}' signature: expected {}",
+                        method_name, name, trait_name, expected_sig
+                    ),
+                    span.clone(),
+                );
+            }
+        }
+
         // Create and register class definition BEFORE checking method bodies
         let class_def = ClassDefinition {
             name: name.clone(),
             generics: generic_defs,
-            base_class: base_class_name,
-            traits: trait_names,
+            base_class: base_class_name.clone(),
+            traits: trait_names.clone(),
             fields,
             methods,
             module: self.current_module.clone(),
+            is_abstract,
         };
 
         // Register class type definition so self.* lookups work
@@ -1261,6 +1600,7 @@ impl TypeChecker {
         );
 
         // PASS 2: Check method bodies (now class is registered)
+        // Skip abstract methods (no body) as they don't need body checking
         for stmt in method_statements {
             if let StatementKind::FunctionDeclaration(
                 method_name,
@@ -1271,6 +1611,15 @@ impl TypeChecker {
                 props,
             ) = &stmt.node
             {
+                // Skip abstract methods (those with no body or empty body)
+                let is_abstract = method_body.as_ref().is_none_or(|body| {
+                    matches!(&body.node, StatementKind::Empty)
+                        || matches!(&body.node, StatementKind::Block(stmts) if stmts.is_empty())
+                });
+                if is_abstract {
+                    continue;
+                }
+
                 self.check_function_declaration(
                     FunctionDeclarationInfo {
                         name: method_name,
@@ -1386,6 +1735,9 @@ impl TypeChecker {
                         })
                         .collect();
 
+                    // Trait methods are abstract if they have no body
+                    let method_is_abstract = method_body.is_none();
+
                     methods.insert(
                         method_name.clone(),
                         MethodInfo {
@@ -1393,6 +1745,7 @@ impl TypeChecker {
                             return_type: return_ty,
                             visibility: props.visibility.clone(),
                             is_constructor: false,
+                            is_abstract: method_is_abstract,
                         },
                     );
                 }
@@ -1560,6 +1913,65 @@ impl TypeChecker {
                     val_i128 >= min && val_i128 <= max
                 }
             }
+        }
+    }
+
+    /// Checks if a statement (typically a method body) contains a call to super.init()
+    fn contains_super_init_call(&self, stmt: &Statement) -> bool {
+        match &stmt.node {
+            StatementKind::Block(stmts) => stmts.iter().any(|s| self.contains_super_init_call(s)),
+            StatementKind::Expression(expr) => self.expression_contains_super_init(expr),
+            StatementKind::Return(opt_expr) => opt_expr
+                .as_ref()
+                .is_some_and(|e| self.expression_contains_super_init(e)),
+            StatementKind::If(cond, then_branch, else_branch, _) => {
+                self.expression_contains_super_init(cond)
+                    || self.contains_super_init_call(then_branch)
+                    || else_branch
+                        .as_ref()
+                        .is_some_and(|e| self.contains_super_init_call(e))
+            }
+            StatementKind::While(cond, body, _) => {
+                self.expression_contains_super_init(cond) || self.contains_super_init_call(body)
+            }
+            StatementKind::For(_, iter, body) => {
+                self.expression_contains_super_init(iter) || self.contains_super_init_call(body)
+            }
+            StatementKind::Variable(decls, _) => decls.iter().any(|d| {
+                d.initializer
+                    .as_ref()
+                    .is_some_and(|e| self.expression_contains_super_init(e))
+            }),
+            _ => false,
+        }
+    }
+
+    /// Checks if an expression contains a call to super.init()
+    #[allow(clippy::only_used_in_recursion)]
+    fn expression_contains_super_init(&self, expr: &Expression) -> bool {
+        match &expr.node {
+            ExpressionKind::Call(callee, _args) => {
+                // Check if callee is super.init
+                if let ExpressionKind::Member(obj, prop) = &callee.node {
+                    if matches!(obj.node, ExpressionKind::Super) {
+                        if let ExpressionKind::Identifier(name, _) = &prop.node {
+                            if name == "init" {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                false
+            }
+            // Binary is (left, op, right)
+            ExpressionKind::Binary(left, _op, right)
+            | ExpressionKind::Logical(left, _op, right) => {
+                self.expression_contains_super_init(left)
+                    || self.expression_contains_super_init(right)
+            }
+            ExpressionKind::Unary(_, operand) => self.expression_contains_super_init(operand),
+            ExpressionKind::Member(obj, _) => self.expression_contains_super_init(obj),
+            _ => false,
         }
     }
 }

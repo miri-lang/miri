@@ -230,3 +230,55 @@ let i int = b.value
 ";
     check_success(source);
 }
+
+// ===== Class-based Generic Constraint Tests =====
+
+#[test]
+fn test_generic_class_with_extends_constraint() {
+    let source = "
+class Animal
+    var name String
+
+class Dog extends Animal
+    var breed String
+
+class Container<T extends Animal>
+    var item T
+
+let c Container<Dog>
+";
+    check_success(source);
+}
+
+#[test]
+fn test_generic_class_with_extends_constraint_fail() {
+    let source = "
+class Animal
+    var name String
+
+class Robot
+    var model String
+
+class Container<T extends Animal>
+    var item T
+
+let c Container<Robot>
+";
+    check_error(source, "does not satisfy constraint");
+}
+
+#[test]
+fn test_generic_class_with_trait_constraint() {
+    let source = "
+trait Drawable
+    fn draw() int
+
+class Circle implements Drawable
+    fn draw() int
+        1
+
+class Canvas<T implements Drawable>
+    var item T
+";
+    check_success(source);
+}

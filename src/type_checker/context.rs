@@ -62,6 +62,8 @@ pub struct MethodInfo {
     pub return_type: Type,
     pub visibility: MemberVisibility,
     pub is_constructor: bool,
+    /// Whether this method is abstract (no body).
+    pub is_abstract: bool,
 }
 
 /// Definition of a class type.
@@ -74,6 +76,8 @@ pub struct ClassDefinition {
     pub fields: HashMap<String, FieldInfo>,
     pub methods: HashMap<String, MethodInfo>,
     pub module: String,
+    /// Whether this class is abstract.
+    pub is_abstract: bool,
 }
 
 /// Definition of a trait type.

@@ -63,7 +63,7 @@ fn foo()
 fn test_super_method_call() {
     let code = "
 class Animal
-    fn speak() string
+    protected fn speak() string
         \"generic sound\"
 
 class Dog extends Animal
@@ -78,7 +78,7 @@ fn test_super_with_base_class() {
     let code = "
 class Base
     var value int
-    fn init(v int)
+    protected fn init(v int)
         self.value = v
 
 class Derived extends Base
@@ -125,7 +125,7 @@ fn test_self_and_super_in_derived_class() {
     let code = "
 class Parent
     var name String
-    fn greet() string
+    protected fn greet() string
         \"Hello\"
 
 class Child extends Parent
