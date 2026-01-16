@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use super::super::utils::{has_local, lower_code};
-use miri::mir::TerminatorKind;
+use crate::mir::utils::{
+    mir_lower_code, mir_lowering_basic_blocks_test, mir_lowering_goto_target_test,
+    mir_lowering_local_test, mir_lowering_min_basic_blocks_test, mir_lowering_switch_target_test,
+};
 
 #[test]
 fn test_while_loop() {
@@ -13,25 +15,9 @@ fn main()
         x = x + 1
     let y = 1
 ";
-    let body = lower_code(source);
-    assert!(has_local(&body, "x"));
-    assert!(has_local(&body, "y"));
-
-    // Structure:
-    // BB0: x = 0, Goto BB1
-    // BB1 (Header): SwitchInt(x<10) -> [1: BB2], otherwise BB3
-    // BB2 (Body): x = x + 1, Goto BB1
-    // BB3 (Exit): y = 1, Return
-
-    assert!(body.basic_blocks.len() >= 4);
-
-    // Check Header Terminator
-    let header_bb = &body.basic_blocks[1];
-    if let TerminatorKind::SwitchInt { .. } = header_bb.terminator.as_ref().unwrap().kind {
-        // Ok
-    } else {
-        panic!("Expected SwitchInt in header");
-    }
+    mir_lowering_local_test(source, "x");
+    mir_lowering_local_test(source, "y");
+    mir_lowering_min_basic_blocks_test(source, 4);
 }
 
 #[test]
@@ -42,16 +28,7 @@ fn main()
     until x == 10
         x = x + 1
 ";
-    let body = lower_code(source);
-
-    // Should use SwitchInt with 0 -> Body for Until
-    let header_bb = &body.basic_blocks[1];
-    if let TerminatorKind::SwitchInt { targets, .. } = &header_bb.terminator.as_ref().unwrap().kind
-    {
-        assert_eq!(targets[0].0, 0); // 0 = false (until condition false -> loop continues)
-    } else {
-        panic!("Expected SwitchInt in header");
-    }
+    mir_lowering_switch_target_test(source, 1, 0);
 }
 
 #[test]
@@ -63,14 +40,7 @@ fn main()
         x = x + 1
     while x < 10
 ";
-    let body = lower_code(source);
-
-    // Structure:
-    // BB0: x=0, Goto BB1 (Body)
-    // BB1 (Body): x=x+1, Goto BB2 (Cond)
-    // BB2 (Cond): SwitchInt(x<10) -> [1: BB1], otherwise BB3 (Exit)
-
-    assert!(body.basic_blocks.len() >= 4);
+    mir_lowering_min_basic_blocks_test(source, 4);
 }
 
 #[test]
@@ -80,20 +50,8 @@ fn main()
     forever
         break
 ";
-    let body = lower_code(source);
-
-    // BB0: Goto BB1 (Body)
-    // BB1 (Body): Goto BB2 (Break target)
-    // BB2 (Exit): Return
-
-    assert_eq!(body.basic_blocks.len(), 3);
-
-    let body_bb = &body.basic_blocks[1];
-    if let TerminatorKind::Goto { target } = body_bb.terminator.as_ref().unwrap().kind {
-        assert_eq!(target.0, 2);
-    } else {
-        panic!("Expected Goto exit");
-    }
+    mir_lowering_basic_blocks_test(source, 3);
+    mir_lowering_goto_target_test(source, 1, 2);
 }
 
 #[test]
@@ -103,18 +61,9 @@ fn main()
     for i in 0..10
         let x = i
 ";
-    let body = lower_code(source);
-
-    // BB0: Init i, Goto BB1
-    // BB1 (Header): Cond, SwitchInt -> BB2, else BB4
-    // BB2 (Body): x=i, Goto BB3
-    // BB3 (Inc): i=i+1, Goto BB1
-    // BB4 (Exit)
-
-    assert!(has_local(&body, "i"));
-    assert!(has_local(&body, "x"));
-
-    assert!(body.basic_blocks.len() >= 5);
+    mir_lowering_local_test(source, "i");
+    mir_lowering_local_test(source, "x");
+    mir_lowering_min_basic_blocks_test(source, 5);
 }
 
 #[test]
@@ -124,15 +73,7 @@ fn main()
     while true
         continue
 ";
-    let body = lower_code(source);
-
-    // BB2 (Body) should Goto BB1 (Header) due to continue
-    let body_bb = &body.basic_blocks[2];
-    if let TerminatorKind::Goto { target } = body_bb.terminator.as_ref().unwrap().kind {
-        assert_eq!(target.0, 1);
-    } else {
-        panic!("Expected Goto header");
-    }
+    mir_lowering_goto_target_test(source, 2, 1);
 }
 
 #[test]
@@ -142,16 +83,7 @@ fn main()
     for i in 0..10
         continue
 ";
-    let body = lower_code(source);
-
-    // BB2 (Body) should Goto BB3 (Increment) due to continue
-    let body_bb = &body.basic_blocks[2];
-    if let TerminatorKind::Goto { target } = body_bb.terminator.as_ref().unwrap().kind {
-        // BB3 is increment
-        assert_eq!(target.0, 3);
-    } else {
-        panic!("Expected Goto increment");
-    }
+    mir_lowering_goto_target_test(source, 2, 3);
 }
 
 #[test]
@@ -161,5 +93,93 @@ fn test_break_outside_loop() {
 fn main()
     break
 ";
-    lower_code(source);
+    mir_lower_code(source);
+}
+
+#[test]
+#[should_panic]
+fn test_continue_outside_loop() {
+    let source = "
+fn main()
+    continue
+";
+    mir_lower_code(source);
+}
+
+#[test]
+fn test_nested_while_loops() {
+    let source = "
+fn main()
+    var i = 0
+    while i < 10
+        var j = 0
+        while j < 10
+            j = j + 1
+        i = i + 1
+";
+    mir_lowering_local_test(source, "i");
+    mir_lowering_local_test(source, "j");
+    mir_lowering_min_basic_blocks_test(source, 6);
+}
+
+#[test]
+fn test_deeply_nested_loops() {
+    let source = "
+fn main()
+    for a in 0..2
+        for b in 0..2
+            for c in 0..2
+                let x = a + b + c
+";
+    mir_lowering_local_test(source, "a");
+    mir_lowering_local_test(source, "b");
+    mir_lowering_local_test(source, "c");
+    mir_lowering_local_test(source, "x");
+}
+
+#[test]
+fn test_for_loop_descending() {
+    let source = "
+fn main()
+    for i in 10..0
+        let x = i
+";
+    mir_lowering_local_test(source, "i");
+}
+
+#[test]
+fn test_while_with_complex_condition() {
+    let source = "
+fn main()
+    var x = 0
+    while x < 10 and x >= 0
+        x = x + 1
+";
+    mir_lowering_local_test(source, "x");
+    mir_lowering_min_basic_blocks_test(source, 4);
+}
+
+#[test]
+fn test_loop_with_early_break() {
+    let source = "
+fn main()
+    forever
+        let x = 1
+        break
+";
+    mir_lowering_local_test(source, "x");
+    mir_lowering_basic_blocks_test(source, 3);
+}
+
+#[test]
+fn test_multiple_breaks_in_different_branches() {
+    let source = "
+fn main()
+    forever
+        if true
+            break
+        else
+            break
+";
+    mir_lowering_min_basic_blocks_test(source, 5);
 }

@@ -16,5 +16,4 @@ pub mod r#loop;
 pub mod match_expression;
 pub mod shared_memory;
 pub mod unary;
-pub mod utils;
 pub mod variable;

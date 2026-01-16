@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use super::utils::{
-    lowering_test_aggregate_with_count, lowering_test_has_local, lowering_test_switch_int,
+use crate::mir::utils::{
+    mir_lowering_local_test, mir_lowering_switch_int_test, mir_lowering_tuple_aggregate_test,
 };
-
-// === Basic Enum Variants ===
 
 #[test]
 fn test_enum_unit_variant() {
-    lowering_test_aggregate_with_count(
+    mir_lowering_tuple_aggregate_test(
         "
 enum Status: Ok, Error
 fn main()
@@ -21,7 +19,7 @@ fn main()
 
 #[test]
 fn test_enum_single_value_variant() {
-    lowering_test_aggregate_with_count(
+    mir_lowering_tuple_aggregate_test(
         "
 enum Event: Quit, KeyPress(int)
 fn main()
@@ -33,7 +31,7 @@ fn main()
 
 #[test]
 fn test_enum_multi_value_variant() {
-    lowering_test_aggregate_with_count(
+    mir_lowering_tuple_aggregate_test(
         "
 enum Event: Click(int, int)
 fn main()
@@ -45,7 +43,7 @@ fn main()
 
 #[test]
 fn test_match_enum_variants() {
-    lowering_test_switch_int(
+    mir_lowering_switch_int_test(
         "
 enum Status: Ok, Error
 
@@ -61,7 +59,7 @@ fn main()
 
 #[test]
 fn test_match_enum_exhaustive() {
-    lowering_test_switch_int(
+    mir_lowering_switch_int_test(
         "
 enum Color: Red, Green, Blue
 fn main()
@@ -77,7 +75,7 @@ fn main()
 
 #[test]
 fn test_match_enum_with_binding() {
-    lowering_test_has_local(
+    mir_lowering_local_test(
         "
 enum Status: Ok, Error
 fn main()
@@ -91,36 +89,36 @@ fn main()
 
 #[test]
 fn test_enum_with_list_type() {
-    lowering_test_aggregate_with_count(
+    mir_lowering_tuple_aggregate_test(
         "
 enum Data: Numbers([int])
 fn main()
     let d = Data.Numbers([1, 2, 3])
 ",
-        2, // discriminant + list
+        2,
     );
 }
 
 #[test]
 fn test_enum_with_map_type() {
-    lowering_test_aggregate_with_count(
+    mir_lowering_tuple_aggregate_test(
         r#"
 enum Config: Settings({string: int})
 fn main()
     let c = Config.Settings({"a": 1})
 "#,
-        2, // discriminant + map
+        2,
     );
 }
 
 #[test]
 fn test_enum_multiple_variants_defined() {
-    lowering_test_aggregate_with_count(
+    mir_lowering_tuple_aggregate_test(
         "
 enum Event: Quit, KeyPress(int), Click(int, int), Scroll(int)
 fn main()
     let x = Event.Scroll(10)
 ",
-        2, // discriminant + value
+        2,
     );
 }

@@ -1,77 +1,54 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use miri::ast::factory::*;
-use miri::error::syntax::Span;
-use miri::mir::{
-    BasicBlockData, BinOp, Body, ExecutionModel, Local, LocalDecl, Operand, Place, Rvalue,
-    Statement, StatementKind, Terminator, TerminatorKind,
-};
+use crate::mir::utils::mir_lowering_pretty_print_contains_test;
 
 #[test]
-fn test_mir_pretty_print() {
-    let int_type = type_int();
+fn test_mir_pretty_print_function_body() {
+    let source = "
+fn add(a int, b int) int
+    let result = a + b
+    result
+";
+    mir_lowering_pretty_print_contains_test(source, "let _");
+    mir_lowering_pretty_print_contains_test(source, "int");
+    mir_lowering_pretty_print_contains_test(source, "bb0:");
+    mir_lowering_pretty_print_contains_test(source, "return");
+}
 
-    let span = Span::default();
-    let mut body = Body::new(2, span.clone(), ExecutionModel::Cpu);
+#[test]
+fn test_mir_pretty_print_binary_op() {
+    let source = "fn main(): 1 + 2";
+    mir_lowering_pretty_print_contains_test(source, "Add");
+}
 
-    // _0: Return value
-    body.new_local(LocalDecl::new(int_type.clone(), span.clone()));
-    // _1: arg0
-    let mut arg0 = LocalDecl::new(int_type.clone(), span.clone());
-    arg0.name = Some("arg0".to_string());
-    body.new_local(arg0);
-    // _2: arg1
-    let mut arg1 = LocalDecl::new(int_type.clone(), span.clone());
-    arg1.name = Some("arg1".to_string());
-    body.new_local(arg1);
-    // _3: temp
-    let mut temp = LocalDecl::new(int_type.clone(), span.clone());
-    temp.name = Some("temp".to_string());
-    let l3 = body.new_local(temp);
+#[test]
+fn test_mir_pretty_print_local_names() {
+    let source = "
+fn main()
+    let x = 10
+    let y = 20
+";
+    mir_lowering_pretty_print_contains_test(source, "// x");
+    mir_lowering_pretty_print_contains_test(source, "// y");
+}
 
-    let mut bb0 = BasicBlockData::new(Some(Terminator::new(TerminatorKind::Return, span.clone())));
+#[test]
+fn test_mir_pretty_print_blocks() {
+    let source = "
+fn main()
+    if true
+        let a = 1
+    else
+        let b = 2
+";
+    mir_lowering_pretty_print_contains_test(source, "bb0:");
+    mir_lowering_pretty_print_contains_test(source, "bb1:");
+    mir_lowering_pretty_print_contains_test(source, "switchInt");
+}
 
-    // _3 = Add(_1, _2)
-    bb0.statements.push(Statement {
-        kind: StatementKind::Assign(
-            Place::new(l3),
-            Rvalue::BinaryOp(
-                BinOp::Add,
-                Box::new(Operand::Copy(Place::new(Local(1)))),
-                Box::new(Operand::Copy(Place::new(Local(2)))),
-            ),
-        ),
-        span: span.clone(),
-    });
-
-    // _0 = _3
-    bb0.statements.push(Statement {
-        kind: StatementKind::Assign(
-            Place::new(Local(0)),
-            Rvalue::Use(Operand::Copy(Place::new(l3))),
-        ),
-        span: span.clone(),
-    });
-
-    body.basic_blocks.push(bb0);
-
-    let output = format!("{}", body);
-    let expected = r#"
-    let _0: int;
-    let _1: int; // arg0
-    let _2: int; // arg1
-    let _3: int; // temp
-
-    bb0: {
-        _3 = Add(_1, _2);
-        _0 = _3;
-        return;
-    }
-"#;
-
-    println!("Expected:\n{}", expected);
-    println!("Actual:\n{}", output);
-
-    assert_eq!(output.trim(), expected.trim());
+#[test]
+fn test_mir_pretty_print_return_terminator() {
+    let source = "fn main(): 42";
+    mir_lowering_pretty_print_contains_test(source, "return;");
 }

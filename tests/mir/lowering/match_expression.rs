@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use super::utils::{lowering_test_has_local, lowering_test_switch_int};
-use crate::mir::utils::lower_code;
+use crate::mir::utils::{
+    mir_lowering_local_test, mir_lowering_min_basic_blocks_test, mir_lowering_switch_int_test,
+};
 
 #[test]
 fn test_match_literal_patterns() {
-    lowering_test_switch_int(
+    mir_lowering_switch_int_test(
         "
 fn main()
     let x = 2
@@ -15,13 +16,13 @@ fn main()
         2: \"two\"
         _: \"other\"
 ",
-        1, // At least 1 SwitchInt for the match
+        1,
     );
 }
 
 #[test]
 fn test_match_identifier_binding() {
-    lowering_test_has_local(
+    mir_lowering_local_test(
         "
 fn main()
     let x = 42
@@ -34,7 +35,7 @@ fn main()
 
 #[test]
 fn test_match_multiple_patterns() {
-    lowering_test_switch_int(
+    mir_lowering_switch_int_test(
         "
 fn main()
     let code = 200
@@ -49,8 +50,7 @@ fn main()
 
 #[test]
 fn test_match_guard() {
-    // Guards produce additional SwitchInt for the condition
-    lowering_test_switch_int(
+    mir_lowering_switch_int_test(
         "
 fn main()
     let num = 15
@@ -58,14 +58,13 @@ fn main()
         x if x > 10: \"large\"
         x: \"small\"
 ",
-        2, // Main switch + guard condition
+        2,
     );
 }
 
 #[test]
 fn test_nested_match() {
-    // Nested match produces multiple SwitchInt terminators
-    lowering_test_switch_int(
+    mir_lowering_switch_int_test(
         "
 fn main()
     let a = 1
@@ -76,13 +75,13 @@ fn main()
             _: \"other inner\"
         _: \"outer\"
 ",
-        2, // Outer + inner match
+        2,
     );
 }
 
 #[test]
 fn test_match_produces_basic_blocks() {
-    let body = lower_code(
+    mir_lowering_min_basic_blocks_test(
         "
 fn main()
     let x = 2
@@ -91,17 +90,13 @@ fn main()
         2: \"two\"
         _: \"other\"
 ",
-    );
-    // At least: entry, 3 branches, join = 5 blocks
-    assert!(
-        body.basic_blocks.len() >= 5,
-        "Expected at least 5 basic blocks"
+        5,
     );
 }
 
 #[test]
 fn test_match_enum_with_binding() {
-    lowering_test_has_local(
+    mir_lowering_local_test(
         "
 enum Color: Red(string), Green(string), Blue(string)
 
@@ -114,5 +109,87 @@ fn main()
 
 ",
         "x",
+    );
+}
+
+#[test]
+fn test_match_many_literal_arms() {
+    mir_lowering_switch_int_test(
+        "
+fn main()
+    let x = 5
+    match x
+        1: \"one\"
+        2: \"two\"
+        3: \"three\"
+        4: \"four\"
+        5: \"five\"
+        6: \"six\"
+        7: \"seven\"
+        _: \"other\"
+",
+        1,
+    );
+}
+
+#[test]
+fn test_match_with_expression_in_arm() {
+    mir_lowering_switch_int_test(
+        "
+fn main()
+    let x = 2
+    match x
+        1: 1 + 1
+        2: 2 + 2
+        _: 0
+",
+        1,
+    );
+}
+
+#[test]
+fn test_match_all_wildcards() {
+    mir_lowering_local_test(
+        "
+fn main()
+    let x = 42
+    match x
+        _: \"any\"
+",
+        "x",
+    );
+}
+
+#[test]
+fn test_match_deeply_nested() {
+    mir_lowering_switch_int_test(
+        "
+fn main()
+    let a = 1
+    let b = 2
+    let c = 3
+    match a
+        1: match b
+            2: match c
+                3: \"deep\"
+                _: \"not deep c\"
+            _: \"not deep b\"
+        _: \"not deep a\"
+",
+        3,
+    );
+}
+
+#[test]
+fn test_match_result_used() {
+    mir_lowering_local_test(
+        "
+fn main()
+    let x = 1
+    let result = match x
+        1: 100
+        _: 0
+",
+        "result",
     );
 }

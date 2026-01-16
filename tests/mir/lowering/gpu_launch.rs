@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use super::super::utils::lower_code;
-use miri::mir::TerminatorKind;
+use crate::mir::utils::mir_lowering_gpu_launch_test;
 
 #[test]
 fn test_gpu_launch_terminator() {
-    let body = lower_code(
+    mir_lowering_gpu_launch_test(
         "
 gpu fn my_kernel()
     let x = 1
@@ -15,14 +14,4 @@ fn main()
     my_kernel().launch(Dim3(1, 1, 1), Dim3(1, 1, 1))
 ",
     );
-
-    let found_launch = body.basic_blocks.iter().any(|bb| {
-        if let Some(terminator) = &bb.terminator {
-            matches!(terminator.kind, TerminatorKind::GpuLaunch { .. })
-        } else {
-            false
-        }
-    });
-
-    assert!(found_launch, "Expected TerminatorKind::GpuLaunch");
 }

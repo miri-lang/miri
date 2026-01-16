@@ -1,16 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Integration tests for collection literal lowering and index access.
-
-use super::utils::{lowering_test_aggregate, lowering_test_index_projection};
+use crate::mir::utils::{mir_lowering_aggregate_test, mir_lowering_index_test};
 use miri::mir::AggregateKind;
-
-// === Collection Literal Tests ===
 
 #[test]
 fn test_tuple_literal() {
-    lowering_test_aggregate(
+    mir_lowering_aggregate_test(
         "
 fn main()
     let t = (1, 2, 3)
@@ -22,7 +18,7 @@ fn main()
 
 #[test]
 fn test_empty_tuple() {
-    lowering_test_aggregate(
+    mir_lowering_aggregate_test(
         "
 fn main()
     let unit = ()
@@ -34,7 +30,7 @@ fn main()
 
 #[test]
 fn test_list_literal() {
-    lowering_test_aggregate(
+    mir_lowering_aggregate_test(
         "
 fn main()
     let l = [1, 2, 3]
@@ -46,7 +42,7 @@ fn main()
 
 #[test]
 fn test_set_literal() {
-    lowering_test_aggregate(
+    mir_lowering_aggregate_test(
         "
 fn main()
     let s = {1, 2, 3}
@@ -58,8 +54,7 @@ fn main()
 
 #[test]
 fn test_map_literal() {
-    // Map has key1, val1, key2, val2 = 4 operands for 2 pairs
-    lowering_test_aggregate(
+    mir_lowering_aggregate_test(
         "
 fn main()
     let m = {\"a\": 1, \"b\": 2}
@@ -71,8 +66,7 @@ fn main()
 
 #[test]
 fn test_nested_tuple() {
-    // Should find the outer tuple (at least 2 elements - the inner tuples)
-    lowering_test_aggregate(
+    mir_lowering_aggregate_test(
         "
 fn main()
     let nested = ((1, 2), (3, 4))
@@ -84,7 +78,7 @@ fn main()
 
 #[test]
 fn test_list_index_access() {
-    lowering_test_index_projection(
+    mir_lowering_index_test(
         "
 fn main()
     let l = [10, 20, 30]
@@ -95,7 +89,7 @@ fn main()
 
 #[test]
 fn test_tuple_index_access() {
-    lowering_test_index_projection(
+    mir_lowering_index_test(
         "
 fn main()
     let t = (1, 2, 3)
@@ -106,7 +100,7 @@ fn main()
 
 #[test]
 fn test_map_index_access() {
-    lowering_test_index_projection(
+    mir_lowering_index_test(
         "
 fn main()
     let m = {\"a\": 1, \"b\": 2}
@@ -117,7 +111,7 @@ fn main()
 
 #[test]
 fn test_computed_index() {
-    lowering_test_index_projection(
+    mir_lowering_index_test(
         "
 fn main()
     let l = [1, 2, 3]
@@ -129,7 +123,7 @@ fn main()
 
 #[test]
 fn test_empty_list() {
-    lowering_test_aggregate(
+    mir_lowering_aggregate_test(
         "
 fn main()
     let l [int] = []
@@ -141,7 +135,7 @@ fn main()
 
 #[test]
 fn test_nested_list() {
-    lowering_test_aggregate(
+    mir_lowering_aggregate_test(
         "
 fn main()
     let l = [[1, 2], [3, 4]]
@@ -153,12 +147,121 @@ fn main()
 
 #[test]
 fn test_single_element_tuple() {
-    lowering_test_aggregate(
+    mir_lowering_aggregate_test(
         "
 fn main()
     let t = (42,)
 ",
         AggregateKind::Tuple,
         1,
+    );
+}
+
+#[test]
+fn test_large_tuple() {
+    mir_lowering_aggregate_test(
+        "
+fn main()
+    let t = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+",
+        AggregateKind::Tuple,
+        10,
+    );
+}
+
+#[test]
+fn test_large_list() {
+    mir_lowering_aggregate_test(
+        "
+fn main()
+    let l = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+",
+        AggregateKind::List,
+        15,
+    );
+}
+
+#[test]
+fn test_deeply_nested_lists() {
+    mir_lowering_aggregate_test(
+        "
+fn main()
+    let l = [[[1, 2], [3, 4]], [[5, 6], [7, 8]]]
+",
+        AggregateKind::List,
+        2,
+    );
+}
+
+#[test]
+fn test_mixed_nested_collections() {
+    mir_lowering_aggregate_test(
+        "
+fn main()
+    let t = ([1, 2], [3, 4])
+",
+        AggregateKind::Tuple,
+        2,
+    );
+}
+
+#[test]
+fn test_tuple_of_tuples() {
+    mir_lowering_aggregate_test(
+        "
+fn main()
+    let inner1 = (1, 2)
+    let inner2 = (3, 4)
+    let inner3 = (5, 6)
+    let t = (inner1, inner2, inner3)
+",
+        AggregateKind::Tuple,
+        2,
+    );
+}
+
+#[test]
+fn test_map_with_many_entries() {
+    mir_lowering_aggregate_test(
+        "
+fn main()
+    let m = {\"a\": 1, \"b\": 2, \"c\": 3, \"d\": 4, \"e\": 5}
+",
+        AggregateKind::Map,
+        10,
+    );
+}
+
+#[test]
+fn test_set_with_many_elements() {
+    mir_lowering_aggregate_test(
+        "
+fn main()
+    let s = {1, 2, 3, 4, 5, 6, 7, 8}
+",
+        AggregateKind::Set,
+        8,
+    );
+}
+
+#[test]
+fn test_index_expression_in_index() {
+    mir_lowering_index_test(
+        "
+fn main()
+    let l = [[1, 2], [3, 4]]
+    let x = l[0][1]
+",
+    );
+}
+
+#[test]
+fn test_index_last_element() {
+    mir_lowering_index_test(
+        "
+fn main()
+    let l = [10, 20, 30, 40, 50]
+    let x = l[4]
+",
     );
 }

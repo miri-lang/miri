@@ -1,60 +1,105 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use super::utils::lowering_test_binary_op;
+use crate::mir::utils::mir_lowering_binary_op_test;
 use miri::mir::BinOp;
 
 #[test]
 fn test_add() {
-    lowering_test_binary_op("fn main(): 1 + 2", BinOp::Add);
+    mir_lowering_binary_op_test("fn main(): 1 + 2", BinOp::Add);
 }
 
 #[test]
 fn test_sub() {
-    lowering_test_binary_op("fn main(): 5 - 3", BinOp::Sub);
+    mir_lowering_binary_op_test("fn main(): 5 - 3", BinOp::Sub);
 }
 
 #[test]
 fn test_mul() {
-    lowering_test_binary_op("fn main(): 2 * 3", BinOp::Mul);
+    mir_lowering_binary_op_test("fn main(): 2 * 3", BinOp::Mul);
 }
 
 #[test]
 fn test_div() {
-    lowering_test_binary_op("fn main(): 10 / 2", BinOp::Div);
+    mir_lowering_binary_op_test("fn main(): 10 / 2", BinOp::Div);
 }
 
 #[test]
 fn test_mod() {
-    lowering_test_binary_op("fn main(): 10 % 3", BinOp::Rem);
+    mir_lowering_binary_op_test("fn main(): 10 % 3", BinOp::Rem);
 }
 
 #[test]
 fn test_eq() {
-    lowering_test_binary_op("fn main(): 1 == 1", BinOp::Eq);
+    mir_lowering_binary_op_test("fn main(): 1 == 1", BinOp::Eq);
 }
 
 #[test]
 fn test_ne() {
-    lowering_test_binary_op("fn main(): 1 != 2", BinOp::Ne);
+    mir_lowering_binary_op_test("fn main(): 1 != 2", BinOp::Ne);
 }
 
 #[test]
 fn test_lt() {
-    lowering_test_binary_op("fn main(): 1 < 2", BinOp::Lt);
+    mir_lowering_binary_op_test("fn main(): 1 < 2", BinOp::Lt);
 }
 
 #[test]
 fn test_le() {
-    lowering_test_binary_op("fn main(): 1 <= 2", BinOp::Le);
+    mir_lowering_binary_op_test("fn main(): 1 <= 2", BinOp::Le);
 }
 
 #[test]
 fn test_gt() {
-    lowering_test_binary_op("fn main(): 2 > 1", BinOp::Gt);
+    mir_lowering_binary_op_test("fn main(): 2 > 1", BinOp::Gt);
 }
 
 #[test]
 fn test_ge() {
-    lowering_test_binary_op("fn main(): 2 >= 1", BinOp::Ge);
+    mir_lowering_binary_op_test("fn main(): 2 >= 1", BinOp::Ge);
+}
+
+#[test]
+fn test_chained_additions() {
+    mir_lowering_binary_op_test("fn main(): 1 + 2 + 3 + 4 + 5", BinOp::Add);
+}
+
+#[test]
+fn test_chained_mixed_operations() {
+    mir_lowering_binary_op_test("fn main(): 1 + 2 * 3 - 4 / 2", BinOp::Add);
+}
+
+#[test]
+fn test_deeply_nested_parentheses() {
+    mir_lowering_binary_op_test("fn main(): ((((1 + 2))))", BinOp::Add);
+}
+
+#[test]
+fn test_binary_op_with_negative() {
+    mir_lowering_binary_op_test("fn main(): -1 + -2", BinOp::Add);
+}
+
+#[test]
+fn test_comparison_chain() {
+    mir_lowering_binary_op_test("fn main(): 1 < 2 == true", BinOp::Lt);
+}
+
+#[test]
+fn test_bitwise_and() {
+    mir_lowering_binary_op_test("fn main(): 5 & 3", BinOp::BitAnd);
+}
+
+#[test]
+fn test_max_int_addition() {
+    mir_lowering_binary_op_test("fn main(): 2147483647 + 0", BinOp::Add);
+}
+
+#[test]
+fn test_zero_division_expression() {
+    mir_lowering_binary_op_test("fn main(): 10 / 1", BinOp::Div);
+}
+
+#[test]
+fn test_modulo_with_one() {
+    mir_lowering_binary_op_test("fn main(): 10 % 1", BinOp::Rem);
 }

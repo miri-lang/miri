@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use super::super::utils::{has_local, lower_code};
-use miri::mir::TerminatorKind;
+use crate::mir::utils::{
+    mir_lowering_basic_blocks_test, mir_lowering_local_test, mir_lowering_locals_test,
+    mir_lowering_min_basic_blocks_test, mir_lowering_switch_target_test,
+};
 
 #[test]
 fn test_simple_if() {
@@ -13,36 +15,11 @@ fn main()
         let y = 2
     let z = 3
 ";
-    let body = lower_code(source);
-
-    // Expected structure:
-    // BB0:
-    //   x = 1
-    //   SwitchInt(true) -> [1: BB1], otherwise: BB2
-    // BB1 (then):
-    //   y = 2
-    //   Goto(BB3)
-    // BB2 (else):
-    //   Goto(BB3)
-    // BB3 (join):
-    //   z = 3
-    //   Return
-
-    assert_eq!(body.basic_blocks.len(), 4, "Should have 4 basic blocks");
-
-    // Check local presence
-    assert!(has_local(&body, "x"));
-    assert!(has_local(&body, "y"));
-    assert!(has_local(&body, "z"));
-
-    // Check terminators
-    let bb0 = &body.basic_blocks[0];
-    if let TerminatorKind::SwitchInt { targets, .. } = &bb0.terminator.as_ref().unwrap().kind {
-        assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].0, 1); // 1 = true
-    } else {
-        panic!("Expected SwitchInt in BB0");
-    }
+    mir_lowering_basic_blocks_test(source, 4);
+    mir_lowering_local_test(source, "x");
+    mir_lowering_local_test(source, "y");
+    mir_lowering_local_test(source, "z");
+    mir_lowering_switch_target_test(source, 0, 1);
 }
 
 #[test]
@@ -55,12 +32,10 @@ fn main()
         let b = 2
     let c = 3
 ";
-    let body = lower_code(source);
-
-    assert_eq!(body.basic_blocks.len(), 4, "Should have 4 basic blocks");
-    assert!(has_local(&body, "a"));
-    assert!(has_local(&body, "b"));
-    assert!(has_local(&body, "c"));
+    mir_lowering_basic_blocks_test(source, 4);
+    mir_lowering_local_test(source, "a");
+    mir_lowering_local_test(source, "b");
+    mir_lowering_local_test(source, "c");
 }
 
 #[test]
@@ -72,18 +47,8 @@ fn main()
     else
         let b = 2
 ";
-    let body = lower_code(source);
-
-    // Structure matches If, but switch targets differ
-    assert_eq!(body.basic_blocks.len(), 4);
-
-    let bb0 = &body.basic_blocks[0];
-    if let TerminatorKind::SwitchInt { targets, .. } = &bb0.terminator.as_ref().unwrap().kind {
-        assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].0, 0); // 0 = unless condition matches
-    } else {
-        panic!("Expected SwitchInt in BB0");
-    }
+    mir_lowering_basic_blocks_test(source, 4);
+    mir_lowering_switch_target_test(source, 0, 0);
 }
 
 #[test]
@@ -95,18 +60,89 @@ fn main()
             let a = 1
         let b = 2
 ";
-    let body = lower_code(source);
+    mir_lowering_min_basic_blocks_test(source, 5);
+    mir_lowering_local_test(source, "a");
+    mir_lowering_local_test(source, "b");
+}
 
-    // BB0 (outer if)
-    // BB1 (outer then) -> BB2 (inner if)
-    // BB2 (inner if) -> BB3 (inner then), BB4 (inner else)
-    // BB3 -> BB5 (inner join)
-    // BB4 -> BB5
-    // BB5 -> b=2 -> BB6 (outer join, implicit return?)
-    // BB0 else -> BB6...
-    // Count will be higher.
+#[test]
+fn test_deeply_nested_if_else() {
+    let source = "
+fn main()
+    if true
+        if true
+            if true
+                if true
+                    let x = 1
+";
+    mir_lowering_local_test(source, "x");
+    mir_lowering_min_basic_blocks_test(source, 9);
+}
 
-    assert!(body.basic_blocks.len() > 4);
-    assert!(has_local(&body, "a"));
-    assert!(has_local(&body, "b"));
+#[test]
+fn test_if_with_complex_condition() {
+    let source = "
+fn main()
+    let a = 5
+    let b = 10
+    if a < b and b > 0
+        let c = 1
+";
+    mir_lowering_locals_test(source, &["a", "b", "c"]);
+}
+
+#[test]
+fn test_if_else_chain() {
+    let source = "
+fn main()
+    let x = 5
+    if x == 1
+        let a = 1
+    else
+        if x == 2
+            let b = 2
+        else
+            if x == 3
+                let c = 3
+            else
+                let d = 4
+";
+    mir_lowering_min_basic_blocks_test(source, 8);
+}
+
+#[test]
+fn test_unless_with_else() {
+    let source = "
+fn main()
+    unless false
+        let a = 1
+    else
+        let b = 2
+    let c = 3
+";
+    mir_lowering_locals_test(source, &["a", "b", "c"]);
+    mir_lowering_basic_blocks_test(source, 4);
+}
+
+#[test]
+fn test_if_both_branches_return() {
+    let source = "
+fn main()
+    if true
+        return
+    else
+        return
+";
+    mir_lowering_min_basic_blocks_test(source, 4);
+}
+
+#[test]
+fn test_if_with_expression_condition() {
+    let source = "
+fn main()
+    let x = 5
+    if x + 1 > 5
+        let y = 1
+";
+    mir_lowering_locals_test(source, &["x", "y"]);
 }
