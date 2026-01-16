@@ -3,7 +3,7 @@
 
 use crate::ast::{types::*, MemberVisibility};
 use crate::error::syntax::Span;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Represents information about a symbol (variable, function, etc.) in the scope.
 #[derive(Debug, Clone)]
@@ -33,7 +33,8 @@ pub struct StructDefinition {
 /// Definition of an enum type.
 #[derive(Debug, Clone)]
 pub struct EnumDefinition {
-    pub variants: HashMap<String, Vec<Type>>,
+    // Use BTreeMap for deterministic variant order (crucial for discriminants)
+    pub variants: BTreeMap<String, Vec<Type>>,
     #[allow(dead_code)]
     pub module: String,
 }
@@ -82,8 +83,8 @@ pub struct ClassDefinition {
     pub generics: Option<Vec<GenericDefinition>>,
     pub base_class: Option<String>,
     pub traits: Vec<String>,
-    pub fields: HashMap<String, FieldInfo>,
-    pub methods: HashMap<String, MethodInfo>,
+    pub fields: BTreeMap<String, FieldInfo>, // Deterministic field order
+    pub methods: BTreeMap<String, MethodInfo>, // Deterministic method order
     pub module: String,
     /// Whether this class is abstract.
     pub is_abstract: bool,
@@ -95,7 +96,7 @@ pub struct TraitDefinition {
     pub name: String,
     pub generics: Option<Vec<GenericDefinition>>,
     pub parent_traits: Vec<String>,
-    pub methods: HashMap<String, MethodInfo>,
+    pub methods: BTreeMap<String, MethodInfo>, // Deterministic method order
     pub module: String,
 }
 

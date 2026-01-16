@@ -10,7 +10,7 @@ use crate::ast::factory::make_type;
 use crate::ast::types::{Type, TypeDeclarationKind, TypeKind};
 use crate::ast::*;
 use crate::error::syntax::Span;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 pub(crate) struct FunctionDeclarationInfo<'a> {
     pub name: &'a str,
@@ -1071,7 +1071,7 @@ impl TypeChecker {
             return;
         };
 
-        let mut variant_map = HashMap::new();
+        let mut variant_map = BTreeMap::new();
         for variant in variants {
             if let ExpressionKind::EnumValue(variant_name_expr, associated_types) = &variant.node {
                 if let ExpressionKind::Identifier(variant_name, _) = &variant_name_expr.node {
@@ -1255,8 +1255,8 @@ impl TypeChecker {
         context.enter_class(name.clone(), base_class_name.clone(), class_type);
 
         // PASS 1: Collect fields and method signatures (without checking bodies)
-        let mut fields: HashMap<String, FieldInfo> = HashMap::new();
-        let mut methods: HashMap<String, MethodInfo> = HashMap::new();
+        let mut fields: BTreeMap<String, FieldInfo> = BTreeMap::new();
+        let mut methods: BTreeMap<String, MethodInfo> = BTreeMap::new();
         // Store method info for second pass body checking
         let mut method_statements: Vec<&Statement> = Vec::new();
 
@@ -1774,7 +1774,7 @@ impl TypeChecker {
         }
 
         // Process trait body to collect methods
-        let mut methods: HashMap<String, MethodInfo> = HashMap::new();
+        let mut methods: BTreeMap<String, MethodInfo> = BTreeMap::new();
 
         for stmt in body {
             match &stmt.node {

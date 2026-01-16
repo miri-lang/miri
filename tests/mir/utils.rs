@@ -39,6 +39,58 @@ pub fn mir_lower_code(source: &str) -> Body {
     lower_function(func_stmt, &result.type_checker).expect("Lowering failed")
 }
 
+/// Normalize MIR output for comparison by trimming lines and removing empty lines.
+fn normalize_mir_output(output: &str) -> String {
+    output
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Snapshot test for MIR lowering.
+/// Compares the actual MIR output against expected output.
+/// Both are normalized (trimmed, empty lines removed) before comparison.
+pub fn mir_snapshot_test(source: &str, expected_mir: &str) {
+    let body = mir_lower_code(source);
+    let actual = format!("{}", body);
+    let actual_normalized = normalize_mir_output(&actual);
+    let expected_normalized = normalize_mir_output(expected_mir);
+
+    if actual_normalized != expected_normalized {
+        panic!(
+            "\n\nMIR snapshot mismatch!\n\n\
+             === SOURCE ===\n{}\n\n\
+             === EXPECTED ===\n{}\n\n\
+             === ACTUAL ===\n{}\n",
+            source.trim(),
+            expected_normalized,
+            actual_normalized
+        );
+    }
+}
+
+/// Snapshot test that only checks if the actual MIR contains the expected substrings.
+/// Useful for partial validation when full MIR is too verbose.
+pub fn mir_snapshot_contains_test(source: &str, expected_fragments: &[&str]) {
+    let body = mir_lower_code(source);
+    let actual = format!("{}", body);
+
+    for fragment in expected_fragments {
+        assert!(
+            actual.contains(fragment),
+            "\n\nMIR missing expected fragment!\n\n\
+             === SOURCE ===\n{}\n\n\
+             === MISSING FRAGMENT ===\n{}\n\n\
+             === ACTUAL MIR ===\n{}\n",
+            source.trim(),
+            fragment,
+            actual
+        );
+    }
+}
+
 pub fn expect_assignment(stmt: &miri::mir::Statement) -> (&Place, &Rvalue) {
     match &stmt.kind {
         StatementKind::Assign(place, rvalue) => (place, rvalue),
