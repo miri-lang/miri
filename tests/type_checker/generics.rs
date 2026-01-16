@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use super::utils::{check_error, check_expr_type, check_success};
+use super::utils::{type_checker_error_test, type_checker_expr_type_test, type_checker_test};
 use miri::ast::factory::*;
 
 #[test]
@@ -19,7 +19,7 @@ struct Container<T implements Interface>
 
 let c Container<Implementation>
     ";
-    check_success(source);
+    type_checker_test(source);
 }
 
 #[test]
@@ -36,7 +36,7 @@ struct Container<T implements Interface>
 
 let c Container<BadImpl>
     ";
-    check_error(source, "does not satisfy constraint");
+    type_checker_error_test(source, "does not satisfy constraint");
 }
 
 #[test]
@@ -47,7 +47,7 @@ struct Box<T>
 
 let b Box<int>
     ";
-    check_success(source);
+    type_checker_test(source);
 }
 
 #[test]
@@ -60,7 +60,7 @@ var b Box<int>
 b.value = 10
 b.value
     ";
-    check_expr_type(source, type_int());
+    type_checker_expr_type_test(source, type_int());
 }
 
 #[test]
@@ -72,7 +72,7 @@ struct Box<T>
 var b Box<int>
 b.value = \"string\"
     ";
-    check_error(source, "Type mismatch");
+    type_checker_error_test(source, "Type mismatch");
 }
 
 #[test]
@@ -85,7 +85,7 @@ var b Box<Box<int>>
 b.value.value = 10
 b.value.value
     ";
-    check_expr_type(source, type_int());
+    type_checker_expr_type_test(source, type_int());
 }
 
 #[test]
@@ -100,7 +100,7 @@ p.key = \"key\"
 p.value = 10
 p.value
     ";
-    check_expr_type(source, type_int());
+    type_checker_expr_type_test(source, type_int());
 }
 
 #[test]
@@ -111,7 +111,7 @@ struct Box<T>
 
 let b Box<int, string>
     ";
-    check_error(source, "Generic argument count mismatch");
+    type_checker_error_test(source, "Generic argument count mismatch");
 }
 
 #[test]
@@ -123,7 +123,7 @@ struct Pair<K, V>
 
 let p Pair<int>
     ";
-    check_error(source, "Generic argument count mismatch");
+    type_checker_error_test(source, "Generic argument count mismatch");
 }
 
 #[test]
@@ -136,7 +136,7 @@ var c ListContainer<int>
 c.items = [1, 2, 3]
 c.items[0]
     ";
-    check_expr_type(source, type_int());
+    type_checker_expr_type_test(source, type_int());
 }
 
 #[test]
@@ -149,7 +149,7 @@ var c MapContainer<string, int>
 c.items = {\"a\": 1}
 c.items[\"a\"]
     ";
-    check_expr_type(source, type_int());
+    type_checker_expr_type_test(source, type_int());
 }
 
 #[test]
@@ -164,7 +164,7 @@ struct Inner<T>
 let o Outer<int>
 let i Inner<string>
     ";
-    check_success(source);
+    type_checker_test(source);
 }
 
 #[test]
@@ -180,7 +180,7 @@ var b Box<int>
 b.value = 10
 unbox(b)
     ";
-    check_expr_type(source, type_int());
+    type_checker_expr_type_test(source, type_int());
 }
 
 #[test]
@@ -193,7 +193,7 @@ let b Box<int>
 let x = b.value
 x
     ";
-    check_expr_type(source, type_int());
+    type_checker_expr_type_test(source, type_int());
 }
 
 #[test]
@@ -204,7 +204,7 @@ struct Box<T>
 
 let b = Box(1)
 ";
-    check_success(source);
+    type_checker_test(source);
 }
 
 #[test]
@@ -216,7 +216,7 @@ struct Box<T>
 let b = Box(1)
 let s string = b.value
 ";
-    check_error(source, "Type mismatch");
+    type_checker_error_test(source, "Type mismatch");
 }
 
 #[test]
@@ -228,10 +228,8 @@ struct Box<T>
 let b = Box(1)
 let i int = b.value
 ";
-    check_success(source);
+    type_checker_test(source);
 }
-
-// ===== Class-based Generic Constraint Tests =====
 
 #[test]
 fn test_generic_class_with_extends_constraint() {
@@ -247,7 +245,7 @@ class Container<T extends Animal>
 
 let c Container<Dog>
 ";
-    check_success(source);
+    type_checker_test(source);
 }
 
 #[test]
@@ -264,7 +262,7 @@ class Container<T extends Animal>
 
 let c Container<Robot>
 ";
-    check_error(source, "does not satisfy constraint");
+    type_checker_error_test(source, "does not satisfy constraint");
 }
 
 #[test]
@@ -280,5 +278,107 @@ class Circle implements Drawable
 class Canvas<T implements Drawable>
     var item T
 ";
-    check_success(source);
+    type_checker_test(source);
+}
+
+#[test]
+fn test_generic_multiple_params() {
+    type_checker_test(
+        "
+struct Triple<A, B, C>
+    first A
+    second B
+    third C
+
+let t Triple<int, string, bool>
+",
+    );
+}
+
+#[test]
+fn test_generic_deeply_nested() {
+    type_checker_test(
+        "
+struct Box<T>
+    value T
+
+let nested Box<Box<Box<int>>>
+",
+    );
+}
+
+#[test]
+fn test_generic_function_chain() {
+    type_checker_expr_type_test(
+        "
+fn wrap<T>(x T) [T]
+    return [x]
+
+wrap(wrap(wrap(1)))[0][0]
+",
+        type_list(type_int()),
+    );
+}
+
+#[test]
+fn test_generic_with_nullable() {
+    type_checker_test(
+        "
+struct MaybeBox<T>
+    value T?
+
+let b MaybeBox<int>
+",
+    );
+}
+
+#[test]
+fn test_generic_function_multiple_params() {
+    // TODO: Feature not implemented - generic tuple return types
+    type_checker_error_test(
+        "
+fn pair<A, B>(a A, b B) (A, B)
+    return (a, b)
+
+pair(1, \"hello\")
+",
+        "Invalid return type",
+    );
+}
+
+#[test]
+fn test_generic_in_list_of_generics() {
+    type_checker_test(
+        "
+struct Box<T>
+    value T
+
+let boxes [Box<int>] = [Box(1), Box(2), Box(3)]
+",
+    );
+}
+
+#[test]
+fn test_generic_map_key_value() {
+    type_checker_test(
+        "
+struct Pair<K, V>
+    key K
+    value V
+
+let p = Pair(\"name\", 42)
+",
+    );
+}
+
+#[test]
+fn test_generic_with_complex_inner_type() {
+    type_checker_test(
+        "
+struct Container<T>
+    items [T]
+
+let c Container<{string: int}>
+",
+    );
 }

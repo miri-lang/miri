@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::type_checker::utils::{check_error, check_success};
-
-// ===== Class Declaration =====
+use crate::type_checker::utils::{type_checker_error_test, type_checker_test};
 
 #[test]
 fn test_class_declaration_basic() {
@@ -11,7 +9,7 @@ fn test_class_declaration_basic() {
 class Animal
     var name String
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -21,7 +19,7 @@ class Point
     var x int
     var y int
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -33,10 +31,8 @@ class Point
 class Point
     var y int
     ";
-    check_error(code, "already defined");
+    type_checker_error_test(code, "already defined");
 }
-
-// ===== Class Inheritance =====
 
 #[test]
 fn test_class_extends() {
@@ -47,7 +43,7 @@ class Animal
 class Dog extends Animal
     var breed String
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -56,10 +52,8 @@ fn test_class_extends_undefined() {
 class Dog extends Animal
     var breed String
     ";
-    check_error(code, "not defined");
+    type_checker_error_test(code, "not defined");
 }
-
-// ===== Class Implements =====
 
 #[test]
 fn test_class_implements_trait() {
@@ -71,7 +65,7 @@ trait Drawable
 class Circle implements Drawable
     var radius float
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -80,10 +74,8 @@ fn test_class_implements_undefined_trait() {
 class Circle implements Drawable
     var radius float
     ";
-    check_error(code, "not defined");
+    type_checker_error_test(code, "not defined");
 }
-
-// ===== Generic Classes =====
 
 #[test]
 fn test_class_generic() {
@@ -91,10 +83,8 @@ fn test_class_generic() {
 class Box<T>
     var value T
     ";
-    check_success(code);
+    type_checker_test(code);
 }
-
-// ===== Traits =====
 
 #[test]
 fn test_trait_declaration_basic() {
@@ -103,7 +93,7 @@ trait Drawable
     fn draw() int
         0
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -121,7 +111,7 @@ trait Shape extends Drawable, Resizable
     fn area() float
         0.0
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -131,7 +121,7 @@ trait Shape extends Unknown
     fn area() float
         0.0
     ";
-    check_error(code, "not defined");
+    type_checker_error_test(code, "not defined");
 }
 
 #[test]
@@ -145,10 +135,8 @@ trait Drawable
     fn render() int
         0
     ";
-    check_error(code, "already defined");
+    type_checker_error_test(code, "already defined");
 }
-
-// ===== Combined Class/Trait =====
 
 #[test]
 fn test_class_extends_and_implements() {
@@ -163,7 +151,7 @@ class Animal
 class Dog extends Animal implements Serializable
     var breed String
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -180,10 +168,8 @@ trait Printable
 class Shape implements Drawable, Printable
     var id int
     ";
-    check_success(code);
+    type_checker_test(code);
 }
-
-// ===== Abstract Classes =====
 
 #[test]
 fn test_abstract_class_with_abstract_method() {
@@ -191,7 +177,7 @@ fn test_abstract_class_with_abstract_method() {
 abstract class Shape
     fn area() float
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -201,7 +187,7 @@ abstract class Shape
     fn describe() string
         \"A shape\"
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -212,7 +198,7 @@ abstract class Shape
     fn describe() string
         \"A shape\"
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -223,7 +209,7 @@ class Shape
 
 0
     ";
-    check_error(
+    type_checker_error_test(
         code,
         "Non-abstract class 'Shape' cannot have abstract method",
     );
@@ -240,7 +226,7 @@ class Circle extends Shape
     fn area() float
         3.14 * self.radius * self.radius
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -252,7 +238,7 @@ abstract class Shape
 class Circle extends Shape
     var radius float
     ";
-    check_error(
+    type_checker_error_test(
         code,
         "must implement abstract method 'area' from class 'Shape'",
     );
@@ -267,7 +253,7 @@ abstract class Shape
 abstract class Polygon extends Shape
     fn perimeter() float
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -287,7 +273,7 @@ class Rectangle extends Polygon
     fn perimeter() float
         2.0 * (self.width + self.height)
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -298,10 +284,8 @@ abstract class Shape
 
 let s = Shape()
     ";
-    check_error(code, "Cannot instantiate abstract class");
+    type_checker_error_test(code, "Cannot instantiate abstract class");
 }
-
-// ===== Trait Implementation Verification =====
 
 #[test]
 fn test_class_implements_trait_all_methods() {
@@ -314,7 +298,7 @@ class Circle implements Drawable
     fn draw() int
         1
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -326,7 +310,7 @@ trait Drawable
 class Circle implements Drawable
     var radius float
     ";
-    check_error(code, "must implement method 'draw' from trait 'Drawable'");
+    type_checker_error_test(code, "must implement method 'draw' from trait 'Drawable'");
 }
 
 #[test]
@@ -340,7 +324,7 @@ class Circle implements Drawable
     var radius float
     ";
     // Default implementation means the class doesn't need to implement it
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -354,7 +338,7 @@ class Circle implements Drawable
     fn draw() string
         \"circle\"
     ";
-    check_error(code, "does not match trait 'Drawable' signature");
+    type_checker_error_test(code, "does not match trait 'Drawable' signature");
 }
 
 #[test]
@@ -368,7 +352,7 @@ class Circle implements Drawable
     fn draw() int
         1
     ";
-    check_error(code, "does not match trait 'Drawable' signature");
+    type_checker_error_test(code, "does not match trait 'Drawable' signature");
 }
 
 #[test]
@@ -387,7 +371,7 @@ class Shape implements Drawable, Printable
     fn print() string
         \"shape\"
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -404,10 +388,8 @@ class Shape implements Drawable, Printable
     fn draw() int
         1
     ";
-    check_error(code, "must implement method 'print' from trait 'Printable'");
+    type_checker_error_test(code, "must implement method 'print' from trait 'Printable'");
 }
-
-// ===== Inheritance Chain Validation =====
 
 #[test]
 fn test_multi_level_inheritance_chain() {
@@ -421,7 +403,7 @@ class Mammal extends Animal
 class Dog extends Mammal
     var breed String
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -441,7 +423,7 @@ class Triangle extends Polygon
     fn sides() int
         3
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -457,7 +439,7 @@ class Triangle extends Polygon
     var base float
     ";
     // Triangle should error because it doesn't implement area() from Shape
-    check_error(
+    type_checker_error_test(
         code,
         "must implement abstract method 'area' from class 'Shape'",
     );
@@ -474,5 +456,141 @@ class A extends B
 class B extends A
     var y int
     ";
-    check_error(code, "not defined");
+    type_checker_error_test(code, "not defined");
+}
+
+#[test]
+fn test_class_deep_inheritance_chain() {
+    type_checker_test(
+        "
+class A
+    var a int
+class B extends A
+    var b int
+class C extends B
+    var c int
+class D extends C
+    var d int
+class E extends D
+    var e int
+
+let e = E()
+",
+    );
+}
+
+#[test]
+fn test_class_many_fields() {
+    type_checker_test(
+        "
+class BigClass
+    var a int
+    var b int
+    var c int
+    var d int
+    var e int
+    var f int
+    var g int
+    var h int
+    var i int
+    var j int
+
+let obj = BigClass()
+",
+    );
+}
+
+#[test]
+fn test_class_implements_many_traits() {
+    type_checker_test(
+        "
+trait A
+    fn a() int: 0
+trait B
+    fn b() int: 0
+trait C
+    fn c() int: 0
+
+class Impl implements A, B, C
+    var x int
+",
+    );
+}
+
+#[test]
+fn test_abstract_chain_deep() {
+    type_checker_test(
+        "
+abstract class A
+    fn method_a() int
+
+abstract class B extends A
+    fn method_b() int
+
+abstract class C extends B
+    fn method_c() int
+
+class Concrete extends C
+    fn method_a() int: 1
+    fn method_b() int: 2
+    fn method_c() int: 3
+",
+    );
+}
+
+#[test]
+fn test_class_with_generic_field() {
+    type_checker_test(
+        "
+struct Box<T>
+    value T
+
+class Container
+    var box Box<int>
+",
+    );
+}
+
+#[test]
+fn test_trait_with_complex_signature() {
+    type_checker_test(
+        "
+trait Processor
+    fn process(items [int], factor int) [int]
+        items
+
+class SimpleProcessor implements Processor
+    var name String
+",
+    );
+}
+
+#[test]
+fn test_class_self_reference_type() {
+    // TODO: Feature not implemented - class self-reference as field type
+    type_checker_error_test(
+        "
+class Node
+    var value int
+    var next Node?
+",
+        "Unknown type",
+    );
+}
+
+#[test]
+fn test_class_inheritance_method_override() {
+    type_checker_test(
+        "
+class Animal
+    fn speak() string
+        \"generic sound\"
+
+class Dog extends Animal
+    fn speak() string
+        \"woof\"
+
+let d = Dog()
+",
+    );
 }

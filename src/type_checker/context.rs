@@ -47,6 +47,15 @@ pub struct GenericDefinition {
     pub kind: TypeDeclarationKind,
 }
 
+/// Definition of a type alias (possibly generic).
+#[derive(Debug, Clone)]
+pub struct AliasDefinition {
+    /// The template type with generic placeholders (e.g., T? for Optional<T>)
+    pub template: Type,
+    /// Generic parameters for this alias (e.g., [T] for Optional<T>)
+    pub generics: Option<Vec<GenericDefinition>>,
+}
+
 /// Information about a class field.
 #[derive(Debug, Clone)]
 pub struct FieldInfo {
@@ -96,7 +105,7 @@ pub enum TypeDefinition {
     Struct(StructDefinition),
     Enum(EnumDefinition),
     Generic(GenericDefinition),
-    Alias(Type),
+    Alias(AliasDefinition),
     Class(ClassDefinition),
     Trait(TraitDefinition),
 }
@@ -116,6 +125,10 @@ pub struct Context {
     pub loop_depth: usize,
     /// Whether we are currently inside a GPU function.
     pub in_gpu_function: bool,
+    /// Whether we are currently inside any function.
+    pub in_function: bool,
+    /// Whether we are currently inside an async function.
+    pub in_async_function: bool,
     /// Name of the current class being checked (for self resolution).
     pub current_class: Option<String>,
     /// Name of the base class of the current class (for super resolution).
@@ -133,6 +146,8 @@ impl Context {
             inferred_return_types: Vec::new(),
             loop_depth: 0,
             in_gpu_function: false,
+            in_function: false,
+            in_async_function: false,
             current_class: None,
             current_base_class: None,
             current_class_type: None,

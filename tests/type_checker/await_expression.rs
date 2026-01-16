@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use super::utils::{check_error, check_expr_type, check_success};
+use super::utils::{type_checker_error_test, type_checker_expr_type_test, type_checker_test};
 use miri::ast::factory::*;
 
 #[test]
 fn test_await_future_variable() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 let f future<int>
 await f
@@ -17,7 +17,7 @@ await f
 
 #[test]
 fn test_await_nested_future() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 let f future<future<string>>
 await await f
@@ -28,7 +28,7 @@ await await f
 
 #[test]
 fn test_await_non_future_error() {
-    check_error(
+    type_checker_error_test(
         "
 let x = 10
 await x
@@ -39,7 +39,7 @@ await x
 
 #[test]
 fn test_await_in_expression() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 let f future<int>
 (await f) + 1
@@ -50,7 +50,7 @@ let f future<int>
 
 #[test]
 fn test_await_function_call() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 fn get_future() future<int>
     let f future<int>
@@ -64,7 +64,7 @@ await get_future()
 
 #[test]
 fn test_await_list_future() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 let f future<[int]>
 await f
@@ -75,7 +75,7 @@ await f
 
 #[test]
 fn test_await_map_future() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 let f future<map<string, int>>
 await f
@@ -86,7 +86,7 @@ await f
 
 #[test]
 fn test_await_void_future() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 let f future<void>
 await f
@@ -97,7 +97,7 @@ await f
 
 #[test]
 fn test_await_nullable_future() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 let f future<int?>
 await f
@@ -108,7 +108,7 @@ await f
 
 #[test]
 fn test_await_custom_type() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 struct User
     name string
@@ -120,23 +120,39 @@ await f
     );
 }
 
-// #[test]
-// fn test_await_generic_function() {
-//     check_expr_type(
-//         "
-// fn unwrap<T>(f future<T>) T
-//     return await f
+#[test]
+fn test_await_in_async_function() {
+    // Await inside an async function is allowed
+    type_checker_expr_type_test(
+        "
+async fn process(f future<int>) int
+    await f
 
-// let x future<int>
-// await unwrap<int>(x)
-// ",
-//         type_int(),
-//     );
-// }
+let x future<int>
+process(x)
+",
+        type_int(),
+    );
+}
+
+#[test]
+fn test_await_in_non_async_function_error() {
+    // Await inside a non-async function is not allowed
+    type_checker_error_test(
+        "
+fn process(f future<int>) int
+    await f
+
+let x future<int>
+process(x)
+",
+        "'await' can only be used in async functions or at the top level",
+    );
+}
 
 #[test]
 fn test_await_in_conditional_expression() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 let f future<bool>
 1 if await f else 0
@@ -147,7 +163,7 @@ let f future<bool>
 
 #[test]
 fn test_await_in_loop_condition() {
-    check_success(
+    type_checker_test(
         "
 let f future<bool>
 while await f

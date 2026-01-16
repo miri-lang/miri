@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::type_checker::utils::{check_error, check_success};
+use crate::type_checker::utils::{type_checker_error_test, type_checker_test};
 
 // ===== Valid Constructor Cases =====
 
@@ -20,7 +20,7 @@ class Dog extends Animal
         super.init(n)
         self.breed = b
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -35,7 +35,7 @@ class Dog extends Animal
     fn init(b string)
         self.breed = b
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -47,7 +47,7 @@ class Animal
     fn init(n string)
         self.name = n
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 // ===== Invalid Constructor Cases =====
@@ -66,7 +66,7 @@ class Dog extends Animal
     fn init(b string)
         self.breed = b
     ";
-    check_error(code, "must call super.init");
+    type_checker_error_test(code, "must call super.init");
 }
 
 #[test]
@@ -87,5 +87,5 @@ class Dog extends Mammal
     fn init(b string)
         self.breed = b
     ";
-    check_error(code, "must call super.init");
+    type_checker_error_test(code, "must call super.init");
 }

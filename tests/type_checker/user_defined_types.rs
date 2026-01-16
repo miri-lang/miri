@@ -1,4 +1,4 @@
-use crate::type_checker::utils::{check_error, check_success};
+use crate::type_checker::utils::{type_checker_error_test, type_checker_test};
 
 #[test]
 fn test_struct_declaration_and_instantiation() {
@@ -11,7 +11,7 @@ let p = Point(1, 2)
 let x = p.x
 let y = p.y
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -23,7 +23,7 @@ struct Point
 
 let p = Point(1, true)
     ";
-    check_error(code, "Type mismatch");
+    type_checker_error_test(code, "Type mismatch");
 }
 
 #[test]
@@ -36,7 +36,7 @@ struct Point
 let p = Point(1, 2)
 let z = p.z
     ";
-    check_error(code, "has no field");
+    type_checker_error_test(code, "has no field");
 }
 
 #[test]
@@ -49,7 +49,7 @@ enum Color
 
 let c = Color.Red
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -62,7 +62,7 @@ enum Result
 let ok = Result.Ok(42)
 let err = Result.Err(\"error\")
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -74,7 +74,7 @@ enum Result
 
 let ok = Result.Ok(\"42\")
     ";
-    check_error(code, "Type mismatch");
+    type_checker_error_test(code, "Type mismatch");
 }
 
 #[test]
@@ -86,7 +86,7 @@ struct Point
 
 let p = Point(x: 1, y: 2)
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -98,7 +98,7 @@ struct Point
 
 let p = Point(y: 2, x: 1)
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -111,7 +111,7 @@ struct Point
 
 let p = Point(1, z: 3, y: 2)
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -123,7 +123,7 @@ struct Point
 
 let p = Point(x: 1, 2)
     ";
-    check_error(code, "Positional arguments cannot follow named arguments");
+    type_checker_error_test(code, "Positional arguments cannot follow named arguments");
 }
 
 #[test]
@@ -135,7 +135,7 @@ struct Point
 
 let p = Point(x: 1)
     ";
-    check_error(code, "Missing argument for field 'y'");
+    type_checker_error_test(code, "Missing argument for field 'y'");
 }
 
 #[test]
@@ -147,7 +147,7 @@ struct Point
 
 let p = Point(x: 1, y: 2, z: 3)
     ";
-    check_error(code, "Unknown field 'z'");
+    type_checker_error_test(code, "Unknown field 'z'");
 }
 
 #[test]
@@ -159,5 +159,5 @@ struct Point
 
 let p = Point(x: 1, x: 2)
     ";
-    check_error(code, "Duplicate argument 'x'");
+    type_checker_error_test(code, "Duplicate argument 'x'");
 }

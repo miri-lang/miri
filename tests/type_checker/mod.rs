@@ -30,6 +30,7 @@ pub mod shared_memory;
 pub mod string;
 pub mod trait_inheritance;
 pub mod tuple;
+pub mod type_alias;
 pub mod user_defined_types;
 pub mod utils;
 pub mod visibility;

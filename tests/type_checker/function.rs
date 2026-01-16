@@ -12,7 +12,7 @@ fn add(a int, b int) int
 
 add(1, 2)
     ";
-    check_expr_type(source, type_int());
+    type_checker_expr_type_test(source, type_int());
 }
 
 #[test]
@@ -21,7 +21,7 @@ fn test_function_return_type_mismatch() {
 fn foo() int
     return true
     ";
-    check_error(source, "Invalid return type: expected int, got boolean");
+    type_checker_error_test(source, "Invalid return type: expected int, got boolean");
 }
 
 #[test]
@@ -32,7 +32,7 @@ fn foo(a int)
 
 foo(true)
     ";
-    check_error(
+    type_checker_error_test(
         source,
         "Type mismatch for argument 'a': expected int, got boolean",
     );
@@ -46,7 +46,7 @@ fn foo(a int)
 
 foo(1, 2)
     ";
-    check_error(source, "Too many positional arguments: expected 1, got 2");
+    type_checker_error_test(source, "Too many positional arguments: expected 1, got 2");
 }
 
 #[test]
@@ -58,7 +58,7 @@ fn foo()
 foo()
     ";
     // Just check if it passes type checking
-    check_success(source);
+    type_checker_test(source);
 }
 
 #[test]
@@ -69,7 +69,7 @@ fn add(a int, b int) int
 
 add(add(1, 2), 3)
     ";
-    check_expr_type(source, type_int());
+    type_checker_expr_type_test(source, type_int());
 }
 
 #[test]
@@ -81,7 +81,7 @@ fn factorial(n int) int
 
 factorial(5)
     ";
-    check_expr_type(source, type_int());
+    type_checker_expr_type_test(source, type_int());
 }
 
 #[test]
@@ -93,7 +93,7 @@ fn add(a int, b int) int
 
 add(1, 2)
     ";
-    check_expr_type(source, type_int());
+    type_checker_expr_type_test(source, type_int());
 }
 
 #[test]
@@ -103,7 +103,7 @@ fn add(a int, b int) int: a + b
 
 add(1, 2)
     ";
-    check_expr_type(source, type_int());
+    type_checker_expr_type_test(source, type_int());
 }
 
 #[test]
@@ -114,7 +114,7 @@ fn dummy_add(a int, b int)
 
 dummy_add(1, 2)
     ";
-    check_success(source);
+    type_checker_test(source);
 }
 
 #[test]
@@ -123,7 +123,7 @@ fn test_void_function_explicit_return_value_error() {
 fn dummy_add(a int, b int)
    return a + b
     ";
-    check_error(source, "Invalid return type: expected void, got int");
+    type_checker_error_test(source, "Invalid return type: expected void, got int");
 }
 
 #[test]
@@ -132,7 +132,7 @@ fn test_implicit_return_type_mismatch() {
 fn foo() int
     true
     ";
-    check_error(source, "Invalid return type: expected int, got boolean");
+    type_checker_error_test(source, "Invalid return type: expected int, got boolean");
 }
 
 #[test]
@@ -144,12 +144,12 @@ fn foo() int
 
 foo()
     ";
-    check_expr_type(source, type_int());
+    type_checker_expr_type_test(source, type_int());
 }
 
 #[test]
 fn test_default_argument_valid() {
-    check_success(
+    type_checker_test(
         "
 fn foo(a int = 1)
     return
@@ -161,7 +161,7 @@ foo(2)
 
 #[test]
 fn test_default_argument_type_mismatch() {
-    check_error(
+    type_checker_error_test(
         "
 fn foo(a int = true)
     return
@@ -172,7 +172,7 @@ fn foo(a int = true)
 
 #[test]
 fn test_guard_valid() {
-    check_success(
+    type_checker_test(
         "
 fn foo(a int > 0)
     return
@@ -183,7 +183,7 @@ foo(1)
 
 #[test]
 fn test_guard_type_mismatch() {
-    check_error(
+    type_checker_error_test(
         "
 fn foo(a int > \"0\")
     return
@@ -194,7 +194,7 @@ fn foo(a int > \"0\")
 
 #[test]
 fn test_parameter_shadowing() {
-    check_success(
+    type_checker_test(
         "
 let a = \"global\"
 fn foo(a int) int
@@ -206,7 +206,7 @@ foo(1)
 
 #[test]
 fn test_local_shadowing_parameter() {
-    check_success(
+    type_checker_test(
         "
 fn foo(a int) int
     let a = 2
@@ -218,7 +218,7 @@ foo(1)
 
 #[test]
 fn test_generic_function_inference() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 fn id<T>(x T) T
     return x
@@ -231,7 +231,7 @@ id(1)
 
 #[test]
 fn test_higher_order_function() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 fn apply(f fn(int) int, x int) int
     return f(x)
@@ -247,7 +247,7 @@ apply(square, 5)
 
 #[test]
 fn test_returning_function() {
-    check_success(
+    type_checker_test(
         "
 fn get_adder() fn(int) int
     return fn(x int): x + 1
@@ -260,7 +260,7 @@ add(1)
 
 #[test]
 fn test_guard_in_range() {
-    check_success(
+    type_checker_test(
         "
 fn foo(a int in 1..10)
     return
@@ -271,7 +271,7 @@ foo(5)
 
 #[test]
 fn test_guard_in_list() {
-    check_success(
+    type_checker_test(
         "
 fn foo(a int in [1, 2, 3])
     return
@@ -282,7 +282,7 @@ foo(1)
 
 #[test]
 fn test_guard_not() {
-    check_success(
+    type_checker_test(
         "
 fn foo(a int not 0)
     return
@@ -293,7 +293,7 @@ foo(1)
 
 #[test]
 fn test_guard_referencing_previous_param() {
-    check_success(
+    type_checker_test(
         "
 fn foo(a int, b int > a)
     return
@@ -304,7 +304,7 @@ foo(1, 2)
 
 #[test]
 fn test_default_value_referencing_previous_param() {
-    check_success(
+    type_checker_test(
         "
 fn foo(a int, b int = a)
     return
@@ -315,7 +315,7 @@ foo(1)
 
 #[test]
 fn test_complex_generic_param() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 fn first<T>(list [T]) T
     return list[0]
@@ -328,7 +328,7 @@ first([1, 2, 3])
 
 #[test]
 fn test_nested_generic_param() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 fn flatten<T>(list [[T]]) [T]
     return list[0]
@@ -341,7 +341,7 @@ flatten([[1], [2]])
 
 #[test]
 fn test_map_generic_param() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 fn get_value<K, V>(map {K: V}, key K) V
     return map[key]
@@ -354,7 +354,7 @@ get_value({\"a\": 1}, \"a\")
 
 #[test]
 fn test_guard_type_mismatch_in() {
-    check_error(
+    type_checker_error_test(
         "
 fn foo(a int in [\"string\"])
     return
@@ -371,7 +371,7 @@ fn add(a int, b int) int
 
 add(a: 1, b: 2)
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -382,7 +382,7 @@ fn add(a int, b int) int
 
 add(b: 2, a: 1)
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -393,7 +393,7 @@ fn add(a int, b int, c int) int
 
 add(1, c: 3, b: 2)
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -404,7 +404,7 @@ fn add(a int)
 
 add(b: 1)
     ";
-    check_error(code, "Unknown argument 'b'");
+    type_checker_error_test(code, "Unknown argument 'b'");
 }
 
 #[test]
@@ -413,7 +413,7 @@ fn test_missing_return_in_function() {
 fn foo() int
     let x = 1
 ";
-    check_error(source, "Missing return statement");
+    type_checker_error_test(source, "Missing return statement");
 }
 
 #[test]
@@ -425,12 +425,12 @@ fn foo() int
     
     // Missing return here
 ";
-    check_error(source, "Missing return statement");
+    type_checker_error_test(source, "Missing return statement");
 }
 
 #[test]
 fn test_gpu_function_must_return_void() {
-    check_error(
+    type_checker_error_test(
         "gpu fn my_kernel() int: 1",
         "GPU functions must not have an explicit return type",
     );
@@ -442,7 +442,7 @@ fn test_gpu_function_implicit_return() {
 gpu fn my_kernel()
     let x = 1
 ";
-    check_success(input);
+    type_checker_test(input);
 }
 
 #[test]
@@ -451,7 +451,7 @@ fn test_gpu_function_cannot_have_explicit_return() {
 gpu fn my_kernel() void
     return
 ";
-    check_error(input, "GPU functions must not have an explicit return type");
+    type_checker_error_test(input, "GPU functions must not have an explicit return type");
 }
 
 #[test]
@@ -460,7 +460,7 @@ fn test_gpu_function_cannot_call_print() {
 gpu fn my_kernel()
     print(1)
 ";
-    check_error(
+    type_checker_error_test(
         input,
         "Host function 'print' cannot be called from a GPU kernel",
     );
@@ -472,7 +472,7 @@ fn test_gpu_function_can_use_builtins() {
 gpu fn my_kernel()
     let x = gpu_context.thread_idx.x
 ";
-    check_success(input);
+    type_checker_test(input);
 }
 
 #[test]
@@ -481,5 +481,165 @@ fn test_gpu_function_block_dim() {
 gpu fn my_kernel()
     let x = gpu_context.block_dim.x
 ";
-    check_success(input);
+    type_checker_test(input);
+}
+
+#[test]
+fn test_function_deeply_nested_calls() {
+    type_checker_expr_type_test(
+        "
+fn add(a int, b int) int: a + b
+
+add(add(add(add(add(1, 2), 3), 4), 5), 6)
+",
+        type_int(),
+    );
+}
+
+#[test]
+fn test_function_many_parameters() {
+    type_checker_test(
+        "
+fn many(a int, b int, c int, d int, e int, f int, g int, h int, i int, j int) int
+    a + b + c + d + e + f + g + h + i + j
+
+many(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+",
+    );
+}
+
+#[test]
+fn test_function_chain_composition() {
+    type_checker_expr_type_test(
+        "
+fn double(x int) int: x * 2
+fn triple(x int) int: x * 3
+fn add_one(x int) int: x + 1
+
+add_one(triple(double(add_one(double(1)))))
+",
+        type_int(),
+    );
+}
+
+#[test]
+fn test_function_mutual_recursion() {
+    // TODO: Feature not implemented - mutual recursion requires forward declarations
+    type_checker_error_test(
+        "
+fn is_even(n int) bool
+    if n == 0: return true
+    return is_odd(n - 1)
+
+fn is_odd(n int) bool
+    if n == 0: return false
+    return is_even(n - 1)
+
+is_even(10)
+",
+        "Undefined variable: is_odd",
+    );
+}
+
+#[test]
+fn test_function_all_named_params_reordered() {
+    type_checker_test(
+        "
+fn point(x int, y int, z int) int: x + y + z
+
+point(z: 3, y: 2, x: 1)
+",
+    );
+}
+
+#[test]
+fn test_function_many_default_params() {
+    type_checker_test(
+        "
+fn defaults(a int = 1, b int = 2, c int = 3, d int = 4, e int = 5) int
+    a + b + c + d + e
+
+defaults()
+defaults(10)
+defaults(10, 20)
+defaults(10, 20, 30, 40, 50)
+",
+    );
+}
+
+#[test]
+fn test_function_nested_lambdas() {
+    type_checker_test(
+        "
+let f = fn(x int) fn(int) int
+    return fn(y int): x + y
+
+let add5 = f(5)
+add5(10)
+",
+    );
+}
+
+#[test]
+fn test_function_long_body_chain() {
+    type_checker_test(
+        "
+fn compute(x int) int
+    let a = x + 1
+    let b = a * 2
+    let c = b - 3
+    let d = c / 2
+    let e = d + 100
+    let f = e * e
+    let g = f - 1
+    let h = g + x
+    h
+
+compute(5)
+",
+    );
+}
+
+#[test]
+fn test_function_generic_with_multiple_constraints() {
+    type_checker_test(
+        "
+fn identity<T>(x T) T: x
+
+identity(1)
+identity(\"hello\")
+identity(true)
+identity([1, 2, 3])
+",
+    );
+}
+
+#[test]
+fn test_function_error_many_wrong_types() {
+    type_checker_error_test(
+        "
+fn foo(a int, b int) int: a + b
+foo(\"a\", \"b\")
+",
+        "Type mismatch for argument 'a'",
+    );
+}
+
+#[test]
+fn test_function_error_extra_args() {
+    type_checker_error_test(
+        "
+fn foo(a int) int: a
+foo(1, 2, 3, 4, 5)
+",
+        "Too many positional arguments",
+    );
+}
+
+#[test]
+fn test_function_inline_expression_body() {
+    type_checker_exprs_type_test(vec![
+        ("fn id(x int) int: x\nid(42)", type_int()),
+        ("fn neg(x bool) bool: not x\nneg(true)", type_bool()),
+    ]);
 }

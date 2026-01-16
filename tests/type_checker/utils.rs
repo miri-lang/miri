@@ -9,14 +9,14 @@ use miri::parser::Parser;
 use miri::pipeline::Pipeline;
 use miri::type_checker::TypeChecker;
 
-pub fn check_success(source: &str) {
+pub fn type_checker_test(source: &str) {
     let pipeline = Pipeline::new();
     if let Err(e) = pipeline.frontend(source) {
         panic!("Expected success, but got error: {:?}", e);
     }
 }
 
-pub fn check_error(source: &str, expected_error: &str) {
+pub fn type_checker_error_test(source: &str, expected_error: &str) {
     let pipeline = Pipeline::new();
     match pipeline.frontend(source) {
         Ok(_) => panic!("Expected error '{}', but got success", expected_error),
@@ -32,7 +32,7 @@ pub fn check_error(source: &str, expected_error: &str) {
     }
 }
 
-pub fn check_errors(source: &str, expected_errors: Vec<&str>) {
+pub fn type_checker_errors_test(source: &str, expected_errors: Vec<&str>) {
     let pipeline = Pipeline::new();
     match pipeline.frontend(source) {
         Ok(_) => panic!("Expected errors, but got success"),
@@ -52,7 +52,7 @@ pub fn check_errors(source: &str, expected_errors: Vec<&str>) {
     }
 }
 
-pub fn check_multi_module_success(modules: Vec<(&str, &str)>) {
+pub fn type_checker_multi_module_test(modules: Vec<(&str, &str)>) {
     let mut type_checker = TypeChecker::new();
 
     for (module_name, source) in modules {
@@ -68,7 +68,7 @@ pub fn check_multi_module_success(modules: Vec<(&str, &str)>) {
     }
 }
 
-pub fn check_multi_module_error(modules: Vec<(&str, &str)>, expected_error: &str) {
+pub fn type_checker_multi_module_error_test(modules: Vec<(&str, &str)>, expected_error: &str) {
     let mut type_checker = TypeChecker::new();
     let mut last_result = Ok(());
 
@@ -95,7 +95,7 @@ pub fn check_multi_module_error(modules: Vec<(&str, &str)>, expected_error: &str
     }
 }
 
-pub fn check_expr_type(source: &str, expected_type: Type) {
+pub fn type_checker_expr_type_test(source: &str, expected_type: Type) {
     let pipeline = Pipeline::new();
     let result = match pipeline.frontend(source) {
         Ok(res) => res,
@@ -132,9 +132,9 @@ pub fn check_expr_type(source: &str, expected_type: Type) {
     }
 }
 
-pub fn check_exprs_type(cases: Vec<(&str, Type)>) {
+pub fn type_checker_exprs_type_test(cases: Vec<(&str, Type)>) {
     for (source, expected_type) in cases {
-        check_expr_type(source, expected_type);
+        type_checker_expr_type_test(source, expected_type);
     }
 }
 
@@ -190,7 +190,7 @@ fn find_variable_type_in_statements(
     None
 }
 
-pub fn check_vars_type(source: &str, expected_types: Vec<(&str, Type)>) {
+pub fn type_checker_vars_type_test(source: &str, expected_types: Vec<(&str, Type)>) {
     let pipeline = Pipeline::new();
     let result = match pipeline.frontend(source) {
         Ok(res) => res,
@@ -216,7 +216,7 @@ pub fn check_vars_type(source: &str, expected_types: Vec<(&str, Type)>) {
     }
 }
 
-pub fn check_warning(source: &str, expected_warning: &str) {
+pub fn type_checker_warning_test(source: &str, expected_warning: &str) {
     let pipeline = Pipeline::new();
     let result = match pipeline.frontend(source) {
         Ok(res) => res,

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::type_checker::utils::{check_error, check_success};
+use crate::type_checker::utils::{type_checker_error_test, type_checker_test};
 
 // ===== self expression =====
 
@@ -14,7 +14,7 @@ class Point
     fn setX(value int)
         self.x = value
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -25,7 +25,7 @@ class Counter
     fn increment()
         self.count = self.count + 1
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -37,7 +37,7 @@ class Foo
     fn baz() int
         self.bar()
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -45,7 +45,7 @@ fn test_self_outside_class_error() {
     let code = "
 let x = self
     ";
-    check_error(code, "'self' can only be used inside a class method");
+    type_checker_error_test(code, "'self' can only be used inside a class method");
 }
 
 #[test]
@@ -54,7 +54,7 @@ fn test_self_in_top_level_function_error() {
 fn foo()
     self.x
     ";
-    check_error(code, "'self' can only be used inside a class method");
+    type_checker_error_test(code, "'self' can only be used inside a class method");
 }
 
 // ===== super expression =====
@@ -70,7 +70,7 @@ class Dog extends Animal
     fn speak() string
         super.speak()
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -85,7 +85,7 @@ class Derived extends Base
     fn init(v int)
         super.init(v)
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -93,7 +93,7 @@ fn test_super_outside_class_error() {
     let code = "
 let x = super.foo()
     ";
-    check_error(code, "'super' can only be used inside a class method");
+    type_checker_error_test(code, "'super' can only be used inside a class method");
 }
 
 #[test]
@@ -102,7 +102,7 @@ fn test_super_in_top_level_function_error() {
 fn foo()
     super.bar()
     ";
-    check_error(code, "'super' can only be used inside a class method");
+    type_checker_error_test(code, "'super' can only be used inside a class method");
 }
 
 #[test]
@@ -112,7 +112,7 @@ class Orphan
     fn foo()
         super.bar()
     ";
-    check_error(
+    type_checker_error_test(
         code,
         "'super' can only be used in a class that extends another class",
     );
@@ -135,7 +135,7 @@ class Child extends Parent
     fn setAge(a int)
         self.age = a
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -148,7 +148,7 @@ trait Counter
         self.count = self.count + 1
     ";
     // Traits shouldn't allow fields and this would be an error
-    check_error(code, "Only method declarations are allowed in trait body");
+    type_checker_error_test(code, "Only method declarations are allowed in trait body");
 }
 
 #[test]
@@ -161,5 +161,5 @@ class Person
         self.name = n
         self.age = a
     ";
-    check_success(code);
+    type_checker_test(code);
 }

@@ -6,7 +6,7 @@ use miri::ast::factory::*;
 
 #[test]
 fn test_integer_literals() {
-    check_exprs_type(vec![
+    type_checker_exprs_type_test(vec![
         ("1", type_int()),
         ("0", type_int()),
         ("-1", type_int()),
@@ -16,7 +16,7 @@ fn test_integer_literals() {
 
 #[test]
 fn test_integer_arithmetic_expressions() {
-    check_exprs_type(vec![
+    type_checker_exprs_type_test(vec![
         ("1 + 2", type_int()),
         ("1 - 2", type_int()),
         ("1 * 2", type_int()),
@@ -29,7 +29,7 @@ fn test_integer_arithmetic_expressions() {
 
 #[test]
 fn test_integer_unary_expressions() {
-    check_exprs_type(vec![
+    type_checker_exprs_type_test(vec![
         ("-1", type_int()),
         ("+1", type_int()),
         ("-(1 + 2)", type_int()),
@@ -38,7 +38,7 @@ fn test_integer_unary_expressions() {
 
 #[test]
 fn test_integer_comparisons() {
-    check_exprs_type(vec![
+    type_checker_exprs_type_test(vec![
         ("1 < 2", type_bool()),
         ("1 <= 2", type_bool()),
         ("1 > 2", type_bool()),
@@ -50,7 +50,7 @@ fn test_integer_comparisons() {
 
 #[test]
 fn test_integer_bitwise_operations() {
-    check_exprs_type(vec![
+    type_checker_exprs_type_test(vec![
         ("1 & 2", type_int()),
         ("1 | 2", type_int()),
         ("1 ^ 2", type_int()),
@@ -60,7 +60,7 @@ fn test_integer_bitwise_operations() {
 
 #[test]
 fn test_valid_integer_arithmetic_variables() {
-    check_vars_type(
+    type_checker_vars_type_test(
         "
 let x = 1 + 2
 let y = x * 3
@@ -78,7 +78,7 @@ let w = z % 2
 
 #[test]
 fn test_explicit_integer_type() {
-    check_vars_type(
+    type_checker_vars_type_test(
         "
 let x int = 1
 let y int = -5
@@ -89,7 +89,7 @@ let y int = -5
 
 #[test]
 fn test_integer_assignment_operators() {
-    check_vars_type(
+    type_checker_vars_type_test(
         "
 var x = 1
 x += 2
@@ -104,14 +104,14 @@ x %= 2
 
 #[test]
 fn test_explicit_type_mismatch() {
-    check_error(
+    type_checker_error_test(
         "
 let x int = 1.5
 ",
         "Type mismatch for variable 'x'",
     );
 
-    check_error(
+    type_checker_error_test(
         "
 let x int = true
 ",
@@ -121,7 +121,7 @@ let x int = true
 
 #[test]
 fn test_integer_bool_mismatch() {
-    check_error(
+    type_checker_error_test(
         "
 let x = 1 + true
 ",
@@ -131,7 +131,7 @@ let x = 1 + true
 
 #[test]
 fn test_integer_float_mismatch() {
-    check_error(
+    type_checker_error_test(
         "
 let x = 1 + 1.5
 ",
@@ -141,7 +141,7 @@ let x = 1 + 1.5
 
 #[test]
 fn test_invalid_integer_assignment() {
-    check_error(
+    type_checker_error_test(
         "
 var x = 1
 x = 1.5
@@ -152,14 +152,14 @@ x = 1.5
 
 #[test]
 fn test_invalid_bitwise_operands() {
-    check_error(
+    type_checker_error_test(
         "
 let x = 1 & 1.5
 ",
         "Invalid types for bitwise operation",
     );
 
-    check_error(
+    type_checker_error_test(
         "
 let x = 1 | true
 ",
@@ -171,7 +171,7 @@ let x = 1 | true
 fn test_specific_integer_types() {
     // Test assignment of literals to specific types
     // This checks if type_int() (literal) is compatible with specific integer types
-    check_vars_type(
+    type_checker_vars_type_test(
         "
 let a i8 = 1
 let b i16 = 2
@@ -201,7 +201,7 @@ let j u128 = 10
 
 #[test]
 fn test_bitwise_on_specific_types() {
-    check_vars_type(
+    type_checker_vars_type_test(
         "
 let a u8 = 1
 let b u8 = 2
@@ -214,7 +214,7 @@ let c = a & b
 #[test]
 fn test_mixed_integer_arithmetic_fail() {
     // Strict typing: i8 + i16 should fail without cast
-    check_error(
+    type_checker_error_test(
         "
 let x i8 = 1
 let y i16 = 2
@@ -226,7 +226,7 @@ x + y
 
 #[test]
 fn test_mixed_integer_bitwise_fail() {
-    check_error(
+    type_checker_error_test(
         "
 let x u8 = 1
 let y u16 = 2
@@ -238,7 +238,7 @@ x & y
 
 #[test]
 fn test_unary_on_specific_types() {
-    check_vars_type(
+    type_checker_vars_type_test(
         "
 let a i8 = 1
 let b = -a
@@ -251,7 +251,7 @@ let d = -c
 
 #[test]
 fn test_comparison_on_specific_types() {
-    check_exprs_type(vec![
+    type_checker_exprs_type_test(vec![
         ("let a i8 = 1\nlet b i8 = 2\na < b", type_bool()),
         ("let a u32 = 1\nlet b u32 = 2\na == b", type_bool()),
     ]);
@@ -259,7 +259,7 @@ fn test_comparison_on_specific_types() {
 
 #[test]
 fn test_comparison_mixed_types_success() {
-    check_exprs_type(vec![
+    type_checker_exprs_type_test(vec![
         ("let a i8 = 1\nlet b i16 = 2\na < b", type_bool()),
         ("let a u32 = 1\nlet b u64 = 2\na == b", type_bool()),
     ]);
@@ -268,14 +268,133 @@ fn test_comparison_mixed_types_success() {
 #[test]
 fn test_assignment_compatibility() {
     // Int literal to specific type is allowed
-    check_success("let a i8 = 1");
+    type_checker_test("let a i8 = 1");
 
     // Specific type to Int (variable) - inferred as specific type
-    check_vars_type("let a i8 = 1\nlet b = a", vec![("b", type_i8())]);
+    type_checker_vars_type_test("let a i8 = 1\nlet b = a", vec![("b", type_i8())]);
 
     // Smaller to larger - allowed
-    check_vars_type("let a i8 = 1\nlet b i16 = a", vec![("b", type_i16())]);
+    type_checker_vars_type_test("let a i8 = 1\nlet b i16 = a", vec![("b", type_i16())]);
 
     // Larger to smaller - fail
-    check_error("let a i16 = 1\nlet b i8 = a", "Type mismatch");
+    type_checker_error_test("let a i16 = 1\nlet b i8 = a", "Type mismatch");
+}
+
+#[test]
+fn test_integer_deeply_nested_arithmetic() {
+    type_checker_exprs_type_test(vec![
+        ("((((1 + 2) * 3) - 4) / 5)", type_int()),
+        (
+            "1 + (2 + (3 + (4 + (5 + (6 + (7 + (8 + 9)))))))",
+            type_int(),
+        ),
+        ("((((((((1))))))))", type_int()),
+    ]);
+}
+
+#[test]
+fn test_integer_deeply_nested_comparisons() {
+    type_checker_exprs_type_test(vec![
+        ("(1 < 2) == (3 > 4)", type_bool()),
+        (
+            "((1 < 2) and (3 > 4)) or ((5 == 6) and (7 != 8))",
+            type_bool(),
+        ),
+    ]);
+}
+
+#[test]
+fn test_integer_chained_operations() {
+    type_checker_exprs_type_test(vec![
+        ("1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 10", type_int()),
+        ("1 * 2 * 3 * 4 * 5 * 6 * 7 * 8 * 9 * 10", type_int()),
+        ("1 - 2 - 3 - 4 - 5 - 6 - 7 - 8 - 9 - 10", type_int()),
+    ]);
+}
+
+#[test]
+fn test_integer_mixed_operators_precedence() {
+    type_checker_exprs_type_test(vec![
+        ("1 + 2 * 3 - 4 / 5 % 6", type_int()),
+        ("1 & 2 | 3 ^ 4", type_int()),
+        ("-1 + +2 * -3", type_int()),
+    ]);
+}
+
+#[test]
+fn test_integer_compact_formatting() {
+    type_checker_exprs_type_test(vec![
+        ("1+2", type_int()),
+        ("1-2*3", type_int()),
+        ("(1+2)*(3-4)", type_int()),
+    ]);
+}
+
+#[test]
+fn test_integer_spaced_formatting() {
+    type_checker_exprs_type_test(vec![
+        ("1    +    2", type_int()),
+        ("(    1    +    2    )", type_int()),
+    ]);
+}
+
+#[test]
+fn test_integer_large_literal() {
+    type_checker_test("let x i128 = 170141183460469231731687303715884105727");
+}
+
+#[test]
+fn test_integer_negative_literal() {
+    type_checker_vars_type_test(
+        "
+let a = -1
+let b i8 = -128
+let c i16 = -32768
+",
+        vec![("a", type_int()), ("b", type_i8()), ("c", type_i16())],
+    );
+}
+
+#[test]
+fn test_integer_zero_operations() {
+    type_checker_exprs_type_test(vec![
+        ("0 + 0", type_int()),
+        ("0 * 1000000", type_int()),
+        ("0 - 0", type_int()),
+        ("0 == 0", type_bool()),
+    ]);
+}
+
+#[test]
+fn test_integer_many_variables_chain() {
+    type_checker_test(
+        "
+let a = 1
+let b = a + 1
+let c = b + 1
+let d = c + 1
+let e = d + 1
+let f = e + 1
+let g = f + 1
+let h = g + 1
+let i = h + 1
+let j = i + 1
+",
+    );
+}
+
+#[test]
+fn test_integer_bitwise_combinations() {
+    type_checker_exprs_type_test(vec![
+        ("(1 & 2) | (3 ^ 4)", type_int()),
+        ("~(1 & 2)", type_int()),
+        ("~~1", type_int()),
+    ]);
+}
+
+#[test]
+fn test_integer_invalid_types_in_expression() {
+    type_checker_error_test("1 + \"string\"", "Invalid types for arithmetic operation");
+    type_checker_error_test("1 * [1, 2, 3]", "Invalid types for multiplication");
+    type_checker_error_test("1 / {1, 2}", "Invalid types for arithmetic operation");
 }

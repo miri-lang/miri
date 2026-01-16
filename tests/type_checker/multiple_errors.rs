@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::type_checker::utils::check_errors;
+use crate::type_checker::utils::type_checker_errors_test;
 
 #[test]
 fn test_multiple_errors() {
@@ -10,7 +10,7 @@ let x int = \"string\"
 let y bool = 123
 ";
 
-    check_errors(
+    type_checker_errors_test(
         source,
         vec![
             "Type mismatch for variable 'x': expected int, got string",
@@ -25,7 +25,7 @@ fn test_function_arguments_multiple_errors() {
 fn foo(a int, b float): a + b
 foo(\"wrong\", 1)
 ";
-    check_errors(
+    type_checker_errors_test(
         source,
         vec![
             "Type mismatch for argument 'a': expected int, got string",
@@ -39,7 +39,7 @@ fn test_list_literal_multiple_errors() {
     let source = "
 let l = [1, \"str\", true]
 ";
-    check_errors(
+    type_checker_errors_test(
         source,
         vec![
             "List elements must have the same type", // 1 vs "str"
@@ -53,7 +53,7 @@ fn test_map_literal_multiple_errors() {
     let source = "
 let m = {1: \"a\", \"2\": \"b\", 3: 3}
 ";
-    check_errors(
+    type_checker_errors_test(
         source,
         vec![
             "Map keys must have the same type",   // 1 vs "2"
@@ -71,7 +71,7 @@ match x
     2: 123
     3: true
 ";
-    check_errors(
+    type_checker_errors_test(
         source,
         vec![
             "Match branch types mismatch: expected string, got int",
@@ -86,7 +86,7 @@ fn test_struct_initialization_multiple_errors() {
 struct Point: x int, y int
 let p = Point(true, \"str\")
 ";
-    check_errors(
+    type_checker_errors_test(
         source,
         vec![
             "Type mismatch for field 'x': expected int, got boolean",
@@ -102,5 +102,5 @@ let x int = unknown_var
 ";
     // Should only report "Undefined variable: unknown_var"
     // Should NOT report "Type mismatch: expected Int, got Error"
-    check_errors(source, vec!["Undefined variable: unknown_var"]);
+    type_checker_errors_test(source, vec!["Undefined variable: unknown_var"]);
 }

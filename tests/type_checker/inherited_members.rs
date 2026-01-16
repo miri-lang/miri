@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::type_checker::utils::{check_error, check_success};
+use crate::type_checker::utils::{type_checker_error_test, type_checker_test};
 
 // ===== Inherited Field Access =====
 
@@ -15,7 +15,7 @@ class Dog extends Animal
     fn getName() string
         self.name
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -28,7 +28,7 @@ class Dog extends Animal
     fn getAge() int
         self.age
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -41,7 +41,7 @@ class Dog extends Animal
     fn getSecret() int
         self.secret
     ";
-    check_error(code, "Private and cannot be accessed");
+    type_checker_error_test(code, "Private and cannot be accessed");
 }
 
 // ===== Inherited Method Access =====
@@ -57,7 +57,7 @@ class Dog extends Animal
     fn bark() string
         self.speak()
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -71,7 +71,7 @@ class Dog extends Animal
     fn info() string
         self.getInfo()
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -85,7 +85,7 @@ class Dog extends Animal
     fn tryAccess() string
         self.secretMethod()
     ";
-    check_error(code, "Private and cannot be accessed");
+    type_checker_error_test(code, "Private and cannot be accessed");
 }
 
 // ===== Multi-level Inheritance =====
@@ -103,7 +103,7 @@ class Dog extends Mammal
     fn describe() string
         self.name
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -121,7 +121,7 @@ class Dog extends Mammal
     fn callBoth() int
         self.baseMethod() + self.middleMethod()
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 // ===== Mixed Access Patterns =====
@@ -139,7 +139,7 @@ class Dog extends Animal
     fn test() string
         self.speak()
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -155,7 +155,7 @@ class Dog extends Animal
     fn getBreed() string
         self.breed
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 // ===== External Access (not via self) =====
@@ -173,7 +173,7 @@ class Vet
     fn checkName(d Dog) string
         d.name
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -189,5 +189,5 @@ class Vet
     fn checkAge(d Dog) int
         d.age
     ";
-    check_error(code, "Protected and cannot be accessed");
+    type_checker_error_test(code, "Protected and cannot be accessed");
 }

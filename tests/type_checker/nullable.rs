@@ -6,22 +6,22 @@ use miri::ast::factory::*;
 
 #[test]
 fn test_nullable_assignment() {
-    check_vars_type("var x int? = 5", vec![("x", type_null(type_int()))]);
+    type_checker_vars_type_test("var x int? = 5", vec![("x", type_null(type_int()))]);
 }
 
 #[test]
 fn test_none_assignment_to_nullable() {
-    check_vars_type("var x int? = None", vec![("x", type_null(type_int()))]);
+    type_checker_vars_type_test("var x int? = None", vec![("x", type_null(type_int()))]);
 }
 
 #[test]
 fn test_none_assignment_to_non_nullable_error() {
-    check_error("var x int = None", "Type mismatch");
+    type_checker_error_test("var x int = None", "Type mismatch");
 }
 
 #[test]
 fn test_nullable_immutable_warning() {
-    check_warning(
+    type_checker_warning_test(
         "let x int? = 5",
         "Variable 'x' is immutable but declared as nullable",
     );
@@ -30,36 +30,36 @@ fn test_nullable_immutable_warning() {
 #[test]
 fn test_nullable_list_of_non_nullable() {
     // [int]? - List itself can be None, but elements must be int
-    check_vars_type(
+    type_checker_vars_type_test(
         "var list [int]? = [1, 2, 3]",
         vec![("list", type_null(type_list(type_int())))],
     );
 
-    check_vars_type(
+    type_checker_vars_type_test(
         "var list [int]? = None",
         vec![("list", type_null(type_list(type_int())))],
     );
 
-    check_error("var list [int]? = [1, None]", "Type mismatch");
+    type_checker_error_test("var list [int]? = [1, None]", "Type mismatch");
 }
 
 #[test]
 fn test_non_nullable_list_of_nullable() {
     // [int?] - List cannot be None, but elements can be None
     // Note: List literal inference is strict, so we init with ints and assign None
-    check_success(
+    type_checker_test(
         "
 var list [int?] = [1, 2, 3]
 list[1] = None
         ",
     );
-    check_error("var list [int?] = None", "Type mismatch");
+    type_checker_error_test("var list [int?] = None", "Type mismatch");
 }
 
 #[test]
 fn test_nullable_list_of_nullable() {
     // [int?]? - List can be None, and elements can be None
-    check_vars_type(
+    type_checker_vars_type_test(
         "
 var inner [int?] = [1, 2, 3]
 inner[1] = None
@@ -73,19 +73,19 @@ list = None
 #[test]
 fn test_nullable_map_values() {
     // {string: int?}
-    check_success(
+    type_checker_test(
         "
 var map {string: int?} = {\"a\": 1}
 map[\"b\"] = None
         ",
     );
 
-    check_error("var map {string: int} = {\"a\": None}", "Type mismatch");
+    type_checker_error_test("var map {string: int} = {\"a\": None}", "Type mismatch");
 }
 
 #[test]
 fn test_nullable_map_itself() {
-    check_vars_type(
+    type_checker_vars_type_test(
         "
 var map {string: int}? = {\"a\": 1}
 map = None
@@ -96,7 +96,7 @@ map = None
 
 #[test]
 fn test_nullable_map_key() {
-    check_error(
+    type_checker_error_test(
         "var map {string?: int} = {None: 1}",
         "Map keys cannot be nullable",
     );
@@ -105,7 +105,7 @@ fn test_nullable_map_key() {
 #[test]
 fn test_arithmetic_on_nullable_error() {
     // TODO: currently unwrapping nullable in arithmetic is not supported
-    check_error(
+    type_checker_error_test(
         "
 var x int? = 5
 var y = x + 1
@@ -116,7 +116,7 @@ var y = x + 1
 
 #[test]
 fn test_member_access_on_nullable_error() {
-    check_error(
+    type_checker_error_test(
         "
 struct Point: x int
 var p Point? = Point(1)
@@ -128,7 +128,7 @@ var x = p.x
 
 #[test]
 fn test_function_argument_nullable() {
-    check_success(
+    type_checker_test(
         "
 fn foo(x int?)
     return
@@ -141,7 +141,7 @@ foo(None)
 
 #[test]
 fn test_function_argument_non_nullable_error() {
-    check_error(
+    type_checker_error_test(
         "
 fn foo(x int)
     return
@@ -155,7 +155,7 @@ foo(val)
 
 #[test]
 fn test_function_return_nullable() {
-    check_success(
+    type_checker_test(
         "
 fn foo() int?
     return None
@@ -165,7 +165,7 @@ fn foo() int?
 
 #[test]
 fn test_function_return_non_nullable_error() {
-    check_error(
+    type_checker_error_test(
         "
 fn foo() int
     return None
@@ -176,7 +176,7 @@ fn foo() int
 
 #[test]
 fn test_nullable_boolean_logic_error() {
-    check_error(
+    type_checker_error_test(
         "
 var x bool? = true
 if x
@@ -188,9 +188,9 @@ if x
 
 #[test]
 fn test_nullable_boolean_assignment() {
-    check_success("var x bool? = true");
-    check_success("var x bool? = false");
-    check_success("var x bool? = None");
+    type_checker_test("var x bool? = true");
+    type_checker_test("var x bool? = false");
+    type_checker_test("var x bool? = None");
 }
 
 #[test]
@@ -199,5 +199,5 @@ fn test_option_methods() {
 let o int? = 10
 o.is_some()
     ";
-    check_expr_type(source, type_bool());
+    type_checker_expr_type_test(source, type_bool());
 }

@@ -6,7 +6,7 @@ use miri::ast::factory::*;
 
 #[test]
 fn test_map_literal() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "{ \"a\": 1, \"b\": 2 }",
         type_map(type_string(), type_int()),
     );
@@ -14,7 +14,7 @@ fn test_map_literal() {
 
 #[test]
 fn test_map_variable_definitions() {
-    check_vars_type(
+    type_checker_vars_type_test(
         "
         let m1 {int: int} = { 10: 100, 20: 200 } 
         let m2 map<string, float> = { \"a\": 1.1, \"b\": 2.2 }
@@ -30,12 +30,12 @@ fn test_map_variable_definitions() {
 
 #[test]
 fn test_map_literal_mixed_keys_error() {
-    check_error("{ \"a\": 1, 2: 2 }", "Map keys must have the same type");
+    type_checker_error_test("{ \"a\": 1, 2: 2 }", "Map keys must have the same type");
 }
 
 #[test]
 fn test_map_literal_mixed_values_error() {
-    check_error(
+    type_checker_error_test(
         "{ \"a\": 1, \"b\": \"s\" }",
         "Map values must have the same type",
     );
@@ -43,17 +43,17 @@ fn test_map_literal_mixed_values_error() {
 
 #[test]
 fn test_map_indexing() {
-    check_expr_type("{ \"a\": 1 }[\"a\"]", type_int());
+    type_checker_expr_type_test("{ \"a\": 1 }[\"a\"]", type_int());
 }
 
 #[test]
 fn test_map_indexing_invalid_key_type() {
-    check_error("{ \"a\": 1 }[1]", "Invalid map key type");
+    type_checker_error_test("{ \"a\": 1 }[1]", "Invalid map key type");
 }
 
 #[test]
 fn test_map_indexing_variable() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 let k = \"a\"
 { \"a\": 1 }[k]
@@ -64,7 +64,7 @@ let k = \"a\"
 
 #[test]
 fn test_map_indexing_function_call() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 fn get_key() string
     return \"a\"
@@ -77,7 +77,7 @@ fn get_key() string
 
 #[test]
 fn test_map_indexing_generic_function_call() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 fn get_key<T>(key T) T
     return key
@@ -90,7 +90,7 @@ fn get_key<T>(key T) T
 
 #[test]
 fn test_map_indexing_variable_type_mismatch() {
-    check_error(
+    type_checker_error_test(
         "
 let k = 1
 { \"a\": 1 }[k]
@@ -101,12 +101,12 @@ let k = 1
 
 #[test]
 fn test_empty_map() {
-    check_expr_type("{}", type_map(type_void(), type_void()));
+    type_checker_expr_type_test("{}", type_map(type_void(), type_void()));
 }
 
 #[test]
 fn test_empty_map_with_specified_types() {
-    check_vars_type(
+    type_checker_vars_type_test(
         "
     let m1 {string: int} = {}
 ",
@@ -116,7 +116,7 @@ fn test_empty_map_with_specified_types() {
 
 #[test]
 fn test_empty_map_with_specified_types_named() {
-    check_vars_type(
+    type_checker_vars_type_test(
         "
     let m2 map<string, float> = {}
 ",
@@ -126,7 +126,7 @@ fn test_empty_map_with_specified_types_named() {
 
 #[test]
 fn test_nested_map() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "{ \"a\": { \"b\": 1 } }",
         type_map(type_string(), type_map(type_string(), type_int())),
     );
@@ -134,7 +134,7 @@ fn test_nested_map() {
 
 #[test]
 fn test_map_assignment_exact() {
-    check_success(
+    type_checker_test(
         "
 let m {string: int} = { \"a\": 1 }
 ",
@@ -143,7 +143,7 @@ let m {string: int} = { \"a\": 1 }
 
 #[test]
 fn test_map_assignment_mismatch_key() {
-    check_error(
+    type_checker_error_test(
         "
 let m {int: int} = { \"a\": 1 }
 ",
@@ -153,7 +153,7 @@ let m {int: int} = { \"a\": 1 }
 
 #[test]
 fn test_map_assignment_mismatch_value() {
-    check_error(
+    type_checker_error_test(
         "
 let m {string: string} = { \"a\": 1 }
 ",
@@ -163,7 +163,7 @@ let m {string: string} = { \"a\": 1 }
 
 #[test]
 fn test_map_mutability() {
-    check_success(
+    type_checker_test(
         "
 var m = { \"a\": 1 }
 m[\"a\"] = 2
@@ -173,7 +173,7 @@ m[\"a\"] = 2
 
 #[test]
 fn test_map_mutability_type_mismatch() {
-    check_error(
+    type_checker_error_test(
         "
 var m = { \"a\": 1 }
 m[\"a\"] = \"s\"
@@ -184,7 +184,7 @@ m[\"a\"] = \"s\"
 
 #[test]
 fn test_map_assignment_to_immutable_index() {
-    check_error(
+    type_checker_error_test(
         "
 let m = { \"a\": 1 }
 m[\"a\"] = 2
@@ -195,7 +195,7 @@ m[\"a\"] = 2
 
 #[test]
 fn test_map_of_functions() {
-    check_success(
+    type_checker_test(
         "
 let m = { \"inc\": fn(x int): x + 1, \"dec\": fn(x int): x - 1 }
 m[\"inc\"](1)
@@ -205,7 +205,7 @@ m[\"inc\"](1)
 
 #[test]
 fn test_map_of_functions_mismatch() {
-    check_error(
+    type_checker_error_test(
         "
 let m = { \"inc\": fn(x int): x + 1, \"dec\": fn(x string): x }
 ",
@@ -215,9 +215,9 @@ let m = { \"inc\": fn(x int): x + 1, \"dec\": fn(x string): x }
 
 #[test]
 fn test_map_key_types() {
-    check_success("{ 1: \"int\", 2: \"int\" }");
-    check_success("{ true: \"bool\", false: \"bool\" }");
+    type_checker_test("{ 1: \"int\", 2: \"int\" }");
+    type_checker_test("{ true: \"bool\", false: \"bool\" }");
 
     // TODO: should this be allowed?
-    check_success("{ [1]: \"list\" }");
+    type_checker_test("{ [1]: \"list\" }");
 }

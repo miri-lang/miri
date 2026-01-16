@@ -241,6 +241,15 @@ impl TypeChecker {
             self.report_warning("use of a double negation".to_string(), span.clone());
         }
 
+        // Validate await context: allowed outside functions or inside async functions
+        if matches!(op, UnaryOp::Await) && context.in_function && !context.in_async_function {
+            self.report_error(
+                "'await' can only be used in async functions or at the top level".to_string(),
+                span.clone(),
+            );
+            return ast_factory::make_type(TypeKind::Error);
+        }
+
         let expr_ty = self.infer_expression(operand, context);
         match self.check_unary_op_types(op, &expr_ty) {
             Ok(t) => t,

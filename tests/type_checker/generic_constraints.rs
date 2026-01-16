@@ -3,7 +3,7 @@
 
 // Additional generic constraint tests for edge cases
 
-use crate::type_checker::utils::{check_error, check_success};
+use crate::type_checker::utils::{type_checker_error_test, type_checker_test};
 
 // ===== Multiple Generic Parameters with Constraints =====
 
@@ -28,7 +28,7 @@ class Processor<P implements Printable, C implements Comparable>
     var printer P
     var comparer C
 ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -54,7 +54,7 @@ class Processor<P implements Printable, C implements Comparable>
 
 let proc Processor<Document, Number>
 ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -79,7 +79,7 @@ class Processor<P implements Printable, C implements Comparable>
 
 let proc Processor<Plain, Number>
 ";
-    check_error(code, "does not satisfy constraint");
+    type_checker_error_test(code, "does not satisfy constraint");
 }
 
 #[test]
@@ -104,7 +104,7 @@ class Processor<P implements Printable, C implements Comparable>
 
 let proc Processor<Document, Plain>
 ";
-    check_error(code, "does not satisfy constraint");
+    type_checker_error_test(code, "does not satisfy constraint");
 }
 
 // ===== Class Extends Constraint with Method Access =====
@@ -128,7 +128,7 @@ class Kennel<T extends Animal>
 
 let k Kennel<Dog>
 ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 // ===== Trait Constraint with Method Call =====
@@ -151,5 +151,5 @@ class Summer<T extends Counter>
     fn getItemValue() int
         self.item.value()
 ";
-    check_success(code);
+    type_checker_test(code);
 }

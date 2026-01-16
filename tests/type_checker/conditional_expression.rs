@@ -9,7 +9,7 @@ fn test_conditional_expression_basic() {
     let source = "
     let x = 10 if true else 20
     ";
-    check_success(source);
+    type_checker_test(source);
 }
 
 #[test]
@@ -17,7 +17,7 @@ fn test_conditional_expression_condition_not_boolean() {
     let source = "
     let x = 10 if 1 else 20
     ";
-    check_error(source, "Conditional condition must be a boolean");
+    type_checker_error_test(source, "Conditional condition must be a boolean");
 }
 
 #[test]
@@ -25,7 +25,7 @@ fn test_conditional_expression_branch_mismatch() {
     let source = "
     let x = 10 if true else 'hello'
     ";
-    check_error(source, "Conditional branches must have the same type");
+    type_checker_error_test(source, "Conditional branches must have the same type");
 }
 
 #[test]
@@ -36,7 +36,7 @@ fn foo()
 
 let x = foo() if true
 ";
-    check_success(source);
+    type_checker_test(source);
 }
 
 #[test]
@@ -44,7 +44,7 @@ fn test_conditional_expression_no_else_non_void() {
     let source = "
     let x = 10 if true
     ";
-    check_error(
+    type_checker_error_test(
         source,
         "Conditional expression without else branch must return Void",
     );
@@ -52,17 +52,17 @@ fn test_conditional_expression_no_else_non_void() {
 
 #[test]
 fn test_nested_conditional() {
-    check_expr_type("1 if true else (2 if false else 3)", type_int());
+    type_checker_expr_type_test("1 if true else (2 if false else 3)", type_int());
 }
 
 #[test]
 fn test_complex_condition() {
-    check_expr_type("1 if (true and false) or (1 < 2) else 2", type_int());
+    type_checker_expr_type_test("1 if (true and false) or (1 < 2) else 2", type_int());
 }
 
 #[test]
 fn test_void_branches() {
-    check_success(
+    type_checker_test(
         "
 fn foo()
     return
@@ -75,7 +75,7 @@ foo() if true else bar()
 
 #[test]
 fn test_numeric_mismatch() {
-    check_error(
+    type_checker_error_test(
         "1.0 if true else 1",
         "Conditional branches must have the same type",
     );
@@ -84,7 +84,7 @@ fn test_numeric_mismatch() {
 #[test]
 fn test_nullable_mismatch() {
     // Currently fails because no common supertype inference
-    check_error(
+    type_checker_error_test(
         "1 if true else None",
         "Conditional branches must have the same type",
     );
@@ -96,16 +96,18 @@ fn test_inheritance_compatibility() {
     // when the then branch is the supertype.
     // Note: This relies on are_compatible checking is_subtype(rhs, lhs).
     let source = "
-struct A: x int
-struct B: x int
-type B extends A
+class A
+    var x int
 
-let a = A(1)
-let b = B(1)
+class B extends A
+    var y int
 
-let x = a if true else b
+let a = A()
+let b = B()
+
+let result = a if true else b
 ";
-    check_vars_type(source, vec![("x", type_custom("A", None))]);
+    type_checker_vars_type_test(source, vec![("result", type_custom("A", None))]);
 }
 
 #[test]
@@ -113,14 +115,16 @@ fn test_inheritance_incompatibility() {
     // This test verifies that we cannot use a supertype in the else branch
     // when the then branch is the subtype (because the result type is fixed to then branch).
     let source = "
-struct A: x int
-struct B: x int
-type B extends A
+class A
+    var x int
 
-let a = A(1)
-let b = B(1)
+class B extends A
+    var y int
 
-let x = b if true else a
+let a = A()
+let b = B()
+
+let result = b if true else a
 ";
-    check_error(source, "Conditional branches must have the same type");
+    type_checker_error_test(source, "Conditional branches must have the same type");
 }

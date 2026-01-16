@@ -6,24 +6,24 @@ use miri::ast::factory::*;
 
 #[test]
 fn test_tuple_literal() {
-    check_success("(1, \"a\")");
+    type_checker_test("(1, \"a\")");
 }
 
 #[test]
 fn test_tuple_indexing() {
-    check_expr_type("(1, \"a\")[0]", type_int());
-    check_expr_type("(1, \"a\")[1]", type_string());
+    type_checker_expr_type_test("(1, \"a\")[0]", type_int());
+    type_checker_expr_type_test("(1, \"a\")[1]", type_string());
 }
 
 #[test]
 fn test_tuple_indexing_out_of_bounds() {
-    check_error("(1, \"a\")[2]", "Tuple index out of bounds");
+    type_checker_error_test("(1, \"a\")[2]", "Tuple index out of bounds");
 }
 
 #[test]
 fn test_tuple_indexing_variable_homogeneous() {
     // Should succeed because tuple is homogeneous (int, int)
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 let i = 0
 (1, 2)[i]
@@ -35,7 +35,7 @@ let i = 0
 #[test]
 fn test_tuple_indexing_variable_heterogeneous() {
     // Should fail because tuple is heterogeneous (int, string)
-    check_error(
+    type_checker_error_test(
         "
 let i = 0
 (1, \"a\")[i]
@@ -47,44 +47,44 @@ let i = 0
 #[test]
 fn test_tuple_slicing() {
     // Slicing homogeneous tuple returns a list
-    check_expr_type("(1, 2, 3)[0..1]", type_list(type_int()));
+    type_checker_expr_type_test("(1, 2, 3)[0..1]", type_list(type_int()));
 }
 
 #[test]
 fn test_tuple_slicing_heterogeneous_error() {
-    check_error("(1, \"a\")[0..1]", "Cannot slice heterogeneous tuple");
+    type_checker_error_test("(1, \"a\")[0..1]", "Cannot slice heterogeneous tuple");
 }
 
 #[test]
 fn test_empty_tuple() {
-    check_success("()");
+    type_checker_test("()");
 }
 
 #[test]
 fn test_empty_tuple_indexing() {
-    check_error("()[0]", "Tuple index out of bounds");
+    type_checker_error_test("()[0]", "Tuple index out of bounds");
 }
 
 #[test]
 fn test_nested_tuple() {
-    check_success("((1, 2), (3, 4))");
-    check_expr_type("((1, 2), (3, 4))[0][0]", type_int());
+    type_checker_test("((1, 2), (3, 4))");
+    type_checker_expr_type_test("((1, 2), (3, 4))[0][0]", type_int());
 }
 
 #[test]
 fn test_nested_heterogeneous_tuple() {
-    check_success("((1, \"a\"), (2, \"b\"))");
-    check_expr_type("((1, \"a\"), (2, \"b\"))[0][1]", type_string());
+    type_checker_test("((1, \"a\"), (2, \"b\"))");
+    type_checker_expr_type_test("((1, \"a\"), (2, \"b\"))[0][1]", type_string());
 }
 
 #[test]
 fn test_tuple_negative_index_heterogeneous() {
-    check_error("(1, \"a\")[-1]", "Tuple index must be an integer literal");
+    type_checker_error_test("(1, \"a\")[-1]", "Tuple index must be an integer literal");
 }
 
 #[test]
 fn test_tuple_match_success() {
-    check_success(
+    type_checker_test(
         "
 match (1, \"a\")
     (i, s): i
@@ -94,7 +94,7 @@ match (1, \"a\")
 
 #[test]
 fn test_tuple_match_type_inference() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 match (1, \"a\")
     (i, s): i
@@ -105,7 +105,7 @@ match (1, \"a\")
 
 #[test]
 fn test_tuple_match_length_mismatch() {
-    check_error(
+    type_checker_error_test(
         "
 match (1, \"a\")
     (i): i
@@ -116,7 +116,7 @@ match (1, \"a\")
 
 #[test]
 fn test_tuple_match_type_mismatch() {
-    check_error(
+    type_checker_error_test(
         "
 match (1, \"a\")
     (i, 1): i // 1 is int, but second element is string
@@ -127,7 +127,7 @@ match (1, \"a\")
 
 #[test]
 fn test_tuple_match_nested() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 match ((1, 2), 3)
     ((a, b), c): b
@@ -138,7 +138,7 @@ match ((1, 2), 3)
 
 #[test]
 fn test_tuple_match_not_tuple() {
-    check_error(
+    type_checker_error_test(
         "
 match 1
     (a, b): a
@@ -149,7 +149,7 @@ match 1
 
 #[test]
 fn test_tuple_as_function_arg() {
-    check_success(
+    type_checker_test(
         "
 fn f(t (int, string))
     return
@@ -160,7 +160,7 @@ f((1, \"a\"))
 
 #[test]
 fn test_tuple_return_type() {
-    check_success(
+    type_checker_test(
         "
 fn f() (int, string)
     return (1, \"a\")
@@ -170,7 +170,7 @@ fn f() (int, string)
 
 #[test]
 fn test_tuple_return_type_mismatch() {
-    check_error(
+    type_checker_error_test(
         "
 fn f() (int, string)
     return (1, 1)

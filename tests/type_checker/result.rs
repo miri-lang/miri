@@ -10,7 +10,7 @@ fn test_result_ok_inference() {
 let r = Ok(10)
 r
     ";
-    check_expr_type(source, type_result(type_int(), type_void()));
+    type_checker_expr_type_test(source, type_result(type_int(), type_void()));
 }
 
 #[test]
@@ -19,7 +19,7 @@ fn test_result_err_inference() {
 let r = Err(\"error\")
 r
     ";
-    check_expr_type(source, type_result(type_void(), type_string()));
+    type_checker_expr_type_test(source, type_result(type_void(), type_string()));
 }
 
 #[test]
@@ -28,7 +28,7 @@ fn test_result_ok_assignment() {
 let r result<int, string> = Ok(10)
 r
     ";
-    check_expr_type(source, type_result(type_int(), type_string()));
+    type_checker_expr_type_test(source, type_result(type_int(), type_string()));
 }
 
 #[test]
@@ -37,7 +37,7 @@ fn test_result_err_assignment() {
 let r result<int, string> = Err(\"fail\")
 r
     ";
-    check_expr_type(source, type_result(type_int(), type_string()));
+    type_checker_expr_type_test(source, type_result(type_int(), type_string()));
 }
 
 #[test]
@@ -45,7 +45,7 @@ fn test_result_ok_type_mismatch() {
     let source = "
 let r result<int, string> = Ok(\"wrong\")
     ";
-    check_error(source, "Type mismatch");
+    type_checker_error_test(source, "Type mismatch");
 }
 
 #[test]
@@ -53,7 +53,7 @@ fn test_result_err_type_mismatch() {
     let source = "
 let r result<int, string> = Err(10)
     ";
-    check_error(source, "Type mismatch");
+    type_checker_error_test(source, "Type mismatch");
 }
 
 #[test]
@@ -62,7 +62,7 @@ fn test_result_methods_is_ok() {
 let r = Ok(10)
 r.is_ok()
     ";
-    check_expr_type(source, type_bool());
+    type_checker_expr_type_test(source, type_bool());
 }
 
 #[test]
@@ -71,7 +71,7 @@ fn test_result_methods_is_err() {
 let r = Err(\"error\")
 r.is_err()
     ";
-    check_expr_type(source, type_bool());
+    type_checker_expr_type_test(source, type_bool());
 }
 
 #[test]
@@ -80,7 +80,7 @@ fn test_result_methods_unwrap() {
 let r = Ok(10)
 r.unwrap()
     ";
-    check_expr_type(source, type_int());
+    type_checker_expr_type_test(source, type_int());
 }
 
 #[test]
@@ -90,7 +90,7 @@ let r = Err(\"error\")
 r.unwrap()
     ";
     // unwrap on Err returns Void because Ok type is Void
-    check_expr_type(source, type_void());
+    type_checker_expr_type_test(source, type_void());
 }
 
 #[test]
@@ -100,7 +100,7 @@ let r result<int, string> = Err(\"error\")
 r.unwrap()
     ";
     // unwrap on typed Result returns the Ok type (Int)
-    check_expr_type(source, type_int());
+    type_checker_expr_type_test(source, type_int());
 }
 
 #[test]
@@ -109,7 +109,7 @@ fn test_nested_result() {
 let r result<result<int, string>, bool> = Ok(Ok(10))
 r
     ";
-    check_expr_type(
+    type_checker_expr_type_test(
         source,
         type_result(type_result(type_int(), type_string()), type_bool()),
     );
@@ -121,7 +121,7 @@ fn test_nested_result_unwrap() {
 let r result<result<int, string>, bool> = Ok(Ok(10))
 r.unwrap().unwrap()
     ";
-    check_expr_type(source, type_int());
+    type_checker_expr_type_test(source, type_int());
 }
 
 #[test]
@@ -129,7 +129,7 @@ fn test_ok_argument_count() {
     let source = "
 let r = Ok(1, 2)
     ";
-    check_error(source, "Too many positional arguments");
+    type_checker_error_test(source, "Too many positional arguments");
 }
 
 #[test]
@@ -137,7 +137,7 @@ fn test_err_argument_count() {
     let source = "
 let r = Err()
     ";
-    check_error(source, "Missing argument for parameter 'error'");
+    type_checker_error_test(source, "Missing argument for parameter 'error'");
 }
 
 #[test]
@@ -146,7 +146,7 @@ fn test_result_invalid_member() {
 let r = Ok(10)
 r.foo
     ";
-    check_error(source, "does not have members");
+    type_checker_error_test(source, "does not have members");
 }
 
 #[test]
@@ -156,7 +156,7 @@ let r = Ok(10)
 match r
     x: x.unwrap()
     ";
-    check_expr_type(source, type_int());
+    type_checker_expr_type_test(source, type_int());
 }
 
 #[test]
@@ -167,7 +167,7 @@ match r
     Ok: Ok.unwrap()
     ";
     // Ok resolves to the constructor function, which doesn't have unwrap()
-    check_error(source, "does not have members");
+    type_checker_error_test(source, "does not have members");
 }
 
 #[test]
@@ -181,7 +181,7 @@ let e = MyError(code: 404, message: \"Not Found\")
 let r result<int, MyError> = Err(e)
 r
     ";
-    check_expr_type(
+    type_checker_expr_type_test(
         source,
         type_result(type_int(), type_custom("MyError", None)),
     );
@@ -199,7 +199,7 @@ struct OtherError
 let e = OtherError(code: 500)
 let r result<int, MyError> = Err(e)
     ";
-    check_error(source, "Type mismatch");
+    type_checker_error_test(source, "Type mismatch");
 }
 
 #[test]
@@ -213,7 +213,7 @@ fn fail() result<int, MyError>
 
 fail()
     ";
-    check_expr_type(
+    type_checker_expr_type_test(
         source,
         type_result(type_int(), type_custom("MyError", None)),
     );

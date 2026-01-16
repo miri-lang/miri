@@ -1,4 +1,4 @@
-use crate::type_checker::utils::{check_error, check_success};
+use crate::type_checker::utils::{type_checker_error_test, type_checker_test};
 
 #[test]
 fn test_mutable_variable_assignment() {
@@ -6,7 +6,7 @@ fn test_mutable_variable_assignment() {
 var x = 1
 x = 2
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -15,7 +15,7 @@ fn test_immutable_variable_assignment_error() {
 let x = 1
 x = 2
     ";
-    check_error(code, "Cannot assign to immutable variable");
+    type_checker_error_test(code, "Cannot assign to immutable variable");
 }
 
 #[test]
@@ -24,7 +24,7 @@ fn test_shadowing() {
 let x = 1
 let x = \"string\" 
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -33,7 +33,7 @@ fn test_shadowing_in_nested_scope() {
 let x = 1
 if true: let x = \"string\"
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -44,7 +44,7 @@ struct Point: x int, y int
 let p = Point(1, 2)
 p.x = 3
     ";
-    check_error(code, "Cannot assign to field of immutable variable");
+    type_checker_error_test(code, "Cannot assign to field of immutable variable");
 }
 
 #[test]
@@ -55,7 +55,7 @@ struct Point: x int, y int
 var p = Point(1, 2)
 p.x = 3
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -64,7 +64,7 @@ fn test_function_argument_immutability() {
 fn foo(x int)
     x = 2
     ";
-    check_error(code, "Cannot assign to immutable variable");
+    type_checker_error_test(code, "Cannot assign to immutable variable");
 }
 
 #[test]
@@ -74,7 +74,7 @@ fn foo(x int)
     var x = 2
     x = 3
     ";
-    check_error(
+    type_checker_error_test(
         code,
         "Variable 'x' is already defined in this scope. 'var' cannot shadow existing variables.",
     );
@@ -87,7 +87,7 @@ fn foo(x int)
     let x = 2
     x = 3
     ";
-    check_error(code, "Cannot assign to immutable variable");
+    type_checker_error_test(code, "Cannot assign to immutable variable");
 }
 
 #[test]
@@ -97,7 +97,7 @@ fn test_loop_variable_immutability() {
 for i in 1..10
     i = 5
     ";
-    check_error(code, "Cannot assign to immutable variable");
+    type_checker_error_test(code, "Cannot assign to immutable variable");
 }
 
 #[test]
@@ -108,7 +108,7 @@ for i in 1..10
     var i = 5
     i = 6
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -117,7 +117,7 @@ fn test_immutable_list_element_assignment() {
 let list = [1, 2, 3]
 list[0] = 4
     ";
-    check_error(code, "Cannot assign to element of immutable variable");
+    type_checker_error_test(code, "Cannot assign to element of immutable variable");
 }
 
 #[test]
@@ -126,7 +126,7 @@ fn test_mutable_list_element_assignment() {
 var list = [1, 2, 3]
 list[0] = 4
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -135,7 +135,7 @@ fn test_immutable_map_value_assignment() {
 let map = {\"a\": 1}
 map[\"a\"] = 2
     ";
-    check_error(code, "Cannot assign to element of immutable variable");
+    type_checker_error_test(code, "Cannot assign to element of immutable variable");
 }
 
 #[test]
@@ -144,7 +144,7 @@ fn test_mutable_map_value_assignment() {
 var map = {\"a\": 1}
 map[\"a\"] = 2
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -156,7 +156,7 @@ struct Outer: inner Inner
 let o = Outer(Inner(1))
 o.inner.val = 2
     ";
-    check_error(code, "Cannot assign to field of immutable variable");
+    type_checker_error_test(code, "Cannot assign to field of immutable variable");
 }
 
 #[test]
@@ -168,7 +168,7 @@ struct Outer: inner Inner
 var o = Outer(Inner(1))
 o.inner.val = 2
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -181,7 +181,7 @@ struct C: b B
 let c = C(B(A(1)))
 c.b.a.val = 2
     ";
-    check_error(code, "Cannot assign to field of immutable variable");
+    type_checker_error_test(code, "Cannot assign to field of immutable variable");
 }
 
 #[test]
@@ -194,7 +194,7 @@ struct C: b B
 var c = C(B(A(1)))
 c.b.a.val = 2
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -204,7 +204,7 @@ struct Point: x int, y int
 let list = [Point(1, 2)]
 list[0].x = 3
     ";
-    check_error(code, "Cannot assign to field of immutable variable");
+    type_checker_error_test(code, "Cannot assign to field of immutable variable");
 }
 
 #[test]
@@ -214,7 +214,7 @@ struct Point: x int, y int
 var list = [Point(1, 2)]
 list[0].x = 3
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -224,7 +224,7 @@ struct Container: items [int]
 let c = Container([1, 2])
 c.items[0] = 3
     ";
-    check_error(code, "Cannot assign to element of immutable variable");
+    type_checker_error_test(code, "Cannot assign to element of immutable variable");
 }
 
 #[test]
@@ -234,7 +234,7 @@ struct Container: items [int]
 var c = Container([1, 2])
 c.items[0] = 3
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -244,7 +244,7 @@ let x = 1
 let f = fn()
     x = 2
     ";
-    check_error(code, "Cannot assign to immutable variable");
+    type_checker_error_test(code, "Cannot assign to immutable variable");
 }
 
 #[test]
@@ -254,5 +254,5 @@ var x = 1
 let f = fn()
     x = 2
     ";
-    check_success(code);
+    type_checker_test(code);
 }

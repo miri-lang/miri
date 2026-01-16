@@ -11,7 +11,7 @@ let x = 1
 let x = 2
 x
     ";
-    check_expr_type(source, type_int());
+    type_checker_expr_type_test(source, type_int());
 }
 
 #[test]
@@ -21,7 +21,7 @@ let x = 1
 let x = \"string\"
 x
     ";
-    check_expr_type(source, type_string());
+    type_checker_expr_type_test(source, type_string());
 }
 
 #[test]
@@ -31,7 +31,7 @@ var x = 1
 let x = \"string\"
 x
     ";
-    check_error(
+    type_checker_error_test(
         source,
         "Cannot shadow mutable variable 'x' with an immutable one in the same scope.",
     );
@@ -44,7 +44,7 @@ let x = 1
 var x = \"string\"
 x
     ";
-    check_error(
+    type_checker_error_test(
         source,
         "Variable 'x' is already defined in this scope. 'var' cannot shadow existing variables.",
     );
@@ -58,10 +58,10 @@ if true:
     let x = \"string\"
     x
     ";
-    // We can't easily check the type of the inner expression directly with check_expr_type
+    // We can't easily check the type of the inner expression directly with type_checker_expr_type_test
     // because it returns the type of the last statement in the block.
     // But we can verify it compiles.
-    check_success(source);
+    type_checker_test(source);
 }
 
 #[test]
@@ -73,7 +73,7 @@ if true:
 x
     ";
     // Should be Int (outer x)
-    check_expr_type(source, type_int());
+    type_checker_expr_type_test(source, type_int());
 }
 
 #[test]
@@ -85,7 +85,7 @@ fn foo(x int) string:
 
 foo(1)
     ";
-    check_expr_type(source, type_string());
+    type_checker_expr_type_test(source, type_string());
 }
 
 #[test]
@@ -94,7 +94,7 @@ fn test_shadowing_loop_variable() {
 for i in 1..10:
     let i = \"string\"
     ";
-    check_success(source);
+    type_checker_test(source);
 }
 
 #[test]
@@ -104,7 +104,7 @@ let x = 1
 match x
     y: y // This y shadows the outer x if we used x, but here we test binding
     ";
-    check_success(source);
+    type_checker_test(source);
 }
 
 #[test]
@@ -114,7 +114,7 @@ let x = 1
 match x
     x: x
     ";
-    check_success(source);
+    type_checker_test(source);
 }
 
 #[test]
@@ -127,5 +127,5 @@ fn foo() string:
 
 foo()
     ";
-    check_expr_type(source, type_string());
+    type_checker_expr_type_test(source, type_string());
 }

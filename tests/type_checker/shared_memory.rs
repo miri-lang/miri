@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use super::utils::{check_error, check_success};
+use super::utils::{type_checker_error_test, type_checker_test};
 
 #[test]
 fn test_shared_memory_valid() {
-    check_success(
+    type_checker_test(
         "
 gpu fn kernel():
     shared cache [float; 256]
@@ -15,7 +15,7 @@ gpu fn kernel():
 
 #[test]
 fn test_shared_memory_in_regular_fn() {
-    check_error(
+    type_checker_error_test(
         "
 fn plain():
     shared cache [float; 256]
@@ -26,7 +26,7 @@ fn plain():
 
 #[test]
 fn test_shared_memory_non_array() {
-    check_error(
+    type_checker_error_test(
         "
 gpu fn kernel():
     shared cache float

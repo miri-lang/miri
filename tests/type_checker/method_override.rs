@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::type_checker::utils::{check_error, check_success};
+use crate::type_checker::utils::{type_checker_error_test, type_checker_test};
 
 // ===== Valid Method Overrides =====
 
@@ -17,7 +17,7 @@ class Dog extends Animal
     fn speak() int
         2
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -32,7 +32,7 @@ class AdvancedCalculator extends Calculator
     fn add(a int, b int) int
         a + b + 1
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 // ===== Invalid Method Overrides =====
@@ -49,7 +49,7 @@ class Dog extends Animal
     fn speak() string
         \"bark\"
     ";
-    check_error(code, "incompatible return type");
+    type_checker_error_test(code, "incompatible return type");
 }
 
 #[test]
@@ -64,7 +64,7 @@ class Dog extends Animal
     fn speak() int
         1
     ";
-    check_error(code, "incompatible parameter");
+    type_checker_error_test(code, "incompatible parameter");
 }
 
 #[test]
@@ -79,7 +79,7 @@ class WrongCalculator extends Calculator
     fn add(a string, b int) int
         1
     ";
-    check_error(code, "incompatible parameter");
+    type_checker_error_test(code, "incompatible parameter");
 }
 
 // ===== Multi-level Override =====
@@ -100,7 +100,7 @@ class Derived extends Middle
     fn value() int
         3
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -119,5 +119,5 @@ class Derived extends Middle
     fn value() int
         3
     ";
-    check_success(code);
+    type_checker_test(code);
 }

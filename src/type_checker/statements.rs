@@ -2,8 +2,8 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use super::context::{
-    ClassDefinition, Context, EnumDefinition, FieldInfo, GenericDefinition, MethodInfo,
-    StructDefinition, TraitDefinition, TypeDefinition,
+    AliasDefinition, ClassDefinition, Context, EnumDefinition, FieldInfo, GenericDefinition,
+    MethodInfo, StructDefinition, TraitDefinition, TypeDefinition,
 };
 use super::TypeChecker;
 use crate::ast::factory::make_type;
@@ -208,26 +208,109 @@ impl TypeChecker {
                 &expr.node
             {
                 if let Ok(name) = self.extract_name(name_expr) {
-                    // Handle "type F is map<string, int>"
+                    // Reject incomplete type declarations (type A, B, C without is/extends/implements)
+                    if *kind == TypeDeclarationKind::None && target_expr.is_none() {
+                        self.report_error(
+                            format!(
+                                "Incomplete type declaration '{}'. Use 'is', 'extends', 'implements', or 'includes' to define the type.",
+                                name
+                            ),
+                            expr.span.clone(),
+                        );
+                        continue;
+                    }
+
+                    // Handle "type F is map<string, int>" or "type Optional<T> is T?"
                     if *kind == TypeDeclarationKind::Is {
                         if let Some(target) = target_expr {
+                            // Extract generic definitions from the generics expression
+                            let generic_defs = if let Some(gens) = _generics {
+                                let mut defs = Vec::new();
+                                for gen in gens {
+                                    if let ExpressionKind::GenericType(
+                                        name_expr,
+                                        constraint_expr,
+                                        gen_kind,
+                                    ) = &gen.node
+                                    {
+                                        let gen_name = if let ExpressionKind::Identifier(n, _) =
+                                            &name_expr.node
+                                        {
+                                            n.clone()
+                                        } else {
+                                            continue;
+                                        };
+                                        let constraint_type = constraint_expr
+                                            .as_ref()
+                                            .map(|c| self.resolve_type_expression(c, context));
+                                        defs.push(GenericDefinition {
+                                            name: gen_name,
+                                            constraint: constraint_type,
+                                            kind: gen_kind.clone(),
+                                        });
+                                    }
+                                }
+                                if defs.is_empty() {
+                                    None
+                                } else {
+                                    Some(defs)
+                                }
+                            } else {
+                                None
+                            };
+
+                            // If there are generics, define them in a temporary scope before resolving the type
+                            if let Some(ref gens) = _generics {
+                                context.enter_scope();
+                                self.define_generics(gens, context);
+                            }
+
                             let target_type = self.resolve_type_expression(target, context);
-                            self.global_type_definitions
-                                .insert(name.clone(), TypeDefinition::Alias(target_type));
+
+                            if _generics.is_some() {
+                                context.exit_scope();
+                            }
+
+                            self.global_type_definitions.insert(
+                                name.clone(),
+                                TypeDefinition::Alias(AliasDefinition {
+                                    template: target_type,
+                                    generics: generic_defs,
+                                }),
+                            );
                         }
                     } else if let Some(target) = target_expr {
+                        // For extends/implements/includes, check for conflicts with existing types
+                        if self.global_type_definitions.contains_key(&name) {
+                            self.report_error(
+                                format!(
+                                    "Type '{}' is already defined. Cannot use 'type' statement with '{}' on an existing type.",
+                                    name, kind
+                                ),
+                                expr.span.clone(),
+                            );
+                            continue;
+                        }
+
+                        // Validate that target type exists
                         if let Ok(target_name) = self.extract_type_name(target) {
-                            // Register type if not exists (as empty struct/interface)
-                            if !self.global_type_definitions.contains_key(&name) {
-                                self.global_type_definitions.insert(
-                                    name.clone(),
-                                    TypeDefinition::Struct(StructDefinition {
-                                        fields: vec![],
-                                        generics: None,
-                                        module: self.current_module.clone(),
-                                    }),
+                            if !self.global_type_definitions.contains_key(&target_name) {
+                                self.report_error(
+                                    format!("Unknown type '{}' in type declaration", target_name),
+                                    target.span.clone(),
                                 );
+                                continue;
                             }
+
+                            // Register new type and add hierarchy relationship
+                            self.global_type_definitions.insert(
+                                name.clone(),
+                                TypeDefinition::Struct(StructDefinition {
+                                    fields: vec![],
+                                    generics: None,
+                                    module: self.current_module.clone(),
+                                }),
+                            );
 
                             let entry = self.hierarchy.entry(name.clone()).or_default();
                             match kind {
@@ -239,16 +322,6 @@ impl TypeChecker {
                                 _ => {}
                             }
                         }
-                    } else {
-                        // "type A" - opaque type / interface
-                        self.global_type_definitions.insert(
-                            name.clone(),
-                            TypeDefinition::Struct(StructDefinition {
-                                fields: vec![],
-                                generics: None,
-                                module: self.current_module.clone(),
-                            }),
-                        );
                     }
                 }
             }
@@ -776,6 +849,12 @@ impl TypeChecker {
             );
         }
 
+        // Track function context for await validation
+        let previous_in_function = context.in_function;
+        let previous_in_async = context.in_async_function;
+        context.in_function = true;
+        context.in_async_function = properties.is_async;
+
         // Only check function body if it exists (abstract functions have no body)
         if let Some(body) = body {
             match &body.node {
@@ -872,6 +951,8 @@ impl TypeChecker {
         }
 
         context.in_gpu_function = previous_in_gpu;
+        context.in_function = previous_in_function;
+        context.in_async_function = previous_in_async;
         context.loop_depth = old_loop_depth;
         context.exit_scope();
         context.return_types.pop();

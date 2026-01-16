@@ -13,7 +13,7 @@ fn main()
     let k = my_kernel()
     let f = k.launch(Dim3(1, 1, 1), Dim3(1, 1, 1))
 ";
-    check_success(input);
+    type_checker_test(input);
 }
 
 #[test]
@@ -26,7 +26,7 @@ fn main()
     let k = my_kernel()
     k.launch(1, 2)
 ";
-    check_error(
+    type_checker_error_test(
         input,
         "Type mismatch for argument 'grid': expected Dim3, got int",
     );
@@ -44,7 +44,7 @@ fn main()
 ";
     // Check for correct error message for non-kernel type.
     // If not_kernel returns Void, it has no members.
-    check_error(input, "Type 'void' does not have members");
+    type_checker_error_test(input, "Type 'void' does not have members");
 }
 
 #[test]
@@ -56,5 +56,5 @@ gpu fn my_kernel()
 async fn main()
     await my_kernel().launch(Dim3(1, 1, 1), Dim3(1, 1, 1))
 ";
-    check_success(input);
+    type_checker_test(input);
 }

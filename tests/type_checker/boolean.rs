@@ -6,12 +6,12 @@ use miri::ast::factory::*;
 
 #[test]
 fn test_boolean_literals() {
-    check_exprs_type(vec![("true", type_bool()), ("false", type_bool())]);
+    type_checker_exprs_type_test(vec![("true", type_bool()), ("false", type_bool())]);
 }
 
 #[test]
 fn test_boolean_expressions() {
-    check_exprs_type(vec![
+    type_checker_exprs_type_test(vec![
         ("true and false", type_bool()),
         ("true or false", type_bool()),
         ("not true", type_bool()),
@@ -21,7 +21,7 @@ fn test_boolean_expressions() {
 
 #[test]
 fn test_boolean_logic() {
-    check_vars_type(
+    type_checker_vars_type_test(
         "
 let x = true and false
 let y = not x
@@ -33,7 +33,7 @@ let z = x or y
 
 #[test]
 fn test_equality() {
-    check_exprs_type(vec![
+    type_checker_exprs_type_test(vec![
         ("true == false", type_bool()),
         ("true != false", type_bool()),
         ("1 == 1", type_bool()),
@@ -45,7 +45,7 @@ fn test_equality() {
 
 #[test]
 fn test_comparison() {
-    check_vars_type(
+    type_checker_vars_type_test(
         "
 let x = 1 > 2
 let y = 1.5 <= 2.5
@@ -56,7 +56,7 @@ let y = 1.5 <= 2.5
 
 #[test]
 fn test_explicit_type() {
-    check_vars_type(
+    type_checker_vars_type_test(
         "
 let x bool = true
 let y bool = false
@@ -67,7 +67,7 @@ let y bool = false
 
 #[test]
 fn test_invalid_boolean_logic_and() {
-    check_error(
+    type_checker_error_test(
         "
 let x = true and 1
 ",
@@ -77,7 +77,7 @@ let x = true and 1
 
 #[test]
 fn test_invalid_boolean_logic_or() {
-    check_error(
+    type_checker_error_test(
         "
 let x = 1 or false
 ",
@@ -87,7 +87,7 @@ let x = 1 or false
 
 #[test]
 fn test_invalid_boolean_logic_not() {
-    check_error(
+    type_checker_error_test(
         "
 let x = not 1
 ",
@@ -97,7 +97,7 @@ let x = not 1
 
 #[test]
 fn test_invalid_equality_types() {
-    check_error(
+    type_checker_error_test(
         "
 let x = 1 == true
 ",
@@ -108,7 +108,7 @@ let x = 1 == true
 #[test]
 fn test_boolean_comparison() {
     // Boolean comparison is valid (e.g. true > false)
-    check_vars_type(
+    type_checker_vars_type_test(
         "
 let x = true > false
 ",
@@ -118,7 +118,7 @@ let x = true > false
 
 #[test]
 fn test_if_condition_type_mismatch() {
-    check_error(
+    type_checker_error_test(
         "
 if 1
     let x = 1
@@ -129,7 +129,7 @@ if 1
 
 #[test]
 fn test_while_condition_type_mismatch() {
-    check_error(
+    type_checker_error_test(
         "
 while 1
     let x = 1
@@ -140,7 +140,7 @@ while 1
 
 #[test]
 fn test_conditional_expression_type_mismatch() {
-    check_error(
+    type_checker_error_test(
         "
 let x = 10 if 1 else 20
 ",
@@ -150,15 +150,15 @@ let x = 10 if 1 else 20
 
 #[test]
 fn test_bitwise_operations_invalid() {
-    check_error(
+    type_checker_error_test(
         "let x = true & false",
         "Invalid types for bitwise operation",
     );
-    check_error(
+    type_checker_error_test(
         "let x = true | false",
         "Invalid types for bitwise operation",
     );
-    check_error(
+    type_checker_error_test(
         "let x = true ^ false",
         "Invalid types for bitwise operation",
     );
@@ -166,14 +166,14 @@ fn test_bitwise_operations_invalid() {
 
 #[test]
 fn test_unary_operations_invalid() {
-    check_error("let x = -true", "Unary operator requires numeric type");
-    check_error("let x = +true", "Unary operator requires numeric type");
+    type_checker_error_test("let x = -true", "Unary operator requires numeric type");
+    type_checker_error_test("let x = +true", "Unary operator requires numeric type");
 }
 
 #[test]
 fn test_assignment_mismatch() {
-    check_error("let x bool = 1", "Type mismatch for variable 'x'");
-    check_error(
+    type_checker_error_test("let x bool = 1", "Type mismatch for variable 'x'");
+    type_checker_error_test(
         "
 let x = true
 x = 1
@@ -184,14 +184,14 @@ x = 1
 
 #[test]
 fn test_function_mismatch() {
-    check_error(
+    type_checker_error_test(
         "
 fn f(b bool) bool
     return 1
 ",
         "Invalid return type",
     );
-    check_error(
+    type_checker_error_test(
         "
 fn f(b bool)
     return
@@ -204,7 +204,7 @@ f(1)
 
 #[test]
 fn test_boolean_comparison_comprehensive() {
-    check_exprs_type(vec![
+    type_checker_exprs_type_test(vec![
         ("true < false", type_bool()),
         ("true <= false", type_bool()),
         ("true > false", type_bool()),
@@ -214,7 +214,7 @@ fn test_boolean_comparison_comprehensive() {
 
 #[test]
 fn test_match_boolean() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 match true
     true: 1
@@ -226,7 +226,7 @@ match true
 
 #[test]
 fn test_invalid_iterable() {
-    check_error(
+    type_checker_error_test(
         "
 for i in true
     1
@@ -237,7 +237,7 @@ for i in true
 
 #[test]
 fn test_boolean_map_key() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 {true: 1, false: 0}
 ",
@@ -247,7 +247,7 @@ fn test_boolean_map_key() {
 
 #[test]
 fn test_boolean_map_key_expression() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 fn predicate(x int) bool: x > 0
 
@@ -262,22 +262,22 @@ fn predicate(x int) bool: x > 0
 
 #[test]
 fn test_boolean_list() {
-    check_expr_type("[true, false, true]", type_list(type_bool()));
+    type_checker_expr_type_test("[true, false, true]", type_list(type_bool()));
 }
 
 #[test]
 fn test_boolean_list_expression() {
-    check_expr_type("[1 > 0, 1 == 1, true or false]", type_list(type_bool()));
+    type_checker_expr_type_test("[1 > 0, 1 == 1, true or false]", type_list(type_bool()));
 }
 
 #[test]
 fn test_boolean_tuple() {
-    check_expr_type("(true, false)", type_tuple(vec![type_bool(), type_bool()]));
+    type_checker_expr_type_test("(true, false)", type_tuple(vec![type_bool(), type_bool()]));
 }
 
 #[test]
 fn test_boolean_tuple_mixed() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "(true, 1, \"s\")",
         type_tuple(vec![type_bool(), type_int(), type_string()]),
     );
@@ -285,31 +285,31 @@ fn test_boolean_tuple_mixed() {
 
 #[test]
 fn test_boolean_set() {
-    check_expr_type("{true, false}", type_set(type_bool()));
+    type_checker_expr_type_test("{true, false}", type_set(type_bool()));
 }
 
 #[test]
 fn test_boolean_set_expression() {
-    check_expr_type("{1 > 0, 1 == 1}", type_set(type_bool()));
+    type_checker_expr_type_test("{1 > 0, 1 == 1}", type_set(type_bool()));
 }
 
 #[test]
 fn test_nullable_boolean_assignment() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 let x bool? = true
 x
 ",
         type_null(type_bool()),
     );
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 let y bool? = false
 y
 ",
         type_null(type_bool()),
     );
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 let z bool? = None
 z
@@ -320,7 +320,7 @@ z
 
 #[test]
 fn test_nullable_boolean_mismatch() {
-    check_error(
+    type_checker_error_test(
         "
 let x bool? = true
 let y bool = x
@@ -331,11 +331,115 @@ let y bool = x
 
 #[test]
 fn test_nullable_boolean_logic_error() {
-    check_error(
+    type_checker_error_test(
         "
 let x bool? = true
 let y = x and true
 ",
         "Logical operations require booleans",
     );
+}
+
+#[test]
+fn test_boolean_deeply_nested_logic() {
+    type_checker_exprs_type_test(vec![
+        ("not not not not true", type_bool()),
+        ("((true and false) or (true and true))", type_bool()),
+        ("(((true or false) and (not true)) or false)", type_bool()),
+    ]);
+}
+
+#[test]
+fn test_boolean_long_chain_and() {
+    type_checker_expr_type_test(
+        "true and true and true and true and true and true and true and true and true and true",
+        type_bool(),
+    );
+}
+
+#[test]
+fn test_boolean_long_chain_or() {
+    type_checker_expr_type_test(
+        "false or false or false or false or false or false or false or false or true",
+        type_bool(),
+    );
+}
+
+#[test]
+fn test_boolean_mixed_logic_chain() {
+    type_checker_exprs_type_test(vec![
+        ("true and false or true and false or true", type_bool()),
+        ("not true or not false and not true", type_bool()),
+    ]);
+}
+
+#[test]
+fn test_boolean_complex_comparisons() {
+    type_checker_exprs_type_test(vec![
+        ("(1 < 2) and (3 > 4) or (5 == 5)", type_bool()),
+        ("(1 <= 2) == (3 >= 4)", type_bool()),
+        ("not (1 != 2)", type_bool()),
+    ]);
+}
+
+#[test]
+fn test_boolean_compact_formatting() {
+    type_checker_exprs_type_test(vec![
+        ("true and false", type_bool()),
+        ("not true", type_bool()),
+    ]);
+}
+
+#[test]
+fn test_boolean_in_nested_conditionals() {
+    type_checker_test(
+        "
+if true and false
+    if true or false
+        if not true
+            1
+",
+    );
+}
+
+#[test]
+fn test_boolean_in_while_nested() {
+    type_checker_test(
+        "
+while true and (1 < 2)
+    while false or (3 > 4)
+        break
+    break
+",
+    );
+}
+
+#[test]
+fn test_boolean_many_variables() {
+    type_checker_test(
+        "
+let a = true
+let b = a and false
+let c = b or true
+let d = not c
+let e = (a and b) or (c and d)
+let f = not (e and a) or (b and c)
+",
+    );
+}
+
+#[test]
+fn test_boolean_equality_chain() {
+    type_checker_exprs_type_test(vec![
+        ("true == true", type_bool()),
+        ("false != true", type_bool()),
+        ("(true == false) == (false == true)", type_bool()),
+    ]);
+}
+
+#[test]
+fn test_boolean_invalid_operand_types() {
+    type_checker_error_test("true and 1", "Logical operations require booleans");
+    type_checker_error_test("\"string\" or false", "Logical operations require booleans");
+    type_checker_error_test("not 42", "Logical NOT requires boolean");
 }

@@ -13,7 +13,7 @@ let res = match x
     2: 'two'
     default: 'other'
 ";
-    check_success(source);
+    type_checker_test(source);
 }
 
 #[test]
@@ -24,7 +24,7 @@ let x = 1
         1: 'one'
         2: 2
 ";
-    check_error(source, "Match branch types mismatch");
+    type_checker_error_test(source, "Match branch types mismatch");
 }
 
 #[test]
@@ -35,7 +35,7 @@ let res = match x
     val if val > 5: 'large'
     default: 'small'
 ";
-    check_vars_type(source, vec![("res", type_string())]);
+    type_checker_vars_type_test(source, vec![("res", type_string())]);
 }
 
 #[test]
@@ -46,7 +46,7 @@ match x
     'one': 'one'
     2: 'two'
 ";
-    check_error(source, "Pattern type mismatch");
+    type_checker_error_test(source, "Pattern type mismatch");
 }
 
 #[test]
@@ -59,7 +59,7 @@ match x
 
 let y = val
 ";
-    check_error(source, "Undefined variable: val");
+    type_checker_error_test(source, "Undefined variable: val");
 }
 
 #[test]
@@ -76,7 +76,7 @@ match 10
 
 let z = val
 ";
-    check_vars_type(source, vec![("z", type_string())]);
+    type_checker_vars_type_test(source, vec![("z", type_string())]);
 }
 
 #[test]
@@ -91,7 +91,7 @@ match 10
 
 let x = a
 ";
-    check_error(source, "Undefined variable: a");
+    type_checker_error_test(source, "Undefined variable: a");
 }
 
 #[test]
@@ -103,7 +103,7 @@ let res = match x
     1: match y: 2: 'nested', default: 'other'
     default: 'outer'
 ";
-    check_vars_type(source, vec![("res", type_string())]);
+    type_checker_vars_type_test(source, vec![("res", type_string())]);
 }
 
 #[test]
@@ -115,7 +115,7 @@ let msg = match code
     404: 'Not Found'
     default: 'Unknown'
 ";
-    check_vars_type(source, vec![("msg", type_string())]);
+    type_checker_vars_type_test(source, vec![("msg", type_string())]);
 }
 
 #[test]
@@ -126,7 +126,7 @@ match code
     200 | 'str': 'Success'
     default: 'Unknown'
 ";
-    check_error(source, "Pattern type mismatch");
+    type_checker_error_test(source, "Pattern type mismatch");
 }
 
 #[test]
@@ -138,7 +138,7 @@ let msg = match point
     (x, 0): 'on x-axis'
     default: 'other'
 ";
-    check_vars_type(source, vec![("msg", type_string())]);
+    type_checker_vars_type_test(source, vec![("msg", type_string())]);
 }
 
 #[test]
@@ -149,7 +149,7 @@ match point
     (0, 'str'): 'origin'
     default: 'other'
 ";
-    check_error(source, "Pattern type mismatch");
+    type_checker_error_test(source, "Pattern type mismatch");
 }
 
 #[test]
@@ -160,7 +160,7 @@ match point
     (0, 0, 0): 'origin'
     default: 'other'
 ";
-    check_error(source, "Tuple pattern length mismatch");
+    type_checker_error_test(source, "Tuple pattern length mismatch");
 }
 
 #[test]
@@ -172,7 +172,7 @@ let msg = match text
     re\"^[a-z]+$\": 'letters'
     default: 'other'
 ";
-    check_vars_type(source, vec![("msg", type_string())]);
+    type_checker_vars_type_test(source, vec![("msg", type_string())]);
 }
 
 #[test]
@@ -183,7 +183,7 @@ match num
     re\"^\\d+$\": 'digits'
     default: 'other'
 ";
-    check_error(source, "Regex pattern requires string subject");
+    type_checker_error_test(source, "Regex pattern requires string subject");
 }
 
 #[test]
@@ -200,7 +200,7 @@ match c
     Color.Green: 'green'
     Color.Blue: 'blue'
 ";
-    check_success(source);
+    type_checker_test(source);
 }
 
 #[test]
@@ -216,7 +216,7 @@ match c
     Color.Red: 'red'
     Color.Green: 'green'
 ";
-    check_error(source, "Non-exhaustive match");
+    type_checker_error_test(source, "Non-exhaustive match");
 }
 
 #[test]
@@ -232,7 +232,7 @@ match c
     Color.Red: 'red'
     default: 'other'
 ";
-    check_success(source);
+    type_checker_test(source);
 }
 
 #[test]
@@ -248,5 +248,5 @@ match c
     Color.Red: 'red'
     other: 'other'
 ";
-    check_success(source);
+    type_checker_test(source);
 }

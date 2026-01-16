@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::type_checker::utils::{check_multi_module_error, check_multi_module_success};
+use crate::type_checker::utils::{
+    type_checker_multi_module_error_test, type_checker_multi_module_test,
+};
 
 #[test]
 fn test_visibility_same_module() {
-    check_multi_module_success(vec![("A", "private let x = 1"), ("A", "x")]);
+    type_checker_multi_module_test(vec![("A", "private let x = 1"), ("A", "x")]);
 }
 
 #[test]
 fn test_visibility_different_module() {
-    check_multi_module_error(
+    type_checker_multi_module_error_test(
         vec![("A", "private let x = 1"), ("B", "x")],
         "Variable 'x' is not visible",
     );
@@ -18,16 +20,16 @@ fn test_visibility_different_module() {
 
 #[test]
 fn test_visibility_public_different_module() {
-    check_multi_module_success(vec![("A", "public let x = 1"), ("B", "x")]);
+    type_checker_multi_module_test(vec![("A", "public let x = 1"), ("B", "x")]);
 }
 
 #[test]
 fn test_function_visibility() {
     // Public function - accessible
-    check_multi_module_success(vec![("A", "public fn foo()\n    1"), ("B", "foo()")]);
+    type_checker_multi_module_test(vec![("A", "public fn foo()\n    1"), ("B", "foo()")]);
 
     // Private function - not accessible
-    check_multi_module_error(
+    type_checker_multi_module_error_test(
         vec![("A", "private fn foo()\n    1"), ("B", "foo()")],
         "Variable 'foo' is not visible",
     );
@@ -36,13 +38,13 @@ fn test_function_visibility() {
 #[test]
 fn test_struct_visibility() {
     // Public struct - accessible
-    check_multi_module_success(vec![
+    type_checker_multi_module_test(vec![
         ("A", "public struct Point: x int, y int"),
         ("B", "let p = Point(x: 1, y: 2)"),
     ]);
 
     // Private struct - not accessible
-    check_multi_module_error(
+    type_checker_multi_module_error_test(
         vec![
             ("A", "private struct Point: x int, y int"),
             ("B", "let p = Point(x: 1, y: 2)"),
@@ -54,13 +56,13 @@ fn test_struct_visibility() {
 #[test]
 fn test_enum_visibility() {
     // Public enum - accessible
-    check_multi_module_success(vec![
+    type_checker_multi_module_test(vec![
         ("A", "public enum Color: Red, Green"),
         ("B", "let c = Color.Red"),
     ]);
 
     // Private enum - not accessible
-    check_multi_module_error(
+    type_checker_multi_module_error_test(
         vec![
             ("A", "private enum Color: Red, Green"),
             ("B", "let c = Color.Red"),
@@ -71,7 +73,7 @@ fn test_enum_visibility() {
 
 // ===== Class Member Visibility =====
 
-use crate::type_checker::utils::{check_error, check_success};
+use crate::type_checker::utils::{type_checker_error_test, type_checker_test};
 
 #[test]
 fn test_private_field_access_from_same_class() {
@@ -81,7 +83,7 @@ class Person
     fn getAge() int
         self.age
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -93,7 +95,7 @@ class Calculator
     fn reveal() int
         self.secret()
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 // Note: Protected field/method access from subclass tests are skipped
@@ -110,7 +112,7 @@ class Greeter
     fn greet(p Person) String
         p.name
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -123,7 +125,7 @@ class Snooper
     fn spy(p Person) int
         p.secret
     ";
-    check_error(code, "is Private and cannot be accessed");
+    type_checker_error_test(code, "is Private and cannot be accessed");
 }
 
 #[test]
@@ -136,7 +138,7 @@ class Hacker
     fn steal(p Person) String
         p.ssn
     ";
-    check_error(code, "is Protected and cannot be accessed");
+    type_checker_error_test(code, "is Protected and cannot be accessed");
 }
 
 #[test]
@@ -150,5 +152,5 @@ class Thief
     fn tryUnlock(v SecureVault) int
         v.unlock()
     ";
-    check_error(code, "is Private and cannot be accessed");
+    type_checker_error_test(code, "is Private and cannot be accessed");
 }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::type_checker::utils::{check_error, check_success};
+use crate::type_checker::utils::{type_checker_error_test, type_checker_test};
 
 // ===== Trait Inheritance =====
 
@@ -22,7 +22,7 @@ class Button implements Interactive
     fn click() int
         2
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -40,7 +40,7 @@ class Button implements Interactive
         1
     ";
     // Should fail because draw() from Drawable is not implemented
-    check_error(code, "must implement method 'draw'");
+    type_checker_error_test(code, "must implement method 'draw'");
 }
 
 #[test]
@@ -64,7 +64,7 @@ class Widget implements Top
     fn top() int
         3
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -83,7 +83,7 @@ class Button implements Interactive
         1
     ";
     // draw() has a default, so this should succeed
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -107,7 +107,7 @@ class File implements ReadWrite
     fn flush() int
         1
     ";
-    check_success(code);
+    type_checker_test(code);
 }
 
 #[test]
@@ -129,5 +129,5 @@ class File implements ReadWrite
     fn flush() int
         1
     ";
-    check_error(code, "must implement method 'write'");
+    type_checker_error_test(code, "must implement method 'write'");
 }

@@ -6,7 +6,7 @@ use miri::ast::factory::*;
 
 #[test]
 fn test_float_literals() {
-    check_exprs_type(vec![
+    type_checker_exprs_type_test(vec![
         ("1.5", type_f32()),
         ("0.0", type_f32()),
         ("-1.5", type_f32()),
@@ -16,7 +16,7 @@ fn test_float_literals() {
 
 #[test]
 fn test_float_arithmetic_expressions() {
-    check_exprs_type(vec![
+    type_checker_exprs_type_test(vec![
         ("1.0 + 2.0", type_f32()),
         ("1.0 - 2.0", type_f32()),
         ("1.0 * 2.0", type_f32()),
@@ -27,12 +27,12 @@ fn test_float_arithmetic_expressions() {
 
 #[test]
 fn test_float_unary_expressions() {
-    check_exprs_type(vec![("-1.0", type_f32())]);
+    type_checker_exprs_type_test(vec![("-1.0", type_f32())]);
 }
 
 #[test]
 fn test_float_comparisons() {
-    check_vars_type(
+    type_checker_vars_type_test(
         "
 let a = 1.0 < 2.0
 let b = 1.0 <= 2.0
@@ -54,7 +54,7 @@ let f = 1.0 != 2.0
 
 #[test]
 fn test_valid_float_arithmetic_variables() {
-    check_vars_type(
+    type_checker_vars_type_test(
         "
 let x = 1.5 + 2.5
 let y = x / 2.0
@@ -66,7 +66,7 @@ let z = y * 3.0
 
 #[test]
 fn test_explicit_float_type() {
-    check_vars_type(
+    type_checker_vars_type_test(
         "
 let x f32 = 1.5
 let y f64 = 1.1234567890123456789
@@ -77,7 +77,7 @@ let y f64 = 1.1234567890123456789
 
 #[test]
 fn test_mixed_numeric_types_error() {
-    check_error(
+    type_checker_error_test(
         "
 let x = 1 + 2.5
 ",
@@ -87,7 +87,7 @@ let x = 1 + 2.5
 
 #[test]
 fn test_float_int_mismatch() {
-    check_error(
+    type_checker_error_test(
         "
 let x = 1.0 + 2
 ",
@@ -97,7 +97,7 @@ let x = 1.0 + 2
 
 #[test]
 fn test_float_bool_mismatch() {
-    check_error(
+    type_checker_error_test(
         "
 let x = 1.0 + true
 ",
@@ -107,14 +107,14 @@ let x = 1.0 + true
 
 #[test]
 fn test_explicit_type_mismatch() {
-    check_error(
+    type_checker_error_test(
         "
 let x f32 = 1
 ",
         "Type mismatch for variable 'x'",
     );
 
-    check_error(
+    type_checker_error_test(
         "
 let x f32 = 1.1234567890123456789
 ",
@@ -124,7 +124,7 @@ let x f32 = 1.1234567890123456789
 
 #[test]
 fn test_float_assignment_operators() {
-    check_vars_type(
+    type_checker_vars_type_test(
         "
 var x = 1.0
 x += 2.0
@@ -135,7 +135,7 @@ x += 2.0
 
 #[test]
 fn test_invalid_float_assignment() {
-    check_error(
+    type_checker_error_test(
         "
 var x = 1.0
 x += 1
@@ -148,7 +148,7 @@ x += 1
 fn test_f64_arithmetic() {
     // Using high precision literals to force F64
     let f64_val = "1.1234567890123456789";
-    check_exprs_type(vec![
+    type_checker_exprs_type_test(vec![
         (&format!("{} + {}", f64_val, f64_val), type_f64()),
         (&format!("{} - {}", f64_val, f64_val), type_f64()),
         (&format!("{} * {}", f64_val, f64_val), type_f64()),
@@ -158,24 +158,24 @@ fn test_f64_arithmetic() {
 
 #[test]
 fn test_f32_f64_mismatch() {
-    check_error("1.0 + 1.1234567890123456789", "Type mismatch");
+    type_checker_error_test("1.0 + 1.1234567890123456789", "Type mismatch");
 }
 
 #[test]
 fn test_float_bitwise_invalid() {
-    check_error("1.0 & 2.0", "Invalid types for bitwise operation");
-    check_error("1.0 | 2.0", "Invalid types for bitwise operation");
-    check_error("1.0 ^ 2.0", "Invalid types for bitwise operation");
+    type_checker_error_test("1.0 & 2.0", "Invalid types for bitwise operation");
+    type_checker_error_test("1.0 | 2.0", "Invalid types for bitwise operation");
+    type_checker_error_test("1.0 ^ 2.0", "Invalid types for bitwise operation");
 }
 
 #[test]
 fn test_float_unary_plus() {
-    check_expr_type("+1.0", type_f32());
+    type_checker_expr_type_test("+1.0", type_f32());
 }
 
 #[test]
 fn test_float_function() {
-    check_success(
+    type_checker_test(
         "
 fn add(a f32, b f32) f32
     return a + b
@@ -187,24 +187,24 @@ let x = add(1.0, 2.0)
 
 #[test]
 fn test_float_list() {
-    check_expr_type("[1.0, 2.0, 3.0]", type_list(type_f32()));
+    type_checker_expr_type_test("[1.0, 2.0, 3.0]", type_list(type_f32()));
 }
 
 #[test]
 fn test_float_list_mismatch() {
-    check_error("[1.0, 1]", "List elements must have the same type");
+    type_checker_error_test("[1.0, 1]", "List elements must have the same type");
 }
 
 #[test]
 fn test_nullable_float() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 let x f32? = 1.0
 x
 ",
         type_null(type_f32()),
     );
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 let y f32? = None
 y
@@ -216,14 +216,14 @@ y
 #[test]
 fn test_assignment_compatibility() {
     // Float literal to specific type is allowed
-    check_success("let a f32 = 1.0");
+    type_checker_test("let a f32 = 1.0");
 
     // Specific type to Float (variable) - inferred as specific type
-    check_vars_type("let a f32 = 1.0\nlet b = a", vec![("b", type_f32())]);
+    type_checker_vars_type_test("let a f32 = 1.0\nlet b = a", vec![("b", type_f32())]);
 
     // Smaller to larger - allowed
-    check_vars_type("let a f32 = 1.0\nlet b f64 = a", vec![("b", type_f64())]);
+    type_checker_vars_type_test("let a f32 = 1.0\nlet b f64 = a", vec![("b", type_f64())]);
 
     // Larger to smaller - fail
-    check_error("let a f64 = 1.0\nlet b f32 = a", "Type mismatch");
+    type_checker_error_test("let a f64 = 1.0\nlet b f32 = a", "Type mismatch");
 }

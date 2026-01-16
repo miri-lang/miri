@@ -6,12 +6,12 @@ use miri::ast::factory::*;
 
 #[test]
 fn test_list_literal_int() {
-    check_expr_type("[1, 2, 3]", type_list(type_int()));
+    type_checker_expr_type_test("[1, 2, 3]", type_list(type_int()));
 }
 
 #[test]
 fn test_list_variable_definitions() {
-    check_vars_type(
+    type_checker_vars_type_test(
         "
         let l1 [int] = [10, 20, 30]
         let l2 list<string> = [\"a\", \"b\", \"c\"]
@@ -31,32 +31,32 @@ fn test_list_variable_definitions() {
 
 #[test]
 fn test_list_literal_string() {
-    check_expr_type("[\"a\", \"b\"]", type_list(type_string()));
+    type_checker_expr_type_test("[\"a\", \"b\"]", type_list(type_string()));
 }
 
 #[test]
 fn test_list_literal_mixed_error() {
-    check_error("[1, \"a\"]", "List elements must have the same type");
+    type_checker_error_test("[1, \"a\"]", "List elements must have the same type");
 }
 
 #[test]
 fn test_list_indexing() {
-    check_expr_type("[1, 2, 3][0]", type_int());
+    type_checker_expr_type_test("[1, 2, 3][0]", type_int());
 }
 
 #[test]
 fn test_list_indexing_invalid_index_type() {
-    check_error("[1, 2, 3][\"a\"]", "List index must be an integer");
+    type_checker_error_test("[1, 2, 3][\"a\"]", "List index must be an integer");
 }
 
 #[test]
 fn test_list_indexing_on_non_list() {
-    check_error("1[0]", "Type int is not indexable");
+    type_checker_error_test("1[0]", "Type int is not indexable");
 }
 
 #[test]
 fn test_list_indexing_variable() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 let i = 0
 [1, 2, 3][i]
@@ -67,7 +67,7 @@ let i = 0
 
 #[test]
 fn test_list_indexing_function_call() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 fn get_index() int
     return 0
@@ -80,7 +80,7 @@ fn get_index() int
 
 #[test]
 fn test_list_indexing_variable_type_mismatch() {
-    check_error(
+    type_checker_error_test(
         "
 let i = \"0\"
 [1, 2, 3][i]
@@ -91,12 +91,12 @@ let i = \"0\"
 
 #[test]
 fn test_empty_list() {
-    check_expr_type("[]", type_list(type_void()));
+    type_checker_expr_type_test("[]", type_list(type_void()));
 }
 
 #[test]
 fn test_empty_list_with_specified_types() {
-    check_vars_type(
+    type_checker_vars_type_test(
         "
     let l1 [string] = []
 ",
@@ -106,7 +106,7 @@ fn test_empty_list_with_specified_types() {
 
 #[test]
 fn test_empty_list_with_specified_types_named() {
-    check_vars_type(
+    type_checker_vars_type_test(
         "
     let l2 list<int> = []
 ",
@@ -116,17 +116,17 @@ fn test_empty_list_with_specified_types_named() {
 
 #[test]
 fn test_nested_list() {
-    check_expr_type("[[1, 2], [3, 4]]", type_list(type_list(type_int())));
+    type_checker_expr_type_test("[[1, 2], [3, 4]]", type_list(type_list(type_int())));
 }
 
 #[test]
 fn test_nested_list_mixed_error() {
-    check_error("[[1], [\"a\"]]", "List elements must have the same type");
+    type_checker_error_test("[[1], [\"a\"]]", "List elements must have the same type");
 }
 
 #[test]
 fn test_list_assignment_exact() {
-    check_success(
+    type_checker_test(
         "
 let l [int] = [1, 2, 3]
 ",
@@ -135,7 +135,7 @@ let l [int] = [1, 2, 3]
 
 #[test]
 fn test_list_assignment_mismatch_type() {
-    check_error(
+    type_checker_error_test(
         "
 let l [string] = [1, 2, 3]
 ",
@@ -146,7 +146,7 @@ let l [string] = [1, 2, 3]
 #[test]
 fn test_list_assignment_invariant() {
     // Lists are invariant, but list literals should be inferred based on the target type if possible
-    check_success(
+    type_checker_test(
         "
 let l [i16] = [1]
 ",
@@ -155,7 +155,7 @@ let l [i16] = [1]
 
 #[test]
 fn test_list_assignment_overflow() {
-    check_error(
+    type_checker_error_test(
         "
 let l [i8] = [1000]
 ",
@@ -165,7 +165,7 @@ let l [i8] = [1000]
 
 #[test]
 fn test_list_assignment_signed_unsigned_mismatch() {
-    check_error(
+    type_checker_error_test(
         "
 let l [u8] = [-1]
 ",
@@ -175,7 +175,7 @@ let l [u8] = [-1]
 
 #[test]
 fn test_list_assignment_i8_overflow() {
-    check_error(
+    type_checker_error_test(
         "
 let l [i8] = [128]
 ",
@@ -185,7 +185,7 @@ let l [i8] = [128]
 
 #[test]
 fn test_list_mutability() {
-    check_success(
+    type_checker_test(
         "
 var l = [1, 2, 3]
 l[0] = 4
@@ -195,7 +195,7 @@ l[0] = 4
 
 #[test]
 fn test_list_mutability_type_mismatch() {
-    check_error(
+    type_checker_error_test(
         "
 var l = [1, 2, 3]
 l[0] = \"a\"
@@ -206,7 +206,7 @@ l[0] = \"a\"
 
 #[test]
 fn test_list_of_functions() {
-    check_success(
+    type_checker_test(
         "
 let l = [fn(x int): x, fn(x int): x * 2]
 l[0](1)
@@ -216,7 +216,7 @@ l[0](1)
 
 #[test]
 fn test_list_of_functions_mismatch() {
-    check_error(
+    type_checker_error_test(
         "
 let l = [fn(x int): x, fn(x string): x]
 ",
@@ -226,7 +226,7 @@ let l = [fn(x int): x, fn(x string): x]
 
 #[test]
 fn test_list_assignment_to_immutable_index() {
-    check_error(
+    type_checker_error_test(
         "
 let l = [1, 2, 3]
 l[0] = 4
@@ -237,17 +237,104 @@ l[0] = 4
 
 #[test]
 fn test_list_slicing() {
-    check_expr_type("[1, 2, 3][0..1]", type_list(type_int()));
-    check_expr_type("[1, 2, 3][0..=1]", type_list(type_int()));
+    type_checker_expr_type_test("[1, 2, 3][0..1]", type_list(type_int()));
+    type_checker_expr_type_test("[1, 2, 3][0..=1]", type_list(type_int()));
 }
 
 #[test]
 fn test_list_slicing_variable() {
-    check_expr_type(
+    type_checker_expr_type_test(
         "
 let r = 0..1
 [1, 2, 3][r]
 ",
         type_list(type_int()),
+    );
+}
+
+#[test]
+fn test_list_deeply_nested() {
+    type_checker_expr_type_test(
+        "[[[1, 2], [3, 4]], [[5, 6], [7, 8]]]",
+        type_list(type_list(type_list(type_int()))),
+    );
+}
+
+#[test]
+fn test_list_many_elements() {
+    type_checker_test(
+        "
+let l = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+",
+    );
+}
+
+#[test]
+fn test_list_chained_indexing() {
+    type_checker_expr_type_test("[[1, 2], [3, 4]][0][1]", type_int());
+}
+
+#[test]
+fn test_list_triple_nested_indexing() {
+    type_checker_expr_type_test("[[[1]]][0][0][0]", type_int());
+}
+
+#[test]
+fn test_list_of_tuples() {
+    type_checker_expr_type_test(
+        "[(1, \"a\"), (2, \"b\"), (3, \"c\")]",
+        type_list(type_tuple(vec![type_int(), type_string()])),
+    );
+}
+
+#[test]
+fn test_list_in_function_param() {
+    type_checker_test(
+        "
+fn sum(items [int]) int
+    return items[0]
+
+sum([1, 2, 3])
+",
+    );
+}
+
+#[test]
+fn test_list_in_function_return() {
+    type_checker_expr_type_test(
+        "
+fn make_list() [int]
+    return [1, 2, 3]
+
+make_list()
+",
+        type_list(type_int()),
+    );
+}
+
+#[test]
+fn test_list_complex_expression_elements() {
+    type_checker_expr_type_test("[1 + 2, 3 * 4, 5 - 6, 7 / 2]", type_list(type_int()));
+}
+
+#[test]
+fn test_list_of_nullable() {
+    type_checker_test(
+        "
+var items [int?] = [1, 2, 3]
+items[0] = None
+",
+    );
+}
+
+#[test]
+fn test_list_iteration_nested() {
+    type_checker_test(
+        "
+let matrix = [[1, 2], [3, 4]]
+for row in matrix
+    for cell in row
+        let x = cell
+",
     );
 }

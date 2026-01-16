@@ -926,11 +926,54 @@ impl TypeChecker {
                                         gen_def.kind.clone(),
                                     ));
                                 }
-                                TypeDefinition::Alias(alias_type) => {
-                                    if resolved_args.is_some() {
-                                        // TODO: Handle generic aliases
+                                TypeDefinition::Alias(alias_def) => {
+                                    // Validate generic argument count
+                                    let expected_count =
+                                        alias_def.generics.as_ref().map_or(0, |g| g.len());
+                                    let provided_count =
+                                        resolved_args.as_ref().map_or(0, |a| a.len());
+
+                                    if expected_count != provided_count {
+                                        if expected_count == 0 && provided_count > 0 {
+                                            self.report_error(
+                                                format!("Type alias '{}' is not generic but {} type argument(s) were provided", name, provided_count),
+                                                expr.span.clone(),
+                                            );
+                                        } else if provided_count == 0 && expected_count > 0 {
+                                            self.report_error(
+                                                format!(
+                                                    "Type alias '{}' requires {} type argument(s)",
+                                                    name, expected_count
+                                                ),
+                                                expr.span.clone(),
+                                            );
+                                        } else {
+                                            self.report_error(
+                                                format!("Type alias '{}' expects {} type argument(s), got {}", name, expected_count, provided_count),
+                                                expr.span.clone(),
+                                            );
+                                        }
+                                        return make_type(TypeKind::Error);
                                     }
-                                    return alias_type.clone();
+
+                                    // If there are generics, substitute them
+                                    if let Some(gen_defs) = &alias_def.generics {
+                                        let mut mapping = std::collections::HashMap::new();
+                                        if let Some(args) = &resolved_args {
+                                            for (gen_def, arg_expr) in
+                                                gen_defs.iter().zip(args.iter())
+                                            {
+                                                let arg_type = self
+                                                    .extract_type_from_expression(arg_expr)
+                                                    .unwrap_or(make_type(TypeKind::Error));
+                                                mapping.insert(gen_def.name.clone(), arg_type);
+                                            }
+                                        }
+                                        return self.substitute_type(&alias_def.template, &mapping);
+                                    }
+
+                                    // No generics, just return the template directly
+                                    return alias_def.template.clone();
                                 }
                                 TypeDefinition::Class(class_def) => {
                                     self.validate_generics(
