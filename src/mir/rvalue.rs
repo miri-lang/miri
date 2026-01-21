@@ -240,31 +240,58 @@ impl fmt::Display for Dimension {
     }
 }
 
+/// Binary operations in MIR.
+///
+/// These operations take two operands and produce a result.
+/// Arithmetic operations follow standard semantics; comparison
+/// operations produce boolean values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinOp {
+    /// Addition: `lhs + rhs`
     Add,
+    /// Subtraction: `lhs - rhs`
     Sub,
+    /// Multiplication: `lhs * rhs`
     Mul,
+    /// Division: `lhs / rhs`
     Div,
+    /// Remainder (modulo): `lhs % rhs`
     Rem,
+    /// Bitwise XOR: `lhs ^ rhs`
     BitXor,
+    /// Bitwise AND: `lhs & rhs`
     BitAnd,
+    /// Bitwise OR: `lhs | rhs`
     BitOr,
+    /// Shift left: `lhs << rhs`
     Shl,
+    /// Shift right: `lhs >> rhs`
     Shr,
+    /// Equality: `lhs == rhs`
     Eq,
+    /// Less than: `lhs < rhs`
     Lt,
+    /// Less than or equal: `lhs <= rhs`
     Le,
+    /// Not equal: `lhs != rhs`
     Ne,
+    /// Greater than or equal: `lhs >= rhs`
     Ge,
+    /// Greater than: `lhs > rhs`
     Gt,
+    /// Pointer offset (for raw pointer arithmetic)
     Offset,
 }
 
+/// Unary operations in MIR.
+///
+/// These operations take a single operand and produce a result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnOp {
+    /// Logical/bitwise negation: `!operand`
     Not,
+    /// Arithmetic negation: `-operand`
     Neg,
-    /// Await an async operation
+    /// Await an async operation, suspending until completion
     Await,
 }

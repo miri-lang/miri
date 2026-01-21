@@ -8,7 +8,8 @@ use crate::ast::{
 };
 use crate::error::syntax::Span;
 use crate::mir::{
-    BinOp, Constant, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind,
+    BinOp, Constant, Discriminant, Operand, Place, Rvalue, StatementKind, Terminator,
+    TerminatorKind,
 };
 
 use super::{lower_expression, lower_statement, LoweringContext};
@@ -61,7 +62,7 @@ pub fn lower_if(
     ctx.set_terminator(Terminator::new(
         TerminatorKind::SwitchInt {
             discr: cond_op,
-            targets: vec![(target_val, then_bb)],
+            targets: vec![(Discriminant::from(target_val), then_bb)],
             otherwise: other_target,
         },
         span.clone(),
@@ -133,7 +134,7 @@ pub fn lower_while(
             ctx.set_terminator(Terminator::new(
                 TerminatorKind::SwitchInt {
                     discr: cond_op,
-                    targets: vec![(target_val, body_bb)],
+                    targets: vec![(Discriminant::from(target_val), body_bb)],
                     otherwise: other_target,
                 },
                 span.clone(),
@@ -190,7 +191,7 @@ pub fn lower_while(
             ctx.set_terminator(Terminator::new(
                 TerminatorKind::SwitchInt {
                     discr: cond_op,
-                    targets: vec![(target_val, body_bb)],
+                    targets: vec![(Discriminant::from(target_val), body_bb)],
                     otherwise: other_target,
                 },
                 span.clone(),
@@ -327,7 +328,7 @@ fn lower_for_over_iterable(
     ctx.set_terminator(Terminator::new(
         TerminatorKind::SwitchInt {
             discr: Operand::Copy(Place::new(cond_temp)),
-            targets: vec![(1, body_bb)],
+            targets: vec![(Discriminant::bool_true(), body_bb)],
             otherwise: exit_bb,
         },
         span.clone(),
@@ -367,6 +368,7 @@ fn lower_for_over_iterable(
 
     // Increment
     ctx.set_current_block(increment_bb);
+    // Reuse idx_ty from line 280 for the constant (consume it here as final use)
     let one = Operand::Constant(Box::new(Constant {
         span: span.clone(),
         ty: idx_ty,
@@ -476,7 +478,7 @@ pub fn lower_for(
         ctx.set_terminator(Terminator::new(
             TerminatorKind::SwitchInt {
                 discr: Operand::Copy(Place::new(cond_temp)),
-                targets: vec![(1, body_bb)],
+                targets: vec![(Discriminant::bool_true(), body_bb)],
                 otherwise: exit_bb,
             },
             span.clone(),
@@ -502,10 +504,10 @@ pub fn lower_for(
 
         // 4. Increment
         ctx.set_current_block(increment_bb);
-        // i = i + 1
+        // i = i + 1 - reuse loop_var_ty for the constant
         let one = Operand::Constant(Box::new(Constant {
             span: span.clone(),
-            ty: Type::new(TypeKind::Int, span.clone()),
+            ty: loop_var_ty,
             literal: crate::ast::literal::Literal::Integer(
                 crate::ast::literal::IntegerLiteral::I32(1),
             ),

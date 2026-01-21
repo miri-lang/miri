@@ -526,7 +526,9 @@ pub fn mir_lowering_switch_target_test(source: &str, block_idx: usize, expected_
     if let Some(term) = &bb.terminator {
         if let TerminatorKind::SwitchInt { targets, .. } = &term.kind {
             assert!(
-                targets.iter().any(|(val, _)| *val == expected_target),
+                targets
+                    .iter()
+                    .any(|(val, _)| val.value() == expected_target),
                 "Expected SwitchInt target {} in block {} for source:\n{}",
                 expected_target,
                 block_idx,

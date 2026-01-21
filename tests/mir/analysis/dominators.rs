@@ -34,7 +34,7 @@ fn create_branch(target: BasicBlock, otherwise: BasicBlock) -> Terminator {
                 ),
                 literal: miri::ast::literal::Literal::Boolean(true),
             })),
-            targets: vec![(1, target)],
+            targets: vec![(miri::mir::Discriminant::bool_true(), target)],
             otherwise,
         },
         span: Span::default(),

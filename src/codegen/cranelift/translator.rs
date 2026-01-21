@@ -592,7 +592,7 @@ impl FunctionTranslator {
                     let else_block = blocks[otherwise];
 
                     // Compare discriminant with target value
-                    let cmp_val = builder.ins().iconst(disc_ty, *value as i64);
+                    let cmp_val = builder.ins().iconst(disc_ty, value.value() as i64);
                     let cond = builder.ins().icmp(IntCC::Equal, disc_val, cmp_val);
                     builder.ins().brif(cond, then_block, &[], else_block, &[]);
                 } else {
@@ -602,7 +602,7 @@ impl FunctionTranslator {
 
                     while let Some((value, target)) = remaining_targets.pop() {
                         let target_block = blocks[target];
-                        let cmp_val = builder.ins().iconst(disc_ty, *value as i64);
+                        let cmp_val = builder.ins().iconst(disc_ty, value.value() as i64);
                         let cond = builder.ins().icmp(IntCC::Equal, disc_val, cmp_val);
 
                         if remaining_targets.is_empty() {

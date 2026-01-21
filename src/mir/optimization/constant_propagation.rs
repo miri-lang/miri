@@ -14,32 +14,6 @@ impl OptimizationPass for ConstantPropagation {
         let mut changed = false;
         let mut known_consts: HashMap<Local, Constant> = HashMap::new();
 
-        // Very simple constant propagation:
-        // 1. Forward pass: collect constants from Assign(x, Constant)
-        // 2. Rewrite: Assign(y, BinaryOp(Constant, Constant)) -> Assign(y, Constant)
-        // 3. Rewrite: SwitchInt(Constant) -> Goto
-        // Note: In SSA, this is powerful. In non-SSA, we have to be careful about redefinitions.
-        // For now, let's implement a block-local or conservative global pass that only works if def count is 1?
-        // Or assume we are in SSA? The plan says "run after SSA".
-        // If we are in SSA, we can just map Local -> Constant globally.
-
-        // Let's assume SSA or at least disjoint definitions for now to keep it simple,
-        // OR better: handle simple cases regardless of SSA by tracking validity.
-        // Since we don't strictly enforce SSA yet in previous phases (it's optional),
-        // let's do safe propagation:
-        // Iterate blocks. Map local -> value. accessing local checks map.
-        // Invalidating map on reassignment.
-
-        // However, to do it robustly across blocks without SSA requires dataflow analysis (Reaching Definitions).
-        // Given Phase 4 just implemented SSA, maybe we should assume SSA?
-        // But the previous task "SSA Destruction" suggests we might convert back?
-        // "These passes will run after SSA construction (mostly)" in plan.
-
-        // Let's implement an SSA-based Constant Propagation first, assuming unique names.
-        // If we run this on non-SSA code with reassignments, it might be incorrect if we don't check for multiple defs.
-        // But let's look at `construct_ssa`. It returns a body.
-        // If we assume SSA, we can just scan all statements.
-
         // 1. Collect constants
         for block in &body.basic_blocks {
             for stmt in &block.statements {
@@ -121,7 +95,7 @@ impl OptimizationPass for ConstantPropagation {
 
                             let mut target_bb = *otherwise;
                             for (v, bb) in targets {
-                                if *v == int_val as u128 {
+                                if v.value() == int_val as u128 {
                                     target_bb = *bb;
                                     break;
                                 }
@@ -131,10 +105,10 @@ impl OptimizationPass for ConstantPropagation {
                             changed = true;
                         } else if let Literal::Boolean(b) = &c.literal {
                             // SwitchInt usage for boolean: 0=false, 1=true usually
-                            let val = if *b { 1 } else { 0 };
+                            let val = if *b { 1u128 } else { 0u128 };
                             let mut target_bb = *otherwise;
                             for (v, bb) in targets {
-                                if *v == val {
+                                if v.value() == val {
                                     target_bb = *bb;
                                     break;
                                 }

@@ -69,7 +69,7 @@ fn create_branch(target: BasicBlock, otherwise: BasicBlock) -> Terminator {
                 ty: Type::new(TypeKind::Boolean, Span::default()),
                 literal: Literal::Boolean(true),
             })),
-            targets: vec![(1, target)],
+            targets: vec![(miri::mir::Discriminant::bool_true(), target)],
             otherwise,
         },
         span: Span::default(),

@@ -132,7 +132,7 @@ fn test_const_fold_branch() {
     bb0.terminator = Some(Terminator {
         kind: TerminatorKind::SwitchInt {
             discr: Operand::Copy(Place::new(Local(1))),
-            targets: vec![(0, BasicBlock(1))],
+            targets: vec![(miri::mir::Discriminant::bool_false(), BasicBlock(1))],
             otherwise: BasicBlock(2),
         },
         span: Span::default(),

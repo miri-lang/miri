@@ -33,7 +33,9 @@ pub fn lower_variable(
             ));
         };
 
-        let local = ctx.push_local(decl.name.clone(), var_ty.clone(), span.clone());
+        // Clone var_ty only when needed for comparison; consume in final use
+        let var_ty_kind = var_ty.kind.clone();
+        let local = ctx.push_local(decl.name.clone(), var_ty, span.clone());
 
         if decl.is_shared {
             ctx.body.local_decls[local.0].storage_class = StorageClass::GpuShared;
@@ -51,15 +53,9 @@ pub fn lower_variable(
                 });
             } else {
                 // Check if we can use DPS (types match)
-                // We know var_ty.
-                // We need init_expr type.
                 let init_ty = ctx.type_checker.get_type(init_expr.id);
                 // Comparison: ignore spans
-                let types_match = if let Some(ity) = init_ty {
-                    ity.kind == var_ty.kind
-                } else {
-                    false
-                };
+                let types_match = init_ty.is_some_and(|ity| ity.kind == var_ty_kind);
 
                 if types_match {
                     // Optimized path: write directly to variable
@@ -69,8 +65,10 @@ pub fn lower_variable(
                     let op = lower_expression(ctx, init_expr, None)?;
                     let op_ty = op.ty(&ctx.body);
 
-                    let rvalue = if op_ty.kind != var_ty.kind {
-                        Rvalue::Cast(Box::new(op), var_ty)
+                    let rvalue = if op_ty.kind != var_ty_kind {
+                        // Need to get the full type for Cast - get from local_decls
+                        let target_ty = ctx.body.local_decls[local.0].ty.clone();
+                        Rvalue::Cast(Box::new(op), target_ty)
                     } else {
                         Rvalue::Use(op)
                     };

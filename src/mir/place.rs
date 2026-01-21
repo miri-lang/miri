@@ -44,18 +44,32 @@ impl fmt::Display for Place {
     }
 }
 
-/// A projection inside a place.
+/// A projection element that modifies a place.
+///
+/// Projections allow accessing parts of a composite value:
+/// fields of structs/tuples, elements of arrays, or dereferencing pointers.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PlaceElem {
+    /// Dereference a pointer/reference: `*place`
     Deref,
+    /// Access a field by index: `place.0`, `place.field`
     Field(usize),
+    /// Index into an array/list: `place[index]`
     Index(Local),
 }
 
+/// The context in which a place is used.
+///
+/// This is used by the visitor pattern to distinguish between
+/// different kinds of place accesses for analysis passes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaceContext {
+    /// The place is read but not modified (e.g., `Copy`, operand use)
     NonMutatingUse,
+    /// The place is written to (e.g., assignment destination)
     MutatingUse,
+    /// Storage for the local begins (variable comes into scope)
     StorageLive,
+    /// Storage for the local ends (variable goes out of scope)
     StorageDead,
 }

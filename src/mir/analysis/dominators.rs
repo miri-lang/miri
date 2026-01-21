@@ -102,7 +102,9 @@ fn compute_predecessors(body: &Body) -> HashMap<BasicBlock, Vec<BasicBlock>> {
             };
 
             for target in targets {
-                predecessors.get_mut(&target).unwrap().push(source_bb);
+                if let Some(preds) = predecessors.get_mut(&target) {
+                    preds.push(source_bb);
+                }
             }
         }
     }
@@ -243,7 +245,9 @@ fn compute_dominance_frontiers(
                 let mut runner = p;
                 while runner != *idoms.get(&node).unwrap_or(&BasicBlock(0)) {
                     // Add node to runner's frontier
-                    frontiers.get_mut(&runner).unwrap().insert(node);
+                    if let Some(frontier) = frontiers.get_mut(&runner) {
+                        frontier.insert(node);
+                    }
 
                     if let Some(&parent) = idoms.get(&runner) {
                         runner = parent;

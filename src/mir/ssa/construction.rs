@@ -235,7 +235,11 @@ impl SSABuilder {
                     let phi_original_local = if self.is_original(place.local) {
                         place.local
                     } else {
-                        *self.new_to_old.get(&place.local).unwrap()
+                        // Safe: if not original, it must be in new_to_old
+                        self.new_to_old
+                            .get(&place.local)
+                            .copied()
+                            .unwrap_or(place.local)
                     };
 
                     // Get current version
@@ -261,8 +265,10 @@ impl SSABuilder {
 
         // 4. Pop stack
         for (local, count) in pushed_counts {
-            for _ in 0..count {
-                self.version_stack.get_mut(&local).unwrap().pop();
+            if let Some(stack) = self.version_stack.get_mut(&local) {
+                for _ in 0..count {
+                    stack.pop();
+                }
             }
         }
     }

@@ -46,4 +46,4 @@ pub use operand::{Constant, Operand};
 pub use place::{Local, Place, PlaceElem};
 pub use rvalue::{AggregateKind, BinOp, Dimension, GpuIntrinsic, Rvalue, UnOp};
 pub use statement::{Statement, StatementKind};
-pub use terminator::{Terminator, TerminatorKind};
+pub use terminator::{Discriminant, Terminator, TerminatorKind};

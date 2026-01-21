@@ -126,7 +126,7 @@ impl<'a> EvalContext<'a> {
                 })?;
 
                 for (match_val, target) in targets {
-                    if int_val == *match_val as i128 {
+                    if int_val == match_val.value() as i128 {
                         return Ok(TerminatorResult::Goto(*target));
                     }
                 }

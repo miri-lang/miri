@@ -7,6 +7,61 @@ use crate::mir::operand::Operand;
 use crate::mir::place::Place;
 use std::fmt;
 
+/// A discriminant value used in switch statements.
+///
+/// This newtype wrapper provides type safety for discriminant values,
+/// ensuring they are not accidentally confused with other `u128` values.
+/// Discriminants are used in `SwitchInt` terminators to match against
+/// enum variants, boolean values, or integer patterns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Discriminant(pub u128);
+
+impl Discriminant {
+    /// Creates a new discriminant from a `u128` value.
+    pub fn new(value: u128) -> Self {
+        Self(value)
+    }
+
+    /// Returns the underlying `u128` value.
+    pub fn value(self) -> u128 {
+        self.0
+    }
+
+    /// Creates a discriminant representing `true` (1).
+    pub fn bool_true() -> Self {
+        Self(1)
+    }
+
+    /// Creates a discriminant representing `false` (0).
+    pub fn bool_false() -> Self {
+        Self(0)
+    }
+}
+
+impl From<u128> for Discriminant {
+    fn from(value: u128) -> Self {
+        Self(value)
+    }
+}
+
+impl From<i32> for Discriminant {
+    fn from(value: i32) -> Self {
+        Self(value as u128)
+    }
+}
+
+impl From<usize> for Discriminant {
+    fn from(value: usize) -> Self {
+        Self(value as u128)
+    }
+}
+
+impl fmt::Display for Discriminant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Terminator {
     pub span: Span,
@@ -133,9 +188,16 @@ pub enum TerminatorKind {
     /// Jump to the target block.
     Goto { target: BasicBlock },
     /// Switch based on an integer value.
+    ///
+    /// The `discr` operand is evaluated, and control transfers to the first
+    /// target whose discriminant matches the value. If no match is found,
+    /// control transfers to `otherwise`.
     SwitchInt {
+        /// The operand being discriminated on.
         discr: Operand,
-        targets: Vec<(u128, BasicBlock)>,
+        /// List of (discriminant, target) pairs.
+        targets: Vec<(Discriminant, BasicBlock)>,
+        /// The fallback target if no discriminant matches.
         otherwise: BasicBlock,
     },
     /// Return from the function.
