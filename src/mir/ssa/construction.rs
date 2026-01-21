@@ -274,12 +274,10 @@ impl SSABuilder {
         block: BasicBlock,
         stmt_idx: usize,
     ) -> bool {
-        if let StatementKind::Assign(_, Rvalue::Phi(_)) = &blocks[block.0].statements[stmt_idx].kind
-        {
-            true
-        } else {
-            false
-        }
+        matches!(
+            &blocks[block.0].statements[stmt_idx].kind,
+            StatementKind::Assign(_, Rvalue::Phi(_))
+        )
     }
 
     fn rewrite_uses_in_terminator(&mut self, terminator: &mut crate::mir::Terminator) {

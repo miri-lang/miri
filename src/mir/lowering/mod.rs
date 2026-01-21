@@ -91,7 +91,7 @@ pub fn lower_function(
             .new_local(LocalDecl::new(ret_ty.clone(), ast_func.span.clone()));
 
         // Lower parameters
-        for (_i, param) in params.iter().enumerate() {
+        for param in params.iter() {
             // Resolve parameter type from the type expression
             let param_ty = resolve_type(tc, &param.typ);
             ctx.push_local(param.name.clone(), param_ty, param.typ.span.clone());
@@ -710,13 +710,13 @@ pub(crate) fn lower_expression(
                                 Ok(val)
                             }
                         } else {
-                            return Err(LoweringError::undefined_variable(name, expr.span.clone()));
+                            Err(LoweringError::undefined_variable(name, expr.span.clone()))
                         }
                     } else {
-                        return Err(LoweringError::unsupported_lhs(
+                        Err(LoweringError::unsupported_lhs(
                             "Expected identifier",
                             expr.span.clone(),
-                        ));
+                        ))
                     }
                 }
                 crate::ast::expression::LeftHandSideExpression::Member(member_expr) => {
@@ -833,15 +833,15 @@ pub(crate) fn lower_expression(
                                 }
                             }
                         }
-                        return Err(LoweringError::unsupported_lhs(
+                        Err(LoweringError::unsupported_lhs(
                             format!("Cannot assign to member of non-struct type: {:?}", obj_ty),
                             expr.span.clone(),
-                        ));
+                        ))
                     } else {
-                        return Err(LoweringError::unsupported_lhs(
+                        Err(LoweringError::unsupported_lhs(
                             "Expected Member expression",
                             expr.span.clone(),
-                        ));
+                        ))
                     }
                 }
                 #[allow(clippy::needless_return)]
@@ -1442,10 +1442,10 @@ pub(crate) fn lower_expression(
                 }
             }
 
-            return Err(LoweringError::unsupported_expression(
+            Err(LoweringError::unsupported_expression(
                 format!("Unsupported member access on type: {}", obj_ty),
                 expr.span.clone(),
-            ));
+            ))
         }
         ExpressionKind::Tuple(elements) => {
             let ops: Vec<Operand> = elements
@@ -2146,12 +2146,10 @@ pub(crate) fn lower_expression(
             // The name is used by the type checker for struct field matching
             lower_expression(ctx, value_expr, None)
         }
-        _ => {
-            return Err(LoweringError::unsupported_expression(
-                format!("{:?}", expr.node),
-                expr.span.clone(),
-            ));
-        }
+        _ => Err(LoweringError::unsupported_expression(
+            format!("{:?}", expr.node),
+            expr.span.clone(),
+        )),
     }
 }
 

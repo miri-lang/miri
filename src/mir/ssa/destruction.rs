@@ -77,13 +77,9 @@ impl<'a> SSADestructor<'a> {
 
         // 5. Remove Phis
         for block in &mut self.body.basic_blocks {
-            block.statements.retain(|stmt| {
-                if let StatementKind::Assign(_, Rvalue::Phi(_)) = &stmt.kind {
-                    false
-                } else {
-                    true
-                }
-            });
+            block
+                .statements
+                .retain(|stmt| !matches!(stmt.kind, StatementKind::Assign(_, Rvalue::Phi(_))));
         }
     }
 

@@ -22,6 +22,7 @@ pub mod lambda;
 pub mod lowering;
 pub mod module;
 pub mod operand;
+pub mod optimization;
 pub mod place;
 pub mod rvalue;
 pub mod ssa;

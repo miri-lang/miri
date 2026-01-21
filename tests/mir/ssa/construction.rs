@@ -102,7 +102,7 @@ fn test_ssa_linear() {
 
     body.basic_blocks[0].terminator = Some(create_return());
 
-    let result = construct_ssa(&mut body);
+    construct_ssa(&mut body);
 
     // Verify:
     // x should have different versions.
