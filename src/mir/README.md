@@ -12,7 +12,7 @@ The AST is great for parsing and type checking, but it implicitly encodes contro
 
 MIR flattens this structure. All control flow is made **explicit** via jumps between blocks. This simplifies:
 -   **Dataflow Analysis**: Tracking variable validity, constant propagation, borrows.
--   **Optimization**: Dead code elimination, inlining.
+-   **Optimization**: Dead code elimination, copy propagation, constant folding.
 -   **Code Generation**: Mapping to linear machine code is straightforward.
 
 ---
@@ -61,115 +61,277 @@ A "leaf" node in an expression. It is data that is ready to be used.
 #### Rvalue (Right-hand Value)
 A computation that produces a result.
 -   `BinaryOp`: `Operand + Operand`
+-   `UnaryOp`: `-Operand`, `!Operand`, `await Operand`
 -   `Ref`: `&Place`
 -   `Use`: Just a plain `Operand` (simple assignment).
--   `Aggregate`: Constructing a struct/tuple (`(Op, Op)`).
+-   `Aggregate`: Constructing a struct/tuple/enum (`(Op, Op)`).
+-   `Cast`: Type conversion.
+-   `Discriminant`: Read the discriminant of an enum.
+-   `GpuIntrinsic`: GPU-specific operations (thread IDs, barriers).
+-   `Phi`: SSA phi node for merging values from predecessor blocks.
 
 **Equation**: `Place = Rvalue`
 (Assign the result of the computation `Rvalue` to the memory location `Place`).
 
 ---
 
-## 3. Miri's MIR Implementation
+## 3. Module Structure
 
-In Miri, the MIR is defined in the `src/mir` directory.
+The MIR module is organized as follows:
 
-### 3.1 `Body` ([src/mir/body.rs](src/mir/body.rs))
+```
+src/mir/
+├── mod.rs           # Module exports and public API
+├── body.rs          # Function body (CFG container)
+├── block.rs         # Basic block definitions
+├── statement.rs     # Statement types (Assign, StorageLive/Dead, Nop)
+├── terminator.rs    # Terminator types (Goto, SwitchInt, Return, Call, etc.)
+├── place.rs         # Memory locations (Local, PlaceElem projections)
+├── operand.rs       # Operand types (Copy, Move, Constant)
+├── rvalue.rs        # Right-hand values (computations)
+├── declaration.rs   # Type declarations (struct, enum, class, trait)
+├── lambda.rs        # Lambda/closure support
+├── module.rs        # Module-level imports
+├── visitor.rs       # Visitor pattern for MIR traversal
+├── lowering/        # AST → MIR lowering
+├── optimization/    # Optimization passes
+├── analysis/        # CFG analysis (dominators, etc.)
+├── ssa/             # SSA form construction/destruction
+└── backend/         # Backend-specific metadata (GPU)
+```
+
+---
+
+## 4. Core Types
+
+### 4.1 `Body` ([body.rs](body.rs))
 The `Body` struct represents a lowered function.
 ```rust
 pub struct Body {
     pub basic_blocks: Vec<BasicBlockData>,
     pub local_decls: Vec<LocalDecl>,
-    pub execution_model: ExecutionModel, // CPU vs GPU
+    pub arg_count: usize,
+    pub execution_model: ExecutionModel,
+    pub backend_metadata: Option<BackendMetadata>,
+    pub span: Span,
+}
+```
+Key methods: `new()`, `new_local()`, `is_gpu()`, `validate()`, `find_unreachable_blocks()`.
+
+### 4.2 `Statement` ([statement.rs](statement.rs))
+Instructions with usually no effect on control flow.
+```rust
+pub enum StatementKind {
+    Assign(Place, Rvalue),      // x = expr
+    StorageLive(Place),         // Start of variable scope
+    StorageDead(Place),         // End of variable scope
+    Nop,                        // No operation
+}
+```
+
+### 4.3 `Terminator` ([terminator.rs](terminator.rs))
+The final instruction of every block that determines where to go next.
+```rust
+pub enum TerminatorKind {
+    Goto { target },                              // Unconditional jump
+    SwitchInt { discr, targets, otherwise },      // if/else or match
+    Return,                                       // Exit function
+    Unreachable,                                  // Should never execute
+    Call { func, args, destination, target },     // Function call
+    GpuLaunch { kernel, grid, block, ... },       // GPU kernel launch
+}
+```
+
+### 4.4 `Declaration` ([declaration.rs](declaration.rs))
+Type declarations lowered from AST:
+-   `StructDecl`: Named fields with types
+-   `EnumDecl`: Variants with associated data and discriminants
+-   `ClassDecl`: Fields, methods, inheritance, traits
+-   `TraitDecl`: Method signatures for interface contracts
+-   `TypeAliasDecl`: Type alias mappings
+
+---
+
+## 5. Lowering (AST → MIR)
+
+The lowering phase (`src/mir/lowering/`) converts the typed AST into MIR.
+
+### 5.1 Lowering Modules
+-   **`mod.rs`**: Main entry point (`lower_program`, `lower_function`)
+-   **`context.rs`**: Lowering context and state management
+-   **`expression.rs`**: Expression lowering (operators, calls, literals)
+-   **`statement.rs`**: Statement lowering (assignments, declarations)
+-   **`control_flow.rs`**: Control flow lowering (if, while, for, match)
+-   **`variable.rs`**: Variable and local management
+-   **`helpers.rs`**: Utility functions
+
+### 5.2 Example Lowering
+
+**Source:**
+```miri
+fn example(a: i32, b: i32) -> i32 {
+    let c = a + b
+    return c
+}
+```
+
+**Lowered MIR:**
+```
+fn example(_1: i32, _2: i32) -> i32 {
+    let _0: i32;           // return value
+    let _3: i32;           // variable c
+    let _4: i32;           // temporary
+
+    bb0: {
+        StorageLive(_3)
+        StorageLive(_4)
+        _4 = Add(Copy(_1), Copy(_2))
+        _3 = Use(Copy(_4))
+        StorageDead(_4)
+        _0 = Use(Copy(_3))
+        StorageDead(_3)
+        return
+    }
+}
+```
+
+---
+
+## 6. Optimization Passes
+
+The MIR includes an optimization framework (`src/mir/optimization/`) with iterative passes.
+
+### 6.1 Available Passes
+| Pass | Description |
+|------|-------------|
+| `SimplifyCfg` | Removes empty blocks, merges unconditional jumps |
+| `ConstantPropagation` | Replaces variables with known constant values |
+| `CopyPropagation` | Eliminates redundant copies |
+| `DeadCodeElimination` | Removes unused assignments and unreachable code |
+
+### 6.2 Optimization Driver
+```rust
+pub fn optimize(body: &mut Body) {
+    let mut passes: Vec<Box<dyn OptimizationPass>> = vec![
+        Box::new(SimplifyCfg),
+        Box::new(ConstantPropagation),
+        Box::new(CopyPropagation),
+        Box::new(DeadCodeElimination),
+    ];
+    // Runs passes iteratively until fixpoint (max 10 iterations)
+}
+```
+
+### 6.3 OptimizationPass Trait
+```rust
+pub trait OptimizationPass {
+    fn run(&mut self, body: &mut Body) -> bool;  // Returns true if modified
+    fn name(&self) -> &'static str;
+}
+```
+
+---
+
+## 7. SSA Form
+
+The MIR supports Static Single Assignment (SSA) form (`src/mir/ssa/`).
+
+### 7.1 SSA Modules
+-   **`construction.rs`**: Convert MIR to SSA form (insert phi nodes, rename variables)
+-   **`destruction.rs`**: Convert SSA back to standard MIR (eliminate phi nodes)
+
+### 7.2 Phi Nodes
+SSA form uses phi nodes to merge values at control flow join points:
+```rust
+pub enum Rvalue {
+    // ...
+    Phi(Vec<(Operand, BasicBlock)>),  // (value, predecessor_block)
+}
+```
+
+---
+
+## 8. Analysis Infrastructure
+
+### 8.1 Dominators ([analysis/dominators.rs](analysis/dominators.rs))
+Computes dominator trees for CFG analysis, essential for SSA construction and loop detection.
+
+### 8.2 Visitor Pattern ([visitor.rs](visitor.rs))
+Two visitor traits for traversing MIR:
+-   **`Visitor`**: Immutable traversal for analysis
+-   **`MutVisitor`**: Mutable traversal for transformations
+
+```rust
+pub trait Visitor {
+    fn visit_body(&mut self, body: &Body);
+    fn visit_basic_block(&mut self, block: BasicBlock, data: &BasicBlockData);
+    fn visit_statement(&mut self, block: BasicBlock, statement: &Statement);
+    fn visit_terminator(&mut self, block: BasicBlock, terminator: &Terminator);
+    fn visit_rvalue(&mut self, rvalue: &Rvalue, location: BasicBlock);
+    fn visit_operand(&mut self, operand: &Operand, location: BasicBlock);
+    fn visit_place(&mut self, place: &Place, context: PlaceContext, location: BasicBlock);
     // ...
 }
 ```
 
-### 3.2 `Statement` ([src/mir/statement.rs](src/mir/statement.rs))
-Instructions with usually no effect on control flow.
--   `Assign(Place, Rvalue)`: The most common instruction. `x = y + z`.
--   `StorageLive(Place)` / `StorageDead(Place)`: Marks where a variable's memory is valid.
-
-### 3.3 `Terminator` ([src/mir/terminator.rs](src/mir/terminator.rs))
-The final instruction of every block that determines where to go next.
--   `Goto { target }`: Unconditional jump.
--   `SwitchInt { discr, targets, otherwise }`: `if/else` or `match`.
--   `Return`: Exit the function (return `_0`).
--   `Call { func, args, destination, target }`: Jump to a function, then continue to `target` (or unwind).
--   `GpuLaunch { ... }`: Launch a GPU kernel.
-
 ---
 
-## 4. Lowering Example
+## 9. GPU Support
 
-How does AST turn into MIR?
-Let's look at a simple Rust function explanation.
+Miri has first-class integration for GPU execution models.
 
-**Source (AST equivalent):**
+### 9.1 Execution Model
 ```rust
-fn example(a: i32, b: i32) -> i32 {
-    let c = a + b;
-    return c;
+pub enum ExecutionModel {
+    Cpu,        // Standard host code
+    GpuKernel,  // GPU entry point (__global__ in CUDA)
+    GpuDevice,  // GPU helper function (__device__ in CUDA)
 }
 ```
 
-**Lowering to MIR:**
+### 9.2 Storage Classes
+```rust
+pub enum StorageClass {
+    Auto,           // Default (stack)
+    GpuShared,      // Shared within workgroup (__shared__)
+    GpuGlobal,      // Global device memory
+    GpuLocal,       // Thread-private
+    UniformBuffer,  // Uniform/constant buffer
+    StorageBuffer,  // Read-write storage buffer
+}
+```
 
-1.  **Locals Setup**:
-    -   `_0`: i32 (Return value)
-    -   `_1`: i32 (Arg `a`)
-    -   `_2`: i32 (Arg `b`)
-    -   `_3`: i32 (Var `c`)
-    -   `_4`: i32 (Temporary for result of a+b)
+### 9.3 GPU Intrinsics
+```rust
+pub enum GpuIntrinsic {
+    ThreadIdx(Dimension),   // Thread ID within block
+    BlockIdx(Dimension),    // Block ID within grid
+    BlockDim(Dimension),    // Block dimensions
+    GridDim(Dimension),     // Grid dimensions
+    SyncThreads,            // Thread barrier
+}
+```
 
-2.  **Basic Block 0 (Entry)**:
-    -   *Statement*: `StorageLive(_3)`
-    -   *Statement*: `StorageLive(_4)`
-    -   *Statement*: `_4 = Add(Copy(_1), Copy(_2))`  // Rvalue::BinaryOp
-    -   *Statement*: `_3 = Use(Copy(_4))`           // Rvalue::Use
-    -   *Statement*: `StorageDead(_4)`
-    -   *Statement*: `_0 = Use(Copy(_3))`           // Assign return value
-    -   *Statement*: `StorageDead(_3)`
-    -   *Terminator*: `Return`
+Backend mappings:
+| Intrinsic | CUDA | Metal | SPIR-V/WebGPU |
+|-----------|------|-------|---------------|
+| `ThreadIdx` | `threadIdx.x` | `thread_position_in_threadgroup` | Computed from GlobalInvocationId |
+| `BlockIdx` | `blockIdx.x` | `threadgroup_position_in_grid` | `WorkgroupId` |
+| `SyncThreads` | `__syncthreads()` | `threadgroup_barrier()` | `OpControlBarrier` |
 
-The actual lowering logic is located in `src/mir/lowering/`.
-
----
-
-## 5. GPU Capabilities and Terms
-
-Miri has first-class integration for GPU execution models, reflected directly in the MIR.
-
-### 5.1 Execution Model
-The `Body` has an `ExecutionModel` field:
--   `Cpu`: Standard host code.
--   `GpuKernel`: Entry point for a GPU program (equivalent to `__global__` in CUDA).
--   `GpuDevice`: Helper function called by a kernel (equivalent to `__device__` in CUDA).
-
-### 5.2 Storage Classes (Memory Spaces) 
-Variables (`LocalDecl`) have a `StorageClass` that tells the backend where to put data:
--   `GpuShared`: Fast memory shared by threads in a block/workgroup (`__shared__`).
--   `GpuGlobal`: Global device memory (`__device__`).
--   `GpuLocal`: Thread-private memory.
-
-### 5.3 Intrinsics
-Specific `Rvalue` variants exist for GPU hardware IDs:
--   `Rvalue::GpuIntrinsic(ThreadIdx(X))`: Gets thread ID in X dimension.
--   `Rvalue::GpuIntrinsic(BlockDim(Y))`: Gets block size in Y dimension.
--   etc.
-
-Lowering detects calls like `gpu_thread_idx_x()` or `gpu_context.thread_idx.x` and converts them directly into these high-performance MIR intrinsics.
-
-### 5.4 GPU Launch Terminator
-The `GpuLaunch` terminator is a special instruction that allows CPU code to spawn GPU kernels.
+### 9.4 GPU Launch Terminator
 ```rust
 TerminatorKind::GpuLaunch {
-    kernel: Operand, // The GPU function to call
-    grid: Operand,   // Grid dimensions ((x, y, z))
-    block: Operand,  // Block dimensions ((x, y, z))
-    destination: Place,
-    target: Option<BasicBlock>,
+    kernel: Operand,            // GPU function to call
+    grid: Operand,              // Grid dimensions (x, y, z)
+    block: Operand,             // Block dimensions (x, y, z)
+    destination: Place,         // Where to store result
+    target: Option<BasicBlock>, // Continue after launch
 }
 ```
 
-This first-class representation allows Miri to potentially interpret GPU code or compile it to shaders (SPIR-V/Metal) with full semantic awareness.
+### 9.5 Backend Metadata ([backend/](backend/))
+The `BackendMetadata` struct stores GPU-specific information:
+-   Kernel arguments and bindings
+-   Memory access patterns
+-   Required GPU capabilities
