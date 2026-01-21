@@ -13,15 +13,15 @@ fn main()
 "#,
         r#"
             let _0: void;
-            let _1: int;
-            let _2: int; // x
+            let _1: int; // x
 
             bb0: {
+                StorageLive(_1); 
                 _1 = const Symbol("foo")() -> bb1;
             }
 
             bb1: {
-                _2 = _1;
+                StorageDead(_1);
                 return;
             }
         "#,
@@ -38,15 +38,15 @@ fn main()
 "#,
         r#"
             let _0: void;
-            let _1: int;
-            let _2: int; // x
+            let _1: int; // x
 
             bb0: {
+                StorageLive(_1);
                 _1 = const Symbol("add")(const Integer(I8(1)), const Integer(I8(2))) -> bb1;
             }
 
             bb1: {
-                _2 = _1;
+                StorageDead(_1);
                 return;
             }
         "#,
@@ -64,20 +64,20 @@ fn main()
 "#,
         r#"
             let _0: void;
-            let _1: int;
+            let _1: int; // x
             let _2: int;
-            let _3: int; // x
 
             bb0: {
-                _1 = const Symbol("mul")(const Integer(I8(2)), const Integer(I8(3))) -> bb1;
+                StorageLive(_1);
+                _2 = const Symbol("mul")(const Integer(I8(2)), const Integer(I8(3))) -> bb1;
             }
 
             bb1: {
-                _2 = const Symbol("add")(_1, const Integer(I8(4))) -> bb2;
+                _1 = const Symbol("add")(_2, const Integer(I8(4))) -> bb2;
             }
 
             bb2: {
-                _3 = _2;
+                StorageDead(_1);
                 return;
             }
         "#,

@@ -3,48 +3,85 @@
 
 use crate::ast::statement::VariableDeclaration;
 use crate::error::syntax::Span;
-use crate::mir::{Operand, Place, Rvalue, StatementKind as MirStatementKind, StorageClass};
+use crate::mir::{Place, Rvalue, StatementKind as MirStatementKind, StorageClass};
 
 use super::{lower_expression, resolve_type, LoweringContext};
+use crate::error::lowering::LoweringError;
 
-pub fn lower_variable(ctx: &mut LoweringContext, decls: &[VariableDeclaration], span: &Span) {
+pub fn lower_variable(
+    ctx: &mut LoweringContext,
+    decls: &[VariableDeclaration],
+    span: &Span,
+) -> Result<(), LoweringError> {
     for decl in decls {
-        let mut init_op = None;
-        let var_ty;
-
-        if let Some(init_expr) = &decl.initializer {
-            let op = lower_expression(ctx, init_expr);
-
-            // Try to get type from TypeChecker for the initializer expression
+        let (var_ty, init_expr_opt, pre_lowered_op) = if let Some(type_expr) = &decl.typ {
+            let ty = resolve_type(ctx.type_checker, type_expr);
+            (ty, decl.initializer.as_ref(), None)
+        } else if let Some(init_expr) = &decl.initializer {
             if let Some(ty) = ctx.type_checker.get_type(init_expr.id) {
-                var_ty = ty.clone();
+                (ty.clone(), Some(init_expr), None)
             } else {
-                // Fallback: infer from operand if constant or local
-                var_ty = match &op {
-                    Operand::Constant(c) => c.ty.clone(),
-                    Operand::Copy(place) | Operand::Move(place) => {
-                        ctx.body.local_decls[place.local.0].ty.clone()
-                    }
-                };
+                // Must lower to infer type
+                let op = lower_expression(ctx, init_expr, None)?;
+                let ty = op.ty(&ctx.body);
+                (ty, Some(init_expr), Some(op))
             }
-            init_op = Some(op);
-        } else if let Some(type_expr) = &decl.typ {
-            var_ty = resolve_type(ctx.type_checker, type_expr);
         } else {
-            panic!("Cannot determine type for variable '{}'", decl.name);
-        }
+            return Err(LoweringError::unsupported_expression(
+                format!("Cannot determine type for variable '{}'", decl.name),
+                span.clone(),
+            ));
+        };
 
-        let local = ctx.push_local(decl.name.clone(), var_ty, span.clone());
+        let local = ctx.push_local(decl.name.clone(), var_ty.clone(), span.clone());
 
         if decl.is_shared {
             ctx.body.local_decls[local.0].storage_class = StorageClass::GpuShared;
         }
 
-        if let Some(op) = init_op {
-            ctx.push_statement(crate::mir::Statement {
-                kind: MirStatementKind::Assign(Place::new(local), Rvalue::Use(op)),
-                span: span.clone(),
-            });
+        if let Some(init_expr) = init_expr_opt {
+            let dest = Place::new(local);
+
+            // If we already lowered it (inference case), we must assign it now
+            if let Some(op) = pre_lowered_op {
+                // op.ty() == var_ty, so no cast needed
+                ctx.push_statement(crate::mir::Statement {
+                    kind: MirStatementKind::Assign(dest, Rvalue::Use(op)),
+                    span: span.clone(),
+                });
+            } else {
+                // Check if we can use DPS (types match)
+                // We know var_ty.
+                // We need init_expr type.
+                let init_ty = ctx.type_checker.get_type(init_expr.id);
+                // Comparison: ignore spans
+                let types_match = if let Some(ity) = init_ty {
+                    ity.kind == var_ty.kind
+                } else {
+                    false
+                };
+
+                if types_match {
+                    // Optimized path: write directly to variable
+                    lower_expression(ctx, init_expr, Some(dest))?;
+                } else {
+                    // Fallback: create temp/use result, then cast/assign
+                    let op = lower_expression(ctx, init_expr, None)?;
+                    let op_ty = op.ty(&ctx.body);
+
+                    let rvalue = if op_ty.kind != var_ty.kind {
+                        Rvalue::Cast(Box::new(op), var_ty)
+                    } else {
+                        Rvalue::Use(op)
+                    };
+
+                    ctx.push_statement(crate::mir::Statement {
+                        kind: MirStatementKind::Assign(dest, rvalue),
+                        span: span.clone(),
+                    });
+                }
+            }
         }
     }
+    Ok(())
 }

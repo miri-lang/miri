@@ -9,6 +9,7 @@ use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::pattern::Pattern;
 use crate::ast::statement::{Statement, StatementKind};
 use crate::ast::types::{Type, TypeKind};
+use crate::error::lowering::LoweringError;
 use crate::mir::declaration::{
     ClassDecl, Declaration, EnumDecl, FieldDecl, MethodDecl, StructDecl, TraitDecl, TypeAliasDecl,
     VariantDecl,
@@ -24,7 +25,11 @@ use crate::type_checker::context::TypeDefinition;
 use crate::type_checker::TypeChecker;
 use context::LoweringContext;
 
-pub fn lower_function(ast_func: &Statement, tc: &TypeChecker) -> Result<Body, String> {
+pub fn lower_function(
+    ast_func: &Statement,
+    tc: &TypeChecker,
+    is_release: bool,
+) -> Result<Body, LoweringError> {
     if let StatementKind::FunctionDeclaration(
         _name,
         _generics,
@@ -77,14 +82,16 @@ pub fn lower_function(ast_func: &Statement, tc: &TypeChecker) -> Result<Body, St
         } else {
             ExecutionModel::Cpu
         };
-        let mut body = Body::new(params.len(), ast_func.span.clone(), execution_model);
+        // Initialize lowering context
+        let body = Body::new(params.len(), ast_func.span.clone(), execution_model);
+        let mut ctx = LoweringContext::new(body, tc, is_release);
 
         // _0: Return value
-        body.new_local(LocalDecl::new(ret_ty.clone(), ast_func.span.clone()));
+        ctx.body
+            .new_local(LocalDecl::new(ret_ty.clone(), ast_func.span.clone()));
 
-        let mut ctx = LoweringContext::new(body, tc);
-
-        for param in params {
+        // Lower parameters
+        for (_i, param) in params.iter().enumerate() {
             // Resolve parameter type from the type expression
             let param_ty = resolve_type(tc, &param.typ);
             ctx.push_local(param.name.clone(), param_ty, param.typ.span.clone());
@@ -96,7 +103,7 @@ pub fn lower_function(ast_func: &Statement, tc: &TypeChecker) -> Result<Body, St
                 if let Some(&param_local) = ctx.variable_map.get(&param.name) {
                     // Lower the guard expression to get the comparison value
                     if let ExpressionKind::Guard(guard_op, guard_value) = &guard.node {
-                        let guard_val = lower_expression(&mut ctx, guard_value);
+                        let guard_val = lower_expression(&mut ctx, guard_value, None)?;
 
                         // Convert GuardOp to BinOp for the comparison
                         let bin_op = match guard_op {
@@ -156,7 +163,15 @@ pub fn lower_function(ast_func: &Statement, tc: &TypeChecker) -> Result<Body, St
         // Lower body with support for implicit return
         // Abstract functions have no body, so we skip lowering for them
         if let Some(body_box) = body_stmt {
-            lower_as_return(&mut ctx, body_box, &ret_ty);
+            lower_as_return(&mut ctx, body_box, &ret_ty)?;
+        }
+
+        // Pop root scope variables (parameters and top-level locals) if falling through
+        if ctx.body.basic_blocks[ctx.current_block.0]
+            .terminator
+            .is_none()
+        {
+            ctx.pop_scope(ast_func.span.clone());
         }
 
         // Ensure the last block has a terminator
@@ -168,42 +183,80 @@ pub fn lower_function(ast_func: &Statement, tc: &TypeChecker) -> Result<Body, St
             ));
         }
 
+        // Validate the body
+        if let Err(msg) = ctx.body.validate() {
+            // This is an internal compiler error, but we report it gracefully
+            return Err(LoweringError::custom(
+                format!("MIR Validation Error: {}", msg),
+                ast_func.span.clone(),
+                None,
+            ));
+        }
+
         Ok(ctx.body)
     } else {
-        Err("Expected FunctionDeclaration".to_string())
+        Err(LoweringError::unsupported_statement(
+            "Expected FunctionDeclaration".to_string(),
+            ast_func.span.clone(),
+        ))
     }
 }
 
-pub(crate) fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) {
+pub(crate) fn lower_statement(
+    ctx: &mut LoweringContext,
+    stmt: &Statement,
+) -> Result<(), LoweringError> {
     match &stmt.node {
         StatementKind::Block(stmts) => {
             // A block defines a new scope. Variables declared within
             // will be tracked and removed when the block ends.
             ctx.push_scope();
             for s in stmts {
-                lower_statement(ctx, s);
+                lower_statement(ctx, s)?;
             }
-            ctx.pop_scope();
+            ctx.pop_scope(stmt.span.clone());
         }
         StatementKind::Return(ret_expr) => {
             // If there's a return value, assign it to _0 (the return place)
+            // If there's a return value, assign it to _0 (the return place)
             if let Some(expr) = ret_expr {
-                let ret_val = lower_expression(ctx, expr);
-                ctx.push_statement(crate::mir::Statement {
-                    kind: MirStatementKind::Assign(
-                        Place::new(crate::mir::Local(0)), // _0 is the return place
-                        Rvalue::Use(ret_val),
-                    ),
-                    span: stmt.span.clone(),
-                });
+                let ret_ty = ctx.body.local_decls[0].ty.clone();
+                let expr_ty_opt = ctx.type_checker.get_type(expr.id);
+                let types_match = if let Some(ety) = expr_ty_opt {
+                    ety.kind == ret_ty.kind
+                } else {
+                    false
+                };
+
+                if types_match {
+                    // DPS: Write directly to _0
+                    lower_expression(ctx, expr, Some(Place::new(crate::mir::Local(0))))?;
+                } else {
+                    let ret_val = lower_expression(ctx, expr, None)?;
+                    let val_ty = ret_val.ty(&ctx.body);
+
+                    let rvalue = if val_ty.kind != ret_ty.kind {
+                        Rvalue::Cast(Box::new(ret_val), ret_ty)
+                    } else {
+                        Rvalue::Use(ret_val)
+                    };
+
+                    ctx.push_statement(crate::mir::Statement {
+                        kind: MirStatementKind::Assign(
+                            Place::new(crate::mir::Local(0)), // _0 is the return place
+                            rvalue,
+                        ),
+                        span: stmt.span.clone(),
+                    });
+                }
             }
             ctx.set_terminator(Terminator::new(TerminatorKind::Return, stmt.span.clone()));
         }
         StatementKind::Variable(decls, _) => {
-            variable::lower_variable(ctx, decls, &stmt.span);
+            variable::lower_variable(ctx, decls, &stmt.span)?;
         }
         StatementKind::Expression(expr) => {
-            let operand = lower_expression(ctx, expr);
+            let operand = lower_expression(ctx, expr, None)?;
 
             // If the expression was a call (or other terminator-producing expr),
             // the current block might have changed or been terminated.
@@ -238,19 +291,19 @@ pub(crate) fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) {
             });
         }
         StatementKind::If(cond, then_block, else_block_opt, if_type) => {
-            control_flow::lower_if(ctx, &stmt.span, cond, then_block, else_block_opt, if_type);
+            control_flow::lower_if(ctx, &stmt.span, cond, then_block, else_block_opt, if_type)?;
         }
         StatementKind::Break => {
-            control_flow::lower_break(ctx, &stmt.span);
+            control_flow::lower_break(ctx, &stmt.span)?;
         }
         StatementKind::Continue => {
-            control_flow::lower_continue(ctx, &stmt.span);
+            control_flow::lower_continue(ctx, &stmt.span)?;
         }
         StatementKind::While(cond, body, while_type) => {
-            control_flow::lower_while(ctx, &stmt.span, cond, body, while_type);
+            control_flow::lower_while(ctx, &stmt.span, cond, body, while_type)?;
         }
         StatementKind::For(decls, iterable, body) => {
-            control_flow::lower_for(ctx, &stmt.span, decls, iterable, body);
+            control_flow::lower_for(ctx, &stmt.span, decls, iterable, body)?;
         }
         StatementKind::Struct(name_expr, _generics, _members, _vis) => {
             // Lower struct declaration by looking up the type definition from type checker
@@ -436,7 +489,7 @@ pub(crate) fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) {
                     .collect();
 
                 if path_strs.is_empty() {
-                    return;
+                    return Ok(());
                 }
 
                 // Determine import source from first segment
@@ -493,9 +546,14 @@ pub(crate) fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) {
         }
         _ => {}
     }
+    Ok(())
 }
 
-pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> Operand {
+pub(crate) fn lower_expression(
+    ctx: &mut LoweringContext,
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
     match &expr.node {
         ExpressionKind::Literal(lit) => {
             let ty = match lit {
@@ -517,39 +575,83 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                 _ => Type::new(TypeKind::Void, expr.span.clone()),
             };
 
-            Operand::Constant(Box::new(Constant {
+            let constant = Operand::Constant(Box::new(Constant {
                 span: expr.span.clone(),
                 ty,
                 literal: lit.clone(),
-            }))
+            }));
+
+            if let Some(d) = dest {
+                ctx.push_statement(crate::mir::Statement {
+                    kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(constant.clone())),
+                    span: expr.span.clone(),
+                });
+                Ok(Operand::Copy(d))
+            } else {
+                Ok(constant)
+            }
         }
         ExpressionKind::Identifier(name, _) => {
-            if let Some(local) = ctx.variable_map.get(name) {
-                Operand::Copy(Place::new(*local))
+            if let Some(&local) = ctx.variable_map.get(name) {
+                // If destination is provided, assign the variable to it
+                if let Some(d) = dest {
+                    ctx.push_statement(crate::mir::Statement {
+                        kind: MirStatementKind::Assign(
+                            d.clone(),
+                            Rvalue::Use(Operand::Copy(Place::new(local))),
+                        ),
+                        span: expr.span.clone(),
+                    });
+                    Ok(Operand::Copy(d))
+                } else {
+                    // Check if the type is Copy to determine Move vs Copy semantics
+                    let ty = &ctx.body.local_decls[local.0].ty;
+                    if ty.is_copy() {
+                        Ok(Operand::Copy(Place::new(local)))
+                    } else {
+                        Ok(Operand::Move(Place::new(local)))
+                    }
+                }
             } else {
                 // Assume global function/symbol
                 // In a real compiler we would check if it exists in globals
-                Operand::Constant(Box::new(Constant {
+                let constant = Operand::Constant(Box::new(Constant {
                     span: expr.span.clone(),
                     ty: Type::new(TypeKind::Symbol, expr.span.clone()),
                     literal: crate::ast::literal::Literal::Symbol(name.clone()),
-                }))
+                }));
+
+                if let Some(d) = dest {
+                    ctx.push_statement(crate::mir::Statement {
+                        kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(constant.clone())),
+                        span: expr.span.clone(),
+                    });
+                    Ok(Operand::Copy(d))
+                } else {
+                    Ok(constant)
+                }
             }
         }
         ExpressionKind::Assignment(lhs, op, rhs) => {
             match &**lhs {
                 crate::ast::expression::LeftHandSideExpression::Identifier(id_expr) => {
                     if let ExpressionKind::Identifier(name, _) = &id_expr.node {
-                        let val = lower_expression(ctx, rhs);
+                        let val = lower_expression(ctx, rhs, None)?;
 
                         if let Some(&local) = ctx.variable_map.get(name) {
                             match op {
                                 crate::ast::operator::AssignmentOp::Assign => {
+                                    let lhs_ty = ctx.body.local_decls[local.0].ty.clone();
+                                    let rhs_ty = val.ty(&ctx.body);
+
+                                    let rvalue = if rhs_ty.kind != lhs_ty.kind {
+                                        Rvalue::Cast(Box::new(val.clone()), lhs_ty)
+                                    } else {
+                                        Rvalue::Use(val.clone())
+                                    };
+
                                     ctx.push_statement(crate::mir::Statement {
-                                        kind: MirStatementKind::Assign(
-                                            Place::new(local),
-                                            Rvalue::Use(val.clone()),
-                                        ),
+                                        kind: MirStatementKind::Assign(Place::new(local), rvalue),
                                         span: expr.span.clone(),
                                     });
                                 }
@@ -595,22 +697,36 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                             }
 
                             // Assignment evaluates to the assigned value
-                            val
+                            if let Some(d) = dest {
+                                ctx.push_statement(crate::mir::Statement {
+                                    kind: MirStatementKind::Assign(
+                                        d.clone(),
+                                        Rvalue::Use(val.clone()),
+                                    ),
+                                    span: expr.span.clone(),
+                                });
+                                Ok(Operand::Copy(d))
+                            } else {
+                                Ok(val)
+                            }
                         } else {
-                            panic!("Unknown variable in assignment: {}", name);
+                            return Err(LoweringError::undefined_variable(name, expr.span.clone()));
                         }
                     } else {
-                        panic!("Expected identifier in assignment LHS");
+                        return Err(LoweringError::unsupported_lhs(
+                            "Expected identifier",
+                            expr.span.clone(),
+                        ));
                     }
                 }
                 crate::ast::expression::LeftHandSideExpression::Member(member_expr) => {
                     // Member assignment: a.b = x
                     // Lower the member expression to get the object and field
                     if let ExpressionKind::Member(obj, prop) = &member_expr.node {
-                        let val = lower_expression(ctx, rhs);
+                        let val = lower_expression(ctx, rhs, None)?;
 
                         // Get the object operand
-                        let obj_operand = lower_expression(ctx, obj);
+                        let obj_operand = lower_expression(ctx, obj, None)?;
 
                         // Get the object's type to find field index
                         let obj_ty = ctx
@@ -701,24 +817,41 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                                                 });
                                             }
                                         }
-                                        return val;
+                                        if let Some(d) = dest {
+                                            ctx.push_statement(crate::mir::Statement {
+                                                kind: MirStatementKind::Assign(
+                                                    d.clone(),
+                                                    Rvalue::Use(val.clone()),
+                                                ),
+                                                span: expr.span.clone(),
+                                            });
+                                            return Ok(Operand::Copy(d));
+                                        } else {
+                                            return Ok(val);
+                                        }
                                     }
                                 }
                             }
                         }
-                        panic!("Cannot assign to member of non-struct type: {:?}", obj_ty);
+                        return Err(LoweringError::unsupported_lhs(
+                            format!("Cannot assign to member of non-struct type: {:?}", obj_ty),
+                            expr.span.clone(),
+                        ));
                     } else {
-                        panic!("Expected Member expression in Member LHS");
+                        return Err(LoweringError::unsupported_lhs(
+                            "Expected Member expression",
+                            expr.span.clone(),
+                        ));
                     }
                 }
                 #[allow(clippy::needless_return)]
                 crate::ast::expression::LeftHandSideExpression::Index(index_expr) => {
                     // Index assignment: a[i] = x
                     if let ExpressionKind::Index(obj, idx) = &index_expr.node {
-                        let val = lower_expression(ctx, rhs);
+                        let val = lower_expression(ctx, rhs, None)?;
 
                         // Get the object operand
-                        let obj_operand = lower_expression(ctx, obj);
+                        let obj_operand = lower_expression(ctx, obj, None)?;
 
                         // Ensure obj is a Place
                         let obj_place = match obj_operand {
@@ -737,7 +870,7 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                         };
 
                         // Lower index expression
-                        let index_operand = lower_expression(ctx, idx);
+                        let index_operand = lower_expression(ctx, idx, None)?;
 
                         // Ensure index is in a local
                         let index_local = match index_operand {
@@ -819,9 +952,20 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                                 });
                             }
                         }
-                        return val;
+                        if let Some(d) = dest {
+                            ctx.push_statement(crate::mir::Statement {
+                                kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(val.clone())),
+                                span: expr.span.clone(),
+                            });
+                            return Ok(Operand::Copy(d));
+                        } else {
+                            return Ok(val);
+                        }
                     } else {
-                        panic!("Expected Index expression in Index LHS");
+                        return Err(LoweringError::unsupported_lhs(
+                            "Expected Index expression",
+                            expr.span.clone(),
+                        ));
                     }
                 }
             }
@@ -829,8 +973,8 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
         ExpressionKind::Binary(lhs, op, rhs) => {
             // Handle `In` operator specially - it's a membership test
             if matches!(op, crate::ast::operator::BinaryOp::In) {
-                let lhs_op = lower_expression(ctx, lhs);
-                let rhs_op = lower_expression(ctx, rhs);
+                let lhs_op = lower_expression(ctx, lhs, None)?;
+                let rhs_op = lower_expression(ctx, rhs, None)?;
 
                 // For now, implement as a call to built-in `contains` function
                 // Backend will handle the actual membership test
@@ -856,11 +1000,11 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                 ));
                 ctx.set_current_block(target_bb);
 
-                return Operand::Copy(Place::new(temp));
+                return Ok(Operand::Copy(Place::new(temp)));
             }
 
-            let lhs_op = lower_expression(ctx, lhs);
-            let rhs_op = lower_expression(ctx, rhs);
+            let lhs_op = lower_expression(ctx, lhs, None)?;
+            let rhs_op = lower_expression(ctx, rhs, None)?;
 
             let bin_op = match op {
                 crate::ast::operator::BinaryOp::Add => BinOp::Add,
@@ -878,7 +1022,12 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                 crate::ast::operator::BinaryOp::GreaterThan => BinOp::Gt,
                 crate::ast::operator::BinaryOp::GreaterThanEqual => BinOp::Ge,
                 // Range and In are handled separately, And/Or via Logical
-                _ => panic!("Unsupported binary operator in Binary expression: {:?}", op),
+                _ => {
+                    return Err(LoweringError::unsupported_operator(
+                        format!("{:?}", op),
+                        expr.span.clone(),
+                    ))
+                }
             };
 
             let result_ty = match op {
@@ -898,19 +1047,25 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                 },
             };
 
-            let temp = ctx.push_temp(result_ty, expr.span.clone());
+            let (target, ret_op) = if let Some(d) = dest {
+                (d.clone(), Operand::Copy(d))
+            } else {
+                let temp = ctx.push_temp(result_ty, expr.span.clone());
+                (Place::new(temp), Operand::Copy(Place::new(temp)))
+            };
+
             ctx.push_statement(crate::mir::Statement {
                 kind: MirStatementKind::Assign(
-                    Place::new(temp),
+                    target,
                     Rvalue::BinaryOp(bin_op, Box::new(lhs_op), Box::new(rhs_op)),
                 ),
                 span: expr.span.clone(),
             });
 
-            Operand::Copy(Place::new(temp))
+            Ok(ret_op)
         }
         ExpressionKind::Unary(op, operand) => {
-            let op_val = lower_expression(ctx, operand);
+            let op_val = lower_expression(ctx, operand, None)?;
             let un_op = match op {
                 crate::ast::operator::UnaryOp::Negate => UnOp::Neg,
                 crate::ast::operator::UnaryOp::Not => UnOp::Not,
@@ -947,15 +1102,15 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                         span: expr.span.clone(),
                     });
 
-                    return Operand::Copy(Place::new(second_neg));
+                    return Ok(Operand::Copy(Place::new(second_neg)));
                 }
                 // Increment (++x) is a no-op for value (not implemented as mutation)
                 crate::ast::operator::UnaryOp::Increment => {
-                    return op_val;
+                    return Ok(op_val);
                 }
                 // Plus is identity
                 crate::ast::operator::UnaryOp::Plus => {
-                    return op_val;
+                    return Ok(op_val);
                 }
                 // BitwiseNot - similar to Not
                 crate::ast::operator::UnaryOp::BitwiseNot => UnOp::Not,
@@ -968,16 +1123,19 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                 }
             };
 
-            let temp = ctx.push_temp(result_ty, expr.span.clone());
+            let (target, ret_op) = if let Some(d) = dest {
+                (d.clone(), Operand::Copy(d))
+            } else {
+                let temp = ctx.push_temp(result_ty, expr.span.clone());
+                (Place::new(temp), Operand::Copy(Place::new(temp)))
+            };
+
             ctx.push_statement(crate::mir::Statement {
-                kind: MirStatementKind::Assign(
-                    Place::new(temp),
-                    Rvalue::UnaryOp(un_op, Box::new(op_val)),
-                ),
+                kind: MirStatementKind::Assign(target, Rvalue::UnaryOp(un_op, Box::new(op_val))),
                 span: expr.span.clone(),
             });
 
-            Operand::Copy(Place::new(temp))
+            Ok(ret_op)
         }
         ExpressionKind::Call(func, args) => {
             // Check for legacy GPU intrinsic function names (gpu_thread_idx_x etc.)
@@ -1013,7 +1171,7 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                         kind: MirStatementKind::Assign(Place::new(temp), rvalue),
                         span: expr.span.clone(),
                     });
-                    return Operand::Copy(Place::new(temp));
+                    return Ok(Operand::Copy(Place::new(temp)));
                 }
             }
 
@@ -1048,27 +1206,33 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                                 // Lower all arguments
                                 let mut ops = vec![discr_op];
                                 for arg in args {
-                                    ops.push(lower_expression(ctx, arg));
+                                    ops.push(lower_expression(ctx, arg, None)?);
                                 }
 
                                 ctx.push_statement(crate::mir::Statement {
                                     kind: MirStatementKind::Assign(
                                         Place::new(temp),
-                                        Rvalue::Aggregate(AggregateKind::Tuple, ops),
+                                        Rvalue::Aggregate(
+                                            AggregateKind::Enum(
+                                                type_name.clone(),
+                                                variant_name.clone(),
+                                            ),
+                                            ops,
+                                        ),
                                     ),
                                     span: expr.span.clone(),
                                 });
-                                return Operand::Copy(Place::new(temp));
+                                return Ok(Operand::Copy(Place::new(temp)));
                             }
                         }
                     }
                 }
             }
 
-            control_flow::lower_call(ctx, &expr.span, expr.id, func, args)
+            control_flow::lower_call(ctx, &expr.span, expr.id, func, args, dest)
         }
         ExpressionKind::Member(obj, prop) => {
-            let obj_operand = lower_expression(ctx, obj);
+            let obj_operand = lower_expression(ctx, obj, None)?;
 
             // Handle GPU Intrinsics (gpu_context.thread_idx.x, etc.)
             // This uses a two-step lowering: gpu_context.thread_idx => intermediate symbol,
@@ -1078,14 +1242,14 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                     if sym == "gpu_context" {
                         if let ExpressionKind::Identifier(prop_name, _) = &prop.node {
                             // Return intermediate symbol for chained access
-                            return Operand::Constant(Box::new(Constant {
+                            return Ok(Operand::Constant(Box::new(Constant {
                                 span: expr.span.clone(),
                                 ty: Type::new(TypeKind::Void, expr.span.clone()),
                                 literal: crate::ast::literal::Literal::Symbol(format!(
                                     "gpu_context.{}",
                                     prop_name
                                 )),
-                            }));
+                            })));
                         }
                     } else if sym.starts_with("gpu_context.") {
                         if let ExpressionKind::Identifier(prop_name, _) = &prop.node {
@@ -1093,7 +1257,12 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                                 "x" => Dimension::X,
                                 "y" => Dimension::Y,
                                 "z" => Dimension::Z,
-                                _ => panic!("Invalid dimension for GPU intrinsic: {}", prop_name),
+                                _ => {
+                                    return Err(LoweringError::unsupported_expression(
+                                        format!("Invalid GPU dimension: {}", prop_name),
+                                        expr.span.clone(),
+                                    ))
+                                }
                             };
 
                             let rvalue = match sym.as_str() {
@@ -1109,18 +1278,34 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                                 "gpu_context.grid_dim" => {
                                     Rvalue::GpuIntrinsic(GpuIntrinsic::GridDim(dim))
                                 }
-                                _ => panic!("Unknown GPU intrinsic: {}", sym),
+                                _ => {
+                                    return Err(LoweringError::unsupported_expression(
+                                        format!("Unknown GPU intrinsic: {}", sym),
+                                        expr.span.clone(),
+                                    ))
+                                }
                             };
 
-                            let temp = ctx.push_temp(
-                                Type::new(TypeKind::Int, expr.span.clone()),
-                                expr.span.clone(),
-                            );
-                            ctx.push_statement(crate::mir::Statement {
-                                kind: MirStatementKind::Assign(Place::new(temp), rvalue),
-                                span: expr.span.clone(),
-                            });
-                            return Operand::Copy(Place::new(temp));
+                            match &dest {
+                                Some(d) => {
+                                    ctx.push_statement(crate::mir::Statement {
+                                        kind: MirStatementKind::Assign(d.clone(), rvalue),
+                                        span: expr.span.clone(),
+                                    });
+                                    return Ok(Operand::Copy(d.clone()));
+                                }
+                                None => {
+                                    let temp = ctx.push_temp(
+                                        Type::new(TypeKind::Int, expr.span.clone()),
+                                        expr.span.clone(),
+                                    );
+                                    ctx.push_statement(crate::mir::Statement {
+                                        kind: MirStatementKind::Assign(Place::new(temp), rvalue),
+                                        span: expr.span.clone(),
+                                    });
+                                    return Ok(Operand::Copy(Place::new(temp)));
+                                }
+                            }
                         }
                     }
                 }
@@ -1130,7 +1315,7 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
             let obj_ty = if let Some(ty) = ctx.type_checker.get_type(obj.id) {
                 ty
             } else {
-                panic!("Type not found for expression ID {}", obj.id);
+                return Err(LoweringError::type_not_found(obj.id, expr.span.clone()));
             };
 
             if let TypeKind::Custom(struct_name, _) = &obj_ty.kind {
@@ -1164,12 +1349,26 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                             let mut new_place = place.clone();
                             new_place.projection.push(PlaceElem::Field(idx));
 
-                            return Operand::Copy(new_place);
+                            if let Some(d) = dest {
+                                ctx.push_statement(crate::mir::Statement {
+                                    kind: MirStatementKind::Assign(
+                                        d.clone(),
+                                        Rvalue::Use(Operand::Copy(new_place)),
+                                    ),
+                                    span: expr.span.clone(),
+                                });
+                                return Ok(Operand::Copy(d));
+                            } else {
+                                return Ok(Operand::Copy(new_place));
+                            }
                         } else {
-                            panic!(
-                                "Field '{}' not found in struct '{}'",
-                                field_name, struct_name
-                            );
+                            return Err(LoweringError::unsupported_lhs(
+                                format!(
+                                    "Field '{}' not found in struct '{}'",
+                                    field_name, struct_name
+                                ),
+                                obj.span.clone(),
+                            ));
                         }
                     }
                 }
@@ -1192,7 +1391,6 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                             let associated_types = enum_def.variants.get(variant_name).unwrap();
                             if associated_types.is_empty() {
                                 let ty = resolve_type(ctx.type_checker, expr);
-                                let temp = ctx.push_temp(ty, expr.span.clone());
 
                                 // Create discriminant constant
                                 let discr_op = Operand::Constant(Box::new(Constant {
@@ -1205,14 +1403,38 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                                     ),
                                 }));
 
-                                ctx.push_statement(crate::mir::Statement {
-                                    kind: MirStatementKind::Assign(
-                                        Place::new(temp),
-                                        Rvalue::Aggregate(AggregateKind::Tuple, vec![discr_op]),
-                                    ),
-                                    span: expr.span.clone(),
-                                });
-                                return Operand::Copy(Place::new(temp));
+                                if let Some(d) = dest {
+                                    ctx.push_statement(crate::mir::Statement {
+                                        kind: MirStatementKind::Assign(
+                                            d.clone(),
+                                            Rvalue::Aggregate(
+                                                AggregateKind::Enum(
+                                                    type_name.clone(),
+                                                    variant_name.clone(),
+                                                ),
+                                                vec![discr_op],
+                                            ),
+                                        ),
+                                        span: expr.span.clone(),
+                                    });
+                                    return Ok(Operand::Copy(d));
+                                } else {
+                                    let temp = ctx.push_temp(ty, expr.span.clone());
+                                    ctx.push_statement(crate::mir::Statement {
+                                        kind: MirStatementKind::Assign(
+                                            Place::new(temp),
+                                            Rvalue::Aggregate(
+                                                AggregateKind::Enum(
+                                                    type_name.clone(),
+                                                    variant_name.clone(),
+                                                ),
+                                                vec![discr_op],
+                                            ),
+                                        ),
+                                        span: expr.span.clone(),
+                                    });
+                                    return Ok(Operand::Copy(Place::new(temp)));
+                                }
                             }
                             // Variant with associated values - handled in Call
                         }
@@ -1220,81 +1442,169 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                 }
             }
 
-            panic!("Unsupported member access on type: {}", obj_ty);
+            return Err(LoweringError::unsupported_expression(
+                format!("Unsupported member access on type: {}", obj_ty),
+                expr.span.clone(),
+            ));
         }
         ExpressionKind::Tuple(elements) => {
-            let ops: Vec<Operand> = elements.iter().map(|e| lower_expression(ctx, e)).collect();
+            let ops: Vec<Operand> = elements
+                .iter()
+                .map(|e| lower_expression(ctx, e, None))
+                .collect::<Result<_, _>>()?;
             let ty = resolve_type(ctx.type_checker, expr);
-            let temp = ctx.push_temp(ty, expr.span.clone());
-            ctx.push_statement(crate::mir::Statement {
-                kind: MirStatementKind::Assign(
-                    Place::new(temp),
-                    Rvalue::Aggregate(AggregateKind::Tuple, ops),
-                ),
-                span: expr.span.clone(),
-            });
-            Operand::Copy(Place::new(temp))
+            if let Some(d) = dest {
+                ctx.push_statement(crate::mir::Statement {
+                    kind: MirStatementKind::Assign(
+                        d.clone(),
+                        Rvalue::Aggregate(AggregateKind::Tuple, ops),
+                    ),
+                    span: expr.span.clone(),
+                });
+                Ok(Operand::Copy(d))
+            } else {
+                let temp = ctx.push_temp(ty, expr.span.clone());
+                ctx.push_statement(crate::mir::Statement {
+                    kind: MirStatementKind::Assign(
+                        Place::new(temp),
+                        Rvalue::Aggregate(AggregateKind::Tuple, ops),
+                    ),
+                    span: expr.span.clone(),
+                });
+                Ok(Operand::Copy(Place::new(temp)))
+            }
         }
         ExpressionKind::List(elements) => {
-            let ops: Vec<Operand> = elements.iter().map(|e| lower_expression(ctx, e)).collect();
+            let ops: Vec<Operand> = elements
+                .iter()
+                .map(|e| lower_expression(ctx, e, None))
+                .collect::<Result<_, _>>()?;
             let ty = resolve_type(ctx.type_checker, expr);
-            let temp = ctx.push_temp(ty, expr.span.clone());
-            ctx.push_statement(crate::mir::Statement {
-                kind: MirStatementKind::Assign(
-                    Place::new(temp),
-                    Rvalue::Aggregate(AggregateKind::List, ops),
-                ),
-                span: expr.span.clone(),
-            });
-            Operand::Copy(Place::new(temp))
+            if let Some(d) = dest {
+                ctx.push_statement(crate::mir::Statement {
+                    kind: MirStatementKind::Assign(
+                        d.clone(),
+                        Rvalue::Aggregate(AggregateKind::List, ops),
+                    ),
+                    span: expr.span.clone(),
+                });
+                Ok(Operand::Copy(d))
+            } else {
+                let temp = ctx.push_temp(ty, expr.span.clone());
+                ctx.push_statement(crate::mir::Statement {
+                    kind: MirStatementKind::Assign(
+                        Place::new(temp),
+                        Rvalue::Aggregate(AggregateKind::List, ops),
+                    ),
+                    span: expr.span.clone(),
+                });
+                Ok(Operand::Copy(Place::new(temp)))
+            }
         }
         ExpressionKind::Array(elements, _size) => {
-            let ops: Vec<Operand> = elements.iter().map(|e| lower_expression(ctx, e)).collect();
+            let ops: Vec<Operand> = elements
+                .iter()
+                .map(|e| lower_expression(ctx, e, None))
+                .collect::<Result<_, _>>()?;
             let ty = resolve_type(ctx.type_checker, expr);
-            let temp = ctx.push_temp(ty, expr.span.clone());
-            ctx.push_statement(crate::mir::Statement {
-                kind: MirStatementKind::Assign(
-                    Place::new(temp),
-                    Rvalue::Aggregate(AggregateKind::Array, ops),
-                ),
-                span: expr.span.clone(),
-            });
-            Operand::Copy(Place::new(temp))
+            if let Some(d) = dest {
+                ctx.push_statement(crate::mir::Statement {
+                    kind: MirStatementKind::Assign(
+                        d.clone(),
+                        Rvalue::Aggregate(AggregateKind::Array, ops),
+                    ),
+                    span: expr.span.clone(),
+                });
+                Ok(Operand::Copy(d))
+            } else {
+                let temp = ctx.push_temp(ty, expr.span.clone());
+                ctx.push_statement(crate::mir::Statement {
+                    kind: MirStatementKind::Assign(
+                        Place::new(temp),
+                        Rvalue::Aggregate(AggregateKind::Array, ops),
+                    ),
+                    span: expr.span.clone(),
+                });
+                Ok(Operand::Copy(Place::new(temp)))
+            }
         }
-        ExpressionKind::Set(elements) => {
-            let ops: Vec<Operand> = elements.iter().map(|e| lower_expression(ctx, e)).collect();
+        /*
+        ExpressionKind::Struct(elements, _) => {
+            let ops: Vec<Operand> = elements
+                .iter()
+                .map(|e| lower_expression(ctx, e))
+                .collect::<Result<_, _>>()?;
             let ty = resolve_type(ctx.type_checker, expr);
             let temp = ctx.push_temp(ty, expr.span.clone());
             ctx.push_statement(crate::mir::Statement {
                 kind: MirStatementKind::Assign(
                     Place::new(temp),
-                    Rvalue::Aggregate(AggregateKind::Set, ops),
+                    Rvalue::Aggregate(AggregateKind::Struct(ty.clone()), ops),
                 ),
                 span: expr.span.clone(),
             });
-            Operand::Copy(Place::new(temp))
+            Ok(Operand::Copy(Place::new(temp)))
+        }
+        */
+        ExpressionKind::Set(elements) => {
+            let ops: Vec<Operand> = elements
+                .iter()
+                .map(|e| lower_expression(ctx, e, None))
+                .collect::<Result<_, _>>()?;
+            let ty = resolve_type(ctx.type_checker, expr);
+            if let Some(d) = dest {
+                ctx.push_statement(crate::mir::Statement {
+                    kind: MirStatementKind::Assign(
+                        d.clone(),
+                        Rvalue::Aggregate(AggregateKind::Set, ops),
+                    ),
+                    span: expr.span.clone(),
+                });
+                Ok(Operand::Copy(d))
+            } else {
+                let temp = ctx.push_temp(ty, expr.span.clone());
+                ctx.push_statement(crate::mir::Statement {
+                    kind: MirStatementKind::Assign(
+                        Place::new(temp),
+                        Rvalue::Aggregate(AggregateKind::Set, ops),
+                    ),
+                    span: expr.span.clone(),
+                });
+                Ok(Operand::Copy(Place::new(temp)))
+            }
         }
         ExpressionKind::Map(pairs) => {
             // Flatten pairs into [key1, val1, key2, val2, ...]
             let mut ops: Vec<Operand> = Vec::with_capacity(pairs.len() * 2);
             for (key, val) in pairs {
-                ops.push(lower_expression(ctx, key));
-                ops.push(lower_expression(ctx, val));
+                ops.push(lower_expression(ctx, key, None)?);
+                ops.push(lower_expression(ctx, val, None)?);
             }
             let ty = resolve_type(ctx.type_checker, expr);
-            let temp = ctx.push_temp(ty, expr.span.clone());
-            ctx.push_statement(crate::mir::Statement {
-                kind: MirStatementKind::Assign(
-                    Place::new(temp),
-                    Rvalue::Aggregate(AggregateKind::Map, ops),
-                ),
-                span: expr.span.clone(),
-            });
-            Operand::Copy(Place::new(temp))
+            if let Some(d) = dest {
+                ctx.push_statement(crate::mir::Statement {
+                    kind: MirStatementKind::Assign(
+                        d.clone(),
+                        Rvalue::Aggregate(AggregateKind::Map, ops),
+                    ),
+                    span: expr.span.clone(),
+                });
+                Ok(Operand::Copy(d))
+            } else {
+                let temp = ctx.push_temp(ty, expr.span.clone());
+                ctx.push_statement(crate::mir::Statement {
+                    kind: MirStatementKind::Assign(
+                        Place::new(temp),
+                        Rvalue::Aggregate(AggregateKind::Map, ops),
+                    ),
+                    span: expr.span.clone(),
+                });
+                Ok(Operand::Copy(Place::new(temp)))
+            }
         }
         ExpressionKind::Index(obj, index_expr) => {
             // Lower object to get a place
-            let obj_operand = lower_expression(ctx, obj);
+            let obj_operand = lower_expression(ctx, obj, None)?;
 
             // Ensure object is in a place (copy to temp if constant)
             let obj_place = match obj_operand {
@@ -1313,7 +1623,7 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
             };
 
             // Lower index expression
-            let index_operand = lower_expression(ctx, index_expr);
+            let index_operand = lower_expression(ctx, index_expr, None)?;
 
             // Ensure index is in a local (PlaceElem::Index requires Local)
             let index_local = match index_operand {
@@ -1341,11 +1651,22 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
             let mut indexed_place = obj_place;
             indexed_place.projection.push(PlaceElem::Index(index_local));
 
-            Operand::Copy(indexed_place)
+            if let Some(d) = dest {
+                ctx.push_statement(crate::mir::Statement {
+                    kind: MirStatementKind::Assign(
+                        d.clone(),
+                        Rvalue::Use(Operand::Copy(indexed_place)),
+                    ),
+                    span: expr.span.clone(),
+                });
+                Ok(Operand::Copy(d))
+            } else {
+                Ok(Operand::Copy(indexed_place))
+            }
         }
         ExpressionKind::Match(subject, branches) => {
             // Lower the subject expression
-            let subject_op = lower_expression(ctx, subject);
+            let subject_op = lower_expression(ctx, subject, None)?;
 
             // Store subject in a temp so we can reference it multiple times
             let subject_ty = resolve_type(ctx.type_checker, subject);
@@ -1416,15 +1737,16 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
             // Lower each branch body
             for (branch_bb, branch) in branch_blocks {
                 ctx.set_current_block(branch_bb);
+                ctx.push_scope();
 
                 // Bind pattern variables
                 for pattern in &branch.patterns {
-                    bind_pattern(ctx, pattern, subject_local, &subject.span);
+                    bind_pattern(ctx, pattern, subject_local, &subject.span)?;
                 }
 
                 // Handle guard if present
                 if let Some(guard) = &branch.guard {
-                    let guard_op = lower_expression(ctx, guard);
+                    let guard_op = lower_expression(ctx, guard, None)?;
                     let guard_true_bb = ctx.new_basic_block();
 
                     ctx.set_terminator(Terminator::new(
@@ -1439,15 +1761,15 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                     ctx.set_current_block(guard_true_bb);
                 }
 
-                // Lower branch body
-                lower_statement(ctx, &branch.body);
+                // Lower branch body and assign result to result_local
+                lower_to_local(ctx, &branch.body, result_local, &result_ty)?;
 
-                // Assign result (if body is expression statement)
-                // For now, just goto join
+                // Goto join if body didn't terminate (e.g., with return)
                 if ctx.body.basic_blocks[ctx.current_block.0]
                     .terminator
                     .is_none()
                 {
+                    ctx.pop_scope(expr.span.clone());
                     ctx.set_terminator(Terminator::new(
                         TerminatorKind::Goto { target: join_bb },
                         expr.span.clone(),
@@ -1456,7 +1778,7 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
             }
 
             ctx.set_current_block(join_bb);
-            Operand::Copy(Place::new(result_local))
+            Ok(Operand::Copy(Place::new(result_local)))
         }
         ExpressionKind::Logical(lhs, op, rhs) => {
             // Short-circuit evaluation for logical operators:
@@ -1467,7 +1789,7 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
             let result_local = ctx.push_temp(result_ty.clone(), expr.span.clone());
 
             // Evaluate LHS
-            let lhs_op = lower_expression(ctx, lhs);
+            let lhs_op = lower_expression(ctx, lhs, None)?;
 
             // Create blocks for short-circuit evaluation
             let rhs_bb = ctx.new_basic_block();
@@ -1524,7 +1846,12 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                         span: expr.span.clone(),
                     });
                 }
-                _ => panic!("Unsupported logical operator: {:?}", op),
+                _ => {
+                    return Err(LoweringError::unsupported_operator(
+                        format!("{:?}", op),
+                        expr.span.clone(),
+                    ))
+                }
             }
 
             // Create final join block
@@ -1536,7 +1863,7 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
 
             // Evaluate RHS in rhs_bb
             ctx.set_current_block(rhs_bb);
-            let rhs_op = lower_expression(ctx, rhs);
+            let rhs_op = lower_expression(ctx, rhs, None)?;
             ctx.push_statement(crate::mir::Statement {
                 kind: MirStatementKind::Assign(Place::new(result_local), Rvalue::Use(rhs_op)),
                 span: expr.span.clone(),
@@ -1547,7 +1874,7 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
             ));
 
             ctx.set_current_block(final_bb);
-            Operand::Copy(Place::new(result_local))
+            Ok(Operand::Copy(Place::new(result_local)))
         }
         ExpressionKind::Conditional(then_expr, cond_expr, else_expr_opt, if_type) => {
             // Inline if/unless expression: `value if condition else other`
@@ -1557,7 +1884,7 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
             let result_local = ctx.push_temp(result_ty, expr.span.clone());
 
             // Evaluate condition first
-            let cond_op = lower_expression(ctx, cond_expr);
+            let cond_op = lower_expression(ctx, cond_expr, None)?;
 
             let then_bb = ctx.new_basic_block();
             let else_bb = ctx.new_basic_block();
@@ -1581,7 +1908,7 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
 
             // Then block
             ctx.set_current_block(then_bb);
-            let then_op = lower_expression(ctx, then_expr);
+            let then_op = lower_expression(ctx, then_expr, None)?;
             ctx.push_statement(crate::mir::Statement {
                 kind: MirStatementKind::Assign(Place::new(result_local), Rvalue::Use(then_op)),
                 span: then_expr.span.clone(),
@@ -1594,7 +1921,7 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
             // Else block
             ctx.set_current_block(else_bb);
             if let Some(else_expr) = else_expr_opt {
-                let else_op = lower_expression(ctx, else_expr);
+                let else_op = lower_expression(ctx, else_expr, None)?;
                 ctx.push_statement(crate::mir::Statement {
                     kind: MirStatementKind::Assign(Place::new(result_local), Rvalue::Use(else_op)),
                     span: else_expr.span.clone(),
@@ -1606,17 +1933,17 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
             ));
 
             ctx.set_current_block(join_bb);
-            Operand::Copy(Place::new(result_local))
+            Ok(Operand::Copy(Place::new(result_local)))
         }
         ExpressionKind::Range(start_expr, end_expr_opt, range_type) => {
             // Lower range expression to a tuple aggregate (start, end, is_inclusive)
             // This provides enough info for backends to iterate the range
 
-            let start_op = lower_expression(ctx, start_expr);
+            let start_op = lower_expression(ctx, start_expr, None)?;
 
             // End value - if not provided, create a "max" sentinel or just use start
             let end_op = if let Some(end_expr) = end_expr_opt {
-                lower_expression(ctx, end_expr)
+                lower_expression(ctx, end_expr, None)?
             } else {
                 // Range with no end (used for iterable objects) - use start as placeholder
                 start_op.clone()
@@ -1643,7 +1970,7 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                 ),
                 span: expr.span.clone(),
             });
-            Operand::Copy(Place::new(temp))
+            Ok(Operand::Copy(Place::new(temp)))
         }
         ExpressionKind::Lambda(_generics, params, ret_type_expr, body, props) => {
             // Lambda expressions create an anonymous function.
@@ -1681,7 +2008,8 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
             // Create a nested context for the lambda
             // Note: We need to track which outer variables are captured
             let outer_variable_map = ctx.variable_map.clone();
-            let mut lambda_ctx = LoweringContext::new(lambda_body, ctx.type_checker);
+            let mut lambda_ctx =
+                LoweringContext::new(lambda_body, ctx.type_checker, ctx.is_release);
 
             // Add parameters to lambda context
             for param in params {
@@ -1690,7 +2018,7 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
             }
 
             // Lower the lambda body
-            lower_as_return(&mut lambda_ctx, body, &ret_ty);
+            lower_as_return(&mut lambda_ctx, body, &ret_ty)?;
 
             // Ensure the last block has a terminator
             let last_block_idx = lambda_ctx.current_block.0;
@@ -1710,7 +2038,7 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                 // by looking for it in the lambda's variable map
                 if lambda_ctx.variable_map.contains_key(name) {
                     // If it's also a parameter, skip it (not a capture)
-                    if params.iter().any(|p| &p.name == name) {
+                    if params.iter().any(|p| &p.name == name.as_ref()) {
                         continue;
                     }
                     // This is a captured variable - for now we just track it
@@ -1748,7 +2076,7 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                 span: expr.span.clone(),
             });
 
-            Operand::Copy(Place::new(temp))
+            Ok(Operand::Copy(Place::new(temp)))
         }
         ExpressionKind::FormattedString(parts) => {
             // Formatted string: f"Hello, {name}"
@@ -1757,8 +2085,8 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
 
             let ops: Vec<Operand> = parts
                 .iter()
-                .map(|part| lower_expression(ctx, part))
-                .collect();
+                .map(|part| lower_expression(ctx, part, None))
+                .collect::<Result<_, _>>()?;
 
             let ty = Type::new(TypeKind::String, expr.span.clone());
             let temp = ctx.push_temp(ty, expr.span.clone());
@@ -1772,14 +2100,14 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                 span: expr.span.clone(),
             });
 
-            Operand::Copy(Place::new(temp))
+            Ok(Operand::Copy(Place::new(temp)))
         }
         ExpressionKind::Guard(guard_op, guard_expr) => {
             // Guard expressions are used in function parameter validation
             // e.g., fn divide(a int, b int > 0) - the `> 0` is a guard
             // We lower guards to comparison operations that return bool
 
-            let operand = lower_expression(ctx, guard_expr);
+            let operand = lower_expression(ctx, guard_expr, None)?;
 
             // Convert GuardOp to BinOp
             let _bin_op = match guard_op {
@@ -1799,11 +2127,11 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
                         ),
                         span: expr.span.clone(),
                     });
-                    return Operand::Copy(Place::new(temp));
+                    return Ok(Operand::Copy(Place::new(temp)));
                 }
                 crate::ast::operator::GuardOp::In | crate::ast::operator::GuardOp::NotIn => {
                     // In/NotIn guards require membership test - for now create placeholder
-                    return operand;
+                    return Ok(operand);
                 }
             };
 
@@ -1811,15 +2139,18 @@ pub(crate) fn lower_expression(ctx: &mut LoweringContext, expr: &Expression) -> 
             // The operand IS the guard expression (e.g., the `0` in `> 0`)
             // The LHS (the parameter) would need to be provided by the caller
             // For now, just return the guard expression value
-            operand
+            Ok(operand)
         }
         ExpressionKind::NamedArgument(_name, value_expr) => {
             // Named argument: extract the value and lower it
             // The name is used by the type checker for struct field matching
-            lower_expression(ctx, value_expr)
+            lower_expression(ctx, value_expr, None)
         }
         _ => {
-            panic!("Unsupported expression kind in lowering: {:?}", expr.node);
+            return Err(LoweringError::unsupported_expression(
+                format!("{:?}", expr.node),
+                expr.span.clone(),
+            ));
         }
     }
 }
@@ -1856,15 +2187,19 @@ pub(crate) fn resolve_type(tc: &TypeChecker, expr: &Expression) -> Type {
 }
 
 /// Convert a literal to u128 for SwitchInt discrimination.
+/// For signed integers, we reinterpret as unsigned to preserve bit patterns,
+/// then extend to u128. This ensures -1i8 becomes 255 (0xFF), not u128::MAX.
 fn literal_to_u128(lit: &crate::ast::literal::Literal) -> Option<u128> {
     use crate::ast::literal::{IntegerLiteral, Literal};
     match lit {
         Literal::Integer(int_lit) => match int_lit {
-            IntegerLiteral::I8(v) => Some(*v as u128),
-            IntegerLiteral::I16(v) => Some(*v as u128),
-            IntegerLiteral::I32(v) => Some(*v as u128),
-            IntegerLiteral::I64(v) => Some(*v as u128),
+            // Signed: reinterpret bits as unsigned first, then zero-extend to u128
+            IntegerLiteral::I8(v) => Some((*v as u8) as u128),
+            IntegerLiteral::I16(v) => Some((*v as u16) as u128),
+            IntegerLiteral::I32(v) => Some((*v as u32) as u128),
+            IntegerLiteral::I64(v) => Some((*v as u64) as u128),
             IntegerLiteral::I128(v) => Some(*v as u128),
+            // Unsigned: direct conversion
             IntegerLiteral::U8(v) => Some(*v as u128),
             IntegerLiteral::U16(v) => Some(*v as u128),
             IntegerLiteral::U32(v) => Some(*v as u128),
@@ -1883,13 +2218,12 @@ fn bind_pattern(
     pattern: &Pattern,
     subject_local: crate::mir::Local,
     span: &crate::error::syntax::Span,
-) {
+) -> Result<(), LoweringError> {
     match pattern {
         Pattern::Identifier(name) => {
             // Create a new local for the bound variable
             let ty = ctx.body.local_decls[subject_local.0].ty.clone();
-            let var_local = ctx.push_temp(ty, span.clone());
-            ctx.body.local_decls[var_local.0].name = Some(name.clone());
+            let var_local = ctx.push_local(name.clone(), ty, span.clone());
 
             // Assign subject value to bound variable
             ctx.push_statement(crate::mir::Statement {
@@ -1899,36 +2233,20 @@ fn bind_pattern(
                 ),
                 span: span.clone(),
             });
-
-            // Register in variable map
-            ctx.variable_map.insert(name.clone(), var_local);
         }
         Pattern::Tuple(patterns) => {
             // For tuple destructuring, create bindings for each element
+            // Tuple fields are statically known, so we use Field projection
             for (i, p) in patterns.iter().enumerate() {
                 if let Pattern::Identifier(name) = p {
                     let ty = ctx.body.local_decls[subject_local.0].ty.clone();
                     let elem_local = ctx.push_temp(ty, span.clone());
-                    ctx.body.local_decls[elem_local.0].name = Some(name.clone());
+                    let name_rc = std::rc::Rc::new(name.clone());
+                    ctx.body.local_decls[elem_local.0].name = Some(name_rc.clone());
 
-                    // Create indexed place for tuple element
+                    // Create Field projection for tuple element (static index)
                     let mut place = Place::new(subject_local);
-                    let idx_local =
-                        ctx.push_temp(Type::new(TypeKind::Int, span.clone()), span.clone());
-                    ctx.push_statement(crate::mir::Statement {
-                        kind: MirStatementKind::Assign(
-                            Place::new(idx_local),
-                            Rvalue::Use(Operand::Constant(Box::new(Constant {
-                                span: span.clone(),
-                                ty: Type::new(TypeKind::Int, span.clone()),
-                                literal: crate::ast::literal::Literal::Integer(
-                                    crate::ast::literal::IntegerLiteral::I32(i as i32),
-                                ),
-                            }))),
-                        ),
-                        span: span.clone(),
-                    });
-                    place.projection.push(PlaceElem::Index(idx_local));
+                    place.projection.push(PlaceElem::Field(i));
 
                     ctx.push_statement(crate::mir::Statement {
                         kind: MirStatementKind::Assign(
@@ -1938,39 +2256,25 @@ fn bind_pattern(
                         span: span.clone(),
                     });
 
-                    ctx.variable_map.insert(name.clone(), elem_local);
+                    ctx.variable_map.insert(name_rc, elem_local);
                 }
             }
         }
         Pattern::EnumVariant(_parent, bindings) => {
             // For enum variant destructuring, extract associated values
-            // The aggregate is (discriminant, val1, val2, ...), so bindings start at index 1
+            // The aggregate is (discriminant, val1, val2, ...), so bindings use Field(i+1)
             for (i, binding) in bindings.iter().enumerate() {
                 if let Pattern::Identifier(name) = binding {
                     // Create local for bound variable
                     // Note: Type info is from type checker, we use a generic type here
                     let ty = Type::new(TypeKind::Void, span.clone()); // Will be properly typed
                     let elem_local = ctx.push_temp(ty, span.clone());
-                    ctx.body.local_decls[elem_local.0].name = Some(name.clone());
+                    let name_rc = std::rc::Rc::new(name.clone());
+                    ctx.body.local_decls[elem_local.0].name = Some(name_rc.clone());
 
-                    // Create indexed place for element (index i+1 to skip discriminant)
+                    // Create Field projection for element (i+1 to skip discriminant at field 0)
                     let mut place = Place::new(subject_local);
-                    let idx_local =
-                        ctx.push_temp(Type::new(TypeKind::Int, span.clone()), span.clone());
-                    ctx.push_statement(crate::mir::Statement {
-                        kind: MirStatementKind::Assign(
-                            Place::new(idx_local),
-                            Rvalue::Use(Operand::Constant(Box::new(Constant {
-                                span: span.clone(),
-                                ty: Type::new(TypeKind::Int, span.clone()),
-                                literal: crate::ast::literal::Literal::Integer(
-                                    crate::ast::literal::IntegerLiteral::I32((i + 1) as i32), // Skip discriminant at index 0
-                                ),
-                            }))),
-                        ),
-                        span: span.clone(),
-                    });
-                    place.projection.push(PlaceElem::Index(idx_local));
+                    place.projection.push(PlaceElem::Field(i + 1));
 
                     ctx.push_statement(crate::mir::Statement {
                         kind: MirStatementKind::Assign(
@@ -1980,30 +2284,84 @@ fn bind_pattern(
                         span: span.clone(),
                     });
 
-                    ctx.variable_map.insert(name.clone(), elem_local);
+                    ctx.variable_map.insert(name_rc, elem_local);
                 }
             }
         }
         // Literal, Default, Regex, Member - no bindings needed
         _ => {}
     }
+    Ok(())
 }
 
-/// Recursively lowers statements to assign the final expression to `_0` (return place).
-fn lower_as_return(ctx: &mut LoweringContext, stmt: &Statement, ret_ty: &Type) {
-    if matches!(ret_ty.kind, TypeKind::Void) {
-        lower_statement(ctx, stmt);
-        return;
+/// Helper to lower a statement and assign the result expression to a target local.
+/// This is used for match branches where each branch result should be assigned to result_local.
+fn lower_to_local(
+    ctx: &mut LoweringContext,
+    stmt: &Statement,
+    target_local: crate::mir::Local,
+    result_ty: &Type,
+) -> Result<(), LoweringError> {
+    if matches!(result_ty.kind, TypeKind::Void) {
+        lower_statement(ctx, stmt)?;
+        return Ok(());
     }
 
     match &stmt.node {
         StatementKind::Expression(expr) => {
-            let operand = lower_expression(ctx, expr);
+            let operand = lower_expression(ctx, expr, None)?;
             ctx.push_statement(crate::mir::Statement {
-                kind: MirStatementKind::Assign(
-                    Place::new(crate::mir::Local(0)),
-                    Rvalue::Use(operand),
-                ),
+                kind: MirStatementKind::Assign(Place::new(target_local), Rvalue::Use(operand)),
+                span: expr.span.clone(),
+            });
+        }
+        StatementKind::Block(stmts) => {
+            ctx.push_scope();
+            let last_meaningful_idx = stmts
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, s)| !matches!(&s.node, StatementKind::Block(inner) if inner.is_empty()))
+                .map(|(i, _)| i);
+
+            for (i, s) in stmts.iter().enumerate() {
+                if Some(i) == last_meaningful_idx {
+                    lower_to_local(ctx, s, target_local, result_ty)?;
+                } else {
+                    lower_statement(ctx, s)?;
+                }
+            }
+            ctx.pop_scope(stmt.span.clone());
+        }
+        _ => lower_statement(ctx, stmt)?,
+    }
+    Ok(())
+}
+
+/// Recursively lowers statements to assign the final expression to `_0` (return place).
+fn lower_as_return(
+    ctx: &mut LoweringContext,
+    stmt: &Statement,
+    ret_ty: &Type,
+) -> Result<(), LoweringError> {
+    if matches!(ret_ty.kind, TypeKind::Void) {
+        lower_statement(ctx, stmt)?;
+        return Ok(());
+    }
+
+    match &stmt.node {
+        StatementKind::Expression(expr) => {
+            let operand = lower_expression(ctx, expr, None)?;
+            let op_ty = operand.ty(&ctx.body);
+
+            let rvalue = if op_ty.kind != ret_ty.kind {
+                Rvalue::Cast(Box::new(operand), ret_ty.clone())
+            } else {
+                Rvalue::Use(operand)
+            };
+
+            ctx.push_statement(crate::mir::Statement {
+                kind: MirStatementKind::Assign(Place::new(crate::mir::Local(0)), rvalue),
                 span: expr.span.clone(),
             });
         }
@@ -2021,15 +2379,15 @@ fn lower_as_return(ctx: &mut LoweringContext, stmt: &Statement, ret_ty: &Type) {
 
             for (i, s) in stmts.iter().enumerate() {
                 if Some(i) == last_meaningful_idx {
-                    lower_as_return(ctx, s, ret_ty);
+                    lower_as_return(ctx, s, ret_ty)?;
                 } else {
-                    lower_statement(ctx, s);
+                    lower_statement(ctx, s)?;
                 }
             }
-            ctx.pop_scope();
+            ctx.pop_scope(stmt.span.clone());
         }
         StatementKind::If(cond, then_stmt, else_stmt, if_type) => {
-            let cond_op = lower_expression(ctx, cond);
+            let cond_op = lower_expression(ctx, cond, None)?;
             let then_bb = ctx.new_basic_block();
             let else_bb = ctx.new_basic_block();
             let join_bb = ctx.new_basic_block();
@@ -2050,7 +2408,7 @@ fn lower_as_return(ctx: &mut LoweringContext, stmt: &Statement, ret_ty: &Type) {
 
             // Lower Then
             ctx.set_current_block(then_bb);
-            lower_as_return(ctx, then_stmt, ret_ty);
+            lower_as_return(ctx, then_stmt, ret_ty)?;
             if ctx.body.basic_blocks[ctx.current_block.0]
                 .terminator
                 .is_none()
@@ -2064,7 +2422,7 @@ fn lower_as_return(ctx: &mut LoweringContext, stmt: &Statement, ret_ty: &Type) {
             // Lower Else
             ctx.set_current_block(else_bb);
             if let Some(else_s) = else_stmt {
-                lower_as_return(ctx, else_s, ret_ty);
+                lower_as_return(ctx, else_s, ret_ty)?;
             }
             if ctx.body.basic_blocks[ctx.current_block.0]
                 .terminator
@@ -2077,6 +2435,7 @@ fn lower_as_return(ctx: &mut LoweringContext, stmt: &Statement, ret_ty: &Type) {
             }
             ctx.set_current_block(join_bb);
         }
-        _ => lower_statement(ctx, stmt),
+        _ => lower_statement(ctx, stmt)?,
     }
+    Ok(())
 }

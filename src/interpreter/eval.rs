@@ -4,6 +4,7 @@
 //! Core evaluation logic for the MIR interpreter.
 
 use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
+use crate::ast::types::TypeKind;
 use crate::error::InterpreterError;
 
 use crate::interpreter::value::Value;
@@ -190,7 +191,26 @@ impl<'a> EvalContext<'a> {
             }
             Rvalue::Ref(_) => Err(InterpreterError::not_implemented("References")),
             Rvalue::Len(_) => Err(InterpreterError::not_implemented("Len intrinsic")),
-            Rvalue::Cast(_, _) => Err(InterpreterError::not_implemented("Casts")),
+            Rvalue::Cast(op, ty) => {
+                let value = self.eval_operand(op)?;
+                // Simple cast logic for interpreter
+                match (value, &ty.kind) {
+                    (Value::Int(v), TypeKind::Float) | (Value::Int(v), TypeKind::F64) => {
+                        Ok(Value::Float(v as f64))
+                    }
+                    (Value::Int(v), TypeKind::F32) => Ok(Value::Float(v as f64)), // Using f64 for all floats in Value?
+                    (Value::Float(v), TypeKind::Int)
+                    | (Value::Float(v), TypeKind::I32)
+                    | (Value::Float(v), TypeKind::I64) => Ok(Value::Int(v as i128)),
+                    (Value::Float(v), TypeKind::I8) | (Value::Float(v), TypeKind::U8) => {
+                        Ok(Value::Int(v as i128))
+                    }
+                    // Int to Int casts (truncation or extension) - Value::Int is i128 so it covers all
+                    (Value::Int(v), _) if ty.is_copy() => Ok(Value::Int(v)),
+                    // String/etc casts?
+                    (v, _) => Ok(v), // Default to identity if not special
+                }
+            }
             Rvalue::Aggregate(_, operands) => {
                 // Primitive implementation: just return the first one if present (tuple checks omitted)
                 if let Some(op) = operands.first() {
@@ -200,6 +220,12 @@ impl<'a> EvalContext<'a> {
                 }
             }
             Rvalue::GpuIntrinsic(_) => Err(InterpreterError::not_implemented("GPU intrinsics")),
+            Rvalue::Phi(_) => {
+                // Interpreter doesn't support SSA form yet
+                Err(InterpreterError::not_implemented(
+                    "Phi nodes in interpreter",
+                ))
+            }
         }
     }
 

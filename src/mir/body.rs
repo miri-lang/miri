@@ -6,7 +6,9 @@ use crate::error::syntax::Span;
 use crate::mir::backend::BackendMetadata;
 use crate::mir::block::BasicBlockData;
 use crate::mir::place::Local;
+use std::collections::HashSet;
 use std::fmt;
+use std::rc::Rc;
 
 /// The body of a function in MIR.
 ///
@@ -37,8 +39,11 @@ pub struct Body {
 impl Body {
     pub fn new(arg_count: usize, span: Span, execution_model: ExecutionModel) -> Self {
         Self {
-            basic_blocks: Vec::new(),
-            local_decls: Vec::new(),
+            // Pre-allocate with reasonable defaults to reduce re-allocations
+            // Basic blocks: entry + return + some branches
+            basic_blocks: Vec::with_capacity(16),
+            // Locals: args + return + some temporaries
+            local_decls: Vec::with_capacity(arg_count + 16),
             arg_count,
             span,
             execution_model,
@@ -58,6 +63,63 @@ impl Body {
             self.execution_model,
             ExecutionModel::GpuKernel | ExecutionModel::GpuDevice
         )
+    }
+
+    /// Validate the consistency of the MIR body.
+    /// Checks:
+    /// 1. All blocks have a terminator.
+    /// 2. All jump targets are valid block indices.
+    pub fn validate(&self) -> Result<(), String> {
+        for (i, block) in self.basic_blocks.iter().enumerate() {
+            // 1. Check terminator
+            if block.terminator.is_none() {
+                return Err(format!("Basic block {} has no terminator", i));
+            }
+
+            // 2. Check targets
+            if let Some(term) = &block.terminator {
+                for target in term.successors() {
+                    if target.0 >= self.basic_blocks.len() {
+                        return Err(format!(
+                            "Basic block {} jumps to invalid target bb{}",
+                            i, target.0
+                        ));
+                    }
+                }
+            }
+        }
+
+        // 3. Check reachability (optional check, for now just ensure internal consistency)
+        // We do not fail validation if blocks are unreachable, as that is valid MIR (dead code).
+        // Use find_unreachable_blocks() if you need to detect them.
+        Ok(())
+    }
+
+    /// Identify unreachable blocks in the CFG.
+    /// Returns a list of block indices that cannot be reached from the entry block (bb0).
+    pub fn find_unreachable_blocks(&self) -> Vec<usize> {
+        if self.basic_blocks.is_empty() {
+            return Vec::new();
+        }
+
+        let mut reachable = HashSet::new();
+        let mut worklist = vec![0];
+        reachable.insert(0);
+
+        while let Some(idx) = worklist.pop() {
+            if let Some(term) = &self.basic_blocks[idx].terminator {
+                for target in term.successors() {
+                    // target.0 is usize
+                    if target.0 < self.basic_blocks.len() && reachable.insert(target.0) {
+                        worklist.push(target.0);
+                    }
+                }
+            }
+        }
+
+        (0..self.basic_blocks.len())
+            .filter(|i| !reachable.contains(i))
+            .collect()
     }
 }
 
@@ -153,7 +215,7 @@ impl fmt::Display for StorageClass {
 pub struct LocalDecl {
     pub ty: Type,
     pub span: Span,
-    pub name: Option<String>,
+    pub name: Option<Rc<String>>,
     pub is_user_variable: bool,
     pub storage_class: StorageClass,
 }

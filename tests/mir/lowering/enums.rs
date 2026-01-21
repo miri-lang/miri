@@ -5,7 +5,8 @@ use crate::mir::utils::{mir_snapshot_contains_test, mir_snapshot_test};
 
 #[test]
 fn test_enum_unit_variant() {
-    // Unit variant is represented as a tuple with just the discriminant (1-indexed due to BTreeMap ordering: Error=0, Ok=1)
+    // Unit variant is represented as Enum aggregate with discriminant
+    // (1-indexed due to BTreeMap ordering: Error=0, Ok=1)
     mir_snapshot_test(
         r#"
 enum Status: Ok, Error
@@ -14,12 +15,12 @@ fn main()
 "#,
         r#"
             let _0: void;
-            let _1: Status;
-            let _2: Status; // x
+            let _1: Status; // x
 
             bb0: {
-                _1 = (const Integer(I32(1)));
-                _2 = _1;
+                StorageLive(_1);
+                _1 = Status.Ok(const Integer(I32(1)));
+                StorageDead(_1);
                 return;
             }
         "#,
@@ -36,8 +37,7 @@ fn main()
 "#,
         &[
             "// x",
-            "Event",
-            "(const Integer(I32(0)), const Integer(I8(5)))",
+            "Event.KeyPress(const Integer(I32(0)), const Integer(I8(5)))",
         ],
     );
 }
@@ -52,7 +52,7 @@ fn main()
 "#,
         &[
             "// x",
-            "Event",
+            "Event.Click(",
             "const Integer(I8(10))",
             "const Integer(I8(20))",
         ],

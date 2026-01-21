@@ -9,6 +9,7 @@
 use crate::mir::body::Body;
 use crate::mir::place::Local;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 /// Represents a lowered lambda function.
 #[derive(Debug, Clone)]
@@ -23,13 +24,10 @@ pub struct LambdaInfo {
 }
 
 /// A variable captured by a lambda/closure.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CapturedVar {
-    /// The name of the variable in the outer scope
-    pub name: String,
-    /// The local index in the lambda's body where this capture is stored
+    pub name: Rc<String>,
     pub lambda_local: Local,
-    /// The local index in the enclosing function
     pub outer_local: Local,
 }
 

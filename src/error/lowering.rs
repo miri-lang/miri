@@ -32,6 +32,17 @@ pub enum LoweringErrorKind {
     UnsupportedLhs {
         desc: String,
     },
+    UnsupportedOperator {
+        op: String,
+    },
+    UnsupportedRangeType,
+    InvalidGpuLaunchArgs {
+        expected: usize,
+        got: usize,
+    },
+    UnsupportedType {
+        desc: String,
+    },
     // Fallback
     Custom {
         message: String,
@@ -86,8 +97,38 @@ impl LoweringErrorKind {
                 message: Some(format!("Unsupported left-hand side: {}", desc)),
                 help: Some("This expression cannot be assigned to.".to_string()),
             },
+            Self::UnsupportedOperator { op } => ErrorProperties {
+                code: "E0207",
+                title: "Unsupported Operator",
+                message: Some(format!("Unsupported operator: {}", op)),
+                help: Some("This operator is not yet supported in MIR lowering.".to_string()),
+            },
+            Self::UnsupportedRangeType => ErrorProperties {
+                code: "E0208",
+                title: "Unsupported Range Type",
+                message: Some("Unsupported range type for loop".to_string()),
+                help: Some("Use exclusive (..) or inclusive (..=) ranges.".to_string()),
+            },
+            Self::InvalidGpuLaunchArgs { expected, got } => ErrorProperties {
+                code: "E0209",
+                title: "Invalid GPU Launch Arguments",
+                message: Some(format!(
+                    "GPU launch expects {} arguments, got {}",
+                    expected, got
+                )),
+                help: Some(
+                    "GPU launch requires exactly 2 arguments: grid and block dimensions."
+                        .to_string(),
+                ),
+            },
+            Self::UnsupportedType { desc } => ErrorProperties {
+                code: "E0210",
+                title: "Unsupported Type",
+                message: Some(format!("Unsupported type: {}", desc)),
+                help: Some("This type is not yet supported in MIR lowering.".to_string()),
+            },
             Self::Custom { message, .. } => ErrorProperties {
-                code: "E0200", // Generic code
+                code: "E0299",
                 title: "Lowering Error",
                 message: Some(message.clone()),
                 help: None,
@@ -145,6 +186,31 @@ impl LoweringError {
     pub fn unsupported_lhs(desc: impl Into<String>, span: Span) -> Self {
         Self::new(
             LoweringErrorKind::UnsupportedLhs { desc: desc.into() },
+            span,
+        )
+    }
+
+    pub fn unsupported_operator(op: impl Into<String>, span: Span) -> Self {
+        Self::new(
+            LoweringErrorKind::UnsupportedOperator { op: op.into() },
+            span,
+        )
+    }
+
+    pub fn unsupported_range_type(span: Span) -> Self {
+        Self::new(LoweringErrorKind::UnsupportedRangeType, span)
+    }
+
+    pub fn invalid_gpu_launch_args(expected: usize, got: usize, span: Span) -> Self {
+        Self::new(
+            LoweringErrorKind::InvalidGpuLaunchArgs { expected, got },
+            span,
+        )
+    }
+
+    pub fn unsupported_type(desc: impl Into<String>, span: Span) -> Self {
+        Self::new(
+            LoweringErrorKind::UnsupportedType { desc: desc.into() },
             span,
         )
     }

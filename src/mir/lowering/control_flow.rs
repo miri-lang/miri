@@ -12,26 +12,29 @@ use crate::mir::{
 };
 
 use super::{lower_expression, lower_statement, LoweringContext};
+use crate::error::lowering::LoweringError;
 
-pub fn lower_break(ctx: &mut LoweringContext, span: &Span) {
+pub fn lower_break(ctx: &mut LoweringContext, span: &Span) -> Result<(), LoweringError> {
     if let Some(target) = ctx.get_break_target() {
         ctx.set_terminator(Terminator::new(
             TerminatorKind::Goto { target },
             span.clone(),
         ));
+        Ok(())
     } else {
-        panic!("Break outside of loop");
+        Err(LoweringError::break_outside_loop(span.clone()))
     }
 }
 
-pub fn lower_continue(ctx: &mut LoweringContext, span: &Span) {
+pub fn lower_continue(ctx: &mut LoweringContext, span: &Span) -> Result<(), LoweringError> {
     if let Some(target) = ctx.get_continue_target() {
         ctx.set_terminator(Terminator::new(
             TerminatorKind::Goto { target },
             span.clone(),
         ));
+        Ok(())
     } else {
-        panic!("Continue outside of loop");
+        Err(LoweringError::continue_outside_loop(span.clone()))
     }
 }
 
@@ -42,8 +45,8 @@ pub fn lower_if(
     then_block: &Statement,
     else_block_opt: &Option<Box<Statement>>,
     if_type: &IfStatementType,
-) {
-    let cond_op = lower_expression(ctx, cond);
+) -> Result<(), LoweringError> {
+    let cond_op = lower_expression(ctx, cond, None)?;
 
     // Create blocks
     let then_bb = ctx.new_basic_block();
@@ -66,7 +69,7 @@ pub fn lower_if(
 
     // Lower then block
     ctx.set_current_block(then_bb);
-    lower_statement(ctx, then_block);
+    lower_statement(ctx, then_block)?;
     // If the block didn't terminate itself (e.g. return), goto join
     if ctx.body.basic_blocks[ctx.current_block.0]
         .terminator
@@ -81,7 +84,7 @@ pub fn lower_if(
     // Lower else block
     ctx.set_current_block(else_bb);
     if let Some(else_stmt) = else_block_opt {
-        lower_statement(ctx, else_stmt);
+        lower_statement(ctx, else_stmt)?;
     }
     if ctx.body.basic_blocks[ctx.current_block.0]
         .terminator
@@ -94,6 +97,7 @@ pub fn lower_if(
     }
 
     ctx.set_current_block(join_bb);
+    Ok(())
 }
 
 pub fn lower_while(
@@ -102,7 +106,7 @@ pub fn lower_while(
     cond: &Expression,
     body: &Statement,
     while_type: &WhileStatementType,
-) {
+) -> Result<(), LoweringError> {
     // While/Until: Header (cond) -> Body -> Header
     // DoWhile/DoUntil: Body -> Header (cond) -> Body
     // Forever: Body -> Body
@@ -119,7 +123,7 @@ pub fn lower_while(
             ));
 
             ctx.set_current_block(header_bb);
-            let cond_op = lower_expression(ctx, cond);
+            let cond_op = lower_expression(ctx, cond, None)?;
             let (target_val, other_target) = match while_type {
                 WhileStatementType::While => (1, exit_bb),
                 WhileStatementType::Until => (0, exit_bb),
@@ -137,7 +141,7 @@ pub fn lower_while(
 
             ctx.enter_loop(exit_bb, header_bb);
             ctx.set_current_block(body_bb);
-            lower_statement(ctx, body);
+            lower_statement(ctx, body)?;
             if ctx.body.basic_blocks[ctx.current_block.0]
                 .terminator
                 .is_none()
@@ -163,7 +167,7 @@ pub fn lower_while(
 
             ctx.enter_loop(exit_bb, cond_bb);
             ctx.set_current_block(body_bb);
-            lower_statement(ctx, body);
+            lower_statement(ctx, body)?;
             if ctx.body.basic_blocks[ctx.current_block.0]
                 .terminator
                 .is_none()
@@ -176,7 +180,7 @@ pub fn lower_while(
             ctx.exit_loop();
 
             ctx.set_current_block(cond_bb);
-            let cond_op = lower_expression(ctx, cond);
+            let cond_op = lower_expression(ctx, cond, None)?;
             let (target_val, other_target) = match while_type {
                 WhileStatementType::DoWhile => (1, exit_bb),
                 WhileStatementType::DoUntil => (0, exit_bb),
@@ -205,7 +209,7 @@ pub fn lower_while(
 
             ctx.enter_loop(exit_bb, body_bb);
             ctx.set_current_block(body_bb);
-            lower_statement(ctx, body);
+            lower_statement(ctx, body)?;
             if ctx.body.basic_blocks[ctx.current_block.0]
                 .terminator
                 .is_none()
@@ -221,6 +225,7 @@ pub fn lower_while(
             ctx.set_current_block(exit_bb);
         }
     }
+    Ok(())
 }
 
 /// Helper to lower for-loops over iterable collections (lists, arrays).
@@ -231,7 +236,7 @@ fn lower_for_over_iterable(
     decls: &[VariableDeclaration],
     iterable: &Expression,
     body: &Statement,
-) {
+) -> Result<(), LoweringError> {
     // For now, use a simple approach: just run the interpreter for this
     // since proper list iteration requires more complex MIR patterns.
     // We'll lower it as: evaluate list, iterate with index.
@@ -253,10 +258,13 @@ fn lower_for_over_iterable(
         Type::new(TypeKind::Int, span.clone())
     };
 
+    // In lower_for_over_iterable, we want to keep the name if it's user defined.
+    // The ctx.push_local logic already handles is_release stripping if we pass the name.
+    // However, push_local takes String, and ctx handles the logic.
     let loop_var = ctx.push_local(decl.name.clone(), elem_ty, span.clone());
 
     // Lower the iterable
-    let list_op = lower_expression(ctx, iterable);
+    let list_op = lower_expression(ctx, iterable, None)?;
     let list_ty = if let Some(ty) = ctx.type_checker.get_type(iterable.id) {
         ty.clone()
     } else {
@@ -342,7 +350,7 @@ fn lower_for_over_iterable(
         span: span.clone(),
     });
 
-    lower_statement(ctx, body);
+    lower_statement(ctx, body)?;
 
     if ctx.body.basic_blocks[ctx.current_block.0]
         .terminator
@@ -381,8 +389,9 @@ fn lower_for_over_iterable(
         span.clone(),
     ));
 
-    ctx.pop_scope();
+    ctx.pop_scope(span.clone());
     ctx.set_current_block(exit_bb);
+    Ok(())
 }
 
 pub fn lower_for(
@@ -391,7 +400,7 @@ pub fn lower_for(
     decls: &[VariableDeclaration],
     iterable: &Expression,
     body: &Statement,
-) {
+) -> Result<(), LoweringError> {
     // Support for: for i in start..end (range) AND for i in [items] (list)
 
     // Check for IterableObject (e.g., for i in [1,2,3] parsed as Range with IterableObject type)
@@ -422,8 +431,9 @@ pub fn lower_for(
         // Assumed single declaration for now
         let decl = &decls[0];
         let loop_var_ty = Type::new(TypeKind::Int, span.clone()); // Assuming Int for range
+                                                                  // Provide the name so push_local can decide to strip it or not based on is_release
         let loop_var = ctx.push_local(decl.name.clone(), loop_var_ty.clone(), span.clone());
-        let start_op = lower_expression(ctx, start);
+        let start_op = lower_expression(ctx, start, None)?;
 
         ctx.push_statement(crate::mir::Statement {
             kind: StatementKind::Assign(Place::new(loop_var), Rvalue::Use(start_op)),
@@ -442,14 +452,14 @@ pub fn lower_for(
 
         // 2. Header: Check condition
         ctx.set_current_block(header_bb);
-        let end_op = lower_expression(ctx, end);
+        let end_op = lower_expression(ctx, end, None)?;
         let current_val = Operand::Copy(Place::new(loop_var));
 
         // Compare: i < end or i <= end
         let bin_op = match range_type {
             RangeExpressionType::Exclusive => BinOp::Lt,
             RangeExpressionType::Inclusive => BinOp::Le,
-            _ => panic!("Unsupported range type for loop"),
+            _ => return Err(LoweringError::unsupported_range_type(span.clone())),
         };
 
         let bool_ty = Type::new(TypeKind::Boolean, span.clone());
@@ -475,7 +485,7 @@ pub fn lower_for(
         // 3. Body
         ctx.enter_loop(exit_bb, increment_bb); // Continue goes to increment
         ctx.set_current_block(body_bb);
-        lower_statement(ctx, body);
+        lower_statement(ctx, body)?;
 
         if ctx.body.basic_blocks[ctx.current_block.0]
             .terminator
@@ -515,20 +525,25 @@ pub fn lower_for(
             span.clone(),
         ));
 
-        ctx.pop_scope();
+        ctx.pop_scope(span.clone());
         ctx.set_current_block(exit_bb);
     } else {
-        panic!("For loop only supports Range or List iterables for now");
+        return Err(LoweringError::unsupported_expression(
+            "For loop only supports Range or List iterables".to_string(),
+            span.clone(),
+        ));
     }
+    Ok(())
 }
 
 pub fn lower_call(
     ctx: &mut LoweringContext,
     span: &Span,
-    call_expr_id: usize, // New argument
+    call_expr_id: usize,
     func: &Expression,
     args: &[Expression],
-) -> Operand {
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
     // Check for kernel launch: kernel_handle.launch(grid, block)
     if let ExpressionKind::Member(obj, prop) = &func.node {
         if let ExpressionKind::Identifier(name, _) = &prop.node {
@@ -542,21 +557,37 @@ pub fn lower_call(
                     if let TypeKind::Custom(type_name, _) = &ty.kind {
                         if type_name == "Kernel" {
                             // This is a GPU kernel launch!
-                            let kernel_op = lower_expression(ctx, obj);
+                            let kernel_op = lower_expression(ctx, obj, None)?;
 
                             if args.len() != 2 {
-                                panic!("GPU launch expects exactly 2 arguments (grid, block)");
+                                return Err(LoweringError::invalid_gpu_launch_args(
+                                    2,
+                                    args.len(),
+                                    span.clone(),
+                                ));
                             }
 
-                            let grid_op = lower_expression(ctx, &args[0]);
-                            let block_op = lower_expression(ctx, &args[1]);
+                            let grid_op = lower_expression(ctx, &args[0], None)?;
+                            let block_op = lower_expression(ctx, &args[1], None)?;
+
+                            // GPU Launch doesn't really have a return value in the traditional sense,
+                            // but if dest is provided (unlikely for launch statement), we can use it or ignore.
+                            // For now, let's keep existing behavior for launch, ignoring dest or creating a dummy one.
+                            // Assuming launch returns void.
 
                             let mut return_ty = Type::new(TypeKind::Void, span.clone());
                             if let Some(ty) = ctx.type_checker.get_type(call_expr_id) {
                                 return_ty = ty.clone();
                             }
 
-                            let destination = ctx.push_temp(return_ty, span.clone());
+                            // Use provided dest or create temp
+                            let (destination, op) = if let Some(d) = dest {
+                                (d.clone(), Operand::Copy(d))
+                            } else {
+                                let temp = ctx.push_temp(return_ty, span.clone());
+                                let p = Place::new(temp);
+                                (p.clone(), Operand::Copy(p))
+                            };
                             let target_bb = ctx.new_basic_block();
 
                             ctx.set_terminator(Terminator::new(
@@ -564,7 +595,7 @@ pub fn lower_call(
                                     kernel: kernel_op,
                                     grid: grid_op,
                                     block: block_op,
-                                    destination: Place::new(destination),
+                                    destination,
                                     target: Some(target_bb),
                                 },
                                 span.clone(),
@@ -572,7 +603,7 @@ pub fn lower_call(
 
                             ctx.set_current_block(target_bb);
 
-                            return Operand::Copy(Place::new(destination));
+                            return Ok(op);
                         }
                     }
                 }
@@ -580,13 +611,52 @@ pub fn lower_call(
         }
     }
 
-    let func_op = lower_expression(ctx, func);
-    let arg_ops: Vec<Operand> = args.iter().map(|arg| lower_expression(ctx, arg)).collect();
+    let func_op = lower_expression(ctx, func, None)?;
+
+    // Try to get function type to check parameters
+    let func_ty = ctx.type_checker.get_type(func.id);
+    let param_types = if let Some(ty) = func_ty {
+        if let TypeKind::Function(_, params, _) = &ty.kind {
+            Some(params.clone())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let mut arg_ops = Vec::new();
+    for (i, arg) in args.iter().enumerate() {
+        let op = lower_expression(ctx, arg, None)?;
+
+        let op = if let Some(params) = &param_types {
+            if i < params.len() {
+                let target_ty = super::resolve_type(ctx.type_checker, &params[i].typ);
+
+                let op_ty = op.ty(&ctx.body);
+                if op_ty.kind != target_ty.kind {
+                    let temp = ctx.push_temp(target_ty.clone(), arg.span.clone());
+                    ctx.push_statement(crate::mir::Statement {
+                        kind: StatementKind::Assign(
+                            Place::new(temp),
+                            Rvalue::Cast(Box::new(op), target_ty.clone()),
+                        ),
+                        span: arg.span.clone(),
+                    });
+                    Operand::Copy(Place::new(temp))
+                } else {
+                    op
+                }
+            } else {
+                op
+            }
+        } else {
+            op
+        };
+        arg_ops.push(op);
+    }
 
     // Determine return type (void for now, or from type checker)
-    // In a real scenario, we'd lookup the function signature.
-    // For now, let's assume Int/Void based on usage or just Void if unknown.
-    // Better: check if function is known in TypeChecker
     let mut return_ty = Type::new(TypeKind::Void, span.clone());
 
     // Attempt to resolve return type from TypeChecker using the Call expression ID
@@ -594,14 +664,23 @@ pub fn lower_call(
         return_ty = ty.clone();
     }
 
-    let destination = ctx.push_temp(return_ty, span.clone());
+    // Use provided dest or create temp
+    let (destination, op) = if let Some(d) = dest {
+        // We might want to verify types match, but we trust caller for DPS optimization
+        (d.clone(), Operand::Copy(d))
+    } else {
+        let temp = ctx.push_temp(return_ty, span.clone());
+        let p = Place::new(temp);
+        (p.clone(), Operand::Copy(p))
+    };
+
     let target_bb = ctx.new_basic_block();
 
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
             func: func_op,
             args: arg_ops,
-            destination: Place::new(destination),
+            destination,
             target: Some(target_bb),
         },
         span.clone(),
@@ -609,5 +688,5 @@ pub fn lower_call(
 
     ctx.set_current_block(target_bb);
 
-    Operand::Copy(Place::new(destination))
+    Ok(op)
 }

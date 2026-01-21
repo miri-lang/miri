@@ -5,6 +5,7 @@ pub mod aggregate;
 pub mod binary;
 pub mod block;
 pub mod call;
+pub mod casts;
 pub mod collections;
 pub mod enums;
 pub mod function;

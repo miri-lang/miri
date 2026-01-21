@@ -12,7 +12,9 @@ fn test_lower_variable_declaration() {
             let _1: int; // x
 
             bb0: {
+                StorageLive(_1);
                 _1 = const Integer(I8(10));
+                StorageDead(_1);
                 return;
             }
         "#,
@@ -36,10 +38,14 @@ fn main()
             let _2: int; // y
 
             bb0: {
+                StorageLive(_1);
                 _1 = const Integer(I8(1));
+                StorageLive(_2);
                 _2 = _1;
                 _1 = const Integer(I8(2));
                 _0 = const Integer(I8(2));
+                StorageDead(_2);
+                StorageDead(_1);
                 return;
             }
         "#,
@@ -62,9 +68,15 @@ fn main()
             let _3: int; // c
 
             bb0: {
+                StorageLive(_1);
                 _1 = const Integer(I8(1));
+                StorageLive(_2);
                 _2 = const Integer(I8(2));
+                StorageLive(_3);
                 _3 = const Integer(I8(3));
+                StorageDead(_3);
+                StorageDead(_2);
+                StorageDead(_1);
                 return;
             }
         "#,
@@ -83,13 +95,15 @@ fn main()
         r#"
             let _0: void;
             let _1: int; // x
-            let _2: int;
-            let _3: int; // y
+            let _2: int; // y
 
             bb0: {
+                StorageLive(_1);
                 _1 = const Integer(I8(5));
+                StorageLive(_2);
                 _2 = Add(_1, const Integer(I8(1)));
-                _3 = _2;
+                StorageDead(_2);
+                StorageDead(_1);
                 return;
             }
         "#,

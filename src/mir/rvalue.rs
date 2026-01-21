@@ -22,6 +22,10 @@ pub enum AggregateKind {
     /// A map, e.g., `{"a": 1, "b": 2}` - key-value pairs
     /// Operands alternate: key1, val1, key2, val2, ...
     Map,
+    /// An enum variant, e.g., `Color.Red("#ff0000")` - tagged union
+    /// First string is the enum type name, second is the variant name
+    /// First operand is the discriminant, followed by associated values
+    Enum(String, String),
 }
 
 /// Right-hand value: the result of a computation.
@@ -51,6 +55,10 @@ pub enum Rvalue {
     /// - Map: operands alternate key1, val1, key2, val2, ...
     /// - Struct: operands are field values in declaration order
     Aggregate(AggregateKind, Vec<Operand>),
+    /// SSA Phi node: merges values from predecessor blocks.
+    /// Accesses predecessor blocks by index (usize).
+    /// Vector of (value, predecessor_block_index).
+    Phi(Vec<(Operand, crate::mir::BasicBlock)>),
 }
 
 impl fmt::Display for Rvalue {
@@ -116,7 +124,27 @@ impl fmt::Display for Rvalue {
                     }
                     write!(f, " }}")
                 }
+                AggregateKind::Enum(type_name, variant_name) => {
+                    write!(f, "{}.{}(", type_name, variant_name)?;
+                    for (i, op) in ops.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", op)?;
+                    }
+                    write!(f, ")")
+                }
             },
+            Rvalue::Phi(args) => {
+                write!(f, "phi(")?;
+                for (i, (op, block)) in args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "[ {}, {} ]", op, block)?;
+                }
+                write!(f, ")")
+            }
         }
     }
 }

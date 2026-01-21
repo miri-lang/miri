@@ -17,6 +17,13 @@ impl Type {
     pub fn new(kind: TypeKind, span: Span) -> Self {
         Self { kind, span }
     }
+
+    /// Returns true if this type has Copy semantics (can be duplicated without invalidating source).
+    /// Primitive types (integers, floats, booleans, symbols) are Copy.
+    /// Complex types (strings, lists, maps, custom types) require Move.
+    pub fn is_copy(&self) -> bool {
+        self.kind.is_copy()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -99,6 +106,52 @@ pub enum TypeDeclarationKind {
     Extends,
     Implements,
     Includes,
+}
+
+impl TypeKind {
+    /// Returns true if this type kind has Copy semantics.
+    /// Primitive types (integers, floats, booleans, symbols, void) are Copy.
+    /// Complex types (strings, lists, maps, custom types) require Move.
+    pub fn is_copy(&self) -> bool {
+        match self {
+            // Primitives are Copy
+            TypeKind::Int
+            | TypeKind::I8
+            | TypeKind::I16
+            | TypeKind::I32
+            | TypeKind::I64
+            | TypeKind::I128
+            | TypeKind::U8
+            | TypeKind::U16
+            | TypeKind::U32
+            | TypeKind::U64
+            | TypeKind::U128
+            | TypeKind::Float
+            | TypeKind::F32
+            | TypeKind::F64
+            | TypeKind::Boolean
+            | TypeKind::Symbol
+            | TypeKind::Void
+            | TypeKind::Error => true,
+            // Complex types require Move
+            TypeKind::String
+            | TypeKind::List(_)
+            | TypeKind::Array(_, _)
+            | TypeKind::Map(_, _)
+            | TypeKind::Set(_)
+            | TypeKind::Result(_, _)
+            | TypeKind::Future(_)
+            | TypeKind::Function(_, _, _)
+            | TypeKind::Generic(_, _, _)
+            | TypeKind::Custom(_, _)
+            | TypeKind::Meta(_) => false,
+            // Nullable: inherits from inner type
+            TypeKind::Nullable(inner) => inner.kind.is_copy(),
+            // Tuple: Check that all elements are Copy (simplified - we'd need to resolve types)
+            // For now, treat tuples as Copy since lowering doesn't track element types here
+            TypeKind::Tuple(_) => true,
+        }
+    }
 }
 
 impl fmt::Display for Type {

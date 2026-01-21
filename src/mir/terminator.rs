@@ -17,6 +17,56 @@ impl Terminator {
     pub fn new(kind: TerminatorKind, span: Span) -> Self {
         Self { kind, span }
     }
+
+    pub fn successors(&self) -> Vec<BasicBlock> {
+        match &self.kind {
+            TerminatorKind::Goto { target } => vec![*target],
+            TerminatorKind::SwitchInt {
+                targets, otherwise, ..
+            } => {
+                let mut succs = Vec::with_capacity(targets.len() + 1);
+                for (_, target) in targets {
+                    succs.push(*target);
+                }
+                succs.push(*otherwise);
+                succs
+            }
+            TerminatorKind::Return | TerminatorKind::Unreachable => vec![],
+            TerminatorKind::Call { target, .. } | TerminatorKind::GpuLaunch { target, .. } => {
+                target.iter().copied().collect()
+            }
+        }
+    }
+
+    pub fn replace_successor(&mut self, old: BasicBlock, new: BasicBlock) {
+        match &mut self.kind {
+            TerminatorKind::Goto { target } => {
+                if *target == old {
+                    *target = new;
+                }
+            }
+            TerminatorKind::SwitchInt {
+                targets, otherwise, ..
+            } => {
+                for (_, target) in targets {
+                    if *target == old {
+                        *target = new;
+                    }
+                }
+                if *otherwise == old {
+                    *otherwise = new;
+                }
+            }
+            TerminatorKind::Call { target, .. } | TerminatorKind::GpuLaunch { target, .. } => {
+                if let Some(t) = target {
+                    if *t == old {
+                        *t = new;
+                    }
+                }
+            }
+            TerminatorKind::Return | TerminatorKind::Unreachable => {}
+        }
+    }
 }
 
 impl fmt::Display for Terminator {

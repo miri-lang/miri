@@ -234,9 +234,12 @@ impl FunctionTranslator {
                 }
             }
 
-            Rvalue::Cast(_operand, _ty) => {
-                // TODO: Implement casts
-                Err("Cast operations not yet implemented".to_string())
+            Rvalue::Cast(operand, ty) => {
+                let value = Self::translate_operand(builder, operand, locals)?;
+                let dest_ty = translate_type(ty);
+                let src_ty = builder.func.dfg.value_type(value);
+
+                Self::cast_value(builder, value, src_ty, dest_ty)
             }
 
             Rvalue::Len(_place) => {
@@ -249,6 +252,11 @@ impl FunctionTranslator {
 
             Rvalue::GpuIntrinsic(_intrinsic) => {
                 Err("GPU intrinsics not supported in CPU backend".to_string())
+            }
+
+            Rvalue::Phi(_) => {
+                // Phi nodes should be eliminated before code generation
+                panic!("Encountered Phi node during code generation. Run SSA destruction first.");
             }
         }
     }

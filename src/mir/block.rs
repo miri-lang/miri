@@ -23,7 +23,8 @@ pub struct BasicBlockData {
 impl BasicBlockData {
     pub fn new(terminator: Option<Terminator>) -> Self {
         Self {
-            statements: Vec::new(),
+            // Most basic blocks have a few statements
+            statements: Vec::with_capacity(8),
             terminator,
             is_cleanup: false,
         }

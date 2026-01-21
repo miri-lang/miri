@@ -146,7 +146,7 @@ impl Pipeline {
     /// Interpret the source code directly without compilation.
     pub fn interpret(&self, source: &str) -> Result<crate::interpreter::Value, CompilerError> {
         let pipeline_result = self.frontend_script(source)?;
-        let mir_bodies = self.lower_to_mir(&pipeline_result)?;
+        let mir_bodies = self.lower_to_mir(&pipeline_result, false)?;
 
         let mut interpreter = crate::interpreter::Interpreter::new();
         interpreter.load_functions(mir_bodies);
@@ -195,7 +195,7 @@ impl Pipeline {
         let pipeline_result = self.frontend_script(source)?;
 
         // Lower AST to MIR
-        let mir_bodies = self.lower_to_mir(&pipeline_result)?;
+        let mir_bodies = self.lower_to_mir(&pipeline_result, opts.release)?;
 
         // Compile via selected backend
         let object_bytes = match opts.cpu_backend {
@@ -285,12 +285,13 @@ impl Pipeline {
     fn lower_to_mir(
         &self,
         result: &PipelineResult,
+        is_release: bool,
     ) -> Result<Vec<(String, mir::Body)>, CompilerError> {
         let mut bodies = Vec::new();
 
         for stmt in &result.ast.body {
             if let StatementKind::FunctionDeclaration(name, _, _, _, _, _) = &stmt.node {
-                let body = mir::lowering::lower_function(stmt, &result.type_checker)
+                let body = mir::lowering::lower_function(stmt, &result.type_checker, is_release)
                     .map_err(|e| CompilerError::Codegen(format!("MIR lowering failed: {}", e)))?;
                 bodies.push((name.clone(), body));
             }
@@ -308,7 +309,7 @@ impl Pipeline {
     /// Get MIR as a string for debugging purposes.
     pub fn get_mir(&self, source: &str) -> Result<String, CompilerError> {
         let pipeline_result = self.frontend_script(source)?;
-        let mir_bodies = self.lower_to_mir(&pipeline_result)?;
+        let mir_bodies = self.lower_to_mir(&pipeline_result, false)?;
 
         let mut output = String::new();
         for (name, body) in &mir_bodies {

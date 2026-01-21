@@ -27,6 +27,7 @@ fn main()
             let _5: int; // y
 
             bb0: {
+                StorageLive(_1);
                 _1 = const Integer(I8(0));
                 goto bb1;
             }
@@ -44,7 +45,10 @@ fn main()
             }
 
             bb3: {
+                StorageLive(_5);
                 _5 = const Integer(I8(1));
+                StorageDead(_5);
+                StorageDead(_1);
                 return;
             }
         "#,

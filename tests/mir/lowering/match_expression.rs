@@ -6,6 +6,7 @@ use crate::mir::utils::{mir_snapshot_contains_test, mir_snapshot_test};
 #[test]
 fn test_match_literal_patterns() {
     // Match generates a switchInt with targets for each literal pattern
+    // Each branch assigns its result directly to the result local (_3)
     mir_snapshot_test(
         r#"
 fn main()
@@ -20,12 +21,10 @@ fn main()
             let _1: int; // x
             let _2: int;
             let _3: string;
-            let _4: string;
-            let _5: string;
-            let _6: int; // _
-            let _7: string;
+            let _4: int; // _
 
             bb0: {
+                StorageLive(_1);
                 _1 = const Integer(I8(2));
                 _2 = _1;
                 switchInt(_2) -> [1: bb2, 2: bb3, otherwise: bb4];
@@ -33,22 +32,25 @@ fn main()
 
             bb1: {
                 _0 = _3;
+                StorageDead(_1);
                 return;
             }
 
             bb2: {
-                _4 = const String("one");
+                _3 = const String("one");
                 goto bb1;
             }
 
             bb3: {
-                _5 = const String("two");
+                _3 = const String("two");
                 goto bb1;
             }
 
             bb4: {
-                _6 = _2;
-                _7 = const String("other");
+                StorageLive(_4);
+                _4 = _2;
+                _3 = const String("other");
+                StorageDead(_4);
                 goto bb1;
             }
         "#,

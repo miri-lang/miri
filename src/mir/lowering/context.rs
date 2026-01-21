@@ -3,24 +3,26 @@ use crate::error::syntax::Span;
 use crate::mir::declaration::Declaration;
 use crate::mir::lambda::LambdaInfo;
 use crate::mir::module::Import;
-use crate::mir::place::Local;
-use crate::mir::{BasicBlock, BasicBlockData, Body, LocalDecl, Terminator};
+use crate::mir::place::{Local, Place};
+use crate::mir::{BasicBlock, BasicBlockData, Body, LocalDecl, StatementKind, Terminator};
 use std::collections::HashMap;
+use std::rc::Rc;
 
 /// Tracks variables introduced in a single scope level.
 /// When a scope is exited, these bindings are removed from the variable_map,
 /// and any shadowed variables are restored.
 #[derive(Debug, Clone)]
 pub struct ScopeData {
-    pub introduced: Vec<String>,
-    pub shadowed: HashMap<String, Local>,
+    pub introduced: Vec<Rc<String>>,
+    pub shadowed: HashMap<Rc<String>, Local>,
 }
 
 impl ScopeData {
     pub fn new() -> Self {
         Self {
-            introduced: Vec::new(),
-            shadowed: HashMap::new(),
+            // Most scopes introduce only a few variables
+            introduced: Vec::with_capacity(4),
+            shadowed: HashMap::with_capacity(4),
         }
     }
 }
@@ -39,11 +41,13 @@ pub struct LoopContext {
 
 pub struct LoweringContext<'a> {
     pub body: Body,
-    pub variable_map: HashMap<String, Local>, // Map variable names to locals
+    pub variable_map: HashMap<Rc<String>, Local>, // Map variable names to locals
     pub current_block: BasicBlock,
     pub type_checker: &'a crate::type_checker::TypeChecker,
     /// Stack of scopes for tracking variable visibility
     pub scope_stack: Vec<ScopeData>,
+    /// Pool of reusable scopes to reduce allocations
+    pub scope_pool: Vec<ScopeData>,
     /// Stack of loops for tracking break/continue targets
     pub loop_stack: Vec<LoopContext>,
     /// Lambda bodies collected during lowering
@@ -52,10 +56,16 @@ pub struct LoweringContext<'a> {
     pub declarations: Vec<Declaration>,
     /// Imports collected during lowering
     pub imports: Vec<Import>,
+    /// Whether this is a release build (e.g. strip debug names)
+    pub is_release: bool,
 }
 
 impl<'a> LoweringContext<'a> {
-    pub fn new(body: Body, type_checker: &'a crate::type_checker::TypeChecker) -> Self {
+    pub fn new(
+        body: Body,
+        type_checker: &'a crate::type_checker::TypeChecker,
+        is_release: bool,
+    ) -> Self {
         let mut ctx = Self {
             body,
             variable_map: HashMap::new(),
@@ -63,10 +73,12 @@ impl<'a> LoweringContext<'a> {
             type_checker,
             // Start with a root scope
             scope_stack: vec![ScopeData::new()],
+            scope_pool: Vec::with_capacity(8), // Pool for reusing scopes
             loop_stack: Vec::new(),
             lambda_bodies: Vec::new(),
             declarations: Vec::new(),
             imports: Vec::new(),
+            is_release,
         };
         // Create the first basic block
         ctx.body.basic_blocks.push(BasicBlockData::new(None));
@@ -101,22 +113,40 @@ impl<'a> LoweringContext<'a> {
     /// Enter a new scope. Variables declared in this scope will be tracked
     /// and removed when pop_scope is called.
     pub fn push_scope(&mut self) {
-        self.scope_stack.push(ScopeData::new());
+        if let Some(scope) = self.scope_pool.pop() {
+            // Reused scope should be empty but have capacity
+            self.scope_stack.push(scope);
+        } else {
+            self.scope_stack.push(ScopeData::new());
+        }
     }
 
     /// Exit the current scope. Removes variables introduced in this scope
     /// and restores any shadowed variables.
-    pub fn pop_scope(&mut self) {
-        if let Some(scope) = self.scope_stack.pop() {
+    pub fn pop_scope(&mut self, span: Span) {
+        if let Some(mut scope) = self.scope_stack.pop() {
             // Remove variables introduced in this scope
-            for name in &scope.introduced {
-                self.variable_map.remove(name);
+            for name in scope.introduced.iter().rev() {
+                if let Some(local) = self.variable_map.remove(name) {
+                    // Emit StorageDead for variables leaving scope
+                    self.push_statement(crate::mir::Statement {
+                        kind: StatementKind::StorageDead(Place::new(local)),
+                        span: span.clone(),
+                    });
+                }
             }
 
             // Restore shadowed variables
-            for (name, local) in scope.shadowed {
+            for (name, local) in scope.shadowed.drain() {
                 self.variable_map.insert(name, local);
             }
+
+            // Clear introduced for reuse (without shrinking capacity)
+            scope.introduced.clear();
+            // shadowed is already cleared by drain()
+
+            // Return to pool
+            self.scope_pool.push(scope);
         }
     }
 
@@ -126,21 +156,33 @@ impl<'a> LoweringContext<'a> {
     }
 
     pub fn push_local(&mut self, name: String, ty: Type, span: Span) -> Local {
-        let mut decl = LocalDecl::new(ty, span);
-        decl.name = Some(name.clone());
+        let mut decl = LocalDecl::new(ty, span.clone());
+        let name_rc = Rc::new(name);
+
+        if !self.is_release {
+            decl.name = Some(name_rc.clone());
+        }
+
         decl.is_user_variable = true;
         let local = self.body.new_local(decl);
 
         // Track in current scope
         if let Some(scope) = self.scope_stack.last_mut() {
             // If this name already exists, save it as shadowed
-            if let Some(old_local) = self.variable_map.get(&name) {
-                scope.shadowed.insert(name.clone(), *old_local);
+            if let Some(old_local) = self.variable_map.get(&name_rc) {
+                scope.shadowed.insert(name_rc.clone(), *old_local);
             }
-            scope.introduced.push(name.clone());
+            scope.introduced.push(name_rc.clone());
         }
 
-        self.variable_map.insert(name, local);
+        self.variable_map.insert(name_rc, local);
+
+        // Emit StorageLive for the new local
+        self.push_statement(crate::mir::Statement {
+            kind: StatementKind::StorageLive(Place::new(local)),
+            span,
+        });
+
         local
     }
 

@@ -9,12 +9,12 @@ fn test_tuple_literal() {
         "fn main(): let t = (1, 2, 3)",
         r#"
             let _0: void;
-            let _1: tuple(int, int, int);
-            let _2: tuple(int, int, int); // t
+            let _1: tuple(int, int, int); // t
 
             bb0: {
+                StorageLive(_1);
                 _1 = (const Integer(I8(1)), const Integer(I8(2)), const Integer(I8(3)));
-                _2 = _1;
+                StorageDead(_1);
                 return;
             }
         "#,
@@ -27,12 +27,12 @@ fn test_empty_tuple() {
         "fn main(): let unit = ()",
         r#"
             let _0: void;
-            let _1: tuple();
-            let _2: tuple(); // unit
+            let _1: tuple(); // unit
 
             bb0: {
+                StorageLive(_1);
                 _1 = ();
-                _2 = _1;
+                StorageDead(_1);
                 return;
             }
         "#,
@@ -45,12 +45,12 @@ fn test_list_literal() {
         "fn main(): let l = [1, 2, 3]",
         r#"
             let _0: void;
-            let _1: list(int);
-            let _2: list(int); // l
+            let _1: list(int); // l
 
             bb0: {
+                StorageLive(_1);
                 _1 = [const Integer(I8(1)), const Integer(I8(2)), const Integer(I8(3))];
-                _2 = _1;
+                StorageDead(_1);
                 return;
             }
         "#,
@@ -95,7 +95,7 @@ fn main()
     let l = [10, 20, 30]
     let x = l[1]
 "#,
-        &["// l", "// x", "_2[_3]"],
+        &["// l", "// x", "_1[_3]"],
     );
 }
 
@@ -107,7 +107,7 @@ fn main()
     let t = (1, 2, 3)
     let x = t[0]
 "#,
-        &["// t", "// x", "_2[_3]"],
+        &["// t", "// x", "_1[_3]"],
     );
 }
 
@@ -131,12 +131,12 @@ fn test_single_element_tuple() {
         "fn main(): let t = (42,)",
         r#"
             let _0: void;
-            let _1: tuple(int);
-            let _2: tuple(int); // t
+            let _1: tuple(int); // t
 
             bb0: {
+                StorageLive(_1);
                 _1 = (const Integer(I8(42)));
-                _2 = _1;
+                StorageDead(_1);
                 return;
             }
         "#,

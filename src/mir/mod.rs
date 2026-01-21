@@ -13,6 +13,7 @@
 //! MIR is designed to be lowered to multiple backends including LLVM, Cranelift,
 //! CUDA/PTX, Metal, and SPIR-V.
 
+pub mod analysis;
 pub mod backend;
 pub mod block;
 pub mod body;
@@ -23,6 +24,7 @@ pub mod module;
 pub mod operand;
 pub mod place;
 pub mod rvalue;
+pub mod ssa;
 pub mod statement;
 pub mod terminator;
 pub mod visitor;

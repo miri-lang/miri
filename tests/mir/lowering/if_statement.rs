@@ -25,12 +25,15 @@ fn main()
             let _3: int; // z
 
             bb0: {
+                StorageLive(_1);
                 _1 = const Integer(I8(1));
                 switchInt(const Boolean(true)) -> [1: bb1, otherwise: bb2];
             }
 
             bb1: {
+                StorageLive(_2);
                 _2 = const Integer(I8(2));
+                StorageDead(_2);
                 goto bb3;
             }
 
@@ -39,7 +42,10 @@ fn main()
             }
 
             bb3: {
+                StorageLive(_3);
                 _3 = const Integer(I8(3));
+                StorageDead(_3);
+                StorageDead(_1);
                 return;
             }
         "#,
