@@ -200,10 +200,9 @@ pub fn lower_expression(
                         let obj_operand = lower_expression(ctx, obj, None)?;
 
                         // Get the object's type to find field index
-                        let obj_ty = ctx
-                            .type_checker
-                            .get_type(obj.id)
-                            .expect("Object type not found");
+                        let obj_ty = ctx.type_checker.get_type(obj.id).ok_or_else(|| {
+                            LoweringError::type_not_found(obj.id, obj.span.clone())
+                        })?;
 
                         if let TypeKind::Custom(struct_name, _) = &obj_ty.kind {
                             if let Some(crate::type_checker::context::TypeDefinition::Struct(def)) =

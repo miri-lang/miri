@@ -1,6 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+//! Visitor pattern for MIR traversal.
+//!
+//! This module provides two visitor traits for traversing MIR structures:
+//!
+//! - [`Visitor`]: Immutable traversal for analysis passes
+//! - [`MutVisitor`]: Mutable traversal for transformation passes
+//!
+//! Both traits provide default implementations that traverse the entire MIR structure.
+//! Override specific methods to capture information or make modifications.
+
 use crate::mir::block::{BasicBlock, BasicBlockData};
 use crate::mir::body::{Body, LocalDecl};
 use crate::mir::operand::{Constant, Operand};
@@ -9,7 +19,41 @@ use crate::mir::rvalue::Rvalue;
 use crate::mir::statement::{Statement, StatementKind};
 use crate::mir::terminator::{Terminator, TerminatorKind};
 
-/// A visitor trait for traversing the MIR.
+/// A visitor trait for **immutable** traversal of MIR.
+///
+/// This trait follows the Visitor design pattern, providing default implementations
+/// that recursively traverse the entire MIR structure. Override specific methods to
+/// capture information during traversal without modifying the MIR.
+///
+/// # Traversal Order
+///
+/// The default traversal visits in this order:
+/// 1. Local declarations (parameters, return value, temporaries)
+/// 2. Basic blocks in index order
+///    - Statements within each block
+///    - Terminator of each block
+///
+/// # Example: Counting Locals
+///
+/// ```no_run
+/// use miri::mir::visitor::Visitor;
+/// use miri::mir::{BasicBlock, Body, Local};
+/// use miri::mir::place::PlaceContext;
+///
+/// struct LocalCounter { count: usize }
+///
+/// impl Visitor for LocalCounter {
+///     fn visit_local(&mut self, _: Local, _: PlaceContext, _: BasicBlock) {
+///         self.count += 1;
+///     }
+/// }
+///
+/// fn count_locals(body: &Body) -> usize {
+///     let mut counter = LocalCounter { count: 0 };
+///     counter.visit_body(body);
+///     counter.count
+/// }
+/// ```
 pub trait Visitor {
     fn visit_body(&mut self, body: &Body) {
         for (i, decl) in body.local_decls.iter().enumerate() {
@@ -136,7 +180,30 @@ pub trait Visitor {
     fn visit_constant(&mut self, _constant: &Constant, _location: BasicBlock) {}
 }
 
-/// A visitor trait for traversing and modifying the MIR.
+/// A visitor trait for **mutable** traversal and modification of MIR.
+///
+/// Similar to [`Visitor`], but all visited nodes are passed as mutable references,
+/// allowing in-place modifications. Use this for transformation passes like
+/// dead code elimination, copy propagation, or SSA construction.
+///
+/// # Example: Replacing Constants
+///
+/// ```no_run
+/// use miri::mir::visitor::MutVisitor;
+/// use miri::mir::{BasicBlock, Constant};
+/// use miri::ast::literal::{Literal, IntegerLiteral};
+///
+/// struct ConstantReplacer;
+///
+/// impl MutVisitor for ConstantReplacer {
+///     fn visit_constant(&mut self, constant: &mut Constant, _: BasicBlock) {
+///         // Replace all integer constants with 42
+///         if let Literal::Integer(_) = constant.literal {
+///             constant.literal = Literal::Integer(IntegerLiteral::I32(42));
+///         }
+///     }
+/// }
+/// ```
 pub trait MutVisitor {
     fn visit_body(&mut self, body: &mut Body) {
         for (i, decl) in body.local_decls.iter_mut().enumerate() {

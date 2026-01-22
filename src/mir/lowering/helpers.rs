@@ -18,6 +18,19 @@ use super::context::LoweringContext;
 use super::expression::lower_expression;
 use super::statement::lower_statement;
 
+/// Resolve an AST type expression to a concrete `Type`.
+///
+/// This function attempts to resolve type expressions in the following order:
+/// 1. Look up the expression ID in the type checker's type map
+/// 2. Parse the expression structure directly (Type nodes, Identifiers)
+///
+/// # Returns
+/// The resolved type. If resolution fails, returns `TypeKind::Error` to allow
+/// graceful error propagation rather than panicking.
+///
+/// # Note
+/// Unknown types produce `TypeKind::Error` instead of panicking. Callers should
+/// check for this and report appropriate errors if needed.
 pub fn resolve_type(tc: &TypeChecker, expr: &Expression) -> Type {
     if let Some(ty) = tc.get_type(expr.id) {
         return ty.clone();
@@ -41,11 +54,13 @@ pub fn resolve_type(tc: &TypeChecker, expr: &Expression) -> Type {
                     "string" => Type::new(TypeKind::String, expr.span.clone()),
                     "float" => Type::new(TypeKind::Float, expr.span.clone()),
                     "void" => Type::new(TypeKind::Void, expr.span.clone()),
-                    _ => panic!("Unknown type: {}", name),
+                    // Fallback: Unknown primitive type - use Error type instead of panicking
+                    _ => Type::new(TypeKind::Error, expr.span.clone()),
                 }
             }
         }
-        _ => panic!("Unsupported type expression: {:?}", expr.node),
+        // Fallback: Unsupported type expression - use Error type instead of panicking
+        _ => Type::new(TypeKind::Error, expr.span.clone()),
     }
 }
 
