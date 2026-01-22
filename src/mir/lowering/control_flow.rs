@@ -391,8 +391,8 @@ fn lower_for_over_iterable(
         span.clone(),
     ));
 
-    ctx.pop_scope(span.clone());
     ctx.set_current_block(exit_bb);
+    ctx.pop_scope(span.clone());
     Ok(())
 }
 
@@ -527,8 +527,8 @@ pub fn lower_for(
             span.clone(),
         ));
 
-        ctx.pop_scope(span.clone());
         ctx.set_current_block(exit_bb);
+        ctx.pop_scope(span.clone());
     } else {
         return Err(LoweringError::unsupported_expression(
             "For loop only supports Range or List iterables".to_string(),
@@ -656,6 +656,18 @@ pub fn lower_call(
             op
         };
         arg_ops.push(op);
+    }
+
+    // Fill in default values for missing arguments
+    if let Some(params) = &param_types {
+        for param in params.iter().skip(args.len()) {
+            if let Some(default_expr) = &param.default_value {
+                // Lower the default value expression
+                let default_op = lower_expression(ctx, default_expr, None)?;
+                arg_ops.push(default_op);
+            }
+            // If no default and missing, type checker should have caught this error
+        }
     }
 
     // Determine return type (void for now, or from type checker)

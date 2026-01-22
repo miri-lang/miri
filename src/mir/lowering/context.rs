@@ -186,6 +186,33 @@ impl<'a> LoweringContext<'a> {
         local
     }
 
+    /// Register a function parameter (similar to push_local but no StorageLive)
+    pub fn push_param(&mut self, name: String, ty: Type, span: Span) -> Local {
+        let mut decl = LocalDecl::new(ty, span.clone());
+        let name_rc = Rc::new(name);
+
+        if !self.is_release {
+            decl.name = Some(name_rc.clone());
+        }
+
+        decl.is_user_variable = true;
+        let local = self.body.new_local(decl);
+
+        // Track in current scope
+        if let Some(scope) = self.scope_stack.last_mut() {
+            // If this name already exists, save it as shadowed
+            if let Some(old_local) = self.variable_map.get(&name_rc) {
+                scope.shadowed.insert(name_rc.clone(), *old_local);
+            }
+            scope.introduced.push(name_rc.clone());
+        }
+
+        self.variable_map.insert(name_rc, local);
+        // implicit StorageLive: parameters are live upon entry
+
+        local
+    }
+
     pub fn push_temp(&mut self, ty: Type, span: Span) -> Local {
         let decl = LocalDecl::new(ty, span);
         self.body.new_local(decl)

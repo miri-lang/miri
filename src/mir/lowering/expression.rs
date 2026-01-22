@@ -27,23 +27,55 @@ pub fn lower_expression(
 ) -> Result<Operand, LoweringError> {
     match &expr.node {
         ExpressionKind::Literal(lit) => {
-            let ty = match lit {
-                crate::ast::literal::Literal::Integer(_) => {
-                    Type::new(TypeKind::Int, expr.span.clone())
+            // Prefer type checker's resolved type for proper context-aware typing
+            // Only infer from literal if type checker doesn't have a type
+            let ty = if let Some(resolved) = ctx.type_checker.get_type(expr.id) {
+                resolved.clone()
+            } else {
+                match lit {
+                    crate::ast::literal::Literal::Integer(int_lit) => {
+                        // Preserve specific integer type from the literal
+                        use crate::ast::literal::IntegerLiteral;
+                        match int_lit {
+                            IntegerLiteral::I8(_) => Type::new(TypeKind::I8, expr.span.clone()),
+                            IntegerLiteral::I16(_) => Type::new(TypeKind::I16, expr.span.clone()),
+                            IntegerLiteral::I32(_) => Type::new(TypeKind::I32, expr.span.clone()),
+                            IntegerLiteral::I64(_) => Type::new(TypeKind::I64, expr.span.clone()),
+                            IntegerLiteral::I128(_) => Type::new(TypeKind::I128, expr.span.clone()),
+                            IntegerLiteral::U8(_) => Type::new(TypeKind::U8, expr.span.clone()),
+                            IntegerLiteral::U16(_) => Type::new(TypeKind::U16, expr.span.clone()),
+                            IntegerLiteral::U32(_) => Type::new(TypeKind::U32, expr.span.clone()),
+                            IntegerLiteral::U64(_) => Type::new(TypeKind::U64, expr.span.clone()),
+                            IntegerLiteral::U128(_) => Type::new(TypeKind::U128, expr.span.clone()),
+                        }
+                    }
+                    crate::ast::literal::Literal::Boolean(_) => {
+                        Type::new(TypeKind::Boolean, expr.span.clone())
+                    }
+                    crate::ast::literal::Literal::String(_) => {
+                        Type::new(TypeKind::String, expr.span.clone())
+                    }
+                    crate::ast::literal::Literal::Float(float_lit) => {
+                        // Preserve specific float type from the literal
+                        use crate::ast::literal::FloatLiteral;
+                        match float_lit {
+                            FloatLiteral::F32(_) => Type::new(TypeKind::F32, expr.span.clone()),
+                            FloatLiteral::F64(_) => Type::new(TypeKind::F64, expr.span.clone()),
+                        }
+                    }
+                    crate::ast::literal::Literal::Symbol(_) => {
+                        Type::new(TypeKind::Symbol, expr.span.clone())
+                    }
+                    crate::ast::literal::Literal::Regex(_) => {
+                        // Regex literals are represented as strings internally
+                        Type::new(TypeKind::String, expr.span.clone())
+                    }
+                    crate::ast::literal::Literal::None => {
+                        // None represents the absence of a value (null/nil)
+                        // Use Void type since it's the unit type in Miri
+                        Type::new(TypeKind::Void, expr.span.clone())
+                    }
                 }
-                crate::ast::literal::Literal::Boolean(_) => {
-                    Type::new(TypeKind::Boolean, expr.span.clone())
-                }
-                crate::ast::literal::Literal::String(_) => {
-                    Type::new(TypeKind::String, expr.span.clone())
-                }
-                crate::ast::literal::Literal::Float(_) => {
-                    Type::new(TypeKind::Float, expr.span.clone())
-                }
-                crate::ast::literal::Literal::Symbol(_) => {
-                    Type::new(TypeKind::Symbol, expr.span.clone())
-                }
-                _ => Type::new(TypeKind::Void, expr.span.clone()),
             };
 
             let constant = Operand::Constant(Box::new(Constant {
@@ -496,7 +528,7 @@ pub fn lower_expression(
                     return Err(LoweringError::unsupported_operator(
                         format!("{:?}", op),
                         expr.span.clone(),
-                    ))
+                    ));
                 }
             };
 
@@ -731,7 +763,7 @@ pub fn lower_expression(
                                     return Err(LoweringError::unsupported_expression(
                                         format!("Invalid GPU dimension: {}", prop_name),
                                         expr.span.clone(),
-                                    ))
+                                    ));
                                 }
                             };
 
@@ -752,7 +784,7 @@ pub fn lower_expression(
                                     return Err(LoweringError::unsupported_expression(
                                         format!("Unknown GPU intrinsic: {}", sym),
                                         expr.span.clone(),
-                                    ))
+                                    ));
                                 }
                             };
 
@@ -840,6 +872,55 @@ pub fn lower_expression(
                                 obj.span.clone(),
                             ));
                         }
+                    }
+                }
+
+                // Also check for class field access
+                if let Some(crate::type_checker::context::TypeDefinition::Class(def)) =
+                    ctx.type_checker.global_type_definitions.get(struct_name)
+                {
+                    if let ExpressionKind::Identifier(field_name, _) = &prop.node {
+                        // Check fields in BTreeMap (note: index is stored in FieldInfo)
+                        if let Some((idx, _)) = def
+                            .fields
+                            .iter()
+                            .enumerate()
+                            .find(|(_, (f, _))| *f == field_name)
+                        {
+                            // Ensure obj is a Place (copy to temp if constant)
+                            let place = match obj_operand {
+                                Operand::Copy(p) | Operand::Move(p) => p,
+                                Operand::Constant(c) => {
+                                    let temp = ctx.push_temp(c.ty.clone(), obj.span.clone());
+                                    ctx.push_statement(crate::mir::Statement {
+                                        kind: MirStatementKind::Assign(
+                                            Place::new(temp),
+                                            Rvalue::Use(Operand::Constant(c)),
+                                        ),
+                                        span: obj.span.clone(),
+                                    });
+                                    Place::new(temp)
+                                }
+                            };
+
+                            // Create new place with projection
+                            let mut new_place = place.clone();
+                            new_place.projection.push(PlaceElem::Field(idx));
+
+                            if let Some(d) = dest {
+                                ctx.push_statement(crate::mir::Statement {
+                                    kind: MirStatementKind::Assign(
+                                        d.clone(),
+                                        Rvalue::Use(Operand::Copy(new_place)),
+                                    ),
+                                    span: expr.span.clone(),
+                                });
+                                return Ok(Operand::Copy(d));
+                            } else {
+                                return Ok(Operand::Copy(new_place));
+                            }
+                        }
+                        // If field not found, might be a method call, which is handled in Call
                     }
                 }
             }
@@ -1192,8 +1273,58 @@ pub fn lower_expression(
                                 otherwise_bb = Some(branch_bb);
                             }
                         }
-                        _ => {
-                            // Tuple, Regex, Member patterns - for now treat as otherwise
+                        Pattern::Member(type_pattern, variant_name) => {
+                            // Member pattern for unit enum variants: Status.Ok
+                            if let Pattern::Identifier(type_name) = type_pattern.as_ref() {
+                                if let Some(crate::type_checker::context::TypeDefinition::Enum(
+                                    enum_def,
+                                )) = ctx.type_checker.global_type_definitions.get(type_name)
+                                {
+                                    if let Some((idx, _)) = enum_def
+                                        .variants
+                                        .iter()
+                                        .enumerate()
+                                        .find(|(_, (name, _))| *name == variant_name)
+                                    {
+                                        switch_targets
+                                            .push((Discriminant::from(idx as u128), branch_bb));
+                                    }
+                                }
+                            }
+                        }
+                        Pattern::EnumVariant(parent_pattern, _bindings) => {
+                            // Enum variant with bindings: Color.Red(x, y)
+                            if let Pattern::Member(type_pattern, variant_name) =
+                                parent_pattern.as_ref()
+                            {
+                                if let Pattern::Identifier(type_name) = type_pattern.as_ref() {
+                                    if let Some(
+                                        crate::type_checker::context::TypeDefinition::Enum(
+                                            enum_def,
+                                        ),
+                                    ) = ctx.type_checker.global_type_definitions.get(type_name)
+                                    {
+                                        if let Some((idx, _)) = enum_def
+                                            .variants
+                                            .iter()
+                                            .enumerate()
+                                            .find(|(_, (name, _))| *name == variant_name)
+                                        {
+                                            switch_targets
+                                                .push((Discriminant::from(idx as u128), branch_bb));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Pattern::Tuple(_) => {
+                            // Tuple patterns match by structure - treat as otherwise for now
+                            if otherwise_bb.is_none() {
+                                otherwise_bb = Some(branch_bb);
+                            }
+                        }
+                        Pattern::Regex(_) => {
+                            // Regex patterns require runtime matching - treat as otherwise
                             if otherwise_bb.is_none() {
                                 otherwise_bb = Some(branch_bb);
                             }
@@ -1205,10 +1336,43 @@ pub fn lower_expression(
             // Set otherwise to join if no default pattern
             let otherwise_target = otherwise_bb.unwrap_or(join_bb);
 
+            // For enum types, we need to extract the discriminant (Field 0) to switch on
+            let switch_discr = if let TypeKind::Custom(type_name, _) = &subject_ty.kind {
+                if ctx
+                    .type_checker
+                    .global_type_definitions
+                    .get(type_name)
+                    .is_some_and(|td| {
+                        matches!(td, crate::type_checker::context::TypeDefinition::Enum(_))
+                    })
+                {
+                    // Extract discriminant from enum value at Field(0)
+                    let discr_ty = Type::new(TypeKind::Int, subject.span.clone());
+                    let discr_local = ctx.push_temp(discr_ty, subject.span.clone());
+
+                    let mut discr_place = Place::new(subject_local);
+                    discr_place.projection.push(PlaceElem::Field(0));
+
+                    ctx.push_statement(crate::mir::Statement {
+                        kind: MirStatementKind::Assign(
+                            Place::new(discr_local),
+                            Rvalue::Use(Operand::Copy(discr_place)),
+                        ),
+                        span: subject.span.clone(),
+                    });
+
+                    Operand::Copy(Place::new(discr_local))
+                } else {
+                    Operand::Copy(Place::new(subject_local))
+                }
+            } else {
+                Operand::Copy(Place::new(subject_local))
+            };
+
             // Set SwitchInt terminator
             ctx.set_terminator(Terminator::new(
                 TerminatorKind::SwitchInt {
-                    discr: Operand::Copy(Place::new(subject_local)),
+                    discr: switch_discr,
                     targets: switch_targets,
                     otherwise: otherwise_target,
                 },
@@ -1331,7 +1495,7 @@ pub fn lower_expression(
                     return Err(LoweringError::unsupported_operator(
                         format!("{:?}", op),
                         expr.span.clone(),
-                    ))
+                    ));
                 }
             }
 
@@ -1627,9 +1791,129 @@ pub fn lower_expression(
             // The name is used by the type checker for struct field matching
             lower_expression(ctx, value_expr, None)
         }
-        _ => Err(LoweringError::unsupported_expression(
-            format!("{:?}", expr.node),
-            expr.span.clone(),
-        )),
+        ExpressionKind::Super => {
+            // Super refers to the parent class instance.
+            // It's represented as a special constant that the backend
+            // will use to resolve parent class method calls.
+            // The type checker ensures this is only used in a derived class.
+            let ty = resolve_type(ctx.type_checker, expr);
+            let constant = Operand::Constant(Box::new(Constant {
+                span: expr.span.clone(),
+                ty,
+                literal: crate::ast::literal::Literal::Symbol("super".to_string()),
+            }));
+
+            if let Some(d) = dest {
+                ctx.push_statement(crate::mir::Statement {
+                    kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(constant.clone())),
+                    span: expr.span.clone(),
+                });
+                Ok(Operand::Copy(d))
+            } else {
+                Ok(constant)
+            }
+        }
+        ExpressionKind::EnumValue(enum_expr, args) => {
+            // EnumValue is used for enum variant construction with :: syntax
+            // e.g., Option::Some(value)
+            // Extract the enum type name and variant from the expression
+            if let ExpressionKind::Member(type_expr, variant_expr) = &enum_expr.node {
+                if let ExpressionKind::Identifier(type_name, _) = &type_expr.node {
+                    if let ExpressionKind::Identifier(variant_name, _) = &variant_expr.node {
+                        if let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) =
+                            ctx.type_checker.global_type_definitions.get(type_name)
+                        {
+                            if let Some((discriminant, _)) = enum_def
+                                .variants
+                                .iter()
+                                .enumerate()
+                                .find(|(_, (name, _))| name.as_str() == variant_name)
+                            {
+                                let ty = resolve_type(ctx.type_checker, expr);
+                                let temp = ctx.push_temp(ty, expr.span.clone());
+
+                                // Create discriminant constant
+                                let discr_op = Operand::Constant(Box::new(Constant {
+                                    span: expr.span.clone(),
+                                    ty: Type::new(TypeKind::Int, expr.span.clone()),
+                                    literal: crate::ast::literal::Literal::Integer(
+                                        crate::ast::literal::IntegerLiteral::I32(
+                                            discriminant as i32,
+                                        ),
+                                    ),
+                                }));
+
+                                // Lower all arguments
+                                let mut ops = vec![discr_op];
+                                for arg in args {
+                                    ops.push(lower_expression(ctx, arg, None)?);
+                                }
+
+                                ctx.push_statement(crate::mir::Statement {
+                                    kind: MirStatementKind::Assign(
+                                        Place::new(temp),
+                                        Rvalue::Aggregate(
+                                            AggregateKind::Enum(
+                                                type_name.clone(),
+                                                variant_name.clone(),
+                                            ),
+                                            ops,
+                                        ),
+                                    ),
+                                    span: expr.span.clone(),
+                                });
+                                return Ok(Operand::Copy(Place::new(temp)));
+                            }
+                        }
+                    }
+                }
+            }
+            Err(LoweringError::unsupported_expression(
+                "Invalid EnumValue expression structure".to_string(),
+                expr.span.clone(),
+            ))
+        }
+        ExpressionKind::Type(ty, _is_nullable) => {
+            // Type expressions used as values (metatype operations)
+            // Return a symbol representing the type name
+            let type_name = format!("{}", ty);
+            let constant = Operand::Constant(Box::new(Constant {
+                span: expr.span.clone(),
+                ty: Type::new(TypeKind::Symbol, expr.span.clone()),
+                literal: crate::ast::literal::Literal::Symbol(type_name),
+            }));
+
+            if let Some(d) = dest {
+                ctx.push_statement(crate::mir::Statement {
+                    kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(constant.clone())),
+                    span: expr.span.clone(),
+                });
+                Ok(Operand::Copy(d))
+            } else {
+                Ok(constant)
+            }
+        }
+        ExpressionKind::StructMember(_, _) => {
+            // StructMember is primarily used in struct declarations, not runtime
+            // If encountered at runtime, it's likely an error in the AST structure
+            Err(LoweringError::unsupported_expression(
+                "StructMember expressions are only valid in struct declarations".to_string(),
+                expr.span.clone(),
+            ))
+        }
+        ExpressionKind::GenericType(_, _, _) | ExpressionKind::TypeDeclaration(_, _, _, _) => {
+            // Generic type instantiation and type declarations are compile-time only
+            Err(LoweringError::unsupported_expression(
+                "Type expressions are compile-time only, not runtime values".to_string(),
+                expr.span.clone(),
+            ))
+        }
+        ExpressionKind::ImportPath(_, _) => {
+            // ImportPath should only appear in Use statements, not as standalone expressions
+            Err(LoweringError::unsupported_expression(
+                "ImportPath expressions are only valid in use statements".to_string(),
+                expr.span.clone(),
+            ))
+        }
     }
 }

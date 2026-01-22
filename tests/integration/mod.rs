@@ -7,6 +7,7 @@ pub mod collections;
 pub mod control_flow;
 pub mod enums;
 pub mod functions;
+pub mod interpreter_gaps;
 pub mod oop;
 pub mod pattern_matching;
 pub mod primitive_types;

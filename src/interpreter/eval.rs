@@ -10,7 +10,8 @@ use crate::error::InterpreterError;
 use crate::interpreter::value::Value;
 use crate::interpreter::Interpreter;
 use crate::mir::{
-    BinOp, Body, Operand, Place, PlaceElem, Rvalue, StatementKind, TerminatorKind, UnOp,
+    AggregateKind, BinOp, Body, Operand, Place, PlaceElem, Rvalue, StatementKind, TerminatorKind,
+    UnOp,
 };
 
 use crate::mir::{BasicBlock, Local, Statement, Terminator};
@@ -43,8 +44,12 @@ pub(crate) fn execute_function(
 
     // Execute blocks starting from 0
     let mut current_block = BasicBlock(0);
+    // Track previous block for Phi nodes
+    let mut prev_block: Option<BasicBlock> = None;
 
     loop {
+        context.previous_block = prev_block;
+
         let block_data = body
             .basic_blocks
             .get(current_block.0)
@@ -58,7 +63,10 @@ pub(crate) fn execute_function(
         // Execute terminator
         if let Some(terminator) = &block_data.terminator {
             match context.execute_terminator(terminator)? {
-                TerminatorResult::Goto(target) => current_block = target,
+                TerminatorResult::Goto(target) => {
+                    prev_block = Some(current_block);
+                    current_block = target;
+                }
                 TerminatorResult::Return(val) => return Ok(val),
             }
         } else {
@@ -73,6 +81,7 @@ pub(crate) fn execute_function(
 struct EvalContext<'a> {
     interpreter: &'a mut Interpreter,
     locals: HashMap<Local, Value>,
+    previous_block: Option<BasicBlock>,
 }
 
 enum TerminatorResult {
@@ -85,6 +94,7 @@ impl<'a> EvalContext<'a> {
         Self {
             interpreter,
             locals: HashMap::new(),
+            previous_block: None,
         }
     }
 
@@ -95,7 +105,18 @@ impl<'a> EvalContext<'a> {
                 self.write_place(place, value)?;
             }
             StatementKind::Nop => {}
-            StatementKind::StorageLive(_) | StatementKind::StorageDead(_) => {} // Ignore storage markers
+            StatementKind::StorageLive(place) => {
+                // Mark local as live but uninitialized
+                if place.projection.is_empty() {
+                    self.locals.insert(place.local, Value::Uninitialized);
+                }
+            }
+            StatementKind::StorageDead(place) => {
+                // Mark local as dead (remove it)
+                if place.projection.is_empty() {
+                    self.locals.remove(&place.local);
+                }
+            }
         }
         Ok(())
     }
@@ -171,8 +192,25 @@ impl<'a> EvalContext<'a> {
             TerminatorKind::Unreachable => {
                 Err(InterpreterError::internal("Reached unreachable code"))
             }
-            TerminatorKind::GpuLaunch { .. } => {
-                Err(InterpreterError::not_implemented("GPU launch"))
+            TerminatorKind::GpuLaunch {
+                kernel: _,
+                grid: _,
+                block: _,
+                destination: _,
+                target,
+            } => {
+                // Simulate GPU launch by just proceeding (no-op for now)
+                // In a real simulator, we would spawn threads.
+                // Here we just warn and continue.
+                eprintln!("warning: GPU launch simulated as no-op on CPU interpreter");
+
+                if let Some(target_block) = target {
+                    Ok(TerminatorResult::Goto(*target_block))
+                } else {
+                    Err(InterpreterError::internal(
+                        "GpuLaunch terminator missing target",
+                    ))
+                }
             }
         }
     }
@@ -189,8 +227,24 @@ impl<'a> EvalContext<'a> {
                 let val = self.eval_operand(operand)?;
                 self.eval_unop(*op, val)
             }
-            Rvalue::Ref(_) => Err(InterpreterError::not_implemented("References")),
-            Rvalue::Len(_) => Err(InterpreterError::not_implemented("Len intrinsic")),
+            Rvalue::Ref(place) => {
+                let value = self.read_place(place)?;
+                Ok(Value::Ref(Box::new(value)))
+            }
+            Rvalue::Len(place) => {
+                let value = self.read_place(place)?;
+                match value {
+                    Value::Array(arr) => Ok(Value::Int(arr.len() as i128)),
+                    Value::String(s) => Ok(Value::Int(s.len() as i128)),
+                    Value::Tuple(t) => Ok(Value::Int(t.len() as i128)),
+                    Value::Map(m) => Ok(Value::Int(m.len() as i128)),
+                    _ => Err(InterpreterError::type_mismatch(
+                        "array, string, tuple, or map",
+                        value.type_name(),
+                        "len",
+                    )),
+                }
+            }
             Rvalue::Cast(op, ty) => {
                 let value = self.eval_operand(op)?;
                 // Simple cast logic for interpreter
@@ -211,20 +265,91 @@ impl<'a> EvalContext<'a> {
                     (v, _) => Ok(v), // Default to identity if not special
                 }
             }
-            Rvalue::Aggregate(_, operands) => {
-                // Primitive implementation: just return the first one if present (tuple checks omitted)
-                if let Some(op) = operands.first() {
-                    self.eval_operand(op)
-                } else {
-                    Ok(Value::None)
+            Rvalue::Aggregate(kind, operands) => {
+                // Evaluate all operands first
+                let values: Vec<Value> = operands
+                    .iter()
+                    .map(|op| self.eval_operand(op))
+                    .collect::<Result<_, _>>()?;
+
+                match kind {
+                    AggregateKind::Tuple => Ok(Value::Tuple(values)),
+                    AggregateKind::Array | AggregateKind::List => Ok(Value::Array(values)),
+                    AggregateKind::Set => {
+                        // Sets are represented as arrays for now
+                        Ok(Value::Array(values))
+                    }
+                    AggregateKind::Map => {
+                        // Values alternate: key1, val1, key2, val2...
+                        let mut map = HashMap::new();
+                        for chunk in values.chunks(2) {
+                            if let [k, v] = chunk {
+                                let key = match k {
+                                    Value::String(s) => s.clone(),
+                                    other => other.to_string(),
+                                };
+                                map.insert(key, v.clone());
+                            }
+                        }
+                        Ok(Value::Map(map))
+                    }
+                    AggregateKind::Struct(ty) => {
+                        let name = ty.to_string();
+                        // For structs, we don't have field names here, so store by index
+                        let mut fields = HashMap::new();
+                        for (i, v) in values.into_iter().enumerate() {
+                            fields.insert(i.to_string(), v);
+                        }
+                        Ok(Value::Struct(name, fields))
+                    }
+                    AggregateKind::Enum(type_name, variant_name) => {
+                        // First operand is discriminant, rest are associated values
+                        let associated = if values.len() > 1 {
+                            Some(Box::new(Value::Tuple(values[1..].to_vec())))
+                        } else {
+                            None
+                        };
+                        Ok(Value::Enum(
+                            type_name.clone(),
+                            variant_name.clone(),
+                            associated,
+                        ))
+                    }
                 }
             }
-            Rvalue::GpuIntrinsic(_) => Err(InterpreterError::not_implemented("GPU intrinsics")),
-            Rvalue::Phi(_) => {
-                // Interpreter doesn't support SSA form yet
-                Err(InterpreterError::not_implemented(
-                    "Phi nodes in interpreter",
-                ))
+            Rvalue::GpuIntrinsic(intrinsic) => {
+                // Simulate GPU intrinsics with single-thread CPU values
+                use crate::mir::rvalue::GpuIntrinsic;
+                match intrinsic {
+                    GpuIntrinsic::ThreadIdx(_) => Ok(Value::Int(0)),
+                    GpuIntrinsic::BlockIdx(_) => Ok(Value::Int(0)),
+                    GpuIntrinsic::BlockDim(_) => Ok(Value::Int(1)), // 1 thread per block
+                    GpuIntrinsic::GridDim(_) => Ok(Value::Int(1)),  // 1 block per grid
+                    GpuIntrinsic::SyncThreads => Ok(Value::None),
+                }
+            }
+            Rvalue::Phi(args) => {
+                // Find value for previous_block
+                if let Some(prev) = self.previous_block {
+                    for (op, block) in args {
+                        if *block == prev {
+                            return self.eval_operand(op);
+                        }
+                    }
+                    // If not found, that's an issue with CFG or Phi node vs predecessor
+                    // (Unless the previous block is not listed? e.g. dead code entry?)
+                    // But assume valid MIR.
+                    Err(InterpreterError::internal(format!(
+                        "Phi node has no entry for previous block {:?}",
+                        prev
+                    )))
+                } else {
+                    // Entry block should not have Phi nodes usually?
+                    // Or if we jumped from nowhere?
+                    Err(InterpreterError::internal(
+                        "Phi node evaluated without previous block",
+                    ))
+                }
             }
         }
     }
@@ -237,26 +362,161 @@ impl<'a> EvalContext<'a> {
     }
 
     fn read_place(&self, place: &Place) -> Result<Value, InterpreterError> {
-        // Only simple local access supported
-        self.read_local(place.local)
+        let mut value = self.read_local(place.local)?;
+
+        // Apply each projection element to traverse into nested structures
+        for proj in &place.projection {
+            value = self.apply_projection(value, proj)?;
+        }
+
+        Ok(value)
     }
 
     fn read_local(&self, local: Local) -> Result<Value, InterpreterError> {
-        self.locals.get(&local).cloned().ok_or_else(|| {
+        let val = self.locals.get(&local).cloned().ok_or_else(|| {
             // Check if it should have been initialized (params or declared)
             // Just return uninitialized error
             InterpreterError::uninitialized_local(local.0)
-        })
+        })?;
+
+        if let Value::Uninitialized = val {
+            return Err(InterpreterError::uninitialized_local(local.0));
+        }
+
+        Ok(val)
     }
 
     fn write_place(&mut self, place: &Place, value: Value) -> Result<(), InterpreterError> {
-        if !place.projection.is_empty() {
-            return Err(InterpreterError::not_implemented(
-                "assignment to projected place",
-            ));
+        if place.projection.is_empty() {
+            self.locals.insert(place.local, value);
+            return Ok(());
         }
-        self.locals.insert(place.local, value);
+
+        // For projected writes, get the root value, modify it, then put it back
+        let mut root = self.read_local(place.local)?;
+        self.write_projected(&mut root, &place.projection, value)?;
+        self.locals.insert(place.local, root);
         Ok(())
+    }
+
+    fn write_projected(
+        &self,
+        value: &mut Value,
+        projection: &[PlaceElem],
+        new_val: Value,
+    ) -> Result<(), InterpreterError> {
+        if projection.is_empty() {
+            *value = new_val;
+            return Ok(());
+        }
+
+        let (first, rest) = projection.split_first().unwrap();
+
+        match first {
+            PlaceElem::Field(idx) => match value {
+                Value::Struct(_name, fields) | Value::Class(_name, fields) => {
+                    // Get the field name at index idx
+                    if let Some((_key, field_val)) = fields.iter_mut().nth(*idx) {
+                        if rest.is_empty() {
+                            *field_val = new_val;
+                        } else {
+                            self.write_projected(field_val, rest, new_val)?;
+                        }
+                        Ok(())
+                    } else {
+                        // Field doesn't exist, try to insert by index as string key
+                        let key = idx.to_string();
+                        if rest.is_empty() {
+                            fields.insert(key, new_val);
+                        } else {
+                            let mut nested = Value::None;
+                            self.write_projected(&mut nested, rest, new_val)?;
+                            fields.insert(key, nested);
+                        }
+                        Ok(())
+                    }
+                }
+                Value::Tuple(elements) => {
+                    if let Some(elem) = elements.get_mut(*idx) {
+                        if rest.is_empty() {
+                            *elem = new_val;
+                        } else {
+                            self.write_projected(elem, rest, new_val)?;
+                        }
+                        Ok(())
+                    } else {
+                        Err(InterpreterError::internal(format!(
+                            "Tuple index {} out of bounds",
+                            idx
+                        )))
+                    }
+                }
+                _ => Err(InterpreterError::type_mismatch(
+                    "struct, class, or tuple",
+                    value.type_name(),
+                    "field write",
+                )),
+            },
+            PlaceElem::Index(local) => {
+                let idx_val = self.read_local(*local)?;
+                let idx = idx_val.as_int().ok_or_else(|| {
+                    InterpreterError::type_mismatch("integer", idx_val.type_name(), "index")
+                })? as usize;
+
+                match value {
+                    Value::Array(arr) => {
+                        if let Some(elem) = arr.get_mut(idx) {
+                            if rest.is_empty() {
+                                *elem = new_val;
+                            } else {
+                                self.write_projected(elem, rest, new_val)?;
+                            }
+                            Ok(())
+                        } else {
+                            Err(InterpreterError::internal(format!(
+                                "Array index {} out of bounds",
+                                idx
+                            )))
+                        }
+                    }
+                    Value::Tuple(tup) => {
+                        if let Some(elem) = tup.get_mut(idx) {
+                            if rest.is_empty() {
+                                *elem = new_val;
+                            } else {
+                                self.write_projected(elem, rest, new_val)?;
+                            }
+                            Ok(())
+                        } else {
+                            Err(InterpreterError::internal(format!(
+                                "Tuple index {} out of bounds",
+                                idx
+                            )))
+                        }
+                    }
+                    _ => Err(InterpreterError::type_mismatch(
+                        "array or tuple",
+                        value.type_name(),
+                        "index write",
+                    )),
+                }
+            }
+            PlaceElem::Deref => match value {
+                Value::Ref(inner) => {
+                    if rest.is_empty() {
+                        **inner = new_val;
+                    } else {
+                        self.write_projected(inner, rest, new_val)?;
+                    }
+                    Ok(())
+                }
+                _ => Err(InterpreterError::type_mismatch(
+                    "reference",
+                    value.type_name(),
+                    "dereference write",
+                )),
+            },
+        }
     }
 
     fn eval_binop(&self, op: BinOp, lhs: Value, rhs: Value) -> Result<Value, InterpreterError> {
@@ -354,7 +614,9 @@ impl<'a> EvalContext<'a> {
                     format!("{:?} >> {:?}", a, b),
                 )),
             },
-            BinOp::Offset => Err(InterpreterError::not_implemented("pointer offset")),
+            BinOp::Offset => Err(InterpreterError::not_implemented(
+                "pointer offset (requires memory model upgrade)",
+            )),
         }
     }
 
@@ -370,10 +632,11 @@ impl<'a> EvalContext<'a> {
                 Value::Int(v) => Ok(Value::Int(!v)),
                 v => Err(InterpreterError::invalid_operand("not", format!("{:?}", v))),
             },
-            _ => Err(InterpreterError::not_implemented(format!(
-                "Unary operator {:?}",
-                op
-            ))),
+            UnOp::Await => {
+                // For the synchronous interpreter, await is identity
+                // (async execution model not yet supported)
+                Ok(val)
+            }
         }
     }
 

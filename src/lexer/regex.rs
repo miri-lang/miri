@@ -21,7 +21,7 @@ pub fn parse_regex_literal(
             return Err(SyntaxError::new(
                 SyntaxErrorKind::InvalidRegexLiteral,
                 lexer.span(),
-            ))
+            ));
         }
     };
 

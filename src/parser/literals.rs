@@ -104,7 +104,7 @@ impl<'source> Parser<'source> {
                                 found: format!("{:?}", token_type),
                             },
                             token.1.start..token.1.end,
-                        ))
+                        ));
                     }
                 };
 
@@ -212,7 +212,7 @@ impl<'source> Parser<'source> {
                         return Err(SyntaxError::new(
                             SyntaxErrorKind::InvalidBooleanLiteral,
                             token.1.start..token.1.end,
-                        ))
+                        ));
                     }
                 };
                 Ok(literal)

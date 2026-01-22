@@ -77,7 +77,7 @@ impl<'source> Parser<'source> {
                 _ => {
                     return Err(self.error_unexpected_lookahead_token(
                         "function modifier (async, parallel or gpu)",
-                    ))
+                    ));
                 }
             }
         }
@@ -741,7 +741,7 @@ impl<'source> Parser<'source> {
                 return Err(self.error_unexpected_token(
                     "is, implements, includes or extends",
                     &self.lookahead_as_string(),
-                ))
+                ));
             }
         };
         let type_expr = self.type_expression()?.map(Box::new);

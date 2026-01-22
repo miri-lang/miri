@@ -151,7 +151,7 @@ impl<'source> Parser<'source> {
                                         return Err(self.error_unexpected_token(
                                             "Parameter name must be a simple identifier",
                                             "identifier",
-                                        ))
+                                        ));
                                     }
                                 }
                             } else {

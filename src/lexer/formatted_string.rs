@@ -22,7 +22,7 @@ pub fn lex_formatted_string(
             return Err(SyntaxError::new(
                 SyntaxErrorKind::InvalidFormattedString,
                 lexer.span(),
-            ))
+            ));
         }
     };
 

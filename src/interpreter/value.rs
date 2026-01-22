@@ -35,6 +35,8 @@ pub enum Value {
     None,
     /// Reference to another value (for future use).
     Ref(Box<Value>),
+    /// Uninitialized value (for safety checks).
+    Uninitialized,
 }
 
 impl fmt::Display for Value {
@@ -93,6 +95,7 @@ impl fmt::Display for Value {
             }
             Value::None => write!(f, "none"),
             Value::Ref(v) => write!(f, "&{}", v),
+            Value::Uninitialized => write!(f, "<uninitialized>"),
         }
     }
 }
@@ -107,6 +110,7 @@ impl Value {
             Value::String(v) => !v.is_empty(),
             Value::Array(v) => !v.is_empty(),
             Value::None => false,
+            Value::Uninitialized => false, // Uninitialized is falsy (safe default?) or should assume truthy? usually UB.
             _ => true,
         }
     }
@@ -148,6 +152,7 @@ impl Value {
             Value::Map(_) => "map".to_string(),
             Value::None => "none".to_string(),
             Value::Ref(_) => "reference".to_string(),
+            Value::Uninitialized => "uninitialized".to_string(),
         }
     }
 }

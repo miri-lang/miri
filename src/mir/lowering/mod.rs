@@ -90,7 +90,7 @@ pub fn lower_function(
         // Lower parameters
         for param in params.iter() {
             let param_ty = resolve_type(tc, &param.typ);
-            ctx.push_local(param.name.clone(), param_ty, param.typ.span.clone());
+            ctx.push_param(param.name.clone(), param_ty, param.typ.span.clone());
         }
 
         // Emit guard checks for parameters with guards

@@ -5,6 +5,7 @@
 
 use crate::ast::expression::ExpressionKind;
 use crate::ast::statement::{Statement, StatementKind};
+use crate::ast::types::{Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::mir::declaration::{
     ClassDecl, Declaration, EnumDecl, FieldDecl, MethodDecl, StructDecl, TraitDecl, TypeAliasDecl,
@@ -361,7 +362,96 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
                 ctx.imports.push(import);
             }
         }
-        _ => {}
+        StatementKind::Empty => {
+            // Empty statement - no-op, nothing to do
+        }
+        StatementKind::FunctionDeclaration(
+            name,
+            _generics,
+            params,
+            ret_type_expr,
+            body_stmt,
+            props,
+        ) => {
+            // Nested function declarations are lowered to LambdaInfo
+            // and stored for later codegen. A local variable is created
+            // that references this function.
+            use crate::mir::lambda::LambdaInfo;
+            use crate::mir::{Body, ExecutionModel, LocalDecl};
+
+            // Determine execution model
+            let execution_model = if props.is_gpu {
+                ExecutionModel::GpuKernel
+            } else if props.is_async {
+                ExecutionModel::Async
+            } else {
+                ExecutionModel::Cpu
+            };
+
+            // Resolve return type
+            let ret_ty = if let Some(ret_expr) = ret_type_expr {
+                super::resolve_type(ctx.type_checker, ret_expr)
+            } else {
+                Type::new(TypeKind::Void, stmt.span.clone())
+            };
+
+            // Create a new body for this nested function
+            let mut nested_body = Body::new(params.len(), stmt.span.clone(), execution_model);
+            nested_body.new_local(LocalDecl::new(ret_ty.clone(), stmt.span.clone()));
+
+            // Create a temporary context for lowering the nested function
+            let mut nested_ctx =
+                super::LoweringContext::new(nested_body, ctx.type_checker, ctx.is_release);
+
+            // Lower parameters
+            for param in params.iter() {
+                let param_ty = super::resolve_type(ctx.type_checker, &param.typ);
+                nested_ctx.push_local(param.name.clone(), param_ty, param.typ.span.clone());
+            }
+
+            // Lower the body if present
+            if let Some(body_box) = body_stmt {
+                super::lower_as_return(&mut nested_ctx, body_box, &ret_ty)?;
+            }
+
+            // Ensure terminator
+            if nested_ctx.body.basic_blocks[nested_ctx.current_block.0]
+                .terminator
+                .is_none()
+            {
+                nested_ctx.set_terminator(crate::mir::Terminator::new(
+                    crate::mir::TerminatorKind::Return,
+                    stmt.span.clone(),
+                ));
+            }
+
+            // Store as lambda info (using function name)
+            let lambda_info = LambdaInfo {
+                name: name.clone(),
+                body: nested_ctx.body,
+                captures: vec![], // Nested functions don't capture by default
+            };
+            ctx.lambda_bodies.push(lambda_info);
+
+            // Create a local variable for this function reference
+            let func_ty = Type::new(
+                TypeKind::Function(
+                    None,
+                    params
+                        .iter()
+                        .map(|p| crate::ast::common::Parameter {
+                            name: p.name.clone(),
+                            typ: p.typ.clone(),
+                            guard: p.guard.clone(),
+                            default_value: p.default_value.clone(),
+                        })
+                        .collect(),
+                    ret_type_expr.clone(),
+                ),
+                stmt.span.clone(),
+            );
+            ctx.push_local(name.clone(), func_ty, stmt.span.clone());
+        }
     }
     Ok(())
 }

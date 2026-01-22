@@ -277,3 +277,62 @@ pub fn assert_returns_with_warning(code: &str, expected: i64, expected_warning: 
         );
     }
 }
+
+// =============================================================================
+// Interpreter-Only Test Utilities
+// =============================================================================
+// Use these for features not yet supported by codegen.
+// Add TODO comments in tests to switch to dual-backend versions when codegen catches up.
+
+/// Run code ONLY on the interpreter (for features not yet in codegen).
+///
+/// Use this for testing features that work in the interpreter but not yet in codegen.
+/// Add a TODO comment in the test to switch to `assert_runs` when codegen supports it.
+pub fn interpreter_assert_runs(code: &str) {
+    let interp_result = interpret(code);
+    if let Err(e) = &interp_result {
+        let mir = get_mir(code);
+        panic!(
+            "Interpreter failed:\n{}\n\nCode:\n{}\n\nMIR:\n{}",
+            e, code, mir
+        );
+    }
+}
+
+/// Assert interpreter returns expected integer value (for features not yet in codegen).
+///
+/// Use this for testing features that work in the interpreter but not yet in codegen.
+/// Add a TODO comment in the test to switch to `assert_returns` when codegen supports it.
+pub fn interpreter_assert_returns(code: &str, expected: i64) {
+    let interp_result = interpret(code);
+    match &interp_result {
+        Ok(value) => {
+            let actual = value.as_int().unwrap_or_else(|| {
+                let mir = get_mir(code);
+                panic!(
+                    "Interpreter returned non-integer value: {:?}\n\nCode:\n{}\n\nMIR:\n{}",
+                    value, code, mir
+                )
+            });
+            assert_eq!(
+                actual, expected as i128,
+                "Interpreter returned wrong value.\nExpected: {}\nGot: {}\n\nCode:\n{}",
+                expected, actual, code
+            );
+        }
+        Err(e) => {
+            let mir = get_mir(code);
+            panic!(
+                "Interpreter failed:\n{}\n\nCode:\n{}\n\nMIR:\n{}",
+                e, code, mir
+            );
+        }
+    }
+}
+
+/// Same as `interpreter_assert_returns` for multiple tests.
+pub fn interpreter_assert_returns_many(tests: &[(&str, i64)]) {
+    for (code, expected) in tests {
+        interpreter_assert_returns(code, *expected);
+    }
+}

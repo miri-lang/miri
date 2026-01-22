@@ -10,6 +10,8 @@
 //! lowering as the compiled backends, ensuring consistent semantics.
 
 mod eval;
+#[cfg(test)]
+mod tests;
 mod value;
 
 // Re-export InterpreterError from centralized error module
