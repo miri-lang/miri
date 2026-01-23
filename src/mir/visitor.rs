@@ -85,6 +85,15 @@ pub trait Visitor {
                 self.visit_place(place, PlaceContext::StorageDead, block);
             }
             StatementKind::Nop => {}
+            StatementKind::IncRef(place) => {
+                self.visit_place(place, PlaceContext::NonMutatingUse, block);
+            }
+            StatementKind::DecRef(place) => {
+                self.visit_place(place, PlaceContext::MutatingUse, block);
+            }
+            StatementKind::Dealloc(place) => {
+                self.visit_place(place, PlaceContext::MutatingUse, block);
+            }
         }
     }
 
@@ -148,6 +157,11 @@ pub trait Visitor {
                 for (op, _) in args {
                     self.visit_operand(op, location);
                 }
+            }
+            Rvalue::Allocate(size, align, alloc) => {
+                self.visit_operand(size, location);
+                self.visit_operand(align, location);
+                self.visit_operand(alloc, location);
             }
         }
     }
@@ -235,6 +249,15 @@ pub trait MutVisitor {
                 self.visit_place(place, PlaceContext::StorageDead, block);
             }
             StatementKind::Nop => {}
+            StatementKind::IncRef(place) => {
+                self.visit_place(place, PlaceContext::NonMutatingUse, block);
+            }
+            StatementKind::DecRef(place) => {
+                self.visit_place(place, PlaceContext::MutatingUse, block);
+            }
+            StatementKind::Dealloc(place) => {
+                self.visit_place(place, PlaceContext::MutatingUse, block);
+            }
         }
     }
 
@@ -298,6 +321,11 @@ pub trait MutVisitor {
                 for (op, _) in args {
                     self.visit_operand(op, location);
                 }
+            }
+            Rvalue::Allocate(size, align, alloc) => {
+                self.visit_operand(size, location);
+                self.visit_operand(align, location);
+                self.visit_operand(alloc, location);
             }
         }
     }

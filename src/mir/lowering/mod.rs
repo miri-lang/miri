@@ -42,6 +42,7 @@ pub fn lower_function(
     ast_func: &Statement,
     tc: &TypeChecker,
     is_release: bool,
+    inject_allocator: bool,
 ) -> Result<Body, LoweringError> {
     if let StatementKind::FunctionDeclaration(
         _name,
@@ -91,6 +92,50 @@ pub fn lower_function(
         for param in params.iter() {
             let param_ty = resolve_type(tc, &param.typ);
             ctx.push_param(param.name.clone(), param_ty, param.typ.span.clone());
+        }
+
+        // Implicit Allocator Injection
+        // We inject an 'allocator' parameter to specific functions (or all for now)
+        // This supports the "Call Site Allocator Injection" strategy.
+        if inject_allocator {
+            let allocator_type = Type::new(TypeKind::Int, ast_func.span.clone());
+
+            if name_str == "main" {
+                // For main, we cannot inject a parameter as it breaks the entry point signature.
+                // Instead, we create a local variable 'allocator'.
+                // Ideally this should be initialized by the runtime, but for now we leave it uninitialized
+                // (StorageLive only) which is sufficient if it's just passed around and not dereferenced.
+                let alloc_local = ctx.push_local(
+                    "allocator".to_string(),
+                    allocator_type.clone(),
+                    ast_func.span.clone(),
+                );
+
+                // Initialize to dummy value (0) to avoid uninitialized read
+                let dummy_allocator =
+                    crate::mir::Operand::Constant(Box::new(crate::mir::Constant {
+                        span: ast_func.span.clone(),
+                        ty: allocator_type,
+                        literal: crate::ast::literal::Literal::Integer(
+                            crate::ast::literal::IntegerLiteral::I32(0),
+                        ),
+                    }));
+
+                ctx.push_statement(crate::mir::Statement {
+                    kind: crate::mir::StatementKind::Assign(
+                        crate::mir::Place::new(alloc_local),
+                        crate::mir::Rvalue::Use(dummy_allocator),
+                    ),
+                    span: ast_func.span.clone(),
+                });
+            } else {
+                ctx.push_param(
+                    "allocator".to_string(),
+                    allocator_type,
+                    ast_func.span.clone(),
+                );
+                ctx.body.arg_count += 1;
+            }
         }
 
         // Emit guard checks for parameters with guards

@@ -96,6 +96,8 @@ pub enum TypeKind {
     Void,
     /// Error type (for type checking).
     Error,
+    /// Linear type wrapper (explicit ownership).
+    Linear(Box<Type>),
 }
 
 /// Represents a type declaration kind
@@ -133,6 +135,8 @@ impl TypeKind {
             | TypeKind::Symbol
             | TypeKind::Void
             | TypeKind::Error => true,
+            // Linear types are never Copy
+            TypeKind::Linear(_) => false,
             // Complex types require Move
             TypeKind::String
             | TypeKind::List(_)
@@ -229,6 +233,7 @@ impl fmt::Display for TypeKind {
             TypeKind::Nullable(inner) => write!(f, "nullable({})", inner),
             TypeKind::Void => write!(f, "void"),
             TypeKind::Error => write!(f, "error"),
+            TypeKind::Linear(inner) => write!(f, "linear({})", inner),
         }
     }
 }

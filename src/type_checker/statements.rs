@@ -380,6 +380,7 @@ impl TypeChecker {
                 self.global_scope.insert(
                     decl.name.clone(),
                     super::context::SymbolInfo {
+                        consumed: false,
                         ty: inferred_type.clone(),
                         mutable: is_mutable,
                         visibility: visibility.clone(),
@@ -495,6 +496,16 @@ impl TypeChecker {
         for s in stmts {
             self.check_statement(s, context);
         }
+
+        // Check for unconsumed linear variables
+        let unconsumed = context.get_unconsumed_linear_vars();
+        for (name, span) in unconsumed {
+            self.report_error(
+                format!("Linear variable '{}' must be consumed exactly once", name),
+                span,
+            );
+        }
+
         context.exit_scope();
     }
 
@@ -513,17 +524,74 @@ impl TypeChecker {
             );
         }
 
-        // Enter scope for then block
+        // Snapshot state before branching
+        let start_state = context.snapshot_linear_state();
+
+        // Check Then block
         context.enter_scope();
         self.check_statement(then_block, context);
+        // Check for unconsumed locals in then block
+        let unconsumed_then = context.get_unconsumed_linear_vars();
+        for (name, span) in unconsumed_then {
+            self.report_error(
+                format!("Linear variable '{}' must be consumed exactly once", name),
+                span,
+            );
+        }
         context.exit_scope();
 
+        let then_state = context.snapshot_linear_state();
+
+        // Restore state for Else block
+        context.restore_linear_state(start_state);
+
         if let Some(else_stmt) = else_block {
-            // Enter scope for else block
             context.enter_scope();
             self.check_statement(else_stmt, context);
+            let unconsumed_else = context.get_unconsumed_linear_vars();
+            for (name, span) in unconsumed_else {
+                self.report_error(
+                    format!("Linear variable '{}' must be consumed exactly once", name),
+                    span,
+                );
+            }
             context.exit_scope();
         }
+
+        let else_state = context.snapshot_linear_state();
+
+        // Merge and Validate
+        // For a linear variable defined outside implementation of the blocks:
+        // If it was consumed in one branch, it must be consumed in the other.
+        for (scope_idx, scope) in then_state.iter().enumerate() {
+            if scope_idx >= else_state.len() {
+                break;
+            }
+            let else_scope = &else_state[scope_idx];
+
+            for (name, consumed_then) in scope {
+                // Find corresponding var in else_scope
+                if let Some((_, consumed_else)) = else_scope.iter().find(|(n, _)| n == name) {
+                    if *consumed_then != *consumed_else {
+                        // We found a mismatch.
+                        // We need a span to report the error.
+                        // Ideally we point to the if statement or the variable.
+                        // We don't have the variable span handy easily here.
+                        // Use 'cond.span' as a proxy for the if statement.
+                        self.report_error(
+                             format!(
+                                 "Linear variable '{}' is consumed in one branch but not the other. Linear variables must be consistently consumed.",
+                                 name
+                             ),
+                             cond.span.clone(),
+                         );
+                    }
+                }
+            }
+        }
+
+        // Finalize state: If consistent, set to consumed (which is true in both).
+        context.restore_linear_state(then_state);
     }
 
     fn check_while(&mut self, cond: &Expression, body: &Statement, context: &mut Context) {
@@ -537,6 +605,15 @@ impl TypeChecker {
         context.enter_scope();
         context.enter_loop();
         self.check_statement(body, context);
+
+        let unconsumed = context.get_unconsumed_linear_vars();
+        for (name, span) in unconsumed {
+            self.report_error(
+                format!("Linear variable '{}' must be consumed exactly once", name),
+                span,
+            );
+        }
+
         context.exit_loop();
         context.exit_scope();
     }
@@ -557,6 +634,15 @@ impl TypeChecker {
         self.bind_loop_variables(decls, &element_type, iterable.span.clone(), context);
 
         self.check_statement(body, context);
+
+        let unconsumed = context.get_unconsumed_linear_vars();
+        for (name, span) in unconsumed {
+            self.report_error(
+                format!("Linear variable '{}' must be consumed exactly once", name),
+                span,
+            );
+        }
+
         context.exit_loop();
         context.exit_scope();
     }
@@ -706,6 +792,7 @@ impl TypeChecker {
             self.global_scope.insert(
                 name.to_string(),
                 super::context::SymbolInfo {
+                    consumed: false,
                     ty: func_type.clone(),
                     mutable: false,
                     visibility: properties.visibility.clone(),
@@ -1040,6 +1127,7 @@ impl TypeChecker {
             self.global_scope.insert(
                 name.clone(),
                 super::context::SymbolInfo {
+                    consumed: false,
                     ty: make_type(TypeKind::Meta(Box::new(struct_type.clone()))),
                     mutable: false,
                     visibility: visibility.clone(),
@@ -1112,6 +1200,7 @@ impl TypeChecker {
             self.global_scope.insert(
                 name.clone(),
                 super::context::SymbolInfo {
+                    consumed: false,
                     ty: make_type(TypeKind::Meta(Box::new(enum_type.clone()))),
                     mutable: false,
                     visibility: visibility.clone(),
@@ -1664,6 +1753,7 @@ impl TypeChecker {
             self.global_scope.insert(
                 name.clone(),
                 super::context::SymbolInfo {
+                    consumed: false,
                     ty: class_type_meta.clone(),
                     mutable: false,
                     visibility: visibility.clone(),
@@ -1864,6 +1954,7 @@ impl TypeChecker {
             self.global_scope.insert(
                 name.clone(),
                 super::context::SymbolInfo {
+                    consumed: false,
                     ty: make_type(TypeKind::Meta(Box::new(trait_type.clone()))),
                     mutable: false,
                     visibility: visibility.clone(),

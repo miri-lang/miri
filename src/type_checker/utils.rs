@@ -881,6 +881,15 @@ impl TypeChecker {
                                     )]),
                                 ));
                             }
+                        } else if name == "Linear" {
+                            if let Some(args) = &args {
+                                if args.len() == 1 {
+                                    let t = self.resolve_type_expression(&args[0], context);
+                                    return crate::ast::factory::make_type(TypeKind::Linear(
+                                        Box::new(t),
+                                    ));
+                                }
+                            }
                         }
 
                         // Resolve generic arguments recursively

@@ -100,6 +100,9 @@ impl<'a> EvalContext<'a> {
 
     fn execute_statement(&mut self, stmt: &Statement) -> Result<(), InterpreterError> {
         match &stmt.kind {
+            StatementKind::IncRef(_) | StatementKind::DecRef(_) | StatementKind::Dealloc(_) => {
+                // TODO: Implement RC in interpreter
+            }
             StatementKind::Assign(place, rvalue) => {
                 let value = self.eval_rvalue(rvalue)?;
                 self.write_place(place, value)?;
@@ -217,6 +220,7 @@ impl<'a> EvalContext<'a> {
 
     fn eval_rvalue(&self, rvalue: &Rvalue) -> Result<Value, InterpreterError> {
         match rvalue {
+            Rvalue::Allocate(_, _, _) => todo!("Implement Allocate in interpreter"),
             Rvalue::Use(op) => self.eval_operand(op),
             Rvalue::BinaryOp(op, lhs, rhs) => {
                 let lhs_val = self.eval_operand(lhs)?;

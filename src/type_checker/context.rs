@@ -12,6 +12,8 @@ pub struct SymbolInfo {
     pub mutable: bool,
     pub visibility: MemberVisibility,
     pub module: String,
+    /// Tracks if a linear resource has been consumed/moved.
+    pub consumed: bool,
 }
 
 /// Represents relationships between types (inheritance, interfaces, mixins).
@@ -196,6 +198,7 @@ impl Context {
                     mutable,
                     visibility,
                     module,
+                    consumed: false,
                 },
             );
         }
@@ -238,6 +241,52 @@ impl Context {
         false
     }
 
+    /// Marks a symbol as consumed. Returns true if it was already consumed.
+    pub fn mark_consumed(&mut self, name: &str) -> bool {
+        for scope in self.scopes.iter_mut().rev() {
+            if let Some(info) = scope.get_mut(name) {
+                if info.consumed {
+                    return true;
+                }
+                info.consumed = true;
+                return false;
+            }
+        }
+        false
+    }
+
+    /// Checks if a symbol has been consumed.
+    pub fn is_consumed(&self, name: &str) -> bool {
+        for scope in self.scopes.iter().rev() {
+            if let Some(info) = scope.get(name) {
+                return info.consumed;
+            }
+        }
+        false
+    }
+
+    /// Returns a list of linear variables in the current scope that have not been consumed.
+    pub fn get_unconsumed_linear_vars(&self) -> Vec<(String, Span)> {
+        let mut unconsumed = Vec::new();
+        if let Some(scope) = self.scopes.last() {
+            for (name, info) in scope {
+                if let TypeKind::Linear(_) = &info.ty.kind {
+                    if !info.consumed {
+                        // We need the span of definition.
+                        // Currently SymbolInfo doesn't store the Span.
+                        // We will return the name, and the caller can error on the block close or closest approximation.
+                        // Since we don't store span in SymbolInfo (we should, but big refactor),
+                        // we will return just the name.
+                        // Caller will likely use the block's span or similar.
+                        // Wait, Type has a Span! info.ty.span
+                        unconsumed.push((name.clone(), info.ty.span.clone()));
+                    }
+                }
+            }
+        }
+        unconsumed
+    }
+
     /// Resolves a type definition, searching from the innermost scope outwards.
     pub fn resolve_type_definition(&self, name: &str) -> Option<&TypeDefinition> {
         for scope in self.type_definitions.iter().rev() {
@@ -270,6 +319,34 @@ impl Context {
     /// Returns true if we are currently inside a class context.
     pub fn in_class(&self) -> bool {
         self.current_class.is_some()
+    }
+    /// Snapshots the consumed state of all linear variables in all scopes.
+    /// Returns a list of scopes, each containing a list of (variable name, consumed state).
+    pub fn snapshot_linear_state(&self) -> Vec<Vec<(String, bool)>> {
+        self.scopes
+            .iter()
+            .map(|scope| {
+                scope
+                    .iter()
+                    .filter(|(_, info)| matches!(info.ty.kind, TypeKind::Linear(_)))
+                    .map(|(k, v)| (k.clone(), v.consumed))
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Restores the consumed state of linear variables from a snapshot.
+    pub fn restore_linear_state(&mut self, snapshot: Vec<Vec<(String, bool)>>) {
+        for (i, scope_snapshot) in snapshot.into_iter().enumerate() {
+            if i < self.scopes.len() {
+                let scope = &mut self.scopes[i];
+                for (name, consumed) in scope_snapshot {
+                    if let Some(info) = scope.get_mut(&name) {
+                        info.consumed = consumed;
+                    }
+                }
+            }
+        }
     }
 }
 

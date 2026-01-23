@@ -175,6 +175,7 @@ impl TypeChecker {
         global_scope.insert(
             "print".to_string(),
             SymbolInfo {
+                consumed: false,
                 ty: crate::ast::factory::make_type(TypeKind::Function(
                     Some(vec![generic_decl]),
                     vec![Parameter {

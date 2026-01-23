@@ -19,6 +19,9 @@ impl fmt::Display for Statement {
             StatementKind::Assign(place, rvalue) => write!(f, "{} = {}", place, rvalue),
             StatementKind::StorageLive(place) => write!(f, "StorageLive({})", place),
             StatementKind::StorageDead(place) => write!(f, "StorageDead({})", place),
+            StatementKind::IncRef(place) => write!(f, "IncRef({})", place),
+            StatementKind::DecRef(place) => write!(f, "DecRef({})", place),
+            StatementKind::Dealloc(place) => write!(f, "Dealloc({})", place),
             StatementKind::Nop => write!(f, "nop"),
         }
     }
@@ -32,6 +35,12 @@ pub enum StatementKind {
     StorageLive(Place),
     /// A storage dead statement (end of variable scope).
     StorageDead(Place),
+    /// Unconditional increment of reference count.
+    IncRef(Place),
+    /// Unconditional decrement of reference count. May trigger deallocation.
+    DecRef(Place),
+    /// Explicit deallocation (used when optimization proves uniqueness).
+    Dealloc(Place),
     /// No-op.
     Nop,
 }

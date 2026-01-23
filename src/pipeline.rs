@@ -291,8 +291,11 @@ impl Pipeline {
 
         for stmt in &result.ast.body {
             if let StatementKind::FunctionDeclaration(name, _, _, _, _, _) = &stmt.node {
-                let body = mir::lowering::lower_function(stmt, &result.type_checker, is_release)
-                    .map_err(|e| CompilerError::Codegen(format!("MIR lowering failed: {}", e)))?;
+                let body =
+                    mir::lowering::lower_function(stmt, &result.type_checker, is_release, true)
+                        .map_err(|e| {
+                            CompilerError::Codegen(format!("MIR lowering failed: {}", e))
+                        })?;
                 bodies.push((name.clone(), body));
             }
         }

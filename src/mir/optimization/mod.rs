@@ -30,12 +30,14 @@
 pub mod constant_propagation;
 pub mod copy_propagation;
 pub mod dead_code;
+pub mod perceus;
 pub mod simplify_cfg;
 
 use crate::mir::Body;
 use constant_propagation::ConstantPropagation;
 use copy_propagation::CopyPropagation;
 use dead_code::DeadCodeElimination;
+use perceus::Perceus;
 use simplify_cfg::SimplifyCfg;
 
 /// Defines an optimization pass for MIR transformations.
@@ -96,6 +98,7 @@ pub fn optimize(body: &mut Body) {
         Box::new(ConstantPropagation),
         Box::new(CopyPropagation),
         Box::new(DeadCodeElimination),
+        Box::new(Perceus),
     ];
 
     let mut changed = true;

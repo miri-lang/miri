@@ -260,7 +260,7 @@ impl TypeChecker {
         }
     }
 
-    fn infer_identifier(&mut self, name: &str, span: Span, context: &Context) -> Type {
+    fn infer_identifier(&mut self, name: &str, span: Span, context: &mut Context) -> Type {
         // println!("Inferring identifier: {}", name);
         if name == "None" {
             return ast_factory::make_type(TypeKind::Nullable(Box::new(ast_factory::make_type(
@@ -334,6 +334,15 @@ impl TypeChecker {
                 self.report_error(format!("Variable '{}' is not visible", name), span);
                 return ast_factory::make_type(TypeKind::Error);
             }
+
+            // Linearity Check: Ensure linear resources are used exactly once
+            if let TypeKind::Linear(_) = &info.ty.kind {
+                if context.mark_consumed(name) {
+                    self.report_error(format!("Use of moved value: '{}'", name), span);
+                    return ast_factory::make_type(TypeKind::Error);
+                }
+            }
+
             return info.ty;
         }
 

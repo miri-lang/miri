@@ -169,6 +169,12 @@ impl FunctionTranslator {
         local_types: &[Type],
     ) -> Result<(), String> {
         match &stmt.kind {
+            StatementKind::IncRef(_) | StatementKind::DecRef(_) | StatementKind::Dealloc(_) => {
+                // TODO: Implement reference counting in Cranelift backend
+                // For now, these are optimizations so we might be able to ignore them IF no custom RC needed?
+                // But Dealloc is critical.
+                todo!("Implement IncRef/DecRef/Dealloc in Cranelift");
+            }
             StatementKind::Assign(place, rvalue) => {
                 let mut value = Self::translate_rvalue(builder, rvalue, locals)?;
 
@@ -200,6 +206,7 @@ impl FunctionTranslator {
         locals: &HashMap<Local, Variable>,
     ) -> Result<Value, String> {
         match rvalue {
+            Rvalue::Allocate(_, _, _) => todo!("Implement Rvalue::Allocate in Cranelift"),
             Rvalue::Use(operand) => Self::translate_operand(builder, operand, locals),
 
             Rvalue::BinaryOp(op, lhs, rhs) => {

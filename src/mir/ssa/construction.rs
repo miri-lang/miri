@@ -186,6 +186,13 @@ impl SSABuilder {
                     StatementKind::Nop
                     | StatementKind::StorageLive(_)
                     | StatementKind::StorageDead(_) => {}
+                    StatementKind::IncRef(place)
+                    | StatementKind::DecRef(place)
+                    | StatementKind::Dealloc(place) => {
+                        if place.projection.is_empty() {
+                            place.local = self.get_current_version(place.local);
+                        }
+                    }
                 }
 
                 // Rewrite Defs
@@ -331,6 +338,11 @@ impl SSABuilder {
                 // Phis are definitions in this block
             }
             Rvalue::GpuIntrinsic(_) => {}
+            Rvalue::Allocate(size, align, alloc) => {
+                self.rewrite_operand(size);
+                self.rewrite_operand(align);
+                self.rewrite_operand(alloc);
+            }
         }
     }
 
