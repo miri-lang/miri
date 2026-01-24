@@ -24,8 +24,8 @@ pub enum Value {
     /// Class instance: (class name, field values).
     /// Note: Methods are resolved via the type checker's ClassDefinition.
     Class(String, HashMap<String, Value>),
-    /// Enum variant: (type name, variant name, optional associated value).
-    Enum(String, String, Option<Box<Value>>),
+    /// Enum variant: (type name, variant name, discriminant, optional associated value).
+    Enum(String, String, i128, Option<Box<Value>>),
     /// Array/list of values.
     Array(Vec<Value>),
     /// Map of key-value pairs.
@@ -33,8 +33,11 @@ pub enum Value {
     /// Unit/None value.
     #[default]
     None,
-    /// Reference to another value (for future use).
+    /// Reference to another value (borrowed).
     Ref(Box<Value>),
+    /// Pointer to heap-allocated value (owned/managed).
+    /// Stores the allocation ID.
+    Pointer(usize),
     /// Uninitialized value (for safety checks).
     Uninitialized,
 }
@@ -66,7 +69,7 @@ impl fmt::Display for Value {
                 }
                 write!(f, ")")
             }
-            Value::Enum(type_name, variant, value) => {
+            Value::Enum(type_name, variant, _discr, value) => {
                 write!(f, "{}.{}", type_name, variant)?;
                 if let Some(v) = value {
                     write!(f, "({})", v)?;
@@ -95,6 +98,7 @@ impl fmt::Display for Value {
             }
             Value::None => write!(f, "none"),
             Value::Ref(v) => write!(f, "&{}", v),
+            Value::Pointer(id) => write!(f, "#ptr({})", id),
             Value::Uninitialized => write!(f, "<uninitialized>"),
         }
     }
@@ -147,11 +151,12 @@ impl Value {
             Value::String(_) => "string".to_string(),
             Value::Tuple(_) => "tuple".to_string(),
             Value::Struct(name, _) | Value::Class(name, _) => name.clone(),
-            Value::Enum(name, variant, _) => format!("{}::{}", name, variant),
+            Value::Enum(name, variant, _, _) => format!("{}::{}", name, variant),
             Value::Array(_) => "array".to_string(),
             Value::Map(_) => "map".to_string(),
             Value::None => "none".to_string(),
             Value::Ref(_) => "reference".to_string(),
+            Value::Pointer(_) => "pointer".to_string(),
             Value::Uninitialized => "uninitialized".to_string(),
         }
     }

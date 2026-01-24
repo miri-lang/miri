@@ -5,6 +5,7 @@ use logos::Logos;
 
 use crate::error::syntax::Span;
 
+/// A parsed regex literal with its flags.
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub struct RegexToken {
     pub body: String,
@@ -15,6 +16,7 @@ pub struct RegexToken {
     pub unicode: bool,
 }
 
+/// All token types produced by the lexer.
 #[derive(Logos, Debug, PartialEq, Clone)]
 pub enum Token {
     // Keywords
@@ -235,7 +237,8 @@ pub enum Token {
 
     #[regex("[0-9]+(?:_[0-9]+)*\\.", priority = 4)]
     FloatOrRange,
-    #[regex("\\.[0-9]+(?:_[0-9]+)*([eE][+-]?[0-9]+(?:_[0-9]+)*)?", priority = 3)]
+
+    #[regex(r"\.[0-9]+(?:_[0-9]+)*([eE][+-]?[0-9]+(?:_[0-9]+)*)?", priority = 3)]
     #[regex(
         "[0-9]+(?:_[0-9]+)*(\\.[0-9]+(?:_[0-9]+)*)?([eE][+-]?[0-9]+(?:_[0-9]+)*)?",
         priority = 2
@@ -272,7 +275,8 @@ pub enum Token {
 
     Indent,
     Dedent,
-    ExpressionStatementEnd, // Used to mark the end of an expression statement (one code line)
+    /// Marks the end of an expression statement (one logical line).
+    ExpressionStatementEnd,
 
     #[regex("[ \t\r]+", logos::skip)]
     Whitespace,
@@ -282,4 +286,5 @@ pub enum Token {
     ByteOrderMark,
 }
 
+/// A token paired with its source span.
 pub type TokenSpan = (Token, Span);

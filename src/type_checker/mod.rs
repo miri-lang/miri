@@ -42,6 +42,7 @@ impl Default for TypeChecker {
 }
 
 impl TypeChecker {
+    /// Creates a new type checker with built-in types and functions pre-loaded.
     pub fn new() -> Self {
         let (global_scope, global_type_definitions) = Self::initialize_builtins();
 
@@ -197,14 +198,17 @@ impl TypeChecker {
         (global_scope, global_type_definitions)
     }
 
+    /// Sets the current module name for scoping declarations.
     pub fn set_current_module(&mut self, name: String) {
         self.current_module = name;
     }
 
+    /// Returns the inferred type for a given expression ID.
     pub fn get_type(&self, id: usize) -> Option<&Type> {
         self.types.get(&id)
     }
 
+    /// Returns the type of a global variable by name.
     pub fn get_variable_type(&self, name: &str) -> Option<&Type> {
         self.global_scope.get(name).map(|info| &info.ty)
     }

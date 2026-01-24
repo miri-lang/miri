@@ -5,12 +5,14 @@ use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable, Severity
 use crate::error::format::format_diagnostic;
 use crate::error::syntax::Span;
 
+/// A type error detected during type checking, with its source location.
 #[derive(Debug, PartialEq, Clone)]
 pub struct TypeError {
     pub kind: TypeErrorKind,
     pub span: Span,
 }
 
+/// All possible type error variants produced by the type checker.
 #[derive(Debug, PartialEq, Clone)]
 pub enum TypeErrorKind {
     UndefinedVariable {
@@ -49,7 +51,6 @@ pub enum TypeErrorKind {
         expected: usize,
         found: usize,
     },
-    // Fallback for unified migration
     Custom {
         message: String,
         help: Option<String>,
@@ -57,6 +58,7 @@ pub enum TypeErrorKind {
 }
 
 impl TypeErrorKind {
+    /// Returns the error code, title, message, and help text for this error kind.
     pub fn properties(&self) -> ErrorProperties {
         match self {
             Self::UndefinedVariable { name } => ErrorProperties {
@@ -129,7 +131,7 @@ impl TypeErrorKind {
                 ),
             },
             Self::Custom { message, .. } => ErrorProperties {
-                code: "E0101", // Fallback to generic type mismatch or similar
+                code: "E0101",
                 title: "Type Error",
                 message: Some(message.clone()),
                 help: None,
@@ -139,11 +141,12 @@ impl TypeErrorKind {
 }
 
 impl TypeError {
+    /// Creates a new type error of the given kind at the given span.
     pub fn new(kind: TypeErrorKind, span: Span) -> Self {
         Self { kind, span }
     }
 
-    /// Helper for backward compatibility or custom errors
+    /// Creates a custom type error with a freeform message.
     pub fn custom(message: String, span: Span, help: Option<String>) -> Self {
         Self {
             kind: TypeErrorKind::Custom { message, help },
@@ -151,6 +154,7 @@ impl TypeError {
         }
     }
 
+    /// Formats this error for terminal display using the given source code.
     pub fn report(&self, source: &str) -> String {
         Reportable::report(self, source)
     }

@@ -19,6 +19,7 @@ enum Colors: Red, Green, Blue
 ",
         vec![enum_statement(
             identifier("Colors"),
+            None,
             vec![
                 enum_value("Red", vec![]),
                 enum_value("Green", vec![]),
@@ -40,6 +41,7 @@ enum Colors
 ",
         vec![enum_statement(
             identifier("Colors"),
+            None,
             vec![
                 enum_value("Red", vec![]),
                 enum_value("Green", vec![]),
@@ -58,6 +60,7 @@ enum Message: Write(string), Move(int, int)
 ",
         vec![enum_statement(
             identifier("Message"),
+            None,
             vec![
                 enum_value("Write", vec![type_expr_non_null(type_string())]),
                 enum_value(
@@ -84,6 +87,7 @@ enum Event
 ",
         vec![enum_statement(
             identifier("Event"),
+            None,
             vec![
                 enum_value("Quit", vec![]),
                 enum_value("KeyPress", vec![type_expr_non_null(type_int())]),
@@ -106,6 +110,7 @@ fn test_enum_with_single_value() {
         "enum Status: Ok",
         vec![enum_statement(
             identifier("Status"),
+            None,
             vec![enum_value("Ok", vec![])],
             MemberVisibility::Public,
         )],
@@ -120,6 +125,7 @@ enum Data: Point([int]?), Config({string: bool})
 ",
         vec![enum_statement(
             identifier("Data"),
+            None,
             vec![
                 enum_value("Point", vec![type_expr_null(type_list(type_int()))]),
                 enum_value(
@@ -179,6 +185,7 @@ fn test_error_enum_malformed_value_type() {
         "enum E: V(int,)",
         vec![enum_statement(
             identifier("E"),
+            None,
             vec![enum_value("V", vec![type_expr_non_null(type_int())])],
             MemberVisibility::Public,
         )],
@@ -191,6 +198,7 @@ fn test_enum_visibility_modifiers() {
         "public enum Color: Red",
         vec![enum_statement(
             identifier("Color"),
+            None,
             vec![enum_value("Red", vec![])],
             MemberVisibility::Public,
         )],
@@ -200,6 +208,7 @@ fn test_enum_visibility_modifiers() {
         "protected enum E: V",
         vec![enum_statement(
             identifier("E"),
+            None,
             vec![enum_value("V", vec![])],
             MemberVisibility::Protected,
         )],
@@ -208,6 +217,7 @@ fn test_enum_visibility_modifiers() {
         "private enum E: V",
         vec![enum_statement(
             identifier("E"),
+            None,
             vec![enum_value("V", vec![])],
             MemberVisibility::Private,
         )],

@@ -556,11 +556,7 @@ impl TypeChecker {
                     context.exit_scope();
                 }
 
-                // GPU Semantic Check: Forbid calling non-GPU functions (currently strict: no calls except built-ins/other user functions?)
-                // Actually, the requirement says "Cannot call host functions like print".
-                // Since we don't have a way to tag "gpu" vs "host" on imported functions yet (except if they are gpu fn),
-                // we will specifically ban "print" for now as per plan.
-                // Longer term: check `is_gpu` on the function being called.
+                // GPU kernels cannot call host functions.
                 if context.in_gpu_function {
                     if let ExpressionKind::Identifier(name, _) = &func.node {
                         if name == "print" {
@@ -1029,6 +1025,30 @@ impl TypeChecker {
     ) -> Type {
         let obj_type = self.infer_expression(obj, context);
 
+        if let TypeKind::Tuple(element_types) = &obj_type.kind {
+            if let ExpressionKind::Literal(Literal::Integer(val)) = &prop.node {
+                let idx = match val {
+                    crate::ast::IntegerLiteral::I8(v) => *v as usize,
+                    crate::ast::IntegerLiteral::I16(v) => *v as usize,
+                    crate::ast::IntegerLiteral::I32(v) => *v as usize,
+                    crate::ast::IntegerLiteral::I64(v) => *v as usize,
+                    crate::ast::IntegerLiteral::I128(v) => *v as usize,
+                    crate::ast::IntegerLiteral::U8(v) => *v as usize,
+                    crate::ast::IntegerLiteral::U16(v) => *v as usize,
+                    crate::ast::IntegerLiteral::U32(v) => *v as usize,
+                    crate::ast::IntegerLiteral::U64(v) => *v as usize,
+                    crate::ast::IntegerLiteral::U128(v) => *v as usize,
+                };
+
+                if idx < element_types.len() {
+                    return self.resolve_type_expression(&element_types[idx], context);
+                } else {
+                    self.report_error("Tuple index out of bounds".to_string(), span);
+                    return make_type(TypeKind::Error);
+                }
+            }
+        }
+
         let prop_name = if let ExpressionKind::Identifier(name, _) = &prop.node {
             name
         } else {
@@ -1323,21 +1343,59 @@ impl TypeChecker {
         match obj_type.kind {
             TypeKind::Meta(inner_type) => {
                 // Static member access (Enum variant)
-                if let TypeKind::Custom(name, _) = inner_type.kind {
+                if let TypeKind::Custom(name, _) = &inner_type.kind {
                     let def_opt = context
-                        .resolve_type_definition(&name)
+                        .resolve_type_definition(name)
                         .cloned()
-                        .or_else(|| self.global_type_definitions.get(&name).cloned());
+                        .or_else(|| self.global_type_definitions.get(name).cloned());
 
                     if let Some(TypeDefinition::Enum(def)) = def_opt {
                         if let Some(variant_types) = def.variants.get(prop_name) {
                             // If variant has no associated types, it's a value of the Enum type.
                             // If it has associated types, it's a constructor function.
+
+                            // Check for generics substitution
+                            let type_args = if let TypeKind::Custom(_, args) = &inner_type.kind {
+                                args.clone()
+                            } else {
+                                None
+                            };
+
                             if variant_types.is_empty() {
-                                make_type(TypeKind::Custom(name.clone(), None))
+                                make_type(TypeKind::Custom(name.clone(), type_args))
                             } else {
                                 // Constructor function: (args) -> EnumType
-                                let params: Vec<Parameter> = variant_types
+
+                                // Perform substitution if needed
+                                let mut substituted_variant_types = Vec::new();
+                                if let Some(generics) = &def.generics {
+                                    if let Some(args) = &type_args {
+                                        if generics.len() == args.len() {
+                                            let mut mapping = HashMap::new();
+                                            for (param, arg_expr) in
+                                                generics.iter().zip(args.iter())
+                                            {
+                                                let arg_type = self
+                                                    .extract_type_from_expression(arg_expr)
+                                                    .unwrap_or(make_type(TypeKind::Error));
+                                                mapping.insert(param.name.clone(), arg_type);
+                                            }
+
+                                            for t in variant_types {
+                                                substituted_variant_types
+                                                    .push(self.substitute_type(t, &mapping));
+                                            }
+                                        } else {
+                                            substituted_variant_types = variant_types.clone();
+                                        }
+                                    } else {
+                                        substituted_variant_types = variant_types.clone();
+                                    }
+                                } else {
+                                    substituted_variant_types = variant_types.clone();
+                                }
+
+                                let params: Vec<Parameter> = substituted_variant_types
                                     .iter()
                                     .enumerate()
                                     .map(|(i, t)| Parameter {
@@ -1351,7 +1409,7 @@ impl TypeChecker {
                                     None,
                                     params,
                                     Some(Box::new(self.create_type_expression(make_type(
-                                        TypeKind::Custom(name.clone(), None),
+                                        TypeKind::Custom(name.clone(), type_args),
                                     )))),
                                 ))
                             }
@@ -1802,9 +1860,18 @@ impl TypeChecker {
                             );
                         }
                         // Check if subject type matches the enum type
-                        // We construct the expected type from the enum name
-                        // TODO: Handle generics
-                        let expected_type = make_type(TypeKind::Custom(parent_name.clone(), None));
+                        // We construct the expected type from the enum name, preserving generic args if present in subject
+                        let expected_type = if let TypeKind::Custom(sub_name, sub_args) =
+                            &subject_type.kind
+                        {
+                            if sub_name == parent_name {
+                                make_type(TypeKind::Custom(parent_name.clone(), sub_args.clone()))
+                            } else {
+                                make_type(TypeKind::Custom(parent_name.clone(), None))
+                            }
+                        } else {
+                            make_type(TypeKind::Custom(parent_name.clone(), None))
+                        };
                         if !self.are_compatible(subject_type, &expected_type, context) {
                             self.report_error(
                                 format!(
@@ -1953,50 +2020,70 @@ impl TypeChecker {
         if *kind == TypeDeclarationKind::None && target.is_none() {
             if let Some(args) = generics {
                 let expr_type = self.infer_expression(expr, context);
-                if let TypeKind::Function(Some(params), func_params, ret) = expr_type.kind {
-                    let mut mapping = HashMap::new();
-                    if params.len() != args.len() {
-                        self.report_error("Generic argument count mismatch".to_string(), span);
-                        return make_type(TypeKind::Error);
-                    }
+                match expr_type.kind {
+                    TypeKind::Function(Some(params), func_params, ret) => {
+                        let mut mapping = HashMap::new();
+                        if params.len() != args.len() {
+                            self.report_error("Generic argument count mismatch".to_string(), span);
+                            return make_type(TypeKind::Error);
+                        }
 
-                    for (i, param) in params.iter().enumerate() {
-                        if let ExpressionKind::GenericType(name_expr, _, _) = &param.node {
-                            if let ExpressionKind::Identifier(name, _) = &name_expr.node {
-                                let arg_type = self.resolve_type_expression(&args[i], context);
-                                mapping.insert(name.clone(), arg_type);
+                        for (i, param) in params.iter().enumerate() {
+                            if let ExpressionKind::GenericType(name_expr, _, _) = &param.node {
+                                if let ExpressionKind::Identifier(name, _) = &name_expr.node {
+                                    let arg_type = self.resolve_type_expression(&args[i], context);
+                                    mapping.insert(name.clone(), arg_type);
+                                }
                             }
                         }
+
+                        let mut new_params = Vec::new();
+                        for p in func_params {
+                            let p_type = self
+                                .extract_type_from_expression(&p.typ)
+                                .unwrap_or(make_type(TypeKind::Error));
+                            let new_p_type = self.substitute_type(&p_type, &mapping);
+                            new_params.push(Parameter {
+                                name: p.name.clone(),
+                                typ: Box::new(self.create_type_expression(new_p_type)),
+                                guard: p.guard.clone(),
+                                default_value: p.default_value.clone(),
+                            });
+                        }
+
+                        let new_ret = if let Some(r) = ret {
+                            let r_type = self
+                                .extract_type_from_expression(&r)
+                                .unwrap_or(make_type(TypeKind::Error));
+                            let new_r_type = self.substitute_type(&r_type, &mapping);
+                            Some(Box::new(self.create_type_expression(new_r_type)))
+                        } else {
+                            None
+                        };
+
+                        return make_type(TypeKind::Function(None, new_params, new_ret));
                     }
-
-                    let mut new_params = Vec::new();
-                    for p in func_params {
-                        let p_type = self
-                            .extract_type_from_expression(&p.typ)
-                            .unwrap_or(make_type(TypeKind::Error));
-                        let new_p_type = self.substitute_type(&p_type, &mapping);
-                        new_params.push(Parameter {
-                            name: p.name.clone(),
-                            typ: Box::new(self.create_type_expression(new_p_type)),
-                            guard: p.guard.clone(),
-                            default_value: p.default_value.clone(),
-                        });
+                    TypeKind::Meta(inner) => {
+                        if let TypeKind::Custom(name, _) = inner.kind {
+                            let resolved_args: Vec<Expression> = args
+                                .iter()
+                                .map(|arg| {
+                                    let ty = self.resolve_type_expression(arg, context);
+                                    self.create_type_expression(ty)
+                                })
+                                .collect();
+                            return make_type(TypeKind::Meta(Box::new(make_type(
+                                TypeKind::Custom(name, Some(resolved_args)),
+                            ))));
+                        } else {
+                            self.report_error("Expected generic type".to_string(), span);
+                            return make_type(TypeKind::Error);
+                        }
                     }
-
-                    let new_ret = if let Some(r) = ret {
-                        let r_type = self
-                            .extract_type_from_expression(&r)
-                            .unwrap_or(make_type(TypeKind::Error));
-                        let new_r_type = self.substitute_type(&r_type, &mapping);
-                        Some(Box::new(self.create_type_expression(new_r_type)))
-                    } else {
-                        None
-                    };
-
-                    return make_type(TypeKind::Function(None, new_params, new_ret));
-                } else {
-                    self.report_error("Expected generic function".to_string(), span);
-                    return make_type(TypeKind::Error);
+                    _ => {
+                        self.report_error("Expected generic function or type".to_string(), span);
+                        return make_type(TypeKind::Error);
+                    }
                 }
             }
         }

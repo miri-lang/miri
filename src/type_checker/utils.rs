@@ -404,12 +404,7 @@ impl TypeChecker {
         if self.is_integer(t1) && self.is_integer(t2) {
             if let (Some(s1), Some(s2)) = (self.get_integer_size(t1), self.get_integer_size(t2)) {
                 if s1 >= s2 {
-                    // Also check signedness compatibility?
-                    // For now, let's assume simple size check as requested "assigning smaller type to a larger".
-                    // Strict signedness check might be needed later.
-                    // e.g. u8 -> i16 (ok), i8 -> u16 (maybe not ok if negative?)
-                    // User said "assigning smaller type to a larger".
-                    // Let's stick to size for now.
+                    // Only size is checked; signedness compatibility is not yet enforced.
                     return true;
                 }
             }
@@ -421,7 +416,34 @@ impl TypeChecker {
         }
 
         // Handle inheritance and interfaces
-        if let (TypeKind::Custom(n1, _), TypeKind::Custom(n2, _)) = (&t1.kind, &t2.kind) {
+        // Handle inheritance and interfaces
+        if let (TypeKind::Custom(n1, args1), TypeKind::Custom(n2, args2)) = (&t1.kind, &t2.kind) {
+            if n1 == n2 {
+                // If names match, check generic arguments compatibility
+                if let (Some(a1), Some(a2)) = (args1, args2) {
+                    if a1.len() != a2.len() {
+                        return false;
+                    }
+                    for (arg1, arg2) in a1.iter().zip(a2.iter()) {
+                        let t1_arg = self
+                            .extract_type_from_expression(arg1)
+                            .unwrap_or(crate::ast::factory::make_type(TypeKind::Error));
+                        let t2_arg = self
+                            .extract_type_from_expression(arg2)
+                            .unwrap_or(crate::ast::factory::make_type(TypeKind::Error));
+                        if !self.are_compatible(&t1_arg, &t2_arg, context) {
+                            return false;
+                        }
+                    }
+                    return true;
+                } else if args1.is_none() && args2.is_none() {
+                    return true;
+                }
+                // Mismatch in generic args presence (one raw, one generic) - assume incompatible or strict?
+                // For safety, require match.
+                return false;
+            }
+
             if self.is_subtype(n2, n1) {
                 return true;
             }
@@ -918,8 +940,13 @@ impl TypeChecker {
                                         expr.span.clone(),
                                     );
                                 }
-                                TypeDefinition::Enum(_) => {
-                                    // TODO: Enum generics
+                                TypeDefinition::Enum(enum_def) => {
+                                    self.validate_generics(
+                                        &resolved_args,
+                                        &enum_def.generics,
+                                        context,
+                                        expr.span.clone(),
+                                    );
                                 }
                                 TypeDefinition::Generic(gen_def) => {
                                     if resolved_args.is_some() {

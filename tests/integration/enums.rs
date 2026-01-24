@@ -32,7 +32,6 @@ fn main()
 }
 
 #[test]
-#[ignore = "MIR lowering: enum discriminant extraction for match not fully working"]
 fn test_enum_match() {
     interpreter_assert_returns(
         r#"
@@ -51,7 +50,6 @@ fn main() int
 }
 
 #[test]
-#[ignore = "MIR lowering: enum discriminant extraction for match not fully working"]
 fn test_enum_match_multiple_variants() {
     interpreter_assert_returns(
         r#"

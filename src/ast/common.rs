@@ -3,6 +3,7 @@
 
 use crate::ast::expression::Expression;
 
+/// Visibility level for class/struct members and declarations.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum MemberVisibility {
     #[default]

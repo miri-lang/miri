@@ -172,29 +172,26 @@ pub fn count_basic_blocks(body: &Body) -> usize {
 pub fn has_index_projection(body: &Body) -> bool {
     for block in &body.basic_blocks {
         for stmt in &block.statements {
-            match &stmt.kind {
-                StatementKind::Assign(place, _) => {
-                    if place
-                        .projection
-                        .iter()
-                        .any(|p| matches!(p, PlaceElem::Index(_)))
-                    {
-                        return true;
-                    }
-                }
-                _ => {}
-            }
-            if let StatementKind::Assign(_, rvalue) = &stmt.kind {
-                if let Rvalue::Use(Operand::Copy(place)) | Rvalue::Use(Operand::Move(place)) =
-                    rvalue
+            if let StatementKind::Assign(place, _) = &stmt.kind {
+                if place
+                    .projection
+                    .iter()
+                    .any(|p| matches!(p, PlaceElem::Index(_)))
                 {
-                    if place
-                        .projection
-                        .iter()
-                        .any(|p| matches!(p, PlaceElem::Index(_)))
-                    {
-                        return true;
-                    }
+                    return true;
+                }
+            }
+            if let StatementKind::Assign(
+                _,
+                Rvalue::Use(Operand::Copy(place)) | Rvalue::Use(Operand::Move(place)),
+            ) = &stmt.kind
+            {
+                if place
+                    .projection
+                    .iter()
+                    .any(|p| matches!(p, PlaceElem::Index(_)))
+                {
+                    return true;
                 }
             }
         }
@@ -657,7 +654,7 @@ pub fn mir_lowering_order_preserved_test(source: &str, var_names: &[&str]) {
     let body = mir_lower_code(source);
     let indices: Vec<_> = var_names
         .iter()
-        .map(|name| find_local_idx(&body, name).expect(&format!("{} not found", name)))
+        .map(|name| find_local_idx(&body, name).unwrap_or_else(|| panic!("{} not found", name)))
         .collect();
 
     let order = get_assignment_order(&body, 0);

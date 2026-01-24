@@ -27,16 +27,8 @@ impl Operand {
                             // TODO: Implement Deref type resolution if we support pointers
                         }
                         PlaceElem::Field(_idx) => {
-                            // TODO: Implement field type resolution for tuples/structs using definitions
-                            // This requires more context (TypeChecker/Definitions) than just Body usually.
-                            // But for Tuple, we might have type info in TypeKind::Tuple.
-                            if let crate::ast::types::TypeKind::Tuple(_elements) = &ty.kind {
-                                // This is tricky because TypeKind::Tuple stores Expressions, not Types directly?
-                                // Actually Type structure in ast::types has TypeKind::Tuple(Vec<Expression>) which seems wrong for a resolved Type.
-                                // It should be Vec<Type>.
-                                // Let's simplify for now: just return the base type if projection is complex,
-                                // or assume we are not resolving projections here deeply yet.
-                            }
+                            // TODO: Implement field type resolution for tuples/structs
+                            if let crate::ast::types::TypeKind::Tuple(_elements) = &ty.kind {}
                         }
                         PlaceElem::Index(_) => {
                             // TODO: Array/List element type

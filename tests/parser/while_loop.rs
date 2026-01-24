@@ -18,7 +18,7 @@ while x > 0
     x -= 1
 ",
         binary(
-            identifier("x".into()),
+            identifier("x"),
             BinaryOp::GreaterThan,
             int_literal_expression(0),
         ),
@@ -38,7 +38,7 @@ while x > 0
     // TODO
 ",
         binary(
-            identifier("x".into()),
+            identifier("x"),
             BinaryOp::GreaterThan,
             int_literal_expression(0),
         ),
@@ -55,13 +55,13 @@ while x > 0
         y += 1
 ",
         binary(
-            identifier("x".into()),
+            identifier("x"),
             BinaryOp::GreaterThan,
             int_literal_expression(0),
         ),
         block(vec![while_statement(
             binary(
-                identifier("y".into()),
+                identifier("y"),
                 BinaryOp::LessThan,
                 int_literal_expression(5),
             ),
@@ -84,13 +84,13 @@ while x > 0
         // TODO
 ",
         binary(
-            identifier("x".into()),
+            identifier("x"),
             BinaryOp::GreaterThan,
             int_literal_expression(0),
         ),
         block(vec![while_statement(
             binary(
-                identifier("y".into()),
+                identifier("y"),
                 BinaryOp::LessThan,
                 int_literal_expression(5),
             ),
@@ -107,7 +107,7 @@ fn test_while_loop_inline() {
 while x > 0: x -= 1
 ",
         binary(
-            identifier("x".into()),
+            identifier("x"),
             BinaryOp::GreaterThan,
             int_literal_expression(0),
         ),
@@ -130,17 +130,13 @@ while x < 10
         x += 2
 ",
         binary(
-            identifier("x".into()),
+            identifier("x"),
             BinaryOp::LessThan,
             int_literal_expression(10),
         ),
         block(vec![if_statement(
             binary(
-                binary(
-                    identifier("x".into()),
-                    BinaryOp::Mod,
-                    int_literal_expression(2),
-                ),
+                binary(identifier("x"), BinaryOp::Mod, int_literal_expression(2)),
                 BinaryOp::Equal,
                 int_literal_expression(0),
             ),
@@ -170,13 +166,13 @@ while (
 ",
         logical(
             binary(
-                identifier("x".into()),
+                identifier("x"),
                 BinaryOp::GreaterThan,
                 int_literal_expression(0),
             ),
             BinaryOp::And,
             binary(
-                identifier("y".into()),
+                identifier("y"),
                 BinaryOp::LessThan,
                 int_literal_expression(5),
             ),

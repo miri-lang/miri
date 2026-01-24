@@ -10,32 +10,32 @@ use miri::error::syntax::SyntaxErrorKind;
 
 #[test]
 fn test_unary_expression_negate() {
-    unary_expression_test("-x", UnaryOp::Negate, identifier("x".into()));
+    unary_expression_test("-x", UnaryOp::Negate, identifier("x"));
 }
 
 #[test]
 fn test_unary_expression_plus() {
-    unary_expression_test("+x", UnaryOp::Plus, identifier("x".into()));
+    unary_expression_test("+x", UnaryOp::Plus, identifier("x"));
 }
 
 #[test]
 fn test_unary_expression_not() {
-    unary_expression_test("not x", UnaryOp::Not, identifier("x".into()));
+    unary_expression_test("not x", UnaryOp::Not, identifier("x"));
 }
 
 #[test]
 fn test_unary_expression_bitwise_not() {
-    unary_expression_test("~x", UnaryOp::BitwiseNot, identifier("x".into()));
+    unary_expression_test("~x", UnaryOp::BitwiseNot, identifier("x"));
 }
 
 #[test]
 fn test_unary_expression_increment() {
-    unary_expression_test("++x", UnaryOp::Increment, identifier("x".into()));
+    unary_expression_test("++x", UnaryOp::Increment, identifier("x"));
 }
 
 #[test]
 fn test_unary_expression_decrement() {
-    unary_expression_test("--x", UnaryOp::Decrement, identifier("x".into()));
+    unary_expression_test("--x", UnaryOp::Decrement, identifier("x"));
 }
 
 #[test]
@@ -43,7 +43,7 @@ fn test_unary_expression_precedence() {
     parser_test(
         "-x * -2",
         vec![expression_statement(binary(
-            unary(UnaryOp::Negate, identifier("x".into())),
+            unary(UnaryOp::Negate, identifier("x")),
             BinaryOp::Mul,
             unary(UnaryOp::Negate, int_literal_expression(2)),
         ))],

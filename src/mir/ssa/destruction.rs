@@ -22,19 +22,8 @@ impl<'a> SSADestructor<'a> {
     }
 
     fn run(&mut self) {
-        // 1. Collect all Phis and critical edges to split
-        // We can't mutate body structure (split edges) whilst iterating it easily.
-        // Also, splitting edges changes block indices?
-        // No, we can append new blocks.
-        // But adjusting terminators requires mutating blocks.
-
-        // Approach:
-        // Identify edges requiring split: (Pred, Succ).
-        // Only split if Pred has > 1 successor AND Succ has Phis.
-        // Actually, strictly: needed if we must insert code on the edge.
-        // If Pred has 1 successor, we can insert in Pred.
-        // If Pred has > 1 successor, we MUST split if we need to insert code for THIS edge.
-
+        // Split critical edges (pred has >1 successor) where PHI copies are needed,
+        // then replace PHI nodes with copy assignments in predecessor blocks.
         let edges_to_split = self.collect_edges_to_split();
 
         // 2. Split edges
@@ -120,12 +109,8 @@ impl<'a> SSADestructor<'a> {
                     let pred_bb = &self.body.basic_blocks[pred.0];
                     if let Some(term) = &pred_bb.terminator {
                         let num_succs = term.successors().len();
-                        // Also check for Call/GpuLaunch which require splitting even if 1 successor (because they write to destination, and we want copy to happen AFTER).
-                        // Wait, Call writes to destination. Jump happens after.
-                        // Can we insert `x = ...` after Call but before Jump?
-                        // Terminator IS the Call.
-                        // So we cannot insert AFTER terminator.
-                        // So Call terminators MUST split edge to insert code.
+                        // Call/GpuLaunch terminators also need splitting: we cannot insert
+                        // copies after a terminator, so a new block is required.
 
                         let needs_split = num_succs > 1
                             || matches!(
@@ -166,66 +151,16 @@ impl<'a> SSADestructor<'a> {
     }
 
     fn insert_copies(&mut self, block: BasicBlock, copies: Vec<(Place, Operand)>) {
-        // Simple sequentialization: verify if any Dest is used in any Source.
-        // If so, use temp.
-        // Or simpler: always use temp for one side if needed?
-        // Let's implement robust "read to temps, write from temps" if simplified.
-        // But pure "read to temps" doubles variables for no reason.
-
-        // Dependency Graph approach?
-        // Or simple:
-        // `pending_assignments`: `dest = src`.
-        // To avoid cycles `a=b, b=a`:
-        // Break cycle with temp.
-
-        // Algorithm:
-        // While `copies` not empty:
-        //   Find a copy `(d, s)` where `d` is NOT used in any other copy's `s`.
-        //   If found: emit `d = s`, remove from set.
-        //   If not found (cycle): Pick any `(d, s)`, emit `temp = s`, `d = temp`.
-        //     Wait, breaking cycle `a=b, b=a`.
-        //     `t = b`. `a = t`? No.
-        //     We want result: `a_new = b_old`, `b_new = a_old`.
-        //     If we do `a = b` (a gets b), then `b = a` (b gets a which is b). Wrong.
-        //     We need to save `a` if it's overwritten.
-
-        // Let's assume copies are `(dest, src)`.
-        // `src` are values *before* this block?
-        // No, SSA values are unique.
-        // Wait! In SSA, `v1` and `v2` are distinct versions.
-        // `x0 = 1, x1 = 2`.
-        // `x2 = phi(x0, x1)`.
-        // `pred0`: `x2 = x0`.
-        // `x2` is fresh. `x0` is old. They don't overlap!
-        // IN SSA DESTRUCTION, if we map back to *same* physical registers/locals, we have overlap.
-        // But here we are just outputting standard MIR with *still the same SSA locals*.
-        // We are NOT doing register allocation or coalescing yet.
-        // So `dest` (PHI LHS) is ALWAYS a fresh variable defined at PHI.
-        // `src` (PHI RHS) is defined in predecessor.
-        // THEY ARE DISTINCT NAMES.
-        // So there are NO cycles possible in terms of SSA names!
-        // We can just emit `dest = src` in any order.
-
-        // EXCEPTION: If we had "Lost Copy" due to critical edge handling optimization?
-        // But we handle critical edges.
-
-        // So simple emission is safe!
-
+        // Simple sequential emission is safe: in SSA, PHI destinations are always
+        // fresh locals distinct from sources, so no ordering cycles are possible.
+        // Critical edges are already split, preventing lost-copy issues.
         let bb = &mut self.body.basic_blocks[block.0];
 
-        // Insert at end of statements (before terminator)
-        // Or if block was just created for split, it's empty.
-        // If block is Pred, we append.
-
         for (dest, src) in copies {
-            let stmt = Statement {
+            bb.statements.push(Statement {
                 kind: StatementKind::Assign(dest, Rvalue::Use(src)),
                 span: Default::default(),
-            };
-
-            // Should insert before terminator.
-            // But statements vector assumes execution before terminator.
-            bb.statements.push(stmt);
+            });
         }
     }
 }

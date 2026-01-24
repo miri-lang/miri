@@ -4,15 +4,17 @@
 use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable, Severity};
 use crate::error::format::format_diagnostic;
 
-// Span type for tracking positions in source code
+/// Byte offset range in source code, used for error reporting and AST spans.
 pub type Span = std::ops::Range<usize>;
 
+/// A syntax error from the lexer or parser, with its source location.
 #[derive(Debug, PartialEq, Clone)]
 pub struct SyntaxError {
     pub kind: SyntaxErrorKind,
     pub span: Span,
 }
 
+/// All possible syntax error variants produced by the lexer and parser.
 #[derive(Debug, PartialEq, Clone)]
 pub enum SyntaxErrorKind {
     // Lexer errors
@@ -56,6 +58,7 @@ pub enum SyntaxErrorKind {
 }
 
 impl SyntaxErrorKind {
+    /// Returns the error code, title, message, and help text for this error kind.
     pub fn properties(&self) -> ErrorProperties {
         match self {
             Self::InvalidToken => ErrorProperties {
@@ -249,14 +252,13 @@ impl SyntaxErrorKind {
 }
 
 impl SyntaxError {
+    /// Creates a new syntax error of the given kind at the given span.
     pub fn new(kind: SyntaxErrorKind, span: Span) -> Self {
         Self { kind, span }
     }
 
-    /// Report the error using the legacy format function.
-    /// For new code, prefer using `Reportable::report()` or `to_diagnostic()`.
+    /// Formats this error for terminal display using the given source code.
     pub fn report(&self, source: &str) -> String {
-        // Delegate to the new Reportable trait implementation
         Reportable::report(self, source)
     }
 }
@@ -277,7 +279,6 @@ impl Reportable for SyntaxError {
 
     fn report(&self, source: &str) -> String {
         let props = self.kind.properties();
-        // Use the legacy format function for backward compatibility with existing tests
         format_diagnostic(
             source,
             &self.span,
@@ -288,7 +289,7 @@ impl Reportable for SyntaxError {
     }
 }
 
-// Helper function to find line number, column, and the line content from a source string and a byte position.
+/// Finds the line number, column number, and line content for a byte position in source.
 pub fn find_line_info(source: &str, pos: usize) -> (usize, usize, &str) {
     let mut line_start = 0;
     let mut line_num = 1;

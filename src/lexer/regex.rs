@@ -5,12 +5,13 @@ use super::token::{RegexToken, Token};
 use crate::error::syntax::{SyntaxError, SyntaxErrorKind};
 use logos::Lexer;
 
+/// Parses a regex literal token into a `RegexToken` with body and flags.
 pub fn parse_regex_literal(
     lexer: &Lexer<Token>,
     quote_character: char,
 ) -> Result<RegexToken, SyntaxError> {
-    let slice = lexer.slice(); // Example: re"\d+"ig
-    let without_prefix = &slice[2..]; // remove `re`
+    let slice = lexer.slice();
+    let without_prefix = &slice[2..];
 
     let (start, end) = match (
         without_prefix.find(quote_character),

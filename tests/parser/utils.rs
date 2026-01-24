@@ -33,7 +33,7 @@ pub fn parser_test<'src>(input: &'src str, _expected_body: Vec<Statement>) {
     );
 }
 
-pub fn parser_error_test<'src>(input: &'src str, _expected_error: &SyntaxErrorKind) {
+pub fn parser_error_test(input: &str, _expected_error: &SyntaxErrorKind) {
     let parse_result = parse(input);
     assert!(parse_result.is_err());
     assert_eq!(parse_result.unwrap_err().kind, *_expected_error);
@@ -203,7 +203,7 @@ pub fn type_statement_test(type_str: &str, expected: Expression) {
 
 pub fn run_parser_error_tests(inputs: Vec<&str>, expected_kind: &SyntaxErrorKind) {
     for input in inputs {
-        parser_error_test(input, &expected_kind);
+        parser_error_test(input, expected_kind);
     }
 }
 

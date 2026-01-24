@@ -4,7 +4,6 @@
 use crate::integration::utils::{assert_returns, interpreter_assert_returns};
 
 #[test]
-#[ignore = "Parser: match branch indentation parsing issue"]
 fn test_match_integer_literals() {
     assert_returns(
         r#"

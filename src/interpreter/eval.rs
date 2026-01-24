@@ -100,8 +100,23 @@ impl<'a> EvalContext<'a> {
 
     fn execute_statement(&mut self, stmt: &Statement) -> Result<(), InterpreterError> {
         match &stmt.kind {
-            StatementKind::IncRef(_) | StatementKind::DecRef(_) | StatementKind::Dealloc(_) => {
-                // TODO: Implement RC in interpreter
+            StatementKind::IncRef(place) => {
+                // Read the value at the place. If it's a pointer, increment its RC.
+                if let Value::Pointer(id) = self.read_place(place)? {
+                    self.interpreter.heap_inc_ref(id);
+                }
+            }
+            StatementKind::DecRef(place) => {
+                // Read value. If pointer, decrement RC.
+                if let Value::Pointer(id) = self.read_place(place)? {
+                    self.interpreter.heap_dec_ref(id);
+                }
+            }
+            StatementKind::Dealloc(place) => {
+                // Explicit deallocation
+                if let Value::Pointer(id) = self.read_place(place)? {
+                    self.interpreter.heap_dealloc(id);
+                }
             }
             StatementKind::Assign(place, rvalue) => {
                 let value = self.eval_rvalue(rvalue)?;
@@ -218,9 +233,16 @@ impl<'a> EvalContext<'a> {
         }
     }
 
-    fn eval_rvalue(&self, rvalue: &Rvalue) -> Result<Value, InterpreterError> {
+    fn eval_rvalue(&mut self, rvalue: &Rvalue) -> Result<Value, InterpreterError> {
         match rvalue {
-            Rvalue::Allocate(_, _, _) => todo!("Implement Allocate in interpreter"),
+            Rvalue::Allocate(_, _, _) => {
+                // Create a new allocation.
+                // For now, we initialize with Uninitialized, or we could look at the type size.
+                // The operands (size, align) are currently ignored by the high-level interpreter
+                // as we rely on Value variants.
+                let id = self.interpreter.heap_alloc(Value::Uninitialized);
+                Ok(Value::Pointer(id))
+            }
             Rvalue::Use(op) => self.eval_operand(op),
             Rvalue::BinaryOp(op, lhs, rhs) => {
                 let lhs_val = self.eval_operand(lhs)?;
@@ -306,8 +328,31 @@ impl<'a> EvalContext<'a> {
                         }
                         Ok(Value::Struct(name, fields))
                     }
+                    AggregateKind::Class(ty) => {
+                        let name = ty.to_string();
+                        // For classes, store fields by index just like structs
+                        let mut fields = HashMap::new();
+                        for (i, v) in values.into_iter().enumerate() {
+                            fields.insert(i.to_string(), v);
+                        }
+                        Ok(Value::Class(name, fields))
+                    }
                     AggregateKind::Enum(type_name, variant_name) => {
                         // First operand is discriminant, rest are associated values
+                        if values.is_empty() {
+                            return Err(InterpreterError::internal(
+                                "Enum aggregate missing discriminant",
+                            ));
+                        }
+
+                        let discriminant = values[0].as_int().ok_or_else(|| {
+                            InterpreterError::type_mismatch(
+                                "integer",
+                                values[0].type_name(),
+                                "enum discriminant",
+                            )
+                        })?;
+
                         let associated = if values.len() > 1 {
                             Some(Box::new(Value::Tuple(values[1..].to_vec())))
                         } else {
@@ -316,6 +361,7 @@ impl<'a> EvalContext<'a> {
                         Ok(Value::Enum(
                             type_name.clone(),
                             variant_name.clone(),
+                            discriminant,
                             associated,
                         ))
                     }
@@ -358,14 +404,14 @@ impl<'a> EvalContext<'a> {
         }
     }
 
-    fn eval_operand(&self, operand: &Operand) -> Result<Value, InterpreterError> {
+    fn eval_operand(&mut self, operand: &Operand) -> Result<Value, InterpreterError> {
         match operand {
             Operand::Copy(place) | Operand::Move(place) => self.read_place(place),
             Operand::Constant(c) => eval_constant(&c.literal),
         }
     }
 
-    fn read_place(&self, place: &Place) -> Result<Value, InterpreterError> {
+    fn read_place(&mut self, place: &Place) -> Result<Value, InterpreterError> {
         let mut value = self.read_local(place.local)?;
 
         // Apply each projection element to traverse into nested structures
@@ -376,7 +422,7 @@ impl<'a> EvalContext<'a> {
         Ok(value)
     }
 
-    fn read_local(&self, local: Local) -> Result<Value, InterpreterError> {
+    fn read_local(&mut self, local: Local) -> Result<Value, InterpreterError> {
         let val = self.locals.get(&local).cloned().ok_or_else(|| {
             // Check if it should have been initialized (params or declared)
             // Just return uninitialized error
@@ -404,7 +450,7 @@ impl<'a> EvalContext<'a> {
     }
 
     fn write_projected(
-        &self,
+        &mut self,
         value: &mut Value,
         projection: &[PlaceElem],
         new_val: Value,
@@ -514,8 +560,27 @@ impl<'a> EvalContext<'a> {
                     }
                     Ok(())
                 }
+                Value::Pointer(id) => {
+                    // Need to modify heap value. We take it out to avoid borrowing conflicts with self.
+                    let (mut inner_val, rc) = self.interpreter.heap_take(*id).ok_or_else(|| {
+                        InterpreterError::internal(format!("Invalid heap output: #ptr({})", id))
+                    })?;
+
+                    let result = if rest.is_empty() {
+                        inner_val = new_val;
+                        Ok(())
+                    } else {
+                        self.write_projected(&mut inner_val, rest, new_val)
+                    };
+
+                    // Always put it back
+                    self.interpreter.heap_put(*id, inner_val, rc);
+
+                    result
+                }
+
                 _ => Err(InterpreterError::type_mismatch(
-                    "reference",
+                    "reference or pointer",
                     value.type_name(),
                     "dereference write",
                 )),
@@ -646,7 +711,11 @@ impl<'a> EvalContext<'a> {
 
     // Helper for projections if needed, currently unused by read_place but good to keep structure
     #[allow(dead_code)]
-    fn apply_projection(&self, value: Value, proj: &PlaceElem) -> Result<Value, InterpreterError> {
+    fn apply_projection(
+        &mut self,
+        value: Value,
+        proj: &PlaceElem,
+    ) -> Result<Value, InterpreterError> {
         match proj {
             PlaceElem::Field(idx) => match value {
                 Value::Struct(_name, fields) | Value::Class(_name, fields) => {
@@ -657,8 +726,35 @@ impl<'a> EvalContext<'a> {
                 Value::Tuple(elements) => elements.get(*idx).cloned().ok_or_else(|| {
                     InterpreterError::internal(format!("Tuple index {} out of bounds", idx))
                 }),
+                Value::Enum(_name, _variant, discr, associated) => {
+                    if *idx == 0 {
+                        Ok(Value::Int(discr))
+                    } else {
+                        // Access associated values (offset by 1)
+                        if let Some(boxed_val) = associated {
+                            match *boxed_val {
+                                Value::Tuple(elements) => {
+                                    elements.get(*idx - 1).cloned().ok_or_else(|| {
+                                        InterpreterError::internal(format!(
+                                            "Enum associated value index {} out of bounds",
+                                            idx - 1
+                                        ))
+                                    })
+                                }
+                                _ => Err(InterpreterError::internal(
+                                    "Enum associated value is not a tuple",
+                                )),
+                            }
+                        } else {
+                            Err(InterpreterError::internal(format!(
+                                "Enum has no associated values, cannot access index {}",
+                                idx
+                            )))
+                        }
+                    }
+                }
                 _ => Err(InterpreterError::type_mismatch(
-                    "struct or tuple",
+                    "struct, tuple, or enum",
                     format!("{:?}", value),
                     "field access",
                 )),
@@ -685,8 +781,11 @@ impl<'a> EvalContext<'a> {
             }
             PlaceElem::Deref => match value {
                 Value::Ref(inner) => Ok(*inner),
+                Value::Pointer(id) => self.interpreter.heap_get(id).cloned().ok_or_else(|| {
+                    InterpreterError::internal(format!("Invalid heap access: #ptr({})", id))
+                }),
                 _ => Err(InterpreterError::type_mismatch(
-                    "reference",
+                    "reference or pointer",
                     format!("{:?}", value),
                     "dereference",
                 )),

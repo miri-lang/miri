@@ -33,6 +33,7 @@ pub fn stmt_with_span(kind: StatementKind, span: Span) -> Statement {
     }
 }
 
+/// Creates a statement with a default (empty) span.
 pub fn stmt(kind: StatementKind) -> Statement {
     stmt_with_span(kind, 0..0)
 }
@@ -42,6 +43,7 @@ pub fn identifier_with_span(name: &str, span: Span) -> Expression {
     expr_with_span(ExpressionKind::Identifier(name.into(), None), span)
 }
 
+/// Creates an identifier expression with an optional class qualifier and span.
 pub fn identifier_with_class_and_span(name: &str, class: Option<String>, span: Span) -> Expression {
     expr_with_span(ExpressionKind::Identifier(name.into(), class), span)
 }
@@ -69,6 +71,7 @@ pub fn unary_with_span(op: UnaryOp, expr_node: Expression, span: Span) -> Expres
     expr_with_span(ExpressionKind::Unary(op, Box::new(expr_node)), span)
 }
 
+/// Creates a logical binary expression with a specific span.
 pub fn logical_with_span(
     left: Expression,
     op: BinaryOp,
@@ -81,10 +84,12 @@ pub fn logical_with_span(
     )
 }
 
+/// Creates a function call expression with a specific span.
 pub fn call_with_span(callee: Expression, args: Vec<Expression>, span: Span) -> Expression {
     expr_with_span(ExpressionKind::Call(Box::new(callee), args), span)
 }
 
+/// Creates a member access expression with a specific span.
 pub fn member_with_span(object: Expression, property: Expression, span: Span) -> Expression {
     expr_with_span(
         ExpressionKind::Member(Box::new(object), Box::new(property)),
@@ -92,6 +97,7 @@ pub fn member_with_span(object: Expression, property: Expression, span: Span) ->
     )
 }
 
+/// Creates an index access expression with a specific span.
 pub fn index_with_span(object: Expression, index: Expression, span: Span) -> Expression {
     expr_with_span(
         ExpressionKind::Index(Box::new(object), Box::new(index)),
@@ -99,6 +105,7 @@ pub fn index_with_span(object: Expression, index: Expression, span: Span) -> Exp
     )
 }
 
+/// Creates an assignment expression with a specific span.
 pub fn assign_with_span(
     left: LeftHandSideExpression,
     op: AssignmentOp,
@@ -111,22 +118,27 @@ pub fn assign_with_span(
     )
 }
 
+/// Creates a list literal expression with a specific span.
 pub fn list_with_span(elements: Vec<Expression>, span: Span) -> Expression {
     expr_with_span(ExpressionKind::List(elements), span)
 }
 
+/// Creates a map literal expression with a specific span.
 pub fn map_with_span(pairs: Vec<(Expression, Expression)>, span: Span) -> Expression {
     expr_with_span(ExpressionKind::Map(pairs), span)
 }
 
+/// Creates a tuple literal expression with a specific span.
 pub fn tuple_with_span(elements: Vec<Expression>, span: Span) -> Expression {
     expr_with_span(ExpressionKind::Tuple(elements), span)
 }
 
+/// Creates a set literal expression with a specific span.
 pub fn set_with_span(elements: Vec<Expression>, span: Span) -> Expression {
     expr_with_span(ExpressionKind::Set(elements), span)
 }
 
+/// Creates a match expression with a specific span.
 pub fn match_expression_with_span(
     subject: Expression,
     branches: Vec<MatchBranch>,
@@ -135,14 +147,17 @@ pub fn match_expression_with_span(
     expr_with_span(ExpressionKind::Match(Box::new(subject), branches), span)
 }
 
+/// Creates a formatted string expression with a specific span.
 pub fn f_string_with_span(parts: Vec<Expression>, span: Span) -> Expression {
     expr_with_span(ExpressionKind::FormattedString(parts), span)
 }
 
+/// Creates a type expression with a specific span.
 pub fn type_expression_with_span(inner: Type, is_nullable: bool, span: Span) -> Expression {
     expr_with_span(ExpressionKind::Type(Box::new(inner), is_nullable), span)
 }
 
+/// Creates a generic type expression with a specific span.
 pub fn generic_type_expression_with_span(
     name_expression: Expression,
     constraint: Option<Box<Expression>>,
@@ -155,6 +170,7 @@ pub fn generic_type_expression_with_span(
     )
 }
 
+/// Creates a generic type expression with a default span.
 pub fn generic_type_expression(
     name_expression: Expression,
     constraint: Option<Box<Expression>>,
@@ -163,6 +179,7 @@ pub fn generic_type_expression(
     generic_type_expression_with_span(name_expression, constraint, kind, 0..0)
 }
 
+/// Creates a conditional expression with a specific span.
 pub fn conditional_with_span(
     then: Expression,
     cond: Expression,
@@ -181,6 +198,7 @@ pub fn conditional_with_span(
     )
 }
 
+/// Creates a range expression with a specific span.
 pub fn range_with_span(
     start: Expression,
     end: Option<Box<Expression>>,
@@ -193,10 +211,12 @@ pub fn range_with_span(
     )
 }
 
+/// Creates a guard expression with a specific span.
 pub fn guard_with_span(op: GuardOp, expr_node: Expression, span: Span) -> Expression {
     expr_with_span(ExpressionKind::Guard(op, Box::new(expr_node)), span)
 }
 
+/// Creates an import path expression with a specific span.
 pub fn import_path_expression_with_span(
     segments: Vec<Expression>,
     kind: ImportPathKind,
@@ -205,6 +225,7 @@ pub fn import_path_expression_with_span(
     expr_with_span(ExpressionKind::ImportPath(segments, kind), span)
 }
 
+/// Creates a type declaration expression with a specific span.
 pub fn type_declaration_expression_with_span(
     name: Expression,
     generic_types: Option<Vec<Expression>>,
@@ -218,6 +239,7 @@ pub fn type_declaration_expression_with_span(
     )
 }
 
+/// Creates an enum value expression with a specific span.
 pub fn enum_value_expression_with_span(
     name: Expression,
     types: Vec<Expression>,
@@ -226,6 +248,7 @@ pub fn enum_value_expression_with_span(
     expr_with_span(ExpressionKind::EnumValue(Box::new(name), types), span)
 }
 
+/// Creates a struct member expression with a specific span.
 pub fn struct_member_expression_with_span(
     name: Expression,
     typ: Expression,
@@ -307,20 +330,24 @@ pub fn float64(val: f64) -> FloatLiteral {
     FloatLiteral::F64(val.to_bits())
 }
 
+/// Creates a 32-bit float literal value.
 pub fn float32_literal(val: f32) -> Literal {
     let literal = float32(val);
     Literal::Float(literal)
 }
 
+/// Creates a 32-bit float literal expression.
 pub fn float32_literal_expression(val: f32) -> Expression {
     literal(float32_literal(val))
 }
 
+/// Creates a 64-bit float literal value.
 pub fn float64_literal(val: f64) -> Literal {
     let literal = float64(val);
     Literal::Float(literal)
 }
 
+/// Creates a 64-bit float literal expression.
 pub fn float64_literal_expression(val: f64) -> Expression {
     literal(float64_literal(val))
 }
@@ -891,10 +918,16 @@ pub fn continue_statement() -> Statement {
 /// Creates an enum declaration statement.
 pub fn enum_statement(
     name: Expression,
+    generic_types: Option<Vec<Expression>>,
     values: Vec<Expression>,
     visibility: MemberVisibility,
 ) -> Statement {
-    stmt(StatementKind::Enum(Box::new(name), values, visibility))
+    stmt(StatementKind::Enum(
+        Box::new(name),
+        generic_types,
+        values,
+        visibility,
+    ))
 }
 
 /// Creates an enum value expression (variant).
@@ -907,6 +940,7 @@ pub fn enum_value(name: &str, types: Vec<Expression>) -> Expression {
     enum_value_expression(identifier(name), types)
 }
 
+/// Creates a struct declaration statement.
 pub fn struct_statement(
     name: Expression,
     generic_types: Option<Vec<Expression>>,
@@ -921,10 +955,12 @@ pub fn struct_statement(
     ))
 }
 
+/// Creates a struct member expression (name and type pair).
 pub fn struct_member_expression(name: Expression, typ: Expression) -> Expression {
     expr(ExpressionKind::StructMember(Box::new(name), Box::new(typ)))
 }
 
+/// Creates a struct member from a string name and type expression.
 pub fn struct_member(name: &str, typ: Expression) -> Expression {
     struct_member_expression(identifier(name), typ)
 }
@@ -1053,26 +1089,32 @@ pub fn super_expression_with_span(span: Span) -> Expression {
     expr_with_span(ExpressionKind::Super, span)
 }
 
+/// Creates a list literal expression.
 pub fn list(elements: Vec<Expression>) -> Expression {
     expr(ExpressionKind::List(elements))
 }
 
+/// Creates a fixed-size array literal expression.
 pub fn array(elements: Vec<Expression>, size: Box<Expression>) -> Expression {
     expr(ExpressionKind::Array(elements, size))
 }
 
+/// Creates a map literal expression.
 pub fn map(pairs: Vec<(Expression, Expression)>) -> Expression {
     expr(ExpressionKind::Map(pairs))
 }
 
+/// Creates a tuple literal expression.
 pub fn tuple(elements: Vec<Expression>) -> Expression {
     expr(ExpressionKind::Tuple(elements))
 }
 
+/// Creates a set literal expression.
 pub fn set(elements: Vec<Expression>) -> Expression {
     expr(ExpressionKind::Set(elements))
 }
 
+/// Creates a match expression.
 pub fn match_expression(subject: Expression, branches: Vec<MatchBranch>) -> Expression {
     expr(ExpressionKind::Match(Box::new(subject), branches))
 }
@@ -1087,6 +1129,7 @@ pub struct FunctionBuilder {
 }
 
 impl FunctionBuilder {
+    /// Creates a new function builder with the given name.
     pub fn new(name: &str) -> Self {
         Self {
             name: name.to_string(),
@@ -1103,51 +1146,61 @@ impl FunctionBuilder {
         }
     }
 
+    /// Sets the generic type parameters.
     pub fn generics(mut self, generics: Vec<Expression>) -> Self {
         self.generic_types = Some(generics);
         self
     }
 
+    /// Sets the function parameters.
     pub fn params(mut self, params: Vec<Parameter>) -> Self {
         self.parameters = params;
         self
     }
 
+    /// Sets the function properties (async, parallel, gpu, visibility).
     pub fn properties(mut self, properties: FunctionProperties) -> Self {
         self.properties = properties;
         self
     }
 
+    /// Sets the return type.
     pub fn return_type(mut self, ret_type: Expression) -> Self {
         self.return_type = Some(Box::new(ret_type));
         self
     }
 
+    /// Marks the function as async.
     pub fn set_async(mut self) -> Self {
         self.properties.is_async = true;
         self
     }
 
+    /// Marks the function as parallel.
     pub fn set_parallel(mut self) -> Self {
         self.properties.is_parallel = true;
         self
     }
 
+    /// Marks the function as a GPU kernel.
     pub fn set_gpu(mut self) -> Self {
         self.properties.is_gpu = true;
         self
     }
 
+    /// Sets visibility to private.
     pub fn set_private(mut self) -> Self {
         self.properties.visibility = MemberVisibility::Private;
         self
     }
 
+    /// Sets visibility to protected.
     pub fn set_protected(mut self) -> Self {
         self.properties.visibility = MemberVisibility::Protected;
         self
     }
 
+    /// Builds a function declaration statement with the given body.
     pub fn build(self, body: Statement) -> Statement {
         stmt(StatementKind::FunctionDeclaration(
             self.name,
@@ -1159,6 +1212,7 @@ impl FunctionBuilder {
         ))
     }
 
+    /// Builds an abstract function declaration (no body).
     pub fn build_abstract(self) -> Statement {
         stmt(StatementKind::FunctionDeclaration(
             self.name,
@@ -1170,10 +1224,12 @@ impl FunctionBuilder {
         ))
     }
 
+    /// Builds a function declaration with an empty body.
     pub fn build_empty_body(self) -> Statement {
         self.build(empty_statement())
     }
 
+    /// Builds a lambda expression with the given body.
     pub fn build_lambda(self, body: Statement) -> Expression {
         expr(ExpressionKind::Lambda(
             self.generic_types,
@@ -1184,6 +1240,7 @@ impl FunctionBuilder {
         ))
     }
 
+    /// Builds a lambda expression with an empty body.
     pub fn build_lambda_empty_body(self) -> Expression {
         self.build_lambda(empty_statement())
     }

@@ -42,7 +42,7 @@ use system.math as M
 ",
         vec![use_statement(
             import_path("system.math".into()),
-            opt_expr(identifier("M".into())),
+            opt_expr(identifier("M")),
         )],
     );
 }

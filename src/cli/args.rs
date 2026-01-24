@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use crate::cli::version::version_ref;
 
+/// Top-level CLI argument definition parsed by clap.
 #[derive(Parser, Debug)]
 #[command(name = "miri", version = version_ref(), about = "Miri Compiler", author = "Slavik Shynkarenko <slavik@slavikdev.com>")]
 pub struct Cli {
@@ -89,6 +90,7 @@ pub enum CpuBackend {
     Llvm,
 }
 
+/// Output format for test results.
 #[derive(clap::ValueEnum, Clone, Debug, Default)]
 pub enum TestFormat {
     #[default]

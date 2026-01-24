@@ -153,7 +153,6 @@ impl<'source> Parser<'source> {
 
         self.eat_statement_end()?;
 
-        // Reuse variable_statement node but set is_shared logic inside VariableDeclaration
         Ok(ast::variable_statement(vec![declaration], visibility))
     }
 

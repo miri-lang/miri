@@ -103,7 +103,6 @@ impl<'source> Parser<'source> {
             }
             ExpressionKind::Member(_, _) => ast::lhs_member_from_expr(left),
             ExpressionKind::Index(_, _) => ast::lhs_index_from_expr(left),
-            // Other left-hand side expression types can be added here in the future
             _ => return Err(self.error_invalid_left_hand_side_expression()),
         };
 
@@ -215,7 +214,11 @@ impl<'source> Parser<'source> {
             expression = match &self._lookahead {
                 Some((Token::Dot, _)) => {
                     self.eat_token(&Token::Dot)?;
-                    let property = self.identifier()?;
+                    let property = if self.match_lookahead_type(|t| matches!(t, Token::Int)) {
+                        self.literal_expression()?
+                    } else {
+                        self.identifier()?
+                    };
                     let span = expression.span.start..property.span.end;
                     ast::member_with_span(expression, property, span)
                 }
@@ -262,6 +265,43 @@ impl<'source> Parser<'source> {
                         ),
                         span,
                     )
+                }
+                Some((Token::Float, _)) => {
+                    let span = self.current_token_span();
+                    let source = self.source;
+                    let float_text = &source[span.start..span.end];
+
+                    if let Some(int_part) = float_text.strip_prefix('.') {
+                        // This might be a tuple access like `t.0` which tokenizes as Identifier `t` then Float `.0`.
+                        // We need to treat `.0` as a dot followed by an integer.
+
+                        // Verify the rest is a valid integer (only digits and underscores).
+                        if int_part.chars().all(|c| c.is_ascii_digit() || c == '_') {
+                            // Valid tuple access pattern.
+                            self.eat_token(&Token::Float)?;
+
+                            // Parse the integer value.
+                            let val_str = int_part.replace("_", "");
+                            // We use i128 to be safe, though tuple indices are usually small.
+                            let val = val_str.parse::<i128>().map_err(|_| {
+                                self.error_unexpected_token("valid integer", "number too large")
+                            })?;
+
+                            // Create the property node.
+                            // The span of the property is the float span sans the leading dot.
+                            let prop_span = (span.start + 1)..span.end;
+                            let property = ast::literal_with_span(ast::int_literal(val), prop_span);
+
+                            let span = expression.span.start..property.span.end;
+                            ast::member_with_span(expression, property, span)
+                        } else {
+                            // Contains exponent or other float chars, treat as boundary stop (not member access).
+                            break;
+                        }
+                    } else {
+                        // Float doesn't start with dot (e.g. `1.0`), not a member access here.
+                        break;
+                    }
                 }
                 _ => break,
             };
@@ -333,26 +373,31 @@ impl<'source> Parser<'source> {
             ;
     */
     pub(crate) fn identifier(&mut self) -> Result<Expression, SyntaxError> {
-        match &self._lookahead {
-            Some((Token::Identifier, _)) => {
-                let (_, span) = self.eat_token(&Token::Identifier)?;
-                let (name, class, full_span) = match &self._lookahead {
-                    Some((Token::DoubleColon, _)) => {
-                        self.eat_token(&Token::DoubleColon)?;
-                        let (_, second_span) = self.eat_token(&Token::Identifier)?;
-
-                        (
-                            self.source[second_span.start..second_span.end].to_string(),
-                            Some(self.source[span.start..span.end].to_string()),
-                            span.start..second_span.end,
-                        )
-                    }
-                    _ => (self.source[span.start..span.end].to_string(), None, span),
-                };
-                Ok(ast::identifier_with_class_and_span(&name, class, full_span))
+        let (name, span) = if self.match_lookahead_type(|t| matches!(t, Token::None)) {
+            let (_, span) = self.eat_token(&Token::None)?;
+            ("None".to_string(), span)
+        } else {
+            if self._lookahead.is_none() {
+                return Err(self.error_unexpected_lookahead_token("identifier"));
             }
-            _ => Err(self.error_unexpected_lookahead_token("identifier")),
-        }
+            let (_, span) = self.eat_token(&Token::Identifier)?;
+            (self.source[span.start..span.end].to_string(), span)
+        };
+
+        let (name, class, full_span) = match &self._lookahead {
+            Some((Token::DoubleColon, _)) => {
+                self.eat_token(&Token::DoubleColon)?;
+                let (_, second_span) = self.eat_token(&Token::Identifier)?;
+
+                (
+                    self.source[second_span.start..second_span.end].to_string(),
+                    Some(name),
+                    span.start..second_span.end,
+                )
+            }
+            _ => (name, None, span),
+        };
+        Ok(ast::identifier_with_class_and_span(&name, class, full_span))
     }
 
     pub(crate) fn parse_simple_identifier(&mut self) -> Result<String, SyntaxError> {
@@ -633,6 +678,22 @@ impl<'source> Parser<'source> {
         {
             if inline_mode {
                 self.eat_token(&Token::Comma)?;
+            } else {
+                // Consume optional terminator (newline) between branches
+                self.try_eat_expression_end();
+
+                // Re-check termination condition after consuming terminator
+                if self._lookahead.is_none() || self.lookahead_is_dedent() {
+                    break;
+                }
+
+                if self.lookahead_is_indent() {
+                    // If we encounter an indent here, it must be an empty block (trailing whitespace/comment)
+                    // that produced an INDENT-DEDENT pair. We consume it and continue.
+                    self.eat_token(&Token::Indent)?;
+                    self.eat_token(&Token::Dedent)?;
+                    continue;
+                }
             }
             branches.push(self.match_branch()?);
         }

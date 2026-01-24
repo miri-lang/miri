@@ -89,7 +89,7 @@ impl<'source> Parser<'source> {
                     combination: "async gpu".to_string(),
                     reason: "GPU kernels are inherently asynchronous.".to_string(),
                 },
-                self.current_token_span(), // Approximation, ideally we track spans of modifiers
+                self.current_token_span(),
             ));
         }
         if properties.is_async && properties.is_parallel {
@@ -371,16 +371,17 @@ impl<'source> Parser<'source> {
     ) -> Result<Statement, SyntaxError> {
         self.eat_token(&Token::Enum)?;
         let name = self.identifier()?;
+        let generic_types = self.generic_types_expression()?;
         self.parse_declaration_block(
             Self::enum_value_expression,
-            |n, _, vals: Vec<Expression>, vis| ast::enum_statement(n, vals, vis),
+            ast::enum_statement,
             name,
             visibility,
             DeclarationBlockConfig {
                 inline_error: "either a colon for inline enums or an indentation for block enums",
                 missing_members_error: SyntaxErrorKind::MissingEnumMembers,
             },
-            None,
+            generic_types,
         )
     }
 
@@ -390,6 +391,7 @@ impl<'source> Parser<'source> {
             | Identifier '(' TypeExpression (',' TypeExpression)* ')'
             ;
     */
+    /// Parses an enum variant declaration (name with optional associated types).
     pub fn enum_value_expression(&mut self) -> Result<Expression, SyntaxError> {
         let identifier = self.identifier()?;
         let types = if self.match_lookahead_type(|t| t == &Token::LParen) {

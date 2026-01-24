@@ -18,7 +18,7 @@ fn test_function_call() {
 print(\"Hello\")
 ",
         vec![expression_statement(call(
-            identifier("print".into()),
+            identifier("print"),
             vec![string_literal_expression("Hello".into())],
         ))],
     );
@@ -30,10 +30,7 @@ fn test_function_call_without_arguments() {
         "
 func()
 ",
-        vec![expression_statement(call(
-            identifier("func".into()),
-            vec![],
-        ))],
+        vec![expression_statement(call(identifier("func"), vec![]))],
     );
 }
 
@@ -44,7 +41,7 @@ fn test_chained_function_call() {
 func(0)()
 ",
         vec![expression_statement(call(
-            call(identifier("func".into()), vec![int_literal_expression(0)]),
+            call(identifier("func"), vec![int_literal_expression(0)]),
             vec![],
         ))],
     );
@@ -57,15 +54,8 @@ fn test_member_function_call() {
 coordinates.compute(x, y, z)
 ",
         vec![expression_statement(call(
-            member(
-                identifier("coordinates".into()),
-                identifier("compute".into()),
-            ),
-            vec![
-                identifier("x".into()),
-                identifier("y".into()),
-                identifier("z".into()),
-            ],
+            member(identifier("coordinates"), identifier("compute")),
+            vec![identifier("x"), identifier("y"), identifier("z")],
         ))],
     );
 }

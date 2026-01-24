@@ -183,3 +183,75 @@ fn test_phi_node() {
     let res2 = interpreter.call("phi_test", vec![Value::Int(1)]).unwrap();
     assert_eq!(res2, Value::Int(20), "Path 2 should yield 20");
 }
+#[test]
+fn test_ref_counting() {
+    let mut interpreter = Interpreter::new();
+    let span = Span::default();
+
+    // Body:
+    // _0: return (void)
+    // _1: ptr
+
+    let mut body = Body::new(0, span.clone(), ExecutionModel::Cpu);
+    body.new_local(LocalDecl::new(
+        Type::new(TypeKind::Void, span.clone()),
+        span.clone(),
+    )); // _0
+    body.new_local(LocalDecl::new(
+        Type::new(TypeKind::Int, span.clone()),
+        span.clone(),
+    )); // _1 (type doesn't matter much here)
+
+    let mut bb0 = BasicBlockData::new(None);
+
+    // 1. _1 = Allocate(8, 8, 0)
+    let size_op = Operand::Constant(Box::new(crate::mir::Constant {
+        span: span.clone(),
+        ty: Type::new(TypeKind::Int, span.clone()),
+        literal: crate::ast::literal::Literal::Integer(crate::ast::literal::IntegerLiteral::I64(8)),
+    }));
+
+    bb0.statements.push(Statement {
+        kind: StatementKind::Assign(
+            Place::new(Local(1)),
+            Rvalue::Allocate(size_op.clone(), size_op.clone(), size_op.clone()),
+        ),
+        span: span.clone(),
+    });
+
+    // 2. IncRef(_1)
+    bb0.statements.push(Statement {
+        kind: StatementKind::IncRef(Place::new(Local(1))),
+        span: span.clone(),
+    });
+
+    // 3. DecRef(_1)
+    bb0.statements.push(Statement {
+        kind: StatementKind::DecRef(Place::new(Local(1))),
+        span: span.clone(),
+    });
+
+    bb0.terminator = Some(Terminator::new(TerminatorKind::Return, span.clone()));
+    body.basic_blocks.push(bb0);
+
+    interpreter.functions.insert("rc_test".to_string(), body);
+
+    // Run basic alloc/inc/dec
+    let _ = interpreter.call("rc_test", vec![]).unwrap();
+
+    // Verify heap state.
+    // We allocated one object. ID should be 1.
+    // Initial RC=1. IncRef -> 2. DecRef -> 1.
+    // Should still exist.
+    let val = interpreter.heap_get(1);
+    assert!(val.is_some(), "Heap object 1 should exist with RC=1");
+
+    // Now verify DecRef to 0 triggers dealloc.
+    // We can't run more MIR easily without modifying body, so we use internal API to verify.
+    // The previous call finished.
+    let dropped = interpreter.heap_dec_ref(1);
+    assert!(dropped, "DecRef to 0 should return true (dropped)");
+
+    let val_after = interpreter.heap_get(1);
+    assert!(val_after.is_none(), "Heap object 1 should be gone");
+}

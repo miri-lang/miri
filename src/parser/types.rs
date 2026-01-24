@@ -271,21 +271,7 @@ impl<'source> Parser<'source> {
                             break;
                         }
 
-                        // In function type, we only have types, not names
-                        // But wait, the AST for Function type uses `Vec<Parameter>`?
-                        // Let's check `ast.rs`.
-                        // Type::Function(Option<Vec<Expression>>, Vec<Parameter>, Option<Box<Expression>>)
-                        // It uses `Vec<Parameter>`. This implies named parameters in function types?
-                        // Or maybe just types wrapped in Parameter struct with empty names?
-                        // If the user writes `fn(int, string)`, there are no names.
-                        // If the user writes `fn(x int, y string)`, there are names.
-                        // The parser test `test_function_type_as_return_type` uses `fn() int`.
-                        // The failing test `test_lambda_as_argument` uses `fn(int) int`.
-                        // So it seems we support unnamed parameters in function types.
-
-                        // Let's try to parse a type expression first.
                         if let Some(typ) = self.type_expression()? {
-                            // It's a type. Create a dummy parameter.
                             parameters.push(Parameter {
                                 name: "".to_string(),
                                 typ: Box::new(typ),

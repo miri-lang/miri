@@ -56,6 +56,8 @@ pub struct EnumDecl {
     pub name: String,
     /// The enum's variants
     pub variants: Vec<VariantDecl>,
+    /// Generic type parameter names (if any)
+    pub generics: Vec<String>,
     /// Source module
     pub module: String,
 }

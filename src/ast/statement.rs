@@ -96,7 +96,12 @@ pub enum StatementKind {
     Type(Vec<Expression>, MemberVisibility),
 
     /// An enum declaration.
-    Enum(Box<Expression>, Vec<Expression>, MemberVisibility),
+    Enum(
+        Box<Expression>,
+        Option<Vec<Expression>>,
+        Vec<Expression>,
+        MemberVisibility,
+    ),
 
     /// A struct declaration.
     Struct(

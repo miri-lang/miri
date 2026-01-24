@@ -19,7 +19,7 @@ do
 while x > 0
 ",
         binary(
-            identifier("x".into()),
+            identifier("x"),
             BinaryOp::GreaterThan,
             int_literal_expression(0),
         ),
@@ -40,7 +40,7 @@ do
 while x > 0
 ",
         binary(
-            identifier("x".into()),
+            identifier("x"),
             BinaryOp::GreaterThan,
             int_literal_expression(0),
         ),
@@ -59,13 +59,13 @@ do
 while x > 0
 ",
         binary(
-            identifier("x".into()),
+            identifier("x"),
             BinaryOp::GreaterThan,
             int_literal_expression(0),
         ),
         block(vec![do_while_statement(
             binary(
-                identifier("y".into()),
+                identifier("y"),
                 BinaryOp::LessThan,
                 int_literal_expression(5),
             ),
@@ -90,13 +90,13 @@ do
 while x > 0
 ",
         binary(
-            identifier("x".into()),
+            identifier("x"),
             BinaryOp::GreaterThan,
             int_literal_expression(0),
         ),
         block(vec![do_while_statement(
             binary(
-                identifier("y".into()),
+                identifier("y"),
                 BinaryOp::LessThan,
                 int_literal_expression(5),
             ),
@@ -113,7 +113,7 @@ fn test_do_while_loop_inline() {
 do: x -= 1 while x > 0
 ",
         binary(
-            identifier("x".into()),
+            identifier("x"),
             BinaryOp::GreaterThan,
             int_literal_expression(0),
         ),
@@ -137,17 +137,13 @@ do
 while x < 10
 ",
         binary(
-            identifier("x".into()),
+            identifier("x"),
             BinaryOp::LessThan,
             int_literal_expression(10),
         ),
         block(vec![if_statement(
             binary(
-                binary(
-                    identifier("x".into()),
-                    BinaryOp::Mod,
-                    int_literal_expression(2),
-                ),
+                binary(identifier("x"), BinaryOp::Mod, int_literal_expression(2)),
                 BinaryOp::Equal,
                 int_literal_expression(0),
             ),
@@ -173,11 +169,7 @@ do
     x -= 1
 until x == 0
 ",
-        binary(
-            identifier("x".into()),
-            BinaryOp::Equal,
-            int_literal_expression(0),
-        ),
+        binary(identifier("x"), BinaryOp::Equal, int_literal_expression(0)),
         block(vec![expression_statement(assign(
             lhs_identifier("x"),
             AssignmentOp::AssignSub,
@@ -198,14 +190,14 @@ do
 while x > 0
 ",
         binary(
-            identifier("x".into()),
+            identifier("x"),
             BinaryOp::GreaterThan,
             int_literal_expression(0),
         ),
         block(vec![
             if_statement(
                 binary(
-                    identifier("x".into()),
+                    identifier("x"),
                     BinaryOp::GreaterThan,
                     int_literal_expression(10),
                 ),
@@ -213,11 +205,7 @@ while x > 0
                 None,
             ),
             if_statement(
-                binary(
-                    identifier("x".into()),
-                    BinaryOp::Equal,
-                    int_literal_expression(0),
-                ),
+                binary(identifier("x"), BinaryOp::Equal, int_literal_expression(0)),
                 break_statement(),
                 None,
             ),

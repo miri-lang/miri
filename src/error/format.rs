@@ -136,10 +136,7 @@ pub fn format_diagnostic_full(source: &str, diag: &Diagnostic) -> String {
     output
 }
 
-/// Legacy format function for backward compatibility.
-///
-/// This function is kept for existing code that hasn't migrated to Diagnostic yet.
-/// New code should use `Diagnostic::format()` or `format_diagnostic_full()`.
+/// Formats an error message with source context and optional help text.
 pub fn format_diagnostic(
     source: &str,
     span: &Span,
@@ -229,6 +226,7 @@ pub fn format_diagnostic(
     output
 }
 
+/// Computes the Levenshtein edit distance between two strings.
 pub fn levenshtein_distance(s1: &str, s2: &str) -> usize {
     let len1 = s1.chars().count();
     let len2 = s2.chars().count();
@@ -254,6 +252,8 @@ pub fn levenshtein_distance(s1: &str, s2: &str) -> usize {
     matrix[len1][len2]
 }
 
+/// Finds the closest match to `target` among `candidates` using edit distance.
+/// Returns `None` if no candidate is within a reasonable threshold.
 pub fn find_best_match<S: AsRef<str>>(target: &str, candidates: &[S]) -> Option<String> {
     let mut best_candidate = None;
     let mut min_distance = usize::MAX;

@@ -3,6 +3,7 @@
 
 use super::token::Token;
 
+/// Returns a human-readable string representation of a token for error messages.
 pub fn token_to_string(token: &Token) -> String {
     match token {
         Token::Colon => ":".into(),

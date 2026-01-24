@@ -16,7 +16,7 @@ x > 10 == false
 ",
         vec![expression_statement(binary(
             binary(
-                identifier("x".into()),
+                identifier("x"),
                 BinaryOp::GreaterThan,
                 int_literal_expression(10),
             ),
@@ -34,7 +34,7 @@ x >= 8 != true
 ",
         vec![expression_statement(binary(
             binary(
-                identifier("x".into()),
+                identifier("x"),
                 BinaryOp::GreaterThanEqual,
                 int_literal_expression(8),
             ),
@@ -52,7 +52,7 @@ fn test_precedence_of_bitwise_and_equality() {
         "x & 10 == 10",
         vec![expression_statement(binary(
             binary(
-                identifier("x".into()),
+                identifier("x"),
                 BinaryOp::BitwiseAnd,
                 int_literal_expression(10),
             ),

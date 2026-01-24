@@ -7,12 +7,14 @@ use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable, Severity
 use crate::error::format::format_diagnostic;
 use crate::error::syntax::Span;
 
+/// An error produced during MIR lowering, with its source location.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoweringError {
     pub kind: LoweringErrorKind,
     pub span: Span,
 }
 
+/// All possible error variants produced during MIR lowering.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LoweringErrorKind {
     UnsupportedExpression {
@@ -43,7 +45,10 @@ pub enum LoweringErrorKind {
     UnsupportedType {
         desc: String,
     },
-    // Fallback
+    MissingStructField {
+        field: String,
+        struct_name: String,
+    },
     Custom {
         message: String,
         help: Option<String>,
@@ -51,6 +56,7 @@ pub enum LoweringErrorKind {
 }
 
 impl LoweringErrorKind {
+    /// Returns the error code, title, message, and help text for this error kind.
     pub fn properties(&self) -> ErrorProperties {
         match self {
             Self::UnsupportedExpression { desc } => ErrorProperties {
@@ -127,6 +133,15 @@ impl LoweringErrorKind {
                 message: Some(format!("Unsupported type: {}", desc)),
                 help: Some("This type is not yet supported in MIR lowering.".to_string()),
             },
+            Self::MissingStructField { field, struct_name } => ErrorProperties {
+                code: "E0211",
+                title: "Missing Struct Field",
+                message: Some(format!(
+                    "Missing field '{}' in struct '{}' constructor",
+                    field, struct_name
+                )),
+                help: Some("Provide a value for all required struct fields.".to_string()),
+            },
             Self::Custom { message, .. } => ErrorProperties {
                 code: "E0299",
                 title: "Lowering Error",
@@ -138,11 +153,12 @@ impl LoweringErrorKind {
 }
 
 impl LoweringError {
+    /// Creates a new lowering error of the given kind at the given span.
     pub fn new(kind: LoweringErrorKind, span: Span) -> Self {
         Self { kind, span }
     }
 
-    /// Helper for backward compatibility or custom errors
+    /// Creates a custom lowering error with a freeform message.
     pub fn custom(message: String, span: Span, help: Option<String>) -> Self {
         Self {
             kind: LoweringErrorKind::Custom { message, help },
@@ -150,6 +166,7 @@ impl LoweringError {
         }
     }
 
+    /// Creates an unsupported expression error.
     pub fn unsupported_expression(desc: impl Into<String>, span: Span) -> Self {
         Self::new(
             LoweringErrorKind::UnsupportedExpression { desc: desc.into() },
@@ -157,6 +174,7 @@ impl LoweringError {
         )
     }
 
+    /// Creates an unsupported statement error.
     pub fn unsupported_statement(desc: impl Into<String>, span: Span) -> Self {
         Self::new(
             LoweringErrorKind::UnsupportedStatement { desc: desc.into() },
@@ -164,6 +182,7 @@ impl LoweringError {
         )
     }
 
+    /// Creates an undefined variable error.
     pub fn undefined_variable(name: impl Into<String>, span: Span) -> Self {
         Self::new(
             LoweringErrorKind::UndefinedVariable { name: name.into() },
@@ -171,18 +190,22 @@ impl LoweringError {
         )
     }
 
+    /// Creates a type-not-found error for the given expression ID.
     pub fn type_not_found(expr_id: usize, span: Span) -> Self {
         Self::new(LoweringErrorKind::TypeNotFound { expr_id }, span)
     }
 
+    /// Creates a break-outside-loop error.
     pub fn break_outside_loop(span: Span) -> Self {
         Self::new(LoweringErrorKind::BreakOutsideLoop, span)
     }
 
+    /// Creates a continue-outside-loop error.
     pub fn continue_outside_loop(span: Span) -> Self {
         Self::new(LoweringErrorKind::ContinueOutsideLoop, span)
     }
 
+    /// Creates an unsupported left-hand side error.
     pub fn unsupported_lhs(desc: impl Into<String>, span: Span) -> Self {
         Self::new(
             LoweringErrorKind::UnsupportedLhs { desc: desc.into() },
@@ -190,6 +213,7 @@ impl LoweringError {
         )
     }
 
+    /// Creates an unsupported operator error.
     pub fn unsupported_operator(op: impl Into<String>, span: Span) -> Self {
         Self::new(
             LoweringErrorKind::UnsupportedOperator { op: op.into() },
@@ -197,10 +221,12 @@ impl LoweringError {
         )
     }
 
+    /// Creates an unsupported range type error.
     pub fn unsupported_range_type(span: Span) -> Self {
         Self::new(LoweringErrorKind::UnsupportedRangeType, span)
     }
 
+    /// Creates an invalid GPU launch arguments error.
     pub fn invalid_gpu_launch_args(expected: usize, got: usize, span: Span) -> Self {
         Self::new(
             LoweringErrorKind::InvalidGpuLaunchArgs { expected, got },
@@ -208,6 +234,7 @@ impl LoweringError {
         )
     }
 
+    /// Creates an unsupported type error.
     pub fn unsupported_type(desc: impl Into<String>, span: Span) -> Self {
         Self::new(
             LoweringErrorKind::UnsupportedType { desc: desc.into() },
@@ -215,6 +242,22 @@ impl LoweringError {
         )
     }
 
+    /// Creates a missing struct field error.
+    pub fn missing_struct_field(
+        field: impl Into<String>,
+        struct_name: impl Into<String>,
+        span: Span,
+    ) -> Self {
+        Self::new(
+            LoweringErrorKind::MissingStructField {
+                field: field.into(),
+                struct_name: struct_name.into(),
+            },
+            span,
+        )
+    }
+
+    /// Formats this error for terminal display using the given source code.
     pub fn report(&self, source: &str) -> String {
         Reportable::report(self, source)
     }

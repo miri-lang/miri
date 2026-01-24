@@ -19,7 +19,7 @@ if x
 else
     x = 20
 ",
-        identifier("x".into()),
+        identifier("x"),
         block(vec![expression_statement(assign(
             lhs_identifier("x"),
             AssignmentOp::Assign,
@@ -68,7 +68,7 @@ if x
     x = 10
 else: x = 20
 ",
-        identifier("x".into()),
+        identifier("x"),
         block(vec![expression_statement(assign(
             lhs_identifier("x"),
             AssignmentOp::Assign,
@@ -90,14 +90,14 @@ if x: x = 10
 else
     x = 20
 ",
-        identifier("x".into()),
+        identifier("x"),
         expression_statement(assign(
             lhs_identifier("x"),
             AssignmentOp::Assign,
             int_literal_expression(10),
         )),
         Some(block(vec![expression_statement(assign(
-            lhs_identifier("x".into()),
+            lhs_identifier("x"),
             AssignmentOp::Assign,
             int_literal_expression(20),
         ))])),
@@ -111,9 +111,9 @@ fn test_parse_if_statement_no_else() {
 if x
     x = 10
 ",
-        identifier("x".into()),
+        identifier("x"),
         block_statement(vec![expression_statement(assign(
-            lhs_identifier("x".into()),
+            lhs_identifier("x"),
             AssignmentOp::Assign,
             int_literal_expression(10),
         ))]),
@@ -137,33 +137,33 @@ else
     else
         x = 40
 ",
-        identifier("x".into()),
+        identifier("x"),
         block(vec![if_statement(
-            identifier("y".into()),
+            identifier("y"),
             block(vec![expression_statement(assign(
-                lhs_identifier("x".into()),
+                lhs_identifier("x"),
                 AssignmentOp::Assign,
                 int_literal_expression(10),
             ))]),
             Some(block(vec![expression_statement(assign(
-                lhs_identifier("x".into()),
+                lhs_identifier("x"),
                 AssignmentOp::Assign,
                 int_literal_expression(20),
             ))])),
         )]),
         Some(block(vec![if_statement(
-            identifier("z".into()),
+            identifier("z"),
             block(vec![if_statement(
-                identifier("w".into()),
+                identifier("w"),
                 block(vec![expression_statement(assign(
-                    lhs_identifier("x".into()),
+                    lhs_identifier("x"),
                     AssignmentOp::Assign,
                     int_literal_expression(30),
                 ))]),
                 None,
             )]),
             Some(block(vec![expression_statement(assign(
-                lhs_identifier("x".into()),
+                lhs_identifier("x"),
                 AssignmentOp::Assign,
                 int_literal_expression(40),
             ))])),
@@ -178,14 +178,14 @@ fn test_parse_if_statement_inline() {
         "
 if x: x = 10 else: x = 20
 ",
-        identifier("x".into()),
+        identifier("x"),
         expression_statement(assign(
-            lhs_identifier("x".into()),
+            lhs_identifier("x"),
             AssignmentOp::Assign,
             int_literal_expression(10),
         )),
         Some(expression_statement(assign(
-            lhs_identifier("x".into()),
+            lhs_identifier("x"),
             AssignmentOp::Assign,
             int_literal_expression(20),
         ))),
@@ -199,14 +199,14 @@ fn test_parse_if_mixed_inline() {
 if x: x = 10
 else: x = 20
 ",
-        identifier("x".into()),
+        identifier("x"),
         expression_statement(assign(
-            lhs_identifier("x".into()),
+            lhs_identifier("x"),
             AssignmentOp::Assign,
             int_literal_expression(10),
         )),
         Some(expression_statement(assign(
-            lhs_identifier("x".into()),
+            lhs_identifier("x"),
             AssignmentOp::Assign,
             int_literal_expression(20),
         ))),
@@ -220,23 +220,23 @@ fn test_parse_if_statement_inline_nested() {
 // This is crazy, but should work
 if x: if y: x = 10 else: if z: x = 20 else: x = 30
 ",
-        identifier("x".into()),
+        identifier("x"),
         if_statement(
-            identifier("y".into()),
+            identifier("y"),
             expression_statement(assign(
-                lhs_identifier("x".into()),
+                lhs_identifier("x"),
                 AssignmentOp::Assign,
                 int_literal_expression(10),
             )),
             Some(if_statement(
-                identifier("z".into()),
+                identifier("z"),
                 expression_statement(assign(
-                    lhs_identifier("x".into()),
+                    lhs_identifier("x"),
                     AssignmentOp::Assign,
                     int_literal_expression(20),
                 )),
                 Some(expression_statement(assign(
-                    lhs_identifier("x".into()),
+                    lhs_identifier("x"),
                     AssignmentOp::Assign,
                     int_literal_expression(30),
                 ))),
@@ -253,9 +253,9 @@ fn test_parse_if_statement_inline_no_else() {
         "
 if x: x = 10
 ",
-        identifier("x".into()),
+        identifier("x"),
         expression_statement(assign(
-            lhs_identifier("x".into()),
+            lhs_identifier("x"),
             AssignmentOp::Assign,
             int_literal_expression(10),
         )),
@@ -270,16 +270,12 @@ fn test_parse_if_statement_precedence() {
 if x + 10 <= 20: x = 10
 ",
         binary(
-            binary(
-                identifier("x".into()),
-                BinaryOp::Add,
-                int_literal_expression(10),
-            ),
+            binary(identifier("x"), BinaryOp::Add, int_literal_expression(10)),
             BinaryOp::LessThanEqual,
             int_literal_expression(20),
         ),
         expression_statement(assign(
-            lhs_identifier("x".into()),
+            lhs_identifier("x"),
             AssignmentOp::Assign,
             int_literal_expression(10),
         )),
@@ -299,28 +295,28 @@ else
     y = 3
 ",
         binary(
-            identifier("x".into()),
+            identifier("x"),
             BinaryOp::GreaterThan,
             int_literal_expression(10),
         ),
         block(vec![expression_statement(assign(
-            lhs_identifier("y".into()),
+            lhs_identifier("y"),
             AssignmentOp::Assign,
             int_literal_expression(1),
         ))]),
         Some(if_statement(
             binary(
-                identifier("x".into()),
+                identifier("x"),
                 BinaryOp::GreaterThan,
                 int_literal_expression(5),
             ),
             block(vec![expression_statement(assign(
-                lhs_identifier("y".into()),
+                lhs_identifier("y"),
                 AssignmentOp::Assign,
                 int_literal_expression(2),
             ))]),
             Some(block(vec![expression_statement(assign(
-                lhs_identifier("y".into()),
+                lhs_identifier("y"),
                 AssignmentOp::Assign,
                 int_literal_expression(3),
             ))])),
@@ -338,7 +334,7 @@ if x
 else
     var z = 20
 ",
-        identifier("x".into()),
+        identifier("x"),
         block(vec![variable_statement(
             vec![let_variable(
                 "y".into(),
@@ -364,26 +360,22 @@ if (x > 10 and y < 5) or z == 1
         logical(
             logical(
                 binary(
-                    identifier("x".into()),
+                    identifier("x"),
                     BinaryOp::GreaterThan,
                     int_literal_expression(10),
                 ),
                 BinaryOp::And,
                 binary(
-                    identifier("y".into()),
+                    identifier("y"),
                     BinaryOp::LessThan,
                     int_literal_expression(5),
                 ),
             ),
             BinaryOp::Or,
-            binary(
-                identifier("z".into()),
-                BinaryOp::Equal,
-                int_literal_expression(1),
-            ),
+            binary(identifier("z"), BinaryOp::Equal, int_literal_expression(1)),
         ),
         block(vec![expression_statement(assign(
-            lhs_identifier("x".into()),
+            lhs_identifier("x"),
             AssignmentOp::Assign,
             int_literal_expression(1),
         ))]),
@@ -400,10 +392,10 @@ if x
 else
     x = 1
 ",
-        identifier("x".into()),
+        identifier("x"),
         empty_statement(),
         Some(block(vec![expression_statement(assign(
-            lhs_identifier("x".into()),
+            lhs_identifier("x"),
             AssignmentOp::Assign,
             int_literal_expression(1),
         ))])),
@@ -417,7 +409,7 @@ fn test_parse_if_with_empty_block_no_else() {
 if x
     // TODO
 ",
-        identifier("x".into()),
+        identifier("x"),
         empty_statement(),
         None,
     );
@@ -463,12 +455,8 @@ if x
     if y
         // TODO
 ",
-        identifier("x".into()),
-        block(vec![if_statement(
-            identifier("y".into()),
-            empty_statement(),
-            None,
-        )]),
+        identifier("x"),
+        block(vec![if_statement(identifier("y"), empty_statement(), None)]),
         None,
         IfStatementType::If,
     );
@@ -483,9 +471,9 @@ if x
 else
     // empty else
 ",
-        identifier("x".into()),
+        identifier("x"),
         block(vec![expression_statement(assign(
-            lhs_identifier("x".into()),
+            lhs_identifier("x"),
             AssignmentOp::Assign,
             int_literal_expression(1),
         ))]),
@@ -505,16 +493,16 @@ x = 2
 ",
         vec![
             if_statement(
-                identifier("x".into()),
+                identifier("x"),
                 block(vec![expression_statement(assign(
-                    lhs_identifier("x".into()),
+                    lhs_identifier("x"),
                     AssignmentOp::Assign,
                     int_literal_expression(1),
                 ))]),
                 Some(empty_statement()),
             ),
             expression_statement(assign(
-                lhs_identifier("x".into()),
+                lhs_identifier("x"),
                 AssignmentOp::Assign,
                 int_literal_expression(2),
             )),
@@ -533,16 +521,16 @@ x = 2
 ",
         vec![
             if_statement(
-                identifier("x".into()),
+                identifier("x"),
                 block(vec![expression_statement(assign(
-                    lhs_identifier("x".into()),
+                    lhs_identifier("x"),
                     AssignmentOp::Assign,
                     int_literal_expression(1),
                 ))]),
                 Some(empty_statement()),
             ),
             expression_statement(assign(
-                lhs_identifier("x".into()),
+                lhs_identifier("x"),
                 AssignmentOp::Assign,
                 int_literal_expression(2),
             )),

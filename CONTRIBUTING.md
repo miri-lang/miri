@@ -111,7 +111,7 @@ Most test modules include a `utils.rs` file with common utilities. There's also 
 
 ### Rust Edition
 
-Miri uses a modern Rust edition (2021 or 2024) consistently across the workspace. If using Rust 2024, `rustfmt.toml` explicitly sets `style_edition` to avoid tool mismatches.
+Miri uses a modern Rust edition (2024) consistently across the workspace.
 
 ### Clippy Configuration
 

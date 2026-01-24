@@ -35,8 +35,6 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
             ctx.pop_scope(stmt.span.clone());
         }
         StatementKind::Return(ret_expr) => {
-            // If there's a return value, assign it to _0 (the return place)
-            // If there's a return value, assign it to _0 (the return place)
             if let Some(expr) = ret_expr {
                 let ret_ty = ctx.body.local_decls[0].ty.clone();
                 let expr_ty_opt = ctx.type_checker.get_type(expr.id);
@@ -75,24 +73,6 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
         }
         StatementKind::Expression(expr) => {
             let operand = lower_expression(ctx, expr, None)?;
-
-            // If the expression was a call (or other terminator-producing expr),
-            // the current block might have changed or been terminated.
-            // We only need to assign if it produced a value we care about,
-            // but for expression statements, we usually discard the result unless it's a side-effect.
-            // However, lower_expression typically returns an Operand which is valid in the
-            // block active *after* the expression evaluation.
-
-            // If the expression was a call, lower_expression emitted a call terminator
-            // and switched to a new continuation block. The returned operand is a copy of the
-            // destination temp in that new block.
-            // We don't strictly *need* an assignment here if it's just an expression statement,
-            // but for consistency with other expressions we can assign it to a temp.
-            // The important part is that lower_expression handles the control flow.
-
-            // Check if we need to emit an assignment.
-            // If it's a call returning void, maybe we can skip assignment?
-            // For now, keep generic behavior: assign to temp.
 
             let ty = match &operand {
                 Operand::Constant(c) => c.ty.clone(),
@@ -157,7 +137,7 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
                 }
             }
         }
-        StatementKind::Enum(name_expr, _variants, _vis) => {
+        StatementKind::Enum(name_expr, _generics, _variants, _vis) => {
             // Lower enum declaration by looking up the type definition from type checker
             if let ExpressionKind::Identifier(name, _) = &name_expr.node {
                 if let Some(TypeDefinition::Enum(def)) =
@@ -174,9 +154,16 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
                         })
                         .collect();
 
+                    let generics = def
+                        .generics
+                        .as_ref()
+                        .map(|gs| gs.iter().map(|g| g.name.clone()).collect())
+                        .unwrap_or_default();
+
                     ctx.declarations.push(Declaration::Enum(EnumDecl {
                         name: name.clone(),
                         variants,
+                        generics,
                         module: def.module.clone(),
                     }));
                 }

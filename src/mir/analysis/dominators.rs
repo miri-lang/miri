@@ -121,17 +121,8 @@ fn compute_immediate_dominators(
     let num_blocks = body.basic_blocks.len();
     let entry_node = BasicBlock(0);
 
-    // Dom[n] = set of dominators of n.
-    // We represent sets as sorted Vecs for easier intersection, or we can use bitsets.
-    // For simplicity/clarity, let's use the standard iterative approach for idoms directly:
-    // idom(n) = lowest common ancestor of preds(n) in the dominator tree.
-
-    // Initialize idoms: undefined for all except entry.
-    // We map BasicBlock -> BasicBlock.
+    // Iterative dominator computation: idom(n) = LCA of predecessors in the dominator tree.
     let mut idoms: HashMap<BasicBlock, BasicBlock> = HashMap::new();
-
-    // We need a reverse post-order traversal for efficiency, but consistent order is enough for correctness.
-    // Iterating 0..num_blocks is usually a good approximation of RPO for forward-branching code.
 
     let mut changed = true;
     while changed {
@@ -185,11 +176,7 @@ fn intersect(
     b1: BasicBlock,
     b2: BasicBlock,
 ) -> BasicBlock {
-    // We need 'height' or order to guarantee termination/correctness.
-    // A simple proxy is the block index if the blocks are topologically sorted.
-    // If not, we trace back to root.
-    // Since we don't have depths calculated, we can use a set to find the first common ancestor.
-
+    // Trace ancestors of both nodes to find the first common one.
     let mut visited = HashSet::new();
     let mut curr = b1;
     visited.insert(curr);

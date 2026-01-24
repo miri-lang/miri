@@ -18,7 +18,7 @@ forever
     x
 ",
         vec![forever_statement(block(vec![expression_statement(
-            identifier("x".into()),
+            identifier("x"),
         )]))],
     );
 }
@@ -31,7 +31,7 @@ forever // This is an infinite loop
     x
 ",
         vec![forever_statement(block(vec![expression_statement(
-            identifier("x".into()),
+            identifier("x"),
         )]))],
     );
 }

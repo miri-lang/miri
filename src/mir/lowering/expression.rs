@@ -820,6 +820,63 @@ pub fn lower_expression(
                 return Err(LoweringError::type_not_found(obj.id, expr.span.clone()));
             };
 
+            // Handle Tuple Member Access
+            if let TypeKind::Tuple(elements) = &obj_ty.kind {
+                if let ExpressionKind::Literal(crate::ast::literal::Literal::Integer(val)) =
+                    &prop.node
+                {
+                    let idx = match val {
+                        crate::ast::literal::IntegerLiteral::I8(v) => *v as usize,
+                        crate::ast::literal::IntegerLiteral::I16(v) => *v as usize,
+                        crate::ast::literal::IntegerLiteral::I32(v) => *v as usize,
+                        crate::ast::literal::IntegerLiteral::I64(v) => *v as usize,
+                        crate::ast::literal::IntegerLiteral::I128(v) => *v as usize,
+                        crate::ast::literal::IntegerLiteral::U8(v) => *v as usize,
+                        crate::ast::literal::IntegerLiteral::U16(v) => *v as usize,
+                        crate::ast::literal::IntegerLiteral::U32(v) => *v as usize,
+                        crate::ast::literal::IntegerLiteral::U64(v) => *v as usize,
+                        crate::ast::literal::IntegerLiteral::U128(v) => *v as usize,
+                    };
+
+                    // Ensure obj is a Place
+                    let obj_place = match obj_operand {
+                        Operand::Copy(p) | Operand::Move(p) => p,
+                        Operand::Constant(c) => {
+                            let temp = ctx.push_temp(c.ty.clone(), obj.span.clone());
+                            ctx.push_statement(crate::mir::Statement {
+                                kind: MirStatementKind::Assign(
+                                    Place::new(temp),
+                                    Rvalue::Use(Operand::Constant(c)),
+                                ),
+                                span: obj.span.clone(),
+                            });
+                            Place::new(temp)
+                        }
+                    };
+
+                    let mut target_place = obj_place;
+                    target_place.projection.push(PlaceElem::Field(idx));
+
+                    let element_ty = resolve_type(ctx.type_checker, &elements[idx]);
+
+                    let operand = if element_ty.is_copy() {
+                        Operand::Copy(target_place.clone())
+                    } else {
+                        Operand::Move(target_place.clone())
+                    };
+
+                    if let Some(d) = dest {
+                        ctx.push_statement(crate::mir::Statement {
+                            kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(operand)),
+                            span: expr.span.clone(),
+                        });
+                        return Ok(Operand::Copy(d));
+                    } else {
+                        return Ok(operand);
+                    }
+                }
+            }
+
             if let TypeKind::Custom(struct_name, _) = &obj_ty.kind {
                 // Find field index
                 // We need to look up the struct definition in the type checker.

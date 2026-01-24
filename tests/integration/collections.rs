@@ -23,7 +23,6 @@ fn test_tuple_mixed_types() {
 }
 
 #[test]
-#[ignore = "MIR lowering: tuple field access projection not fully working"]
 fn test_tuple_access() {
     interpreter_assert_returns(
         r#"

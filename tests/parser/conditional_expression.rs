@@ -23,7 +23,7 @@ let x = 10 if y > 5 else 20
                 opt_expr(if_conditional(
                     int_literal_expression(10),
                     binary(
-                        identifier("y".into()),
+                        identifier("y"),
                         BinaryOp::GreaterThan,
                         int_literal_expression(5),
                     ),
@@ -48,11 +48,7 @@ var x = 100 if y % 2 == 0
                 opt_expr(if_conditional(
                     int_literal_expression(100),
                     binary(
-                        binary(
-                            identifier("y".into()),
-                            BinaryOp::Mod,
-                            int_literal_expression(2),
-                        ),
+                        binary(identifier("y"), BinaryOp::Mod, int_literal_expression(2)),
                         BinaryOp::Equal,
                         int_literal_expression(0),
                     ),
@@ -76,7 +72,7 @@ var x = 1 unless y
                 None,
                 opt_expr(unless_conditional(
                     int_literal_expression(1),
-                    identifier("y".into()),
+                    identifier("y"),
                     None,
                 )),
             )],
@@ -93,11 +89,7 @@ fn test_conditional_expression_as_if_condition() {
 if a if b else c
     x = 1
 ",
-        if_conditional(
-            identifier("a".into()),
-            identifier("b".into()),
-            Some(identifier("c".into())),
-        ),
+        if_conditional(identifier("a"), identifier("b"), Some(identifier("c"))),
         block(vec![expression_statement(assign(
             lhs_identifier("x"),
             AssignmentOp::Assign,

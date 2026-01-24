@@ -26,9 +26,9 @@ fn square(x int)
                 None,
             )])
             .build(block(vec![expression_statement(binary(
-                identifier("x".into()),
+                identifier("x"),
                 BinaryOp::Mul,
-                identifier("x".into()),
+                identifier("x"),
             ))]))],
     );
 }
@@ -48,9 +48,9 @@ fn square(x int > 0)
                 None,
             )])
             .build(block(vec![expression_statement(binary(
-                identifier("x".into()),
+                identifier("x"),
                 BinaryOp::Mul,
-                identifier("x".into()),
+                identifier("x"),
             ))]))],
     );
 }
@@ -70,9 +70,9 @@ fn square(x int > 0) int: x * x
             )])
             .return_type(type_expr_non_null(type_int()))
             .build(expression_statement(binary(
-                identifier("x".into()),
+                identifier("x"),
                 BinaryOp::Mul,
-                identifier("x".into()),
+                identifier("x"),
             )))],
     );
 }
@@ -102,9 +102,9 @@ fn add(a int, b int)
                 parameter("b".into(), type_expr_non_null(type_int()), None, None),
             ])
             .build(block(vec![return_statement(opt_expr(binary(
-                identifier("a".into()),
+                identifier("a"),
                 BinaryOp::Add,
-                identifier("b".into()),
+                identifier("b"),
             )))]))],
     );
 }

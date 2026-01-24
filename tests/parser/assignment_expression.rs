@@ -10,7 +10,7 @@ use miri::error::syntax::SyntaxErrorKind;
 fn test_parse_assignment_expression() {
     assignment_expression_test(
         "x = 123",
-        lhs_identifier("x".into()),
+        lhs_identifier("x"),
         AssignmentOp::Assign,
         int_literal_expression(123),
     );
@@ -20,10 +20,10 @@ fn test_parse_assignment_expression() {
 fn test_parse_chained_assignment_expression() {
     assignment_expression_test(
         "x = y = 123",
-        lhs_identifier("x".into()),
+        lhs_identifier("x"),
         AssignmentOp::Assign,
         assign(
-            lhs_identifier("y".into()),
+            lhs_identifier("y"),
             AssignmentOp::Assign,
             int_literal_expression(123),
         ),
@@ -34,7 +34,7 @@ fn test_parse_chained_assignment_expression() {
 fn test_parse_increment_assignment_expression() {
     assignment_expression_test(
         "x += 100",
-        lhs_identifier("x".into()),
+        lhs_identifier("x"),
         AssignmentOp::AssignAdd,
         int_literal_expression(100),
     );
@@ -44,7 +44,7 @@ fn test_parse_increment_assignment_expression() {
 fn test_parse_decrement_assignment_expression() {
     assignment_expression_test(
         "x -= 200",
-        lhs_identifier("x".into()),
+        lhs_identifier("x"),
         AssignmentOp::AssignSub,
         int_literal_expression(200),
     );
@@ -54,7 +54,7 @@ fn test_parse_decrement_assignment_expression() {
 fn test_parse_multiplication_assignment_expression() {
     assignment_expression_test(
         "x *= 10",
-        lhs_identifier("x".into()),
+        lhs_identifier("x"),
         AssignmentOp::AssignMul,
         int_literal_expression(10),
     );
@@ -64,7 +64,7 @@ fn test_parse_multiplication_assignment_expression() {
 fn test_parse_division_assignment_expression() {
     assignment_expression_test(
         "x /= 10",
-        lhs_identifier("x".into()),
+        lhs_identifier("x"),
         AssignmentOp::AssignDiv,
         int_literal_expression(10),
     );
@@ -74,7 +74,7 @@ fn test_parse_division_assignment_expression() {
 fn test_parse_modulo_assignment_expression() {
     assignment_expression_test(
         "x %= 10",
-        lhs_identifier("x".into()),
+        lhs_identifier("x"),
         AssignmentOp::AssignMod,
         int_literal_expression(10),
     );
@@ -84,13 +84,13 @@ fn test_parse_modulo_assignment_expression() {
 fn test_parse_increment_chained_assignment_expression() {
     assignment_expression_test(
         "x = y = z += 100",
-        lhs_identifier("x".into()),
+        lhs_identifier("x"),
         AssignmentOp::Assign,
         assign(
-            lhs_identifier("y".into()),
+            lhs_identifier("y"),
             AssignmentOp::Assign,
             assign(
-                lhs_identifier("z".into()),
+                lhs_identifier("z"),
                 AssignmentOp::AssignAdd,
                 int_literal_expression(100),
             ),
@@ -116,7 +116,7 @@ fn test_parse_invalid_assignment_target() {
 fn test_assignment_precedence_with_binary_expression() {
     assignment_expression_test(
         "x = 1 + 2",
-        lhs_identifier("x".into()),
+        lhs_identifier("x"),
         AssignmentOp::Assign,
         binary(
             int_literal_expression(1),

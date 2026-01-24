@@ -507,7 +507,7 @@ pub(crate) fn is_less_than(token: &Token) -> bool {
 pub(crate) fn is_member_expression_boundary(token: &Token) -> bool {
     matches!(
         token,
-        Token::LBracket | Token::Dot | Token::LParen | Token::LessThan
+        Token::LBracket | Token::Dot | Token::LParen | Token::LessThan | Token::Float
     )
 }
 

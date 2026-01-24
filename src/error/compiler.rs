@@ -6,6 +6,7 @@ use crate::error::syntax::SyntaxError;
 use crate::error::type_error::TypeError;
 use thiserror::Error;
 
+/// Top-level error type encompassing all compiler pipeline errors.
 #[derive(Error, Debug)]
 pub enum CompilerError {
     #[error("I/O Error: {0}")]
@@ -40,6 +41,7 @@ pub enum CompilerError {
 }
 
 impl CompilerError {
+    /// Formats this error for terminal display using the given source code.
     pub fn report(&self, source: &str) -> String {
         match self {
             CompilerError::Lexer(e) | CompilerError::Parser(e) => e.report(source),

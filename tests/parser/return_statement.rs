@@ -24,7 +24,7 @@ return 42 + x
         vec![return_statement(opt_expr(binary(
             int_literal_expression(42),
             BinaryOp::Add,
-            identifier("x".into()),
+            identifier("x"),
         )))],
     );
 }

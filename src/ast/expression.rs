@@ -11,19 +11,25 @@ use crate::ast::types::{Type, TypeDeclarationKind};
 use crate::error::syntax::Span;
 use std::fmt;
 
-/// Represents the type of a range expression
+/// The kind of range expression.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RangeExpressionType {
-    Exclusive, // Represents a range like `1..10`
-    Inclusive, // Represents a range like `1..=10`
-    // TODO: Step,      // Represents a range with a step, e.g., `1..10:2`
-    IterableObject, // Represents an iterable object, e.g. a string, or a collection
+    /// Exclusive range: `1..10`
+    Exclusive,
+    /// Inclusive range: `1..=10`
+    Inclusive,
+    /// An iterable object (e.g. a string or collection used in a for loop).
+    IterableObject,
 }
 
+/// The kind of import path in a `use` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ImportPathKind {
+    /// Single item import: `use foo.bar`
     Simple,
+    /// Wildcard import: `use foo.*`
     Wildcard,
+    /// Multi-item import: `use foo.{bar, baz as b}`
     Multi(Vec<(Expression, Option<Box<Expression>>)>),
 }
 
@@ -31,10 +37,8 @@ pub enum ImportPathKind {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LeftHandSideExpression {
     Identifier(Box<Expression>),
-
-    Member(Box<Expression>), // object.property
-
-    Index(Box<Expression>), // object[index]
+    Member(Box<Expression>),
+    Index(Box<Expression>),
 }
 
 impl LeftHandSideExpression {
@@ -54,7 +58,7 @@ pub enum ExpressionKind {
     Literal(Literal),
 
     /// An identifier (e.g., variable name) with an optional class qualifier.
-    Identifier(String, Option<String>), // name, optional class e.g. x or Http::Status
+    Identifier(String, Option<String>),
 
     /// A binary operation (e.g., `a + b`).
     Binary(Box<Expression>, BinaryOp, Box<Expression>),
@@ -74,23 +78,23 @@ pub enum ExpressionKind {
         Box<Expression>,
         Option<Box<Expression>>,
         IfStatementType,
-    ), // then_expr, condition, else_expr
+    ),
 
     /// A range expression (e.g., `1..10`).
     Range(
         Box<Expression>,
         Option<Box<Expression>>,
         RangeExpressionType,
-    ), // start, end, range_type
+    ),
 
     /// A guard expression.
-    Guard(GuardOp, Box<Expression>), // guard operator and expression
+    Guard(GuardOp, Box<Expression>),
 
     /// A member access expression (e.g., `object.property`).
-    Member(Box<Expression>, Box<Expression>), // object.property
+    Member(Box<Expression>, Box<Expression>),
 
     /// An index access expression (e.g., `object[index]`).
-    Index(Box<Expression>, Box<Expression>), // object[index]
+    Index(Box<Expression>, Box<Expression>),
 
     /// A function call (e.g., `foo(a, b)`).
     Call(Box<Expression>, Vec<Expression>),
@@ -106,15 +110,15 @@ pub enum ExpressionKind {
         Box<Expression>,
         Option<Box<Expression>>,
         TypeDeclarationKind,
-    ), // Represents a generic type, e.g., <T is MyClass>
+    ),
 
-    /// A type declaration expression.
+    /// A type declaration expression (e.g., `T extends SomeClass`).
     TypeDeclaration(
         Box<Expression>,
         Option<Vec<Expression>>,
         TypeDeclarationKind,
         Option<Box<Expression>>,
-    ), // T extends SomeClass
+    ),
 
     /// An enum value reference (e.g., `Option::Some(5)`).
     EnumValue(Box<Expression>, Vec<Expression>),
@@ -129,7 +133,7 @@ pub enum ExpressionKind {
         Option<Box<Expression>>,
         Box<Statement>,
         FunctionProperties,
-    ), // generic_types, parameters, return type, body
+    ),
 
     /// A list literal (e.g., `[1, 2, 3]`).
     List(Vec<Expression>),
@@ -147,7 +151,7 @@ pub enum ExpressionKind {
     Set(Vec<Expression>),
 
     /// A match expression.
-    Match(Box<Expression>, Vec<MatchBranch>), // value, branches
+    Match(Box<Expression>, Vec<MatchBranch>),
 
     /// An interpolated string (f-string e.g. `"hello #{name}"`).
     FormattedString(Vec<Expression>),
@@ -159,10 +163,10 @@ pub enum ExpressionKind {
     Super,
 }
 
-/// Represents an expression
+/// An expression node (wraps `ExpressionKind` with an ID and span).
 pub type Expression = IdNode<ExpressionKind>;
 
-/// Returns an optional expression
+/// Wraps an expression in `Some(Box<...>)` for use in optional fields.
 pub fn opt_expr(expr: Expression) -> Option<Box<Expression>> {
     Some(Box::new(expr))
 }
@@ -173,7 +177,6 @@ impl fmt::Display for ExpressionKind {
             ExpressionKind::Type(t, _) => write!(f, "{}", t),
             ExpressionKind::Identifier(name, _) => write!(f, "{}", name),
             ExpressionKind::GenericType(name, _, _) => write!(f, "{}", name.node),
-            // Fallback for other expressions if they appear in types (shouldn't happen often in error messages for types)
             _ => write!(f, "{:?}", self),
         }
     }

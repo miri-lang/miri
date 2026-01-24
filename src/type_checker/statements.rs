@@ -165,8 +165,8 @@ impl TypeChecker {
             StatementKind::Struct(name, generics, fields, vis) => {
                 self.check_struct(name, generics, fields, vis, context)
             }
-            StatementKind::Enum(name, variants, vis) => {
-                self.check_enum(name, variants, vis, context)
+            StatementKind::Enum(name, generics, variants, vis) => {
+                self.check_enum(name, generics, variants, vis, context)
             }
             StatementKind::Class(name, generics, base_class, traits, body, vis, is_abstract) => {
                 self.check_class(
@@ -1013,26 +1013,7 @@ impl TypeChecker {
             if !matches!(return_type.kind, TypeKind::Void) {
                 let status = check_returns(body);
                 if status == ReturnStatus::None {
-                    // If implicit return was used (Expression or If), check_returns detects Implicit.
-                    // But check_returns logic: Expression -> Implicit. Block -> Last stmt Implicit?
-                    // Let's rely on existing check_returns logic and hope it handles Blocks/Ifs correctly.
-                    // Given `scope_visibility` passed compilation (only execution failed), type checking is likely fine.
-                    // Except now we made it non-Void, so strict check applies.
-                    // We should ensure check_returns handles If implicit return?
-                    // `check_return` handles explicit return.
-                    // Implicit return inside If is handled where?
-                    // Typically dynamic languages or Rust-like check block result.
-                    // check_block doesn't check result.
-
-                    // But for now, let's assume TypeChecker is lenient enough or existing logic covers it.
-                    // We only fixed correct return type inference for Main.
-
-                    if status == ReturnStatus::None {
-                        self.report_error(
-                            "Missing return statement".to_string(),
-                            body.span.clone(),
-                        );
-                    }
+                    self.report_error("Missing return statement".to_string(), body.span.clone());
                 }
             }
         }
@@ -1148,6 +1129,7 @@ impl TypeChecker {
     fn check_enum(
         &mut self,
         name_expr: &Expression,
+        generics: &Option<Vec<Expression>>,
         variants: &[Expression],
         visibility: &MemberVisibility,
         context: &mut Context,
@@ -1158,6 +1140,30 @@ impl TypeChecker {
             self.report_error("Invalid enum name".to_string(), name_expr.span.clone());
             return;
         };
+
+        // Handle generics
+        let mut generic_defs = None;
+        if let Some(gens) = generics {
+            context.enter_scope();
+            self.define_generics(gens, context);
+
+            let mut defs = Vec::new();
+            for gen in gens {
+                if let ExpressionKind::GenericType(name_expr, constraint, kind) = &gen.node {
+                    if let ExpressionKind::Identifier(n, _) = &name_expr.node {
+                        let constraint_type = constraint
+                            .as_ref()
+                            .map(|c| self.resolve_type_expression(c, context));
+                        defs.push(GenericDefinition {
+                            name: n.clone(),
+                            constraint: constraint_type,
+                            kind: kind.clone(),
+                        });
+                    }
+                }
+            }
+            generic_defs = Some(defs);
+        }
 
         let mut variant_map = BTreeMap::new();
         for variant in variants {
@@ -1184,8 +1190,13 @@ impl TypeChecker {
 
         let enum_def = EnumDefinition {
             variants: variant_map,
+            generics: generic_defs.clone(),
             module: self.current_module.clone(),
         };
+
+        if generics.is_some() {
+            context.exit_scope();
+        }
 
         context.define_type(name.clone(), TypeDefinition::Enum(enum_def.clone()));
         if context.scopes.len() == 1 {
@@ -1194,7 +1205,20 @@ impl TypeChecker {
         }
 
         // Define enum type symbol
-        let enum_type = make_type(TypeKind::Custom(name.clone(), None));
+        let enum_type = if let Some(defs) = generic_defs {
+            let args = defs
+                .iter()
+                .map(|g| {
+                    crate::ast::factory::type_expr_non_null(make_type(TypeKind::Custom(
+                        g.name.clone(),
+                        None,
+                    )))
+                })
+                .collect();
+            make_type(TypeKind::Custom(name.clone(), Some(args)))
+        } else {
+            make_type(TypeKind::Custom(name.clone(), None))
+        };
 
         if context.scopes.len() == 1 {
             self.global_scope.insert(

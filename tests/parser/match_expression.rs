@@ -440,6 +440,7 @@ match c
         vec![
             enum_statement(
                 identifier("Color"),
+                None,
                 vec![
                     enum_value("Red", vec![]),
                     enum_value("Green", vec![]),
@@ -451,7 +452,7 @@ match c
                 vec![let_variable(
                     "c",
                     None,
-                    opt_expr(member(identifier("Color".into()), identifier("Red").into())),
+                    opt_expr(member(identifier("Color"), identifier("Red").into())),
                 )],
                 MemberVisibility::Public,
             ),
@@ -502,6 +503,7 @@ match c
         vec![
             enum_statement(
                 identifier("Color"),
+                None,
                 vec![
                     enum_value("Red", vec![type_expr_non_null(type_string())]),
                     enum_value("Green", vec![type_expr_non_null(type_string())]),
@@ -514,7 +516,7 @@ match c
                     "c",
                     None,
                     opt_expr(call(
-                        member(identifier("Color".into()), identifier("Red").into()),
+                        member(identifier("Color"), identifier("Red").into()),
                         vec![string_literal_expression("#ff0000")],
                     )),
                 )],

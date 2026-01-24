@@ -8,12 +8,13 @@ use crate::ast::{
 };
 use crate::error::syntax::Span;
 use crate::mir::{
-    BinOp, Constant, Discriminant, Operand, Place, Rvalue, StatementKind, Terminator,
-    TerminatorKind,
+    AggregateKind, BinOp, Constant, Discriminant, Operand, Place, Rvalue, StatementKind,
+    Terminator, TerminatorKind,
 };
 
 use super::{lower_expression, lower_statement, LoweringContext};
 use crate::error::lowering::LoweringError;
+use crate::type_checker::context::{ClassDefinition, StructDefinition, TypeDefinition};
 
 pub fn lower_break(ctx: &mut LoweringContext, span: &Span) -> Result<(), LoweringError> {
     if let Some(target) = ctx.get_break_target() {
@@ -368,7 +369,6 @@ fn lower_for_over_iterable(
 
     // Increment
     ctx.set_current_block(increment_bb);
-    // Reuse idx_ty from line 280 for the constant (consume it here as final use)
     let one = Operand::Constant(Box::new(Constant {
         span: span.clone(),
         ty: idx_ty,
@@ -572,10 +572,7 @@ pub fn lower_call(
                             let grid_op = lower_expression(ctx, &args[0], None)?;
                             let block_op = lower_expression(ctx, &args[1], None)?;
 
-                            // GPU Launch doesn't really have a return value in the traditional sense,
-                            // but if dest is provided (unlikely for launch statement), we can use it or ignore.
-                            // For now, let's keep existing behavior for launch, ignoring dest or creating a dummy one.
-                            // Assuming launch returns void.
+                            // GPU launch returns void by default.
 
                             let mut return_ty = Type::new(TypeKind::Void, span.clone());
                             if let Some(ty) = ctx.type_checker.get_type(call_expr_id) {
@@ -608,6 +605,29 @@ pub fn lower_call(
                             return Ok(op);
                         }
                     }
+                }
+            }
+        }
+    }
+
+    // Check for struct constructor call
+    // The type checker gives struct names the type Meta(Custom(name, ...))
+    if let Some(func_ty) = ctx.type_checker.get_type(func.id) {
+        if let TypeKind::Meta(inner) = &func_ty.kind {
+            if let TypeKind::Custom(type_name, _) = &inner.kind {
+                // Look up struct definition
+                if let Some(TypeDefinition::Struct(def)) =
+                    ctx.type_checker.global_type_definitions.get(type_name)
+                {
+                    // This is a struct constructor - emit Aggregate instead of Call
+                    return lower_struct_constructor(ctx, span, type_name, def, args, dest);
+                }
+                // Look up class definition
+                if let Some(TypeDefinition::Class(def)) =
+                    ctx.type_checker.global_type_definitions.get(type_name)
+                {
+                    // This is a class constructor - emit Aggregate instead of Call
+                    return lower_class_constructor(ctx, span, type_name, def, args, dest);
                 }
             }
         }
@@ -711,4 +731,207 @@ pub fn lower_call(
     ctx.set_current_block(target_bb);
 
     Ok(op)
+}
+
+/// Lowers a struct constructor call to an Aggregate rvalue.
+fn lower_struct_constructor(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    struct_name: &str,
+    def: &StructDefinition,
+    args: &[crate::ast::expression::Expression],
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    // Separate positional and named arguments
+    let mut positional_args = Vec::new();
+    let mut named_args = std::collections::HashMap::new();
+
+    for arg in args {
+        match &arg.node {
+            ExpressionKind::NamedArgument(name, value) => {
+                let op = lower_expression(ctx, value, None)?;
+                named_args.insert(name.clone(), op);
+            }
+            _ => {
+                let op = lower_expression(ctx, arg, None)?;
+                positional_args.push(op);
+            }
+        }
+    }
+
+    // Build operands in field declaration order
+    let mut operands = Vec::with_capacity(def.fields.len());
+    let mut pos_iter = positional_args.into_iter();
+
+    for (field_name, field_ty, _visibility) in &def.fields {
+        let op = if let Some(op) = pos_iter.next() {
+            // Positional argument
+            op
+        } else if let Some(op) = named_args.remove(field_name) {
+            // Named argument
+            op
+        } else {
+            // Missing field - this should have been caught by type checker
+            return Err(LoweringError::missing_struct_field(
+                field_name.clone(),
+                struct_name.to_string(),
+                span.clone(),
+            ));
+        };
+
+        // Cast if types don't match
+        let op_ty = op.ty(&ctx.body);
+        let op = if op_ty.kind != field_ty.kind {
+            let temp = ctx.push_temp(field_ty.clone(), span.clone());
+            ctx.push_statement(crate::mir::Statement {
+                kind: StatementKind::Assign(
+                    Place::new(temp),
+                    Rvalue::Cast(Box::new(op), field_ty.clone()),
+                ),
+                span: span.clone(),
+            });
+            Operand::Copy(Place::new(temp))
+        } else {
+            op
+        };
+
+        operands.push(op);
+    }
+
+    // Create the struct type
+    let struct_ty = Type::new(
+        TypeKind::Custom(struct_name.to_string(), None),
+        span.clone(),
+    );
+
+    // Assign aggregate to destination
+    let (destination, result_op) = if let Some(d) = dest {
+        (d.clone(), Operand::Copy(d))
+    } else {
+        let temp = ctx.push_temp(struct_ty.clone(), span.clone());
+        let p = Place::new(temp);
+        (p.clone(), Operand::Copy(p))
+    };
+
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(
+            destination,
+            Rvalue::Aggregate(AggregateKind::Struct(struct_ty), operands),
+        ),
+        span: span.clone(),
+    });
+
+    Ok(result_op)
+}
+
+/// Lowers a class constructor call to an Aggregate rvalue.
+fn lower_class_constructor(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    class_name: &str,
+    def: &ClassDefinition,
+    args: &[crate::ast::expression::Expression],
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    // Separate positional and named arguments
+    let mut positional_args = Vec::new();
+    let mut named_args = std::collections::HashMap::new();
+
+    for arg in args {
+        match &arg.node {
+            ExpressionKind::NamedArgument(name, value) => {
+                let op = lower_expression(ctx, value, None)?;
+                named_args.insert(name.clone(), op);
+            }
+            _ => {
+                let op = lower_expression(ctx, arg, None)?;
+                positional_args.push(op);
+            }
+        }
+    }
+
+    // Build operands in field declaration order (BTreeMap is sorted)
+    let mut operands = Vec::with_capacity(def.fields.len());
+    let mut pos_iter = positional_args.into_iter();
+
+    for (field_name, field_info) in &def.fields {
+        let op = if let Some(op) = pos_iter.next() {
+            // Positional argument
+            op
+        } else if let Some(op) = named_args.remove(field_name) {
+            // Named argument
+            op
+        } else {
+            // No argument provided - use default value (zero for now)
+            // TODO: Support default field values from class definition
+            create_default_value(&field_info.ty, span)
+        };
+
+        // Cast if types don't match
+        let op_ty = op.ty(&ctx.body);
+        let op = if op_ty.kind != field_info.ty.kind {
+            let temp = ctx.push_temp(field_info.ty.clone(), span.clone());
+            ctx.push_statement(crate::mir::Statement {
+                kind: StatementKind::Assign(
+                    Place::new(temp),
+                    Rvalue::Cast(Box::new(op), field_info.ty.clone()),
+                ),
+                span: span.clone(),
+            });
+            Operand::Copy(Place::new(temp))
+        } else {
+            op
+        };
+
+        operands.push(op);
+    }
+
+    // Create the class type
+    let class_ty = Type::new(TypeKind::Custom(class_name.to_string(), None), span.clone());
+
+    // Assign aggregate to destination
+    let (destination, result_op) = if let Some(d) = dest {
+        (d.clone(), Operand::Copy(d))
+    } else {
+        let temp = ctx.push_temp(class_ty.clone(), span.clone());
+        let p = Place::new(temp);
+        (p.clone(), Operand::Copy(p))
+    };
+
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(
+            destination,
+            Rvalue::Aggregate(AggregateKind::Class(class_ty), operands),
+        ),
+        span: span.clone(),
+    });
+
+    Ok(result_op)
+}
+
+/// Creates a default value operand for a given type.
+fn create_default_value(ty: &Type, span: &Span) -> Operand {
+    use crate::ast::literal::{IntegerLiteral, Literal};
+    use crate::mir::Constant;
+
+    let literal = match &ty.kind {
+        TypeKind::Int
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I128 => Literal::Integer(IntegerLiteral::I32(0)),
+        TypeKind::U8 | TypeKind::U16 | TypeKind::U32 | TypeKind::U64 | TypeKind::U128 => {
+            Literal::Integer(IntegerLiteral::I32(0))
+        }
+        TypeKind::Boolean => Literal::Boolean(false),
+        TypeKind::String => Literal::String(String::new()),
+        _ => Literal::None,
+    };
+
+    Operand::Constant(Box::new(Constant {
+        span: span.clone(),
+        ty: ty.clone(),
+        literal,
+    }))
 }

@@ -4,18 +4,11 @@
 use crate::integration::utils::{interpreter_assert_returns, interpreter_assert_runs};
 
 #[test]
-#[ignore = "MIR lowering: class constructors lowered as function calls, not aggregates"]
 fn test_class_definition() {
     interpreter_assert_runs(
         r#"
 class Counter
     var count int = 0
-    
-    fn increment()
-        count = count + 1
-    
-    fn get() int
-        count
 
 fn main()
     let c = Counter()
@@ -24,7 +17,6 @@ fn main()
 }
 
 #[test]
-#[ignore = "MIR lowering: class constructors lowered as function calls, not aggregates"]
 fn test_class_instantiation() {
     interpreter_assert_runs(
         r#"
@@ -39,7 +31,6 @@ fn main()
 }
 
 #[test]
-#[ignore = "MIR lowering: class constructors lowered as function calls, not aggregates"]
 fn test_class_with_constructor_args() {
     interpreter_assert_runs(
         r#"

@@ -4,7 +4,6 @@
 use crate::integration::utils::{interpreter_assert_returns, interpreter_assert_runs};
 
 #[test]
-#[ignore = "MIR lowering: struct constructors lowered as function calls, not aggregates"]
 fn test_struct_definition() {
     interpreter_assert_runs(
         r#"
@@ -19,7 +18,6 @@ fn main()
 }
 
 #[test]
-#[ignore = "MIR lowering: struct constructors lowered as function calls, not aggregates"]
 fn test_struct_field_access() {
     interpreter_assert_returns(
         r#"
@@ -36,7 +34,6 @@ fn main() int
 }
 
 #[test]
-#[ignore = "MIR lowering: struct constructors lowered as function calls, not aggregates"]
 fn test_struct_field_mutation() {
     interpreter_assert_returns(
         r#"
@@ -53,7 +50,6 @@ fn main() int
 }
 
 #[test]
-#[ignore = "MIR lowering: struct constructors lowered as function calls, not aggregates"]
 fn test_struct_multiple_fields() {
     interpreter_assert_runs(
         r#"

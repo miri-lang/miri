@@ -17,17 +17,21 @@ pub use utils::token_to_string;
 use self::formatted_string::lex_formatted_string;
 use self::regex::parse_regex_literal;
 
+/// Indentation-aware lexer for Miri source code.
+///
+/// Wraps a `logos` lexer and adds indentation tracking, producing
+/// synthetic `Indent`/`Dedent` tokens for significant whitespace.
 pub struct Lexer<'source> {
     inner: logos::Lexer<'source, Token>,
     source: &'source str,
     pending_tokens_stack: Vec<TokenSpan>,
-    indent_stack: Vec<usize>, // stack of indent levels (in spaces)
-    indent_level: usize,      // current indent level
+    indent_stack: Vec<usize>,
+    indent_level: usize,
     eof_handled: bool,
-    paren_stack: Vec<usize>,          // stack of parenthesis levels
-    bracket_stack: Vec<usize>,        // stack of square bracket levels
-    curly_brace_stack: Vec<usize>,    // stack of curly brace levels
-    previous_tokens: VecDeque<Token>, // keeps track of previous tokens, primarily for indentation handling
+    paren_stack: Vec<usize>,
+    bracket_stack: Vec<usize>,
+    curly_brace_stack: Vec<usize>,
+    previous_tokens: VecDeque<Token>,
 }
 
 impl<'source> Iterator for Lexer<'source> {
@@ -45,6 +49,7 @@ impl<'source> Iterator for Lexer<'source> {
 impl<'source> Lexer<'source> {
     const MAX_PREVIOUS_TOKENS: usize = 2;
 
+    /// Creates a new lexer for the given source string.
     pub fn new(source: &'source str) -> Self {
         Lexer {
             inner: Token::lexer(source),
@@ -80,14 +85,12 @@ impl<'source> Lexer<'source> {
                         self.eof_handled = true;
                         let source_len = self.source.len();
 
-                        // Generate dedent tokens for all remaining indentation levels
                         while self.indent_stack.len() > 1 {
                             self.pending_tokens_stack
                                 .push((Token::Dedent, source_len..source_len));
                             self.indent_stack.pop();
                         }
 
-                        // Return the first pending dedent token if any
                         return self.pending_tokens_stack.pop().map(Ok);
                     }
                     return None;

@@ -26,7 +26,7 @@ for x in 1..=5
         block(vec![expression_statement(assign(
             lhs_identifier("y"),
             AssignmentOp::Assign,
-            identifier("x".into()),
+            identifier("x"),
         ))]),
     );
 }
@@ -46,7 +46,7 @@ for x in 1..5: y = x
         expression_statement(assign(
             lhs_identifier("y"),
             AssignmentOp::Assign,
-            identifier("x".into()),
+            identifier("x"),
         )),
     );
 }
@@ -62,18 +62,14 @@ for k, v in hash: y = k + v
             let_variable("v".into(), None, None),
         ],
         range(
-            identifier("hash".into()),
+            identifier("hash"),
             None,
             RangeExpressionType::IterableObject,
         ),
         expression_statement(assign(
             lhs_identifier("y"),
             AssignmentOp::Assign,
-            binary(
-                identifier("k".into()),
-                BinaryOp::Add,
-                identifier("v".into()),
-            ),
+            binary(identifier("k"), BinaryOp::Add, identifier("v")),
         )),
     );
 }
@@ -93,7 +89,7 @@ for ch in \"hello\": y = ch
         expression_statement(assign(
             lhs_identifier("y"),
             AssignmentOp::Assign,
-            identifier("ch".into()),
+            identifier("ch"),
         )),
     );
 }
@@ -177,7 +173,7 @@ for item in my_list
 ",
         vec![let_variable("item".into(), None, None)],
         range(
-            identifier("my_list".into()),
+            identifier("my_list"),
             None,
             RangeExpressionType::IterableObject,
         ),

@@ -17,13 +17,13 @@ x > 10 and y <= 8
 ",
         vec![expression_statement(logical(
             binary(
-                identifier("x".into()),
+                identifier("x"),
                 BinaryOp::GreaterThan,
                 int_literal_expression(10),
             ),
             BinaryOp::And,
             binary(
-                identifier("y".into()),
+                identifier("y"),
                 BinaryOp::LessThanEqual,
                 int_literal_expression(8),
             ),
@@ -40,23 +40,19 @@ x > 1 and y <= 2 or y == 10
         vec![expression_statement(logical(
             logical(
                 binary(
-                    identifier("x".into()),
+                    identifier("x"),
                     BinaryOp::GreaterThan,
                     int_literal_expression(1),
                 ),
                 BinaryOp::And,
                 binary(
-                    identifier("y".into()),
+                    identifier("y"),
                     BinaryOp::LessThanEqual,
                     int_literal_expression(2),
                 ),
             ),
             BinaryOp::Or,
-            binary(
-                identifier("y".into()),
-                BinaryOp::Equal,
-                int_literal_expression(10),
-            ),
+            binary(identifier("y"), BinaryOp::Equal, int_literal_expression(10)),
         ))],
     );
 }

@@ -6,13 +6,14 @@ use crate::error::syntax::{SyntaxError, SyntaxErrorKind};
 use crate::lexer::Lexer;
 use logos::Lexer as LogosLexer;
 
+/// Lexes an f-string literal, splitting it into string parts and interpolated expressions.
 pub fn lex_formatted_string(
     lexer: &mut LogosLexer<Token>,
     pending_tokens_stack: &mut Vec<TokenSpan>,
     quote_character: char,
 ) -> Result<(), SyntaxError> {
-    let slice = lexer.slice(); // Example: f"Hello, {name}!"
-    let without_prefix = &slice[1..]; // remove `f`
+    let slice = lexer.slice();
+    let without_prefix = &slice[1..];
     let (start, end) = match (
         without_prefix.find(quote_character),
         without_prefix.rfind(quote_character),

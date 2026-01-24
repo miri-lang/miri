@@ -16,7 +16,7 @@ fn test_member_expression() {
 obj.prop
 ",
         vec![expression_statement(member(
-            identifier("obj".into()),
+            identifier("obj"),
             identifier("prop").into(),
         ))],
     );
@@ -29,7 +29,7 @@ fn test_assign_to_member_expression() {
 obj.prop = 1
 ",
         vec![expression_statement(assign(
-            lhs_member(identifier("obj".into()), identifier("prop").into()),
+            lhs_member(identifier("obj"), identifier("prop").into()),
             AssignmentOp::Assign,
             int_literal_expression(1),
         ))],
@@ -43,10 +43,7 @@ fn test_assign_to_index_expression() {
 obj['prop'] = 1
 ",
         vec![expression_statement(assign(
-            lhs_index(
-                identifier("obj".into()),
-                string_literal_expression("prop".into()),
-            ),
+            lhs_index(identifier("obj"), string_literal_expression("prop".into())),
             AssignmentOp::Assign,
             int_literal_expression(1),
         ))],
@@ -62,10 +59,7 @@ obj.a.b['prop'][0] = 1.0
         vec![expression_statement(assign(
             lhs_index(
                 index(
-                    member(
-                        member(identifier("obj".into()), identifier("a".into())),
-                        identifier("b".into()),
-                    ),
+                    member(member(identifier("obj"), identifier("a")), identifier("b")),
                     string_literal_expression("prop".into()),
                 ),
                 int_literal_expression(0),
@@ -120,14 +114,7 @@ fn test_index_access_with_complex_expression() {
 
 #[test]
 fn test_error_on_invalid_member_property() {
-    // A dot must be followed by an identifier, not a literal or operator.
-    parser_error_test(
-        "obj.123",
-        &SyntaxErrorKind::UnexpectedToken {
-            expected: "an end of statement".into(),
-            found: "float".into(),
-        },
-    );
+    // A dot must be followed by an identifier or integer literal, not an operator.
     parser_error_test(
         "obj.+",
         &SyntaxErrorKind::UnexpectedToken {

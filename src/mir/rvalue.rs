@@ -15,6 +15,8 @@ pub enum AggregateKind {
     Array,
     /// A struct, e.g., `Point { x: 1, y: 2 }` - named fields
     Struct(Type),
+    /// A class instance, e.g., `Counter()` - fields with methods
+    Class(Type),
     /// A list, e.g., `[1, 2, 3]` - dynamic size, homogeneous
     List,
     /// A set, e.g., `{1, 2, 3}` - dynamic size, unique elements
@@ -117,7 +119,7 @@ impl fmt::Display for Rvalue {
                     }
                     write!(f, "}}")
                 }
-                AggregateKind::Struct(ty) => {
+                AggregateKind::Struct(ty) | AggregateKind::Class(ty) => {
                     write!(f, "{} {{ ", ty)?;
                     for (i, op) in ops.iter().enumerate() {
                         if i > 0 {

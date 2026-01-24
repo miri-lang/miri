@@ -16,7 +16,6 @@ use std::process::Command;
 
 use crate::type_checker::TypeChecker;
 
-/// Check if the program has any function declarations
 fn has_functions(program: &Program) -> bool {
     program
         .body
@@ -24,7 +23,6 @@ fn has_functions(program: &Program) -> bool {
         .any(|s| matches!(&s.node, StatementKind::FunctionDeclaration(..)))
 }
 
-/// Check if a statement can be wrapped in a function (simple script content)
 fn is_wrappable_stmt(stmt: &Statement) -> bool {
     matches!(
         &stmt.node,
@@ -40,17 +38,13 @@ fn is_wrappable_stmt(stmt: &Statement) -> bool {
     )
 }
 
-/// Wrap a script (without functions) in a synthetic main function.
-/// The last expression becomes the return value.
-/// Only wraps simple scripts - not type definitions.
-/// Also wraps empty programs to create a valid entry point.
+/// Wraps a script-style program (no function declarations) in a synthetic `main` function.
+/// Skips programs that already contain functions or non-wrappable type definitions.
 fn wrap_script_in_main(program: &mut Program) {
-    // Don't wrap if already has functions
     if has_functions(program) {
         return;
     }
 
-    // Handle empty program - create empty main
     if program.body.is_empty() {
         let body = crate::ast::factory::block(vec![]);
         let main_fn = func("main").build(body);
@@ -58,40 +52,40 @@ fn wrap_script_in_main(program: &mut Program) {
         return;
     }
 
-    // Don't wrap if any statement is a type definition
     let all_wrappable = program.body.iter().all(is_wrappable_stmt);
     if !all_wrappable {
         return;
     }
 
-    // Use statements as-is for the function body
-    // Don't add explicit return - let MIR lowering handle implicit returns
     let body_stmts = program.body.clone();
-
-    // Create function body as a block
     let body = crate::ast::factory::block(body_stmts);
-
-    // Create: fn main() { ... } - no explicit return type, let type checker infer
     let main_fn = func("main").build(body);
-
-    // Replace program body with just the main function
     program.body = vec![main_fn];
 }
 
+/// The result of running the frontend pipeline (parsing + type checking).
 #[derive(Debug)]
 pub struct PipelineResult {
+    /// The parsed abstract syntax tree.
     pub ast: Program,
+    /// The type checker state after analysis (contains inferred types and warnings).
     pub type_checker: TypeChecker,
 }
 
+/// Options controlling the build process.
 #[derive(Debug, Default)]
 pub struct BuildOptions {
+    /// Output path for the compiled artifact. If `None`, a temp directory is used.
     pub out_path: Option<PathBuf>,
+    /// Whether to build in release mode (enables optimizations).
     pub release: bool,
+    /// Optimization level (0-3).
     pub opt_level: u8,
+    /// Which CPU backend to use for code generation.
     pub cpu_backend: CpuBackend,
 }
 
+/// Orchestrates the full compilation pipeline from source to executable.
 pub struct Pipeline {}
 
 impl Default for Pipeline {
@@ -105,6 +99,7 @@ impl Pipeline {
         Self {}
     }
 
+    /// Run the frontend (lexer, parser, type checker) on source code.
     pub fn frontend(&self, source: &str) -> Result<PipelineResult, CompilerError> {
         let mut lexer = Lexer::new(source);
         let mut parser = Parser::new(&mut lexer, source);
@@ -118,13 +113,13 @@ impl Pipeline {
         Ok(PipelineResult { ast, type_checker })
     }
 
-    /// Frontend for scripts: wraps simple programs without functions in a main.
+    /// Run the frontend with script-mode wrapping: simple programs without function
+    /// declarations are wrapped in a synthetic `main`.
     pub fn frontend_script(&self, source: &str) -> Result<PipelineResult, CompilerError> {
         let mut lexer = Lexer::new(source);
         let mut parser = Parser::new(&mut lexer, source);
         let mut ast = parser.parse().map_err(CompilerError::Parser)?;
 
-        // Wrap scripts without functions in a synthetic main
         wrap_script_in_main(&mut ast);
 
         let mut type_checker = crate::type_checker::TypeChecker::new();
@@ -132,7 +127,6 @@ impl Pipeline {
             .check(&ast)
             .map_err(CompilerError::TypeErrors)?;
 
-        // Print any warnings
         for warning in &type_checker.warnings {
             eprintln!(
                 "{}",
@@ -156,9 +150,8 @@ impl Pipeline {
             .map_err(|e| CompilerError::Runtime(e.to_string()))
     }
 
+    /// Compile and execute the source, returning the process exit code.
     pub fn run(&self, source: &str) -> Result<i32, CompilerError> {
-        // Build the program to a temporary location
-        // Use a process-unique temporary directory to avoid collisions
         let temp_dir = std::env::temp_dir().join(format!("miri_run_{}", std::process::id()));
         fs::create_dir_all(&temp_dir)?;
 
@@ -173,12 +166,10 @@ impl Pipeline {
 
         self.build(source, &build_opts)?;
 
-        // Execute the compiled program
         let output = Command::new(&executable_path)
             .output()
             .map_err(|e| CompilerError::Codegen(format!("Failed to execute program: {}", e)))?;
 
-        // Print stdout and stderr
         if !output.stdout.is_empty() {
             print!("{}", String::from_utf8_lossy(&output.stdout));
         }
@@ -186,18 +177,14 @@ impl Pipeline {
             eprint!("{}", String::from_utf8_lossy(&output.stderr));
         }
 
-        // Return the exit code
         Ok(output.status.code().unwrap_or(-1))
     }
 
+    /// Compile source code to a native executable, returning the artifact path.
     pub fn build(&self, source: &str, opts: &BuildOptions) -> Result<PathBuf, CompilerError> {
-        // Use frontend_script to wrap scripts without functions in a main
         let pipeline_result = self.frontend_script(source)?;
-
-        // Lower AST to MIR
         let mir_bodies = self.lower_to_mir(&pipeline_result, opts.release)?;
 
-        // Compile via selected backend
         let object_bytes = match opts.cpu_backend {
             CpuBackend::Cranelift => {
                 #[cfg(feature = "cranelift")]
@@ -206,7 +193,6 @@ impl Pipeline {
                     let backend = CraneliftBackend::new()
                         .map_err(|e| CompilerError::Codegen(e.to_string()))?;
 
-                    // Convert to the format expected by compile
                     let bodies_ref: Vec<(&str, &mir::Body)> = mir_bodies
                         .iter()
                         .map(|(name, body)| (name.as_str(), body))
@@ -230,7 +216,6 @@ impl Pipeline {
                 use crate::codegen::LlvmBackend;
                 let backend = LlvmBackend;
 
-                // Convert to the format expected by compile
                 let bodies_ref: Vec<(&str, &mir::Body)> = mir_bodies
                     .iter()
                     .map(|(name, body)| (name.as_str(), body))
@@ -244,17 +229,13 @@ impl Pipeline {
             }
         };
 
-        // Determine output paths
         let (work_dir, out_path) = if let Some(out) = opts.out_path.clone() {
-            // User specified output - place object file in the same directory as the output
-            // This avoids race conditions on shared directories like target/debug
             let work_dir = out
                 .parent()
                 .map(|p| p.to_path_buf())
                 .unwrap_or_else(|| PathBuf::from("."));
             (work_dir, out)
         } else {
-            // No output specified - use unique temp directory
             use std::time::{SystemTime, UNIX_EPOCH};
             let timestamp = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -271,17 +252,13 @@ impl Pipeline {
 
         fs::create_dir_all(&work_dir)?;
 
-        // Write object file
         let object_path = work_dir.join("output.o");
         fs::write(&object_path, &object_bytes)?;
-
-        // Link to executable
         self.link_executable(&object_path, &out_path)?;
 
         Ok(out_path)
     }
 
-    /// Lower AST functions to MIR bodies.
     fn lower_to_mir(
         &self,
         result: &PipelineResult,
