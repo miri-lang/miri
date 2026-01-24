@@ -104,7 +104,7 @@ use some_lib.feature.{Component, render}
 
 Miri follows a standard compiler pipeline:
 
-```
+```text
 Source → Lexer → Parser → AST → Type Checker → MIR → Codegen → Object File → Linker → Executable
 ```
 
@@ -122,7 +122,7 @@ An **Interpreter** path (`Pipeline::interpret`) executes MIR directly without co
 ### Key Modules
 
 | Module | Path | Description |
-|--------|------|-------------|
+| -------- | ------ | ------------- |
 | Lexer | `src/lexer/` | Tokenization using [Logos](https://github.com/maciejhirsz/logos) |
 | Parser | `src/parser/` | Recursive descent parser producing AST |
 | AST | `src/ast/` | High-level syntax tree definitions |
@@ -138,7 +138,7 @@ An **Interpreter** path (`Pipeline::interpret`) executes MIR directly without co
 
 ## Repository Layout
 
-```
+```bash
 src/
 ├── ast/          # Syntax tree definitions
 ├── cli/          # Command-line interface
@@ -184,6 +184,10 @@ cargo test
 ## Contributing
 
 We welcome contributions! Please read our [Contributing Guide](CONTRIBUTING.md) for details on code style, testing requirements, and the submission process.
+
+### Contributors
+
+- Viacheslav Shynkarenko aka Slavik Shynkarenko (maintainer)
 
 ## License
 
