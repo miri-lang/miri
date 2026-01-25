@@ -19,7 +19,7 @@ pub fn translate_type(ty: &Type) -> CraneliftType {
 /// Translate a Miri TypeKind to a Cranelift type.
 pub fn translate_type_kind(kind: &TypeKind) -> CraneliftType {
     match kind {
-        TypeKind::Linear(_) => todo!("Implement Linear types in Cranelift"),
+        TypeKind::Linear(_) => types::I64,
         // Integer types - signed and unsigned use the same Cranelift type
         TypeKind::I8 | TypeKind::U8 => types::I8,
         TypeKind::I16 | TypeKind::U16 => types::I16,

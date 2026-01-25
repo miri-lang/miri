@@ -6,17 +6,20 @@
 //! This module provides the Cranelift-based code generator for CPU targets.
 //! Cranelift is a fast code generator suitable for both JIT and AOT compilation.
 
+pub mod layout;
 mod translator;
 mod types;
 
 use crate::codegen::backend::{ArtifactFormat, Backend, CompiledArtifact};
 use crate::error::CodegenError;
 use crate::mir::Body;
+use crate::type_checker::context::TypeDefinition;
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_codegen::Context;
 use cranelift_module::{Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 use target_lexicon::{DeploymentTarget, OperatingSystem, Triple};
@@ -31,6 +34,8 @@ pub use types::translate_type;
 pub struct CraneliftBackend {
     /// The target ISA (instruction set architecture).
     isa: Arc<dyn TargetIsa>,
+    /// Type definitions from the type checker (for layout computation).
+    type_definitions: HashMap<String, TypeDefinition>,
 }
 
 impl fmt::Debug for CraneliftBackend {
@@ -105,12 +110,20 @@ impl CraneliftBackend {
             .finish(flags)
             .map_err(|e| CodegenError::TargetIsa(e.to_string()))?;
 
-        Ok(Self { isa })
+        Ok(Self {
+            isa,
+            type_definitions: HashMap::new(),
+        })
     }
 
     /// Get the target triple this backend is configured for.
     pub fn target(&self) -> &Triple {
         self.isa.triple()
+    }
+
+    /// Set the type definitions for layout computation.
+    pub fn set_type_definitions(&mut self, defs: HashMap<String, TypeDefinition>) {
+        self.type_definitions = defs;
     }
 }
 
@@ -214,7 +227,7 @@ impl CraneliftBackend {
         isa: &Arc<dyn TargetIsa>,
     ) -> Result<(), CodegenError> {
         // Create function translator
-        let mut translator = FunctionTranslator::new(isa, body);
+        let mut translator = FunctionTranslator::new(isa, body, &self.type_definitions);
 
         // Translate MIR to Cranelift IR
         translator

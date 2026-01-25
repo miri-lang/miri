@@ -1,20 +1,42 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::ast::types::{Type, TypeDeclarationKind};
-use crate::ast::{types::TypeKind, *};
+//! Type checker module for Miri.
+//!
+//! This module is responsible for validating the type safety of Miri programs.
+//! It performs type inference, checks type compatibility, validates operations,
+//! and ensures that all assignments and function calls use compatible types.
+//!
+//! # Module Structure
+//!
+//! ## Core Modules
+//! - [`context`] - Type checking context (scopes, symbols, type definitions)
+//! - [`expressions`] - Expression type inference
+//! - [`statements`] - Statement type checking
+//!
+//! ## Support Modules
+//! - [`builtins`] - Built-in types and functions (String, Dim3, Future, print)
+//! - [`compatibility`] - Type compatibility and subtyping checks
+//! - [`generics`] - Generic type inference and substitution
+//! - [`operators`] - Binary and unary operator type validation
+//! - [`utils`] - Type predicates, visibility, and error reporting
+
+use crate::ast::types::Type;
+use crate::ast::*;
 use crate::error::diagnostic::Diagnostic;
 use crate::error::type_error::TypeError;
 use std::collections::HashMap;
 
+mod builtins;
+mod compatibility;
 pub mod context;
 pub mod expressions;
+mod generics;
+mod operators;
 pub mod statements;
 pub mod utils;
 
-use context::{
-    Context, GenericDefinition, StructDefinition, SymbolInfo, TypeDefinition, TypeRelation,
-};
+use context::{Context, SymbolInfo, TypeDefinition, TypeRelation};
 
 /// The TypeChecker struct is responsible for validating the type safety of the program.
 /// It traverses the AST, infers types for expressions, and ensures that operations
@@ -43,8 +65,12 @@ impl Default for TypeChecker {
 
 impl TypeChecker {
     /// Creates a new type checker with built-in types and functions pre-loaded.
+    ///
+    /// The type checker is initialized with:
+    /// - Built-in types: `String`, `Dim3`, `GpuContext`, `Kernel`, `Future<T>`
+    /// - Built-in functions: `print<T>`
     pub fn new() -> Self {
-        let (global_scope, global_type_definitions) = Self::initialize_builtins();
+        let (global_scope, global_type_definitions) = builtins::initialize_builtins();
 
         Self {
             types: HashMap::new(),
@@ -55,147 +81,6 @@ impl TypeChecker {
             global_scope,
             global_type_definitions,
         }
-    }
-
-    fn initialize_builtins() -> (HashMap<String, SymbolInfo>, HashMap<String, TypeDefinition>) {
-        let mut global_type_definitions = HashMap::new();
-
-        // Define built-in String type
-        global_type_definitions.insert(
-            "String".to_string(),
-            TypeDefinition::Struct(StructDefinition {
-                fields: vec![(
-                    "length".to_string(),
-                    crate::ast::factory::make_type(TypeKind::Int),
-                    MemberVisibility::Public,
-                )],
-                generics: None,
-                module: "std".to_string(),
-            }),
-        );
-
-        // Define built-in Dim3 type
-        let dim3_def = TypeDefinition::Struct(StructDefinition {
-            fields: vec![
-                (
-                    "x".to_string(),
-                    crate::ast::factory::make_type(TypeKind::Int),
-                    MemberVisibility::Public,
-                ),
-                (
-                    "y".to_string(),
-                    crate::ast::factory::make_type(TypeKind::Int),
-                    MemberVisibility::Public,
-                ),
-                (
-                    "z".to_string(),
-                    crate::ast::factory::make_type(TypeKind::Int),
-                    MemberVisibility::Public,
-                ),
-            ],
-            generics: None,
-            module: "std".to_string(),
-        });
-        global_type_definitions.insert("Dim3".to_string(), dim3_def.clone());
-
-        // Define built-in GpuContext type (formerly Kernel)
-        let dim3_type = crate::ast::factory::make_type(TypeKind::Custom("Dim3".to_string(), None));
-        global_type_definitions.insert(
-            "GpuContext".to_string(),
-            TypeDefinition::Struct(StructDefinition {
-                fields: vec![
-                    (
-                        "thread_idx".to_string(),
-                        dim3_type.clone(),
-                        MemberVisibility::Public,
-                    ),
-                    (
-                        "block_idx".to_string(),
-                        dim3_type.clone(),
-                        MemberVisibility::Public,
-                    ),
-                    (
-                        "block_dim".to_string(),
-                        dim3_type.clone(),
-                        MemberVisibility::Public,
-                    ),
-                    (
-                        "grid_dim".to_string(),
-                        dim3_type.clone(),
-                        MemberVisibility::Public,
-                    ),
-                ],
-                generics: None,
-                module: "std".to_string(),
-            }),
-        );
-
-        // Define built-in Kernel type (opaque handle)
-        global_type_definitions.insert(
-            "Kernel".to_string(),
-            TypeDefinition::Struct(StructDefinition {
-                fields: vec![],
-                generics: None,
-                module: "std".to_string(),
-            }),
-        );
-
-        // Define built-in Future<T> type
-        let _generic_t_future = crate::ast::factory::make_type(TypeKind::Generic(
-            "T".to_string(),
-            None,
-            TypeDeclarationKind::None,
-        ));
-        global_type_definitions.insert(
-            "Future".to_string(),
-            TypeDefinition::Struct(StructDefinition {
-                fields: vec![], // Opaque
-                generics: Some(vec![GenericDefinition {
-                    name: "T".to_string(),
-                    constraint: None,
-                    kind: TypeDeclarationKind::None,
-                }]),
-                module: "std".to_string(),
-            }),
-        );
-
-        let mut global_scope = HashMap::new();
-
-        // Define built-in print function: fn print<T>(value T)
-        let generic_t = crate::ast::factory::make_type(TypeKind::Generic(
-            "T".to_string(),
-            None,
-            TypeDeclarationKind::None,
-        ));
-        let generic_decl = crate::ast::factory::generic_type_expression(
-            crate::ast::factory::identifier("T"),
-            None,
-            TypeDeclarationKind::None,
-        );
-
-        global_scope.insert(
-            "print".to_string(),
-            SymbolInfo {
-                consumed: false,
-                ty: crate::ast::factory::make_type(TypeKind::Function(
-                    Some(vec![generic_decl]),
-                    vec![Parameter {
-                        name: "value".to_string(),
-                        typ: Box::new(crate::ast::factory::type_expr_non_null(generic_t)),
-                        guard: None,
-                        default_value: None,
-                    }],
-                    Some(Box::new(crate::ast::factory::type_expr_non_null(
-                        crate::ast::factory::make_type(TypeKind::Void),
-                    ))),
-                )),
-                mutable: false,
-                visibility: MemberVisibility::Public,
-                module: "std".to_string(),
-            },
-        );
-
-        (global_scope, global_type_definitions)
     }
 
     /// Sets the current module name for scoping declarations.
@@ -211,6 +96,11 @@ impl TypeChecker {
     /// Returns the type of a global variable by name.
     pub fn get_variable_type(&self, name: &str) -> Option<&Type> {
         self.global_scope.get(name).map(|info| &info.ty)
+    }
+
+    /// Returns the global type definitions.
+    pub fn type_definitions(&self) -> &HashMap<String, TypeDefinition> {
+        &self.global_type_definitions
     }
 
     /// Main entry point for type checking a program.

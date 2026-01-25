@@ -1,6 +1,47 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+//! Expression type inference for the type checker.
+//!
+//! This module implements type inference for all expression kinds in Miri.
+//! The main entry point is [`TypeChecker::infer_expression`], which dispatches
+//! to specialized inference methods based on the expression kind.
+//!
+//! # Supported Expressions
+//!
+//! ## Literals
+//! - Integer, float, string, boolean, and none literals
+//!
+//! ## Operators
+//! - Binary: arithmetic (`+`, `-`, `*`, `/`, `%`), comparison (`<`, `>`, `==`, etc.)
+//! - Logical: `and`, `or`
+//! - Unary: `-`, `+`, `not`, `~`, `await`
+//!
+//! ## Collections
+//! - Lists: `[1, 2, 3]` → `list<int>`
+//! - Maps: `{"a": 1}` → `map<string, int>`
+//! - Sets: `{1, 2, 3}` → `set<int>`
+//! - Tuples: `(1, "a")` → `(int, string)`
+//! - Ranges: `1..10` → `Range<int>`
+//!
+//! ## Access
+//! - Member access: `obj.field`
+//! - Index access: `list[0]`, `map["key"]`
+//!
+//! ## Functions
+//! - Function calls with generic type inference
+//! - Lambda expressions with type inference
+//! - Method calls on objects
+//!
+//! ## Control Flow
+//! - Conditional expressions: `x if cond else y`
+//! - Match expressions with pattern matching
+//!
+//! ## Types
+//! - Struct instantiation: `Point { x: 1, y: 2 }`
+//! - Enum variant construction: `Ok(value)`, `Err(error)`
+//! - Generic type instantiation
+
 use super::context::{Context, TypeDefinition};
 use super::TypeChecker;
 use crate::ast::factory as ast_factory;
@@ -132,7 +173,125 @@ impl TypeChecker {
             }
         }
 
-        // TODO: Handle user-defined enums
+        // Handle user-defined enums with Member access (e.g., Color.Red(args))
+        if let ExpressionKind::Member(enum_name_expr, variant_name_expr) = &name.node {
+            if let (
+                ExpressionKind::Identifier(enum_name, _),
+                ExpressionKind::Identifier(variant_name, _),
+            ) = (&enum_name_expr.node, &variant_name_expr.node)
+            {
+                // Look up the enum definition in local then global scope
+                let enum_def_opt = context
+                    .resolve_type_definition(enum_name)
+                    .cloned()
+                    .or_else(|| self.global_type_definitions.get(enum_name).cloned());
+
+                if let Some(TypeDefinition::Enum(enum_def)) = enum_def_opt {
+                    if let Some(variant_types) = enum_def.variants.get(variant_name) {
+                        // Check argument count
+                        if values.len() != variant_types.len() {
+                            self.report_error(
+                                format!(
+                                    "Enum variant '{}.{}' expects {} arguments, got {}",
+                                    enum_name,
+                                    variant_name,
+                                    variant_types.len(),
+                                    values.len()
+                                ),
+                                span.clone(),
+                            );
+                            return ast_factory::make_type(TypeKind::Error);
+                        }
+
+                        // Type-check each argument against the variant's types
+                        // Build generic mapping if the enum is generic
+                        let generic_mapping: HashMap<String, Type> = if let Some(ref generics) =
+                            enum_def.generics
+                        {
+                            // Try to infer generic args from the arguments
+                            let mut mapping = HashMap::new();
+                            for (val, var_type) in values.iter().zip(variant_types.iter()) {
+                                let val_type = self.infer_expression(val, context);
+                                if let TypeKind::Generic(name, _, _) = &var_type.kind {
+                                    mapping.insert(name.clone(), val_type);
+                                }
+                            }
+                            // Fill in remaining generics with Error type
+                            for g in generics {
+                                mapping
+                                    .entry(g.name.clone())
+                                    .or_insert_with(|| ast_factory::make_type(TypeKind::Error));
+                            }
+                            mapping
+                        } else {
+                            // Non-generic: just type-check arguments directly
+                            for (val, var_type) in values.iter().zip(variant_types.iter()) {
+                                let val_type = self.infer_expression(val, context);
+                                if !self.are_compatible(&val_type, var_type, context) {
+                                    self.report_error(
+                                            format!(
+                                                "Type mismatch in enum variant '{}.{}': expected {}, got {}",
+                                                enum_name, variant_name, var_type, val_type
+                                            ),
+                                            val.span.clone(),
+                                        );
+                                }
+                            }
+                            HashMap::new()
+                        };
+
+                        // For generic enums, also validate inferred args against variant types
+                        if enum_def.generics.is_some() && !generic_mapping.is_empty() {
+                            for (val, var_type) in values.iter().zip(variant_types.iter()) {
+                                let val_type = self.infer_expression(val, context);
+                                let substituted = self.substitute_type(var_type, &generic_mapping);
+                                if !self.are_compatible(&val_type, &substituted, context) {
+                                    self.report_error(
+                                        format!(
+                                            "Type mismatch in enum variant '{}.{}': expected {}, got {}",
+                                            enum_name, variant_name, substituted, val_type
+                                        ),
+                                        val.span.clone(),
+                                    );
+                                }
+                            }
+                        }
+
+                        // Build generic args for the return type
+                        let generic_args = if let Some(ref generics) = enum_def.generics {
+                            let args: Vec<Expression> = generics
+                                .iter()
+                                .map(|g| {
+                                    let ty = generic_mapping
+                                        .get(&g.name)
+                                        .cloned()
+                                        .unwrap_or_else(|| ast_factory::make_type(TypeKind::Error));
+                                    self.create_type_expression(ty)
+                                })
+                                .collect();
+                            Some(args)
+                        } else {
+                            None
+                        };
+
+                        return ast_factory::make_type(TypeKind::Custom(
+                            enum_name.clone(),
+                            generic_args,
+                        ));
+                    } else {
+                        self.report_error(
+                            format!("Enum '{}' has no variant '{}'", enum_name, variant_name),
+                            span,
+                        );
+                        return ast_factory::make_type(TypeKind::Error);
+                    }
+                } else {
+                    self.report_error(format!("'{}' is not an Enum", enum_name), span);
+                    return ast_factory::make_type(TypeKind::Error);
+                }
+            }
+        }
+
         ast_factory::make_type(TypeKind::Error)
     }
 
@@ -1487,33 +1646,38 @@ impl TypeChecker {
                 let mut is_exhaustive = false;
 
                 for branch in branches {
-                    for pattern in &branch.patterns {
-                        match pattern {
-                            Pattern::Default => {
-                                is_exhaustive = true;
-                            }
-                            Pattern::Identifier(_) => {
-                                // Variable binding covers everything
-                                is_exhaustive = true;
-                            }
-                            Pattern::Member(parent, member) => {
-                                // Check if parent is the enum name
-                                if let Pattern::Identifier(parent_name) = &**parent {
-                                    if parent_name == name {
-                                        remaining_variants.remove(member);
-                                    }
+                    // Only unguarded patterns count toward exhaustiveness
+                    if branch.guard.is_none() {
+                        for pattern in &branch.patterns {
+                            match pattern {
+                                Pattern::Default => {
+                                    is_exhaustive = true;
                                 }
-                            }
-                            Pattern::EnumVariant(parent, _) => {
-                                if let Pattern::Member(enum_name_pat, variant_name) = &**parent {
-                                    if let Pattern::Identifier(enum_name_str) = &**enum_name_pat {
-                                        if enum_name_str == name {
-                                            remaining_variants.remove(variant_name);
+                                Pattern::Identifier(_) => {
+                                    // Variable binding covers everything
+                                    is_exhaustive = true;
+                                }
+                                Pattern::Member(parent, member) => {
+                                    // Check if parent is the enum name
+                                    if let Pattern::Identifier(parent_name) = &**parent {
+                                        if parent_name == name {
+                                            remaining_variants.remove(member);
                                         }
                                     }
                                 }
+                                Pattern::EnumVariant(parent, _) => {
+                                    if let Pattern::Member(enum_name_pat, variant_name) = &**parent
+                                    {
+                                        if let Pattern::Identifier(enum_name_str) = &**enum_name_pat
+                                        {
+                                            if enum_name_str == name {
+                                                remaining_variants.remove(variant_name);
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {}
                             }
-                            _ => {}
                         }
                     }
                     if is_exhaustive {
@@ -1850,9 +2014,11 @@ impl TypeChecker {
             }
             Pattern::Member(parent, member) => {
                 if let Pattern::Identifier(parent_name) = &**parent {
-                    if let Some(TypeDefinition::Enum(enum_def)) =
-                        self.global_type_definitions.get(parent_name)
-                    {
+                    let enum_def_opt = context
+                        .resolve_type_definition(parent_name)
+                        .cloned()
+                        .or_else(|| self.global_type_definitions.get(parent_name).cloned());
+                    if let Some(TypeDefinition::Enum(enum_def)) = enum_def_opt {
                         if !enum_def.variants.contains_key(member) {
                             self.report_error(
                                 format!("Enum '{}' has no variant '{}'", parent_name, member),
@@ -1955,14 +2121,51 @@ impl TypeChecker {
                         // Clone to avoid borrowing issues
                         let variant_types_cloned = variant_types.clone();
 
-                        // Bind each pattern with its type
+                        // Build generic mapping from subject_type's generic args
+                        let generic_mapping: HashMap<String, Type> =
+                            if let TypeKind::Custom(_, Some(ref args)) = &subject_type.kind {
+                                if let Some(ref generics) = enum_def.generics {
+                                    generics
+                                        .iter()
+                                        .zip(args.iter())
+                                        .filter_map(|(g, arg_expr)| {
+                                            self.extract_type_from_expression(arg_expr)
+                                                .ok()
+                                                .map(|ty| (g.name.clone(), ty))
+                                        })
+                                        .collect()
+                                } else {
+                                    HashMap::new()
+                                }
+                            } else {
+                                HashMap::new()
+                            };
+
+                        // Bind each pattern with its type (substituting generics if needed)
                         for (binding, var_type) in bindings.iter().zip(variant_types_cloned.iter())
                         {
-                            self.check_pattern(binding, var_type, context, span.clone());
+                            let resolved_type = if generic_mapping.is_empty() {
+                                var_type.clone()
+                            } else {
+                                self.substitute_type(var_type, &generic_mapping)
+                            };
+                            self.check_pattern(binding, &resolved_type, context, span.clone());
                         }
 
                         // Check if subject type matches the enum type
-                        let expected_type = make_type(TypeKind::Custom(enum_name.clone(), None));
+                        // Preserve generic args from subject_type
+                        let generic_args =
+                            if let TypeKind::Custom(sub_name, ref sub_args) = &subject_type.kind {
+                                if sub_name == &enum_name {
+                                    sub_args.clone()
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+                        let expected_type =
+                            make_type(TypeKind::Custom(enum_name.clone(), generic_args));
                         if !self.are_compatible(subject_type, &expected_type, context) {
                             self.report_error(
                                 format!(

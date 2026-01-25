@@ -395,6 +395,6 @@ fn test_integer_bitwise_combinations() {
 #[test]
 fn test_integer_invalid_types_in_expression() {
     type_checker_error_test("1 + \"string\"", "Invalid types for arithmetic operation");
-    type_checker_error_test("1 * [1, 2, 3]", "Invalid types for multiplication");
+    type_checker_error_test("1 * [1, 2, 3]", "Invalid types for arithmetic operation");
     type_checker_error_test("1 / {1, 2}", "Invalid types for arithmetic operation");
 }

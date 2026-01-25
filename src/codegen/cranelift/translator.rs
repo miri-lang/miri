@@ -8,15 +8,20 @@
 
 use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
 use crate::ast::types::{Type, TypeKind};
+use crate::codegen::cranelift::layout;
 use crate::codegen::cranelift::types::translate_type;
 use crate::mir::{
-    BasicBlock, BinOp, Body, Constant, Local, Operand, Place, Rvalue, Statement, StatementKind,
-    Terminator, TerminatorKind, UnOp,
+    BasicBlock, BinOp, Body, Constant, Local, Operand, Place, PlaceElem, Rvalue, Statement,
+    StatementKind, Terminator, TerminatorKind, UnOp,
 };
+use crate::type_checker::context::TypeDefinition;
 
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::types as cl_types;
-use cranelift_codegen::ir::{AbiParam, Block, Function, InstBuilder, Signature, TrapCode, Value};
+use cranelift_codegen::ir::{
+    AbiParam, Block, Function, InstBuilder, MemFlags, Signature, StackSlotData, StackSlotKind,
+    TrapCode, Value,
+};
 use cranelift_codegen::isa::{CallConv, TargetIsa};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use std::collections::HashMap;
@@ -35,11 +40,17 @@ pub struct FunctionTranslator {
     call_conv: CallConv,
     /// The types of MIR locals (for type information during translation).
     local_types: Vec<Type>,
+    /// Type definitions from the type checker (for layout computation).
+    type_definitions: HashMap<String, TypeDefinition>,
 }
 
 impl FunctionTranslator {
     /// Create a new function translator.
-    pub fn new(isa: &Arc<dyn TargetIsa>, body: &Body) -> Self {
+    pub fn new(
+        isa: &Arc<dyn TargetIsa>,
+        body: &Body,
+        type_definitions: &HashMap<String, TypeDefinition>,
+    ) -> Self {
         let func = Function::new();
         let builder_ctx = FunctionBuilderContext::new();
 
@@ -51,6 +62,7 @@ impl FunctionTranslator {
             builder_ctx,
             call_conv: isa.default_call_conv(),
             local_types,
+            type_definitions: type_definitions.clone(),
         }
     }
 
@@ -108,12 +120,26 @@ impl FunctionTranslator {
 
             // Translate all statements
             for stmt in &block_data.statements {
-                Self::translate_statement(&mut builder, stmt, &locals, &self.local_types)?;
+                Self::translate_statement(
+                    &mut builder,
+                    stmt,
+                    &locals,
+                    &self.local_types,
+                    &self.type_definitions,
+                )?;
             }
 
             // Translate the terminator
             if let Some(ref terminator) = block_data.terminator {
-                Self::translate_terminator(&mut builder, terminator, body, &locals, &blocks)?;
+                Self::translate_terminator(
+                    &mut builder,
+                    terminator,
+                    body,
+                    &locals,
+                    &blocks,
+                    &self.local_types,
+                    &self.type_definitions,
+                )?;
             }
         }
 
@@ -167,10 +193,11 @@ impl FunctionTranslator {
         stmt: &Statement,
         locals: &HashMap<Local, Variable>,
         local_types: &[Type],
+        type_definitions: &HashMap<String, TypeDefinition>,
     ) -> Result<(), String> {
         match &stmt.kind {
             StatementKind::IncRef(place) => {
-                let ptr = Self::read_place(builder, place, locals)?;
+                let ptr = Self::read_place(builder, place, locals, local_types, type_definitions)?;
                 // For now, assume ptr points to data preceded by 8-byte refcount
                 // Header is at ptr - 8
 
@@ -191,7 +218,7 @@ impl FunctionTranslator {
                 );
             }
             StatementKind::DecRef(place) => {
-                let ptr = Self::read_place(builder, place, locals)?;
+                let ptr = Self::read_place(builder, place, locals, local_types, type_definitions)?;
                 let header_ptr = builder.ins().iadd_imm(ptr, -8);
                 let rc = builder.ins().load(
                     cl_types::I64,
@@ -234,12 +261,13 @@ impl FunctionTranslator {
                 builder.seal_block(else_block);
             }
             StatementKind::Dealloc(place) => {
-                let ptr = Self::read_place(builder, place, locals)?;
+                let ptr = Self::read_place(builder, place, locals, local_types, type_definitions)?;
                 let header_ptr = builder.ins().iadd_imm(ptr, -8);
                 Self::call_libc_free(builder, header_ptr)?;
             }
             StatementKind::Assign(place, rvalue) => {
-                let mut value = Self::translate_rvalue(builder, rvalue, locals)?;
+                let mut value =
+                    Self::translate_rvalue(builder, rvalue, locals, local_types, type_definitions)?;
 
                 // Handle implicit casts (e.g. float -> f32, i8 -> i32)
                 let dest_ty = &local_types[place.local.0];
@@ -250,7 +278,14 @@ impl FunctionTranslator {
                     value = Self::cast_value(builder, value, val_ty, dest_cl_ty)?;
                 }
 
-                Self::assign_to_place(builder, place, value, locals)?;
+                Self::assign_to_place(
+                    builder,
+                    place,
+                    value,
+                    locals,
+                    local_types,
+                    type_definitions,
+                )?;
             }
             StatementKind::Nop => {
                 // Nothing to do
@@ -267,11 +302,19 @@ impl FunctionTranslator {
         builder: &mut FunctionBuilder,
         rvalue: &Rvalue,
         locals: &HashMap<Local, Variable>,
+        local_types: &[Type],
+        type_definitions: &HashMap<String, TypeDefinition>,
     ) -> Result<Value, String> {
         match rvalue {
             Rvalue::Allocate(size_op, _, _) => {
                 // Ignore align for now, standard malloc alignment is usually sufficient
-                let size = Self::translate_operand(builder, size_op, locals)?;
+                let size = Self::translate_operand(
+                    builder,
+                    size_op,
+                    locals,
+                    local_types,
+                    type_definitions,
+                )?;
 
                 // Add 8 bytes for header
                 let total_size = builder.ins().iadd_imm(size, 8);
@@ -288,42 +331,95 @@ impl FunctionTranslator {
                 // Return ptr + 8
                 Ok(builder.ins().iadd_imm(ptr, 8))
             }
-            Rvalue::Use(operand) => Self::translate_operand(builder, operand, locals),
+            Rvalue::Use(operand) => {
+                Self::translate_operand(builder, operand, locals, local_types, type_definitions)
+            }
 
             Rvalue::BinaryOp(op, lhs, rhs) => {
-                let lhs_val = Self::translate_operand(builder, lhs, locals)?;
-                let rhs_val = Self::translate_operand(builder, rhs, locals)?;
+                let lhs_val =
+                    Self::translate_operand(builder, lhs, locals, local_types, type_definitions)?;
+                let rhs_val =
+                    Self::translate_operand(builder, rhs, locals, local_types, type_definitions)?;
                 Self::translate_binop(builder, *op, lhs_val, rhs_val)
             }
 
             Rvalue::UnaryOp(op, operand) => {
-                let val = Self::translate_operand(builder, operand, locals)?;
+                let val = Self::translate_operand(
+                    builder,
+                    operand,
+                    locals,
+                    local_types,
+                    type_definitions,
+                )?;
                 Self::translate_unop(builder, *op, val)
             }
 
-            Rvalue::Ref(_place) => {
-                // TODO: Implement reference creation
-                Err("Reference creation not yet implemented".to_string())
+            Rvalue::Ref(place) => {
+                let value =
+                    Self::read_place(builder, place, locals, local_types, type_definitions)?;
+                let ty = builder.func.dfg.value_type(value);
+                let size = ty.bytes();
+                let slot_data = StackSlotData::new(StackSlotKind::ExplicitSlot, size, 0);
+                let slot = builder.create_sized_stack_slot(slot_data);
+                let addr = builder.ins().stack_addr(cl_types::I64, slot, 0);
+                builder.ins().store(MemFlags::new(), value, addr, 0);
+                Ok(addr)
             }
 
             Rvalue::Aggregate(_kind, operands) => {
-                // For now, aggregates are represented as a single value
-                // In a full implementation, we'd allocate struct memory
-                // For tuples with single element, just return that
-                if operands.len() == 1 {
-                    Self::translate_operand(builder, &operands[0], locals)
-                } else if operands.is_empty() {
-                    // Empty tuple/unit
-                    Ok(builder.ins().iconst(cl_types::I64, 0))
-                } else {
-                    // Multi-element aggregate - just return first element for now
-                    // Full aggregate support would require stack allocation
-                    Self::translate_operand(builder, &operands[0], locals)
+                if operands.is_empty() {
+                    return Ok(builder.ins().iconst(cl_types::I64, 0));
                 }
+                if operands.len() == 1 {
+                    return Self::translate_operand(
+                        builder,
+                        &operands[0],
+                        locals,
+                        local_types,
+                        type_definitions,
+                    );
+                }
+
+                // Translate all operands first
+                let translated: Vec<Value> = operands
+                    .iter()
+                    .map(|op| {
+                        Self::translate_operand(builder, op, locals, local_types, type_definitions)
+                    })
+                    .collect::<Result<_, _>>()?;
+
+                // Compute field offsets from operand types
+                let mut total_size: u32 = 0;
+                let mut field_offsets = Vec::new();
+                for &val in &translated {
+                    let ty = builder.func.dfg.value_type(val);
+                    field_offsets.push(total_size);
+                    total_size += ty.bytes();
+                }
+
+                // Allocate stack slot
+                let slot_data = StackSlotData::new(StackSlotKind::ExplicitSlot, total_size, 0);
+                let slot = builder.create_sized_stack_slot(slot_data);
+                let addr = builder.ins().stack_addr(cl_types::I64, slot, 0);
+
+                // Store each field
+                for (i, val) in translated.into_iter().enumerate() {
+                    builder
+                        .ins()
+                        .store(MemFlags::new(), val, addr, field_offsets[i] as i32);
+                }
+
+                Ok(addr)
             }
 
             Rvalue::Cast(operand, ty) => {
-                let value = Self::translate_operand(builder, operand, locals)?;
+                let value = Self::translate_operand(
+                    builder,
+                    operand,
+                    locals,
+                    local_types,
+                    type_definitions,
+                )?;
                 let dest_ty = translate_type(ty);
                 let src_ty = builder.func.dfg.value_type(value);
 
@@ -342,10 +438,10 @@ impl FunctionTranslator {
                 Err("GPU intrinsics not supported in CPU backend".to_string())
             }
 
-            Rvalue::Phi(_) => {
-                // Phi nodes should be eliminated before code generation
-                panic!("Encountered Phi node during code generation. Run SSA destruction first.");
-            }
+            Rvalue::Phi(_) => Err(
+                "Phi nodes must be eliminated before codegen. Run SSA destruction pass."
+                    .to_string(),
+            ),
         }
     }
 
@@ -354,9 +450,13 @@ impl FunctionTranslator {
         builder: &mut FunctionBuilder,
         operand: &Operand,
         locals: &HashMap<Local, Variable>,
+        local_types: &[Type],
+        type_definitions: &HashMap<String, TypeDefinition>,
     ) -> Result<Value, String> {
         match operand {
-            Operand::Copy(place) | Operand::Move(place) => Self::read_place(builder, place, locals),
+            Operand::Copy(place) | Operand::Move(place) => {
+                Self::read_place(builder, place, locals, local_types, type_definitions)
+            }
 
             Operand::Constant(constant) => Self::translate_constant(builder, constant),
         }
@@ -568,17 +668,40 @@ impl FunctionTranslator {
         builder: &mut FunctionBuilder,
         place: &Place,
         locals: &HashMap<Local, Variable>,
+        local_types: &[Type],
+        type_definitions: &HashMap<String, TypeDefinition>,
     ) -> Result<Value, String> {
         let var = locals
             .get(&place.local)
             .ok_or_else(|| format!("Unknown local: {:?}", place.local))?;
 
-        let value = builder.use_var(*var);
+        let mut value = builder.use_var(*var);
 
-        // Handle projections (field access, indexing, etc.)
-        // For now, we don't have proper memory allocation for arrays/structs
-        // so we just return the base value as a placeholder
-        // This works for simple cases but won't be correct for complex data structures
+        for proj in &place.projection {
+            match proj {
+                PlaceElem::Deref => {
+                    value = builder.ins().load(cl_types::I64, MemFlags::new(), value, 0);
+                }
+                PlaceElem::Field(idx) => {
+                    let base_type = &local_types[place.local.0];
+                    let (offset, field_ty) =
+                        layout::field_layout(&base_type.kind, *idx, type_definitions);
+                    value = builder.ins().load(field_ty, MemFlags::new(), value, offset);
+                }
+                PlaceElem::Index(local) => {
+                    let idx_var = locals
+                        .get(local)
+                        .ok_or_else(|| format!("Unknown index local: {:?}", local))?;
+                    let idx_val = builder.use_var(*idx_var);
+                    let elem_size = builder.ins().iconst(cl_types::I64, 8);
+                    let byte_offset = builder.ins().imul(idx_val, elem_size);
+                    let elem_addr = builder.ins().iadd(value, byte_offset);
+                    value = builder
+                        .ins()
+                        .load(cl_types::I64, MemFlags::new(), elem_addr, 0);
+                }
+            }
+        }
 
         Ok(value)
     }
@@ -623,15 +746,67 @@ impl FunctionTranslator {
         place: &Place,
         value: Value,
         locals: &HashMap<Local, Variable>,
+        local_types: &[Type],
+        type_definitions: &HashMap<String, TypeDefinition>,
     ) -> Result<(), String> {
-        // Skip projections for now - just assign to base variable
-        // This is a placeholder until proper memory allocation is implemented
+        if place.projection.is_empty() {
+            let var = locals
+                .get(&place.local)
+                .ok_or_else(|| format!("Unknown local: {:?}", place.local))?;
+            builder.def_var(*var, value);
+        } else {
+            // Base is a pointer to the aggregate
+            let var = locals
+                .get(&place.local)
+                .ok_or_else(|| format!("Unknown local: {:?}", place.local))?;
+            let mut addr = builder.use_var(*var);
 
-        let var = locals
-            .get(&place.local)
-            .ok_or_else(|| format!("Unknown local: {:?}", place.local))?;
+            // Navigate through all but the last projection
+            for proj in &place.projection[..place.projection.len() - 1] {
+                match proj {
+                    PlaceElem::Deref => {
+                        addr = builder.ins().load(cl_types::I64, MemFlags::new(), addr, 0);
+                    }
+                    PlaceElem::Field(idx) => {
+                        let base_type = &local_types[place.local.0];
+                        let (offset, _) =
+                            layout::field_layout(&base_type.kind, *idx, type_definitions);
+                        addr = builder.ins().iadd_imm(addr, offset as i64);
+                    }
+                    PlaceElem::Index(local) => {
+                        let idx_var = locals
+                            .get(local)
+                            .ok_or_else(|| format!("Unknown index local: {:?}", local))?;
+                        let idx_val = builder.use_var(*idx_var);
+                        let elem_size = builder.ins().iconst(cl_types::I64, 8);
+                        let byte_offset = builder.ins().imul(idx_val, elem_size);
+                        addr = builder.ins().iadd(addr, byte_offset);
+                    }
+                }
+            }
 
-        builder.def_var(*var, value);
+            // Apply the last projection as a store
+            match place.projection.last().unwrap() {
+                PlaceElem::Deref => {
+                    builder.ins().store(MemFlags::new(), value, addr, 0);
+                }
+                PlaceElem::Field(idx) => {
+                    let base_type = &local_types[place.local.0];
+                    let (offset, _) = layout::field_layout(&base_type.kind, *idx, type_definitions);
+                    builder.ins().store(MemFlags::new(), value, addr, offset);
+                }
+                PlaceElem::Index(local) => {
+                    let idx_var = locals
+                        .get(local)
+                        .ok_or_else(|| format!("Unknown index local: {:?}", local))?;
+                    let idx_val = builder.use_var(*idx_var);
+                    let elem_size = builder.ins().iconst(cl_types::I64, 8);
+                    let byte_offset = builder.ins().imul(idx_val, elem_size);
+                    let elem_addr = builder.ins().iadd(addr, byte_offset);
+                    builder.ins().store(MemFlags::new(), value, elem_addr, 0);
+                }
+            }
+        }
         Ok(())
     }
 
@@ -642,6 +817,8 @@ impl FunctionTranslator {
         body: &Body,
         locals: &HashMap<Local, Variable>,
         blocks: &HashMap<BasicBlock, Block>,
+        local_types: &[Type],
+        type_definitions: &HashMap<String, TypeDefinition>,
     ) -> Result<(), String> {
         match &terminator.kind {
             TerminatorKind::Return => {
@@ -669,7 +846,8 @@ impl FunctionTranslator {
                 targets,
                 otherwise,
             } => {
-                let disc_val = Self::translate_operand(builder, discr, locals)?;
+                let disc_val =
+                    Self::translate_operand(builder, discr, locals, local_types, type_definitions)?;
 
                 let disc_ty = builder.func.dfg.value_type(disc_val);
 
@@ -793,32 +971,6 @@ impl FunctionTranslator {
             call_conv: CallConv::SystemV, // Default to SystemV for now, should be target dependent
         });
 
-        // We need to refer to 'malloc' symbol.
-        // In standalone Cranelift, we'd use Module::declare_func.
-        // Here we just use a simplified approach assuming the linker resolves "malloc".
-        // Use a well-known function ref mechanism if available, or ExtFunc.
-        // Since we don't have the Module context here easily, we might need to rely on the environment.
-        // For this task, we will create an ExternalName.
-
-        // let name = ... (removed)
-        // NOTE: In a real implementation we need to register "malloc" properly.
-        // We'll proceed assuming we can just declare a function with a specific name/id.
-        // But `builder.import_function` needs an `ExtFuncData`.
-
-        // Since we are mocking the backend logic to some extent (no full linker integration shown),
-        // we will leave this as a stub that generates a Call to a named function if possible,
-        // or just returns a dummy pointer if we can't emit the call correctly without more context.
-
-        // Better approach: Stub it out or assume `Colocated(User(..))` works.
-        // We really need `module` access.
-        // Let's assume for now we just fail if we can't properly link, or we define it:
-
-        // Using `builder.ins().call_indirect` if we had the address? No.
-
-        // Let's try to assume we can create a FuncRef.
-        // fn import_function(&mut self, data: ExtFuncData) -> FuncRef
-
-        // We interpret this requirement as "write the logic that WOULD call malloc".
         Ok(builder.ins().iconst(cl_types::I64, 0)) // STUB for compilation check
     }
 

@@ -190,8 +190,11 @@ impl Pipeline {
                 #[cfg(feature = "cranelift")]
                 {
                     use crate::codegen::CraneliftBackend;
-                    let backend = CraneliftBackend::new()
+                    let mut backend = CraneliftBackend::new()
                         .map_err(|e| CompilerError::Codegen(e.to_string()))?;
+                    backend.set_type_definitions(
+                        pipeline_result.type_checker.type_definitions().clone(),
+                    );
 
                     let bodies_ref: Vec<(&str, &mir::Body)> = mir_bodies
                         .iter()

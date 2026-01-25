@@ -1,6 +1,33 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+//! Type checking context for managing scopes and type information.
+//!
+//! This module provides the [`Context`] struct which maintains the type checking
+//! state during AST traversal, including:
+//!
+//! - **Symbol scopes**: Stack of variable/function bindings with visibility
+//! - **Type definitions**: Struct, enum, class, trait, and alias definitions
+//! - **Type hierarchy**: Inheritance and interface relationships
+//! - **Linear type tracking**: Consumption state for move semantics
+//!
+//! # Scope Management
+//!
+//! The context uses a stack-based scope system where:
+//! - `enter_scope()` pushes a new scope for blocks, functions, etc.
+//! - `exit_scope()` pops the current scope and checks for unused linear types
+//! - Variables are looked up from innermost to outermost scope
+//!
+//! # Type Definitions
+//!
+//! Supported type definition kinds:
+//! - [`StructDefinition`]: Named product types with fields
+//! - [`EnumDefinition`]: Sum types with variants
+//! - [`ClassDefinition`]: OOP classes with methods and inheritance
+//! - [`TraitDefinition`]: Interface contracts
+//! - [`AliasDefinition`]: Type aliases with optional generics
+//! - [`GenericDefinition`]: Generic type parameters with constraints
+
 use crate::ast::{types::*, MemberVisibility};
 use crate::error::syntax::Span;
 use std::collections::{BTreeMap, HashMap};

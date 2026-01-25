@@ -161,3 +161,78 @@ let p = Point(x: 1, x: 2)
     ";
     type_checker_error_test(code, "Duplicate argument 'x'");
 }
+
+#[test]
+fn test_enum_value_construction_direct() {
+    // Test that enum variant construction with associated values works correctly
+    let code = "
+enum Shape
+    Circle(int)
+    Rect(int, int)
+
+let c = Shape.Circle(5)
+let r = Shape.Rect(3, 4)
+    ";
+    type_checker_test(code);
+}
+
+#[test]
+fn test_enum_generic_variant_construction() {
+    // Test that generic enum variant construction with explicit type args works
+    let code = "
+enum Option<T>
+    Some(T)
+    None
+
+let n = Option.None
+    ";
+    type_checker_test(code);
+}
+
+#[test]
+fn test_enum_generic_variant_with_explicit_type() {
+    // Test that generic enum with explicit type args and associated values works
+    let code = "
+enum MyOption<T>
+    Some(T)
+    None
+
+fn process(o MyOption<int>) int
+    match o
+        MyOption.Some(x): x
+        MyOption.None: 0
+    ";
+    type_checker_test(code);
+}
+
+#[test]
+fn test_includes_constraint_passes() {
+    // Test that a type with includes relationship satisfies the constraint
+    let code = "
+trait Mixin
+    fn mixin_method() int
+
+type MyMixin includes Mixin
+
+struct Container<T includes Mixin>
+    value T
+    ";
+    type_checker_test(code);
+}
+
+#[test]
+fn test_includes_constraint_fails() {
+    // Test that a type without includes relationship fails the constraint
+    let code = "
+trait Mixin
+    fn mixin_method() int
+
+type MyMixin includes Mixin
+
+struct Container<T includes Mixin>
+    value T
+
+var c Container<int>
+    ";
+    type_checker_error_test(code, "does not satisfy constraint");
+}

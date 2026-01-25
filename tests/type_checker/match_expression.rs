@@ -250,3 +250,58 @@ match c
 ";
     type_checker_test(source);
 }
+
+#[test]
+fn test_match_enum_guarded_not_exhaustive() {
+    // Guards can fail, so guarded patterns don't guarantee exhaustiveness
+    let source = "
+enum Color
+    Red
+    Green
+    Blue
+
+let c = Color.Red
+match c
+    Color.Red if true: 'red'
+    Color.Green if true: 'green'
+    Color.Blue if true: 'blue'
+";
+    type_checker_error_test(source, "Non-exhaustive match");
+}
+
+#[test]
+fn test_match_generic_enum_binding_type() {
+    // Verify that bindings in generic enum patterns get concrete types
+    let source = "
+enum Option<T>
+    Some(T)
+    None
+
+fn takes_int(x int) int
+    x
+
+fn process(o Option<int>) int
+    match o
+        Option.Some(x): takes_int(x)
+        Option.None: 0
+";
+    type_checker_test(source);
+}
+
+#[test]
+fn test_match_enum_with_associated_values_pattern() {
+    // Enum variant patterns with bindings should work for non-generic enums
+    let source = "
+enum Shape
+    Circle(int)
+    Rect(int, int)
+    Empty
+
+let s = Shape.Circle(5)
+match s
+    Shape.Circle(r): r
+    Shape.Rect(w, h): w
+    Shape.Empty: 0
+";
+    type_checker_test(source);
+}
