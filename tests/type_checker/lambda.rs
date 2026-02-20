@@ -52,7 +52,7 @@ fn test_lambda_explicit_return_mismatch() {
 let f = fn(a int) int
     return true
     ";
-    type_checker_error_test(source, "Invalid return type: expected int, got boolean");
+    type_checker_error_test(source, "Invalid return type: expected int, got bool");
 }
 
 #[test]
@@ -60,7 +60,7 @@ fn test_lambda_implicit_return_mismatch() {
     let source = "
 let f = fn(a int) int: true
     ";
-    type_checker_error_test(source, "Invalid return type: expected int, got boolean");
+    type_checker_error_test(source, "Invalid return type: expected int, got bool");
 }
 
 #[test]
@@ -70,10 +70,7 @@ let f = fn(a int)
     if a > 0: return 1
     return true
     ";
-    type_checker_error_test(
-        source,
-        "Incompatible return types in lambda: int and boolean",
-    );
+    type_checker_error_test(source, "Incompatible return types in lambda: int and bool");
 }
 
 #[test]

@@ -21,7 +21,7 @@ fn test_function_return_type_mismatch() {
 fn foo() int
     return true
     ";
-    type_checker_error_test(source, "Invalid return type: expected int, got boolean");
+    type_checker_error_test(source, "Invalid return type: expected int, got bool");
 }
 
 #[test]
@@ -34,7 +34,7 @@ foo(true)
     ";
     type_checker_error_test(
         source,
-        "Type mismatch for argument 'a': expected int, got boolean",
+        "Type mismatch for argument 'a': expected int, got bool",
     );
 }
 
@@ -132,7 +132,7 @@ fn test_implicit_return_type_mismatch() {
 fn foo() int
     true
     ";
-    type_checker_error_test(source, "Invalid return type: expected int, got boolean");
+    type_checker_error_test(source, "Invalid return type: expected int, got bool");
 }
 
 #[test]

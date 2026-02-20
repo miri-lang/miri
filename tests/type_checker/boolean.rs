@@ -231,7 +231,7 @@ fn test_invalid_iterable() {
 for i in true
     1
 ",
-        "Type boolean is not iterable",
+        "Type bool is not iterable",
     );
 }
 
