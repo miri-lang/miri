@@ -93,8 +93,8 @@ fn test_eq() {
     mir_snapshot_test(
         "fn main(): 1 == 1",
         r#"
-            let _0: boolean;
-            let _1: boolean;
+            let _0: bool;
+            let _1: bool;
 
             bb0: {
                 _1 = Eq(const Integer(I8(1)), const Integer(I8(1)));
@@ -110,8 +110,8 @@ fn test_ne() {
     mir_snapshot_test(
         "fn main(): 1 != 2",
         r#"
-            let _0: boolean;
-            let _1: boolean;
+            let _0: bool;
+            let _1: bool;
 
             bb0: {
                 _1 = Ne(const Integer(I8(1)), const Integer(I8(2)));
@@ -127,8 +127,8 @@ fn test_lt() {
     mir_snapshot_test(
         "fn main(): 1 < 2",
         r#"
-            let _0: boolean;
-            let _1: boolean;
+            let _0: bool;
+            let _1: bool;
 
             bb0: {
                 _1 = Lt(const Integer(I8(1)), const Integer(I8(2)));
@@ -144,8 +144,8 @@ fn test_le() {
     mir_snapshot_test(
         "fn main(): 1 <= 2",
         r#"
-            let _0: boolean;
-            let _1: boolean;
+            let _0: bool;
+            let _1: bool;
 
             bb0: {
                 _1 = Le(const Integer(I8(1)), const Integer(I8(2)));
@@ -161,8 +161,8 @@ fn test_gt() {
     mir_snapshot_test(
         "fn main(): 2 > 1",
         r#"
-            let _0: boolean;
-            let _1: boolean;
+            let _0: bool;
+            let _1: bool;
 
             bb0: {
                 _1 = Gt(const Integer(I8(2)), const Integer(I8(1)));
@@ -178,8 +178,8 @@ fn test_ge() {
     mir_snapshot_test(
         "fn main(): 2 >= 1",
         r#"
-            let _0: boolean;
-            let _1: boolean;
+            let _0: bool;
+            let _1: bool;
 
             bb0: {
                 _1 = Ge(const Integer(I8(2)), const Integer(I8(1)));

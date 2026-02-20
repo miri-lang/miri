@@ -25,8 +25,8 @@ fn test_not() {
     mir_snapshot_test(
         "fn main(): not true",
         r#"
-            let _0: boolean;
-            let _1: boolean;
+            let _0: bool;
+            let _1: bool;
 
             bb0: {
                 _1 = Not(const Boolean(true));
@@ -62,9 +62,9 @@ fn test_double_not() {
     mir_snapshot_test(
         "fn main(): not not true",
         r#"
-            let _0: boolean;
-            let _1: boolean;
-            let _2: boolean;
+            let _0: bool;
+            let _1: bool;
+            let _2: bool;
 
             bb0: {
                 _1 = Not(const Boolean(true));
@@ -102,9 +102,9 @@ fn test_not_with_comparison() {
     mir_snapshot_test(
         "fn main(): not (1 < 2)",
         r#"
-            let _0: boolean;
-            let _1: boolean;
-            let _2: boolean;
+            let _0: bool;
+            let _1: bool;
+            let _2: bool;
 
             bb0: {
                 _1 = Lt(const Integer(I8(1)), const Integer(I8(2)));

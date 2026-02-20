@@ -22,10 +22,7 @@ fn test_parse_list_type_in_variable() {
 
 #[test]
 fn test_fixed_size_array_type() {
-    type_statement_test(
-        "[int; 3]",
-        type_expr_non_null(type_array(type_int(), Box::new(int_literal_expression(3)))),
-    );
+    type_statement_test("[int; 3]", type_expr_non_null(type_array(type_int(), 3)));
 }
 
 #[test]
@@ -276,10 +273,7 @@ fn test_system_types() {
             "Tuple<String, int, float>",
             type_tuple(vec![type_string(), type_int(), type_float()]),
         ),
-        (
-            "Array<String, 3>",
-            type_array(type_string(), Box::new(int_literal_expression(3))),
-        ),
+        ("Array<String, 3>", type_array(type_string(), 3)),
     ];
 
     for (name, mapped_type) in type_map {

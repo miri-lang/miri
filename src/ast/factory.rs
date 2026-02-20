@@ -829,8 +829,11 @@ pub fn type_list(inner: Type) -> Type {
 }
 
 /// Creates an `Array` type.
-pub fn type_array(inner: Type, size: Box<Expression>) -> Type {
-    make_type(TypeKind::Array(Box::new(type_expr_non_null(inner)), size))
+pub fn type_array(inner: Type, size: i128) -> Type {
+    make_type(TypeKind::Array(
+        Box::new(type_expr_non_null(inner)),
+        Box::new(int_literal_expression(size)),
+    ))
 }
 
 /// Creates a `Map` type.

@@ -21,7 +21,7 @@ fn main()
         r#"
             let _0: void;
             let _1: int; // x
-            let _2: boolean;
+            let _2: bool;
             let _3: int;
             let _4: int;
             let _5: int; // y

@@ -40,7 +40,7 @@ fn test_lower_boolean_true() {
     mir_snapshot_test(
         "fn main(): true",
         r#"
-            let _0: boolean;
+            let _0: bool;
 
             bb0: {
                 _0 = const Boolean(true);
@@ -55,7 +55,7 @@ fn test_lower_boolean_false() {
     mir_snapshot_test(
         "fn main(): false",
         r#"
-            let _0: boolean;
+            let _0: bool;
 
             bb0: {
                 _0 = const Boolean(false);
@@ -70,7 +70,7 @@ fn test_lower_string_literal() {
     mir_snapshot_test(
         r#"fn main(): "hello""#,
         r#"
-            let _0: string;
+            let _0: String;
 
             bb0: {
                 _0 = const String("hello");

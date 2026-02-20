@@ -9,7 +9,7 @@ fn test_tuple_literal() {
         "fn main(): let t = (1, 2, 3)",
         r#"
             let _0: void;
-            let _1: tuple(int, int, int); // t
+            let _1: Tuple(int, int, int); // t
 
             bb0: {
                 StorageLive(_1);
@@ -27,7 +27,7 @@ fn test_empty_tuple() {
         "fn main(): let unit = ()",
         r#"
             let _0: void;
-            let _1: tuple(); // unit
+            let _1: Tuple(); // unit
 
             bb0: {
                 StorageLive(_1);
@@ -45,7 +45,7 @@ fn test_list_literal() {
         "fn main(): let l = [1, 2, 3]",
         r#"
             let _0: void;
-            let _1: list(int); // l
+            let _1: List(int); // l
 
             bb0: {
                 StorageLive(_1);
@@ -83,7 +83,7 @@ fn test_map_literal() {
 fn test_nested_tuple() {
     mir_snapshot_contains_test(
         "fn main(): let nested = ((1, 2), (3, 4))",
-        &["// nested", "tuple(tuple(int, int), tuple(int, int))"],
+        &["// nested", "Tuple(Tuple(int, int), Tuple(int, int))"],
     );
 }
 
@@ -113,15 +113,15 @@ fn main()
 
 #[test]
 fn test_empty_list() {
-    // Note: empty list currently lowers as list(void); type annotation not propagated
-    mir_snapshot_contains_test("fn main(): let l [int] = []", &["// l", "[]", "list(void)"]);
+    // Note: empty list currently lowers as List(void); type annotation not propagated
+    mir_snapshot_contains_test("fn main(): let l [int] = []", &["// l", "[]", "List(void)"]);
 }
 
 #[test]
 fn test_nested_list() {
     mir_snapshot_contains_test(
         "fn main(): let l = [[1, 2], [3, 4]]",
-        &["// l", "list(list("],
+        &["// l", "List(List("],
     );
 }
 
@@ -131,7 +131,7 @@ fn test_single_element_tuple() {
         "fn main(): let t = (42,)",
         r#"
             let _0: void;
-            let _1: tuple(int); // t
+            let _1: Tuple(int); // t
 
             bb0: {
                 StorageLive(_1);
@@ -149,7 +149,7 @@ fn test_large_tuple() {
         "fn main(): let t = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)",
         &[
             "// t",
-            "tuple(int, int, int, int, int, int, int, int, int, int)",
+            "Tuple(int, int, int, int, int, int, int, int, int, int)",
         ],
     );
 }
@@ -158,6 +158,6 @@ fn test_large_tuple() {
 fn test_large_list() {
     mir_snapshot_contains_test(
         "fn main(): let l = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]",
-        &["// l", "list(int)"],
+        &["// l", "List(int)"],
     );
 }

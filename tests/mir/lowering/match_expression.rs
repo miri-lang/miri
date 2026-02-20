@@ -17,10 +17,10 @@ fn main()
         _: "other"
 "#,
         r#"
-            let _0: string;
+            let _0: String;
             let _1: int; // x
             let _2: int;
-            let _3: string;
+            let _3: String;
             let _4: int; // _
 
             bb0: {
