@@ -1,0 +1,21 @@
+use system.io.{print, println, eprintln, line_end}
+
+println("Testing IO...")
+
+print("This is ")
+println("a split line")
+
+eprintln("This is an error message (expected)")
+
+let le = line_end()
+print("Line ending length: ")
+// println(le.length()) // can't print int yet? print takes String. 
+// String interpolation isn't explicitly clear if it works for print, but `println(le.length())` might fail if no overload.
+// sticking to string printing.
+
+if le.length() > 0
+    println("line_end() returned non-empty string")
+else
+    eprintln("Error: line_end() returned empty string")
+
+println("IO tests passed!")

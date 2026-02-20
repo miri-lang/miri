@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::integration::utils::{assert_runs, interpreter_assert_returns};
+use crate::integration::utils::{assert_runs, assert_runs_with_output};
 
 #[test]
 fn test_simple_enum() {
@@ -33,38 +33,44 @@ fn main()
 
 #[test]
 fn test_enum_match() {
-    interpreter_assert_returns(
+    assert_runs_with_output(
         r#"
+use system.io
+
 enum Status
     Ok
     Error
 
-fn main() int
+fn main()
     let s = Status.Ok
-    match s
+    let result = match s
         Status.Ok: 1
         Status.Error: 0
+    print(result)
     "#,
-        1,
+        "1",
     );
 }
 
 #[test]
 fn test_enum_match_multiple_variants() {
-    interpreter_assert_returns(
+    assert_runs_with_output(
         r#"
+use system.io
+
 enum Color
     Red
     Green
     Blue
 
-fn main() int
+fn main()
     let c = Color.Green
-    match c
+    let result = match c
         Color.Red: 1
         Color.Green: 2
         Color.Blue: 3
+    print(result)
     "#,
-        2,
+        "2",
     );
 }

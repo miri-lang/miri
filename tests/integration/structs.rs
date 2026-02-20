@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::integration::utils::{interpreter_assert_returns, interpreter_assert_runs};
+use crate::integration::utils::{assert_runs, assert_runs_with_output};
 
 #[test]
 fn test_struct_definition() {
-    interpreter_assert_runs(
+    assert_runs(
         r#"
 struct Point
     x int
@@ -19,39 +19,43 @@ fn main()
 
 #[test]
 fn test_struct_field_access() {
-    interpreter_assert_returns(
+    assert_runs_with_output(
         r#"
+use system.io
+
 struct Point
     x int
     y int
 
-fn main() int
+fn main()
     let p = Point(x: 10, y: 20)
-    p.x + p.y
+    print(p.x + p.y)
     "#,
-        30,
+        "30",
     );
 }
 
 #[test]
 fn test_struct_field_mutation() {
-    interpreter_assert_returns(
+    assert_runs_with_output(
         r#"
+use system.io
+
 struct Counter
     value int
 
-fn main() int
+fn main()
     var c = Counter(value: 0)
     c.value = 42
-    c.value
+    print(c.value)
     "#,
-        42,
+        "42",
     );
 }
 
 #[test]
 fn test_struct_multiple_fields() {
-    interpreter_assert_runs(
+    assert_runs(
         r#"
 struct Person
     name string

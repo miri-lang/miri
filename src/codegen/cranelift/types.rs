@@ -47,6 +47,10 @@ pub fn translate_type_kind(kind: &TypeKind) -> CraneliftType {
         // Symbol type - represented as I64
         TypeKind::Symbol => types::I64,
 
+        // Raw pointer - maps to target pointer width
+        // TODO: use I32 on 32-bit targets
+        TypeKind::RawPtr => types::I64,
+
         // Collections are represented as pointers
         TypeKind::List(_) => types::I64,
         TypeKind::Array(_, _) => types::I64,

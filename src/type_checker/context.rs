@@ -37,6 +37,7 @@ use std::collections::{BTreeMap, HashMap};
 pub struct SymbolInfo {
     pub ty: Type,
     pub mutable: bool,
+    pub is_constant: bool,
     pub visibility: MemberVisibility,
     pub module: String,
     /// Tracks if a linear resource has been consumed/moved.
@@ -209,12 +210,12 @@ impl Context {
         }
     }
 
-    /// Defines a variable in the current scope.
     pub fn define(
         &mut self,
         name: String,
         ty: Type,
         mutable: bool,
+        is_constant: bool,
         visibility: MemberVisibility,
         module: String,
     ) {
@@ -224,6 +225,7 @@ impl Context {
                 SymbolInfo {
                     ty,
                     mutable,
+                    is_constant,
                     visibility,
                     module,
                     consumed: false,

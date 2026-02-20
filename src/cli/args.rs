@@ -25,10 +25,6 @@ pub enum Commands {
         #[arg(required = true)]
         path: PathBuf,
 
-        /// Use interpreter instead of compilation (faster, for development)
-        #[arg(long, short = 'i')]
-        interpret: bool,
-
         /// Arguments to pass to the program
         #[arg(last = true)]
         program_args: Vec<String>,

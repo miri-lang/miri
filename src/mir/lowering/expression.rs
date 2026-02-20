@@ -95,7 +95,7 @@ pub fn lower_expression(
             }
         }
         ExpressionKind::Identifier(name, _) => {
-            if let Some(&local) = ctx.variable_map.get(name) {
+            if let Some(&local) = ctx.variable_map.get(name.as_str()) {
                 // If destination is provided, assign the variable to it
                 if let Some(d) = dest {
                     ctx.push_statement(crate::mir::Statement {
@@ -141,7 +141,7 @@ pub fn lower_expression(
                     if let ExpressionKind::Identifier(name, _) = &id_expr.node {
                         let val = lower_expression(ctx, rhs, None)?;
 
-                        if let Some(&local) = ctx.variable_map.get(name) {
+                        if let Some(&local) = ctx.variable_map.get(name.as_str()) {
                             match op {
                                 crate::ast::operator::AssignmentOp::Assign => {
                                     let lhs_ty = ctx.body.local_decls[local.0].ty.clone();
@@ -1740,7 +1740,7 @@ pub fn lower_expression(
                 // by looking for it in the lambda's variable map
                 if lambda_ctx.variable_map.contains_key(name) {
                     // If it's also a parameter, skip it (not a capture)
-                    if params.iter().any(|p| &p.name == name.as_ref()) {
+                    if params.iter().any(|p| p.name == name.as_ref()) {
                         continue;
                     }
                     // This is a captured variable - for now we just track it

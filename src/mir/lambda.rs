@@ -26,7 +26,7 @@ pub struct LambdaInfo {
 /// A variable captured by a lambda/closure.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CapturedVar {
-    pub name: Rc<String>,
+    pub name: Rc<str>,
     pub lambda_local: Local,
     pub outer_local: Local,
 }

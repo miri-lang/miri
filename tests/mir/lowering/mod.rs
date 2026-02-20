@@ -7,6 +7,7 @@ pub mod block;
 pub mod call;
 pub mod casts;
 pub mod collections;
+pub mod constant;
 pub mod enums;
 pub mod function;
 pub mod gpu;

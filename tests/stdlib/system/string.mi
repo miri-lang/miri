@@ -1,0 +1,75 @@
+use system.io.{print, println, eprintln}
+use system.string
+
+println("Testing String...")
+
+// specific test for string.length()
+let s1 = "Hello"
+if s1.length() != 5
+    eprintln("Error: s1.length() should be 5")
+else
+    println("s1.length() passed")
+
+// specific test for string.is_empty()
+if s1.is_empty()
+    eprintln("Error: s1 should not be empty")
+else
+    println("s1.is_empty() passed")
+
+// specific test for string.to_lower()
+let s2 = s1.to_lower()
+if s2 != "hello"
+    eprintln("Error: to_lower failed")
+else
+    println("to_lower passed")
+
+// specific test for string.to_upper()
+let s3 = s1.to_upper()
+if s3 != "HELLO"
+    eprintln("Error: to_upper failed")
+else
+    println("to_upper passed")
+
+// specific test for string.trim()
+let s4 = "  hello  "
+let s5 = s4.trim()
+if s5 != "hello"
+    eprintln("Error: trim failed")
+else
+    println("trim passed")
+
+// specific test for string.replace()
+let s6 = "Hello, World!"
+let s7 = s6.replace("World", "Miri")
+if s7 != "Hello, Miri!"
+    eprintln("Error: replace failed")
+else
+    println("replace passed")
+
+// specific test for string.substring()
+let s8 = "Hello, World!"
+let s9 = s8.substring(0, 5)
+if s9 != "Hello"
+    eprintln("Error: substring failed")
+else
+    println("substring passed")
+
+// specific test for string.contains()
+if not s8.contains("World")
+    eprintln("Error: contains failed")
+else
+    println("contains passed")
+
+// specific test for string.starts_with()
+if not s8.starts_with("Hello")
+    eprintln("Error: starts_with failed")
+else
+    println("starts_with passed")
+
+// specific test for string.ends_with()
+if not s8.ends_with("World!")
+    eprintln("Error: ends_with failed")
+else
+    println("ends_with passed")
+
+println("String tests passed!")

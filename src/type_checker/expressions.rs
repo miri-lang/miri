@@ -18,9 +18,9 @@
 //! - Unary: `-`, `+`, `not`, `~`, `await`
 //!
 //! ## Collections
-//! - Lists: `[1, 2, 3]` → `list<int>`
-//! - Maps: `{"a": 1}` → `map<string, int>`
-//! - Sets: `{1, 2, 3}` → `set<int>`
+//! - Lists: `[1, 2, 3]` → `List<int>`
+//! - Maps: `{"a": 1}` → `Map<string, int>`
+//! - Sets: `{1, 2, 3}` → `Set<int>`
 //! - Tuples: `(1, "a")` → `(int, string)`
 //! - Ranges: `1..10` → `Range<int>`
 //!
@@ -1771,6 +1771,7 @@ impl TypeChecker {
                 param.name.clone(),
                 param_type,
                 false,
+                false,
                 MemberVisibility::Public,
                 self.current_module.clone(),
             ); // Parameters are immutable by default
@@ -1975,6 +1976,7 @@ impl TypeChecker {
                 context.define(
                     name.clone(),
                     subject_type.clone(),
+                    false,
                     false,
                     MemberVisibility::Public,
                     self.current_module.clone(),

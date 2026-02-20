@@ -1,1 +1,3 @@
-print('Hello World!')
+use system.io
+
+println("Hello World!")

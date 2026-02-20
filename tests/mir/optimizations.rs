@@ -34,7 +34,7 @@ fn test_debug_names_present_in_debug_build() {
     let has_x = body
         .local_decls
         .iter()
-        .any(|d| d.name.as_deref().map(|s| s.as_str()) == Some("x"));
+        .any(|d| d.name.as_deref() == Some("x"));
     assert!(has_x, "Variable 'x' should have a name in debug build");
 }
 
@@ -47,7 +47,7 @@ fn test_debug_names_stripped_in_release_build() {
     let has_x = body
         .local_decls
         .iter()
-        .any(|d| d.name.as_deref().map(|s| s.as_str()) == Some("x"));
+        .any(|d| d.name.as_deref() == Some("x"));
     assert!(
         !has_x,
         "Variable 'x' should NOT have a name in release build"

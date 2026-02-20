@@ -54,9 +54,9 @@ fn test_struct_with_complex_member_types() {
     parser_test(
         "
 struct UserProfile
-    id string
-    aliases [string]?
-    preferences {string: bool}
+    id String
+    aliases [String]?
+    preferences {String: bool}
 ",
         vec![struct_statement(
             identifier("UserProfile"),
@@ -197,7 +197,7 @@ fn test_generic_struct_with_constraint() {
 #[test]
 fn test_struct_with_nested_generic_member() {
     parser_test(
-        "struct Container<T>: items list<Optional<T>>",
+        "struct Container<T>: items List<Optional<T>>",
         vec![struct_statement(
             identifier("Container"),
             Some(vec![generic_type("T", None)]),

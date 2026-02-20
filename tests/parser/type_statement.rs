@@ -32,7 +32,7 @@ type MyInt is int
 fn test_type_alias_complex() {
     parser_test(
         "
-type UserMap is {string: User?}
+type UserMap is {String: User?}
 ",
         vec![type_statement(
             vec![type_declaration(

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+pub mod array_literal;
 pub mod assignment_expression;
 pub mod await_expression;
 pub mod basic;
@@ -9,6 +10,7 @@ pub mod boolean;
 pub mod break_statement;
 pub mod class_statement;
 pub mod conditional_expression;
+pub mod constant_declaration;
 pub mod continue_statement;
 pub mod do_while_loop;
 pub mod edge_cases;
@@ -29,8 +31,10 @@ pub mod match_expression;
 pub mod member_expression;
 pub mod namespeced_identifier;
 pub mod parenthesized_expression;
+pub mod rawptr;
 pub mod regex_literal;
 pub mod return_statement;
+pub mod runtime_function_declaration;
 pub mod set_literal;
 pub mod string;
 pub mod struct_statement;

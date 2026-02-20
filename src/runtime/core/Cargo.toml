@@ -1,0 +1,13 @@
+[package]
+name = "miri-runtime-core"
+version = "0.1.0"
+edition = "2021"
+description = "Core runtime for the Miri programming language"
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+
+[features]
+default = []

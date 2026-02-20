@@ -691,11 +691,18 @@ pub fn lower_call(
     }
 
     // Implicit Allocator Injection at Call Site
-    // If the current function has an allocator (injected by lower_function), pass it to the callee.
-    // This assumes all called functions expect this implicit argument.
-    #[allow(clippy::unnecessary_to_owned)]
-    if let Some(&alloc_local) = ctx.variable_map.get(&"allocator".to_string()) {
-        arg_ops.push(Operand::Copy(Place::new(alloc_local)));
+    if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
+        let already_has_alloc = arg_ops.iter().any(|op| {
+            if let Operand::Copy(p) | Operand::Move(p) = op {
+                p.local == alloc_local
+            } else {
+                false
+            }
+        });
+
+        if !already_has_alloc {
+            arg_ops.push(Operand::Copy(Place::new(alloc_local)));
+        }
     }
 
     // Determine return type (void for now, or from type checker)

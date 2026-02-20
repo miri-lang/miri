@@ -24,11 +24,19 @@ pub enum SyntaxErrorKind {
     UnclosedStringLiteral,
 
     // Parser errors
-    UnexpectedToken { expected: String, found: String },
-    UnexpectedOperator { expected: String, found: String },
+    UnexpectedToken {
+        expected: String,
+        found: String,
+    },
+    UnexpectedOperator {
+        expected: String,
+        found: String,
+    },
     UnexpectedEOF,
 
-    InvalidTypeDeclaration { expected: String },
+    InvalidTypeDeclaration {
+        expected: String,
+    },
     InvalidLeftHandSideExpression,
     InvalidAssignmentTarget,
     IntegerLiteralOverflow,
@@ -54,7 +62,15 @@ pub enum SyntaxErrorKind {
     DuplicateMatchPattern,
     MissingMatchBranches,
 
-    InvalidModifierCombination { combination: String, reason: String },
+    InvalidModifierCombination {
+        combination: String,
+        reason: String,
+    },
+
+    /// An unknown runtime name was specified in a runtime function declaration.
+    UnknownRuntime {
+        name: String,
+    },
 }
 
 impl SyntaxErrorKind {
@@ -246,6 +262,12 @@ impl SyntaxErrorKind {
                 title: "Invalid Modifier Combination",
                 message: None,
                 help: Some("These modifiers cannot be used together.".to_string()),
+            },
+            Self::UnknownRuntime { name } => ErrorProperties {
+                code: "E0032",
+                title: "Unknown Runtime",
+                message: Some(format!("Unknown runtime '{}'", name)),
+                help: Some("Known runtimes: \"core\".".to_string()),
             },
         }
     }

@@ -101,19 +101,19 @@ pub fn expect_assignment(stmt: &miri::mir::Statement) -> (&Place, &Rvalue) {
 pub fn find_local_idx(body: &Body, name: &str) -> Option<usize> {
     body.local_decls
         .iter()
-        .position(|d| d.name.as_deref().map(|s| s.as_str()) == Some(name))
+        .position(|d| d.name.as_deref() == Some(name))
 }
 
 pub fn has_local(body: &Body, name: &str) -> bool {
     body.local_decls
         .iter()
-        .any(|d| d.name.as_deref().map(|s| s.as_str()) == Some(name))
+        .any(|d| d.name.as_deref() == Some(name))
 }
 
 pub fn count_locals_named(body: &Body, name: &str) -> usize {
     body.local_decls
         .iter()
-        .filter(|d| d.name.as_deref().map(|s| s.as_str()) == Some(name))
+        .filter(|d| d.name.as_deref() == Some(name))
         .count()
 }
 
@@ -466,7 +466,7 @@ pub fn mir_lowering_storage_class_test(source: &str, var_name: &str, expected: S
     let decl = body
         .local_decls
         .iter()
-        .find(|d| d.name.as_deref().map(|s| s.as_str()) == Some(var_name));
+        .find(|d| d.name.as_deref() == Some(var_name));
     assert!(
         decl.is_some(),
         "Expected local '{}' for source:\n{}",

@@ -14,10 +14,12 @@ use crate::codegen::backend::{ArtifactFormat, Backend, CompiledArtifact};
 use crate::error::CodegenError;
 use crate::mir::Body;
 use crate::type_checker::context::TypeDefinition;
+use cranelift_codegen::ir::AbiParam;
+use cranelift_codegen::ir::Signature;
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_codegen::Context;
-use cranelift_module::{Linkage, Module};
+use cranelift_module::{DataDescription, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use std::collections::HashMap;
 use std::fmt;
@@ -26,6 +28,20 @@ use target_lexicon::{DeploymentTarget, OperatingSystem, Triple};
 
 pub use translator::FunctionTranslator;
 pub use types::translate_type;
+
+/// Describes a runtime function to be declared as an external import.
+///
+/// These correspond to `#[no_mangle] extern "C"` functions in the runtime
+/// library (e.g. `miri-runtime-core`) that are resolved at link time.
+#[derive(Debug, Clone)]
+pub struct RuntimeImport {
+    /// Symbol name (e.g. `miri_rt_string_new`).
+    pub name: String,
+    /// Cranelift types for each parameter.
+    pub param_types: Vec<cranelift_codegen::ir::Type>,
+    /// Cranelift return type, or `None` for void functions.
+    pub return_type: Option<cranelift_codegen::ir::Type>,
+}
 
 /// Cranelift backend for native code generation.
 ///
@@ -36,6 +52,8 @@ pub struct CraneliftBackend {
     isa: Arc<dyn TargetIsa>,
     /// Type definitions from the type checker (for layout computation).
     type_definitions: HashMap<String, TypeDefinition>,
+    /// Runtime function imports to declare as external symbols.
+    runtime_imports: Vec<RuntimeImport>,
 }
 
 impl fmt::Debug for CraneliftBackend {
@@ -103,6 +121,10 @@ impl CraneliftBackend {
             .set("opt_level", "none")
             .map_err(|e| CodegenError::TargetIsa(e.to_string()))?;
 
+        settings_builder
+            .set("is_pic", "false")
+            .map_err(|e| CodegenError::TargetIsa(e.to_string()))?;
+
         let flags = settings::Flags::new(settings_builder);
 
         let isa = cranelift_codegen::isa::lookup(target)
@@ -113,6 +135,7 @@ impl CraneliftBackend {
         Ok(Self {
             isa,
             type_definitions: HashMap::new(),
+            runtime_imports: Vec::new(),
         })
     }
 
@@ -124,6 +147,37 @@ impl CraneliftBackend {
     /// Set the type definitions for layout computation.
     pub fn set_type_definitions(&mut self, defs: HashMap<String, TypeDefinition>) {
         self.type_definitions = defs;
+    }
+
+    /// Set runtime function imports that should be declared as external symbols.
+    pub fn set_runtime_imports(&mut self, imports: Vec<RuntimeImport>) {
+        self.runtime_imports = imports;
+    }
+
+    /// Declare all runtime function imports in the given object module.
+    ///
+    /// Each import is registered with `Linkage::Import`, meaning the symbol
+    /// must be resolved at link time (typically from a static runtime library).
+    fn declare_runtime_imports(&self, module: &mut ObjectModule) -> Result<(), CodegenError> {
+        let call_conv = self.isa.default_call_conv();
+
+        for import in &self.runtime_imports {
+            let mut sig = Signature::new(call_conv);
+
+            for &param_ty in &import.param_types {
+                sig.params.push(AbiParam::new(param_ty));
+            }
+
+            if let Some(ret_ty) = import.return_type {
+                sig.returns.push(AbiParam::new(ret_ty));
+            }
+
+            module
+                .declare_function(&import.name, Linkage::Import, &sig)
+                .map_err(|e| CodegenError::declare_function(&import.name, e.to_string()))?;
+        }
+
+        Ok(())
     }
 }
 
@@ -137,6 +191,10 @@ impl Backend for CraneliftBackend {
     type Error = CodegenError;
     type Options = CraneliftOptions;
 
+    /// Compile the provided MIR bodies into an artifact.
+    ///
+    /// This method translates each body into Cranelift IR, manages string literals
+    /// by emitting them as static data, and generates a native object file.
     fn compile(
         &self,
         bodies: &[(&str, &Body)],
@@ -180,9 +238,47 @@ impl Backend for CraneliftBackend {
         let mut module = ObjectModule::new(object_builder);
         let mut ctx = Context::new();
 
+        // Declare runtime function imports as external symbols
+        self.declare_runtime_imports(&mut module)?;
+
         // Compile each function
+        let mut string_literals = HashMap::new();
         for (name, body) in bodies {
-            self.compile_function(&mut module, &mut ctx, name, body, &isa)?;
+            self.compile_function(
+                &mut module,
+                &mut ctx,
+                name,
+                body,
+                &isa,
+                &mut string_literals,
+            )?;
+        }
+
+        // Define string literals as static data
+        for (literal, symbol_name) in string_literals {
+            // 1. Define the raw bytes
+            let bytes_symbol = format!("{}_bytes", symbol_name);
+            let bytes_id = module
+                .declare_data(&bytes_symbol, Linkage::Export, false, false)
+                .map_err(|e| CodegenError::Module(e.to_string()))?;
+            let mut bytes_ctx = DataDescription::new();
+            bytes_ctx.define(literal.as_bytes().to_vec().into_boxed_slice());
+            module
+                .define_data(bytes_id, &bytes_ctx)
+                .map_err(|e| CodegenError::Module(e.to_string()))?;
+
+            // 3. Define the Wrapper Cache (for lazy initialization)
+            let cache_symbol = format!("{}_wrapper_cache", symbol_name);
+            let cache_id = module
+                .declare_data(&cache_symbol, Linkage::Export, true, false)
+                .map_err(|e| CodegenError::Module(e.to_string()))?;
+
+            let mut cache_ctx = DataDescription::new();
+            cache_ctx.define_zeroinit(8);
+
+            module
+                .define_data(cache_id, &cache_ctx)
+                .map_err(|e| CodegenError::Module(e.to_string()))?;
         }
 
         // Emit the object file
@@ -218,6 +314,15 @@ impl Backend for CraneliftBackend {
 }
 
 impl CraneliftBackend {
+    /// Compile a single MIR function body to Cranelift IR.
+    ///
+    /// # Arguments
+    /// * `module` - The ObjectModule being built.
+    /// * `ctx` - The Cranelift Context for this function.
+    /// * `name` - The symbol name of the function.
+    /// * `body` - The MIR Body to translate.
+    /// * `isa` - The TargetIsa for code generation.
+    /// * `string_literals` - A map to collect and deduplicate string literals found in the function.
     fn compile_function(
         &self,
         module: &mut ObjectModule,
@@ -225,13 +330,14 @@ impl CraneliftBackend {
         name: &str,
         body: &Body,
         isa: &Arc<dyn TargetIsa>,
+        string_literals: &mut HashMap<String, String>,
     ) -> Result<(), CodegenError> {
         // Create function translator
         let mut translator = FunctionTranslator::new(isa, body, &self.type_definitions);
 
         // Translate MIR to Cranelift IR
         translator
-            .translate(body)
+            .translate(body, module, string_literals)
             .map_err(|e| CodegenError::translation(name, e))?;
 
         // Get the function signature and declare it

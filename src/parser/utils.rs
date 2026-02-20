@@ -155,6 +155,7 @@ impl<'source> Parser<'source> {
                     | Token::Parallel
                     | Token::Gpu
                     | Token::Return
+                    | Token::Runtime
                     | Token::Use
                     | Token::Type
                     | Token::Break

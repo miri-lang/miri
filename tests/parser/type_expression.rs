@@ -32,7 +32,7 @@ fn test_fixed_size_array_type() {
 fn test_parse_nullable_map_type_in_parameter() {
     parser_test(
         "
-fn process_data(data {string: bool}?)
+fn process_data(data {String: bool}?)
     // body
 ",
         vec![func("process_data")
@@ -66,7 +66,7 @@ fn get_coordinates() (float, float?, float)?
 #[test]
 fn test_parse_generic_result_type() {
     type_statement_test(
-        "result<int, string>",
+        "Result<int, String>",
         type_expr_non_null(type_result(type_int(), type_string())),
     );
 }
@@ -75,7 +75,7 @@ fn test_parse_generic_result_type() {
 fn test_parse_generic_custom_type_with_nesting() {
     parser_test(
         "
-fn get_data() MyContainer<[int]?, future<string>>
+fn get_data() MyContainer<[int]?, Future<String>>
     // body
 ",
         vec![func("get_data")
@@ -103,7 +103,7 @@ fn test_error_unclosed_list_type() {
 #[test]
 fn test_error_malformed_map_type() {
     parser_error_test(
-        "let my_map {string, int}",
+        "let my_map {String, int}",
         &SyntaxErrorKind::UnexpectedToken {
             expected: "}".to_string(),
             found: ",".to_string(),
@@ -132,7 +132,7 @@ fn test_error_empty_generic_parameters() {
 #[test]
 fn test_deeply_nested_collection_type() {
     type_statement_test(
-        "[[{string: (int?, bool)}]?]?",
+        "[[{String: (int?, bool)}]?]?",
         type_expr_null(
             // The outer list is nullable: `[...]`?
             type_list_expr(type_expr_null(
@@ -152,13 +152,13 @@ fn test_deeply_nested_collection_type() {
 
 #[test]
 fn test_grouping_parentheses_in_type() {
-    type_statement_test("(string)", type_expr_non_null(type_string()));
+    type_statement_test("(String)", type_expr_non_null(type_string()));
 }
 
 #[test]
 fn test_single_element_tuple_with_trailing_comma() {
     type_statement_test(
-        "(string,)",
+        "(String,)",
         type_expr_non_null(type_tuple(vec![type_string()])),
     );
 }
@@ -174,7 +174,7 @@ fn test_multi_element_tuple_with_trailing_comma() {
 #[test]
 fn test_nullable_function_type() {
     type_statement_test(
-        "(fn(s string) bool)?",
+        "(fn(s String) bool)?",
         type_expr_null(type_function(
             None,
             vec![parameter(
@@ -215,7 +215,7 @@ fn test_simple_nullable_built_in_type() {
 #[test]
 fn test_error_map_missing_value_type() {
     parser_error_test(
-        "let x {string:}",
+        "let x {String:}",
         &SyntaxErrorKind::InvalidTypeDeclaration {
             expected: "Map value type".to_string(),
         },
@@ -225,7 +225,7 @@ fn test_error_map_missing_value_type() {
 #[test]
 fn test_error_result_type_missing_parameter() {
     parser_error_test(
-        "let x result<int>",
+        "let x Result<int>",
         &SyntaxErrorKind::UnexpectedToken {
             expected: ",".to_string(),
             found: ">".to_string(),
@@ -261,23 +261,23 @@ fn test_system_types() {
         ("float", type_float()),
         ("f32", type_f32()),
         ("f64", type_f64()),
-        ("string", type_string()),
+        ("String", type_string()),
         ("bool", type_bool()),
         ("symbol", type_symbol()),
         (
-            "result<int, string>",
+            "Result<int, String>",
             type_result(type_int(), type_string()),
         ),
-        ("list<float>", type_list(type_float())),
-        ("map<string, int>", type_map(type_string(), type_int())),
-        ("set<string>", type_set(type_string())),
-        ("future<string>", type_future(type_string())),
+        ("List<float>", type_list(type_float())),
+        ("Map<String, int>", type_map(type_string(), type_int())),
+        ("Set<String>", type_set(type_string())),
+        ("Future<String>", type_future(type_string())),
         (
-            "tuple<string, int, float>",
+            "Tuple<String, int, float>",
             type_tuple(vec![type_string(), type_int(), type_float()]),
         ),
         (
-            "array<string, 3>",
+            "Array<String, 3>",
             type_array(type_string(), Box::new(int_literal_expression(3))),
         ),
     ];
@@ -294,7 +294,7 @@ fn test_system_types() {
 #[test]
 fn test_function_type_with_named_parameters() {
     type_statement_test(
-        "fn(x int, y string?) bool",
+        "fn(x int, y String?) bool",
         type_expr_non_null(type_function(
             None, // no generics
             vec![
@@ -332,7 +332,7 @@ fn test_function_type_returning_function_type() {
 #[test]
 fn test_list_of_function_types() {
     type_statement_test(
-        "[fn(s string) bool]",
+        "[fn(s String) bool]",
         type_expr_non_null(type_list(type_function(
             None,
             vec![parameter(

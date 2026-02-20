@@ -56,7 +56,7 @@ enum Colors
 fn test_inline_enum_with_typed_values() {
     parser_test(
         "
-enum Message: Write(string), Move(int, int)
+enum Message: Write(String), Move(int, int)
 ",
         vec![enum_statement(
             identifier("Message"),
@@ -121,7 +121,7 @@ fn test_enum_with_single_value() {
 fn test_enum_with_complex_value_types() {
     parser_test(
         "
-enum Data: Point([int]?), Config({string: bool})
+enum Data: Point([int]?), Config({String: bool})
 ",
         vec![enum_statement(
             identifier("Data"),

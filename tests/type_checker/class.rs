@@ -142,7 +142,7 @@ trait Drawable
 fn test_class_extends_and_implements() {
     let code = "
 trait Serializable
-    fn serialize() string
+    fn serialize() String
         \"\"
 
 class Animal
@@ -184,7 +184,7 @@ abstract class Shape
 fn test_abstract_class_with_concrete_method() {
     let code = "
 abstract class Shape
-    fn describe() string
+    fn describe() String
         \"A shape\"
     ";
     type_checker_test(code);
@@ -195,7 +195,7 @@ fn test_abstract_class_mixed_methods() {
     let code = "
 abstract class Shape
     fn area() float
-    fn describe() string
+    fn describe() String
         \"A shape\"
     ";
     type_checker_test(code);
@@ -335,7 +335,7 @@ trait Drawable
 
 class Circle implements Drawable
     var radius float
-    fn draw() string
+    fn draw() String
         \"circle\"
     ";
     type_checker_error_test(code, "does not match trait 'Drawable' signature");
@@ -362,13 +362,13 @@ trait Drawable
     fn draw() int
 
 trait Printable
-    fn print() string
+    fn print() String
 
 class Shape implements Drawable, Printable
     var id int
     fn draw() int
         1
-    fn print() string
+    fn print() String
         \"shape\"
     ";
     type_checker_test(code);
@@ -381,7 +381,7 @@ trait Drawable
     fn draw() int
 
 trait Printable
-    fn print() string
+    fn print() String
 
 class Shape implements Drawable, Printable
     var id int
@@ -583,11 +583,11 @@ fn test_class_inheritance_method_override() {
     type_checker_test(
         "
 class Animal
-    fn speak() string
+    fn speak() String
         \"generic sound\"
 
 class Dog extends Animal
-    fn speak() string
+    fn speak() String
         \"woof\"
 
 let d = Dog()

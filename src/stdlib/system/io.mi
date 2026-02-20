@@ -1,0 +1,50 @@
+/// Standard I/O operations for Miri.
+///
+/// Provides functions for reading from stdin and writing to stdout/stderr.
+
+use system.string
+
+// =============================================================================
+// Intrinsic function declarations
+// These map to miri_rt_* functions in the Rust runtime.
+// =============================================================================
+
+runtime "core" fn miri_rt_print(message String)
+runtime "core" fn miri_rt_println(message String)
+runtime "core" fn miri_rt_eprint(message String)
+runtime "core" fn miri_rt_eprintln(message String)
+runtime "core" fn miri_rt_get_line_end() String
+
+// =============================================================================
+// Public API
+// =============================================================================
+
+/// Prints a string to stdout without a trailing newline.
+///
+/// Example:
+///     print("Hello")
+///     print(", World!")  // Output: Hello, World!
+public fn print(message String)
+    miri_rt_print(message)
+
+/// Prints a string to stdout with a trailing newline.
+///
+/// Example:
+///     println("Hello, World!")
+public fn println(message String = "")
+    miri_rt_println(message)
+
+/// Prints a string to stderr without a trailing newline.
+public fn eprint(message String)
+    miri_rt_eprint(message)
+
+/// Prints a string to stderr with a trailing newline.
+public fn eprintln(message String)
+    miri_rt_eprintln(message)
+
+/// Returns the platform-specific line ending.
+///
+/// - On Unix/macOS: "\n"
+/// - On Windows: "\r\n"
+public fn line_end() String
+    return miri_rt_get_line_end()

@@ -254,7 +254,8 @@ fn test_error_trait_invalid_member() {
 trait Invalid
     for x in y",
         &SyntaxErrorKind::UnexpectedToken {
-            expected: "class member (let, var, fn, async, gpu, or type)".to_string(),
+            expected: "class member (let, var, const, fn, async, gpu, type, or field declaration)"
+                .to_string(),
             found: "for".to_string(),
         },
     );
@@ -320,7 +321,7 @@ fn test_trait_abstract_function_with_parameters() {
     trait_statement_test(
         "
 trait Processor
-    fn process(data string, count int) bool
+    fn process(data String, count int) bool
 ",
         identifier("Processor"),
         None,
@@ -348,9 +349,9 @@ fn test_trait_multiple_abstract_functions() {
     trait_statement_test(
         "
 trait CRUD
-    fn create(data string)
-    fn read(id int) string
-    fn update(id int, data string)
+    fn create(data String)
+    fn read(id int) String
+    fn update(id int, data String)
     fn delete(id int)
 ",
         identifier("CRUD"),
@@ -426,9 +427,9 @@ fn test_trait_mixed_abstract_and_concrete_functions() {
     trait_statement_test(
         "
 trait Serializable
-    fn serialize() string
-    fn deserialize(data string)
-    fn toString() string
+    fn serialize() String
+    fn deserialize(data String)
+    fn toString() String
         \"default\"
 ",
         identifier("Serializable"),

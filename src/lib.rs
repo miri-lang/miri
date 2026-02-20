@@ -9,8 +9,6 @@ pub mod cli;
 pub mod codegen;
 /// Error and diagnostic types for all compiler phases.
 pub mod error;
-/// MIR interpreter for direct execution without compilation.
-pub mod interpreter;
 /// Lexer (tokenizer) for Miri source code.
 pub mod lexer;
 /// Mid-level Intermediate Representation (MIR).

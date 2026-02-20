@@ -66,7 +66,7 @@ impl<'source> Parser<'source> {
                 self.class_member_statement(MemberVisibility::Private)?
             }
             Some((Token::Indent, _)) => self.block_statement()?,
-            Some((Token::Let, _)) | Some((Token::Var, _)) => {
+            Some((Token::Let, _)) | Some((Token::Var, _)) | Some((Token::Const, _)) => {
                 self.variable_statement(MemberVisibility::Public)?
             }
             Some((Token::Shared, _)) => self.shared_variable_statement(MemberVisibility::Public)?,
@@ -81,6 +81,7 @@ impl<'source> Parser<'source> {
             | Some((Token::Fn, _))
             | Some((Token::Gpu, _))
             | Some((Token::Parallel, _)) => self.function_declaration(MemberVisibility::Public)?,
+            Some((Token::Runtime, _)) => self.runtime_function_declaration()?,
             Some((Token::Return, _)) => self.return_statement()?,
             Some((Token::Use, _)) => self.use_statement()?,
             Some((Token::Type, _)) => self.type_statement(MemberVisibility::Public)?,
@@ -103,6 +104,7 @@ impl<'source> Parser<'source> {
         VariableStatement
             : 'let' VariableDeclarationList EXPRESSION_END
             | 'var' VariableDeclarationList EXPRESSION_END
+            | 'const' Identifier ['=' Expression] EXPRESSION_END
             ;
     */
     pub(crate) fn variable_statement(
@@ -112,7 +114,8 @@ impl<'source> Parser<'source> {
         let (token, variable_declaration_type) = match &self._lookahead {
             Some((Token::Let, _)) => (Token::Let, VariableDeclarationType::Immutable),
             Some((Token::Var, _)) => (Token::Var, VariableDeclarationType::Mutable),
-            _ => Err(self.error_unexpected_lookahead_token("let or var"))?,
+            Some((Token::Const, _)) => (Token::Const, VariableDeclarationType::Constant),
+            _ => Err(self.error_unexpected_lookahead_token("let, var or const"))?,
         };
 
         self.eat_token(&token)?;
@@ -212,6 +215,13 @@ impl<'source> Parser<'source> {
         } else {
             None
         };
+
+        // Constants must have an initializer
+        if matches!(declaration_type, VariableDeclarationType::Constant) && initializer.is_none() {
+            return Err(self.error_unexpected_lookahead_token(
+                "'=' (constant declaration must have an initializer)",
+            ));
+        }
 
         Ok(VariableDeclaration {
             name,

@@ -21,7 +21,7 @@ fn test_test_command_default() {
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("test_pass.mi");
     let mut file = std::fs::File::create(&file_path).unwrap();
-    write!(file, "print(\"Hello\")").unwrap();
+    write!(file, "42").unwrap();
 
     let mut cmd = miri_cmd();
     cmd.arg("test")

@@ -1,0 +1,164 @@
+{
+    "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+    "name": "Miri",
+    "patterns": [
+        {
+            "include": "#comments"
+        },
+        {
+            "include": "#strings"
+        },
+        {
+            "include": "#keywords"
+        },
+        {
+            "include": "#constants"
+        },
+        {
+            "include": "#types"
+        },
+        {
+            "include": "#functions"
+        },
+        {
+            "include": "#variables"
+        }
+    ],
+    "repository": {
+        "comments": {
+            "patterns": [
+                {
+                    "name": "comment.line.double-slash.miri",
+                    "match": "//.*$"
+                }
+            ]
+        },
+        "strings": {
+            "patterns": [
+                {
+                    "name": "string.quoted.double.miri",
+                    "begin": "\"",
+                    "end": "\"",
+                    "patterns": [
+                        {
+                            "name": "constant.character.escape.miri",
+                            "match": "\\\\."
+                        }
+                    ]
+                },
+                {
+                    "name": "string.quoted.single.miri",
+                    "begin": "'",
+                    "end": "'",
+                    "patterns": [
+                        {
+                            "name": "constant.character.escape.miri",
+                            "match": "\\\\."
+                        }
+                    ]
+                },
+                {
+                    "name": "string.interpolated.miri",
+                    "begin": "f\"",
+                    "end": "\"",
+                    "patterns": [
+                        {
+                            "name": "meta.embedded.line.miri",
+                            "begin": "\\{",
+                            "end": "\\}",
+                            "patterns": [
+                                {
+                                    "include": "$self"
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "name": "string.regexp.miri",
+                    "begin": "re\"",
+                    "end": "\"[a-z]*"
+                }
+            ]
+        },
+        "keywords": {
+            "patterns": [
+                {
+                    "name": "keyword.control.miri",
+                    "match": "\\b(if|else|unless|for|while|do|until|forever|return|match|in|break|continue)\\b"
+                },
+                {
+                    "name": "storage.type.miri",
+                    "match": "\\b(let|var|type|struct|enum|class|trait|fn|async|gpu)\\b"
+                },
+                {
+                    "name": "keyword.other.miri",
+                    "match": "\\b(extends|implements|is|use|as|system|local)\\b"
+                },
+                {
+                    "name": "variable.language.miri",
+                    "match": "\\b(self|super)\\b"
+                }
+            ]
+        },
+        "constants": {
+            "patterns": [
+                {
+                    "name": "constant.numeric.miri",
+                    "match": "\\b\\d+(\\.\\d+)?\\b"
+                },
+                {
+                    "name": "constant.language.boolean.miri",
+                    "match": "\\b(true|false)\\b"
+                },
+                {
+                    "name": "constant.other.symbol.miri",
+                    "match": ":[a-zA-Z_][a-zA-Z0-9_]*"
+                }
+            ]
+        },
+        "types": {
+            "patterns": [
+                {
+                    "name": "support.type.primitive.miri",
+                    "match": "\\b(int|i8|i16|i32|i64|u8|u16|u32|u64|float|f32|f64|string|bool|list|map|tuple|set)\\b"
+                },
+                {
+                    "name": "entity.name.type.miri",
+                    "match": "\\b[A-Z][a-zA-Z0-9_]*\\b"
+                }
+            ]
+        },
+        "functions": {
+            "patterns": [
+                {
+                    "match": "\\b(fn|async|gpu)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+                    "captures": {
+                        "1": {
+                            "name": "storage.type.function.miri"
+                        },
+                        "2": {
+                            "name": "entity.name.function.miri"
+                        }
+                    }
+                },
+                {
+                    "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\(",
+                    "captures": {
+                        "1": {
+                            "name": "entity.name.function.call.miri"
+                        }
+                    }
+                }
+            ]
+        },
+        "variables": {
+            "patterns": [
+                {
+                    "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b"
+                }
+            ]
+        }
+    },
+    "scopeName": "source.miri"
+}

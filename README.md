@@ -2,7 +2,7 @@
 
 **A modern, GPU-first, statically-typed programming language designed for balancing high performance and developer productivity in the age of GenAI.**
 
-Miri combines the readability of Ruby and Python with the safety and speed of Rust—essential in the age of Generative AI, when code is often written by machines and must be understood by humans.
+Miri combines the readability of Ruby and Python with the safety and speed of Rust—essential in the age of Generative AI, where humans define intent and invariants, and AI fills in safe, verifiable, high-performance implementations.
 
 ## Features
 
@@ -69,7 +69,7 @@ let set = {1, 2, 3}
 ```miri
 struct User
     id int
-    name string
+    name String
 
 let u = User(id: 1, name: "Alice")
 ```

@@ -14,10 +14,10 @@ fn test_list_variable_definitions() {
     type_checker_vars_type_test(
         "
         let l1 [int] = [10, 20, 30]
-        let l2 list<string> = [\"a\", \"b\", \"c\"]
-        let l3 list<i128> = [1, 2, 3]
-        let l4 list<float> = [1.1, 2.2, 3.3]
-        let l5 list<f64> = [1.5, 2.5, 3.5]
+        let l2 List<String> = [\"a\", \"b\", \"c\"]
+        let l3 List<i128> = [1, 2, 3]
+        let l4 List<float> = [1.1, 2.2, 3.3]
+        let l5 List<f64> = [1.5, 2.5, 3.5]
 ",
         vec![
             ("l1", type_list(type_int())),
@@ -108,7 +108,7 @@ fn test_empty_list_with_specified_types() {
 fn test_empty_list_with_specified_types_named() {
     type_checker_vars_type_test(
         "
-    let l2 list<int> = []
+    let l2 List<int> = []
 ",
         vec![("l2", type_list(type_int()))],
     );

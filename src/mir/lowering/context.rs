@@ -13,8 +13,8 @@ use std::rc::Rc;
 /// and any shadowed variables are restored.
 #[derive(Debug, Clone)]
 pub struct ScopeData {
-    pub introduced: Vec<Rc<String>>,
-    pub shadowed: HashMap<Rc<String>, Local>,
+    pub introduced: Vec<Rc<str>>,
+    pub shadowed: HashMap<Rc<str>, Local>,
 }
 
 impl ScopeData {
@@ -41,7 +41,7 @@ pub struct LoopContext {
 
 pub struct LoweringContext<'a> {
     pub body: Body,
-    pub variable_map: HashMap<Rc<String>, Local>, // Map variable names to locals
+    pub variable_map: HashMap<Rc<str>, Local>, // Map variable names to locals
     pub current_block: BasicBlock,
     pub type_checker: &'a crate::type_checker::TypeChecker,
     /// Stack of scopes for tracking variable visibility
@@ -157,7 +157,7 @@ impl<'a> LoweringContext<'a> {
 
     pub fn push_local(&mut self, name: String, ty: Type, span: Span) -> Local {
         let mut decl = LocalDecl::new(ty, span.clone());
-        let name_rc = Rc::new(name);
+        let name_rc: Rc<str> = Rc::from(name);
 
         if !self.is_release {
             decl.name = Some(name_rc.clone());
@@ -189,7 +189,7 @@ impl<'a> LoweringContext<'a> {
     /// Register a function parameter (similar to push_local but no StorageLive)
     pub fn push_param(&mut self, name: String, ty: Type, span: Span) -> Local {
         let mut decl = LocalDecl::new(ty, span.clone());
-        let name_rc = Rc::new(name);
+        let name_rc: Rc<str> = Rc::from(name);
 
         if !self.is_release {
             decl.name = Some(name_rc.clone());

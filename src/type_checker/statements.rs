@@ -48,7 +48,11 @@ use crate::ast::factory::make_type;
 use crate::ast::types::{Type, TypeDeclarationKind, TypeKind};
 use crate::ast::*;
 use crate::error::syntax::Span;
+use crate::lexer::Lexer;
+use crate::parser::Parser;
 use std::collections::{BTreeMap, HashMap};
+use std::fs;
+use std::path::PathBuf;
 
 pub(crate) struct FunctionDeclarationInfo<'a> {
     pub name: &'a str,
@@ -231,7 +235,177 @@ impl TypeChecker {
             StatementKind::Type(exprs, visibility) => {
                 self.check_type_statement(exprs, visibility, context)
             }
+            StatementKind::RuntimeFunctionDeclaration(_runtime, name, params, return_type_expr) => {
+                // Runtime functions are extern bindings. Register their type
+                // signature in the current scope so calls can be type-checked,
+                // but skip body checking since they have no body.
+                let func_type = make_type(TypeKind::Function(
+                    None,
+                    params.to_vec(),
+                    return_type_expr.clone(),
+                ));
+
+                if context.scopes.len() == 1 {
+                    self.global_scope.insert(
+                        name.to_string(),
+                        super::context::SymbolInfo {
+                            consumed: false,
+                            ty: func_type.clone(),
+                            mutable: false,
+                            is_constant: false,
+                            visibility: MemberVisibility::Private,
+                            module: self.current_module.clone(),
+                        },
+                    );
+                }
+
+                context.define(
+                    name.to_string(),
+                    func_type,
+                    false,
+                    false,
+                    MemberVisibility::Private,
+                    self.current_module.clone(),
+                );
+
+                // Resolve parameter types to catch errors early
+                for param in params {
+                    self.resolve_type_expression(&param.typ, context);
+                }
+
+                // Resolve return type if present
+                if let Some(rt_expr) = return_type_expr {
+                    self.resolve_type_expression(rt_expr, context);
+                }
+            }
+            StatementKind::Use(path_expr, alias) => {
+                self.check_use(path_expr, alias, context);
+            }
             _ => {}
+        }
+    }
+
+    fn check_use(
+        &mut self,
+        path: &Expression,
+        _alias: &Option<Box<Expression>>,
+        context: &mut Context,
+    ) {
+        // 1. Extract path string
+        let path_str = match self.extract_import_path(path) {
+            Some(p) => p,
+            None => {
+                self.report_error("Invalid import path".to_string(), path.span.clone());
+                return;
+            }
+        };
+
+        // 2. Resolve file path
+        // Assume src/stdlib for now.
+        // Convert "system.io" -> "system/io.mi"
+        let relative_path = path_str.replace(".", "/") + ".mi";
+
+        let possible_locations = vec![
+            PathBuf::from("src/stdlib").join(&relative_path),
+            std::env::current_dir()
+                .unwrap_or_default()
+                .join(&relative_path),
+        ];
+
+        let mut found_path = None;
+        for loc in possible_locations {
+            if loc.exists() {
+                found_path = Some(loc);
+                break;
+            }
+        }
+
+        let file_path = match found_path {
+            Some(p) => p,
+            None => {
+                self.report_error(
+                    format!("Module '{}' not found", path_str),
+                    path.span.clone(),
+                );
+                return;
+            }
+        };
+
+        // 3. Cycle check
+        let abs_path_str = if let Ok(canon) = file_path.canonicalize() {
+            canon.to_string_lossy().to_string()
+        } else {
+            file_path.to_string_lossy().to_string()
+        };
+
+        if self.loaded_modules.contains(&abs_path_str) {
+            return; // Already loaded
+        }
+        self.loaded_modules.insert(abs_path_str.clone());
+
+        // 4. Load and Parse
+        let source = match fs::read_to_string(&file_path) {
+            Ok(s) => s,
+            Err(e) => {
+                self.report_error(
+                    format!("Failed to read module '{}': {}", path_str, e),
+                    path.span.clone(),
+                );
+                return;
+            }
+        };
+
+        let mut lexer = Lexer::new(&source);
+        let mut parser = Parser::new(&mut lexer, &source);
+        let module_ast = match parser.parse() {
+            Ok(ast) => ast,
+            Err(e) => {
+                self.report_error(
+                    format!("Failed to parse module '{}': {:?}", path_str, e),
+                    path.span.clone(),
+                );
+                return;
+            }
+        };
+
+        // 5. Check Module Body (merge into current context)
+        // Store current module name
+        let old_module = self.current_module.clone();
+        self.current_module = path_str.clone();
+
+        for stmt in &module_ast.body {
+            self.check_statement(stmt, context);
+        }
+
+        self.current_module = old_module;
+    }
+
+    fn extract_import_path(&self, expr: &Expression) -> Option<String> {
+        match &expr.node {
+            ExpressionKind::ImportPath(segments, _) => {
+                let parts: Vec<String> = segments
+                    .iter()
+                    .filter_map(|s| {
+                        if let ExpressionKind::Identifier(n, _) = &s.node {
+                            Some(n.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                Some(parts.join("."))
+            }
+            ExpressionKind::Identifier(name, _) => Some(name.clone()),
+            ExpressionKind::Member(obj, member) => {
+                let parent = self.extract_import_path(obj)?;
+                let member_name = if let ExpressionKind::Identifier(n, _) = &member.node {
+                    n
+                } else {
+                    return None;
+                };
+                Some(format!("{}.{}", parent, member_name))
+            }
+            _ => None,
         }
     }
 
@@ -410,9 +584,13 @@ impl TypeChecker {
             }
 
             let inferred_type = self.determine_variable_type(decl, context, span.clone());
-            let is_mutable = matches!(decl.declaration_type, VariableDeclarationType::Mutable);
+            let is_mutable = match decl.declaration_type {
+                VariableDeclarationType::Mutable => true,
+                VariableDeclarationType::Immutable | VariableDeclarationType::Constant => false,
+            };
+            let is_constant = matches!(decl.declaration_type, VariableDeclarationType::Constant);
 
-            self.check_shadowing(&decl.name, is_mutable, context, span.clone());
+            self.check_shadowing(&decl.name, is_mutable, is_constant, context, span.clone());
 
             if context.scopes.len() == 1 {
                 self.global_scope.insert(
@@ -421,6 +599,7 @@ impl TypeChecker {
                         consumed: false,
                         ty: inferred_type.clone(),
                         mutable: is_mutable,
+                        is_constant,
                         visibility: visibility.clone(),
                         module: self.current_module.clone(),
                     },
@@ -431,14 +610,45 @@ impl TypeChecker {
                 decl.name.clone(),
                 inferred_type,
                 is_mutable,
+                is_constant,
                 visibility.clone(),
                 self.current_module.clone(),
             );
         }
     }
 
-    fn check_shadowing(&mut self, name: &str, is_mutable: bool, context: &Context, span: Span) {
-        // Check for shadowing rules in the current scope
+    fn check_shadowing(
+        &mut self,
+        name: &str,
+        is_mutable: bool,
+        is_constant: bool,
+        context: &Context,
+        span: Span,
+    ) {
+        // Find existing info in any scope
+        let existing_info = context.resolve_info(name);
+
+        // Rule 4: Constant shadowing is not allowed in any scope (declaring a NEW constant)
+        if is_constant && existing_info.is_some() {
+            self.report_error(
+                format!(
+                    "Cannot shadow existing variable/constant '{}' with a constant.",
+                    name
+                ),
+                span.clone(),
+            );
+            return;
+        }
+
+        // Rule 5: Cannot shadow an existing constant (declaring any variable shadowing a constant)
+        if let Some(existing) = existing_info {
+            if existing.is_constant {
+                self.report_error(format!("Cannot shadow constant '{}'.", name), span.clone());
+                return;
+            }
+        }
+
+        // Check for same-scope shadowing rules
         if let Some(current_scope) = context.scopes.last() {
             if let Some(existing_info) = current_scope.get(name) {
                 // Rule 2: var may not shadow in the same scope
@@ -709,11 +919,15 @@ impl TypeChecker {
             } else {
                 element_type.clone()
             };
-            let is_mutable = matches!(decl.declaration_type, VariableDeclarationType::Mutable);
+            let is_mutable = match decl.declaration_type {
+                VariableDeclarationType::Mutable => true,
+                VariableDeclarationType::Immutable | VariableDeclarationType::Constant => false,
+            };
             context.define(
                 decl.name.clone(),
                 var_type,
                 is_mutable,
+                false,
                 MemberVisibility::Public,
                 self.current_module.clone(),
             );
@@ -727,15 +941,24 @@ impl TypeChecker {
                         .extract_type_from_expression(&exprs[1])
                         .unwrap_or(make_type(TypeKind::Error));
 
-                    let is_mutable_0 =
-                        matches!(decls[0].declaration_type, VariableDeclarationType::Mutable);
-                    let is_mutable_1 =
-                        matches!(decls[1].declaration_type, VariableDeclarationType::Mutable);
+                    let is_mutable_0 = match decls[0].declaration_type {
+                        VariableDeclarationType::Mutable => true,
+                        VariableDeclarationType::Immutable | VariableDeclarationType::Constant => {
+                            false
+                        }
+                    };
+                    let is_mutable_1 = match decls[1].declaration_type {
+                        VariableDeclarationType::Mutable => true,
+                        VariableDeclarationType::Immutable | VariableDeclarationType::Constant => {
+                            false
+                        }
+                    };
 
                     context.define(
                         decls[0].name.clone(),
                         key_type,
                         is_mutable_0,
+                        false,
                         MemberVisibility::Public,
                         self.current_module.clone(),
                     );
@@ -743,6 +966,7 @@ impl TypeChecker {
                         decls[1].name.clone(),
                         val_type,
                         is_mutable_1,
+                        false,
                         MemberVisibility::Public,
                         self.current_module.clone(),
                     );
@@ -833,6 +1057,7 @@ impl TypeChecker {
                     consumed: false,
                     ty: func_type.clone(),
                     mutable: false,
+                    is_constant: false,
                     visibility: properties.visibility.clone(),
                     module: self.current_module.clone(),
                 },
@@ -842,6 +1067,7 @@ impl TypeChecker {
         context.define(
             name.to_string(),
             func_type,
+            false,
             false,
             properties.visibility.clone(),
             self.current_module.clone(),
@@ -888,6 +1114,7 @@ impl TypeChecker {
             context.define(
                 param.name.clone(),
                 param_type,
+                false,
                 false,
                 MemberVisibility::Public,
                 self.current_module.clone(),
@@ -969,6 +1196,7 @@ impl TypeChecker {
                 "gpu_context".to_string(),
                 gpu_context_type,
                 false, // Immutable
+                false,
                 MemberVisibility::Public,
                 self.current_module.clone(),
             );
@@ -1149,6 +1377,7 @@ impl TypeChecker {
                     consumed: false,
                     ty: make_type(TypeKind::Meta(Box::new(struct_type.clone()))),
                     mutable: false,
+                    is_constant: false,
                     visibility: visibility.clone(),
                     module: self.current_module.clone(),
                 },
@@ -1158,6 +1387,7 @@ impl TypeChecker {
         context.define(
             name,
             make_type(TypeKind::Meta(Box::new(struct_type))),
+            false,
             false,
             visibility.clone(),
             self.current_module.clone(),
@@ -1265,6 +1495,7 @@ impl TypeChecker {
                     consumed: false,
                     ty: make_type(TypeKind::Meta(Box::new(enum_type.clone()))),
                     mutable: false,
+                    is_constant: false,
                     visibility: visibility.clone(),
                     module: self.current_module.clone(),
                 },
@@ -1274,6 +1505,7 @@ impl TypeChecker {
         context.define(
             name,
             make_type(TypeKind::Meta(Box::new(enum_type))),
+            false,
             false,
             visibility.clone(),
             self.current_module.clone(),
@@ -1427,8 +1659,11 @@ impl TypeChecker {
                             make_type(TypeKind::Error)
                         };
 
-                        let is_mutable =
-                            matches!(decl.declaration_type, VariableDeclarationType::Mutable);
+                        let is_mutable = match decl.declaration_type {
+                            VariableDeclarationType::Mutable => true,
+                            VariableDeclarationType::Immutable
+                            | VariableDeclarationType::Constant => false,
+                        };
 
                         fields.insert(
                             decl.name.clone(),
@@ -1818,6 +2053,7 @@ impl TypeChecker {
                     consumed: false,
                     ty: class_type_meta.clone(),
                     mutable: false,
+                    is_constant: false,
                     visibility: visibility.clone(),
                     module: self.current_module.clone(),
                 },
@@ -1827,6 +2063,7 @@ impl TypeChecker {
         context.define(
             name.clone(),
             class_type_meta,
+            false,
             false,
             visibility.clone(),
             self.current_module.clone(),
@@ -2019,6 +2256,7 @@ impl TypeChecker {
                     consumed: false,
                     ty: make_type(TypeKind::Meta(Box::new(trait_type.clone()))),
                     mutable: false,
+                    is_constant: false,
                     visibility: visibility.clone(),
                     module: self.current_module.clone(),
                 },
@@ -2028,6 +2266,7 @@ impl TypeChecker {
         context.define(
             name,
             make_type(TypeKind::Meta(Box::new(trait_type))),
+            false,
             false,
             visibility.clone(),
             self.current_module.clone(),

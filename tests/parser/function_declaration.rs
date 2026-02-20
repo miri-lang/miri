@@ -450,7 +450,9 @@ fn test_error_double_visibility_modifier() {
     parser_error_test(
         "public private fn my_func()",
         &SyntaxErrorKind::UnexpectedToken {
-            expected: "let, var, async, def, gpu, enum, type or struct".to_string(),
+            expected:
+                "let, var, const, async, fn, gpu, runtime, enum, type, struct or field declaration"
+                    .to_string(),
             found: "private".to_string(),
         },
     );
@@ -486,7 +488,7 @@ fn my_func(a int = 10, b bool = true)
 fn test_function_and_parameter_names_as_keywords() {
     parser_error_test(
         "
-fn if(let int, for string)
+fn if(let int, for String)
     // body
 ",
         &SyntaxErrorKind::UnexpectedToken {
@@ -500,7 +502,7 @@ fn if(let int, for string)
 fn test_function_with_complex_generic_types() {
     parser_test(
         "
-fn process<T>(data list<T>) list<T>: data
+fn process<T>(data List<T>) List<T>: data
 ",
         vec![func("process")
             .generics(vec![generic_type("T", None)])
@@ -519,7 +521,7 @@ fn process<T>(data list<T>) list<T>: data
 fn test_function_with_trailing_comma_in_parameters() {
     parser_test(
         "
-fn my_func(a int, b string,)
+fn my_func(a int, b String,)
     // body
 ",
         vec![func("my_func")
@@ -572,7 +574,7 @@ fn test_toplevel_function_multiline_params() {
     parser_test(
         "
 fn create(
-    name string,
+    name String,
     age int,
     active bool
 )

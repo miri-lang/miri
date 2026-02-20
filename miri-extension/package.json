@@ -1,0 +1,35 @@
+{
+    "name": "miri-language",
+    "displayName": "Miri Language Support",
+    "description": "Syntax highlighting for the Miri programming language.",
+    "version": "0.1.0",
+    "publisher": "my-miri-extension",
+    "engines": {
+        "vscode": "^1.70.0"
+    },
+    "categories": [
+        "Programming Languages"
+    ],
+    "contributes": {
+        "languages": [
+            {
+                "id": "miri",
+                "aliases": [
+                    "Miri",
+                    "miri"
+                ],
+                "extensions": [
+                    ".mi"
+                ],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "miri",
+                "scopeName": "source.miri",
+                "path": "./syntaxes/miri.tmLanguage.json"
+            }
+        ]
+    }
+}

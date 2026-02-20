@@ -70,11 +70,11 @@ i8, i16, i32, i64    // signed integers
 u8, u16, u32, u64    // unsigned integers
 float                // floating point, size depends on the CPU
 f32, f64             // specific float sizes
-string               // string
+String               // string
 bool                 // boolean
 [int]                // list of ints
-{string: float}      // map
-(int, string)        // tuple
+{String: float}      // map
+(int, String)        // tuple
 {int}                // set
 Type?                // nullable type
 :symbol              // symbol
@@ -84,7 +84,7 @@ Type?                // nullable type
 
 ```miri
 type MyInt is int
-type ID is string
+type ID is String
 type Callback is fn(int) int
 ```
 
@@ -111,7 +111,7 @@ fn identity<T>(x T) T
 ### Async & GPU
 
 ```miri
-async fn fetchData() string
+async fn fetchData() String
     // ...
 
 gpu fn compute(data [float]) [float]
@@ -192,7 +192,7 @@ forever: print("Spinning")
 
 ```miri
 let l1 = [1, 2, 3]
-let l2 list<string> = ["a", "b", "c"]
+let l2 List<String> = ["a", "b", "c"]
 let first = l1[0]
 let last = l1[-1]
 let sublist = l2[1..3]
@@ -202,7 +202,7 @@ let sublist = l2[1..3]
 
 ```miri
 let m1 = {"a": 1, "b": 2}
-let m2 map<int, string> = {1: "one", 2: "two"}
+let m2 Map<int, String> = {1: "one", 2: "two"}
 let val = m1["a"]
 ```
 
@@ -210,7 +210,7 @@ let val = m1["a"]
 
 ```miri
 let t1 = (1, "hello")
-let t2 tuple<int, string> = (2, "world")
+let t2 Tuple<int, String> = (2, "world")
 let num = t1[0]
 ```
 
@@ -218,7 +218,7 @@ let num = t1[0]
 
 ```miri
 let s1 = {1, 2, 3}
-let s2 set<string> = {"a", "b", "c"}
+let s2 Set<String> = {"a", "b", "c"}
 ```
 
 ---
@@ -302,7 +302,7 @@ enum Color
 Inline style:
 
 ```miri
-enum Status: Ok, Error(string)
+enum Status: Ok, Error(String)
 ```
 
 ---

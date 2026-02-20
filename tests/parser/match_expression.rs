@@ -493,7 +493,7 @@ match c
 fn test_match_enum_with_binding() {
     parser_test(
         "
-enum Color: Red(string), Green(string), Blue(string)
+enum Color: Red(String), Green(String), Blue(String)
 let c = Color.Red('#ff0000')
 match c
     Color.Red(x): x

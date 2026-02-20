@@ -62,6 +62,12 @@ pub enum TypeKind {
     Boolean,
     /// Symbol type.
     Symbol,
+    /// Raw pointer type (platform-width, opaque).
+    ///
+    /// Used in runtime/intrinsic function declarations and private class
+    /// fields for type-erased FFI. Maps to the target's pointer width
+    /// (e.g., I64 on 64-bit, I32 on 32-bit).
+    RawPtr,
     /// List type (e.g., `[i32]`).
     List(Box<Expression>),
     /// Array type (e.g., `[i32; 4]`).
@@ -133,6 +139,7 @@ impl TypeKind {
             | TypeKind::F64
             | TypeKind::Boolean
             | TypeKind::Symbol
+            | TypeKind::RawPtr
             | TypeKind::Void
             | TypeKind::Error => true,
             // Linear types are never Copy
@@ -181,14 +188,15 @@ impl fmt::Display for TypeKind {
             TypeKind::Float => write!(f, "float"),
             TypeKind::F32 => write!(f, "f32"),
             TypeKind::F64 => write!(f, "f64"),
-            TypeKind::String => write!(f, "string"),
-            TypeKind::Boolean => write!(f, "boolean"),
+            TypeKind::String => write!(f, "String"),
+            TypeKind::Boolean => write!(f, "bool"),
             TypeKind::Symbol => write!(f, "symbol"),
-            TypeKind::List(inner) => write!(f, "list({})", inner.node),
-            TypeKind::Array(inner, size) => write!(f, "array({}, {})", inner.node, size.node),
-            TypeKind::Map(k, v) => write!(f, "map({}, {})", k.node, v.node),
+            TypeKind::RawPtr => write!(f, "RawPtr"),
+            TypeKind::List(inner) => write!(f, "List({})", inner.node),
+            TypeKind::Array(inner, size) => write!(f, "Array({}, {})", inner.node, size.node),
+            TypeKind::Map(k, v) => write!(f, "Map({}, {})", k.node, v.node),
             TypeKind::Tuple(elements) => {
-                write!(f, "tuple(")?;
+                write!(f, "Tuple(")?;
                 for (i, e) in elements.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
@@ -197,11 +205,11 @@ impl fmt::Display for TypeKind {
                 }
                 write!(f, ")")
             }
-            TypeKind::Set(inner) => write!(f, "set({})", inner.node),
-            TypeKind::Result(ok, err) => write!(f, "result({}, {})", ok.node, err.node),
-            TypeKind::Future(inner) => write!(f, "future({})", inner.node),
+            TypeKind::Set(inner) => write!(f, "Set({})", inner.node),
+            TypeKind::Result(ok, err) => write!(f, "Result({}, {})", ok.node, err.node),
+            TypeKind::Future(inner) => write!(f, "Future({})", inner.node),
             TypeKind::Function(_, params, ret) => {
-                write!(f, "function(")?;
+                write!(f, "Function(")?;
                 for (i, p) in params.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;

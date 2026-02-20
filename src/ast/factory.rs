@@ -459,6 +459,21 @@ pub fn var(
     }
 }
 
+/// Creates a compile-time constant declaration structure.
+pub fn const_variable(
+    name: &str,
+    typ: Option<Box<Expression>>,
+    init: Option<Box<Expression>>,
+) -> VariableDeclaration {
+    VariableDeclaration {
+        name: name.into(),
+        typ,
+        initializer: init,
+        declaration_type: VariableDeclarationType::Constant,
+        is_shared: false,
+    }
+}
+
 /// Creates a conditional expression (ternary or if-else expr).
 pub fn conditional(
     then: Expression,
@@ -875,6 +890,11 @@ pub fn type_symbol() -> Type {
     make_type(TypeKind::Symbol)
 }
 
+/// Creates a `RawPtr` type (platform-width opaque pointer).
+pub fn type_rawptr() -> Type {
+    make_type(TypeKind::RawPtr)
+}
+
 /// Creates a type declaration expression (e.g., `T extends Number`).
 pub fn type_declaration_expression(
     name: Expression,
@@ -1285,6 +1305,21 @@ pub fn abstract_function_declaration(
         return_type,
         None,
         properties,
+    ))
+}
+
+/// Creates a runtime function declaration (extern binding to a runtime library).
+pub fn runtime_function_declaration(
+    runtime: common::RuntimeKind,
+    name: &str,
+    parameters: Vec<Parameter>,
+    return_type: Option<Box<Expression>>,
+) -> Statement {
+    stmt(StatementKind::RuntimeFunctionDeclaration(
+        runtime,
+        name.into(),
+        parameters,
+        return_type,
     ))
 }
 

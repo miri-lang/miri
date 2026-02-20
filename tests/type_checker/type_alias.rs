@@ -235,6 +235,7 @@ identity(5)
 
 #[test]
 fn test_type_parameter_constrained_extends() {
+    // TODO: should this be allowed?
     type_checker_test(
         "
 class Animal
@@ -286,6 +287,7 @@ type A, B, C
 
 #[test]
 fn test_protected_type_alias() {
+    // TODO: types should be just private or public. Protected is not needed.
     type_checker_test(
         "
 protected type InternalInt is int

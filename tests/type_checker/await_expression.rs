@@ -8,7 +8,7 @@ use miri::ast::factory::*;
 fn test_await_future_variable() {
     type_checker_expr_type_test(
         "
-let f future<int>
+let f Future<int>
 await f
 ",
         type_int(),
@@ -19,7 +19,7 @@ await f
 fn test_await_nested_future() {
     type_checker_expr_type_test(
         "
-let f future<future<string>>
+let f Future<Future<String>>
 await await f
 ",
         type_string(),
@@ -41,7 +41,7 @@ await x
 fn test_await_in_expression() {
     type_checker_expr_type_test(
         "
-let f future<int>
+let f Future<int>
 (await f) + 1
 ",
         type_int(),
@@ -52,8 +52,8 @@ let f future<int>
 fn test_await_function_call() {
     type_checker_expr_type_test(
         "
-fn get_future() future<int>
-    let f future<int>
+fn get_future() Future<int>
+    let f Future<int>
     return f
 
 await get_future()
@@ -66,7 +66,7 @@ await get_future()
 fn test_await_list_future() {
     type_checker_expr_type_test(
         "
-let f future<[int]>
+let f Future<List<int>>
 await f
 ",
         type_list(type_int()),
@@ -77,7 +77,7 @@ await f
 fn test_await_map_future() {
     type_checker_expr_type_test(
         "
-let f future<map<string, int>>
+let f Future<Map<String, int>>
 await f
 ",
         type_map(type_string(), type_int()),
@@ -88,7 +88,7 @@ await f
 fn test_await_void_future() {
     type_checker_expr_type_test(
         "
-let f future<void>
+let f Future<void>
 await f
 ",
         type_custom("void", None),
@@ -99,7 +99,7 @@ await f
 fn test_await_nullable_future() {
     type_checker_expr_type_test(
         "
-let f future<int?>
+let f Future<int?>
 await f
 ",
         type_null(type_int()),
@@ -111,9 +111,9 @@ fn test_await_custom_type() {
     type_checker_expr_type_test(
         "
 struct User
-    name string
+    name String
 
-let f future<User>
+let f Future<User>
 await f
 ",
         type_custom("User", None),
@@ -125,10 +125,10 @@ fn test_await_in_async_function() {
     // Await inside an async function is allowed
     type_checker_expr_type_test(
         "
-async fn process(f future<int>) int
+async fn process(f Future<int>) int
     await f
 
-let x future<int>
+let x Future<int>
 process(x)
 ",
         type_int(),
@@ -140,10 +140,10 @@ fn test_await_in_non_async_function_error() {
     // Await inside a non-async function is not allowed
     type_checker_error_test(
         "
-fn process(f future<int>) int
+fn process(f Future<int>) int
     await f
 
-let x future<int>
+let x Future<int>
 process(x)
 ",
         "'await' can only be used in async functions or at the top level",
@@ -154,7 +154,7 @@ process(x)
 fn test_await_in_conditional_expression() {
     type_checker_expr_type_test(
         "
-let f future<bool>
+let f Future<bool>
 1 if await f else 0
 ",
         type_int(),
@@ -165,7 +165,7 @@ let f future<bool>
 fn test_await_in_loop_condition() {
     type_checker_test(
         "
-let f future<bool>
+let f Future<bool>
 while await f
     break
 ",

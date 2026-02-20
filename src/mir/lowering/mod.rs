@@ -141,7 +141,7 @@ pub fn lower_function(
         // Emit guard checks for parameters with guards
         for param in params {
             if let Some(guard) = &param.guard {
-                if let Some(&param_local) = ctx.variable_map.get(&param.name) {
+                if let Some(&param_local) = ctx.variable_map.get(param.name.as_str()) {
                     if let ExpressionKind::Guard(guard_op, guard_value) = &guard.node {
                         let guard_val = lower_expression(&mut ctx, guard_value, None)?;
 

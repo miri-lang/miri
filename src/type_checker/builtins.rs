@@ -141,6 +141,7 @@ fn register_builtin_functions(scope: &mut HashMap<String, SymbolInfo>) {
         "print".to_string(),
         SymbolInfo {
             consumed: false,
+            is_constant: false,
             ty: crate::ast::factory::make_type(TypeKind::Function(
                 Some(vec![generic_decl]),
                 vec![Parameter {

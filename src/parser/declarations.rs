@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+use crate::ast::common::RuntimeKind;
 use crate::ast::factory as ast;
 use crate::ast::types::TypeDeclarationKind;
 use crate::ast::*;
@@ -16,16 +17,47 @@ impl<'source> Parser<'source> {
         visibility: MemberVisibility,
     ) -> Result<Statement, SyntaxError> {
         let statement = match &self._lookahead {
-            Some((Token::Let, _)) | Some((Token::Var, _)) => self.variable_statement(visibility)?,
+            Some((Token::Let, _)) | Some((Token::Var, _)) | Some((Token::Const, _)) => {
+                self.variable_statement(visibility)?
+            }
             Some((Token::Async, _)) | Some((Token::Fn, _)) | Some((Token::Gpu, _)) => {
                 self.function_declaration(visibility)?
+            }
+            Some((Token::Runtime, _)) => {
+                return Err(self.error_unexpected_lookahead_token(
+                    "a declaration (runtime functions cannot have visibility modifiers)",
+                ));
             }
             Some((Token::Enum, _)) => self.enum_statement(visibility)?,
             Some((Token::Struct, _)) => self.struct_statement(visibility)?,
             Some((Token::Type, _)) => self.type_statement(visibility)?,
+            Some((Token::Identifier, _)) => {
+                let name_expr = self.identifier()?;
+                let name = if let ExpressionKind::Identifier(n, _) = name_expr.node {
+                    n
+                } else {
+                    return Err(self.error_unexpected_token("identifier", "expression"));
+                };
+
+                let typ = self
+                    .type_expression()?
+                    .map(Box::new)
+                    .ok_or_else(|| self.error_missing_type_expression())?;
+
+                self.eat_statement_end()?;
+
+                let decl = VariableDeclaration {
+                    name,
+                    typ: Some(typ),
+                    initializer: None,
+                    declaration_type: VariableDeclarationType::Mutable,
+                    is_shared: false,
+                };
+                ast::variable_statement(vec![decl], visibility)
+            }
             _ => {
                 return Err(self.error_unexpected_lookahead_token(
-                    "let, var, async, def, gpu, enum, type or struct",
+                    "let, var, const, async, fn, gpu, runtime, enum, type, struct or field declaration",
                 ));
             }
         };
@@ -44,6 +76,54 @@ impl<'source> Parser<'source> {
         visibility: MemberVisibility,
     ) -> Result<Statement, SyntaxError> {
         self.function_declaration_with_context(visibility, false)
+    }
+
+    /*
+        RuntimeFunctionDeclaration
+            : 'runtime' [String] 'fn' Identifier '(' ParameterList ')' [ReturnType]
+            ;
+
+        Runtime functions are extern bindings to a runtime library.
+        They have no body, no generics, no modifiers, and are always
+        private to their declaring scope.
+
+        If the runtime name string is omitted, defaults to "core".
+    */
+    pub(crate) fn runtime_function_declaration(&mut self) -> Result<Statement, SyntaxError> {
+        self.eat_token(&Token::Runtime)?;
+
+        // Parse optional runtime name (string literal). Default to "core".
+        let runtime_kind = if self.match_lookahead_type(|t| matches!(t, Token::String)) {
+            let token = self.eat_token(&Token::String)?;
+            let raw = &self.source[token.1.start..token.1.end];
+            // Strip surrounding quotes
+            let name = &raw[1..raw.len() - 1];
+            RuntimeKind::from_name(name).ok_or_else(|| {
+                SyntaxError::new(
+                    SyntaxErrorKind::UnknownRuntime {
+                        name: name.to_string(),
+                    },
+                    token.1,
+                )
+            })?
+        } else {
+            RuntimeKind::Core
+        };
+
+        self.eat_token(&Token::Fn)?;
+
+        let name = self.parse_simple_identifier()?;
+        let parameters = self.function_params_expression()?;
+        let return_type = self.return_type_expression()?;
+
+        self.eat_statement_end()?;
+
+        Ok(ast::runtime_function_declaration(
+            runtime_kind,
+            &name,
+            parameters,
+            return_type,
+        ))
     }
 
     /// Parses a function declaration, optionally allowing abstract functions (no body).
@@ -644,7 +724,9 @@ impl<'source> Parser<'source> {
 
         // Parse based on token
         match &self._lookahead {
-            Some((Token::Let, _)) | Some((Token::Var, _)) => self.variable_statement(visibility),
+            Some((Token::Let, _)) | Some((Token::Var, _)) | Some((Token::Const, _)) => {
+                self.variable_statement(visibility)
+            }
             Some((Token::Async, _))
             | Some((Token::Fn, _))
             | Some((Token::Gpu, _))
@@ -652,8 +734,32 @@ impl<'source> Parser<'source> {
                 self.function_declaration_with_context(visibility, allow_abstract)
             }
             Some((Token::Type, _)) => self.type_statement(visibility),
+            Some((Token::Identifier, _)) => {
+                let name_expr = self.identifier()?;
+                let name = if let ExpressionKind::Identifier(n, _) = name_expr.node {
+                    n
+                } else {
+                    return Err(self.error_unexpected_token("identifier", "expression"));
+                };
+
+                let typ = self
+                    .type_expression()?
+                    .map(Box::new)
+                    .ok_or_else(|| self.error_missing_type_expression())?;
+
+                self.eat_statement_end()?;
+
+                let decl = VariableDeclaration {
+                    name,
+                    typ: Some(typ),
+                    initializer: None,
+                    declaration_type: VariableDeclarationType::Mutable,
+                    is_shared: false,
+                };
+                Ok(ast::variable_statement(vec![decl], visibility))
+            }
             _ => Err(self.error_unexpected_lookahead_token(
-                "class member (let, var, fn, async, gpu, or type)",
+                "class member (let, var, const, fn, async, gpu, type, or field declaration)",
             )),
         }
     }

@@ -51,6 +51,7 @@ fn test_all_keywords_in_various_contexts() {
         ("protected", Token::Protected),
         ("private", Token::Private),
         ("parallel", Token::Parallel),
+        ("runtime", Token::Runtime),
     ];
 
     for (keyword, token) in keyword_map {

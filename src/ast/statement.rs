@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::ast::common::{FunctionProperties, MemberVisibility, Parameter};
+use crate::ast::common::{FunctionProperties, MemberVisibility, Parameter, RuntimeKind};
 use crate::ast::expression::Expression;
 use crate::ast::node::IdNode;
 
@@ -27,6 +27,7 @@ pub enum WhileStatementType {
 pub enum VariableDeclarationType {
     Mutable,
     Immutable,
+    Constant,
 }
 
 /// Represents a variable declaration
@@ -131,6 +132,17 @@ pub enum StatementKind {
         Vec<Expression>,         // Parent traits (multiple, via extends)
         Vec<Statement>,          // Trait body (method signatures)
         MemberVisibility,        // Trait visibility
+    ),
+
+    /// A runtime function declaration (extern binding to a runtime library).
+    /// These functions have no body, no generics, no modifiers, and are always
+    /// private to their declaring scope.
+    /// (runtime_kind, name, params, return_type)
+    RuntimeFunctionDeclaration(
+        RuntimeKind,             // Which runtime this function lives in
+        String,                  // Function name (e.g., "miri_rt_string_new")
+        Vec<Parameter>,          // Parameters
+        Option<Box<Expression>>, // Return type
     ),
 }
 

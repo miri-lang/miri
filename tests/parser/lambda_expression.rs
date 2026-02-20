@@ -428,7 +428,7 @@ fn test_lambda_with_keyword_as_parameter_name() {
 #[test]
 fn test_lambda_with_trailing_comma_in_parameters() {
     parser_test(
-        "let f = fn (a int, b string,): a",
+        "let f = fn (a int, b String,): a",
         vec![variable_statement(
             vec![let_variable(
                 "f",

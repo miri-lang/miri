@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::integration::utils::{assert_returns, assert_runs};
+use crate::integration::utils::{assert_operation_outputs, assert_runs};
 
 // =============================================================================
 // Integer Type Tests
@@ -57,13 +57,17 @@ fn test_boolean_literals() {
 
 #[test]
 fn test_boolean_not() {
-    assert_returns("if not false: 1 else: 0", 1);
-    assert_returns("if not true: 1 else: 0", 0);
+    assert_operation_outputs(&[
+        ("if not false: 1 else: 0", "1"),
+        ("if not true: 1 else: 0", "0"),
+    ]);
 }
 
 #[test]
 fn test_boolean_comparisons() {
-    assert_returns("if true == true: 1 else: 0", 1);
-    assert_returns("if true != false: 1 else: 0", 1);
-    assert_returns("if false == false: 1 else: 0", 1);
+    assert_operation_outputs(&[
+        ("if true == true: 1 else: 0", "1"),
+        ("if true != false: 1 else: 0", "1"),
+        ("if false == false: 1 else: 0", "1"),
+    ]);
 }

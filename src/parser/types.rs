@@ -235,22 +235,23 @@ impl<'source> Parser<'source> {
             "float" => ast::make_type(TypeKind::Float),
             "f32" => ast::make_type(TypeKind::F32),
             "f64" => ast::make_type(TypeKind::F64),
-            "string" => ast::make_type(TypeKind::String),
+            "String" | "string" => ast::make_type(TypeKind::String),
             "bool" => ast::make_type(TypeKind::Boolean),
             "symbol" => ast::make_type(TypeKind::Symbol),
-            "result" => self.generic_two_types_expression(
+            "RawPtr" => ast::make_type(TypeKind::RawPtr),
+            "Result" | "result" => self.generic_two_types_expression(
                 "Ok result type",
                 "Error result type",
                 TypeKind::Result,
             )?,
-            "map" => {
+            "Map" => {
                 self.generic_two_types_expression("Map key type", "Map value type", TypeKind::Map)?
             }
-            "future" => self.generic_one_type_expression("Future result type", TypeKind::Future)?,
-            "array" => self.generic_array_type_expression()?,
-            "list" => self.generic_one_type_expression("List element type", TypeKind::List)?,
-            "set" => self.generic_one_type_expression("Set element type", TypeKind::Set)?,
-            "tuple" => {
+            "Future" => self.generic_one_type_expression("Future result type", TypeKind::Future)?,
+            "Array" => self.generic_array_type_expression()?,
+            "List" => self.generic_one_type_expression("List element type", TypeKind::List)?,
+            "Set" => self.generic_one_type_expression("Set element type", TypeKind::Set)?,
+            "Tuple" => {
                 let inner = self.multiple_element_type_expressions(
                     "Tuple item type",
                     &Token::LessThan,

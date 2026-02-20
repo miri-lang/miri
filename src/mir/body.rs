@@ -215,7 +215,7 @@ impl fmt::Display for StorageClass {
 pub struct LocalDecl {
     pub ty: Type,
     pub span: Span,
-    pub name: Option<Rc<String>>,
+    pub name: Option<Rc<str>>,
     pub is_user_variable: bool,
     pub storage_class: StorageClass,
 }

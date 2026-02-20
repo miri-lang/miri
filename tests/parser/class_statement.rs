@@ -183,7 +183,7 @@ fn test_class_extends() {
     class_statement_test(
         "
 class Dog extends Animal
-    let name string
+    let name String
 ",
         identifier("Dog"),
         None,
@@ -252,7 +252,7 @@ fn test_class_extends_and_implements() {
     class_statement_test(
         "
 class Dog extends Animal implements Trainable
-    let name string
+    let name String
 ",
         identifier("Dog"),
         None,
@@ -419,13 +419,6 @@ fn test_super_method_with_args() {
 }
 
 #[test]
-fn test_error_class_no_body() {
-    // This should actually succeed with empty body according to our implementation
-    // But if we require at least one member, uncomment below
-    // parser_error_test("class Empty", &SyntaxErrorKind::...);
-}
-
-#[test]
 fn test_error_class_implements_before_extends() {
     parser_error_test(
         "
@@ -447,7 +440,8 @@ class Point
     if x
 ",
         &SyntaxErrorKind::UnexpectedToken {
-            expected: "class member (let, var, fn, async, gpu, or type)".to_string(),
+            expected: "class member (let, var, const, fn, async, gpu, type, or field declaration)"
+                .to_string(),
             found: "if".to_string(),
         },
     );
@@ -461,7 +455,7 @@ fn test_abstract_class_basic() {
     abstract_class_statement_test(
         "
 abstract class Shape
-    let name string
+    let name String
 ",
         identifier("Shape"),
         None,
@@ -511,7 +505,7 @@ fn test_abstract_class_with_concrete_method() {
     abstract_class_statement_test(
         "
 abstract class Shape
-    fn describe() string
+    fn describe() String
         \"A shape\"
 ",
         identifier("Shape"),
@@ -541,9 +535,9 @@ fn test_abstract_class_mixed_members() {
     abstract_class_statement_test(
         "
 abstract class Animal
-    let name string
+    let name String
     var age int
-    fn speak() string
+    fn speak() String
     fn sleep()
         x
 ",
@@ -596,7 +590,7 @@ fn test_abstract_class_extends() {
     abstract_class_statement_test(
         "
 abstract class Dog extends Animal
-    fn bark() string
+    fn bark() String
 ",
         identifier("Dog"),
         None,
@@ -649,7 +643,7 @@ fn test_abstract_class_extends_and_implements() {
         "
 abstract class Service extends BaseService implements Callable, Serializable
     fn execute()
-    fn serialize() string
+    fn serialize() String
 ",
         identifier("Service"),
         None,
@@ -782,7 +776,7 @@ fn test_abstract_class_multiple_abstract_methods() {
     abstract_class_statement_test(
         "
 abstract class Repository
-    fn findAll() list<int>
+    fn findAll() List<int>
     fn findById(id int) int
     fn save(entity int)
     fn delete(id int)

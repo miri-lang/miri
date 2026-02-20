@@ -215,6 +215,38 @@ pub fn type_checker_vars_type_test(source: &str, expected_types: Vec<(&str, Type
         }
     }
 }
+pub fn type_checker_const_type_test(source: &str, expected_types: Vec<(&str, Type)>) {
+    let pipeline = Pipeline::new();
+    let result = match pipeline.frontend(source) {
+        Ok(res) => res,
+        Err(e) => panic!("Type check failed unexpectedly: {}", e),
+    };
+
+    for (var_name, expected_type) in expected_types {
+        let actual_type = if let Some(ty) = result.type_checker.get_variable_type(var_name) {
+            Some(ty.clone())
+        } else {
+            find_variable_type_in_statements(&result.ast.body, var_name, &result.type_checker)
+        };
+
+        if let Some(ty) = actual_type {
+            assert_eq!(
+                &ty, &expected_type,
+                "Type mismatch for constant '{}'",
+                var_name
+            );
+
+            // Also verify it's a constant
+            assert!(
+                result.type_checker.is_constant(var_name),
+                "Variable '{}' should be a constant",
+                var_name
+            );
+        } else {
+            panic!("Constant '{}' not found or has no initializer", var_name);
+        }
+    }
+}
 
 pub fn type_checker_warning_test(source: &str, expected_warning: &str) {
     let pipeline = Pipeline::new();

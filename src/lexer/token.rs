@@ -62,6 +62,8 @@ pub enum Token {
     Let,
     #[token("var")]
     Var,
+    #[token("const")]
+    Const,
     #[token("or")]
     Or,
     #[token("and")]
@@ -116,6 +118,8 @@ pub enum Token {
     Local,
     #[token("abstract")]
     Abstract,
+    #[token("runtime")]
+    Runtime,
 
     // Symbols and Operators
     #[token(";")]

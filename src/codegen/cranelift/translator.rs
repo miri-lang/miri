@@ -24,6 +24,8 @@ use cranelift_codegen::ir::{
 };
 use cranelift_codegen::isa::{CallConv, TargetIsa};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
+use cranelift_module::{Linkage, Module};
+use cranelift_object::ObjectModule;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -42,6 +44,18 @@ pub struct FunctionTranslator {
     local_types: Vec<Type>,
     /// Type definitions from the type checker (for layout computation).
     type_definitions: HashMap<String, TypeDefinition>,
+}
+
+/// Context for module-level resources during translation.
+struct ModuleCtx<'a> {
+    module: &'a mut ObjectModule,
+    string_literals: &'a mut HashMap<String, String>,
+}
+
+/// Context for type information during translation.
+struct TypeCtx<'a> {
+    local_types: &'a [Type],
+    type_definitions: &'a HashMap<String, TypeDefinition>,
 }
 
 impl FunctionTranslator {
@@ -67,7 +81,12 @@ impl FunctionTranslator {
     }
 
     /// Translate a MIR function body to Cranelift IR.
-    pub fn translate(&mut self, body: &Body) -> Result<(), String> {
+    pub fn translate(
+        &mut self,
+        body: &Body,
+        module: &mut ObjectModule,
+        string_literals: &mut HashMap<String, String>,
+    ) -> Result<(), String> {
         // Build the function signature
         self.build_signature(body)?;
 
@@ -118,27 +137,30 @@ impl FunctionTranslator {
             let block = blocks[&BasicBlock(idx)];
             builder.switch_to_block(block);
 
+            let mut module_ctx = ModuleCtx {
+                module,
+                string_literals,
+            };
+            let type_ctx = TypeCtx {
+                local_types: &self.local_types,
+                type_definitions: &self.type_definitions,
+            };
+
             // Translate all statements
             for stmt in &block_data.statements {
-                Self::translate_statement(
-                    &mut builder,
-                    stmt,
-                    &locals,
-                    &self.local_types,
-                    &self.type_definitions,
-                )?;
+                Self::translate_statement(&mut builder, &mut module_ctx, stmt, &locals, &type_ctx)?;
             }
 
             // Translate the terminator
             if let Some(ref terminator) = block_data.terminator {
                 Self::translate_terminator(
                     &mut builder,
+                    &mut module_ctx,
                     terminator,
                     body,
                     &locals,
                     &blocks,
-                    &self.local_types,
-                    &self.type_definitions,
+                    &type_ctx,
                 )?;
             }
         }
@@ -190,14 +212,14 @@ impl FunctionTranslator {
     /// Translate a MIR statement.
     fn translate_statement(
         builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
         stmt: &Statement,
         locals: &HashMap<Local, Variable>,
-        local_types: &[Type],
-        type_definitions: &HashMap<String, TypeDefinition>,
+        type_ctx: &TypeCtx,
     ) -> Result<(), String> {
         match &stmt.kind {
             StatementKind::IncRef(place) => {
-                let ptr = Self::read_place(builder, place, locals, local_types, type_definitions)?;
+                let ptr = Self::read_place(builder, place, locals, type_ctx)?;
                 // For now, assume ptr points to data preceded by 8-byte refcount
                 // Header is at ptr - 8
 
@@ -218,7 +240,7 @@ impl FunctionTranslator {
                 );
             }
             StatementKind::DecRef(place) => {
-                let ptr = Self::read_place(builder, place, locals, local_types, type_definitions)?;
+                let ptr = Self::read_place(builder, place, locals, type_ctx)?;
                 let header_ptr = builder.ins().iadd_imm(ptr, -8);
                 let rc = builder.ins().load(
                     cl_types::I64,
@@ -252,8 +274,9 @@ impl FunctionTranslator {
                 // Assuming a helper `trans.call_free(builder, header_ptr)`
                 // For this exercise, we will assume a placeholder helper or panic if not available
                 // But we can try to define it inline if we have the signature.
+                // But we can try to define it inline if we have the signature.
                 // See `call_libc` helper below.
-                Self::call_libc_free(builder, header_ptr)?;
+                Self::call_libc_free(builder, ctx, header_ptr)?;
 
                 builder.ins().jump(else_block, &[]);
                 builder.seal_block(then_block);
@@ -261,16 +284,15 @@ impl FunctionTranslator {
                 builder.seal_block(else_block);
             }
             StatementKind::Dealloc(place) => {
-                let ptr = Self::read_place(builder, place, locals, local_types, type_definitions)?;
+                let ptr = Self::read_place(builder, place, locals, type_ctx)?;
                 let header_ptr = builder.ins().iadd_imm(ptr, -8);
-                Self::call_libc_free(builder, header_ptr)?;
+                Self::call_libc_free(builder, ctx, header_ptr)?;
             }
             StatementKind::Assign(place, rvalue) => {
-                let mut value =
-                    Self::translate_rvalue(builder, rvalue, locals, local_types, type_definitions)?;
+                let mut value = Self::translate_rvalue(builder, ctx, rvalue, locals, type_ctx)?;
 
                 // Handle implicit casts (e.g. float -> f32, i8 -> i32)
-                let dest_ty = &local_types[place.local.0];
+                let dest_ty = &type_ctx.local_types[place.local.0];
                 let dest_cl_ty = translate_type(dest_ty);
                 let val_ty = builder.func.dfg.value_type(value);
 
@@ -278,14 +300,7 @@ impl FunctionTranslator {
                     value = Self::cast_value(builder, value, val_ty, dest_cl_ty)?;
                 }
 
-                Self::assign_to_place(
-                    builder,
-                    place,
-                    value,
-                    locals,
-                    local_types,
-                    type_definitions,
-                )?;
+                Self::assign_to_place(builder, place, value, locals, type_ctx)?;
             }
             StatementKind::Nop => {
                 // Nothing to do
@@ -300,27 +315,20 @@ impl FunctionTranslator {
     /// Translate a MIR rvalue to a Cranelift value.
     fn translate_rvalue(
         builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
         rvalue: &Rvalue,
         locals: &HashMap<Local, Variable>,
-        local_types: &[Type],
-        type_definitions: &HashMap<String, TypeDefinition>,
+        type_ctx: &TypeCtx,
     ) -> Result<Value, String> {
         match rvalue {
             Rvalue::Allocate(size_op, _, _) => {
-                // Ignore align for now, standard malloc alignment is usually sufficient
-                let size = Self::translate_operand(
-                    builder,
-                    size_op,
-                    locals,
-                    local_types,
-                    type_definitions,
-                )?;
+                let size = Self::translate_operand(builder, ctx, size_op, locals, type_ctx)?;
 
                 // Add 8 bytes for header
                 let total_size = builder.ins().iadd_imm(size, 8);
 
                 // Call malloc
-                let ptr = Self::call_libc_malloc(builder, total_size)?;
+                let ptr = Self::call_libc_malloc(builder, ctx, total_size)?;
 
                 // Init RC to 1
                 let one = builder.ins().iconst(cl_types::I64, 1);
@@ -332,33 +340,24 @@ impl FunctionTranslator {
                 Ok(builder.ins().iadd_imm(ptr, 8))
             }
             Rvalue::Use(operand) => {
-                Self::translate_operand(builder, operand, locals, local_types, type_definitions)
+                Self::translate_operand(builder, ctx, operand, locals, type_ctx)
             }
 
             Rvalue::BinaryOp(op, lhs, rhs) => {
-                let lhs_val =
-                    Self::translate_operand(builder, lhs, locals, local_types, type_definitions)?;
-                let rhs_val =
-                    Self::translate_operand(builder, rhs, locals, local_types, type_definitions)?;
+                let lhs_val = Self::translate_operand(builder, ctx, lhs, locals, type_ctx)?;
+                let rhs_val = Self::translate_operand(builder, ctx, rhs, locals, type_ctx)?;
                 Self::translate_binop(builder, *op, lhs_val, rhs_val)
             }
 
             Rvalue::UnaryOp(op, operand) => {
-                let val = Self::translate_operand(
-                    builder,
-                    operand,
-                    locals,
-                    local_types,
-                    type_definitions,
-                )?;
+                let val = Self::translate_operand(builder, ctx, operand, locals, type_ctx)?;
                 Self::translate_unop(builder, *op, val)
             }
 
             Rvalue::Ref(place) => {
-                let value =
-                    Self::read_place(builder, place, locals, local_types, type_definitions)?;
-                let ty = builder.func.dfg.value_type(value);
-                let size = ty.bytes();
+                let value = Self::read_place(builder, place, locals, type_ctx)?;
+                let val_ty = builder.func.dfg.value_type(value);
+                let size = val_ty.bytes();
                 let slot_data = StackSlotData::new(StackSlotKind::ExplicitSlot, size, 0);
                 let slot = builder.create_sized_stack_slot(slot_data);
                 let addr = builder.ins().stack_addr(cl_types::I64, slot, 0);
@@ -371,21 +370,13 @@ impl FunctionTranslator {
                     return Ok(builder.ins().iconst(cl_types::I64, 0));
                 }
                 if operands.len() == 1 {
-                    return Self::translate_operand(
-                        builder,
-                        &operands[0],
-                        locals,
-                        local_types,
-                        type_definitions,
-                    );
+                    return Self::translate_operand(builder, ctx, &operands[0], locals, type_ctx);
                 }
 
                 // Translate all operands first
                 let translated: Vec<Value> = operands
                     .iter()
-                    .map(|op| {
-                        Self::translate_operand(builder, op, locals, local_types, type_definitions)
-                    })
+                    .map(|op| Self::translate_operand(builder, ctx, op, locals, type_ctx))
                     .collect::<Result<_, _>>()?;
 
                 // Compute field offsets from operand types
@@ -413,13 +404,7 @@ impl FunctionTranslator {
             }
 
             Rvalue::Cast(operand, ty) => {
-                let value = Self::translate_operand(
-                    builder,
-                    operand,
-                    locals,
-                    local_types,
-                    type_definitions,
-                )?;
+                let value = Self::translate_operand(builder, ctx, operand, locals, type_ctx)?;
                 let dest_ty = translate_type(ty);
                 let src_ty = builder.func.dfg.value_type(value);
 
@@ -448,23 +433,24 @@ impl FunctionTranslator {
     /// Translate an operand to a Cranelift value.
     fn translate_operand(
         builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
         operand: &Operand,
         locals: &HashMap<Local, Variable>,
-        local_types: &[Type],
-        type_definitions: &HashMap<String, TypeDefinition>,
+        type_ctx: &TypeCtx,
     ) -> Result<Value, String> {
         match operand {
             Operand::Copy(place) | Operand::Move(place) => {
-                Self::read_place(builder, place, locals, local_types, type_definitions)
+                Self::read_place(builder, place, locals, type_ctx)
             }
 
-            Operand::Constant(constant) => Self::translate_constant(builder, constant),
+            Operand::Constant(constant) => Self::translate_constant(builder, ctx, constant),
         }
     }
 
     /// Translate a constant to a Cranelift value.
     fn translate_constant(
         builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
         constant: &Constant,
     ) -> Result<Value, String> {
         let cl_type = translate_type(&constant.ty);
@@ -512,10 +498,92 @@ impl FunctionTranslator {
                 Ok(builder.ins().iconst(cl_types::I8, 0))
             }
 
-            Literal::String(_) => {
-                // String literals are represented as pointers (I64)
-                // For now, return a placeholder null pointer
-                Ok(builder.ins().iconst(cl_types::I64, 0))
+            Literal::String(s) => {
+                // Get Bytes Symbol address (safe code relocation)
+                let next_idx = ctx.string_literals.len();
+                let params_symbol = ctx
+                    .string_literals
+                    .entry(s.clone())
+                    .or_insert_with(|| format!(".miri_str_{}", next_idx))
+                    .clone();
+
+                let bytes_symbol = format!("{}_bytes", params_symbol);
+                let bytes_id = ctx
+                    .module
+                    .declare_data(&bytes_symbol, Linkage::Export, false, false)
+                    .map_err(|e| format!("Error declaring string bytes: {}", e))?;
+                let bytes_gv = ctx.module.declare_data_in_func(bytes_id, builder.func);
+                let bytes_addr = builder.ins().symbol_value(cl_types::I64, bytes_gv);
+
+                // Use Lazy Init Cache
+                let cache_symbol = format!("{}_wrapper_cache", params_symbol);
+                let cache_id = ctx
+                    .module
+                    .declare_data(&cache_symbol, Linkage::Export, true, false)
+                    .map_err(|e| format!("Error declaring cache: {}", e))?;
+                let cache_gv = ctx.module.declare_data_in_func(cache_id, builder.func);
+                let cache_ptr = builder.ins().symbol_value(cl_types::I64, cache_gv);
+
+                // Load cache
+                let cached_val = builder
+                    .ins()
+                    .load(cl_types::I64, MemFlags::new(), cache_ptr, 0);
+
+                let zero = builder.ins().iconst(cl_types::I64, 0);
+                let is_zero = builder.ins().icmp(IntCC::Equal, cached_val, zero);
+
+                let init_block = builder.create_block();
+                let continue_block = builder.create_block();
+
+                builder
+                    .ins()
+                    .brif(is_zero, init_block, &[], continue_block, &[]);
+
+                builder.switch_to_block(init_block);
+
+                // 1. Alloc MiriString (24 bytes)
+                let ms_size = builder.ins().iconst(cl_types::I64, 24);
+                let ms_ptr = Self::call_libc_malloc(builder, ctx, ms_size)?;
+
+                // Init MiriString
+                // Offset 0: data ptr (bytes_addr)
+                builder.ins().store(MemFlags::new(), bytes_addr, ms_ptr, 0);
+                // Offset 8: len
+                let len_val = builder.ins().iconst(cl_types::I64, s.len() as i64);
+                builder.ins().store(MemFlags::new(), len_val, ms_ptr, 8);
+                // Offset 16: capacity (same as len for literals)
+                builder.ins().store(MemFlags::new(), len_val, ms_ptr, 16);
+
+                // 2. Alloc Wrapper (16 bytes)
+                let wrap_size = builder.ins().iconst(cl_types::I64, 16);
+                let wrapper_ptr = Self::call_libc_malloc(builder, ctx, wrap_size)?;
+
+                // Init Wrapper
+                // Header (RC = Immortal)
+                let header = builder.ins().iconst(cl_types::I64, 1 << 60);
+                builder.ins().store(MemFlags::new(), header, wrapper_ptr, 0);
+                // Inner Ptr -> ms_ptr
+                builder.ins().store(MemFlags::new(), ms_ptr, wrapper_ptr, 8);
+
+                // Update Cache
+                builder
+                    .ins()
+                    .store(MemFlags::new(), wrapper_ptr, cache_ptr, 0);
+
+                builder.ins().jump(continue_block, &[]);
+                // We must process init_block immediately or seal it later.
+                // Since this function flows sequentially, we seal it now.
+                builder.seal_block(init_block);
+
+                builder.switch_to_block(continue_block);
+                // Load from cache
+                let final_ptr_wrap =
+                    builder
+                        .ins()
+                        .load(cl_types::I64, MemFlags::new(), cache_ptr, 0);
+
+                // Return pointer to _inner (offset 8)
+                Ok(builder.ins().iadd_imm(final_ptr_wrap, 8))
             }
 
             Literal::Symbol(_) => {
@@ -668,9 +736,10 @@ impl FunctionTranslator {
         builder: &mut FunctionBuilder,
         place: &Place,
         locals: &HashMap<Local, Variable>,
-        local_types: &[Type],
-        type_definitions: &HashMap<String, TypeDefinition>,
+        type_ctx: &TypeCtx,
     ) -> Result<Value, String> {
+        let local_types = type_ctx.local_types;
+        let type_definitions = type_ctx.type_definitions;
         let var = locals
             .get(&place.local)
             .ok_or_else(|| format!("Unknown local: {:?}", place.local))?;
@@ -746,9 +815,10 @@ impl FunctionTranslator {
         place: &Place,
         value: Value,
         locals: &HashMap<Local, Variable>,
-        local_types: &[Type],
-        type_definitions: &HashMap<String, TypeDefinition>,
+        type_ctx: &TypeCtx,
     ) -> Result<(), String> {
+        let local_types = type_ctx.local_types;
+        let type_definitions = type_ctx.type_definitions;
         if place.projection.is_empty() {
             let var = locals
                 .get(&place.local)
@@ -813,12 +883,12 @@ impl FunctionTranslator {
     /// Translate a terminator.
     fn translate_terminator(
         builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
         terminator: &Terminator,
         body: &Body,
         locals: &HashMap<Local, Variable>,
         blocks: &HashMap<BasicBlock, Block>,
-        local_types: &[Type],
-        type_definitions: &HashMap<String, TypeDefinition>,
+        type_ctx: &TypeCtx,
     ) -> Result<(), String> {
         match &terminator.kind {
             TerminatorKind::Return => {
@@ -846,8 +916,7 @@ impl FunctionTranslator {
                 targets,
                 otherwise,
             } => {
-                let disc_val =
-                    Self::translate_operand(builder, discr, locals, local_types, type_definitions)?;
+                let disc_val = Self::translate_operand(builder, ctx, discr, locals, type_ctx)?;
 
                 let disc_ty = builder.func.dfg.value_type(disc_val);
 
@@ -887,14 +956,11 @@ impl FunctionTranslator {
 
             TerminatorKind::Call {
                 func,
-                args: _,
+                args,
                 destination,
                 target,
             } => {
                 // Handle function calls
-                // For now we handle built-in functions and skip others
-
-                // Get function name from operand
                 let func_name = match func {
                     Operand::Constant(c) => match &c.literal {
                         Literal::Symbol(name) => Some(name.clone()),
@@ -903,51 +969,44 @@ impl FunctionTranslator {
                     _ => None,
                 };
 
-                // Get destination variable and its type
-                let dest_var = locals
-                    .get(&destination.local)
-                    .ok_or_else(|| format!("Unknown destination local: {:?}", destination.local))?;
+                let func_name =
+                    func_name.ok_or_else(|| "Indirect calls not supported".to_string())?;
 
-                // Get the Cranelift type for this destination from the body
+                // Check if it's a runtime function
+                // For now, we assume all reachable calls in MIR are either internal or runtime functions.
+                // We'll try to find it in the module imports.
+                let mut sig = Signature::new(builder.func.signature.call_conv);
+                let mut arg_values = Vec::new();
+
+                for arg in args {
+                    let val = Self::translate_operand(builder, ctx, arg, locals, type_ctx)?;
+                    arg_values.push(val);
+                    sig.params
+                        .push(AbiParam::new(builder.func.dfg.value_type(val)));
+                }
+
                 let dest_ty = &body.local_decls[destination.local.0].ty;
-                let cl_ty = translate_type(dest_ty);
+                let cl_dest_ty = translate_type(dest_ty);
+                if dest_ty.kind != TypeKind::Void {
+                    sig.returns.push(AbiParam::new(cl_dest_ty));
+                }
 
-                // Create appropriate zero value for the destination type
-                let default_val = if cl_ty.is_int() {
-                    // Handle all integer types (I8, I16, I32, I64, I128)
-                    builder.ins().iconst(cl_ty, 0)
-                } else if cl_ty == cl_types::F64 {
-                    builder.ins().f64const(0.0)
-                } else if cl_ty == cl_types::F32 {
-                    builder.ins().f32const(0.0)
-                } else {
-                    // Default to I64 for unknown types
-                    builder.ins().iconst(cl_types::I64, 0)
-                };
+                let func_id = ctx
+                    .module
+                    .declare_function(&func_name, Linkage::Import, &sig)
+                    .map_err(|e| format!("Failed to declare function {}: {}", func_name, e))?;
+                let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+                let call = builder.ins().call(local_func, &arg_values);
 
-                match func_name.as_deref() {
-                    Some("print") => {
-                        // print is a no-op in compiled code (side effect only in interpreter)
-                        // Just assign unit value to destination and continue
-                        builder.def_var(*dest_var, default_val);
+                if dest_ty.kind != TypeKind::Void {
+                    let result = builder.inst_results(call)[0];
+                    let dest_var = locals.get(&destination.local).unwrap();
+                    builder.def_var(*dest_var, result);
+                }
 
-                        // Jump to continuation block
-                        if let Some(t) = target {
-                            let target_block = blocks[t];
-                            builder.ins().jump(target_block, &[]);
-                        }
-                    }
-                    _ => {
-                        // For other function calls, we currently don't support them in codegen
-                        // This would require module-level function references
-                        // For now, assign unit value and continue
-                        builder.def_var(*dest_var, default_val);
-
-                        if let Some(t) = target {
-                            let target_block = blocks[t];
-                            builder.ins().jump(target_block, &[]);
-                        }
-                    }
+                if let Some(t) = target {
+                    let target_block = blocks[t];
+                    builder.ins().jump(target_block, &[]);
                 }
             }
 
@@ -964,21 +1023,48 @@ impl FunctionTranslator {
     }
 
     /// Helper to call libc malloc.
-    fn call_libc_malloc(builder: &mut FunctionBuilder, _size: Value) -> Result<Value, String> {
-        let _sig = builder.import_signature(Signature {
+    fn call_libc_malloc(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        size: Value,
+    ) -> Result<Value, String> {
+        let name = "malloc";
+        let sig = Signature {
             params: vec![AbiParam::new(cl_types::I64)],
             returns: vec![AbiParam::new(cl_types::I64)],
-            call_conv: CallConv::SystemV, // Default to SystemV for now, should be target dependent
-        });
+            call_conv: builder.func.signature.call_conv,
+        };
 
-        Ok(builder.ins().iconst(cl_types::I64, 0)) // STUB for compilation check
+        let func_id = ctx
+            .module
+            .declare_function(name, Linkage::Import, &sig)
+            .map_err(|e| format!("Failed to declare malloc: {}", e))?;
+
+        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+        let call = builder.ins().call(local_func, &[size]);
+        Ok(builder.inst_results(call)[0])
     }
 
     /// Helper to call libc free.
-    fn call_libc_free(_builder: &mut FunctionBuilder, _ptr: Value) -> Result<(), String> {
-        // STUB
-        // let sig = ...
-        // builder.ins().call(...)
+    fn call_libc_free(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        ptr: Value,
+    ) -> Result<(), String> {
+        let name = "free";
+        let sig = Signature {
+            params: vec![AbiParam::new(cl_types::I64)],
+            returns: vec![],
+            call_conv: builder.func.signature.call_conv,
+        };
+
+        let func_id = ctx
+            .module
+            .declare_function(name, Linkage::Import, &sig)
+            .map_err(|e| format!("Failed to declare free: {}", e))?;
+
+        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+        builder.ins().call(local_func, &[ptr]);
         Ok(())
     }
 }

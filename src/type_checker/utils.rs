@@ -292,7 +292,7 @@ impl TypeChecker {
         }
     }
 
-    /// Resolves built-in type aliases like map<K,V>, list<T>, set<T>, range<T>.
+    /// Resolves built-in type aliases like Map<K,V>, List<T>, Set<T>, Range<T>.
     fn resolve_builtin_type_alias(
         &mut self,
         name: &str,

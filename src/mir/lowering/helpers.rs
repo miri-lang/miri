@@ -119,7 +119,7 @@ pub fn bind_pattern(
                 if let Pattern::Identifier(name) = p {
                     let ty = ctx.body.local_decls[subject_local.0].ty.clone();
                     let elem_local = ctx.push_temp(ty, span.clone());
-                    let name_rc = std::rc::Rc::new(name.clone());
+                    let name_rc: std::rc::Rc<str> = std::rc::Rc::from(name.as_str());
                     ctx.body.local_decls[elem_local.0].name = Some(name_rc.clone());
 
                     // Create Field projection for tuple element (static index)
@@ -147,7 +147,7 @@ pub fn bind_pattern(
                     // Note: Type info is from type checker, we use a generic type here
                     let ty = Type::new(TypeKind::Void, span.clone()); // Will be properly typed
                     let elem_local = ctx.push_temp(ty, span.clone());
-                    let name_rc = std::rc::Rc::new(name.clone());
+                    let name_rc: std::rc::Rc<str> = std::rc::Rc::from(name.as_str());
                     ctx.body.local_decls[elem_local.0].name = Some(name_rc.clone());
 
                     // Create Field projection for element (i+1 to skip discriminant at field 0)

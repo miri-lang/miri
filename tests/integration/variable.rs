@@ -2,7 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::integration::utils::{
-    assert_compiler_error, assert_returns, assert_returns_many, assert_runs, assert_runs_many,
+    assert_compiler_error, assert_runs, assert_runs_many, assert_runs_with_output,
 };
 
 #[test]
@@ -19,54 +19,58 @@ fn variable_declaration() {
 
 #[test]
 fn implicit_typing() {
-    assert_returns_many(&[
-        (
-            r#"
-            let x = 10
-            x
-            "#,
-            10,
-        ),
-        (
-            r#"
-            var x = 20
-            x
-            "#,
-            20,
-        ),
-    ]);
+    assert_runs_with_output(
+        r#"
+use system.io
+let x = 10
+println(x)
+        "#,
+        "10",
+    );
+    assert_runs_with_output(
+        r#"
+use system.io
+var x = 20
+println(x)
+        "#,
+        "20",
+    );
 }
 
 #[test]
 fn explicit_typing() {
-    assert_returns_many(&[
-        (
-            r#"
-            let x int = 42
-            x
-            "#,
-            42,
-        ),
-        (
-            r#"
-            var y i64 = 100
-            y
-            "#,
-            100,
-        ),
-    ]);
+    assert_runs_with_output(
+        r#"
+use system.io
+
+let x int = 42
+println(x)
+        "#,
+        "42",
+    );
+    assert_runs_with_output(
+        r#"
+use system.io
+
+var y i64 = 100
+println(y)
+        "#,
+        "100",
+    );
 }
 
 #[test]
 fn mutability_checks() {
-    assert_returns_many(&[(
+    assert_runs_with_output(
         r#"
+use system.io
+
 var x = 10
 x = 20
-x
+println(x)
         "#,
-        20,
-    )]);
+        "20",
+    );
 
     assert_compiler_error(
         r#"
@@ -79,26 +83,31 @@ x = 20
 
 #[test]
 fn scope_visibility() {
-    assert_returns(
+    assert_runs_with_output(
         r#"
-        let x = 10
-        if true:
-            let y = 20
-            x + y
-        else:
-            0
+use system.io
+
+let x = 10
+let result = if true
+    let y = 20
+    x + y
+else
+    0
+println(result)
         "#,
-        30,
+        "30",
     );
 
-    assert_returns(
+    assert_runs_with_output(
         r#"
-        let x = 10
-        if true:
-            let x = 20
-        x
+use system.io
+
+let x = 10
+if true
+    let x = 20
+println(x)
         "#,
-        10,
+        "10",
     );
 
     assert_compiler_error(

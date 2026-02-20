@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+pub mod array;
 pub mod await_expression;
 pub mod boolean;
 pub mod class;
 pub mod conditional_expression;
+pub mod constant;
 pub mod constructor;
 pub mod control_flow;
 pub mod float;
@@ -22,7 +24,9 @@ pub mod method_override;
 pub mod multiple_errors;
 pub mod mutability;
 pub mod nullable;
+pub mod rawptr;
 pub mod result;
+pub mod runtime_function;
 pub mod self_super;
 pub mod set;
 pub mod shadowing;

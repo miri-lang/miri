@@ -38,6 +38,20 @@ pub mod utils;
 
 use context::{Context, SymbolInfo, TypeDefinition, TypeRelation};
 
+/// Extracts a `Type` from an AST type expression without a full `TypeChecker`.
+///
+/// This is used by the pipeline to translate runtime function parameter/return
+/// types (which are always simple, non-generic types like `Int`, `Bool`,
+/// `RawPtr`) into `Type` objects suitable for codegen translation.
+///
+/// Returns `None` if the expression is not a type expression.
+pub fn resolve_type_name(expr: &Expression) -> Option<Type> {
+    match &expr.node {
+        ExpressionKind::Type(ty, _) => Some(*ty.clone()),
+        _ => None,
+    }
+}
+
 /// The TypeChecker struct is responsible for validating the type safety of the program.
 /// It traverses the AST, infers types for expressions, and ensures that operations
 /// and assignments are performed on compatible types.
@@ -55,6 +69,8 @@ pub struct TypeChecker {
     pub(crate) current_module: String,
     pub(crate) global_scope: HashMap<String, SymbolInfo>,
     pub(crate) global_type_definitions: HashMap<String, TypeDefinition>,
+    /// Set of modules that have been loaded to prevent cycles.
+    pub(crate) loaded_modules: std::collections::HashSet<String>,
 }
 
 impl Default for TypeChecker {
@@ -71,7 +87,6 @@ impl TypeChecker {
     /// - Built-in functions: `print<T>`
     pub fn new() -> Self {
         let (global_scope, global_type_definitions) = builtins::initialize_builtins();
-
         Self {
             types: HashMap::new(),
             errors: Vec::new(),
@@ -80,6 +95,7 @@ impl TypeChecker {
             current_module: "Main".to_string(),
             global_scope,
             global_type_definitions,
+            loaded_modules: std::collections::HashSet::new(),
         }
     }
 
@@ -96,6 +112,14 @@ impl TypeChecker {
     /// Returns the type of a global variable by name.
     pub fn get_variable_type(&self, name: &str) -> Option<&Type> {
         self.global_scope.get(name).map(|info| &info.ty)
+    }
+
+    /// Returns whether a global variable is a constant.
+    pub fn is_constant(&self, name: &str) -> bool {
+        self.global_scope
+            .get(name)
+            .map(|info| info.is_constant)
+            .unwrap_or(false)
     }
 
     /// Returns the global type definitions.
