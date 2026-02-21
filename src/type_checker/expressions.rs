@@ -72,8 +72,8 @@ impl TypeChecker {
             ExpressionKind::Identifier(name, _) => {
                 self.infer_identifier(name, expr.span.clone(), context)
             }
-            ExpressionKind::Assignment(lhs, _, rhs) => {
-                self.infer_assignment(lhs, rhs, expr.span.clone(), context)
+            ExpressionKind::Assignment(lhs, op, rhs) => {
+                self.infer_assignment(lhs, op, rhs, expr.span.clone(), context)
             }
             ExpressionKind::Call(func, args) => {
                 self.infer_call(func, args, expr.span.clone(), context)
@@ -364,6 +364,15 @@ impl TypeChecker {
         let left_ty = self.infer_expression(left, context);
         let right_ty = self.infer_expression(right, context);
 
+        if matches!(op, BinaryOp::Div | BinaryOp::Mod) {
+            if let ExpressionKind::Literal(lit) = &right.node {
+                if lit.is_zero() {
+                    self.report_error("Division by zero".to_string(), right.span.clone());
+                    return ast_factory::make_type(TypeKind::Error);
+                }
+            }
+        }
+
         match self.check_binary_op_types(&left_ty, op, &right_ty, context) {
             Ok(t) => t,
             Err(msg) => {
@@ -536,6 +545,7 @@ impl TypeChecker {
     fn infer_assignment(
         &mut self,
         lhs: &LeftHandSideExpression,
+        op: &AssignmentOp,
         rhs: &Expression,
         span: Span,
         context: &mut Context,
@@ -584,15 +594,24 @@ impl TypeChecker {
             }
         };
 
+        if matches!(op, AssignmentOp::AssignDiv | AssignmentOp::AssignMod) {
+            if let ExpressionKind::Literal(lit) = &rhs.node {
+                if lit.is_zero() {
+                    self.report_error("Division by zero".to_string(), rhs.span.clone());
+                }
+            }
+        }
+
         if !self.are_compatible(&lhs_type, &rhs_type, context) {
             self.report_error(
                 format!(
                     "Type mismatch in assignment: cannot assign {} to {}",
                     rhs_type, lhs_type
                 ),
-                span,
+                span.clone(),
             );
         }
+
         lhs_type
     }
 
@@ -1774,6 +1793,7 @@ impl TypeChecker {
                 false,
                 MemberVisibility::Public,
                 self.current_module.clone(),
+                None,
             ); // Parameters are immutable by default
         }
 
@@ -1980,6 +2000,7 @@ impl TypeChecker {
                     false,
                     MemberVisibility::Public,
                     self.current_module.clone(),
+                    None,
                 ); // Immutable binding by default
             }
             Pattern::Tuple(patterns) => {

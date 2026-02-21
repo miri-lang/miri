@@ -22,7 +22,7 @@ public class String
     runtime "core" fn miri_rt_string_contains(haystack String, needle String) int
     runtime "core" fn miri_rt_string_starts_with(s String, prefix String) int
     runtime "core" fn miri_rt_string_ends_with(s String, suffix String) int
-    runtime "core" fn miri_rt_string_replace(s String, from String, to String) String
+    runtime "core" fn miri_rt_string_replace(s String, old String, to String) String
     runtime "core" fn miri_rt_string_substring(s String, start int, end int) String
     runtime "core" fn miri_rt_string_equals(a String, b String) int
     runtime "core" fn miri_rt_string_clone(s String) String
@@ -79,8 +79,8 @@ public class String
         return miri_rt_string_trim_end(self)
 
     /// Returns a new string with all occurrences of `from` replaced with `to`.
-    public fn replace(from String, to String) String
-        return miri_rt_string_replace(self, from, to)
+    public fn replace(old String, to String) String
+        return miri_rt_string_replace(self, old, to)
 
     /// Returns a substring from byte index `start` to `end` (exclusive).
     ///
@@ -138,3 +138,4 @@ public class String
     /// Returns a clone of this string.
     fn clone() String
         return miri_rt_string_clone(self)
+

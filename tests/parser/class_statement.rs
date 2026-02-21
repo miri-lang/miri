@@ -440,8 +440,9 @@ class Point
     if x
 ",
         &SyntaxErrorKind::UnexpectedToken {
-            expected: "class member (let, var, const, fn, async, gpu, type, or field declaration)"
-                .to_string(),
+            expected:
+                "class member (let, var, const, fn, async, gpu, type, runtime, or field declaration)"
+                    .to_string(),
             found: "if".to_string(),
         },
     );

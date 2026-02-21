@@ -31,6 +31,12 @@ impl<'source> Parser<'source> {
             Some((Token::Enum, _)) => self.enum_statement(visibility)?,
             Some((Token::Struct, _)) => self.struct_statement(visibility)?,
             Some((Token::Type, _)) => self.type_statement(visibility)?,
+            Some((Token::Class, _)) => self.class_statement(visibility)?,
+            Some((Token::Trait, _)) => self.trait_statement(visibility)?,
+            Some((Token::Abstract, _)) => {
+                self.eat_token(&Token::Abstract)?;
+                self.abstract_class_statement(visibility)?
+            }
             Some((Token::Identifier, _)) => {
                 let name_expr = self.identifier()?;
                 let name = if let ExpressionKind::Identifier(n, _) = name_expr.node {
@@ -57,7 +63,7 @@ impl<'source> Parser<'source> {
             }
             _ => {
                 return Err(self.error_unexpected_lookahead_token(
-                    "let, var, const, async, fn, gpu, runtime, enum, type, struct or field declaration",
+                    "let, var, const, async, fn, gpu, runtime, enum, type, struct, class, trait, abstract or field declaration",
                 ));
             }
         };
@@ -734,6 +740,7 @@ impl<'source> Parser<'source> {
                 self.function_declaration_with_context(visibility, allow_abstract)
             }
             Some((Token::Type, _)) => self.type_statement(visibility),
+            Some((Token::Runtime, _)) => Ok(self.runtime_function_declaration()?),
             Some((Token::Identifier, _)) => {
                 let name_expr = self.identifier()?;
                 let name = if let ExpressionKind::Identifier(n, _) = name_expr.node {
@@ -745,7 +752,10 @@ impl<'source> Parser<'source> {
                 let typ = self
                     .type_expression()?
                     .map(Box::new)
-                    .ok_or_else(|| self.error_missing_type_expression())?;
+                    .ok_or_else(|| {
+                        println!("MissingTypeExpression after parsing identifier '{}', lookahead: {:?}", name, self._lookahead);
+                        self.error_missing_type_expression()
+                    })?;
 
                 self.eat_statement_end()?;
 
@@ -759,7 +769,7 @@ impl<'source> Parser<'source> {
                 Ok(ast::variable_statement(vec![decl], visibility))
             }
             _ => Err(self.error_unexpected_lookahead_token(
-                "class member (let, var, const, fn, async, gpu, type, or field declaration)",
+                "class member (let, var, const, fn, async, gpu, type, runtime, or field declaration)",
             )),
         }
     }

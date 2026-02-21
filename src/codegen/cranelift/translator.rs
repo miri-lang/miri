@@ -631,6 +631,8 @@ impl FunctionTranslator {
                 if is_float {
                     builder.ins().fdiv(lhs, rhs)
                 } else {
+                    // Check for division by zero
+                    builder.ins().trapz(rhs, TrapCode::INTEGER_DIVISION_BY_ZERO);
                     // Signed division
                     builder.ins().sdiv(lhs, rhs)
                 }
@@ -639,6 +641,8 @@ impl FunctionTranslator {
                 if is_float {
                     return Err("Floating point remainder not directly supported".to_string());
                 } else {
+                    // Check for division by zero
+                    builder.ins().trapz(rhs, TrapCode::INTEGER_DIVISION_BY_ZERO);
                     builder.ins().srem(lhs, rhs)
                 }
             }

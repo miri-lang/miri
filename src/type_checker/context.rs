@@ -28,7 +28,7 @@
 //! - [`AliasDefinition`]: Type aliases with optional generics
 //! - [`GenericDefinition`]: Generic type parameters with constraints
 
-use crate::ast::{types::*, MemberVisibility};
+use crate::ast::{literal::Literal, types::*, MemberVisibility};
 use crate::error::syntax::Span;
 use std::collections::{BTreeMap, HashMap};
 
@@ -42,6 +42,8 @@ pub struct SymbolInfo {
     pub module: String,
     /// Tracks if a linear resource has been consumed/moved.
     pub consumed: bool,
+    /// Optional known compile-time literal value for constants or simple variables
+    pub value: Option<Literal>,
 }
 
 /// Represents relationships between types (inheritance, interfaces, mixins).
@@ -218,6 +220,7 @@ impl Context {
         is_constant: bool,
         visibility: MemberVisibility,
         module: String,
+        value: Option<Literal>,
     ) {
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(
@@ -229,6 +232,7 @@ impl Context {
                     visibility,
                     module,
                     consumed: false,
+                    value,
                 },
             );
         }

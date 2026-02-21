@@ -9,6 +9,7 @@ pub mod conditional_expression;
 pub mod constant;
 pub mod constructor;
 pub mod control_flow;
+pub mod division_by_zero;
 pub mod float;
 pub mod function;
 pub mod generic_constraints;

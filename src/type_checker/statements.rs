@@ -255,6 +255,7 @@ impl TypeChecker {
                             is_constant: false,
                             visibility: MemberVisibility::Private,
                             module: self.current_module.clone(),
+                            value: None,
                         },
                     );
                 }
@@ -266,6 +267,7 @@ impl TypeChecker {
                     false,
                     MemberVisibility::Private,
                     self.current_module.clone(),
+                    None,
                 );
 
                 // Resolve parameter types to catch errors early
@@ -602,6 +604,7 @@ impl TypeChecker {
                         is_constant,
                         visibility: visibility.clone(),
                         module: self.current_module.clone(),
+                        value: None,
                     },
                 );
             }
@@ -613,6 +616,7 @@ impl TypeChecker {
                 is_constant,
                 visibility.clone(),
                 self.current_module.clone(),
+                None,
             );
         }
     }
@@ -930,6 +934,7 @@ impl TypeChecker {
                 false,
                 MemberVisibility::Public,
                 self.current_module.clone(),
+                None,
             );
         } else if decls.len() == 2 {
             if let TypeKind::Tuple(exprs) = &element_type.kind {
@@ -961,6 +966,7 @@ impl TypeChecker {
                         false,
                         MemberVisibility::Public,
                         self.current_module.clone(),
+                        None,
                     );
                     context.define(
                         decls[1].name.clone(),
@@ -969,6 +975,7 @@ impl TypeChecker {
                         false,
                         MemberVisibility::Public,
                         self.current_module.clone(),
+                        None,
                     );
                 } else {
                     self.report_error(
@@ -1060,6 +1067,7 @@ impl TypeChecker {
                     is_constant: false,
                     visibility: properties.visibility.clone(),
                     module: self.current_module.clone(),
+                    value: None,
                 },
             );
         }
@@ -1071,6 +1079,7 @@ impl TypeChecker {
             false,
             properties.visibility.clone(),
             self.current_module.clone(),
+            None,
         ); // Functions are immutable
 
         context.enter_scope();
@@ -1118,6 +1127,7 @@ impl TypeChecker {
                 false,
                 MemberVisibility::Public,
                 self.current_module.clone(),
+                None,
             ); // Parameters are immutable by default
 
             if let Some(guard) = &param.guard {
@@ -1199,6 +1209,7 @@ impl TypeChecker {
                 false,
                 MemberVisibility::Public,
                 self.current_module.clone(),
+                None,
             );
         }
 
@@ -1380,6 +1391,7 @@ impl TypeChecker {
                     is_constant: false,
                     visibility: visibility.clone(),
                     module: self.current_module.clone(),
+                    value: None,
                 },
             );
         }
@@ -1391,6 +1403,7 @@ impl TypeChecker {
             false,
             visibility.clone(),
             self.current_module.clone(),
+            None,
         );
     }
 
@@ -1498,6 +1511,7 @@ impl TypeChecker {
                     is_constant: false,
                     visibility: visibility.clone(),
                     module: self.current_module.clone(),
+                    value: None,
                 },
             );
         }
@@ -1509,6 +1523,7 @@ impl TypeChecker {
             false,
             visibility.clone(),
             self.current_module.clone(),
+            None,
         );
     }
 
@@ -2056,6 +2071,7 @@ impl TypeChecker {
                     is_constant: false,
                     visibility: visibility.clone(),
                     module: self.current_module.clone(),
+                    value: None,
                 },
             );
         }
@@ -2067,6 +2083,7 @@ impl TypeChecker {
             false,
             visibility.clone(),
             self.current_module.clone(),
+            None,
         );
 
         // PASS 2: Check method bodies (now class is registered)
@@ -2259,6 +2276,7 @@ impl TypeChecker {
                     is_constant: false,
                     visibility: visibility.clone(),
                     module: self.current_module.clone(),
+                    value: None,
                 },
             );
         }
@@ -2270,6 +2288,7 @@ impl TypeChecker {
             false,
             visibility.clone(),
             self.current_module.clone(),
+            None,
         );
     }
 

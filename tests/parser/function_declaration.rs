@@ -451,7 +451,7 @@ fn test_error_double_visibility_modifier() {
         "public private fn my_func()",
         &SyntaxErrorKind::UnexpectedToken {
             expected:
-                "let, var, const, async, fn, gpu, runtime, enum, type, struct or field declaration"
+                "let, var, const, async, fn, gpu, runtime, enum, type, struct, class, trait, abstract or field declaration"
                     .to_string(),
             found: "private".to_string(),
         },

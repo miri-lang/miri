@@ -386,6 +386,10 @@ impl<'source> Parser<'source> {
     }
 
     pub(crate) fn error_missing_type_expression(&self) -> SyntaxError {
+        println!(
+            "MissingTypeExpression at:\\n{:?}",
+            std::backtrace::Backtrace::capture()
+        );
         SyntaxError::new(
             SyntaxErrorKind::MissingTypeExpression,
             self.source.len()..self.source.len(),

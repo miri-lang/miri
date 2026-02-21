@@ -254,7 +254,7 @@ fn test_error_trait_invalid_member() {
 trait Invalid
     for x in y",
         &SyntaxErrorKind::UnexpectedToken {
-            expected: "class member (let, var, const, fn, async, gpu, type, or field declaration)"
+            expected: "class member (let, var, const, fn, async, gpu, type, runtime, or field declaration)"
                 .to_string(),
             found: "for".to_string(),
         },

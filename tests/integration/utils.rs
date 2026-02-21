@@ -45,7 +45,7 @@ pub fn assert_runs_with_output(code: &str, expected_output: &str) {
 pub fn assert_operation_outputs(operations: &[(&str, &str)]) {
     let statements = operations
         .iter()
-        .map(|(op, _)| format!("println({op})"))
+        .map(|(op, _)| format!("println(f'{{{op}}}')"))
         .collect::<Vec<_>>()
         .join("\n");
     let expected_output = operations

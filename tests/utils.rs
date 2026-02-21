@@ -29,7 +29,12 @@ fn exec_miri(command: &str, input: &str) -> CompilerResult {
     let path = file.path().to_str().unwrap().to_string();
 
     let mut cmd = miri_cmd();
-    let output = cmd.arg(command).arg(&path).output().unwrap();
+    let output = cmd
+        .env("RUST_BACKTRACE", "1")
+        .arg(command)
+        .arg(&path)
+        .output()
+        .unwrap();
 
     CompilerResult {
         success: output.status.success(),

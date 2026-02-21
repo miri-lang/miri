@@ -157,6 +157,7 @@ fn register_builtin_functions(scope: &mut HashMap<String, SymbolInfo>) {
             mutable: false,
             visibility: MemberVisibility::Public,
             module: "std".to_string(),
+            value: None,
         },
     );
 }
