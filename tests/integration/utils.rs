@@ -111,3 +111,18 @@ pub fn assert_runtime_error(code: &str, expected_error: &str) {
         );
     }
 }
+
+/// Assert that the code compiles but crashes at runtime (non-zero exit code or signal).
+///
+/// This is used for cases like hardware traps (e.g. division by zero on AArch64)
+/// where the process is killed by a signal rather than printing an error message.
+pub fn assert_runtime_crash(code: &str) {
+    let result = miri_run(code);
+
+    if result.success {
+        panic!(
+            "Expected program to crash at runtime, but it succeeded.\nOutput:\n{}",
+            result.output()
+        );
+    }
+}

@@ -633,6 +633,24 @@ pub fn lower_call(
         }
     }
 
+    // Detect print/println with generic (non-string) arguments.
+    // The built-in print<T>/println<T> generics accept any type but the
+    // runtime expects a *const MiriString.  When called with non-string args
+    // we wrap each arg in an f-string conversion so the codegen receives a
+    // proper MiriString pointer.
+    let is_print_generic = {
+        let fname = match &func.node {
+            ExpressionKind::Identifier(name, _) => Some(name.as_str()),
+            _ => None,
+        };
+        if let (Some(name), Some(ty)) = (fname, ctx.type_checker.get_type(func.id)) {
+            (name == "print" || name == "println")
+                && matches!(&ty.kind, TypeKind::Function(Some(gens), _, _) if !gens.is_empty())
+        } else {
+            false
+        }
+    };
+
     let func_op = lower_expression(ctx, func, None)?;
 
     // Try to get function type to check parameters
@@ -651,7 +669,25 @@ pub fn lower_call(
     for (i, arg) in args.iter().enumerate() {
         let op = lower_expression(ctx, arg, None)?;
 
-        let op = if let Some(params) = &param_types {
+        // For print<T>/println<T>, wrap non-string args in a FormattedString
+        // aggregate so the codegen converts them to MiriString pointers.
+        let op = if is_print_generic {
+            let op_ty = op.ty(&ctx.body);
+            if op_ty.kind != TypeKind::String {
+                let str_ty = Type::new(TypeKind::String, arg.span.clone());
+                let temp = ctx.push_temp(str_ty, arg.span.clone());
+                ctx.push_statement(crate::mir::Statement {
+                    kind: StatementKind::Assign(
+                        Place::new(temp),
+                        Rvalue::Aggregate(AggregateKind::FormattedString, vec![op]),
+                    ),
+                    span: arg.span.clone(),
+                });
+                Operand::Copy(Place::new(temp))
+            } else {
+                op
+            }
+        } else if let Some(params) = &param_types {
             if i < params.len() {
                 let target_ty = super::resolve_type(ctx.type_checker, &params[i].typ);
 

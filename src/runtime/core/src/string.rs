@@ -474,3 +474,35 @@ pub unsafe extern "C" fn miri_rt_string_clone(ptr: *const MiriString) -> *mut Mi
     let string = Box::new(MiriString::from_str(s));
     Box::into_raw(string)
 }
+
+// =============================================================================
+// Type-to-String Conversion Functions
+// =============================================================================
+
+/// Converts a 64-bit integer to its string representation.
+#[no_mangle]
+pub extern "C" fn miri_rt_int_to_string(value: i64) -> *mut MiriString {
+    let s = value.to_string();
+    let string = Box::new(MiriString::from_str(&s));
+    Box::into_raw(string)
+}
+
+/// Converts a 64-bit float to its string representation.
+#[no_mangle]
+pub extern "C" fn miri_rt_float_to_string(value: f64) -> *mut MiriString {
+    let s = if value.fract() == 0.0 && value.is_finite() {
+        format!("{:.1}", value)
+    } else {
+        value.to_string()
+    };
+    let string = Box::new(MiriString::from_str(&s));
+    Box::into_raw(string)
+}
+
+/// Converts a boolean (0 or 1) to its string representation ("true" or "false").
+#[no_mangle]
+pub extern "C" fn miri_rt_bool_to_string(value: i64) -> *mut MiriString {
+    let s = if value != 0 { "true" } else { "false" };
+    let string = Box::new(MiriString::from_str(s));
+    Box::into_raw(string)
+}

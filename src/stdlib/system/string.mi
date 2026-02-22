@@ -12,19 +12,19 @@ public class String
     runtime "core" fn miri_rt_string_new() String
     runtime "core" fn miri_rt_string_len(s String) int
     runtime "core" fn miri_rt_string_char_count(s String) int
-    runtime "core" fn miri_rt_string_is_empty(s String) int
+    runtime "core" fn miri_rt_string_is_empty(s String) bool
     runtime "core" fn miri_rt_string_concat(left String, right String) String
     runtime "core" fn miri_rt_string_to_lower(s String) String
     runtime "core" fn miri_rt_string_to_upper(s String) String
     runtime "core" fn miri_rt_string_trim(s String) String
     runtime "core" fn miri_rt_string_trim_start(s String) String
     runtime "core" fn miri_rt_string_trim_end(s String) String
-    runtime "core" fn miri_rt_string_contains(haystack String, needle String) int
-    runtime "core" fn miri_rt_string_starts_with(s String, prefix String) int
-    runtime "core" fn miri_rt_string_ends_with(s String, suffix String) int
+    runtime "core" fn miri_rt_string_contains(haystack String, needle String) bool
+    runtime "core" fn miri_rt_string_starts_with(s String, prefix String) bool
+    runtime "core" fn miri_rt_string_ends_with(s String, suffix String) bool
     runtime "core" fn miri_rt_string_replace(s String, old String, to String) String
     runtime "core" fn miri_rt_string_substring(s String, start int, end int) String
-    runtime "core" fn miri_rt_string_equals(a String, b String) int
+    runtime "core" fn miri_rt_string_equals(a String, b String) bool
     runtime "core" fn miri_rt_string_clone(s String) String
     runtime "core" fn miri_rt_string_free(s String)
 
@@ -52,7 +52,7 @@ public class String
     public fn size() int: miri_rt_string_len(self)
 
     /// Returns true if the string has no characters.
-    public fn is_empty() int: miri_rt_string_is_empty(self)
+    public fn is_empty() bool: miri_rt_string_is_empty(self)
 
     // =========================================================================
     // Transformations (return new strings)
@@ -119,17 +119,20 @@ public class String
     public fn concat(other String) String
         return miri_rt_string_concat(self, other)
 
-    /// Equality operator.
-    operator ==(other String) bool
-        return self.equals(other)
 
-    /// Inequality operator.
-    operator !=(other String) bool
-        return not self.equals(other)
+    // TODO: operators aren't supported yet
+    
+    /// Equality operator
+    // operator ==(other String) bool
+    //     return self.equals(other)
 
-    /// Concatenation operator.
-    operator +(other String) String
-        return self.concat(other)
+    // /// Inequality operator.
+    // operator !=(other String) bool
+    //     return not self.equals(other)
+
+    // /// Concatenation operator.
+    // operator +(other String) String
+    //     return self.concat(other)
 
     // =========================================================================
     // Internal

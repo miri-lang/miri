@@ -161,6 +161,13 @@ pub enum ExpressionKind {
 
     /// A super reference for calling parent class methods (e.g., `super.init()`).
     Super,
+
+    /// A block expression: a sequence of statements followed by a final expression.
+    /// Used for multi-statement blocks in if-expressions, e.g.:
+    /// let result = if true
+    ///     let y = 20
+    ///     x + y
+    Block(Vec<Statement>, Box<Expression>),
 }
 
 /// An expression node (wraps `ExpressionKind` with an ID and span).

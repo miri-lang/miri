@@ -71,6 +71,9 @@ pub struct TypeChecker {
     pub(crate) global_type_definitions: HashMap<String, TypeDefinition>,
     /// Set of modules that have been loaded to prevent cycles.
     pub(crate) loaded_modules: std::collections::HashSet<String>,
+    /// AST statements collected from imported modules.
+    /// These need to be included in MIR lowering and codegen.
+    pub imported_statements: Vec<Statement>,
 }
 
 impl Default for TypeChecker {
@@ -96,6 +99,7 @@ impl TypeChecker {
             global_scope,
             global_type_definitions,
             loaded_modules: std::collections::HashSet::new(),
+            imported_statements: Vec::new(),
         }
     }
 

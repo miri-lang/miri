@@ -40,6 +40,11 @@ impl TypeChecker {
             return result;
         }
 
+        // TypeKind::String and Custom("String") are the same type
+        if self.is_string_type(t1) && self.is_string_type(t2) {
+            return true;
+        }
+
         // Handle custom types (inheritance, interfaces)
         if let Some(result) = self.check_custom_type_compatibility(t1, t2, context) {
             return result;
@@ -563,5 +568,15 @@ impl TypeChecker {
             &expected_method.return_type,
             context,
         )
+    }
+
+    /// Returns `true` if the type represents a string, either the built-in
+    /// `TypeKind::String` or the class `TypeKind::Custom("String", _)`.
+    fn is_string_type(&self, ty: &Type) -> bool {
+        match &ty.kind {
+            TypeKind::String => true,
+            TypeKind::Custom(name, _) => name == "String",
+            _ => false,
+        }
     }
 }

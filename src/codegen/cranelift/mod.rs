@@ -89,7 +89,7 @@ impl Default for CraneliftOptions {
     fn default() -> Self {
         Self {
             opt_level: OptLevel::None,
-            pic: false,
+            pic: true,
         }
     }
 }
@@ -122,7 +122,7 @@ impl CraneliftBackend {
             .map_err(|e| CodegenError::TargetIsa(e.to_string()))?;
 
         settings_builder
-            .set("is_pic", "false")
+            .set("is_pic", "true")
             .map_err(|e| CodegenError::TargetIsa(e.to_string()))?;
 
         let flags = settings::Flags::new(settings_builder);

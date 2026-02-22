@@ -19,6 +19,7 @@ use super::control_flow::lower_call;
 use super::helpers::{
     bind_pattern, literal_to_u128, lower_as_return, lower_to_local, resolve_type,
 };
+use super::statement::lower_statement;
 
 pub fn lower_expression(
     ctx: &mut LoweringContext,
@@ -1295,9 +1296,13 @@ pub fn lower_expression(
                 span: subject.span.clone(),
             });
 
-            // Result type and temp
+            // Use dest if provided (DPS), otherwise create a temp
             let result_ty = resolve_type(ctx.type_checker, expr);
-            let result_local = ctx.push_temp(result_ty.clone(), expr.span.clone());
+            let result_local = if let Some(ref dest_place) = dest {
+                dest_place.local
+            } else {
+                ctx.push_temp(result_ty.clone(), expr.span.clone())
+            };
 
             // Create join block where all branches converge
             let join_bb = ctx.new_basic_block();
@@ -1582,8 +1587,13 @@ pub fn lower_expression(
             // Inline if/unless expression: `value if condition else other`
             // then_expr is returned if condition is true (or false for unless)
 
-            let result_ty = resolve_type(ctx.type_checker, expr);
-            let result_local = ctx.push_temp(result_ty, expr.span.clone());
+            // Use dest if provided (DPS), otherwise create a temp
+            let result_local = if let Some(ref dest_place) = dest {
+                dest_place.local
+            } else {
+                let result_ty = resolve_type(ctx.type_checker, expr);
+                ctx.push_temp(result_ty, expr.span.clone())
+            };
 
             // Evaluate condition first
             let cond_op = lower_expression(ctx, cond_expr, None)?;
@@ -1793,11 +1803,11 @@ pub fn lower_expression(
             let ty = Type::new(TypeKind::String, expr.span.clone());
             let temp = ctx.push_temp(ty, expr.span.clone());
 
-            // Create a list aggregate of parts - backend will concatenate
+            // Create a formatted string aggregate - backend will convert and concatenate
             ctx.push_statement(crate::mir::Statement {
                 kind: MirStatementKind::Assign(
                     Place::new(temp),
-                    Rvalue::Aggregate(AggregateKind::List, ops),
+                    Rvalue::Aggregate(AggregateKind::FormattedString, ops),
                 ),
                 span: expr.span.clone(),
             });
@@ -1971,6 +1981,13 @@ pub fn lower_expression(
                 "ImportPath expressions are only valid in use statements".to_string(),
                 expr.span.clone(),
             ))
+        }
+        ExpressionKind::Block(statements, final_expr) => {
+            // Block expression: lower statements, then the final expression is the value
+            for stmt in statements {
+                lower_statement(ctx, stmt)?;
+            }
+            lower_expression(ctx, final_expr, dest)
         }
     }
 }

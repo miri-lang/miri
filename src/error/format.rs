@@ -144,6 +144,21 @@ pub fn format_diagnostic(
     level: &str,
     help: Option<&str>,
 ) -> String {
+    // If the span points outside the user's source (e.g. from a stdlib module),
+    // format the diagnostic without source context to avoid panicking.
+    if span.start >= source.len() {
+        let level_color = if level == "warning" {
+            "\x1b[33m"
+        } else {
+            "\x1b[31m"
+        };
+        let mut out = format!("\x1b[1m{level_color}{level}: \x1b[0m{message}\n");
+        if let Some(h) = help {
+            out.push_str(&format!("  = help: {h}\n"));
+        }
+        return out;
+    }
+
     let (line_num, col_num, line_str) = find_line_info(source, span.start);
     let len = if span.end > span.start {
         span.end - span.start

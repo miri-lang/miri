@@ -379,6 +379,9 @@ impl TypeChecker {
             self.check_statement(stmt, context);
         }
 
+        // Collect imported statements for MIR lowering and codegen
+        self.imported_statements.extend(module_ast.body);
+
         self.current_module = old_module;
     }
 
@@ -1057,30 +1060,42 @@ impl TypeChecker {
             return_type_expr.clone(),
         ));
 
-        if context.scopes.len() == 1 {
-            self.global_scope.insert(
-                name.to_string(),
-                super::context::SymbolInfo {
-                    consumed: false,
-                    ty: func_type.clone(),
-                    mutable: false,
-                    is_constant: false,
-                    visibility: properties.visibility.clone(),
-                    module: self.current_module.clone(),
-                    value: None,
-                },
-            );
-        }
+        // Don't let imported non-generic functions shadow built-in generic ones
+        // (e.g. system.io's print(String) should not override the built-in print<T>)
+        let is_shadowing_builtin_generic = if let Some(existing) = self.global_scope.get(name) {
+            existing.module == "std"
+                && matches!(&existing.ty.kind, TypeKind::Function(Some(gens), _, _) if !gens.is_empty())
+                && self.current_module != "Main"
+        } else {
+            false
+        };
 
-        context.define(
-            name.to_string(),
-            func_type,
-            false,
-            false,
-            properties.visibility.clone(),
-            self.current_module.clone(),
-            None,
-        ); // Functions are immutable
+        if !is_shadowing_builtin_generic {
+            if context.scopes.len() == 1 {
+                self.global_scope.insert(
+                    name.to_string(),
+                    super::context::SymbolInfo {
+                        consumed: false,
+                        ty: func_type.clone(),
+                        mutable: false,
+                        is_constant: false,
+                        visibility: properties.visibility.clone(),
+                        module: self.current_module.clone(),
+                        value: None,
+                    },
+                );
+            }
+
+            context.define(
+                name.to_string(),
+                func_type,
+                false,
+                false,
+                properties.visibility.clone(),
+                self.current_module.clone(),
+                None,
+            ); // Functions are immutable
+        }
 
         context.enter_scope();
 
@@ -1736,6 +1751,45 @@ impl TypeChecker {
                     // Save for second pass
                     method_statements.push(stmt);
                 }
+                StatementKind::RuntimeFunctionDeclaration(
+                    _runtime,
+                    rt_name,
+                    params,
+                    return_type_expr,
+                ) => {
+                    // Runtime functions inside a class are extern bindings used
+                    // by the class methods. Register them in scope so calls
+                    // type-check, and also in the global scope for codegen.
+                    let func_type = make_type(TypeKind::Function(
+                        None,
+                        params.to_vec(),
+                        return_type_expr.clone(),
+                    ));
+
+                    self.global_scope.insert(
+                        rt_name.to_string(),
+                        super::context::SymbolInfo {
+                            consumed: false,
+                            ty: func_type.clone(),
+                            mutable: false,
+                            is_constant: false,
+                            visibility: MemberVisibility::Private,
+                            module: self.current_module.clone(),
+                            value: None,
+                        },
+                    );
+
+                    context.define(
+                        rt_name.to_string(),
+                        func_type,
+                        false,
+                        false,
+                        MemberVisibility::Private,
+                        self.current_module.clone(),
+                        None,
+                    );
+                }
+                StatementKind::Empty => {}
                 _ => {
                     self.report_error(
                         "Only field and method declarations are allowed in class body".to_string(),

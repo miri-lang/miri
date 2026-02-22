@@ -436,13 +436,13 @@ let y = 1
 
 #[test]
 fn test_error_if_statement_as_condition() {
-    // An `if` statement is not an expression and cannot be a condition.
-    // The parser should expect an expression and fail on the block/inline body.
+    // With prefix if-expression support, `if if x: 1` is parsed as `if (if x: 1)`,
+    // where the inner `if x: 1` is the condition. The outer if then needs a body.
     parser_error_test(
         "if if x: 1",
         &SyntaxErrorKind::UnexpectedToken {
-            expected: "an expression".to_string(),
-            found: "if".to_string(),
+            expected: "a colon or an expression end".to_string(),
+            found: "end of file".to_string(),
         },
     );
 }

@@ -2,7 +2,9 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::ast::common::RuntimeKind;
-use crate::ast::factory::func;
+use crate::ast::factory::{
+    func, int_literal_expression, return_statement, type_expr_non_null, type_int,
+};
 use crate::ast::statement::{Statement, StatementKind};
 use crate::ast::Program;
 use crate::cli::args::CpuBackend;
@@ -40,6 +42,20 @@ fn is_wrappable_stmt(stmt: &Statement) -> bool {
     )
 }
 
+/// Returns true if the statement should stay at the top level (not wrapped in main).
+fn is_top_level_stmt(stmt: &Statement) -> bool {
+    matches!(
+        &stmt.node,
+        StatementKind::Use(..)
+            | StatementKind::Class(..)
+            | StatementKind::Struct(..)
+            | StatementKind::Enum(..)
+            | StatementKind::Trait(..)
+            | StatementKind::Type(..)
+            | StatementKind::RuntimeFunctionDeclaration(..)
+    )
+}
+
 /// Information about runtime functions collected from the AST.
 struct RuntimeInfo {
     /// Runtime function imports for the codegen backend.
@@ -54,12 +70,14 @@ struct RuntimeInfo {
 /// Extracts the symbol names, parameter types, and return types so the codegen
 /// backend can declare them as external imports, and collects which runtime
 /// libraries must be linked.
-fn collect_runtime_info(program: &Program) -> RuntimeInfo {
+fn collect_runtime_info(program: &Program, imported_stmts: &[Statement]) -> RuntimeInfo {
     #[cfg(feature = "cranelift")]
     let mut imports = Vec::new();
     let mut required_runtimes = HashSet::new();
 
-    for stmt in &program.body {
+    let all_stmts = program.body.iter().chain(imported_stmts.iter());
+
+    for stmt in all_stmts {
         if let StatementKind::RuntimeFunctionDeclaration(runtime_kind, name, params, return_type) =
             &stmt.node
         {
@@ -105,27 +123,91 @@ fn collect_runtime_info(program: &Program) -> RuntimeInfo {
 
 /// Wraps a script-style program (no function declarations) in a synthetic `main` function.
 /// Skips programs that already contain functions or non-wrappable type definitions.
+///
+/// The synthetic main has return type `Int` and appends `return 0` so the process
+/// exits cleanly. Without this, the exit code leaks from whatever value the last
+/// expression leaves in the return register.
 fn wrap_script_in_main(program: &mut Program) {
     if has_functions(program) {
         return;
     }
 
+    let return_zero = return_statement(Some(Box::new(int_literal_expression(0))));
+    let int_ret = type_expr_non_null(type_int());
+
     if program.body.is_empty() {
-        let body = crate::ast::factory::block(vec![]);
-        let main_fn = func("main").build(body);
+        let body = crate::ast::factory::block(vec![return_zero]);
+        let main_fn = func("main").return_type(int_ret).build(body);
         program.body = vec![main_fn];
         return;
     }
 
-    let all_wrappable = program.body.iter().all(is_wrappable_stmt);
-    if !all_wrappable {
-        return;
+    // Separate top-level declarations (use, class, struct, etc.) from executable statements.
+    let mut top_level = Vec::new();
+    let mut body_stmts = Vec::new();
+    for stmt in &program.body {
+        if is_top_level_stmt(stmt) {
+            top_level.push(stmt.clone());
+        } else if is_wrappable_stmt(stmt) {
+            body_stmts.push(stmt.clone());
+        } else {
+            // Non-wrappable, non-top-level statement — cannot wrap this program.
+            return;
+        }
     }
 
-    let body_stmts = program.body.clone();
+    body_stmts.push(return_zero);
     let body = crate::ast::factory::block(body_stmts);
-    let main_fn = func("main").build(body);
-    program.body = vec![main_fn];
+    let main_fn = func("main").return_type(int_ret).build(body);
+    top_level.push(main_fn);
+    program.body = top_level;
+}
+
+/// Ensures that a user-defined `main()` function returns `Int` with an
+/// implicit `return 0` at the end, so the process exits cleanly.
+fn patch_main_return(program: &mut Program) {
+    use crate::ast::factory::stmt_with_span;
+
+    let return_zero = return_statement(Some(Box::new(int_literal_expression(0))));
+    let int_ret = type_expr_non_null(type_int());
+
+    for stmt in &mut program.body {
+        if let StatementKind::FunctionDeclaration(
+            name,
+            _generics,
+            _params,
+            ret_type,
+            body,
+            _props,
+        ) = &mut stmt.node
+        {
+            if name == "main" && ret_type.is_none() {
+                // Set return type to Int
+                *ret_type = Some(Box::new(int_ret));
+
+                // Append `return 0` to the body
+                if let Some(body_stmt) = body {
+                    match &mut body_stmt.node {
+                        StatementKind::Block(stmts) => {
+                            stmts.push(return_zero);
+                        }
+                        _ => {
+                            let span = body_stmt.span.clone();
+                            let existing = std::mem::replace(
+                                body_stmt.as_mut(),
+                                stmt_with_span(StatementKind::Empty, 0..0),
+                            );
+                            *body_stmt = Box::new(stmt_with_span(
+                                StatementKind::Block(vec![existing, return_zero]),
+                                span,
+                            ));
+                        }
+                    }
+                }
+                return;
+            }
+        }
+    }
 }
 
 /// The result of running the frontend pipeline (parsing + type checking).
@@ -186,6 +268,7 @@ impl Pipeline {
         let mut ast = parser.parse().map_err(CompilerError::Parser)?;
 
         wrap_script_in_main(&mut ast);
+        patch_main_return(&mut ast);
 
         let mut type_checker = crate::type_checker::TypeChecker::new();
         type_checker
@@ -236,7 +319,10 @@ impl Pipeline {
     pub fn build(&self, source: &str, opts: &BuildOptions) -> Result<PathBuf, CompilerError> {
         let pipeline_result = self.frontend_script(source)?;
         let mir_bodies = self.lower_to_mir(&pipeline_result, opts.release)?;
-        let runtime_info = collect_runtime_info(&pipeline_result.ast);
+        let runtime_info = collect_runtime_info(
+            &pipeline_result.ast,
+            &pipeline_result.type_checker.imported_statements,
+        );
 
         let object_bytes = match opts.cpu_backend {
             CpuBackend::Cranelift => {
@@ -322,7 +408,9 @@ impl Pipeline {
         is_release: bool,
     ) -> Result<Vec<(String, mir::Body)>, CompilerError> {
         let mut bodies = Vec::new();
+        let mut lowered_names = std::collections::HashSet::new();
 
+        // Lower functions from the program AST
         for stmt in &result.ast.body {
             if let StatementKind::FunctionDeclaration(name, _, _, _, _, _) = &stmt.node {
                 let body =
@@ -330,7 +418,23 @@ impl Pipeline {
                         .map_err(|e| {
                             CompilerError::Codegen(format!("MIR lowering failed: {}", e))
                         })?;
+                lowered_names.insert(name.clone());
                 bodies.push((name.clone(), body));
+            }
+        }
+
+        // Lower functions imported from stdlib modules
+        for stmt in &result.type_checker.imported_statements {
+            if let StatementKind::FunctionDeclaration(name, _, _, _, _, _) = &stmt.node {
+                if !lowered_names.contains(name) {
+                    let body =
+                        mir::lowering::lower_function(stmt, &result.type_checker, is_release, true)
+                            .map_err(|e| {
+                                CompilerError::Codegen(format!("MIR lowering failed: {}", e))
+                            })?;
+                    lowered_names.insert(name.clone());
+                    bodies.push((name.clone(), body));
+                }
             }
         }
 

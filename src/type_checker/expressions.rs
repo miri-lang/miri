@@ -115,6 +115,13 @@ impl TypeChecker {
                 self.infer_enum_value(name, values, expr.span.clone(), context)
             }
             ExpressionKind::Super => self.infer_super(expr.span.clone(), context),
+            ExpressionKind::Block(statements, final_expr) => {
+                // Type check all statements, then the final expression determines the type
+                for stmt in statements {
+                    self.infer_statement_type(stmt, context);
+                }
+                self.infer_expression(final_expr, context)
+            }
             _ => ast_factory::make_type(TypeKind::Int), // Default fallback for unimplemented expressions
         };
 
@@ -365,11 +372,16 @@ impl TypeChecker {
         let right_ty = self.infer_expression(right, context);
 
         if matches!(op, BinaryOp::Div | BinaryOp::Mod) {
-            if let ExpressionKind::Literal(lit) = &right.node {
-                if lit.is_zero() {
-                    self.report_error("Division by zero".to_string(), right.span.clone());
-                    return ast_factory::make_type(TypeKind::Error);
+            let is_zero = match &right.node {
+                ExpressionKind::Literal(lit) => lit.is_zero(),
+                ExpressionKind::Unary(UnaryOp::Negate | UnaryOp::Plus, operand) => {
+                    matches!(&operand.node, ExpressionKind::Literal(lit) if lit.is_zero())
                 }
+                _ => false,
+            };
+            if is_zero {
+                self.report_error("Division by zero".to_string(), right.span.clone());
+                return ast_factory::make_type(TypeKind::Error);
             }
         }
 
@@ -554,7 +566,8 @@ impl TypeChecker {
         let lhs_type = match lhs {
             LeftHandSideExpression::Identifier(id_expr) => {
                 if let ExpressionKind::Identifier(name, _) = &id_expr.node {
-                    if !context.is_mutable(name) {
+                    // 'self' is always mutable in class context (for constructor assignment)
+                    if name != "self" && !context.is_mutable(name) {
                         self.report_error(
                             format!("Cannot assign to immutable variable '{}'", name),
                             span.clone(),
@@ -1623,6 +1636,13 @@ impl TypeChecker {
                     make_type(TypeKind::Error)
                 }
             }
+            TypeKind::String => match prop_name.as_str() {
+                "length" => make_type(TypeKind::Int),
+                _ => {
+                    self.report_error(format!("Type 'String' has no field '{}'", prop_name), span);
+                    make_type(TypeKind::Error)
+                }
+            },
             _ => {
                 self.report_error(format!("Type '{}' does not have members", obj_type), span);
                 make_type(TypeKind::Error)

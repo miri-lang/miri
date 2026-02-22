@@ -29,21 +29,14 @@ pub fn initialize_builtins() -> (HashMap<String, SymbolInfo>, HashMap<String, Ty
     (global_scope, type_definitions)
 }
 
-/// Registers primitive built-in types like `String`.
-fn register_primitive_types(types: &mut HashMap<String, TypeDefinition>) {
-    // String type with a length field
-    types.insert(
-        "String".to_string(),
-        TypeDefinition::Struct(StructDefinition {
-            fields: vec![(
-                "length".to_string(),
-                crate::ast::factory::make_type(TypeKind::Int),
-                MemberVisibility::Public,
-            )],
-            generics: None,
-            module: "std".to_string(),
-        }),
-    );
+/// Registers primitive built-in types.
+///
+/// Note: `String` is intentionally NOT registered here because it is fully defined
+/// in the standard library (`system/string.mi`). Registering it as a built-in would
+/// cause a "Type 'String' is already defined" error when the stdlib is imported.
+fn register_primitive_types(_types: &mut HashMap<String, TypeDefinition>) {
+    // Currently empty — all primitive types are either represented as TypeKind variants
+    // (Int, Float, Bool, String) or defined in the standard library.
 }
 
 /// Registers GPU-related built-in types (`Dim3`, `GpuContext`, `Kernel`).
@@ -137,22 +130,47 @@ fn register_builtin_functions(scope: &mut HashMap<String, SymbolInfo>) {
         TypeDeclarationKind::None,
     );
 
+    let void_ret = || {
+        Some(Box::new(crate::ast::factory::type_expr_non_null(
+            crate::ast::factory::make_type(TypeKind::Void),
+        )))
+    };
+
+    let generic_param = |name: &str| Parameter {
+        name: name.to_string(),
+        typ: Box::new(crate::ast::factory::type_expr_non_null(generic_t.clone())),
+        guard: None,
+        default_value: None,
+    };
+
+    // print<T>(value: T) -> void
     scope.insert(
         "print".to_string(),
         SymbolInfo {
             consumed: false,
             is_constant: false,
             ty: crate::ast::factory::make_type(TypeKind::Function(
+                Some(vec![generic_decl.clone()]),
+                vec![generic_param("value")],
+                void_ret(),
+            )),
+            mutable: false,
+            visibility: MemberVisibility::Public,
+            module: "std".to_string(),
+            value: None,
+        },
+    );
+
+    // println<T>(value: T) -> void
+    scope.insert(
+        "println".to_string(),
+        SymbolInfo {
+            consumed: false,
+            is_constant: false,
+            ty: crate::ast::factory::make_type(TypeKind::Function(
                 Some(vec![generic_decl]),
-                vec![Parameter {
-                    name: "value".to_string(),
-                    typ: Box::new(crate::ast::factory::type_expr_non_null(generic_t)),
-                    guard: None,
-                    default_value: None,
-                }],
-                Some(Box::new(crate::ast::factory::type_expr_non_null(
-                    crate::ast::factory::make_type(TypeKind::Void),
-                ))),
+                vec![generic_param("value")],
+                void_ret(),
             )),
             mutable: false,
             visibility: MemberVisibility::Public,
@@ -171,7 +189,7 @@ mod tests {
         let (scope, types) = initialize_builtins();
 
         // Check that expected types exist
-        assert!(types.contains_key("String"));
+        // Note: String is NOT a built-in; it's defined in system/string.mi
         assert!(types.contains_key("Dim3"));
         assert!(types.contains_key("GpuContext"));
         assert!(types.contains_key("Kernel"));

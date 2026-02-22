@@ -19,6 +19,10 @@ pub enum AggregateKind {
     Class(Type),
     /// A list, e.g., `[1, 2, 3]` - dynamic size, homogeneous
     List,
+    /// A formatted string, e.g., `f"Hello {name}, you are {age}"`
+    /// Operands are the parts (string literals and typed expressions).
+    /// The backend converts non-string parts to strings and concatenates all.
+    FormattedString,
     /// A set, e.g., `{1, 2, 3}` - dynamic size, unique elements
     Set,
     /// A map, e.g., `{"a": 1, "b": 2}` - key-value pairs
@@ -86,6 +90,16 @@ impl fmt::Display for Rvalue {
                         write!(f, "{}", op)?;
                     }
                     write!(f, ")")
+                }
+                AggregateKind::FormattedString => {
+                    write!(f, "f\"")?;
+                    for (i, op) in ops.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{{{}}}", op)?;
+                    }
+                    write!(f, "\"")
                 }
                 AggregateKind::Array | AggregateKind::List => {
                     write!(f, "[")?;
