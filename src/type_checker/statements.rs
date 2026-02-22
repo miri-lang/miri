@@ -41,7 +41,7 @@
 
 use super::context::{
     AliasDefinition, ClassDefinition, Context, EnumDefinition, FieldInfo, GenericDefinition,
-    MethodInfo, StructDefinition, TraitDefinition, TypeDefinition,
+    MethodInfo, StructDefinition, SymbolInfo, TraitDefinition, TypeDefinition,
 };
 use super::TypeChecker;
 use crate::ast::factory::make_type;
@@ -262,12 +262,14 @@ impl TypeChecker {
 
                 context.define(
                     name.to_string(),
-                    func_type,
-                    false,
-                    false,
-                    MemberVisibility::Private,
-                    self.current_module.clone(),
-                    None,
+                    SymbolInfo::new(
+                        func_type,
+                        false,
+                        false,
+                        MemberVisibility::Private,
+                        self.current_module.clone(),
+                        None,
+                    ),
                 );
 
                 // Resolve parameter types to catch errors early
@@ -294,7 +296,7 @@ impl TypeChecker {
         context: &mut Context,
     ) {
         // 1. Extract path string
-        let path_str = match self.extract_import_path(path) {
+        let path_str = match Self::extract_import_path(path) {
             Some(p) => p,
             None => {
                 self.report_error("Invalid import path".to_string(), path.span.clone());
@@ -385,7 +387,7 @@ impl TypeChecker {
         self.current_module = old_module;
     }
 
-    fn extract_import_path(&self, expr: &Expression) -> Option<String> {
+    fn extract_import_path(expr: &Expression) -> Option<String> {
         match &expr.node {
             ExpressionKind::ImportPath(segments, _) => {
                 let parts: Vec<String> = segments
@@ -402,7 +404,7 @@ impl TypeChecker {
             }
             ExpressionKind::Identifier(name, _) => Some(name.clone()),
             ExpressionKind::Member(obj, member) => {
-                let parent = self.extract_import_path(obj)?;
+                let parent = Self::extract_import_path(obj)?;
                 let member_name = if let ExpressionKind::Identifier(n, _) = &member.node {
                     n
                 } else {
@@ -614,12 +616,14 @@ impl TypeChecker {
 
             context.define(
                 decl.name.clone(),
-                inferred_type,
-                is_mutable,
-                is_constant,
-                visibility.clone(),
-                self.current_module.clone(),
-                None,
+                SymbolInfo::new(
+                    inferred_type.clone(),
+                    is_mutable,
+                    is_constant,
+                    visibility.clone(),
+                    self.current_module.clone(),
+                    None,
+                ),
             );
         }
     }
@@ -932,12 +936,14 @@ impl TypeChecker {
             };
             context.define(
                 decl.name.clone(),
-                var_type,
-                is_mutable,
-                false,
-                MemberVisibility::Public,
-                self.current_module.clone(),
-                None,
+                SymbolInfo::new(
+                    var_type,
+                    is_mutable,
+                    false,
+                    MemberVisibility::Public,
+                    self.current_module.clone(),
+                    None,
+                ),
             );
         } else if decls.len() == 2 {
             if let TypeKind::Tuple(exprs) = &element_type.kind {
@@ -964,21 +970,25 @@ impl TypeChecker {
 
                     context.define(
                         decls[0].name.clone(),
-                        key_type,
-                        is_mutable_0,
-                        false,
-                        MemberVisibility::Public,
-                        self.current_module.clone(),
-                        None,
+                        SymbolInfo::new(
+                            key_type,
+                            is_mutable_0,
+                            false,
+                            MemberVisibility::Public,
+                            self.current_module.clone(),
+                            None,
+                        ),
                     );
                     context.define(
                         decls[1].name.clone(),
-                        val_type,
-                        is_mutable_1,
-                        false,
-                        MemberVisibility::Public,
-                        self.current_module.clone(),
-                        None,
+                        SymbolInfo::new(
+                            val_type,
+                            is_mutable_1,
+                            false,
+                            MemberVisibility::Public,
+                            self.current_module.clone(),
+                            None,
+                        ),
                     );
                 } else {
                     self.report_error(
@@ -1088,12 +1098,14 @@ impl TypeChecker {
 
             context.define(
                 name.to_string(),
-                func_type,
-                false,
-                false,
-                properties.visibility.clone(),
-                self.current_module.clone(),
-                None,
+                SymbolInfo::new(
+                    func_type,
+                    false,
+                    false,
+                    properties.visibility.clone(),
+                    self.current_module.clone(),
+                    None,
+                ),
             ); // Functions are immutable
         }
 
@@ -1137,13 +1149,16 @@ impl TypeChecker {
 
             context.define(
                 param.name.clone(),
-                param_type,
-                false,
-                false,
-                MemberVisibility::Public,
-                self.current_module.clone(),
-                None,
-            ); // Parameters are immutable by default
+                SymbolInfo::new(
+                    param_type,
+                    false,
+                    false,
+                    MemberVisibility::Public,
+                    self.current_module.clone(),
+                    None,
+                ),
+            );
+            // Parameters are immutable by default
 
             if let Some(guard) = &param.guard {
                 if let ExpressionKind::Guard(op, right) = &guard.node {
@@ -1219,12 +1234,14 @@ impl TypeChecker {
             let gpu_context_type = make_type(TypeKind::Custom("GpuContext".to_string(), None));
             context.define(
                 "gpu_context".to_string(),
-                gpu_context_type,
-                false, // Immutable
-                false,
-                MemberVisibility::Public,
-                self.current_module.clone(),
-                None,
+                SymbolInfo::new(
+                    gpu_context_type,
+                    false, // Immutable
+                    false,
+                    MemberVisibility::Public,
+                    self.current_module.clone(),
+                    None,
+                ),
             );
         }
 
@@ -1413,12 +1430,14 @@ impl TypeChecker {
 
         context.define(
             name,
-            make_type(TypeKind::Meta(Box::new(struct_type))),
-            false,
-            false,
-            visibility.clone(),
-            self.current_module.clone(),
-            None,
+            SymbolInfo::new(
+                make_type(TypeKind::Meta(Box::new(struct_type))),
+                false,
+                false,
+                visibility.clone(),
+                self.current_module.clone(),
+                None,
+            ),
         );
     }
 
@@ -1533,12 +1552,14 @@ impl TypeChecker {
 
         context.define(
             name,
-            make_type(TypeKind::Meta(Box::new(enum_type))),
-            false,
-            false,
-            visibility.clone(),
-            self.current_module.clone(),
-            None,
+            SymbolInfo::new(
+                make_type(TypeKind::Meta(Box::new(enum_type))),
+                false,
+                false,
+                visibility.clone(),
+                self.current_module.clone(),
+                None,
+            ),
         );
     }
 
@@ -1781,12 +1802,14 @@ impl TypeChecker {
 
                     context.define(
                         rt_name.to_string(),
-                        func_type,
-                        false,
-                        false,
-                        MemberVisibility::Private,
-                        self.current_module.clone(),
-                        None,
+                        SymbolInfo::new(
+                            func_type,
+                            false,
+                            false,
+                            MemberVisibility::Private,
+                            self.current_module.clone(),
+                            None,
+                        ),
                     );
                 }
                 StatementKind::Empty => {}
@@ -2132,12 +2155,14 @@ impl TypeChecker {
 
         context.define(
             name.clone(),
-            class_type_meta,
-            false,
-            false,
-            visibility.clone(),
-            self.current_module.clone(),
-            None,
+            SymbolInfo::new(
+                class_type_meta,
+                false,
+                false,
+                visibility.clone(),
+                self.current_module.clone(),
+                None,
+            ),
         );
 
         // PASS 2: Check method bodies (now class is registered)
@@ -2337,12 +2362,14 @@ impl TypeChecker {
 
         context.define(
             name,
-            make_type(TypeKind::Meta(Box::new(trait_type))),
-            false,
-            false,
-            visibility.clone(),
-            self.current_module.clone(),
-            None,
+            SymbolInfo::new(
+                make_type(TypeKind::Meta(Box::new(trait_type))),
+                false,
+                false,
+                visibility.clone(),
+                self.current_module.clone(),
+                None,
+            ),
         );
     }
 

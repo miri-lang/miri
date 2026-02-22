@@ -42,7 +42,7 @@
 //! - Enum variant construction: `Ok(value)`, `Err(error)`
 //! - Generic type instantiation
 
-use super::context::{Context, TypeDefinition};
+use super::context::{Context, SymbolInfo, TypeDefinition};
 use super::TypeChecker;
 use crate::ast::factory as ast_factory;
 use crate::ast::factory::make_type;
@@ -1808,12 +1808,14 @@ impl TypeChecker {
             let param_type = self.resolve_type_expression(&param.typ, context);
             context.define(
                 param.name.clone(),
-                param_type,
-                false,
-                false,
-                MemberVisibility::Public,
-                self.current_module.clone(),
-                None,
+                SymbolInfo::new(
+                    param_type,
+                    false,
+                    false,
+                    MemberVisibility::Public,
+                    self.current_module.clone(),
+                    None,
+                ),
             ); // Parameters are immutable by default
         }
 
@@ -2015,12 +2017,14 @@ impl TypeChecker {
                 // Bind variable
                 context.define(
                     name.clone(),
-                    subject_type.clone(),
-                    false,
-                    false,
-                    MemberVisibility::Public,
-                    self.current_module.clone(),
-                    None,
+                    SymbolInfo::new(
+                        subject_type.clone(),
+                        false,
+                        false,
+                        MemberVisibility::Public,
+                        self.current_module.clone(),
+                        None,
+                    ),
                 ); // Immutable binding by default
             }
             Pattern::Tuple(patterns) => {

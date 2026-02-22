@@ -46,6 +46,27 @@ pub struct SymbolInfo {
     pub value: Option<Literal>,
 }
 
+impl SymbolInfo {
+    pub fn new(
+        ty: Type,
+        mutable: bool,
+        is_constant: bool,
+        visibility: MemberVisibility,
+        module: String,
+        value: Option<Literal>,
+    ) -> Self {
+        Self {
+            ty,
+            mutable,
+            is_constant,
+            visibility,
+            module,
+            consumed: false,
+            value,
+        }
+    }
+}
+
 /// Represents relationships between types (inheritance, interfaces, mixins).
 #[derive(Debug, Clone, Default)]
 pub struct TypeRelation {
@@ -212,29 +233,9 @@ impl Context {
         }
     }
 
-    pub fn define(
-        &mut self,
-        name: String,
-        ty: Type,
-        mutable: bool,
-        is_constant: bool,
-        visibility: MemberVisibility,
-        module: String,
-        value: Option<Literal>,
-    ) {
+    pub fn define(&mut self, name: String, info: SymbolInfo) {
         if let Some(scope) = self.scopes.last_mut() {
-            scope.insert(
-                name,
-                SymbolInfo {
-                    ty,
-                    mutable,
-                    is_constant,
-                    visibility,
-                    module,
-                    consumed: false,
-                    value,
-                },
-            );
+            scope.insert(name, info);
         }
     }
 
