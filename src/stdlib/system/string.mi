@@ -1,8 +1,10 @@
+use system.ops
+
 /// A UTF-8 encoded string type.
 ///
 /// Strings in Miri are immutable sequences of Unicode characters.
 /// All operations that modify a string return a new string instance.
-public class String
+public class String implements Equatable, Addable, Multiplicable, Iterable
 
     // =========================================================================
     // Intrinsic function declarations
@@ -10,6 +12,7 @@ public class String
     // =========================================================================
 
     runtime "core" fn miri_rt_string_new() String
+
     runtime "core" fn miri_rt_string_len(s String) int
     runtime "core" fn miri_rt_string_char_count(s String) int
     runtime "core" fn miri_rt_string_is_empty(s String) bool
@@ -27,6 +30,8 @@ public class String
     runtime "core" fn miri_rt_string_equals(a String, b String) bool
     runtime "core" fn miri_rt_string_clone(s String) String
     runtime "core" fn miri_rt_string_free(s String)
+    runtime "core" fn miri_rt_string_repeat(s String, count int) String
+    runtime "core" fn miri_rt_string_char_at(s String, index int) String
 
     // =========================================================================
     // Constructors
@@ -119,20 +124,19 @@ public class String
     public fn concat(other String) String
         return miri_rt_string_concat(self, other)
 
+    /// Repeats this string a given number of times.
+    ///
+    /// This is used by the `*` operator: `"ha" * 3` → `"hahaha"`.
+    public fn repeat(count int) String
+        return miri_rt_string_repeat(self, count)
 
-    // TODO: operators aren't supported yet
-    
-    /// Equality operator
-    // operator ==(other String) bool
-    //     return self.equals(other)
+    /// Returns the character at the given index as a string.
+    ///
+    /// This enables for-loop iteration: `for ch in "hello"`.
+    public fn element_at(index int) String
+        return miri_rt_string_char_at(self, index)
 
-    // /// Inequality operator.
-    // operator !=(other String) bool
-    //     return not self.equals(other)
 
-    // /// Concatenation operator.
-    // operator +(other String) String
-    //     return self.concat(other)
 
     // =========================================================================
     // Internal

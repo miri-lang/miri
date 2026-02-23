@@ -344,44 +344,9 @@ impl FunctionTranslator {
             }
 
             Rvalue::BinaryOp(op, lhs, rhs) => {
-                // Check if this is a string operation (Add = concatenation, Eq/Ne = equals)
-                let lhs_ty = Self::operand_type(lhs, type_ctx);
-                let lhs_is_string = matches!(&lhs_ty.kind, TypeKind::String)
-                    || matches!(&lhs_ty.kind, TypeKind::Custom(ref n, _) if n == "String");
-                if lhs_is_string && *op == BinOp::Add {
-                    let lhs_val = Self::translate_operand(builder, ctx, lhs, locals, type_ctx)?;
-                    let rhs_val = Self::translate_operand(builder, ctx, rhs, locals, type_ctx)?;
-                    Self::call_runtime_fn(
-                        builder,
-                        ctx,
-                        "miri_rt_string_concat",
-                        vec![AbiParam::new(cl_types::I64), AbiParam::new(cl_types::I64)],
-                        vec![AbiParam::new(cl_types::I64)],
-                        &[lhs_val, rhs_val],
-                    )
-                    .map(|v| v.unwrap())
-                } else if lhs_is_string && matches!(op, BinOp::Eq | BinOp::Ne) {
-                    let lhs_val = Self::translate_operand(builder, ctx, lhs, locals, type_ctx)?;
-                    let rhs_val = Self::translate_operand(builder, ctx, rhs, locals, type_ctx)?;
-                    let eq_result = Self::call_runtime_fn(
-                        builder,
-                        ctx,
-                        "miri_rt_string_equals",
-                        vec![AbiParam::new(cl_types::I64), AbiParam::new(cl_types::I64)],
-                        vec![AbiParam::new(cl_types::I8)],
-                        &[lhs_val, rhs_val],
-                    )?
-                    .unwrap();
-                    if *op == BinOp::Ne {
-                        Ok(builder.ins().bxor_imm(eq_result, 1))
-                    } else {
-                        Ok(eq_result)
-                    }
-                } else {
-                    let lhs_val = Self::translate_operand(builder, ctx, lhs, locals, type_ctx)?;
-                    let rhs_val = Self::translate_operand(builder, ctx, rhs, locals, type_ctx)?;
-                    Self::translate_binop(builder, *op, lhs_val, rhs_val)
-                }
+                let lhs_val = Self::translate_operand(builder, ctx, lhs, locals, type_ctx)?;
+                let rhs_val = Self::translate_operand(builder, ctx, rhs, locals, type_ctx)?;
+                Self::translate_binop(builder, *op, lhs_val, rhs_val)
             }
 
             Rvalue::UnaryOp(op, operand) => {
@@ -401,12 +366,6 @@ impl FunctionTranslator {
             }
 
             Rvalue::Aggregate(kind, operands) => {
-                if matches!(kind, AggregateKind::FormattedString) {
-                    return Self::translate_formatted_string(
-                        builder, ctx, operands, locals, type_ctx,
-                    );
-                }
-
                 if operands.is_empty() {
                     return Ok(builder.ins().iconst(cl_types::I64, 0));
                 }
@@ -1086,177 +1045,6 @@ impl FunctionTranslator {
         }
 
         Ok(())
-    }
-
-    /// Returns the MIR type of an operand.
-    fn operand_type<'b>(operand: &'b Operand, type_ctx: &'b TypeCtx) -> &'b Type {
-        match operand {
-            Operand::Copy(place) | Operand::Move(place) => &type_ctx.local_types[place.local.0],
-            Operand::Constant(c) => &c.ty,
-        }
-    }
-
-    /// Calls a runtime function by name with the given signature and arguments.
-    fn call_runtime_fn(
-        builder: &mut FunctionBuilder,
-        ctx: &mut ModuleCtx,
-        name: &str,
-        params: Vec<AbiParam>,
-        returns: Vec<AbiParam>,
-        args: &[Value],
-    ) -> Result<Option<Value>, String> {
-        let sig = Signature {
-            params,
-            returns: returns.clone(),
-            call_conv: builder.func.signature.call_conv,
-        };
-        let func_id = ctx
-            .module
-            .declare_function(name, Linkage::Import, &sig)
-            .map_err(|e| format!("Failed to declare {}: {}", name, e))?;
-        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
-        let call = builder.ins().call(local_func, args);
-        if returns.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(builder.inst_results(call)[0]))
-        }
-    }
-
-    /// Translates a formatted string (f-string) aggregate.
-    ///
-    /// Converts each part to a `*mut MiriString` by calling runtime conversion
-    /// functions for non-string types, then concatenates all parts with
-    /// `miri_rt_string_concat`.
-    fn translate_formatted_string(
-        builder: &mut FunctionBuilder,
-        ctx: &mut ModuleCtx,
-        operands: &[Operand],
-        locals: &HashMap<Local, Variable>,
-        type_ctx: &TypeCtx,
-    ) -> Result<Value, String> {
-        if operands.is_empty() {
-            // Empty f-string → empty MiriString
-            return Self::call_runtime_fn(
-                builder,
-                ctx,
-                "miri_rt_string_new",
-                vec![],
-                vec![AbiParam::new(cl_types::I64)],
-                &[],
-            )
-            .map(|v| v.unwrap());
-        }
-
-        // Convert each operand to a *const MiriString
-        let mut string_parts: Vec<Value> = Vec::new();
-        for op in operands {
-            let val = Self::translate_operand(builder, ctx, op, locals, type_ctx)?;
-            let mir_type = Self::operand_type(op, type_ctx);
-
-            let as_string = match &mir_type.kind {
-                TypeKind::String => val,
-                TypeKind::Custom(ref n, _) if n == "String" => {
-                    // Custom String type — same representation
-                    val
-                }
-                TypeKind::Int
-                | TypeKind::I8
-                | TypeKind::I16
-                | TypeKind::I32
-                | TypeKind::I64
-                | TypeKind::I128
-                | TypeKind::U8
-                | TypeKind::U16
-                | TypeKind::U32
-                | TypeKind::U64
-                | TypeKind::U128 => {
-                    // Widen to I64 if needed, then call miri_rt_int_to_string
-                    let wide = if builder.func.dfg.value_type(val) != cl_types::I64 {
-                        builder.ins().sextend(cl_types::I64, val)
-                    } else {
-                        val
-                    };
-                    Self::call_runtime_fn(
-                        builder,
-                        ctx,
-                        "miri_rt_int_to_string",
-                        vec![AbiParam::new(cl_types::I64)],
-                        vec![AbiParam::new(cl_types::I64)],
-                        &[wide],
-                    )?
-                    .unwrap()
-                }
-                TypeKind::Float | TypeKind::F64 => Self::call_runtime_fn(
-                    builder,
-                    ctx,
-                    "miri_rt_float_to_string",
-                    vec![AbiParam::new(cl_types::F64)],
-                    vec![AbiParam::new(cl_types::I64)],
-                    &[val],
-                )?
-                .unwrap(),
-                TypeKind::F32 => {
-                    let wide = builder.ins().fpromote(cl_types::F64, val);
-                    Self::call_runtime_fn(
-                        builder,
-                        ctx,
-                        "miri_rt_float_to_string",
-                        vec![AbiParam::new(cl_types::F64)],
-                        vec![AbiParam::new(cl_types::I64)],
-                        &[wide],
-                    )?
-                    .unwrap()
-                }
-                TypeKind::Boolean => {
-                    // Bool is I8, widen to I64
-                    let wide = builder.ins().sextend(cl_types::I64, val);
-                    Self::call_runtime_fn(
-                        builder,
-                        ctx,
-                        "miri_rt_bool_to_string",
-                        vec![AbiParam::new(cl_types::I64)],
-                        vec![AbiParam::new(cl_types::I64)],
-                        &[wide],
-                    )?
-                    .unwrap()
-                }
-                _ => {
-                    // Fallback: treat as integer
-                    let wide = if builder.func.dfg.value_type(val) != cl_types::I64 {
-                        builder.ins().sextend(cl_types::I64, val)
-                    } else {
-                        val
-                    };
-                    Self::call_runtime_fn(
-                        builder,
-                        ctx,
-                        "miri_rt_int_to_string",
-                        vec![AbiParam::new(cl_types::I64)],
-                        vec![AbiParam::new(cl_types::I64)],
-                        &[wide],
-                    )?
-                    .unwrap()
-                }
-            };
-            string_parts.push(as_string);
-        }
-
-        // Concatenate all parts with miri_rt_string_concat
-        let mut result = string_parts[0];
-        for part in &string_parts[1..] {
-            result = Self::call_runtime_fn(
-                builder,
-                ctx,
-                "miri_rt_string_concat",
-                vec![AbiParam::new(cl_types::I64), AbiParam::new(cl_types::I64)],
-                vec![AbiParam::new(cl_types::I64)],
-                &[result, *part],
-            )?
-            .unwrap();
-        }
-
-        Ok(result)
     }
 
     /// Helper to call libc malloc.

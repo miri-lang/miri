@@ -14,11 +14,13 @@ fn test_string_literals() {
 }
 
 #[test]
-fn test_string_concatenation() {
-    type_checker_exprs_type_test(vec![
-        ("\"hello\" + \" world\"", type_string()),
-        ("'a' + 'b'", type_string()),
-    ]);
+fn test_string_concatenation_without_trait() {
+    // Without loading the Addable trait from stdlib, string + string is a type error.
+    // String concatenation via `+` is tested in integration::strings which loads stdlib.
+    type_checker_error_test(
+        "\"hello\" + \" world\"",
+        "Invalid types for arithmetic operation",
+    );
 }
 
 #[test]
@@ -210,9 +212,9 @@ fn test_string_membership() {
 }
 
 #[test]
-fn test_string_multiplication() {
-    type_checker_expr_type_test("\"a\" * 3", type_string());
-    type_checker_expr_type_test("3 * \"a\"", type_string());
+fn test_string_multiplication_not_supported() {
+    // String repetition via `*` is not supported; use trait-based dispatch.
+    type_checker_error_test("\"a\" * 3", "Invalid types for arithmetic operation");
 }
 
 #[test]

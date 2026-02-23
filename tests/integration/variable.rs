@@ -23,7 +23,7 @@ fn implicit_typing() {
         r#"
 use system.io
 let x = 10
-println(x)
+println(f"{x}")
         "#,
         "10",
     );
@@ -31,7 +31,7 @@ println(x)
         r#"
 use system.io
 var x = 20
-println(x)
+println(f"{x}")
         "#,
         "20",
     );
@@ -44,7 +44,7 @@ fn explicit_typing() {
 use system.io
 
 let x int = 42
-println(x)
+println(f"{x}")
         "#,
         "42",
     );
@@ -53,7 +53,7 @@ println(x)
 use system.io
 
 var y i64 = 100
-println(y)
+println(f"{y}")
         "#,
         "100",
     );
@@ -67,7 +67,7 @@ use system.io
 
 var x = 10
 x = 20
-println(x)
+println(f"{x}")
         "#,
         "20",
     );
@@ -93,7 +93,7 @@ let result = if true
     x + y
 else
     0
-println(result)
+println(f"{result}")
         "#,
         "30",
     );
@@ -105,7 +105,7 @@ use system.io
 let x = 10
 if true
     let x = 20
-println(x)
+println(f"{x}")
         "#,
         "10",
     );

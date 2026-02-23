@@ -46,7 +46,7 @@ fn main()
     let result = match s
         Status.Ok: 1
         Status.Error: 0
-    print(result)
+    print(f"{result}")
     "#,
         "1",
     );
@@ -69,7 +69,7 @@ fn main()
         Color.Red: 1
         Color.Green: 2
         Color.Blue: 3
-    print(result)
+    print(f"{result}")
     "#,
         "2",
     );

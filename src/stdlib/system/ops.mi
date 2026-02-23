@@ -1,0 +1,50 @@
+/// Operator traits for Miri.
+///
+/// These traits define the protocols for operator overloading:
+/// - `Equatable`: enables `==` and `!=` operators
+/// - `Addable`: enables `+` operator (concatenation, combination, etc.)
+
+/// Enables equality comparison (`==` and `!=`) for types that implement it.
+///
+/// The `!=` operator is automatically derived as the logical negation of `equals`.
+///
+/// Example:
+///     class Point implements Equatable
+///         x int
+///         y int
+///         public fn equals(other Self) bool
+///             return self.x == other.x and self.y == other.y
+public trait Equatable
+    public fn equals(other Self) bool
+
+/// Enables the `+` operator for types that implement it.
+///
+/// Example:
+///     class Vector implements Addable
+///         x int
+///         public fn concat(other Self) Self
+///             return Vector(self.x + other.x)
+public trait Addable
+    public fn concat(other Self) Self
+
+/// Enables the `*` operator for repetition.
+///
+/// Example:
+///     class Pattern implements Multiplicable
+///         let value String
+///         public fn repeat(count int) Self
+///             return Pattern(self.value * count)
+public trait Multiplicable
+    public fn repeat(count int) Self
+
+/// Enables for-loop iteration over a type.
+///
+/// Types implementing this trait can be used in `for x in collection` loops.
+/// The iterator protocol uses index-based access via `element_at` and `length`.
+///
+/// Example:
+///     for ch in "hello"
+///         println(ch)  // prints each character
+public trait Iterable
+    public fn element_at(index int) Self
+    public fn length() int

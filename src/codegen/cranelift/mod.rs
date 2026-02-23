@@ -350,9 +350,11 @@ impl CraneliftBackend {
         ctx.func = translator.into_function();
 
         // Define the function
-        module
-            .define_function(func_id, ctx)
-            .map_err(|e| CodegenError::define_function(name, e.to_string()))?;
+        module.define_function(func_id, ctx).map_err(|e| {
+            println!("=== Failed function {} ===", name);
+            println!("{}", ctx.func.display());
+            CodegenError::define_function(name, e.to_string())
+        })?;
 
         // Clear context for next function
         ctx.clear();

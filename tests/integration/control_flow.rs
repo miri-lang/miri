@@ -19,7 +19,7 @@ let y = if x > 5
     x * 2
 else
     x
-print(y)
+print(f"{y}")
         "#,
         "20",
     );
@@ -37,7 +37,7 @@ else if x > 3
     50
 else
     0
-print(y)
+print(f"{y}")
     "#,
         "50",
     );
@@ -64,7 +64,7 @@ let y = if x > 10
         2
 else
     1
-print(y)
+print(f"{y}")
         "#,
         "2",
     );
@@ -80,7 +80,7 @@ var i = 0
 while i < 5
     x = x + i
     i = i + 1
-print(x)
+print(f"{x}")
     "#,
         "10",
     ); // 0+1+2+3+4 = 10
@@ -94,7 +94,7 @@ use system.io
 var sum = 0
 for i in 1..5
     sum = sum + i
-print(sum)
+print(f"{sum}")
     "#,
         "10",
     ); // 1+2+3+4 = 10
@@ -110,7 +110,7 @@ while true
     x = x + 1
     if x >= 5
         break
-print(x)
+print(f"{x}")
     "#,
         "5",
     );
@@ -126,7 +126,7 @@ for i in 1..10
     if i % 2 == 0
         continue
     sum = sum + i
-print(sum)
+print(f"{sum}")
     "#,
         "25",
     ); // 1+3+5+7+9 = 25
@@ -173,7 +173,7 @@ var sum = 0
 for i in 1..4
     for j in 1..4
         sum = sum + 1
-print(sum)
+print(f"{sum}")
     "#,
         "9",
     ); // 3 * 3 = 9

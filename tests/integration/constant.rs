@@ -8,7 +8,7 @@ fn const_declaration() {
     assert_runs_many(&[
         "const x = 10",
         "const y int = 20",
-        "const s string = \"hello\"",
+        "const s String = \"hello\"",
         "const b bool = true",
     ]);
 }
@@ -16,12 +16,12 @@ fn const_declaration() {
 #[test]
 fn const_print_value() {
     assert_runs_with_output(
-        "
+        r#"
 use system.io
 
 const x = 42
-print(x)
-",
+print(f"{x}")
+"#,
         "42",
     );
 }
@@ -29,12 +29,12 @@ print(x)
 #[test]
 fn const_in_expression() {
     assert_runs_with_output(
-        "
+        r#"
 use system.io
 
 const x = 10
-print(x + 5)
-",
+print(f"{x + 5}")
+"#,
         "15",
     );
 }
@@ -42,13 +42,13 @@ print(x + 5)
 #[test]
 fn const_multiple_declarations() {
     assert_runs_with_output(
-        "
+        r#"
 use system.io
 
 const x = 10
 const y = 20
-print(x + y)
-",
+print(f"{x + y}")
+"#,
         "30",
     );
 }

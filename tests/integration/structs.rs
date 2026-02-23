@@ -29,7 +29,7 @@ struct Point
 
 fn main()
     let p = Point(x: 10, y: 20)
-    print(p.x + p.y)
+    print(f"{p.x + p.y}")
     "#,
         "30",
     );
@@ -47,7 +47,7 @@ struct Counter
 fn main()
     var c = Counter(value: 0)
     c.value = 42
-    print(c.value)
+    print(f"{c.value}")
     "#,
         "42",
     );

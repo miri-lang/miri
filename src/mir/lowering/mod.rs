@@ -233,3 +233,111 @@ pub fn lower_function(
         ))
     }
 }
+
+/// Lower a stdlib class method to a MIR Body.
+///
+/// Unlike `lower_function`, this variant:
+/// - Prepends an implicit `self` parameter (registered in `variable_map`)
+/// - Registers the allocator in the function ABI (`body.arg_count`) but NOT in
+///   the lowering context's `variable_map`.
+///
+/// Keeping the allocator out of `variable_map` prevents the auto-injector from
+/// appending it to calls to runtime C functions inside the method body. Those C
+/// functions do not accept an allocator parameter.
+pub fn lower_class_method(
+    ast_method: &Statement,
+    self_type: Type,
+    tc: &TypeChecker,
+    is_release: bool,
+) -> Result<Body, LoweringError> {
+    if let StatementKind::FunctionDeclaration(
+        _name,
+        _generics,
+        params,
+        ret_type_expr,
+        body_stmt,
+        props,
+    ) = &ast_method.node
+    {
+        let ret_ty = if let Some(ret_expr) = ret_type_expr {
+            resolve_type(tc, ret_expr)
+        } else {
+            Type::new(TypeKind::Void, ast_method.span.clone())
+        };
+
+        let execution_model = if props.is_gpu {
+            ExecutionModel::GpuKernel
+        } else if props.is_async {
+            ExecutionModel::Async
+        } else {
+            ExecutionModel::Cpu
+        };
+
+        // Initial arg_count = 1 (self) + explicit params.
+        // The allocator is added to arg_count below but NOT to variable_map.
+        let body = Body::new(params.len() + 1, ast_method.span.clone(), execution_model);
+        let mut ctx = LoweringContext::new(body, tc, is_release);
+
+        // _0: Return value
+        ctx.body
+            .new_local(LocalDecl::new(ret_ty.clone(), ast_method.span.clone()));
+
+        // _1: self parameter (the class instance, registered in variable_map)
+        ctx.push_param("self".to_string(), self_type, ast_method.span.clone());
+
+        // Remaining explicit parameters (registered in variable_map)
+        for param in params.iter() {
+            let param_ty = resolve_type(tc, &param.typ);
+            ctx.push_param(param.name.clone(), param_ty, param.typ.span.clone());
+        }
+
+        // Inject allocator into the ABI for call-site compatibility, but do NOT
+        // register it in variable_map so that internal calls to runtime C functions
+        // do not receive the allocator as an extra argument.
+        {
+            let allocator_decl = LocalDecl::new(
+                Type::new(TypeKind::Int, ast_method.span.clone()),
+                ast_method.span.clone(),
+            );
+            ctx.body.new_local(allocator_decl);
+            ctx.body.arg_count += 1;
+        }
+
+        // Lower body
+        if let Some(body_box) = body_stmt {
+            lower_as_return(&mut ctx, body_box, &ret_ty)?;
+        }
+
+        // Pop root scope if falling through
+        if ctx.body.basic_blocks[ctx.current_block.0]
+            .terminator
+            .is_none()
+        {
+            ctx.pop_scope(ast_method.span.clone());
+        }
+
+        // Ensure last block has a terminator
+        let last_block_idx = ctx.current_block.0;
+        if ctx.body.basic_blocks[last_block_idx].terminator.is_none() {
+            ctx.set_terminator(Terminator::new(
+                TerminatorKind::Return,
+                ast_method.span.clone(),
+            ));
+        }
+
+        if let Err(msg) = ctx.body.validate() {
+            return Err(LoweringError::custom(
+                format!("MIR Validation Error: {}", msg),
+                ast_method.span.clone(),
+                None,
+            ));
+        }
+
+        Ok(ctx.body)
+    } else {
+        Err(LoweringError::unsupported_statement(
+            "Expected FunctionDeclaration for class method".to_string(),
+            ast_method.span.clone(),
+        ))
+    }
+}

@@ -509,6 +509,124 @@ pub fn lower_expression(
             let lhs_op = lower_expression(ctx, lhs, None)?;
             let rhs_op = lower_expression(ctx, rhs, None)?;
 
+            // Trait-based binary operator dispatch for class types.
+            // Maps operators to trait methods:
+            //   BinaryOp::Add     → Addable::concat
+            //   BinaryOp::Equal   → Equatable::equals
+            //   BinaryOp::NotEqual → NOT Equatable::equals
+            if let Some(lhs_ty) = ctx.type_checker.get_type(lhs.id) {
+                let class_name = match &lhs_ty.kind {
+                    TypeKind::String => Some("String".to_string()),
+                    TypeKind::Custom(name, _) => Some(name.clone()),
+                    _ => None,
+                };
+
+                if let Some(class_name) = class_name {
+                    // Map operator to (trait_name, method_name, is_negated)
+                    let op_mapping = match op {
+                        crate::ast::operator::BinaryOp::Add => Some(("Addable", "concat", false)),
+                        crate::ast::operator::BinaryOp::Mul => {
+                            Some(("Multiplicable", "repeat", false))
+                        }
+                        crate::ast::operator::BinaryOp::Equal => {
+                            Some(("Equatable", "equals", false))
+                        }
+                        crate::ast::operator::BinaryOp::NotEqual => {
+                            Some(("Equatable", "equals", true))
+                        }
+                        _ => None,
+                    };
+
+                    if let Some((_trait_name, method_name, negate)) = op_mapping {
+                        if let Some(crate::type_checker::context::TypeDefinition::Class(
+                            class_def,
+                        )) = ctx.type_checker.global_type_definitions.get(&class_name)
+                        {
+                            if class_def.methods.contains_key(method_name) {
+                                use crate::ast::literal::Literal;
+
+                                let mangled_name = format!("{}_{}", class_name, method_name);
+
+                                let alloc_op = ctx
+                                    .variable_map
+                                    .get("allocator")
+                                    .map(|&al| Operand::Copy(Place::new(al)));
+
+                                let mut call_args = vec![lhs_op, rhs_op];
+                                if let Some(alloc) = alloc_op {
+                                    call_args.push(alloc);
+                                }
+
+                                let method_info = &class_def.methods[method_name];
+                                let return_ty = method_info.return_type.clone();
+
+                                let func_op = Operand::Constant(Box::new(Constant {
+                                    span: expr.span.clone(),
+                                    ty: Type::new(TypeKind::Symbol, expr.span.clone()),
+                                    literal: Literal::Symbol(mangled_name),
+                                }));
+
+                                if negate {
+                                    // NotEqual: call equals then NOT the result
+                                    let eq_temp =
+                                        ctx.push_temp(return_ty.clone(), expr.span.clone());
+                                    let after_eq_bb = ctx.new_basic_block();
+                                    ctx.set_terminator(Terminator::new(
+                                        TerminatorKind::Call {
+                                            func: func_op,
+                                            args: call_args,
+                                            destination: Place::new(eq_temp),
+                                            target: Some(after_eq_bb),
+                                        },
+                                        expr.span.clone(),
+                                    ));
+                                    ctx.set_current_block(after_eq_bb);
+
+                                    let (target, ret_op) = if let Some(d) = dest {
+                                        (d.clone(), Operand::Copy(d))
+                                    } else {
+                                        let temp = ctx.push_temp(return_ty, expr.span.clone());
+                                        (Place::new(temp), Operand::Copy(Place::new(temp)))
+                                    };
+                                    ctx.push_statement(crate::mir::Statement {
+                                        kind: MirStatementKind::Assign(
+                                            target,
+                                            Rvalue::UnaryOp(
+                                                UnOp::Not,
+                                                Box::new(Operand::Copy(Place::new(eq_temp))),
+                                            ),
+                                        ),
+                                        span: expr.span.clone(),
+                                    });
+                                    return Ok(ret_op);
+                                }
+
+                                // Normal case: call the method directly
+                                let (destination, ret_op) = if let Some(d) = dest {
+                                    (d.clone(), Operand::Copy(d))
+                                } else {
+                                    let temp = ctx.push_temp(return_ty, expr.span.clone());
+                                    let p = Place::new(temp);
+                                    (p.clone(), Operand::Copy(p))
+                                };
+                                let target_bb = ctx.new_basic_block();
+                                ctx.set_terminator(Terminator::new(
+                                    TerminatorKind::Call {
+                                        func: func_op,
+                                        args: call_args,
+                                        destination,
+                                        target: Some(target_bb),
+                                    },
+                                    expr.span.clone(),
+                                ));
+                                ctx.set_current_block(target_bb);
+                                return Ok(ret_op);
+                            }
+                        }
+                    }
+                }
+            }
+
             let bin_op = match op {
                 crate::ast::operator::BinaryOp::Add => BinOp::Add,
                 crate::ast::operator::BinaryOp::Sub => BinOp::Sub,
@@ -1057,6 +1175,65 @@ pub fn lower_expression(
                                 }
                             }
                             // Variant with associated values - handled in Call
+                        }
+                    }
+                }
+            }
+
+            // Handle class method-as-property access (e.g. s.length, s.size).
+            // Zero-arg methods on class types can be accessed as properties.
+            let class_name = match &obj_ty.kind {
+                TypeKind::String => Some("String".to_string()),
+                TypeKind::Custom(name, _) => Some(name.clone()),
+                _ => None,
+            };
+
+            if let Some(class_name) = class_name {
+                if let ExpressionKind::Identifier(prop_name, _) = &prop.node {
+                    if let Some(crate::type_checker::context::TypeDefinition::Class(class_def)) =
+                        ctx.type_checker.global_type_definitions.get(&class_name)
+                    {
+                        if let Some(method_info) = class_def.methods.get(prop_name.as_str()) {
+                            // Only treat zero-arg methods as property access
+                            if method_info.params.is_empty() {
+                                let mangled_name = format!("{}_{}", class_name, prop_name);
+                                let return_ty = method_info.return_type.clone();
+
+                                let func_op = Operand::Constant(Box::new(Constant {
+                                    span: expr.span.clone(),
+                                    ty: crate::ast::types::Type::new(
+                                        TypeKind::Symbol,
+                                        expr.span.clone(),
+                                    ),
+                                    literal: crate::ast::literal::Literal::Symbol(mangled_name),
+                                }));
+
+                                let mut call_args = vec![obj_operand];
+                                if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
+                                    call_args.push(Operand::Copy(Place::new(alloc_local)));
+                                }
+
+                                let (destination, op) = if let Some(d) = dest {
+                                    (d.clone(), Operand::Copy(d))
+                                } else {
+                                    let temp = ctx.push_temp(return_ty, expr.span.clone());
+                                    let p = Place::new(temp);
+                                    (p.clone(), Operand::Copy(p))
+                                };
+
+                                let target_bb = ctx.new_basic_block();
+                                ctx.set_terminator(Terminator::new(
+                                    TerminatorKind::Call {
+                                        func: func_op,
+                                        args: call_args,
+                                        destination,
+                                        target: Some(target_bb),
+                                    },
+                                    expr.span.clone(),
+                                ));
+                                ctx.set_current_block(target_bb);
+                                return Ok(op);
+                            }
                         }
                     }
                 }
@@ -1791,28 +1968,86 @@ pub fn lower_expression(
             Ok(Operand::Copy(Place::new(temp)))
         }
         ExpressionKind::FormattedString(parts) => {
-            // Formatted string: f"Hello, {name}"
-            // Lower each part (string literals and expressions) and combine into a list
-            // The backend will concatenate them into a single string
+            // Formatted string: f"Hello, {name}! Age: {age}"
+            //
+            // Each part is converted to a String via `emit_to_string` and then
+            // all parts are concatenated left-to-right via String_concat.
+            use crate::ast::literal::Literal;
 
-            let ops: Vec<Operand> = parts
-                .iter()
-                .map(|part| lower_expression(ctx, part, None))
-                .collect::<Result<_, _>>()?;
+            if parts.is_empty() {
+                // Empty f-string: produce an empty string literal.
+                let ty = Type::new(TypeKind::String, expr.span.clone());
+                let temp = ctx.push_temp(ty.clone(), expr.span.clone());
+                ctx.push_statement(crate::mir::Statement {
+                    kind: MirStatementKind::Assign(
+                        Place::new(temp),
+                        Rvalue::Use(Operand::Constant(Box::new(Constant {
+                            span: expr.span.clone(),
+                            ty,
+                            literal: Literal::String(String::new()),
+                        }))),
+                    ),
+                    span: expr.span.clone(),
+                });
+                return Ok(Operand::Copy(Place::new(temp)));
+            }
 
-            let ty = Type::new(TypeKind::String, expr.span.clone());
-            let temp = ctx.push_temp(ty, expr.span.clone());
+            // Convert each part to a String Local.
+            let mut string_parts: Vec<crate::mir::place::Local> = Vec::with_capacity(parts.len());
 
-            // Create a formatted string aggregate - backend will convert and concatenate
-            ctx.push_statement(crate::mir::Statement {
-                kind: MirStatementKind::Assign(
-                    Place::new(temp),
-                    Rvalue::Aggregate(AggregateKind::FormattedString, ops),
-                ),
-                span: expr.span.clone(),
-            });
+            for part in parts.iter() {
+                let part_op = lower_expression(ctx, part, None)?;
 
-            Ok(Operand::Copy(Place::new(temp)))
+                // Determine the type of this part.
+                let part_kind = ctx
+                    .type_checker
+                    .get_type(part.id)
+                    .map(|t| t.kind.clone())
+                    .unwrap_or_else(|| match &part_op {
+                        Operand::Constant(c) => c.ty.kind.clone(),
+                        Operand::Copy(p) | Operand::Move(p) => {
+                            ctx.body.local_decls[p.local.0].ty.kind.clone()
+                        }
+                    });
+
+                let string_local = emit_to_string(ctx, part_op, &part_kind, &expr.span)?;
+                string_parts.push(string_local);
+            }
+
+            // Concatenate all parts left-to-right via String_concat.
+            let mut accumulator = string_parts[0];
+            for &next_part in &string_parts[1..] {
+                let mut call_args = vec![
+                    Operand::Copy(Place::new(accumulator)),
+                    Operand::Copy(Place::new(next_part)),
+                ];
+                if let Some(&al) = ctx.variable_map.get("allocator") {
+                    call_args.push(Operand::Copy(Place::new(al)));
+                }
+                let func_op = Operand::Constant(Box::new(Constant {
+                    span: expr.span.clone(),
+                    ty: Type::new(TypeKind::Symbol, expr.span.clone()),
+                    literal: Literal::Symbol("String_concat".to_string()),
+                }));
+                let result = ctx.push_temp(
+                    Type::new(TypeKind::String, expr.span.clone()),
+                    expr.span.clone(),
+                );
+                let target_bb = ctx.new_basic_block();
+                ctx.set_terminator(Terminator::new(
+                    TerminatorKind::Call {
+                        func: func_op,
+                        args: call_args,
+                        destination: Place::new(result),
+                        target: Some(target_bb),
+                    },
+                    expr.span.clone(),
+                ));
+                ctx.set_current_block(target_bb);
+                accumulator = result;
+            }
+
+            Ok(Operand::Copy(Place::new(accumulator)))
         }
         ExpressionKind::Guard(guard_op, guard_expr) => {
             // Guard expressions are used in function parameter validation
@@ -1990,4 +2225,114 @@ pub fn lower_expression(
             lower_expression(ctx, final_expr, dest)
         }
     }
+}
+
+/// Emits MIR to convert an operand to its String representation.
+///
+/// Handles `String` (identity), `Boolean` (cast to int → `miri_rt_bool_to_string`),
+/// `Float`/`F64`/`F32` (promote to f64 → `miri_rt_float_to_string`), and all
+/// integer types (`miri_rt_int_to_string`). Returns an error for unsupported types.
+pub(super) fn emit_to_string(
+    ctx: &mut LoweringContext,
+    operand: Operand,
+    type_kind: &TypeKind,
+    span: &crate::error::syntax::Span,
+) -> Result<crate::mir::place::Local, LoweringError> {
+    match type_kind {
+        TypeKind::String => {
+            // Already a string — assign to a temp Local.
+            let temp = ctx.push_temp(Type::new(TypeKind::String, span.clone()), span.clone());
+            ctx.push_statement(crate::mir::Statement {
+                kind: MirStatementKind::Assign(Place::new(temp), Rvalue::Use(operand)),
+                span: span.clone(),
+            });
+            Ok(temp)
+        }
+        TypeKind::Boolean => {
+            // Bool is I8 at the MIR level; widen to Int before calling runtime.
+            let int_ty = Type::new(TypeKind::Int, span.clone());
+            let int_temp = ctx.push_temp(int_ty.clone(), span.clone());
+            ctx.push_statement(crate::mir::Statement {
+                kind: MirStatementKind::Assign(
+                    Place::new(int_temp),
+                    Rvalue::Cast(Box::new(operand), int_ty),
+                ),
+                span: span.clone(),
+            });
+            let call_args = vec![Operand::Copy(Place::new(int_temp))];
+            emit_runtime_to_string(ctx, "miri_rt_bool_to_string", call_args, span)
+        }
+        TypeKind::Float | TypeKind::F64 | TypeKind::F32 => {
+            // miri_rt_float_to_string expects f64. Promote F32 if needed.
+            let float_op = if matches!(type_kind, TypeKind::F32) {
+                let f64_ty = Type::new(TypeKind::Float, span.clone());
+                let f64_temp = ctx.push_temp(f64_ty.clone(), span.clone());
+                ctx.push_statement(crate::mir::Statement {
+                    kind: MirStatementKind::Assign(
+                        Place::new(f64_temp),
+                        Rvalue::Cast(Box::new(operand), f64_ty),
+                    ),
+                    span: span.clone(),
+                });
+                Operand::Copy(Place::new(f64_temp))
+            } else {
+                operand
+            };
+            let call_args = vec![float_op];
+            emit_runtime_to_string(ctx, "miri_rt_float_to_string", call_args, span)
+        }
+        TypeKind::Int
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::I128
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::U128 => {
+            let call_args = vec![operand];
+            emit_runtime_to_string(ctx, "miri_rt_int_to_string", call_args, span)
+        }
+        other => Err(LoweringError::unsupported_expression(
+            format!(
+                "Cannot convert type '{}' to String in formatted string",
+                other
+            ),
+            span.clone(),
+        )),
+    }
+}
+
+/// Emits a call to a runtime type-to-string conversion function.
+///
+/// Creates a `TerminatorKind::Call` to the named runtime function, returns the
+/// `Local` holding the resulting `String`.
+fn emit_runtime_to_string(
+    ctx: &mut LoweringContext,
+    runtime_fn: &str,
+    args: Vec<Operand>,
+    span: &crate::error::syntax::Span,
+) -> Result<crate::mir::place::Local, LoweringError> {
+    use crate::ast::literal::Literal;
+
+    let result = ctx.push_temp(Type::new(TypeKind::String, span.clone()), span.clone());
+    let func_op = Operand::Constant(Box::new(Constant {
+        span: span.clone(),
+        ty: Type::new(TypeKind::Symbol, span.clone()),
+        literal: Literal::Symbol(runtime_fn.to_string()),
+    }));
+    let target_bb = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func: func_op,
+            args,
+            destination: Place::new(result),
+            target: Some(target_bb),
+        },
+        span.clone(),
+    ));
+    ctx.set_current_block(target_bb);
+    Ok(result)
 }

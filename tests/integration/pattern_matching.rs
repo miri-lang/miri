@@ -14,7 +14,7 @@ let result = match val
     1: 100
     2: 200
     _: 0
-print(result)
+print(f"{result}")
         "#,
         "100",
     );
@@ -31,7 +31,7 @@ let result = match x
     0: 0
     42: 1
     _: 2
-print(result)
+print(f"{result}")
     "#,
         "1",
     );
@@ -48,7 +48,7 @@ let result = match x
     n if n > 10: 1
     n if n > 5: 2
     _: 3
-print(result)
+print(f"{result}")
     "#,
         "1",
     );
@@ -63,7 +63,7 @@ use system.io
 let x = 42
 let result = match x
     value: value * 2
-print(result)
+print(f"{result}")
     "#,
         "84",
     );
@@ -80,7 +80,7 @@ let result = match val
     1: 10
     2: 20
     _: 999
-print(result)
+print(f"{result}")
     "#,
         "999",
     );
@@ -100,7 +100,7 @@ let result = match outer
         2: 20
         _: 30
     _: 0
-print(result)
+print(f"{result}")
     "#,
         "20",
     );

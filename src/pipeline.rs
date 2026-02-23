@@ -2,10 +2,12 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::ast::common::RuntimeKind;
+use crate::ast::expression::ExpressionKind;
 use crate::ast::factory::{
     func, int_literal_expression, return_statement, type_expr_non_null, type_int,
 };
 use crate::ast::statement::{Statement, StatementKind};
+use crate::ast::types::{Type, TypeKind};
 use crate::ast::Program;
 use crate::cli::args::CpuBackend;
 use crate::codegen::Backend;
@@ -20,11 +22,14 @@ use std::process::Command;
 
 use crate::type_checker::TypeChecker;
 
-fn has_functions(program: &Program) -> bool {
-    program
-        .body
-        .iter()
-        .any(|s| matches!(&s.node, StatementKind::FunctionDeclaration(..)))
+fn has_main_function(program: &Program) -> bool {
+    program.body.iter().any(|s| {
+        if let StatementKind::FunctionDeclaration(name, ..) = &s.node {
+            name == "main"
+        } else {
+            false
+        }
+    })
 }
 
 fn is_wrappable_stmt(stmt: &Statement) -> bool {
@@ -53,6 +58,7 @@ fn is_top_level_stmt(stmt: &Statement) -> bool {
             | StatementKind::Trait(..)
             | StatementKind::Type(..)
             | StatementKind::RuntimeFunctionDeclaration(..)
+            | StatementKind::FunctionDeclaration(..)
     )
 }
 
@@ -78,39 +84,53 @@ fn collect_runtime_info(program: &Program, imported_stmts: &[Statement]) -> Runt
     let all_stmts = program.body.iter().chain(imported_stmts.iter());
 
     for stmt in all_stmts {
-        if let StatementKind::RuntimeFunctionDeclaration(runtime_kind, name, params, return_type) =
-            &stmt.node
-        {
-            required_runtimes.insert(runtime_kind.clone());
+        match &stmt.node {
+            StatementKind::RuntimeFunctionDeclaration(runtime_kind, name, params, return_type) => {
+                required_runtimes.insert(runtime_kind.clone());
 
-            #[cfg(feature = "cranelift")]
-            {
-                use crate::codegen::cranelift::translate_type;
-                use crate::type_checker::resolve_type_name;
+                #[cfg(feature = "cranelift")]
+                {
+                    use crate::codegen::cranelift::translate_type;
+                    use crate::type_checker::resolve_type_name;
 
-                let mut param_types: Vec<_> = params
-                    .iter()
-                    .filter_map(|p| resolve_type_name(&p.typ).map(|t| translate_type(&t)))
-                    .collect();
+                    let mut param_types: Vec<_> = params
+                        .iter()
+                        .filter_map(|p| resolve_type_name(&p.typ).map(|t| translate_type(&t)))
+                        .collect();
 
-                // Inject implicit allocator if not explicitly declared
-                if !params.iter().any(|p| p.name == "allocator") {
-                    param_types.push(translate_type(&crate::ast::types::Type::new(
-                        crate::ast::types::TypeKind::Int,
-                        stmt.span.clone(),
-                    )));
+                    // Inject implicit allocator if not explicitly declared
+                    if !params.iter().any(|p| p.name == "allocator") {
+                        param_types.push(translate_type(&crate::ast::types::Type::new(
+                            crate::ast::types::TypeKind::Int,
+                            stmt.span.clone(),
+                        )));
+                    }
+
+                    let ret_type = return_type
+                        .as_ref()
+                        .and_then(|rt| resolve_type_name(rt).map(|t| translate_type(&t)));
+
+                    imports.push(crate::codegen::cranelift::RuntimeImport {
+                        name: name.clone(),
+                        param_types,
+                        return_type: ret_type,
+                    });
                 }
-
-                let ret_type = return_type
-                    .as_ref()
-                    .and_then(|rt| resolve_type_name(rt).map(|t| translate_type(&t)));
-
-                imports.push(crate::codegen::cranelift::RuntimeImport {
-                    name: name.clone(),
-                    param_types,
-                    return_type: ret_type,
-                });
             }
+            // Walk class bodies to collect required runtimes for linking.
+            // Class-level runtime declarations are NOT pre-declared as Cranelift imports
+            // because they are called with different signatures (no allocator injection)
+            // from compiled class methods. The translator handles them dynamically.
+            StatementKind::Class(_, _, _, _, class_body, _, _) => {
+                for class_stmt in class_body {
+                    if let StatementKind::RuntimeFunctionDeclaration(runtime_kind, ..) =
+                        &class_stmt.node
+                    {
+                        required_runtimes.insert(runtime_kind.clone());
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -121,14 +141,14 @@ fn collect_runtime_info(program: &Program, imported_stmts: &[Statement]) -> Runt
     }
 }
 
-/// Wraps a script-style program (no function declarations) in a synthetic `main` function.
-/// Skips programs that already contain functions or non-wrappable type definitions.
+/// Wraps a script-style program (with or without function declarations) in a synthetic `main` function.
+/// Skips programs that already contain a `main` function or non-wrappable type definitions.
 ///
 /// The synthetic main has return type `Int` and appends `return 0` so the process
 /// exits cleanly. Without this, the exit code leaks from whatever value the last
 /// expression leaves in the return register.
 fn wrap_script_in_main(program: &mut Program) {
-    if has_functions(program) {
+    if has_main_function(program) {
         return;
     }
 
@@ -423,18 +443,79 @@ impl Pipeline {
             }
         }
 
-        // Lower functions imported from stdlib modules
+        // Lower functions and class methods imported from stdlib modules
         for stmt in &result.type_checker.imported_statements {
-            if let StatementKind::FunctionDeclaration(name, _, _, _, _, _) = &stmt.node {
-                if !lowered_names.contains(name) {
-                    let body =
-                        mir::lowering::lower_function(stmt, &result.type_checker, is_release, true)
-                            .map_err(|e| {
-                                CompilerError::Codegen(format!("MIR lowering failed: {}", e))
-                            })?;
-                    lowered_names.insert(name.clone());
-                    bodies.push((name.clone(), body));
+            match &stmt.node {
+                StatementKind::FunctionDeclaration(name, _, _, _, _, _) => {
+                    if !lowered_names.contains(name) {
+                        let body = mir::lowering::lower_function(
+                            stmt,
+                            &result.type_checker,
+                            is_release,
+                            true,
+                        )
+                        .map_err(|e| {
+                            CompilerError::Codegen(format!("MIR lowering failed: {}", e))
+                        })?;
+                        lowered_names.insert(name.clone());
+                        bodies.push((name.clone(), body));
+                    }
                 }
+                StatementKind::Class(class_name_expr, _, _, _, class_body, _, _) => {
+                    // Extract the class name string
+                    let class_name =
+                        if let ExpressionKind::Identifier(name, _) = &class_name_expr.node {
+                            name.as_str()
+                        } else {
+                            continue;
+                        };
+
+                    // Build the `self` type for this class
+                    let self_type = Type::new(
+                        TypeKind::Custom(class_name.to_string(), None),
+                        stmt.span.clone(),
+                    );
+
+                    // Compile each non-runtime method in the class body
+                    for method_stmt in class_body {
+                        if let StatementKind::FunctionDeclaration(method_name, _, _, _, body, _) =
+                            &method_stmt.node
+                        {
+                            // Skip methods without a body (abstract/forward declarations)
+                            if body.is_none() {
+                                continue;
+                            }
+
+                            // Skip constructors — `init` has special semantics and is not
+                            // called from compiled code (strings are created as literals).
+                            if method_name == "init" {
+                                continue;
+                            }
+
+                            let mangled = format!("{}_{}", class_name, method_name);
+                            if lowered_names.contains(&mangled) {
+                                continue;
+                            }
+
+                            let mir_body = mir::lowering::lower_class_method(
+                                method_stmt,
+                                self_type.clone(),
+                                &result.type_checker,
+                                is_release,
+                            )
+                            .map_err(|e| {
+                                CompilerError::Codegen(format!(
+                                    "MIR lowering failed for {}: {}",
+                                    mangled, e
+                                ))
+                            })?;
+
+                            lowered_names.insert(mangled.clone());
+                            bodies.push((mangled, mir_body));
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 

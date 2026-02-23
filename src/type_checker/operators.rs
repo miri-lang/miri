@@ -6,7 +6,7 @@
 //! This module handles type validation for binary and unary operators,
 //! ensuring operands have compatible types for the requested operations.
 
-use super::context::Context;
+use super::context::{Context, TypeDefinition};
 use super::TypeChecker;
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::BinaryOp;
@@ -83,20 +83,25 @@ impl TypeChecker {
             ));
         }
 
-        // String concatenation
-        if matches!(op, BinaryOp::Add)
-            && matches!(left.kind, TypeKind::String)
-            && matches!(right.kind, TypeKind::String)
-        {
-            return Ok(crate::ast::factory::make_type(TypeKind::String));
+        // Trait-based Add: if left implements Addable and types are compatible
+        if matches!(op, BinaryOp::Add) && self.type_implements_trait(left, "Addable") {
+            if self.are_compatible(left, right, context) {
+                return Ok(left.clone());
+            }
+            return Err(format!(
+                "Type mismatch: cannot add {} and {} (both must be the same type)",
+                left, right
+            ));
         }
-
-        // String multiplication (repetition)
-        if matches!(op, BinaryOp::Mul)
-            && ((matches!(left.kind, TypeKind::String) && matches!(right.kind, TypeKind::Int))
-                || (matches!(left.kind, TypeKind::Int) && matches!(right.kind, TypeKind::String)))
-        {
-            return Ok(crate::ast::factory::make_type(TypeKind::String));
+        // Trait-based Mul: if left implements Multiplicable and right is int
+        if matches!(op, BinaryOp::Mul) && self.type_implements_trait(left, "Multiplicable") {
+            if self.is_numeric(right) {
+                return Ok(left.clone());
+            }
+            return Err(format!(
+                "Type mismatch: cannot multiply {} by {} (right operand must be an integer)",
+                left, right
+            ));
         }
 
         Err(format!(
@@ -128,6 +133,13 @@ impl TypeChecker {
 
         // Allow comparison between compatible types
         if self.are_compatible(left, right, context) {
+            return Ok(bool_type());
+        }
+
+        // Trait-based Equatable: if left implements Equatable
+        if self.type_implements_trait(left, "Equatable")
+            && self.are_compatible(left, right, context)
+        {
             return Ok(bool_type());
         }
 
@@ -282,6 +294,26 @@ impl TypeChecker {
                 }
             }
             _ => Ok(expr_type.clone()),
+        }
+    }
+
+    /// Checks whether a type implements a given trait by looking up its class
+    /// definition and inspecting the `traits` list.
+    ///
+    /// Maps `TypeKind::String` to class `"String"`, `TypeKind::Custom(name, _)` to `name`,
+    /// and returns `false` for primitive types.
+    fn type_implements_trait(&self, ty: &Type, trait_name: &str) -> bool {
+        let class_name = match &ty.kind {
+            TypeKind::String => "String",
+            TypeKind::Custom(name, _) => name.as_str(),
+            _ => return false,
+        };
+
+        if let Some(TypeDefinition::Class(class_def)) = self.global_type_definitions.get(class_name)
+        {
+            class_def.traits.iter().any(|t| t == trait_name)
+        } else {
+            false
         }
     }
 }

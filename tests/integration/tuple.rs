@@ -25,7 +25,7 @@ fn test_tuple_access() {
 use system.io
 
 let t = (10, 20, 30)
-print(t.0 + t.1)
+print(f"{t.0 + t.1}")
     "#,
         "30",
     );

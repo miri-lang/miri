@@ -54,11 +54,11 @@ fn test_runtime_string_len() {
     assert_runs_with_output(
         r#"
 use system.io
+use system.string
 
-runtime fn miri_rt_string_len(s string) int
 fn main()
     let s = "Hello, Miri!"
-    println(miri_rt_string_len(s))
+    println(f"{s.size()}")
 "#,
         "12",
     );
@@ -69,16 +69,20 @@ fn test_runtime_string_empty() {
     assert_runs_with_output(
         r#"
 use system.io
+use system.string
 
-runtime fn miri_rt_string_is_empty(s string) u8
 fn main()
     let s1 = ""
     let s2 = "not empty"
-    let result = if miri_rt_string_is_empty(s1) == 1 and miri_rt_string_is_empty(s2) == 0
+    let a = if s1.is_empty()
         1
     else
         0
-    println(result)
+    let b = if s2.is_empty()
+        0
+    else
+        1
+    println(f"{a * b}")
 "#,
         "1",
     );
@@ -89,25 +93,19 @@ fn test_runtime_string_concat() {
     assert_runs_with_output(
         r#"
 use system.io
-
-runtime fn miri_rt_string_concat(a string, b string) string
-runtime fn miri_rt_string_equals(a string, b string) u8
-runtime fn miri_rt_string_free(s string)
+use system.string
 
 fn main()
     let a = "Hello, "
     let b = "World!"
-    let combined = miri_rt_string_concat(a, b)
+    let combined = a.concat(b)
     let expected = "Hello, World!"
 
-    let eq = miri_rt_string_equals(combined, expected)
-    miri_rt_string_free(combined)
-
-    let result = if eq == 1
+    let result = if combined.equals(expected)
         1
     else
         0
-    println(result)
+    println(f"{result}")
 "#,
         "1",
     );
@@ -118,28 +116,18 @@ fn test_runtime_string_case_conversion() {
     assert_runs_with_output(
         r#"
 use system.io
-
-runtime fn miri_rt_string_to_lower(s string) string
-runtime fn miri_rt_string_to_upper(s string) string
-runtime fn miri_rt_string_equals(a string, b string) u8
-runtime fn miri_rt_string_free(s string)
+use system.string
 
 fn main()
     let s = "Mixed CASE"
-    let lower = miri_rt_string_to_lower(s)
-    let upper = miri_rt_string_to_upper(s)
+    let lower = s.to_lower()
+    let upper = s.to_upper()
 
-    let ok_lower = miri_rt_string_equals(lower, "mixed case")
-    let ok_upper = miri_rt_string_equals(upper, "MIXED CASE")
-
-    miri_rt_string_free(lower)
-    miri_rt_string_free(upper)
-
-    let result = if ok_lower == 1 and ok_upper == 1
+    let result = if lower.equals("mixed case") and upper.equals("MIXED CASE")
         1
     else
         0
-    println(result)
+    println(f"{result}")
 "#,
         "1",
     );
@@ -150,22 +138,17 @@ fn test_runtime_string_trim() {
     assert_runs_with_output(
         r#"
 use system.io
-
-runtime fn miri_rt_string_trim(s string) string
-runtime fn miri_rt_string_equals(a string, b string) u8
-runtime fn miri_rt_string_free(s string)
+use system.string
 
 fn main()
     let s = "  val  "
-    let trimmed = miri_rt_string_trim(s)
-    let eq = miri_rt_string_equals(trimmed, "val")
-    miri_rt_string_free(trimmed)
+    let trimmed = s.trim()
 
-    let result = if eq == 1
+    let result = if trimmed.equals("val")
         1
     else
         0
-    println(result)
+    println(f"{result}")
 "#,
         "1",
     );
@@ -187,7 +170,7 @@ fn main()
     else
         miri_free(ptr, 1024, 8)
         1
-    println(result)
+    println(f"{result}")
 "#,
         "1",
     );
@@ -212,7 +195,7 @@ fn main()
     else
         miri_free(new_ptr, 128, 8)
         1
-    println(result)
+    println(f"{result}")
 "#,
         "1",
     );
@@ -223,22 +206,16 @@ fn test_runtime_string_contains_starts_ends() {
     assert_runs_with_output(
         r#"
 use system.io
-
-runtime fn miri_rt_string_contains(h string, n string) u8
-runtime fn miri_rt_string_starts_with(s string, p string) u8
-runtime fn miri_rt_string_ends_with(s string, suffix string) u8
+use system.string
 
 fn main()
     let s = "foobarbaz"
-    let c = miri_rt_string_contains(s, "bar")
-    let st = miri_rt_string_starts_with(s, "foo")
-    let e = miri_rt_string_ends_with(s, "baz")
 
-    let result = if c == 1 and st == 1 and e == 1
+    let result = if s.contains("bar") and s.starts_with("foo") and s.ends_with("baz")
         1
     else
         0
-    println(result)
+    println(f"{result}")
 "#,
         "1",
     );
@@ -249,22 +226,17 @@ fn test_runtime_string_substring() {
     assert_runs_with_output(
         r#"
 use system.io
-
-runtime fn miri_rt_string_substring(s string, start int, end int) string
-runtime fn miri_rt_string_equals(a string, b string) u8
-runtime fn miri_rt_string_free(s string)
+use system.string
 
 fn main()
     let s = "hello world"
-    let sub = miri_rt_string_substring(s, 0, 5)
-    let eq = miri_rt_string_equals(sub, "hello")
-    miri_rt_string_free(sub)
+    let sub = s.substring(0, 5)
 
-    let result = if eq == 1
+    let result = if sub.equals("hello")
         1
     else
         0
-    println(result)
+    println(f"{result}")
 "#,
         "1",
     );
@@ -279,7 +251,7 @@ use system.io
 runtime fn miri_rt_println(s string)
 fn main()
     miri_rt_println("IO Smoke Test")
-    println(1)
+    println(f"{1}")
 "#,
         "1",
     );
@@ -290,11 +262,11 @@ fn probe_string_len() {
     assert_runs_with_output(
         r#"
 use system.io
+use system.string
 
 fn main()
-    runtime fn miri_rt_string_len(s string) int
     let s = "hello"
-    println(miri_rt_string_len(s))
+    println(f"{s.size()}")
 "#,
         "5",
     );

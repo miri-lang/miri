@@ -13,7 +13,7 @@ fn add(a int, b int) int
     a + b
 
 fn main()
-    println(add(3, 4))
+    println(f"{add(3, 4)}")
     "#,
         "7",
     );
@@ -29,7 +29,7 @@ fn answer() int
     42
 
 fn main()
-    println(answer())
+    println(f"{answer()}")
     "#,
         "42",
     );
@@ -45,7 +45,7 @@ fn double(x int) int
     x * 2
 
 fn main()
-    println(double(21))
+    println(f"{double(21)}")
     "#,
         "42",
     );
@@ -61,7 +61,7 @@ fn square(x int) int
     x * x
 
 fn main()
-    println(square(3) + square(4))
+    println(f"{square(3) + square(4)}")
     "#,
         "25",
     );
@@ -80,7 +80,7 @@ fn factorial(n int) int
         n * factorial(n - 1)
 
 fn main()
-    println(factorial(5))
+    println(f"{factorial(5)}")
     "#,
         "120",
     );
@@ -99,7 +99,7 @@ fn fib(n int) int
         fib(n - 1) + fib(n - 2)
 
 fn main()
-    println(fib(10))
+    println(f"{fib(10)}")
     "#,
         "55",
     );
@@ -118,7 +118,7 @@ fn mul(a int, b int) int
     a * b
 
 fn main()
-    println(add(mul(2, 3), mul(4, 5)))
+    println(f"{add(mul(2, 3), mul(4, 5))}")
     "#,
         "26",
     ); // (2*3) + (4*5) = 6 + 20 = 26
@@ -136,7 +136,7 @@ fn compute(x int) int
     doubled + tripled
 
 fn main()
-    println(compute(10))
+    println(f"{compute(10)}")
     "#,
         "50",
     ); // 20 + 30 = 50
@@ -168,7 +168,7 @@ fn abs(x int) int
         x
 
 fn main()
-    println(abs(-42))
+    println(f"{abs(-42)}")
     "#,
         "42",
     );

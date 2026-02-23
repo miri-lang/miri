@@ -14,7 +14,7 @@ fn test_list_indexing() {
         r#"
 use system.io
 let list = [10, 20, 30]
-print(list[1])
+print(f"{list[1]}")
     "#,
         "20",
     );
@@ -27,7 +27,7 @@ fn test_list_index_assignment() {
 use system.io
 var list = [10, 20, 30]
 list[1] = 99
-print(list[1])
+print(f"{list[1]}")
     "#,
         "99",
     );

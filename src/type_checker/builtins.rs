@@ -7,24 +7,26 @@
 //! available in every Miri program without explicit imports.
 
 use crate::ast::types::{TypeDeclarationKind, TypeKind};
-use crate::ast::{MemberVisibility, Parameter};
+use crate::ast::MemberVisibility;
 use std::collections::HashMap;
 
-use super::context::{GenericDefinition, StructDefinition, SymbolInfo, TypeDefinition};
+use super::context::{GenericDefinition, StructDefinition, TypeDefinition};
 
 /// Initializes built-in types and functions.
 ///
 /// Returns a tuple of:
 /// - Global scope containing built-in functions (e.g., `print`)
 /// - Global type definitions containing built-in types (e.g., `String`, `Dim3`)
-pub fn initialize_builtins() -> (HashMap<String, SymbolInfo>, HashMap<String, TypeDefinition>) {
+pub fn initialize_builtins() -> (
+    HashMap<String, super::context::SymbolInfo>,
+    HashMap<String, TypeDefinition>,
+) {
     let mut type_definitions = HashMap::new();
-    let mut global_scope = HashMap::new();
+    let global_scope = HashMap::new();
 
     register_primitive_types(&mut type_definitions);
     register_gpu_types(&mut type_definitions);
     register_async_types(&mut type_definitions);
-    register_builtin_functions(&mut global_scope);
 
     (global_scope, type_definitions)
 }
@@ -115,71 +117,6 @@ fn register_async_types(types: &mut HashMap<String, TypeDefinition>) {
     );
 }
 
-/// Registers built-in functions like `print`.
-fn register_builtin_functions(scope: &mut HashMap<String, SymbolInfo>) {
-    // print<T>(value: T) -> void
-    // A generic function that can print any value
-    let generic_t = crate::ast::factory::make_type(TypeKind::Generic(
-        "T".to_string(),
-        None,
-        TypeDeclarationKind::None,
-    ));
-    let generic_decl = crate::ast::factory::generic_type_expression(
-        crate::ast::factory::identifier("T"),
-        None,
-        TypeDeclarationKind::None,
-    );
-
-    let void_ret = || {
-        Some(Box::new(crate::ast::factory::type_expr_non_null(
-            crate::ast::factory::make_type(TypeKind::Void),
-        )))
-    };
-
-    let generic_param = |name: &str| Parameter {
-        name: name.to_string(),
-        typ: Box::new(crate::ast::factory::type_expr_non_null(generic_t.clone())),
-        guard: None,
-        default_value: None,
-    };
-
-    // print<T>(value: T) -> void
-    scope.insert(
-        "print".to_string(),
-        SymbolInfo {
-            consumed: false,
-            is_constant: false,
-            ty: crate::ast::factory::make_type(TypeKind::Function(
-                Some(vec![generic_decl.clone()]),
-                vec![generic_param("value")],
-                void_ret(),
-            )),
-            mutable: false,
-            visibility: MemberVisibility::Public,
-            module: "std".to_string(),
-            value: None,
-        },
-    );
-
-    // println<T>(value: T) -> void
-    scope.insert(
-        "println".to_string(),
-        SymbolInfo {
-            consumed: false,
-            is_constant: false,
-            ty: crate::ast::factory::make_type(TypeKind::Function(
-                Some(vec![generic_decl]),
-                vec![generic_param("value")],
-                void_ret(),
-            )),
-            mutable: false,
-            visibility: MemberVisibility::Public,
-            module: "std".to_string(),
-            value: None,
-        },
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,8 +132,8 @@ mod tests {
         assert!(types.contains_key("Kernel"));
         assert!(types.contains_key("Future"));
 
-        // Check that print function exists
-        assert!(scope.contains_key("print"));
+        // Verify scope is empty (print/println come from stdlib, not builtins)
+        assert!(scope.is_empty());
     }
 
     #[test]

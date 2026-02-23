@@ -475,6 +475,50 @@ pub unsafe extern "C" fn miri_rt_string_clone(ptr: *const MiriString) -> *mut Mi
     Box::into_raw(string)
 }
 
+/// Repeats a string a given number of times.
+///
+/// # Safety
+/// - `ptr` must be a valid pointer to a `MiriString` or null.
+#[no_mangle]
+pub unsafe extern "C" fn miri_rt_string_repeat(
+    ptr: *const MiriString,
+    count: usize,
+) -> *mut MiriString {
+    if ptr.is_null() || count == 0 {
+        return miri_rt_string_new();
+    }
+    let s = (*ptr).as_str();
+    let repeated = s.repeat(count);
+    let string = Box::new(MiriString::from_str(&repeated));
+    Box::into_raw(string)
+}
+
+/// Returns the character at the given index as a new single-character string.
+///
+/// Uses Unicode grapheme-aware indexing (character index, not byte index).
+/// Returns an empty string if the index is out of bounds.
+///
+/// # Safety
+/// - `ptr` must be a valid pointer to a `MiriString` or null.
+#[no_mangle]
+pub unsafe extern "C" fn miri_rt_string_char_at(
+    ptr: *const MiriString,
+    index: usize,
+) -> *mut MiriString {
+    if ptr.is_null() {
+        return miri_rt_string_new();
+    }
+    let s = (*ptr).as_str();
+    if let Some(ch) = s.chars().nth(index) {
+        let mut buf = [0u8; 4];
+        let char_str = ch.encode_utf8(&mut buf);
+        let string = Box::new(MiriString::from_str(char_str));
+        Box::into_raw(string)
+    } else {
+        miri_rt_string_new()
+    }
+}
+
 // =============================================================================
 // Type-to-String Conversion Functions
 // =============================================================================

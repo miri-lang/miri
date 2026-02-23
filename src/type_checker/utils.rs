@@ -262,6 +262,18 @@ impl TypeChecker {
         expr: &Expression,
         context: &Context,
     ) -> Type {
+        // Resolve `Self` to the current class/trait type
+        if name == "Self" {
+            if let Some(class_type) = &context.current_class_type {
+                return class_type.clone();
+            }
+            self.report_error(
+                "'Self' can only be used inside a class or trait".to_string(),
+                expr.span.clone(),
+            );
+            return Self::error_type();
+        }
+
         // Handle built-in generic type aliases
         if let Some(resolved) = self.resolve_builtin_type_alias(name, &args, context) {
             return resolved;

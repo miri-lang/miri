@@ -303,14 +303,70 @@ fn lower_for_over_iterable(
         span.clone(),
     ));
 
-    // Header: Check idx < len(list)
+    // Determine if the iterable is a class implementing Iterable trait.
+    // If so, we use method calls (ClassName_length, ClassName_element_at)
+    // instead of raw Rvalue::Len and PlaceElem::Index.
+    let iterable_class = {
+        let list_ty_kind = ctx
+            .type_checker
+            .get_type(iterable.id)
+            .map(|ty| ty.kind.clone());
+        match list_ty_kind {
+            Some(TypeKind::String) => Some("String".to_string()),
+            Some(TypeKind::Custom(name, _)) => Some(name),
+            _ => None,
+        }
+        .and_then(|name| {
+            if let Some(TypeDefinition::Class(class_def)) =
+                ctx.type_checker.global_type_definitions.get(&name)
+            {
+                if class_def.traits.iter().any(|t| t == "Iterable") {
+                    Some((name, class_def.clone()))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+    };
+
+    // Header: Check idx < length
     ctx.set_current_block(header_bb);
 
     let len_temp = ctx.push_temp(idx_ty.clone(), span.clone());
-    ctx.push_statement(crate::mir::Statement {
-        kind: StatementKind::Assign(Place::new(len_temp), Rvalue::Len(Place::new(list_local))),
-        span: span.clone(),
-    });
+
+    if let Some((ref class_name, _)) = iterable_class {
+        // Call ClassName_length(iterable) via MIR terminator
+        let length_symbol = format!("{}_length", class_name);
+        let func_op = Operand::Constant(Box::new(Constant {
+            span: span.clone(),
+            ty: Type::new(TypeKind::Symbol, span.clone()),
+            literal: crate::ast::literal::Literal::Symbol(length_symbol),
+        }));
+        let after_len_bb = ctx.new_basic_block();
+        ctx.set_terminator(Terminator::new(
+            TerminatorKind::Call {
+                func: func_op,
+                args: {
+                    let mut args = vec![Operand::Copy(Place::new(list_local))];
+                    if let Some(&allocator) = ctx.variable_map.get("allocator") {
+                        args.push(Operand::Copy(Place::new(allocator)));
+                    }
+                    args
+                },
+                destination: Place::new(len_temp),
+                target: Some(after_len_bb),
+            },
+            span.clone(),
+        ));
+        ctx.set_current_block(after_len_bb);
+    } else {
+        ctx.push_statement(crate::mir::Statement {
+            kind: StatementKind::Assign(Place::new(len_temp), Rvalue::Len(Place::new(list_local))),
+            span: span.clone(),
+        });
+    }
 
     let bool_ty = Type::new(TypeKind::Boolean, span.clone());
     let cond_temp = ctx.push_temp(bool_ty, span.clone());
@@ -339,18 +395,48 @@ fn lower_for_over_iterable(
     ctx.enter_loop(exit_bb, increment_bb);
     ctx.set_current_block(body_bb);
 
-    // Assign loop_var = list[idx]
-    let mut indexed_place = Place::new(list_local);
-    indexed_place
-        .projection
-        .push(crate::mir::PlaceElem::Index(idx_var));
-    ctx.push_statement(crate::mir::Statement {
-        kind: StatementKind::Assign(
-            Place::new(loop_var),
-            Rvalue::Use(Operand::Copy(indexed_place)),
-        ),
-        span: span.clone(),
-    });
+    // Assign loop_var = element_at(idx) or list[idx]
+    if let Some((ref class_name, _)) = iterable_class {
+        // Call ClassName_element_at(iterable, idx) via MIR terminator
+        let element_at_symbol = format!("{}_element_at", class_name);
+        let func_op = Operand::Constant(Box::new(Constant {
+            span: span.clone(),
+            ty: Type::new(TypeKind::Symbol, span.clone()),
+            literal: crate::ast::literal::Literal::Symbol(element_at_symbol),
+        }));
+        let after_elem_bb = ctx.new_basic_block();
+        ctx.set_terminator(Terminator::new(
+            TerminatorKind::Call {
+                func: func_op,
+                args: {
+                    let mut args = vec![
+                        Operand::Copy(Place::new(list_local)),
+                        Operand::Copy(Place::new(idx_var)),
+                    ];
+                    if let Some(&allocator) = ctx.variable_map.get("allocator") {
+                        args.push(Operand::Copy(Place::new(allocator)));
+                    }
+                    args
+                },
+                destination: Place::new(loop_var),
+                target: Some(after_elem_bb),
+            },
+            span.clone(),
+        ));
+        ctx.set_current_block(after_elem_bb);
+    } else {
+        let mut indexed_place = Place::new(list_local);
+        indexed_place
+            .projection
+            .push(crate::mir::PlaceElem::Index(idx_var));
+        ctx.push_statement(crate::mir::Statement {
+            kind: StatementKind::Assign(
+                Place::new(loop_var),
+                Rvalue::Use(Operand::Copy(indexed_place)),
+            ),
+            span: span.clone(),
+        });
+    }
 
     lower_statement(ctx, body)?;
 
@@ -610,6 +696,70 @@ pub fn lower_call(
         }
     }
 
+    // Handle method calls on class types (e.g. s.to_upper(), obj.method(args)).
+    // Resolves the class definition from the object's type and emits a call to
+    // the mangled function `{ClassName}_{method_name}`.
+    if let ExpressionKind::Member(obj, method_expr) = &func.node {
+        if let Some(obj_ty) = ctx.type_checker.get_type(obj.id) {
+            let class_name = match &obj_ty.kind {
+                TypeKind::String => Some("String".to_string()),
+                TypeKind::Custom(name, _) => Some(name.clone()),
+                _ => None,
+            };
+
+            if let Some(class_name) = class_name {
+                if let ExpressionKind::Identifier(method_name, _) = &method_expr.node {
+                    if let Some(crate::type_checker::context::TypeDefinition::Class(class_def)) =
+                        ctx.type_checker.global_type_definitions.get(&class_name)
+                    {
+                        if let Some(method_info) = class_def.methods.get(method_name.as_str()) {
+                            let mangled_name = format!("{}_{}", class_name, method_name);
+                            let return_ty = method_info.return_type.clone();
+
+                            let self_op = lower_expression(ctx, obj, None)?;
+                            let mut call_args = vec![self_op];
+                            for arg in args {
+                                call_args.push(lower_expression(ctx, arg, None)?);
+                            }
+
+                            // Inject allocator — compiled class methods accept it as their last arg
+                            if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
+                                call_args.push(Operand::Copy(Place::new(alloc_local)));
+                            }
+
+                            let func_op = Operand::Constant(Box::new(crate::mir::Constant {
+                                span: span.clone(),
+                                ty: Type::new(TypeKind::Symbol, span.clone()),
+                                literal: crate::ast::literal::Literal::Symbol(mangled_name),
+                            }));
+
+                            let (destination, op) = if let Some(d) = dest {
+                                (d.clone(), Operand::Copy(d))
+                            } else {
+                                let temp = ctx.push_temp(return_ty, span.clone());
+                                let p = Place::new(temp);
+                                (p.clone(), Operand::Copy(p))
+                            };
+
+                            let target_bb = ctx.new_basic_block();
+                            ctx.set_terminator(Terminator::new(
+                                TerminatorKind::Call {
+                                    func: func_op,
+                                    args: call_args,
+                                    destination,
+                                    target: Some(target_bb),
+                                },
+                                span.clone(),
+                            ));
+                            ctx.set_current_block(target_bb);
+                            return Ok(op);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Check for struct constructor call
     // The type checker gives struct names the type Meta(Custom(name, ...))
     if let Some(func_ty) = ctx.type_checker.get_type(func.id) {
@@ -633,24 +783,6 @@ pub fn lower_call(
         }
     }
 
-    // Detect print/println with generic (non-string) arguments.
-    // The built-in print<T>/println<T> generics accept any type but the
-    // runtime expects a *const MiriString.  When called with non-string args
-    // we wrap each arg in an f-string conversion so the codegen receives a
-    // proper MiriString pointer.
-    let is_print_generic = {
-        let fname = match &func.node {
-            ExpressionKind::Identifier(name, _) => Some(name.as_str()),
-            _ => None,
-        };
-        if let (Some(name), Some(ty)) = (fname, ctx.type_checker.get_type(func.id)) {
-            (name == "print" || name == "println")
-                && matches!(&ty.kind, TypeKind::Function(Some(gens), _, _) if !gens.is_empty())
-        } else {
-            false
-        }
-    };
-
     let func_op = lower_expression(ctx, func, None)?;
 
     // Try to get function type to check parameters
@@ -669,25 +801,7 @@ pub fn lower_call(
     for (i, arg) in args.iter().enumerate() {
         let op = lower_expression(ctx, arg, None)?;
 
-        // For print<T>/println<T>, wrap non-string args in a FormattedString
-        // aggregate so the codegen converts them to MiriString pointers.
-        let op = if is_print_generic {
-            let op_ty = op.ty(&ctx.body);
-            if op_ty.kind != TypeKind::String {
-                let str_ty = Type::new(TypeKind::String, arg.span.clone());
-                let temp = ctx.push_temp(str_ty, arg.span.clone());
-                ctx.push_statement(crate::mir::Statement {
-                    kind: StatementKind::Assign(
-                        Place::new(temp),
-                        Rvalue::Aggregate(AggregateKind::FormattedString, vec![op]),
-                    ),
-                    span: arg.span.clone(),
-                });
-                Operand::Copy(Place::new(temp))
-            } else {
-                op
-            }
-        } else if let Some(params) = &param_types {
+        let op = if let Some(params) = &param_types {
             if i < params.len() {
                 let target_ty = super::resolve_type(ctx.type_checker, &params[i].typ);
 

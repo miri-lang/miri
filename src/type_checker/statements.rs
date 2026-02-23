@@ -2062,14 +2062,37 @@ impl TypeChecker {
 
                 // Check signature compatibility if method exists
                 if let Some(class_method) = methods.get(method_name) {
+                    // When checking trait compliance, the trait's own type (from Self)
+                    // should match the implementing class type. For example,
+                    // trait Equatable defines `fn equals(other Self) bool` which
+                    // resolves Self to Custom("Equatable", None), but the class
+                    // String implements `fn equals(other String) bool`.
+                    let class_type_kind = TypeKind::Custom(name.clone(), None);
+                    let trait_self_kind = TypeKind::Custom(origin_trait.clone(), None);
+
+                    let types_match = |trait_ty: &TypeKind, class_ty: &TypeKind| -> bool {
+                        if trait_ty == class_ty {
+                            return true;
+                        }
+                        // Self in trait resolves to Custom(trait_name, None).
+                        // The class type is either Custom(class_name, None) or String.
+                        if *trait_ty == trait_self_kind {
+                            return *class_ty == class_type_kind
+                                || (name == "String" && *class_ty == TypeKind::String);
+                        }
+                        false
+                    };
+
                     let params_match = method_info.params.len() == class_method.params.len()
                         && method_info
                             .params
                             .iter()
                             .zip(class_method.params.iter())
-                            .all(|((_, t1), (_, t2))| t1.kind == t2.kind);
-                    let return_match =
-                        method_info.return_type.kind == class_method.return_type.kind;
+                            .all(|((_, t1), (_, t2))| types_match(&t1.kind, &t2.kind));
+                    let return_match = types_match(
+                        &method_info.return_type.kind,
+                        &class_method.return_type.kind,
+                    );
 
                     if !params_match || !return_match {
                         let expected = format!(
@@ -2253,6 +2276,10 @@ impl TypeChecker {
         // Enter trait scope
         context.enter_scope();
 
+        // Set trait context so `Self` resolves inside method signatures
+        let trait_type = make_type(TypeKind::Custom(name.clone(), None));
+        context.enter_class(name.clone(), None, trait_type);
+
         // Define generics in scope
         if let Some(gens) = generics {
             self.define_generics(gens, context);
@@ -2324,6 +2351,7 @@ impl TypeChecker {
             }
         }
 
+        context.exit_class();
         context.exit_scope();
 
         // Create trait definition
