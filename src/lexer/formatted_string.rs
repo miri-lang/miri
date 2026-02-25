@@ -66,12 +66,12 @@ pub fn lex_formatted_string(
             let literal_span = (token_offset + cursor)..(token_offset + brace_pos);
             if is_first_part {
                 tokens.push((
-                    Token::FormattedStringStart(literal.to_string()),
+                    Token::FormattedStringStart(Box::new(literal.to_string())),
                     literal_span,
                 ));
             } else {
                 tokens.push((
-                    Token::FormattedStringMiddle(literal.to_string()),
+                    Token::FormattedStringMiddle(Box::new(literal.to_string())),
                     literal_span,
                 ));
             }
@@ -137,17 +137,17 @@ pub fn lex_formatted_string(
     if is_first_part {
         // The string had no expressions at all.
         tokens.push((
-            Token::FormattedStringStart(final_literal.to_string()),
+            Token::FormattedStringStart(Box::new(final_literal.to_string())),
             final_span.clone(),
         ));
         // Also push an empty End token so the parser knows it ended.
         tokens.push((
-            Token::FormattedStringEnd("".to_string()),
+            Token::FormattedStringEnd(Box::new("".to_string())),
             final_span.end..final_span.end,
         ));
     } else {
         tokens.push((
-            Token::FormattedStringEnd(final_literal.to_string()),
+            Token::FormattedStringEnd(Box::new(final_literal.to_string())),
             final_span,
         ));
     }

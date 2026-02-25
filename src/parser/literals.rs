@@ -245,7 +245,7 @@ impl<'source> Parser<'source> {
     pub(crate) fn regex_literal(&mut self) -> Result<Literal, SyntaxError> {
         let token_span = self.eat(|t| matches!(t, Token::Regex(_)), "regex literal")?;
         if let (Token::Regex(regex_data), _) = token_span {
-            Ok(ast::regex_literal_from_token(regex_data))
+            Ok(ast::regex_literal_from_token(*regex_data))
         } else {
             // This branch should be unreachable if the predicate in `eat` is correct.
             unreachable!();

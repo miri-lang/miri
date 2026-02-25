@@ -213,7 +213,7 @@ pub enum Token {
     SingleQuotedRegex,
     #[regex(r#"re"[^"\\]*(?:\\.[^"\\]*)*"[igmsu]*"#)]
     DoubleQuotedRegex,
-    Regex(RegexToken),
+    Regex(Box<RegexToken>),
 
     #[regex(r#"'[^'\\]*(?:\\.[^'\\]*)*'"#)]
     SingleQuotedString,
@@ -225,9 +225,9 @@ pub enum Token {
     SingleQuotedFormattedString,
     #[regex(r#"f"[^"\\]*(?:\\.[^"\\]*)*""#)]
     DoubleQuotedFormattedString,
-    FormattedStringStart(String),
-    FormattedStringMiddle(String),
-    FormattedStringEnd(String),
+    FormattedStringStart(Box<String>),
+    FormattedStringMiddle(Box<String>),
+    FormattedStringEnd(Box<String>),
 
     #[regex(
         r"[0-9]+(?:_[0-9]+)*(\\.[0-9]+(?:_[0-9]+)*)?([eE][+-]?[0-9]+(?:_[0-9]+)*)?_+",

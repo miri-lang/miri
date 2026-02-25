@@ -87,15 +87,15 @@ fn test_f_string() {
     lexer_token_test(
         r#"f"val={x+1} and more {y+2}""#,
         vec![
-            Token::FormattedStringStart("val=".to_string()),
+            Token::FormattedStringStart(Box::new("val=".to_string())),
             Token::Identifier,
             Token::Plus,
             Token::Int,
-            Token::FormattedStringMiddle(" and more ".to_string()),
+            Token::FormattedStringMiddle(Box::new(" and more ".to_string())),
             Token::Identifier,
             Token::Plus,
             Token::Int,
-            Token::FormattedStringEnd("".to_string()),
+            Token::FormattedStringEnd(Box::new("".to_string())),
         ],
     );
 }
@@ -105,10 +105,10 @@ fn test_f_string_empty() {
     lexer_token_test(
         r#"f"" f''"#,
         vec![
-            Token::FormattedStringStart("".to_string()),
-            Token::FormattedStringEnd("".to_string()),
-            Token::FormattedStringStart("".to_string()),
-            Token::FormattedStringEnd("".to_string()),
+            Token::FormattedStringStart(Box::new("".to_string())),
+            Token::FormattedStringEnd(Box::new("".to_string())),
+            Token::FormattedStringStart(Box::new("".to_string())),
+            Token::FormattedStringEnd(Box::new("".to_string())),
         ],
     );
 }
@@ -118,8 +118,8 @@ fn test_f_string_no_expressions() {
     lexer_token_test(
         r#"f"this is just a string""#,
         vec![
-            Token::FormattedStringStart("this is just a string".to_string()),
-            Token::FormattedStringEnd("".to_string()),
+            Token::FormattedStringStart(Box::new("this is just a string".to_string())),
+            Token::FormattedStringEnd(Box::new("".to_string())),
         ],
     );
 }
@@ -129,9 +129,9 @@ fn test_f_string_starts_with_expression() {
     lexer_token_test(
         r#"f"{x} starts here""#,
         vec![
-            Token::FormattedStringStart("".to_string()),
+            Token::FormattedStringStart(Box::new("".to_string())),
             Token::Identifier,
-            Token::FormattedStringEnd(" starts here".to_string()),
+            Token::FormattedStringEnd(Box::new(" starts here".to_string())),
         ],
     );
 }
@@ -141,9 +141,9 @@ fn test_f_string_ends_with_expression() {
     lexer_token_test(
         r#"f"ends with {x}""#,
         vec![
-            Token::FormattedStringStart("ends with ".to_string()),
+            Token::FormattedStringStart(Box::new("ends with ".to_string())),
             Token::Identifier,
-            Token::FormattedStringEnd("".to_string()),
+            Token::FormattedStringEnd(Box::new("".to_string())),
         ],
     );
 }
@@ -153,11 +153,11 @@ fn test_f_string_with_adjacent_expressions() {
     lexer_token_test(
         r#"f"{x}{y}""#,
         vec![
-            Token::FormattedStringStart("".to_string()),
+            Token::FormattedStringStart(Box::new("".to_string())),
             Token::Identifier,
-            Token::FormattedStringMiddle("".to_string()),
+            Token::FormattedStringMiddle(Box::new("".to_string())),
             Token::Identifier,
-            Token::FormattedStringEnd("".to_string()),
+            Token::FormattedStringEnd(Box::new("".to_string())),
         ],
     );
 }
@@ -167,8 +167,8 @@ fn test_f_string_with_escaped_braces() {
     lexer_token_test(
         r#"f"Literal braces: \{ and \}""#,
         vec![
-            Token::FormattedStringStart("Literal braces: \\{ and \\}".to_string()),
-            Token::FormattedStringEnd("".to_string()),
+            Token::FormattedStringStart(Box::new("Literal braces: \\{ and \\}".to_string())),
+            Token::FormattedStringEnd(Box::new("".to_string())),
         ],
     );
 }
@@ -178,9 +178,9 @@ fn test_f_string_with_escaped_braces_and_expression() {
     lexer_token_test(
         r#"f"\{ not code \} but {x} is""#,
         vec![
-            Token::FormattedStringStart("\\{ not code \\} but ".to_string()),
+            Token::FormattedStringStart(Box::new("\\{ not code \\} but ".to_string())),
             Token::Identifier,
-            Token::FormattedStringEnd(" is".to_string()),
+            Token::FormattedStringEnd(Box::new(" is".to_string())),
         ],
     );
 }
@@ -190,13 +190,13 @@ fn test_f_string_with_nested_braces_in_expression() {
     lexer_token_test(
         r#"f"A map: {{'key': 'value'}}""#,
         vec![
-            Token::FormattedStringStart("A map: ".to_string()),
+            Token::FormattedStringStart(Box::new("A map: ".to_string())),
             Token::LBrace,
             Token::String,
             Token::Colon,
             Token::String,
             Token::RBrace,
-            Token::FormattedStringEnd("".to_string()),
+            Token::FormattedStringEnd(Box::new("".to_string())),
         ],
     );
 }
@@ -206,9 +206,9 @@ fn test_f_string_with_single_quotes() {
     lexer_token_test(
         r#"f'hello {name}'"#,
         vec![
-            Token::FormattedStringStart("hello ".to_string()),
+            Token::FormattedStringStart(Box::new("hello ".to_string())),
             Token::Identifier,
-            Token::FormattedStringEnd("".to_string()),
+            Token::FormattedStringEnd(Box::new("".to_string())),
         ],
     );
 }
@@ -218,11 +218,11 @@ fn test_f_string_with_string_literal_in_expression() {
     lexer_token_test(
         r#"f"path: {'/home/' + user}""#,
         vec![
-            Token::FormattedStringStart("path: ".to_string()),
+            Token::FormattedStringStart(Box::new("path: ".to_string())),
             Token::String,
             Token::Plus,
             Token::Identifier,
-            Token::FormattedStringEnd("".to_string()),
+            Token::FormattedStringEnd(Box::new("".to_string())),
         ],
     );
 }
@@ -248,15 +248,15 @@ fn test_f_string_with_nested_f_string() {
     lexer_token_test(
         r#"f"Outer value: {f'inner value: {x + 1}'}""#,
         vec![
-            Token::FormattedStringStart("Outer value: ".to_string()),
+            Token::FormattedStringStart(Box::new("Outer value: ".to_string())),
             // Start of inner f-string
-            Token::FormattedStringStart("inner value: ".to_string()),
+            Token::FormattedStringStart(Box::new("inner value: ".to_string())),
             Token::Identifier,
             Token::Plus,
             Token::Int,
-            Token::FormattedStringEnd("".to_string()),
+            Token::FormattedStringEnd(Box::new("".to_string())),
             // End of outer f-string
-            Token::FormattedStringEnd("".to_string()),
+            Token::FormattedStringEnd(Box::new("".to_string())),
         ],
     );
 }
@@ -266,16 +266,16 @@ fn test_f_string_with_regex_inside() {
     lexer_token_test(
         r#"f"The pattern is {re'a-z'i}""#,
         vec![
-            Token::FormattedStringStart("The pattern is ".to_string()),
-            Token::Regex(RegexToken {
+            Token::FormattedStringStart(Box::new("The pattern is ".to_string())),
+            Token::Regex(Box::new(RegexToken {
                 body: "a-z".to_string(),
                 ignore_case: true,
                 global: false,
                 multiline: false,
                 dot_all: false,
                 unicode: false,
-            }),
-            Token::FormattedStringEnd("".to_string()),
+            })),
+            Token::FormattedStringEnd(Box::new("".to_string())),
         ],
     );
 }
@@ -309,8 +309,8 @@ fn test_f_string_with_empty_expression() {
     lexer_token_test(
         r#"f"Empty: {}""#,
         vec![
-            Token::FormattedStringStart("Empty: ".to_string()),
-            Token::FormattedStringEnd("".to_string()),
+            Token::FormattedStringStart(Box::new("Empty: ".to_string())),
+            Token::FormattedStringEnd(Box::new("".to_string())),
         ],
     );
 }
@@ -320,11 +320,11 @@ fn test_f_string_with_escaped_backslash_before_brace() {
     lexer_token_test(
         r#"f"Literal backslash: \\{1+1}""#,
         vec![
-            Token::FormattedStringStart("Literal backslash: \\\\".to_string()),
+            Token::FormattedStringStart(Box::new("Literal backslash: \\\\".to_string())),
             Token::Int,
             Token::Plus,
             Token::Int,
-            Token::FormattedStringEnd("".to_string()),
+            Token::FormattedStringEnd(Box::new("".to_string())),
         ],
     );
 }
@@ -334,13 +334,13 @@ fn test_f_string_with_double_braces() {
     lexer_token_test(
         r#"f"Literal backslash: \\{{'a': 1}}""#,
         vec![
-            Token::FormattedStringStart("Literal backslash: \\\\".to_string()),
+            Token::FormattedStringStart(Box::new("Literal backslash: \\\\".to_string())),
             Token::LBrace,
             Token::String,
             Token::Colon,
             Token::Int,
             Token::RBrace,
-            Token::FormattedStringEnd("".to_string()),
+            Token::FormattedStringEnd(Box::new("".to_string())),
         ],
     );
 }
@@ -350,7 +350,7 @@ fn test_keyword_in_formatted_string() {
     lexer_token_test(
         r#"f"The value is {if x: 1 else: 0}""#,
         vec![
-            Token::FormattedStringStart("The value is ".to_string()),
+            Token::FormattedStringStart(Box::new("The value is ".to_string())),
             Token::If,
             Token::Identifier,
             Token::Colon,
@@ -358,7 +358,7 @@ fn test_keyword_in_formatted_string() {
             Token::Else,
             Token::Colon,
             Token::Int,
-            Token::FormattedStringEnd("".to_string()),
+            Token::FormattedStringEnd(Box::new("".to_string())),
         ],
     );
 }
@@ -376,8 +376,8 @@ fn test_f_string_with_whitespace_expression() {
     lexer_token_test(
         r#"f"Whitespace: { }""#,
         vec![
-            Token::FormattedStringStart("Whitespace: ".to_string()),
-            Token::FormattedStringEnd("".to_string()),
+            Token::FormattedStringStart(Box::new("Whitespace: ".to_string())),
+            Token::FormattedStringEnd(Box::new("".to_string())),
         ],
     );
 }

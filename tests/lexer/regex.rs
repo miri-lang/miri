@@ -7,14 +7,14 @@ use super::utils::{lexer_error_test, lexer_token_test, regex_token};
 
 #[test]
 fn test_simple_regex_literal() {
-    lexer_token_test(r#"re"abc""#, vec![Token::Regex(regex_token("abc", ""))]);
+    lexer_token_test(r#"re"abc""#, vec![Token::Regex(Box::new(regex_token("abc", "")))]);
 }
 
 #[test]
 fn test_regex_with_all_flags() {
     lexer_token_test(
         r#"re"[a-z]+"igmsu"#,
-        vec![Token::Regex(regex_token("[a-z]+", "igmsu"))],
+        vec![Token::Regex(Box::new(regex_token("[a-z]+", "igmsu")))],
     );
 }
 
@@ -22,7 +22,7 @@ fn test_regex_with_all_flags() {
 fn test_regex_with_some_flags() {
     lexer_token_test(
         r#"re"^\d+$"im"#,
-        vec![Token::Regex(regex_token("^\\d+$", "im"))],
+        vec![Token::Regex(Box::new(regex_token("^\\d+$", "im")))],
     );
 }
 
@@ -30,13 +30,13 @@ fn test_regex_with_some_flags() {
 fn test_regex_with_escaped_quotes_and_slashes() {
     lexer_token_test(
         r#"re"a\"b\\c""#,
-        vec![Token::Regex(regex_token("a\\\"b\\\\c", ""))],
+        vec![Token::Regex(Box::new(regex_token("a\\\"b\\\\c", "")))],
     );
 }
 
 #[test]
 fn test_empty_regex() {
-    lexer_token_test(r#"re""g"#, vec![Token::Regex(regex_token("", "g"))]);
+    lexer_token_test(r#"re""g"#, vec![Token::Regex(Box::new(regex_token("", "g")))]);
 }
 
 #[test]
@@ -45,7 +45,7 @@ fn test_regex_is_not_a_string() {
     lexer_token_test(
         "re\"abc\" \"abc\"g",
         vec![
-            Token::Regex(regex_token("abc", "")),
+            Token::Regex(Box::new(regex_token("abc", ""))),
             Token::String,
             Token::Identifier,
         ],
@@ -58,7 +58,7 @@ fn test_regex_with_invalid_flags() {
     lexer_token_test(
         r#"re"abc"ixyz"#,
         vec![
-            Token::Regex(regex_token("abc", "i")),
+            Token::Regex(Box::new(regex_token("abc", "i"))),
             Token::Identifier, // "xyz"
         ],
     );
@@ -72,7 +72,7 @@ fn test_regex_in_expression() {
             Token::Let,
             Token::Identifier,
             Token::Assign,
-            Token::Regex(regex_token("^\\w+$", "i")),
+            Token::Regex(Box::new(regex_token("^\\w+$", "i"))),
         ],
     );
 }
@@ -94,9 +94,9 @@ fn test_single_quoted_regex_literals() {
     lexer_token_test(
         r#"re'abc' re'a\'b'i re''"#,
         vec![
-            Token::Regex(regex_token("abc", "")),
-            Token::Regex(regex_token("a\\'b", "i")),
-            Token::Regex(regex_token("", "")),
+            Token::Regex(Box::new(regex_token("abc", ""))),
+            Token::Regex(Box::new(regex_token("a\\'b", "i"))),
+            Token::Regex(Box::new(regex_token("", ""))),
         ],
     );
 }
@@ -105,7 +105,7 @@ fn test_single_quoted_regex_literals() {
 fn test_regex_with_various_escapes() {
     lexer_token_test(
         r#"re"line\n\t\{[0-9]+\}""#,
-        vec![Token::Regex(regex_token("line\\n\\t\\{[0-9]+\\}", ""))],
+        vec![Token::Regex(Box::new(regex_token("line\\n\\t\\{[0-9]+\\}", "")))],
     );
 }
 
@@ -114,7 +114,7 @@ fn test_regex_with_repeated_flags() {
     // The lexer should just set the flag to true once, behavior is idempotent.
     lexer_token_test(
         r#"re"abc"iig"#,
-        vec![Token::Regex(regex_token("abc", "ig"))],
+        vec![Token::Regex(Box::new(regex_token("abc", "ig")))],
     );
 }
 

@@ -2,7 +2,6 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use logos::Logos;
-use std::collections::VecDeque;
 
 use crate::error::syntax::{SyntaxError, SyntaxErrorKind};
 
@@ -28,10 +27,11 @@ pub struct Lexer<'source> {
     indent_stack: Vec<usize>,
     indent_level: usize,
     eof_handled: bool,
-    paren_stack: Vec<usize>,
-    bracket_stack: Vec<usize>,
-    curly_brace_stack: Vec<usize>,
-    previous_tokens: VecDeque<Token>,
+    paren_level: usize,
+    bracket_level: usize,
+    curly_brace_level: usize,
+    previous_tokens: [Option<Token>; 2],
+    previous_tokens_count: usize,
 }
 
 impl<'source> Iterator for Lexer<'source> {
@@ -58,10 +58,11 @@ impl<'source> Lexer<'source> {
             indent_stack: vec![0],
             indent_level: 0,
             eof_handled: false,
-            paren_stack: Vec::new(),
-            bracket_stack: Vec::new(),
-            curly_brace_stack: Vec::new(),
-            previous_tokens: VecDeque::with_capacity(Self::MAX_PREVIOUS_TOKENS),
+            paren_level: 0,
+            bracket_level: 0,
+            curly_brace_level: 0,
+            previous_tokens: [None, None],
+            previous_tokens_count: 0,
         }
     }
 
@@ -115,27 +116,27 @@ impl<'source> Lexer<'source> {
                     continue;
                 }
                 Token::LParen => {
-                    self.paren_stack.push(self.inner.span().start);
+                    self.paren_level += 1;
                     return Some(Ok((Token::LParen, span)));
                 }
                 Token::RParen => {
-                    self.paren_stack.pop();
+                    self.paren_level = self.paren_level.saturating_sub(1);
                     return Some(Ok((Token::RParen, span)));
                 }
                 Token::LBracket => {
-                    self.bracket_stack.push(self.inner.span().start);
+                    self.bracket_level += 1;
                     return Some(Ok((Token::LBracket, span)));
                 }
                 Token::RBracket => {
-                    self.bracket_stack.pop();
+                    self.bracket_level = self.bracket_level.saturating_sub(1);
                     return Some(Ok((Token::RBracket, span)));
                 }
                 Token::LBrace => {
-                    self.curly_brace_stack.push(self.inner.span().start);
+                    self.curly_brace_level += 1;
                     return Some(Ok((Token::LBrace, span)));
                 }
                 Token::RBrace => {
-                    self.curly_brace_stack.pop();
+                    self.curly_brace_level = self.curly_brace_level.saturating_sub(1);
                     return Some(Ok((Token::RBrace, span)));
                 }
                 Token::SingleQuotedRegex | Token::DoubleQuotedRegex => {
@@ -280,9 +281,7 @@ impl<'source> Lexer<'source> {
                 if self.is_outside_paired_tokens() {
                     // Indentation increase
                     self.push_indent(token_end, indent_len);
-                } else if !self.paren_stack.is_empty()
-                    && self.prev_tokens_match_function_declaration()
-                {
+                } else if self.paren_level > 0 && self.prev_tokens_match_function_declaration() {
                     // If this is a function declaration within function arguments, treat as an indentation increase
                     self.push_indent(token_end, indent_len);
                 }
@@ -365,14 +364,17 @@ impl<'source> Lexer<'source> {
     }
 
     fn memorize_token(&mut self, token: Token) {
-        if self.previous_tokens.len() == Self::MAX_PREVIOUS_TOKENS {
-            self.previous_tokens.pop_front();
+        if self.previous_tokens_count == Self::MAX_PREVIOUS_TOKENS {
+            self.previous_tokens[0] = self.previous_tokens[1].take();
+            self.previous_tokens[1] = Some(token);
+        } else {
+            self.previous_tokens[self.previous_tokens_count] = Some(token);
+            self.previous_tokens_count += 1;
         }
-        self.previous_tokens.push_back(token);
     }
 
     fn have_previous_tokens(&self) -> bool {
-        !self.previous_tokens.is_empty()
+        self.previous_tokens_count > 0
     }
 
     fn matches_previous_tokens(&self, tokens: &[Token]) -> bool {
@@ -384,19 +386,24 @@ impl<'source> Lexer<'source> {
             );
         }
 
-        if self.previous_tokens.len() < tokens.len() {
+        if self.previous_tokens_count < tokens.len() {
             return false;
         }
 
-        let start_index = self.previous_tokens.len() - tokens.len();
-        self.previous_tokens
-            .iter()
-            .skip(start_index)
-            .eq(tokens.iter())
+        let start_index = self.previous_tokens_count - tokens.len();
+        for (i, token) in tokens.iter().enumerate() {
+            if self.previous_tokens[start_index + i].as_ref() != Some(token) {
+                return false;
+            }
+        }
+        true
     }
 
     fn match_previous_token(&self, token: Token) -> bool {
-        self.previous_tokens.back().is_some_and(|t| *t == token)
+        if self.previous_tokens_count == 0 {
+            return false;
+        }
+        self.previous_tokens[self.previous_tokens_count - 1].as_ref() == Some(&token)
     }
 
     fn prev_tokens_match_function_declaration(&self) -> bool {
@@ -417,9 +424,7 @@ impl<'source> Lexer<'source> {
     }
 
     fn is_outside_paired_tokens(&self) -> bool {
-        self.paren_stack.is_empty()
-            && self.bracket_stack.is_empty()
-            && self.curly_brace_stack.is_empty()
+        self.paren_level == 0 && self.bracket_level == 0 && self.curly_brace_level == 0
     }
 
     fn is_inside_code_block(&self) -> bool {

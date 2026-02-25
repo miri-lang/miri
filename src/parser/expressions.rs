@@ -681,7 +681,8 @@ impl<'source> Parser<'source> {
     pub(crate) fn formatted_string_expression(&mut self) -> Result<Expression, SyntaxError> {
         let mut parts = Vec::new();
 
-        let start_token_str = &token_to_string(&Token::FormattedStringStart("".to_string()));
+        let start_token_str =
+            &token_to_string(&Token::FormattedStringStart(Box::new("".to_string())));
         if let Some((Token::FormattedStringStart(start_text), _)) = self._lookahead.clone() {
             self.eat(
                 |t| matches!(t, Token::FormattedStringStart(_)),
@@ -698,7 +699,7 @@ impl<'source> Parser<'source> {
         if let Some((Token::FormattedStringEnd(end_text), _)) = self._lookahead.clone() {
             self.eat(
                 |t| matches!(t, Token::FormattedStringEnd(_)),
-                &token_to_string(&Token::FormattedStringEnd("".to_string())),
+                &token_to_string(&Token::FormattedStringEnd(Box::new("".to_string()))),
             )?;
             if !end_text.is_empty() {
                 parts.push(ast::literal(ast::string_literal(&end_text)));
@@ -712,7 +713,7 @@ impl<'source> Parser<'source> {
             if let Some((Token::FormattedStringMiddle(middle_text), _)) = self._lookahead.clone() {
                 self.eat(
                     |t| matches!(t, Token::FormattedStringMiddle(_)),
-                    &token_to_string(&Token::FormattedStringMiddle("".to_string())),
+                    &token_to_string(&Token::FormattedStringMiddle(Box::new("".to_string()))),
                 )?;
                 if !middle_text.is_empty() {
                     parts.push(ast::literal(ast::string_literal(&middle_text)));
@@ -720,7 +721,7 @@ impl<'source> Parser<'source> {
             } else if let Some((Token::FormattedStringEnd(end_text), _)) = self._lookahead.clone() {
                 self.eat(
                     |t| matches!(t, Token::FormattedStringEnd(_)),
-                    &token_to_string(&Token::FormattedStringEnd("".to_string())),
+                    &token_to_string(&Token::FormattedStringEnd(Box::new("".to_string()))),
                 )?;
                 if !end_text.is_empty() {
                     parts.push(ast::literal(ast::string_literal(&end_text)));

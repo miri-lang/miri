@@ -9,7 +9,7 @@ use logos::Lexer;
 pub fn parse_regex_literal(
     lexer: &Lexer<Token>,
     quote_character: char,
-) -> Result<RegexToken, SyntaxError> {
+) -> Result<Box<RegexToken>, SyntaxError> {
     let slice = lexer.slice();
     let without_prefix = &slice[2..];
 
@@ -49,5 +49,5 @@ pub fn parse_regex_literal(
         }
     }
 
-    Ok(regex)
+    Ok(Box::new(regex))
 }
