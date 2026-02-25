@@ -34,8 +34,9 @@ fn test_build_with_output() {
     let file = create_test_file(SIMPLE_MAIN);
     let path = file.path().to_str().unwrap();
 
-    let out_file = NamedTempFile::new().unwrap();
-    let out_path = out_file.path().to_str().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let out_path_buf = out_dir.path().join("out_exe");
+    let out_path = out_path_buf.to_str().unwrap();
 
     let mut cmd = miri_cmd();
     cmd.arg("build")
@@ -148,8 +149,9 @@ println("Hello from script!")
 #[test]
 fn test_build_produces_runnable_executable_with_output() {
     let source_file = create_test_file(HELLO_WORLD);
-    let out_file = NamedTempFile::new().unwrap();
-    let out_path = out_file.path();
+    let out_dir = tempfile::tempdir().unwrap();
+    let out_path_buf = out_dir.path().join("out_exe");
+    let out_path = out_path_buf.as_path();
 
     // Step 1: build succeeds.
     let mut cmd = miri_cmd();
@@ -183,8 +185,9 @@ fn test_build_produces_runnable_executable_with_output() {
 #[test]
 fn test_build_script_mode_produces_runnable_executable() {
     let source_file = create_test_file(HELLO_WORLD_SCRIPT);
-    let out_file = NamedTempFile::new().unwrap();
-    let out_path = out_file.path();
+    let out_dir = tempfile::tempdir().unwrap();
+    let out_path_buf = out_dir.path().join("out_exe");
+    let out_path = out_path_buf.as_path();
 
     let mut cmd = miri_cmd();
     cmd.arg("build")
@@ -216,8 +219,9 @@ fn test_build_script_mode_produces_runnable_executable() {
 #[test]
 fn test_build_release_executable_produces_output() {
     let source_file = create_test_file(HELLO_WORLD);
-    let out_file = NamedTempFile::new().unwrap();
-    let out_path = out_file.path();
+    let out_dir = tempfile::tempdir().unwrap();
+    let out_path_buf = out_dir.path().join("out_exe");
+    let out_path = out_path_buf.as_path();
 
     let mut cmd = miri_cmd();
     cmd.arg("build")
@@ -254,8 +258,9 @@ fn test_build_release_executable_produces_output() {
 #[test]
 fn test_build_executable_exit_code_matches_main_return() {
     let source_file = create_test_file(SIMPLE_MAIN);
-    let out_file = NamedTempFile::new().unwrap();
-    let out_path = out_file.path();
+    let out_dir = tempfile::tempdir().unwrap();
+    let out_path_buf = out_dir.path().join("out_exe");
+    let out_path = out_path_buf.as_path();
 
     let mut cmd = miri_cmd();
     cmd.arg("build")
