@@ -60,5 +60,9 @@ jobs:
       - name: Build project
         run: cargo build
 
+      - name: Build runtime core
+        working-directory: ./src/runtime/core
+        run: cargo build --release
+
       - name: Run tests
         run: cargo test
