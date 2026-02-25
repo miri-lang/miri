@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0
+// Demonstrates constant declarations of different types used in expressions.
+// Note: constants are declared inside a function body.
+use system.io
+
+fn main()
+    const PI = 3
+    const MAX_SIZE = 100
+    const GREETING = "Hello"
+    println(f"{PI}")
+    println(f"{MAX_SIZE}")
+    println(GREETING)

@@ -1,0 +1,30 @@
+// SPDX-License-Identifier: Apache-2.0
+// Demonstrates enum definitions with and without associated data, and match dispatch.
+use system.io
+
+enum Direction
+    North
+    South
+    East
+    West
+
+enum Shape
+    Circle(int)
+    Rectangle(int)
+
+fn direction_name(d Direction) string
+    match d
+        Direction.North: "north"
+        Direction.South: "south"
+        Direction.East: "east"
+        Direction.West: "west"
+
+fn area(s Shape) int
+    match s
+        Shape.Circle(r): r * r
+        Shape.Rectangle(side): side * side
+
+fn main()
+    println(direction_name(Direction.North))
+    println(f"{area(Shape.Circle(5))}")
+    println(f"{area(Shape.Rectangle(4))}")

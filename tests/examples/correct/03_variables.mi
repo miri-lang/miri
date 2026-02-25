@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+// Demonstrates immutable (let) and mutable (var) variable declarations.
+use system.io
+
+fn main()
+    let x = 42
+    var y = 10
+    y = y + 5
+    println(f"{x}")
+    println(f"{y}")

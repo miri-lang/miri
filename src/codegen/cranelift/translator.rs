@@ -603,13 +603,26 @@ impl FunctionTranslator {
         let lhs_ty = builder.func.dfg.value_type(lhs);
         let rhs_ty = builder.func.dfg.value_type(rhs);
 
-        // Ensure both operands have the same type by widening the smaller one
+        // Ensure both operands have the same type by widening the smaller one.
+        // Float operands are promoted (fpromote); integer operands are sign-extended
+        // (sextend) because Miri's integer types default to signed semantics.
         let (lhs, rhs, ty) = if lhs_ty != rhs_ty && !lhs_ty.is_float() && !rhs_ty.is_float() {
+            // Integer widths differ — sign-extend the narrower operand.
             if lhs_ty.bits() > rhs_ty.bits() {
                 let rhs = builder.ins().sextend(lhs_ty, rhs);
                 (lhs, rhs, lhs_ty)
             } else {
                 let lhs = builder.ins().sextend(rhs_ty, lhs);
+                (lhs, rhs, rhs_ty)
+            }
+        } else if lhs_ty != rhs_ty && lhs_ty.is_float() && rhs_ty.is_float() {
+            // Float widths differ (e.g. F32 literal used in an F64 expression) —
+            // promote the narrower float to the wider one.
+            if lhs_ty.bits() > rhs_ty.bits() {
+                let rhs = builder.ins().fpromote(lhs_ty, rhs);
+                (lhs, rhs, lhs_ty)
+            } else {
+                let lhs = builder.ins().fpromote(rhs_ty, lhs);
                 (lhs, rhs, rhs_ty)
             }
         } else {

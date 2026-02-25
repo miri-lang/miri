@@ -1,0 +1,9 @@
+// SPDX-License-Identifier: Apache-2.0
+// INCORRECT: Type-checker error — function body returns a string but declares int return type.
+// Level: Type checker
+// Expected error: type mismatch / return type mismatch
+fn get_number() int
+    "not a number"
+
+fn main()
+    let x = get_number()

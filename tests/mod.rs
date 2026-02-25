@@ -2,6 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 pub mod cli;
+pub mod e2e;
 pub mod error;
 pub mod integration;
 pub mod lexer;

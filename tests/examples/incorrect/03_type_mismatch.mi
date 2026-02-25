@@ -1,0 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// INCORRECT: Type-checker error — assigning a string literal to an int variable.
+// Level: Type checker
+// Expected error: type mismatch between string and int
+fn main()
+    let x int = "not an integer"

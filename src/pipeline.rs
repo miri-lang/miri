@@ -415,7 +415,10 @@ impl Pipeline {
 
         fs::create_dir_all(&work_dir)?;
 
-        let object_path = work_dir.join("output.o");
+        // Derive a unique object path from the output path so that parallel
+        // builds targeting different output files don't overwrite each other's
+        // intermediate `.o` file.
+        let object_path = out_path.with_extension("o");
         fs::write(&object_path, &object_bytes)?;
         self.link_executable(&object_path, &out_path, &runtime_info.required_runtimes)?;
 

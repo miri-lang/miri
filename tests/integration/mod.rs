@@ -4,10 +4,12 @@
 pub mod arithmetic;
 pub mod array;
 pub mod basic;
+pub mod comparisons;
 pub mod constant;
 pub mod control_flow;
 pub mod enums;
 pub mod fstring;
+pub mod function_params;
 pub mod functions;
 pub mod list;
 pub mod map;

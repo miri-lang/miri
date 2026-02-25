@@ -1,0 +1,21 @@
+// SPDX-License-Identifier: Apache-2.0
+// Demonstrates for-range loops and while loops with accumulation.
+use system.io
+
+fn main()
+    var sum = 0
+    for i in 1..6
+        sum = sum + i
+    println(f"{sum}")
+
+    var n = 1
+    while n < 32
+        n = n * 2
+    println(f"{n}")
+
+    var product = 1
+    var k = 1
+    while k <= 5
+        product = product * k
+        k = k + 1
+    println(f"{product}")

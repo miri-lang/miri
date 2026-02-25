@@ -1,0 +1,9 @@
+// SPDX-License-Identifier: Apache-2.0
+// INCORRECT: Type-checker error — parameter uses a type name that is not defined.
+// Level: Type checker
+// Expected error: unknown/undefined type 'UnknownType'
+fn compute(x UnknownType) int
+    42
+
+fn main()
+    let result = compute(42)

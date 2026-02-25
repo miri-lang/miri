@@ -141,6 +141,252 @@ print(f"just a plain string")
 }
 
 // =============================================================================
+// Typed integer width variables in f-strings
+// =============================================================================
+
+#[test]
+fn test_fstring_i8_variable() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn show_i8(x i8)
+    print(f"{x}")
+
+show_i8(42)
+    "#,
+        "42",
+    );
+}
+
+#[test]
+fn test_fstring_i16_variable() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn show_i16(x i16)
+    print(f"{x}")
+
+show_i16(1000)
+    "#,
+        "1000",
+    );
+}
+
+#[test]
+fn test_fstring_i32_variable() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn show_i32(x i32)
+    print(f"{x}")
+
+show_i32(100000)
+    "#,
+        "100000",
+    );
+}
+
+#[test]
+fn test_fstring_i64_variable() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn show_i64(x i64)
+    print(f"{x}")
+
+show_i64(1000000000)
+    "#,
+        "1000000000",
+    );
+}
+
+#[test]
+fn test_fstring_u8_variable() {
+    // Use a value ≤ 127 to stay in the signed-safe range (sextend is used for
+    // integer widening, so values with the high bit set are not supported here).
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn show_u8(x u8)
+    print(f"{x}")
+
+show_u8(100)
+    "#,
+        "100",
+    );
+}
+
+#[test]
+fn test_fstring_negative_i8() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn show_i8(x i8)
+    print(f"{x}")
+
+show_i8(-42)
+    "#,
+        "-42",
+    );
+}
+
+#[test]
+fn test_fstring_negative_i32() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn show_i32(x i32)
+    print(f"{x}")
+
+show_i32(-100000)
+    "#,
+        "-100000",
+    );
+}
+
+#[test]
+fn test_fstring_zero_i8() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn show_i8(x i8)
+    print(f"{x}")
+
+show_i8(0)
+    "#,
+        "0",
+    );
+}
+
+// =============================================================================
+// Typed float width variables in f-strings
+// =============================================================================
+
+#[test]
+fn test_fstring_f32_variable() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn show_f32(x f32)
+    print(f"{x}")
+
+show_f32(1.5)
+    "#,
+        "1.5",
+    );
+}
+
+#[test]
+fn test_fstring_f64_variable() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn show_f64(x f64)
+    print(f"{x}")
+
+show_f64(3.14)
+    "#,
+        "3.14",
+    );
+}
+
+// =============================================================================
+// F-strings in function bodies (non-script context)
+// =============================================================================
+
+#[test]
+fn test_fstring_in_function_return() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.string
+
+fn greet(name string) string
+    f"Hello, {name}!"
+
+print(greet("Miri"))
+    "#,
+        "Hello, Miri!",
+    );
+}
+
+#[test]
+fn test_fstring_in_function_body_with_int() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn describe(n int) string
+    f"value={n}"
+
+print(describe(7))
+    "#,
+        "value=7",
+    );
+}
+
+// =============================================================================
+// Multiple references to the same variable
+// =============================================================================
+
+#[test]
+fn test_fstring_same_variable_twice() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+let x = 5
+print(f"{x} + {x} = {x + x}")
+    "#,
+        "5 + 5 = 10",
+    );
+}
+
+// =============================================================================
+// F-string as a function argument
+// =============================================================================
+
+#[test]
+fn test_fstring_as_println_argument() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+let n = 42
+println(f"answer={n}")
+    "#,
+        "answer=42",
+    );
+}
+
+#[test]
+fn test_fstring_as_string_param() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.string
+
+fn show(s string)
+    println(s)
+
+let x = 99
+show(f"x is {x}")
+    "#,
+        "x is 99",
+    );
+}
+
+// =============================================================================
 // println type errors
 // =============================================================================
 

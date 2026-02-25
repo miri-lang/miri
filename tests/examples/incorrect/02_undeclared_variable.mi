@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+// INCORRECT: Type-checker error — reading a variable that was never declared.
+// Level: Type checker
+// Expected error: variable not found / undefined identifier
+use system.io
+
+fn main()
+    println(f"{undefined_var}")

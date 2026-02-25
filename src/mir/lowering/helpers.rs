@@ -138,14 +138,39 @@ pub fn bind_pattern(
                 }
             }
         }
-        Pattern::EnumVariant(_parent, bindings) => {
-            // For enum variant destructuring, extract associated values
-            // The aggregate is (discriminant, val1, val2, ...), so bindings use Field(i+1)
+        Pattern::EnumVariant(parent, bindings) => {
+            // For enum variant destructuring, extract associated values.
+            // The aggregate is (discriminant, val1, val2, ...), so bindings use Field(i+1).
+
+            // Resolve the concrete field types from the enum definition so that the
+            // bound locals are typed correctly (e.g. `int` instead of `void`).
+            let field_types: Option<Vec<Type>> =
+                if let Pattern::Member(type_pattern, variant_name) = parent.as_ref() {
+                    if let Pattern::Identifier(type_name) = type_pattern.as_ref() {
+                        if let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) =
+                            ctx.type_checker.global_type_definitions.get(type_name)
+                        {
+                            enum_def.variants.get(variant_name.as_str()).cloned()
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
             for (i, binding) in bindings.iter().enumerate() {
                 if let Pattern::Identifier(name) = binding {
-                    // Create local for bound variable
-                    // Note: Type info is from type checker, we use a generic type here
-                    let ty = Type::new(TypeKind::Void, span.clone()); // Will be properly typed
+                    // Use the actual field type from the enum definition; fall back to
+                    // Void only if the definition cannot be resolved (should not happen
+                    // after a successful type check).
+                    let ty = field_types
+                        .as_ref()
+                        .and_then(|types| types.get(i))
+                        .cloned()
+                        .unwrap_or_else(|| Type::new(TypeKind::Void, span.clone()));
                     let elem_local = ctx.push_temp(ty, span.clone());
                     let name_rc: std::rc::Rc<str> = std::rc::Rc::from(name.as_str());
                     ctx.body.local_decls[elem_local.0].name = Some(name_rc.clone());

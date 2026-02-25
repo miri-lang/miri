@@ -1,0 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// The classic Hello World program using a main function.
+use system.io
+
+fn main()
+    println("Hello, World!")

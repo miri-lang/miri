@@ -809,10 +809,7 @@ pub fn lower_expression(
                                 .enumerate()
                                 .find(|(_, (name, _))| name.as_str() == variant_name)
                             {
-                                // Variant with associated values
-                                let ty = resolve_type(ctx.type_checker, expr);
-                                let temp = ctx.push_temp(ty, expr.span.clone());
-
+                                // Variant with associated values.
                                 // Create discriminant constant
                                 let discr_op = Operand::Constant(Box::new(Constant {
                                     span: expr.span.clone(),
@@ -830,9 +827,18 @@ pub fn lower_expression(
                                     ops.push(lower_expression(ctx, arg, None)?);
                                 }
 
+                                // DPS: use the caller-provided destination if given,
+                                // otherwise allocate a fresh temp.
+                                let target = if let Some(d) = dest {
+                                    d
+                                } else {
+                                    let ty = resolve_type(ctx.type_checker, expr);
+                                    Place::new(ctx.push_temp(ty, expr.span.clone()))
+                                };
+
                                 ctx.push_statement(crate::mir::Statement {
                                     kind: MirStatementKind::Assign(
-                                        Place::new(temp),
+                                        target.clone(),
                                         Rvalue::Aggregate(
                                             AggregateKind::Enum(
                                                 type_name.clone(),
@@ -843,7 +849,7 @@ pub fn lower_expression(
                                     ),
                                     span: expr.span.clone(),
                                 });
-                                return Ok(Operand::Copy(Place::new(temp)));
+                                return Ok(Operand::Copy(target));
                             }
                         }
                     }
@@ -1484,23 +1490,41 @@ pub fn lower_expression(
             // Create join block where all branches converge
             let join_bb = ctx.new_basic_block();
 
-            // Collect literal patterns for SwitchInt
+            // Collect literal patterns for SwitchInt.
+            // branch_blocks stores (block, branch, discriminants) where discriminants is
+            // non-empty for arms with specific literal/enum patterns and empty for catch-all
+            // arms (identifier, default, tuple, regex).  The discriminants are used when
+            // computing guard-failure targets (see second pass below).
+            //
+            // IMPORTANT: only the *first* arm that covers a given discriminant value is
+            // registered in switch_targets.  Subsequent arms with the same discriminant
+            // (e.g. a guarded arm followed by an unguarded fallback for the same literal)
+            // are reachable only via the guard-failure chain, NOT via a second SwitchInt
+            // dispatch.  Adding duplicate discriminants to switch_targets causes the
+            // Cranelift translator (which uses `.pop()` to build a brif chain in reverse)
+            // to dispatch to the *last* duplicate first, bypassing any earlier guarded arm.
             let mut switch_targets: Vec<(Discriminant, crate::mir::block::BasicBlock)> = Vec::new();
+            let mut seen_discrs: std::collections::HashSet<u128> = std::collections::HashSet::new();
             let mut otherwise_bb = None;
             let mut branch_blocks: Vec<(
                 crate::mir::block::BasicBlock,
                 &crate::ast::pattern::MatchBranch,
+                Vec<u128>, // discriminants covered; empty ⇒ catch-all
             )> = Vec::new();
 
             for branch in branches {
                 let branch_bb = ctx.new_basic_block();
-                branch_blocks.push((branch_bb, branch));
+                let mut arm_discrs: Vec<u128> = Vec::new();
 
                 for pattern in &branch.patterns {
                     match pattern {
                         Pattern::Literal(lit) => {
                             if let Some(val) = literal_to_u128(lit) {
-                                switch_targets.push((Discriminant::from(val), branch_bb));
+                                arm_discrs.push(val);
+                                // Only register the first arm per discriminant in switch_targets.
+                                if seen_discrs.insert(val) {
+                                    switch_targets.push((Discriminant::from(val), branch_bb));
+                                }
                             }
                         }
                         Pattern::Default => {
@@ -1525,8 +1549,11 @@ pub fn lower_expression(
                                         .enumerate()
                                         .find(|(_, (name, _))| *name == variant_name)
                                     {
-                                        switch_targets
-                                            .push((Discriminant::from(idx as u128), branch_bb));
+                                        arm_discrs.push(idx as u128);
+                                        if seen_discrs.insert(idx as u128) {
+                                            switch_targets
+                                                .push((Discriminant::from(idx as u128), branch_bb));
+                                        }
                                     }
                                 }
                             }
@@ -1549,8 +1576,13 @@ pub fn lower_expression(
                                             .enumerate()
                                             .find(|(_, (name, _))| *name == variant_name)
                                         {
-                                            switch_targets
-                                                .push((Discriminant::from(idx as u128), branch_bb));
+                                            arm_discrs.push(idx as u128);
+                                            if seen_discrs.insert(idx as u128) {
+                                                switch_targets.push((
+                                                    Discriminant::from(idx as u128),
+                                                    branch_bb,
+                                                ));
+                                            }
                                         }
                                     }
                                 }
@@ -1570,6 +1602,8 @@ pub fn lower_expression(
                         }
                     }
                 }
+
+                branch_blocks.push((branch_bb, branch, arm_discrs));
             }
 
             // Set otherwise to join if no default pattern
@@ -1619,8 +1653,8 @@ pub fn lower_expression(
             ));
 
             // Lower each branch body
-            for (branch_bb, branch) in branch_blocks {
-                ctx.set_current_block(branch_bb);
+            for (arm_idx, (branch_bb, branch, this_discrs)) in branch_blocks.iter().enumerate() {
+                ctx.set_current_block(*branch_bb);
                 ctx.push_scope();
 
                 // Bind pattern variables
@@ -1633,11 +1667,40 @@ pub fn lower_expression(
                     let guard_op = lower_expression(ctx, guard, None)?;
                     let guard_true_bb = ctx.new_basic_block();
 
+                    // Compute guard-failure target: the next arm that could match the same
+                    // subject value.
+                    //
+                    // • If this arm has specific discriminants (literal / enum variant), scan
+                    //   forward for the next arm that shares at least one of those discriminants,
+                    //   OR the first catch-all arm (identifier / default / tuple / regex) —
+                    //   whichever comes first in source order.
+                    //
+                    // • If this arm is itself a catch-all (empty discriminant set), scan forward
+                    //   for the next catch-all arm.
+                    //
+                    // Falling off the end means no more arms can match → jump to join_bb.
+                    let this_is_catchall = this_discrs.is_empty();
+                    let mut guard_fail_bb = join_bb;
+                    for (next_bb, _, next_discrs) in branch_blocks.iter().skip(arm_idx + 1) {
+                        let next_is_catchall = next_discrs.is_empty();
+                        if next_is_catchall {
+                            // A catch-all arm can always receive control.
+                            guard_fail_bb = *next_bb;
+                            break;
+                        }
+                        if !this_is_catchall && this_discrs.iter().any(|d| next_discrs.contains(d))
+                        {
+                            // Next arm covers the same discriminant value.
+                            guard_fail_bb = *next_bb;
+                            break;
+                        }
+                    }
+
                     ctx.set_terminator(Terminator::new(
                         TerminatorKind::SwitchInt {
                             discr: guard_op,
                             targets: vec![(Discriminant::bool_true(), guard_true_bb)],
-                            otherwise: otherwise_target,
+                            otherwise: guard_fail_bb,
                         },
                         guard.span.clone(),
                     ));
@@ -1758,6 +1821,22 @@ pub fn lower_expression(
             ));
 
             ctx.set_current_block(final_bb);
+
+            // DPS: if a destination was provided (e.g. the variable being initialised in
+            // `let var = a and b`), write the result into it so the caller's variable is
+            // populated.  Without this the Logical arm ignores `dest` and the variable
+            // stays at its zero-initialised default (false).
+            if let Some(ref d) = dest {
+                ctx.push_statement(crate::mir::Statement {
+                    kind: MirStatementKind::Assign(
+                        d.clone(),
+                        Rvalue::Use(Operand::Copy(Place::new(result_local))),
+                    ),
+                    span: expr.span.clone(),
+                });
+                return Ok(Operand::Copy(d.clone()));
+            }
+
             Ok(Operand::Copy(Place::new(result_local)))
         }
         ExpressionKind::Conditional(then_expr, cond_expr, else_expr_opt, if_type) => {
@@ -2281,18 +2360,33 @@ pub(super) fn emit_to_string(
             let call_args = vec![float_op];
             emit_runtime_to_string(ctx, "miri_rt_float_to_string", call_args, span)
         }
-        TypeKind::Int
-        | TypeKind::I8
+        TypeKind::Int | TypeKind::I64 | TypeKind::U64 => {
+            // Already 64-bit — pass directly to the runtime (no widening needed).
+            let call_args = vec![operand];
+            emit_runtime_to_string(ctx, "miri_rt_int_to_string", call_args, span)
+        }
+        TypeKind::I8
         | TypeKind::I16
         | TypeKind::I32
-        | TypeKind::I64
         | TypeKind::I128
         | TypeKind::U8
         | TypeKind::U16
         | TypeKind::U32
-        | TypeKind::U64
         | TypeKind::U128 => {
-            let call_args = vec![operand];
+            // miri_rt_int_to_string expects i64. Widen the narrow integer to Int
+            // (I64) before calling the runtime, mirroring the boolean path above.
+            // Uses sextend (signed extension), which is correct for signed types
+            // and for unsigned types with values ≤ the signed maximum of their width.
+            let int_ty = Type::new(TypeKind::Int, span.clone());
+            let int_temp = ctx.push_temp(int_ty.clone(), span.clone());
+            ctx.push_statement(crate::mir::Statement {
+                kind: MirStatementKind::Assign(
+                    Place::new(int_temp),
+                    Rvalue::Cast(Box::new(operand), int_ty),
+                ),
+                span: span.clone(),
+            });
+            let call_args = vec![Operand::Copy(Place::new(int_temp))];
             emit_runtime_to_string(ctx, "miri_rt_int_to_string", call_args, span)
         }
         other => Err(LoweringError::unsupported_expression(

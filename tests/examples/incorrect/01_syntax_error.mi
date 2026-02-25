@@ -1,0 +1,9 @@
+// SPDX-License-Identifier: Apache-2.0
+// INCORRECT: Parser error — the let initializer expression is missing.
+// Level: Parser
+// Expected error: any parse/syntax error (token missing after '=')
+use system.io
+
+fn main()
+    let x =
+    println(f"{x}")

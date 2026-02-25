@@ -1,5 +1,0 @@
-use system.io.{println}
-
-fn fib(n i128) i128: n if n <= 1 else fib(n - 1) + fib(n - 2)
-
-println(fib(40))

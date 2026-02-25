@@ -1,0 +1,9 @@
+// SPDX-License-Identifier: Apache-2.0
+// INCORRECT: Type-checker error — calling a function with the wrong number of arguments.
+// Level: Type checker
+// Expected error: argument count mismatch (add takes 2, called with 3)
+fn add(a int, b int) int
+    a + b
+
+fn main()
+    let result = add(1, 2, 3)
