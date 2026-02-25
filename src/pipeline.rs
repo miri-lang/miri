@@ -217,10 +217,10 @@ fn patch_main_return(program: &mut Program) {
                                 body_stmt.as_mut(),
                                 stmt_with_span(StatementKind::Empty, 0..0),
                             );
-                            *body_stmt = Box::new(stmt_with_span(
+                            **body_stmt = stmt_with_span(
                                 StatementKind::Block(vec![existing, return_zero]),
                                 span,
-                            ));
+                            );
                         }
                     }
                 }
