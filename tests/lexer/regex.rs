@@ -7,7 +7,10 @@ use super::utils::{lexer_error_test, lexer_token_test, regex_token};
 
 #[test]
 fn test_simple_regex_literal() {
-    lexer_token_test(r#"re"abc""#, vec![Token::Regex(Box::new(regex_token("abc", "")))]);
+    lexer_token_test(
+        r#"re"abc""#,
+        vec![Token::Regex(Box::new(regex_token("abc", "")))],
+    );
 }
 
 #[test]
@@ -36,7 +39,10 @@ fn test_regex_with_escaped_quotes_and_slashes() {
 
 #[test]
 fn test_empty_regex() {
-    lexer_token_test(r#"re""g"#, vec![Token::Regex(Box::new(regex_token("", "g")))]);
+    lexer_token_test(
+        r#"re""g"#,
+        vec![Token::Regex(Box::new(regex_token("", "g")))],
+    );
 }
 
 #[test]
@@ -105,7 +111,10 @@ fn test_single_quoted_regex_literals() {
 fn test_regex_with_various_escapes() {
     lexer_token_test(
         r#"re"line\n\t\{[0-9]+\}""#,
-        vec![Token::Regex(Box::new(regex_token("line\\n\\t\\{[0-9]+\\}", "")))],
+        vec![Token::Regex(Box::new(regex_token(
+            "line\\n\\t\\{[0-9]+\\}",
+            "",
+        )))],
     );
 }
 
