@@ -74,6 +74,10 @@ fn check_returns(stmt: &Statement) -> ReturnStatus {
     match &stmt.node {
         StatementKind::Return(_) => ReturnStatus::Explicit,
         StatementKind::While(_, _, WhileStatementType::Forever) => ReturnStatus::Explicit,
+        StatementKind::While(_, _, WhileStatementType::While)
+        | StatementKind::While(_, _, WhileStatementType::Until)
+        | StatementKind::While(_, _, WhileStatementType::DoWhile)
+        | StatementKind::While(_, _, WhileStatementType::DoUntil) => ReturnStatus::None,
         StatementKind::Expression(_) => ReturnStatus::Implicit,
         StatementKind::Block(stmts) => {
             for (i, s) in stmts.iter().enumerate() {
@@ -101,7 +105,22 @@ fn check_returns(stmt: &Statement) -> ReturnStatus {
                 ReturnStatus::None
             }
         }
-        _ => ReturnStatus::None,
+        // All other statement kinds (Variable, For, Break, Continue, FunctionDeclaration,
+        // Struct, Enum, Class, Trait, Type, RuntimeFunctionDeclaration, Use, Empty)
+        // do not contribute to return status analysis.
+        StatementKind::Variable(_, _)
+        | StatementKind::For(_, _, _)
+        | StatementKind::Break
+        | StatementKind::Continue
+        | StatementKind::FunctionDeclaration(_, _, _, _, _, _)
+        | StatementKind::Struct(_, _, _, _)
+        | StatementKind::Enum(_, _, _, _)
+        | StatementKind::Class(_, _, _, _, _, _, _)
+        | StatementKind::Trait(_, _, _, _, _)
+        | StatementKind::Type(_, _)
+        | StatementKind::RuntimeFunctionDeclaration(_, _, _, _)
+        | StatementKind::Use(_, _)
+        | StatementKind::Empty => ReturnStatus::None,
     }
 }
 
@@ -170,7 +189,7 @@ impl TypeChecker {
     pub(crate) fn check_statement(&mut self, statement: &Statement, context: &mut Context) {
         match &statement.node {
             StatementKind::Variable(decls, vis) => {
-                self.check_variable_declaration(decls, vis, context, statement.span.clone())
+                self.check_variable_declaration(decls, vis, context, statement.span)
             }
             StatementKind::Expression(expr) => {
                 self.infer_expression(expr, context);
@@ -183,9 +202,9 @@ impl TypeChecker {
             StatementKind::For(decls, iterable, body) => {
                 self.check_for(decls, iterable, body, context)
             }
-            StatementKind::Break => self.check_break(context, statement.span.clone()),
-            StatementKind::Continue => self.check_continue(context, statement.span.clone()),
-            StatementKind::Return(expr) => self.check_return(expr, context, statement.span.clone()),
+            StatementKind::Break => self.check_break(context, statement.span),
+            StatementKind::Continue => self.check_continue(context, statement.span),
+            StatementKind::Return(expr) => self.check_return(expr, context, statement.span),
             StatementKind::FunctionDeclaration(
                 name,
                 generics,
@@ -219,7 +238,7 @@ impl TypeChecker {
                     body,
                     vis,
                     context,
-                    statement.span.clone(),
+                    statement.span,
                     *is_abstract,
                 )
             }
@@ -230,7 +249,7 @@ impl TypeChecker {
                 body,
                 vis,
                 context,
-                statement.span.clone(),
+                statement.span,
             ),
             StatementKind::Type(exprs, visibility) => {
                 self.check_type_statement(exprs, visibility, context)
@@ -248,15 +267,14 @@ impl TypeChecker {
                 if context.scopes.len() == 1 {
                     self.global_scope.insert(
                         name.to_string(),
-                        super::context::SymbolInfo {
-                            consumed: false,
-                            ty: func_type.clone(),
-                            mutable: false,
-                            is_constant: false,
-                            visibility: MemberVisibility::Private,
-                            module: self.current_module.clone(),
-                            value: None,
-                        },
+                        SymbolInfo::new(
+                            func_type.clone(),
+                            false,
+                            false,
+                            MemberVisibility::Private,
+                            self.current_module.clone(),
+                            None,
+                        ),
                     );
                 }
 
@@ -285,7 +303,10 @@ impl TypeChecker {
             StatementKind::Use(path_expr, alias) => {
                 self.check_use(path_expr, alias, context);
             }
-            _ => {}
+            // These statement kinds require no type checking:
+            // - Empty: no-op
+            // - Break/Continue: validated above via check_break/check_continue match arms
+            StatementKind::Empty => {}
         }
     }
 
@@ -299,7 +320,7 @@ impl TypeChecker {
         let path_str = match Self::extract_import_path(path) {
             Some(p) => p,
             None => {
-                self.report_error("Invalid import path".to_string(), path.span.clone());
+                self.report_error("Invalid import path".to_string(), path.span);
                 return;
             }
         };
@@ -327,10 +348,7 @@ impl TypeChecker {
         let file_path = match found_path {
             Some(p) => p,
             None => {
-                self.report_error(
-                    format!("Module '{}' not found", path_str),
-                    path.span.clone(),
-                );
+                self.report_error(format!("Module '{}' not found", path_str), path.span);
                 return;
             }
         };
@@ -353,7 +371,7 @@ impl TypeChecker {
             Err(e) => {
                 self.report_error(
                     format!("Failed to read module '{}': {}", path_str, e),
-                    path.span.clone(),
+                    path.span,
                 );
                 return;
             }
@@ -366,7 +384,7 @@ impl TypeChecker {
             Err(e) => {
                 self.report_error(
                     format!("Failed to parse module '{}': {:?}", path_str, e),
-                    path.span.clone(),
+                    path.span,
                 );
                 return;
             }
@@ -423,7 +441,7 @@ impl TypeChecker {
         context: &mut Context,
     ) {
         for expr in exprs {
-            if let ExpressionKind::TypeDeclaration(name_expr, _generics, kind, target_expr) =
+            if let ExpressionKind::TypeDeclaration(name_expr, generics, kind, target_expr) =
                 &expr.node
             {
                 if let Ok(name) = self.extract_name(name_expr) {
@@ -434,7 +452,7 @@ impl TypeChecker {
                                 "Incomplete type declaration '{}'. Use 'is', 'extends', 'implements', or 'includes' to define the type.",
                                 name
                             ),
-                            expr.span.clone(),
+                            expr.span,
                         );
                         continue;
                     }
@@ -443,7 +461,7 @@ impl TypeChecker {
                     if *kind == TypeDeclarationKind::Is {
                         if let Some(target) = target_expr {
                             // Extract generic definitions from the generics expression
-                            let generic_defs = if let Some(gens) = _generics {
+                            let generic_defs = if let Some(gens) = generics {
                                 let mut defs = Vec::new();
                                 for gen in gens {
                                     if let ExpressionKind::GenericType(
@@ -479,14 +497,14 @@ impl TypeChecker {
                             };
 
                             // If there are generics, define them in a temporary scope before resolving the type
-                            if let Some(ref gens) = _generics {
+                            if let Some(ref gens) = generics {
                                 context.enter_scope();
                                 self.define_generics(gens, context);
                             }
 
                             let target_type = self.resolve_type_expression(target, context);
 
-                            if _generics.is_some() {
+                            if generics.is_some() {
                                 context.exit_scope();
                             }
 
@@ -506,7 +524,7 @@ impl TypeChecker {
                                     "Type '{}' is already defined. Cannot use 'type' statement with '{}' on an existing type.",
                                     name, kind
                                 ),
-                                expr.span.clone(),
+                                expr.span,
                             );
                             continue;
                         }
@@ -516,7 +534,7 @@ impl TypeChecker {
                             if !self.global_type_definitions.contains_key(&target_name) {
                                 self.report_error(
                                     format!("Unknown type '{}' in type declaration", target_name),
-                                    target.span.clone(),
+                                    target.span,
                                 );
                                 continue;
                             }
@@ -560,7 +578,7 @@ impl TypeChecker {
                 if !context.in_gpu_function {
                     self.report_error(
                         "Shared variables can only be declared inside 'gpu' functions".to_string(),
-                        span.clone(),
+                        span,
                     );
                 }
 
@@ -572,45 +590,44 @@ impl TypeChecker {
                                 "Shared variable '{}' must be an array, got {}",
                                 decl.name, resolved_type
                             ),
-                            span.clone(),
+                            span,
                         );
                     }
                 } else {
                     self.report_error(
                         format!("Shared variable '{}' must have an explicit type", decl.name),
-                        span.clone(),
+                        span,
                     );
                 }
 
                 if decl.initializer.is_some() {
                     self.report_error(
                         format!("Shared variable '{}' cannot have an initializer", decl.name),
-                        span.clone(),
+                        span,
                     );
                 }
             }
 
-            let inferred_type = self.determine_variable_type(decl, context, span.clone());
+            let inferred_type = self.determine_variable_type(decl, context, span);
             let is_mutable = match decl.declaration_type {
                 VariableDeclarationType::Mutable => true,
                 VariableDeclarationType::Immutable | VariableDeclarationType::Constant => false,
             };
             let is_constant = matches!(decl.declaration_type, VariableDeclarationType::Constant);
 
-            self.check_shadowing(&decl.name, is_mutable, is_constant, context, span.clone());
+            self.check_shadowing(&decl.name, is_mutable, is_constant, context, span);
 
             if context.scopes.len() == 1 {
                 self.global_scope.insert(
                     decl.name.clone(),
-                    super::context::SymbolInfo {
-                        consumed: false,
-                        ty: inferred_type.clone(),
-                        mutable: is_mutable,
+                    SymbolInfo::new(
+                        inferred_type.clone(),
+                        is_mutable,
                         is_constant,
-                        visibility: visibility.clone(),
-                        module: self.current_module.clone(),
-                        value: None,
-                    },
+                        visibility.clone(),
+                        self.current_module.clone(),
+                        None,
+                    ),
                 );
             }
 
@@ -646,7 +663,7 @@ impl TypeChecker {
                     "Cannot shadow existing variable/constant '{}' with a constant.",
                     name
                 ),
-                span.clone(),
+                span,
             );
             return;
         }
@@ -654,7 +671,7 @@ impl TypeChecker {
         // Rule 5: Cannot shadow an existing constant (declaring any variable shadowing a constant)
         if let Some(existing) = existing_info {
             if existing.is_constant {
-                self.report_error(format!("Cannot shadow constant '{}'.", name), span.clone());
+                self.report_error(format!("Cannot shadow constant '{}'.", name), span);
                 return;
             }
         }
@@ -683,6 +700,10 @@ impl TypeChecker {
         }
     }
 
+    /// Determines the type of a variable from its initializer and/or type annotation.
+    ///
+    /// When both are present, validates compatibility and returns the declared type.
+    /// Warns when immutable variables are unnecessarily declared nullable.
     fn determine_variable_type(
         &mut self,
         decl: &VariableDeclaration,
@@ -724,7 +745,7 @@ impl TypeChecker {
                             "Type mismatch for variable '{}': expected {}, got {}",
                             decl.name, declared_type, inferred_type
                         ),
-                        init.span.clone(),
+                        init.span,
                     );
                 }
             } else {
@@ -738,7 +759,7 @@ impl TypeChecker {
                                     "Variable '{}' is immutable but declared as nullable. Consider removing '?' to make it non-nullable.",
                                     decl.name
                                 ),
-                                type_expr.span.clone(),
+                                type_expr.span,
                             );
                         }
                     }
@@ -779,7 +800,7 @@ impl TypeChecker {
         if !matches!(cond_type.kind, TypeKind::Boolean) {
             self.report_error(
                 format!("If condition must be a boolean, got {}", cond_type),
-                cond.span.clone(),
+                cond.span,
             );
         }
 
@@ -842,7 +863,7 @@ impl TypeChecker {
                                  "Linear variable '{}' is consumed in one branch but not the other. Linear variables must be consistently consumed.",
                                  name
                              ),
-                             cond.span.clone(),
+                             cond.span,
                          );
                     }
                 }
@@ -858,7 +879,7 @@ impl TypeChecker {
         if !matches!(cond_type.kind, TypeKind::Boolean) {
             self.report_error(
                 format!("While condition must be a boolean, got {}", cond_type),
-                cond.span.clone(),
+                cond.span,
             );
         }
         context.enter_scope();
@@ -885,12 +906,12 @@ impl TypeChecker {
         context: &mut Context,
     ) {
         let iterable_type = self.infer_expression(iterable, context);
-        let element_type = self.get_iterable_element_type(&iterable_type, iterable.span.clone());
+        let element_type = self.get_iterable_element_type(&iterable_type, iterable.span);
 
         context.enter_scope();
         context.enter_loop();
 
-        self.bind_loop_variables(decls, &element_type, iterable.span.clone(), context);
+        self.bind_loop_variables(decls, &element_type, iterable.span, context);
 
         self.check_statement(body, context);
 
@@ -923,7 +944,7 @@ impl TypeChecker {
                             "Type mismatch for loop variable '{}': expected {}, got {}",
                             decl.name, declared_type, element_type
                         ),
-                        type_expr.span.clone(),
+                        type_expr.span,
                     );
                 }
                 declared_type
@@ -1026,9 +1047,9 @@ impl TypeChecker {
         span: Span,
     ) {
         let (actual_return_type, return_span) = if let Some(expr) = expr_opt {
-            (self.infer_expression(expr, context), expr.span.clone())
+            (self.infer_expression(expr, context), expr.span)
         } else {
-            (make_type(TypeKind::Void), span.clone())
+            (make_type(TypeKind::Void), span)
         };
 
         // Check if we are inferring return types for the current function
@@ -1054,6 +1075,11 @@ impl TypeChecker {
         }
     }
 
+    /// Type-checks a function declaration.
+    ///
+    /// Registers the function in the appropriate scope, validates parameter types,
+    /// guards, return type, and checks the function body for type correctness.
+    /// Handles GPU functions, async functions, and implicit return type inference.
     fn check_function_declaration(&mut self, info: FunctionDeclarationInfo, context: &mut Context) {
         let FunctionDeclarationInfo {
             name,
@@ -1084,15 +1110,14 @@ impl TypeChecker {
             if context.scopes.len() == 1 {
                 self.global_scope.insert(
                     name.to_string(),
-                    super::context::SymbolInfo {
-                        consumed: false,
-                        ty: func_type.clone(),
-                        mutable: false,
-                        is_constant: false,
-                        visibility: properties.visibility.clone(),
-                        module: self.current_module.clone(),
-                        value: None,
-                    },
+                    SymbolInfo::new(
+                        func_type.clone(),
+                        false,
+                        false,
+                        properties.visibility.clone(),
+                        self.current_module.clone(),
+                        None,
+                    ),
                 );
             }
 
@@ -1142,7 +1167,7 @@ impl TypeChecker {
                             "Type mismatch for default value: expected {}, got {}",
                             param_type, default_val_type
                         ),
-                        default_val.span.clone(),
+                        default_val.span,
                     );
                 }
             }
@@ -1173,17 +1198,14 @@ impl TypeChecker {
                         GuardOp::Not => BinaryOp::NotEqual, // Assumption: not is !=
                     };
 
-                    let left = crate::ast::factory::identifier_with_span(
-                        &param.name,
-                        param.typ.span.clone(),
-                    );
-                    let guard_type =
-                        self.infer_binary(&left, &bin_op, right, guard.span.clone(), context);
+                    let left =
+                        crate::ast::factory::identifier_with_span(&param.name, param.typ.span);
+                    let guard_type = self.infer_binary(&left, &bin_op, right, guard.span, context);
 
                     if !matches!(guard_type.kind, TypeKind::Boolean) {
                         self.report_error(
                             format!("Type mismatch: guard must be boolean, got {}", guard_type),
-                            guard.span.clone(),
+                            guard.span,
                         );
                     }
                 }
@@ -1199,7 +1221,7 @@ impl TypeChecker {
             if let Some(rt_expr) = return_type_expr {
                 self.report_error(
                     "GPU functions must not have an explicit return type".to_string(),
-                    rt_expr.span.clone(),
+                    rt_expr.span,
                 );
             }
 
@@ -1286,7 +1308,7 @@ impl TypeChecker {
                                             "Invalid return type: expected {}, got {}",
                                             return_type, expr_type
                                         ),
-                                        expr.span.clone(),
+                                        expr.span,
                                     );
                                 }
                             }
@@ -1305,7 +1327,7 @@ impl TypeChecker {
                                 "Invalid return type: expected {}, got {}",
                                 return_type, expr_type
                             ),
-                            expr.span.clone(),
+                            expr.span,
                         );
                     }
 
@@ -1322,7 +1344,7 @@ impl TypeChecker {
             if !matches!(return_type.kind, TypeKind::Void) {
                 let status = check_returns(body);
                 if status == ReturnStatus::None {
-                    self.report_error("Missing return statement".to_string(), body.span.clone());
+                    self.report_error("Missing return statement".to_string(), body.span);
                 }
             }
         }
@@ -1347,7 +1369,7 @@ impl TypeChecker {
         let name = if let ExpressionKind::Identifier(n, _) = &name_expr.node {
             n.clone()
         } else {
-            self.report_error("Invalid struct name".to_string(), name_expr.span.clone());
+            self.report_error("Invalid struct name".to_string(), name_expr.span);
             return;
         };
 
@@ -1380,14 +1402,11 @@ impl TypeChecker {
                 } else {
                     self.report_error(
                         "Invalid struct field name".to_string(),
-                        field_name_expr.span.clone(),
+                        field_name_expr.span,
                     );
                 }
             } else {
-                self.report_error(
-                    "Invalid struct field definition".to_string(),
-                    field.span.clone(),
-                );
+                self.report_error("Invalid struct field definition".to_string(), field.span);
             }
         }
 
@@ -1416,15 +1435,14 @@ impl TypeChecker {
         if context.scopes.len() == 1 {
             self.global_scope.insert(
                 name.clone(),
-                super::context::SymbolInfo {
-                    consumed: false,
-                    ty: make_type(TypeKind::Meta(Box::new(struct_type.clone()))),
-                    mutable: false,
-                    is_constant: false,
-                    visibility: visibility.clone(),
-                    module: self.current_module.clone(),
-                    value: None,
-                },
+                SymbolInfo::new(
+                    make_type(TypeKind::Meta(Box::new(struct_type.clone()))),
+                    false,
+                    false,
+                    visibility.clone(),
+                    self.current_module.clone(),
+                    None,
+                ),
             );
         }
 
@@ -1452,7 +1470,7 @@ impl TypeChecker {
         let name = if let ExpressionKind::Identifier(n, _) = &name_expr.node {
             n.clone()
         } else {
-            self.report_error("Invalid enum name".to_string(), name_expr.span.clone());
+            self.report_error("Invalid enum name".to_string(), name_expr.span);
             return;
         };
 
@@ -1492,14 +1510,11 @@ impl TypeChecker {
                 } else {
                     self.report_error(
                         "Invalid enum variant name".to_string(),
-                        variant_name_expr.span.clone(),
+                        variant_name_expr.span,
                     );
                 }
             } else {
-                self.report_error(
-                    "Invalid enum variant definition".to_string(),
-                    variant.span.clone(),
-                );
+                self.report_error("Invalid enum variant definition".to_string(), variant.span);
             }
         }
 
@@ -1538,15 +1553,14 @@ impl TypeChecker {
         if context.scopes.len() == 1 {
             self.global_scope.insert(
                 name.clone(),
-                super::context::SymbolInfo {
-                    consumed: false,
-                    ty: make_type(TypeKind::Meta(Box::new(enum_type.clone()))),
-                    mutable: false,
-                    is_constant: false,
-                    visibility: visibility.clone(),
-                    module: self.current_module.clone(),
-                    value: None,
-                },
+                SymbolInfo::new(
+                    make_type(TypeKind::Meta(Box::new(enum_type.clone()))),
+                    false,
+                    false,
+                    visibility.clone(),
+                    self.current_module.clone(),
+                    None,
+                ),
             );
         }
 
@@ -1580,14 +1594,14 @@ impl TypeChecker {
         let name = match self.extract_type_name(name_expr) {
             Ok(n) => n,
             Err(_) => {
-                self.report_error("Invalid class name".to_string(), name_expr.span.clone());
+                self.report_error("Invalid class name".to_string(), name_expr.span);
                 return;
             }
         };
 
         // Check for duplicate type definitions
         if self.global_type_definitions.contains_key(&name) {
-            self.report_error(format!("Type '{}' is already defined", name), span.clone());
+            self.report_error(format!("Type '{}' is already defined", name), span);
             return;
         }
 
@@ -1604,16 +1618,13 @@ impl TypeChecker {
                     if !self.global_type_definitions.contains_key(&base_name) {
                         self.report_error(
                             format!("Base class '{}' is not defined", base_name),
-                            base_expr.span.clone(),
+                            base_expr.span,
                         );
                     }
                     Some(base_name)
                 }
                 Err(_) => {
-                    self.report_error(
-                        "Invalid base class name".to_string(),
-                        base_expr.span.clone(),
-                    );
+                    self.report_error("Invalid base class name".to_string(), base_expr.span);
                     None
                 }
             }
@@ -1633,7 +1644,7 @@ impl TypeChecker {
                             "Circular inheritance detected: class '{}' eventually extends itself",
                             name
                         ),
-                        span.clone(),
+                        span,
                     );
                     break;
                 }
@@ -1658,7 +1669,7 @@ impl TypeChecker {
                 if !self.global_type_definitions.contains_key(&trait_name) {
                     self.report_error(
                         format!("Trait '{}' is not defined", trait_name),
-                        trait_expr.span.clone(),
+                        trait_expr.span,
                     );
                 }
                 trait_names.push(trait_name);
@@ -1705,7 +1716,7 @@ impl TypeChecker {
                         } else {
                             self.report_error(
                                 format!("Cannot infer type for field '{}'", decl.name),
-                                stmt.span.clone(),
+                                stmt.span,
                             );
                             make_type(TypeKind::Error)
                         };
@@ -1728,7 +1739,7 @@ impl TypeChecker {
                 }
                 StatementKind::FunctionDeclaration(
                     method_name,
-                    _method_generics,
+                    _methodgenerics,
                     params,
                     return_type,
                     _method_body,
@@ -1789,15 +1800,14 @@ impl TypeChecker {
 
                     self.global_scope.insert(
                         rt_name.to_string(),
-                        super::context::SymbolInfo {
-                            consumed: false,
-                            ty: func_type.clone(),
-                            mutable: false,
-                            is_constant: false,
-                            visibility: MemberVisibility::Private,
-                            module: self.current_module.clone(),
-                            value: None,
-                        },
+                        SymbolInfo::new(
+                            func_type.clone(),
+                            false,
+                            false,
+                            MemberVisibility::Private,
+                            self.current_module.clone(),
+                            None,
+                        ),
                     );
 
                     context.define(
@@ -1816,7 +1826,7 @@ impl TypeChecker {
                 _ => {
                     self.report_error(
                         "Only field and method declarations are allowed in class body".to_string(),
-                        stmt.span.clone(),
+                        stmt.span,
                     );
                 }
             }
@@ -1831,7 +1841,7 @@ impl TypeChecker {
                             "Non-abstract class '{}' cannot have abstract method '{}'",
                             name, method_name
                         ),
-                        span.clone(),
+                        span,
                     );
                 }
             }
@@ -1906,7 +1916,7 @@ impl TypeChecker {
 
         // Report override errors
         for error in override_errors {
-            self.report_error(error, span.clone());
+            self.report_error(error, span);
         }
 
         // Validate: child class init must call super.init() when parent has accessible init
@@ -1967,7 +1977,7 @@ impl TypeChecker {
                                 "Constructor 'init' in class '{}' must call super.init() because parent class '{}' has a constructor",
                                 name, base_name
                             ),
-                            span.clone(),
+                            span,
                         );
                     }
                 }
@@ -2007,7 +2017,7 @@ impl TypeChecker {
                             "Class '{}' must implement abstract method '{}' from class '{}'",
                             name, method_name, origin_class
                         ),
-                        span.clone(),
+                        span,
                     );
                 }
             }
@@ -2118,7 +2128,7 @@ impl TypeChecker {
                         "Class '{}' must implement method '{}' from trait '{}'",
                         name, method_name, origin_trait
                     ),
-                    span.clone(),
+                    span,
                 );
             }
 
@@ -2129,7 +2139,7 @@ impl TypeChecker {
                         "Method '{}' in class '{}' does not match trait '{}' signature: expected {}",
                         method_name, name, trait_name, expected_sig
                     ),
-                    span.clone(),
+                    span,
                 );
             }
         }
@@ -2164,15 +2174,14 @@ impl TypeChecker {
         if context.scopes.len() == 2 {
             self.global_scope.insert(
                 name.clone(),
-                super::context::SymbolInfo {
-                    consumed: false,
-                    ty: class_type_meta.clone(),
-                    mutable: false,
-                    is_constant: false,
-                    visibility: visibility.clone(),
-                    module: self.current_module.clone(),
-                    value: None,
-                },
+                SymbolInfo::new(
+                    class_type_meta.clone(),
+                    false,
+                    false,
+                    visibility.clone(),
+                    self.current_module.clone(),
+                    None,
+                ),
             );
         }
 
@@ -2193,7 +2202,7 @@ impl TypeChecker {
         for stmt in method_statements {
             if let StatementKind::FunctionDeclaration(
                 method_name,
-                method_generics,
+                methodgenerics,
                 params,
                 return_type,
                 method_body,
@@ -2212,7 +2221,7 @@ impl TypeChecker {
                 self.check_function_declaration(
                     FunctionDeclarationInfo {
                         name: method_name,
-                        generics: method_generics,
+                        generics: methodgenerics,
                         params,
                         return_type,
                         body: method_body.as_ref().map(|b| b.as_ref()),
@@ -2243,14 +2252,14 @@ impl TypeChecker {
         let name = match self.extract_type_name(name_expr) {
             Ok(n) => n,
             Err(_) => {
-                self.report_error("Invalid trait name".to_string(), name_expr.span.clone());
+                self.report_error("Invalid trait name".to_string(), name_expr.span);
                 return;
             }
         };
 
         // Check for duplicate type definitions
         if self.global_type_definitions.contains_key(&name) {
-            self.report_error(format!("Type '{}' is already defined", name), span.clone());
+            self.report_error(format!("Type '{}' is already defined", name), span);
             return;
         }
 
@@ -2266,7 +2275,7 @@ impl TypeChecker {
                 if !self.global_type_definitions.contains_key(&trait_name) {
                     self.report_error(
                         format!("Parent trait '{}' is not defined", trait_name),
-                        trait_expr.span.clone(),
+                        trait_expr.span,
                     );
                 }
                 parent_trait_names.push(trait_name);
@@ -2292,7 +2301,7 @@ impl TypeChecker {
             match &stmt.node {
                 StatementKind::FunctionDeclaration(
                     method_name,
-                    _method_generics,
+                    method_generics,
                     params,
                     return_type,
                     method_body,
@@ -2302,7 +2311,7 @@ impl TypeChecker {
                     self.check_function_declaration(
                         FunctionDeclarationInfo {
                             name: method_name,
-                            generics: _method_generics,
+                            generics: method_generics,
                             params,
                             return_type,
                             body: method_body.as_ref().map(|b| b.as_ref()),
@@ -2345,7 +2354,7 @@ impl TypeChecker {
                 _ => {
                     self.report_error(
                         "Only method declarations are allowed in trait body".to_string(),
-                        stmt.span.clone(),
+                        stmt.span,
                     );
                 }
             }
@@ -2376,15 +2385,14 @@ impl TypeChecker {
         if context.scopes.len() == 1 {
             self.global_scope.insert(
                 name.clone(),
-                super::context::SymbolInfo {
-                    consumed: false,
-                    ty: make_type(TypeKind::Meta(Box::new(trait_type.clone()))),
-                    mutable: false,
-                    is_constant: false,
-                    visibility: visibility.clone(),
-                    module: self.current_module.clone(),
-                    value: None,
-                },
+                SymbolInfo::new(
+                    make_type(TypeKind::Meta(Box::new(trait_type.clone()))),
+                    false,
+                    false,
+                    visibility.clone(),
+                    self.current_module.clone(),
+                    None,
+                ),
             );
         }
 

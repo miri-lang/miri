@@ -39,7 +39,9 @@ impl TypeChecker {
                 self.check_bitwise_op(left, right, context)
             }
             BinaryOp::In => self.check_membership_op(left, right, context),
-            _ => Ok(crate::ast::factory::make_type(TypeKind::Boolean)),
+            BinaryOp::Not | BinaryOp::Range => {
+                Ok(crate::ast::factory::make_type(TypeKind::Boolean))
+            }
         }
     }
 
@@ -293,7 +295,16 @@ impl TypeChecker {
                     Err(format!("Await requires a Future, got {}", expr_type))
                 }
             }
-            _ => Ok(expr_type.clone()),
+            UnaryOp::BitwiseNot => {
+                if self.is_integer(expr_type) {
+                    Ok(expr_type.clone())
+                } else {
+                    Err(format!(
+                        "Bitwise NOT requires integer type, got {}",
+                        expr_type
+                    ))
+                }
+            }
         }
     }
 

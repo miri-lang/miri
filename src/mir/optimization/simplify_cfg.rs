@@ -7,6 +7,14 @@ use crate::mir::terminator::TerminatorKind;
 use crate::mir::Body;
 use std::collections::{HashMap, HashSet};
 
+/// Simplifies the control flow graph by threading empty jump-only blocks
+/// and removing unreachable blocks.
+///
+/// Pass 1 (thread jumps): If block B is empty and terminates with `Goto(C)`,
+/// all jumps to B are redirected to C. Chains are resolved iteratively.
+///
+/// Pass 2 (remove unreachable): Blocks not reachable from the entry block
+/// are removed and all block indices are remapped.
 pub struct SimplifyCfg;
 
 impl OptimizationPass for SimplifyCfg {
@@ -55,21 +63,21 @@ fn thread_jumps(body: &mut Body) -> bool {
     }
 
     // Resolve chains: A -> B, B -> C  =>  A -> C
-    // We want A -> C directly.
-    // Iteratively resolve replacements.
-    let original = replacements.clone();
-    for val in replacements.values_mut() {
-        let mut current = *val;
-        let mut visited = HashSet::new();
-        visited.insert(current);
-        while let Some(next) = original.get(&current) {
-            if visited.contains(next) {
-                break; // Cycle detected
+    // Iteratively resolve until no changes occur, avoiding the need to clone.
+    loop {
+        let mut progress = false;
+        for key in replacements.keys().copied().collect::<Vec<_>>() {
+            let target = replacements[&key];
+            if let Some(&next) = replacements.get(&target) {
+                if next != target {
+                    replacements.insert(key, next);
+                    progress = true;
+                }
             }
-            current = *next;
-            visited.insert(current);
         }
-        *val = current;
+        if !progress {
+            break;
+        }
     }
 
     // Apply replacements to all terminators

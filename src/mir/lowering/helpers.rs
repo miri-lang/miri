@@ -39,28 +39,28 @@ pub fn resolve_type(tc: &TypeChecker, expr: &Expression) -> Type {
     match &expr.node {
         ExpressionKind::Type(t, is_nullable) => {
             if *is_nullable {
-                Type::new(TypeKind::Nullable(t.clone()), expr.span.clone())
+                Type::new(TypeKind::Nullable(t.clone()), expr.span)
             } else {
                 *t.clone()
             }
         }
         ExpressionKind::Identifier(name, _) => {
             if tc.global_type_definitions.contains_key(name) {
-                Type::new(TypeKind::Custom(name.clone(), None), expr.span.clone())
+                Type::new(TypeKind::Custom(name.clone(), None), expr.span)
             } else {
                 match name.as_str() {
-                    "int" => Type::new(TypeKind::Int, expr.span.clone()),
-                    "bool" => Type::new(TypeKind::Boolean, expr.span.clone()),
-                    "string" => Type::new(TypeKind::String, expr.span.clone()),
-                    "float" => Type::new(TypeKind::Float, expr.span.clone()),
-                    "void" => Type::new(TypeKind::Void, expr.span.clone()),
+                    "int" => Type::new(TypeKind::Int, expr.span),
+                    "bool" => Type::new(TypeKind::Boolean, expr.span),
+                    "string" => Type::new(TypeKind::String, expr.span),
+                    "float" => Type::new(TypeKind::Float, expr.span),
+                    "void" => Type::new(TypeKind::Void, expr.span),
                     // Fallback: Unknown primitive type - use Error type instead of panicking
-                    _ => Type::new(TypeKind::Error, expr.span.clone()),
+                    _ => Type::new(TypeKind::Error, expr.span),
                 }
             }
         }
         // Fallback: Unsupported type expression - use Error type instead of panicking
-        _ => Type::new(TypeKind::Error, expr.span.clone()),
+        _ => Type::new(TypeKind::Error, expr.span),
     }
 }
 
@@ -101,7 +101,7 @@ pub fn bind_pattern(
         Pattern::Identifier(name) => {
             // Create a new local for the bound variable
             let ty = ctx.body.local_decls[subject_local.0].ty.clone();
-            let var_local = ctx.push_local(name.clone(), ty, span.clone());
+            let var_local = ctx.push_local(name.clone(), ty, *span);
 
             // Assign subject value to bound variable
             ctx.push_statement(crate::mir::Statement {
@@ -109,7 +109,7 @@ pub fn bind_pattern(
                     Place::new(var_local),
                     Rvalue::Use(Operand::Copy(Place::new(subject_local))),
                 ),
-                span: span.clone(),
+                span: *span,
             });
         }
         Pattern::Tuple(patterns) => {
@@ -118,7 +118,7 @@ pub fn bind_pattern(
             for (i, p) in patterns.iter().enumerate() {
                 if let Pattern::Identifier(name) = p {
                     let ty = ctx.body.local_decls[subject_local.0].ty.clone();
-                    let elem_local = ctx.push_temp(ty, span.clone());
+                    let elem_local = ctx.push_temp(ty, *span);
                     let name_rc: std::rc::Rc<str> = std::rc::Rc::from(name.as_str());
                     ctx.body.local_decls[elem_local.0].name = Some(name_rc.clone());
 
@@ -131,7 +131,7 @@ pub fn bind_pattern(
                             Place::new(elem_local),
                             Rvalue::Use(Operand::Copy(place)),
                         ),
-                        span: span.clone(),
+                        span: *span,
                     });
 
                     ctx.variable_map.insert(name_rc, elem_local);
@@ -170,8 +170,8 @@ pub fn bind_pattern(
                         .as_ref()
                         .and_then(|types| types.get(i))
                         .cloned()
-                        .unwrap_or_else(|| Type::new(TypeKind::Void, span.clone()));
-                    let elem_local = ctx.push_temp(ty, span.clone());
+                        .unwrap_or_else(|| Type::new(TypeKind::Void, *span));
+                    let elem_local = ctx.push_temp(ty, *span);
                     let name_rc: std::rc::Rc<str> = std::rc::Rc::from(name.as_str());
                     ctx.body.local_decls[elem_local.0].name = Some(name_rc.clone());
 
@@ -184,7 +184,7 @@ pub fn bind_pattern(
                             Place::new(elem_local),
                             Rvalue::Use(Operand::Copy(place)),
                         ),
-                        span: span.clone(),
+                        span: *span,
                     });
 
                     ctx.variable_map.insert(name_rc, elem_local);
@@ -215,7 +215,7 @@ pub fn lower_to_local(
             let operand = lower_expression(ctx, expr, None)?;
             ctx.push_statement(crate::mir::Statement {
                 kind: MirStatementKind::Assign(Place::new(target_local), Rvalue::Use(operand)),
-                span: expr.span.clone(),
+                span: expr.span,
             });
         }
         StatementKind::Block(stmts) => {
@@ -234,7 +234,7 @@ pub fn lower_to_local(
                     lower_statement(ctx, s)?;
                 }
             }
-            ctx.pop_scope(stmt.span.clone());
+            ctx.pop_scope(stmt.span);
         }
         _ => lower_statement(ctx, stmt)?,
     }
@@ -265,7 +265,7 @@ pub fn lower_as_return(
 
             ctx.push_statement(crate::mir::Statement {
                 kind: MirStatementKind::Assign(Place::new(crate::mir::Local(0)), rvalue),
-                span: expr.span.clone(),
+                span: expr.span,
             });
         }
         StatementKind::Block(stmts) => {
@@ -287,7 +287,7 @@ pub fn lower_as_return(
                     lower_statement(ctx, s)?;
                 }
             }
-            ctx.pop_scope(stmt.span.clone());
+            ctx.pop_scope(stmt.span);
         }
         StatementKind::If(cond, then_stmt, else_stmt, if_type) => {
             let cond_op = lower_expression(ctx, cond, None)?;
@@ -306,7 +306,7 @@ pub fn lower_as_return(
                     targets: vec![(Discriminant::from(target_val), then_bb)],
                     otherwise: other_target,
                 },
-                stmt.span.clone(),
+                stmt.span,
             ));
 
             // Lower Then
@@ -318,7 +318,7 @@ pub fn lower_as_return(
             {
                 ctx.set_terminator(Terminator::new(
                     TerminatorKind::Goto { target: join_bb },
-                    stmt.span.clone(),
+                    stmt.span,
                 ));
             }
 
@@ -333,7 +333,7 @@ pub fn lower_as_return(
             {
                 ctx.set_terminator(Terminator::new(
                     TerminatorKind::Goto { target: join_bb },
-                    stmt.span.clone(),
+                    stmt.span,
                 ));
             }
             ctx.set_current_block(join_bb);

@@ -29,13 +29,13 @@ pub fn lower_variable(
         } else {
             return Err(LoweringError::unsupported_expression(
                 format!("Cannot determine type for variable '{}'", decl.name),
-                span.clone(),
+                *span,
             ));
         };
 
         // Clone var_ty only when needed for comparison; consume in final use
         let var_ty_kind = var_ty.kind.clone();
-        let local = ctx.push_local(decl.name.clone(), var_ty, span.clone());
+        let local = ctx.push_local(decl.name.clone(), var_ty, *span);
 
         if decl.is_shared {
             ctx.body.local_decls[local.0].storage_class = StorageClass::GpuShared;
@@ -49,7 +49,7 @@ pub fn lower_variable(
                 // op.ty() == var_ty, so no cast needed
                 ctx.push_statement(crate::mir::Statement {
                     kind: MirStatementKind::Assign(dest, Rvalue::Use(op)),
-                    span: span.clone(),
+                    span: *span,
                 });
             } else {
                 // Check if we can use DPS (types match)
@@ -75,7 +75,7 @@ pub fn lower_variable(
 
                     ctx.push_statement(crate::mir::Statement {
                         kind: MirStatementKind::Assign(dest, rvalue),
-                        span: span.clone(),
+                        span: *span,
                     });
                 }
             }

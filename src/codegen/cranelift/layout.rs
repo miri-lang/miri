@@ -66,24 +66,57 @@ pub fn field_layout(
                             (payload_offset, cl_types::I64)
                         }
                     }
-                    _ => {
-                        // Fallback: assume 8-byte fields
-                        ((field_idx as i32) * 8, cl_types::I64)
-                    }
+                    // Generic, Alias, Class, Trait — assume pointer-sized fields
+                    TypeDefinition::Generic(_)
+                    | TypeDefinition::Alias(_)
+                    | TypeDefinition::Class(_)
+                    | TypeDefinition::Trait(_) => ((field_idx as i32) * 8, cl_types::I64),
                 }
             } else {
-                // Type not found, assume 8-byte fields
+                // Type not found — assume pointer-sized fields
                 ((field_idx as i32) * 8, cl_types::I64)
             }
         }
-        _ => {
-            // Fallback: assume 8-byte fields (I64 pointer representation)
-            ((field_idx as i32) * 8, cl_types::I64)
-        }
+        // All other types: assume pointer-sized fields
+        TypeKind::Linear(_)
+        | TypeKind::I8
+        | TypeKind::U8
+        | TypeKind::I16
+        | TypeKind::U16
+        | TypeKind::I32
+        | TypeKind::U32
+        | TypeKind::I64
+        | TypeKind::U64
+        | TypeKind::I128
+        | TypeKind::U128
+        | TypeKind::Int
+        | TypeKind::F32
+        | TypeKind::F64
+        | TypeKind::Float
+        | TypeKind::Boolean
+        | TypeKind::Void
+        | TypeKind::String
+        | TypeKind::Symbol
+        | TypeKind::RawPtr
+        | TypeKind::List(_)
+        | TypeKind::Array(_, _)
+        | TypeKind::Map(_, _)
+        | TypeKind::Set(_)
+        | TypeKind::Result(_, _)
+        | TypeKind::Future(_)
+        | TypeKind::Function(_, _, _)
+        | TypeKind::Generic(_, _, _)
+        | TypeKind::Meta(_)
+        | TypeKind::Nullable(_)
+        | TypeKind::Error => ((field_idx as i32) * 8, cl_types::I64),
     }
 }
 
 /// Compute total size of an aggregate for stack slot allocation.
+///
+/// Returns the size in bytes needed to represent the given aggregate type
+/// on the stack. For structs, this is the sum of field sizes. For enums,
+/// it is the discriminant (8 bytes) plus the largest variant payload.
 pub fn aggregate_size(
     local_type: &TypeKind,
     type_definitions: &HashMap<String, TypeDefinition>,
@@ -123,12 +156,17 @@ pub fn aggregate_size(
                             .unwrap_or(0);
                         8 + max_payload
                     }
-                    _ => 8, // Fallback
+                    // Generic, Alias, Class, Trait — pointer-sized
+                    TypeDefinition::Generic(_)
+                    | TypeDefinition::Alias(_)
+                    | TypeDefinition::Class(_)
+                    | TypeDefinition::Trait(_) => 8,
                 }
             } else {
                 8
             }
         }
-        _ => 8, // Fallback: pointer size
+        // All non-aggregate types: pointer-sized
+        _ => 8,
     }
 }

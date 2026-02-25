@@ -2,7 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use super::token::{RegexToken, Token};
-use crate::error::syntax::{SyntaxError, SyntaxErrorKind};
+use crate::error::syntax::{Span, SyntaxError, SyntaxErrorKind};
 use logos::Lexer;
 
 /// Parses a regex literal token into a `RegexToken` with body and flags.
@@ -21,7 +21,7 @@ pub fn parse_regex_literal(
         _ => {
             return Err(SyntaxError::new(
                 SyntaxErrorKind::InvalidRegexLiteral,
-                lexer.span(),
+                Span::new(lexer.span().start, lexer.span().end),
             ));
         }
     };

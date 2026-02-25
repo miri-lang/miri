@@ -2,23 +2,27 @@
 
 **A modern, GPU-first, statically-typed programming language designed for balancing high performance and developer productivity in the age of GenAI.**
 
-Miri combines the readability of Ruby and Python with the safety and speed of Rust—essential in the age of Generative AI, where humans define intent and invariants, and AI fills in safe, verifiable, high-performance implementations.
+Miri combines the readability of Python with the safety and speed of Rust—essential in the age of Generative AI, where humans define intent and invariants, and AI fills in safe, verifiable, high-performance implementations.
 
-## Features
+## Current State (v0.1.0-alpha.1)
 
-- **Indentation-Sensitive Syntax** — Clean, readable code without curly braces
-- **Static Typing** — Catch errors at compile time with powerful type inference
-- **Immutable by Default** — Variables are immutable unless declared with `var`
-- **Null Safety** — No nulls; safety is built into the type system
-- **GPU-First Design** — Miri's intermediate representation (MIR) is designed with heterogeneous computing in mind (kernels, memory scope)
-- **Script Mode** — Run top-level code directly without boilerplate
+Miri is currently in its first Alpha release, supporting foundational language features.
+
+**Working Features:**
+- **Primitives & Variables**: `int`, `float`, `bool`, `String` via `let` (immutable) and `var` (mutable).
+- **Functions**: Typed parameters and returns.
+- **Control Flow**: `if/else`, `unless`, `while`, `until`, `do-while`, `forever`, `for..in`.
+- **Pattern Matching**: The `match` statement.
+- **Compilation Pipeline**: Full frontend (Lexer, Parser, Type Checker), MIR Lowering, and Native Codegen (via Cranelift).
+
+*Note: Collections (lists, maps, tuples), object-oriented features (classes, traits, structs), and GPU codegen are planned for upcoming milestones.*
 
 ## Quick Start
 
 ### Hello World
 
 ```miri
-use system.io.{println}
+use system.io
 
 fn main()
     println("Hello, World!")
@@ -54,51 +58,15 @@ for i in 1..5
     print(i)
 ```
 
-### Collections
+### Pattern Matching
 
 ```miri
-let array = [1, 2, 3]
-let list List<int> = [1, 2, 3]
-let map = {"key": "value"}
-let tuple = (1, true)
-let set = {1, 2, 3}
+match x
+    1: print("One")
+    2 | 3: print("Two or Three")
+    x if x > 10: print("Large")
+    _: print("Other")
 ```
-
-### Structs
-
-```miri
-struct User
-    id int
-    name String
-
-let u = User(id: 1, name: "Alice")
-```
-
-## Modules and Imports
-
-Miri uses a dot-separated path syntax for imports. The folder structure defines the namespace.
-
-```miri
-// Standard library — prefixed with `system`
-use system.io.{print, println}
-use system.math as M
-use system.net.*
-
-// Local project modules — prefixed with `local`
-use local.users.user
-use local.utils.{helpers, validators as V}
-
-// External packages — package name as prefix
-use my_package.module
-use some_lib.feature.{Component, render}
-```
-
-### Import Features
-
-- **Single import**: `use system.math`
-- **Aliasing**: `use system.math as M`
-- **Multi-import**: `use system.{io, net, text as T}`
-- **Wildcard**: `use system.io.*`
 
 ## Architecture
 
@@ -114,27 +82,13 @@ The `Pipeline` struct in `src/pipeline.rs` orchestrates:
 2. **Script Wrapping** — Auto-wrapping top-level statements into `main` if needed
 3. **Analysis** — Type checking
 4. **Lowering** — Converting AST to MIR
-5. **Backend** — Cranelift (default) or LLVM code generation
+5. **Backend** — Cranelift (default) code generation
 6. **Linking** — System linker (`cc`) produces the final binary
-
-An **Interpreter** path (`Pipeline::interpret`) executes MIR directly without compilation.
-
-### Key Modules
-
-| Module | Path | Description |
-| -------- | ------ | ------------- |
-| Lexer | `src/lexer/` | Tokenization using [Logos](https://github.com/maciejhirsz/logos) |
-| Parser | `src/parser/` | Recursive descent parser producing AST |
-| AST | `src/ast/` | High-level syntax tree definitions |
-| Type Checker | `src/type_checker/` | Semantic analysis and type inference |
-| MIR | `src/mir/` | CFG-based intermediate representation |
-| Codegen | `src/codegen/` | Backend implementations |
-| Interpreter | `src/interpreter/` | Stack-based MIR execution |
 
 ### Backends
 
 - **Cranelift** (`src/codegen/cranelift/`) — Default backend. Fast compilation for development.
-- **LLVM** (`src/codegen/llvm/`) — Optional backend via [Inkwell](https://github.com/TheDan64/inkwell). Intended for optimized production builds (not yet implemented).
+- *(Future)* **LLVM** (`src/codegen/llvm/`) — Intended for optimized production builds.
 
 ## Repository Layout
 
@@ -142,25 +96,15 @@ An **Interpreter** path (`Pipeline::interpret`) executes MIR directly without co
 src/
 ├── ast/          # Syntax tree definitions
 ├── cli/          # Command-line interface
-├── codegen/      # Backend implementations (Cranelift/LLVM)
+├── codegen/      # Backend implementations (Cranelift)
 ├── error/        # Error types and formatting
-├── interpreter/  # Direct MIR execution engine
 ├── lexer/        # Source tokenization
 ├── mir/          # IR definitions and lowering
 ├── parser/       # Parsing logic
+├── runtime/      # Scaffolding and intrinsics
+├── stdlib/       # Standard Library (system.*)
 ├── type_checker/ # Type inference and validation
 └── pipeline.rs   # Main compiler driver
-
-tests/
-├── cli/          # CLI tests
-├── error/        # Error formatting tests
-├── examples/     # Example Miri programs
-├── integration/  # Full pipeline tests
-├── interpreter/  # Interpreter tests
-├── lexer/        # Lexer tests
-├── mir/          # MIR tests
-├── parser/       # Parser tests
-└── type_checker/ # Type checker tests
 ```
 
 ## Building from Source

@@ -131,7 +131,7 @@ impl<'a> LoweringContext<'a> {
                     // Emit StorageDead for variables leaving scope
                     self.push_statement(crate::mir::Statement {
                         kind: StatementKind::StorageDead(Place::new(local)),
-                        span: span.clone(),
+                        span,
                     });
                 }
             }
@@ -156,7 +156,7 @@ impl<'a> LoweringContext<'a> {
     }
 
     pub fn push_local(&mut self, name: String, ty: Type, span: Span) -> Local {
-        let mut decl = LocalDecl::new(ty, span.clone());
+        let mut decl = LocalDecl::new(ty, span);
         let name_rc: Rc<str> = Rc::from(name);
 
         if !self.is_release {
@@ -188,7 +188,7 @@ impl<'a> LoweringContext<'a> {
 
     /// Register a function parameter (similar to push_local but no StorageLive)
     pub fn push_param(&mut self, name: String, ty: Type, span: Span) -> Local {
-        let mut decl = LocalDecl::new(ty, span.clone());
+        let mut decl = LocalDecl::new(ty, span);
         let name_rc: Rc<str> = Rc::from(name);
 
         if !self.is_release {

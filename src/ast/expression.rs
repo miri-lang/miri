@@ -44,9 +44,9 @@ pub enum LeftHandSideExpression {
 impl LeftHandSideExpression {
     pub fn span(&self) -> Span {
         match self {
-            LeftHandSideExpression::Identifier(e) => e.span.clone(),
-            LeftHandSideExpression::Member(e) => e.span.clone(),
-            LeftHandSideExpression::Index(e) => e.span.clone(),
+            LeftHandSideExpression::Identifier(e) => e.span,
+            LeftHandSideExpression::Member(e) => e.span,
+            LeftHandSideExpression::Index(e) => e.span,
         }
     }
 }

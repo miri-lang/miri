@@ -9,11 +9,10 @@ use super::Parser;
 
 impl<'source> Parser<'source> {
     pub(crate) fn current_token_span(&self) -> Span {
-        self._lookahead
-            .as_ref()
-            .map_or(self.source.len()..self.source.len(), |(_, span)| {
-                span.clone()
-            })
+        self._lookahead.as_ref().map_or(
+            Span::new(self.source.len(), self.source.len()),
+            |(_, span)| *span,
+        )
     }
 
     pub(crate) fn eat(
@@ -25,7 +24,7 @@ impl<'source> Parser<'source> {
 
         match token {
             Some((ref t, ref span)) if expected(t) => {
-                let result = (t.clone(), span.clone());
+                let result = (t.clone(), *span);
                 self._lookahead = self.lexer.next().transpose()?;
                 Ok(result)
             }
@@ -34,13 +33,13 @@ impl<'source> Parser<'source> {
                     expected: expected_str.to_string(),
                     found: token_to_string(found),
                 },
-                self.source.len()..self.source.len(),
+                Span::new(self.source.len(), self.source.len()),
             )),
             None => {
                 if expected(&Token::ExpressionStatementEnd) {
                     // Special case for end of expression
                     self._lookahead = None;
-                    return Ok((Token::ExpressionStatementEnd, 0..0));
+                    return Ok((Token::ExpressionStatementEnd, Span::new(0, 0)));
                 }
 
                 Err(self.error_eof())
@@ -303,18 +302,22 @@ impl<'source> Parser<'source> {
                 expected: expected.to_string(),
                 found: self.lookahead_as_string(),
             },
-            token.1.start..token.1.end,
+            Span::new(token.1.start, token.1.end),
         )
     }
 
     pub(crate) fn error_unexpected_token(&self, expected: &str, found: &str) -> SyntaxError {
-        self.error_unexpected_token_with_span(expected, found, self.source.len()..self.source.len())
+        self.error_unexpected_token_with_span(
+            expected,
+            found,
+            Span::new(self.source.len(), self.source.len()),
+        )
     }
 
     pub(crate) fn error_invalid_inheritance_identifier(&self) -> SyntaxError {
         SyntaxError::new(
             SyntaxErrorKind::InvalidInheritanceIdentifier,
-            self.source.len()..self.source.len(),
+            Span::new(self.source.len(), self.source.len()),
         )
     }
 
@@ -340,28 +343,28 @@ impl<'source> Parser<'source> {
     pub(crate) fn error_missing_match_branches(&self) -> SyntaxError {
         SyntaxError::new(
             SyntaxErrorKind::MissingMatchBranches,
-            self.source.len()..self.source.len(),
+            Span::new(self.source.len(), self.source.len()),
         )
     }
 
     pub(crate) fn error_duplicate_match_pattern(&self) -> SyntaxError {
         SyntaxError::new(
             SyntaxErrorKind::DuplicateMatchPattern,
-            self.source.len()..self.source.len(),
+            Span::new(self.source.len(), self.source.len()),
         )
     }
 
     pub(crate) fn error_eof(&self) -> SyntaxError {
         SyntaxError::new(
             SyntaxErrorKind::UnexpectedEOF,
-            self.source.len()..self.source.len(),
+            Span::new(self.source.len(), self.source.len()),
         )
     }
 
     pub(crate) fn error_invalid_left_hand_side_expression(&self) -> SyntaxError {
         SyntaxError::new(
             SyntaxErrorKind::InvalidLeftHandSideExpression,
-            self.source.len()..self.source.len(),
+            Span::new(self.source.len(), self.source.len()),
         )
     }
 
@@ -370,29 +373,25 @@ impl<'source> Parser<'source> {
             SyntaxErrorKind::InvalidTypeDeclaration {
                 expected: expected.to_string(),
             },
-            self.source.len()..self.source.len(),
+            Span::new(self.source.len(), self.source.len()),
         )
     }
 
     pub(crate) fn error_missing_struct_member_type(&self) -> SyntaxError {
         SyntaxError::new(
             SyntaxErrorKind::MissingStructMemberType,
-            self.source.len()..self.source.len(),
+            Span::new(self.source.len(), self.source.len()),
         )
     }
 
     pub(crate) fn error_missing_members(&self, kind: SyntaxErrorKind) -> SyntaxError {
-        SyntaxError::new(kind, self.source.len()..self.source.len())
+        SyntaxError::new(kind, Span::new(self.source.len(), self.source.len()))
     }
 
     pub(crate) fn error_missing_type_expression(&self) -> SyntaxError {
-        println!(
-            "MissingTypeExpression at:\\n{:?}",
-            std::backtrace::Backtrace::capture()
-        );
         SyntaxError::new(
             SyntaxErrorKind::MissingTypeExpression,
-            self.source.len()..self.source.len(),
+            Span::new(self.source.len(), self.source.len()),
         )
     }
 }

@@ -233,6 +233,7 @@ impl Context {
         }
     }
 
+    /// Defines a symbol (variable, function, etc.) in the current (innermost) scope.
     pub fn define(&mut self, name: String, info: SymbolInfo) {
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name, info);
@@ -301,20 +302,16 @@ impl Context {
     }
 
     /// Returns a list of linear variables in the current scope that have not been consumed.
+    ///
+    /// Each entry contains the variable name and the span from its type declaration,
+    /// used for error reporting at scope exit.
     pub fn get_unconsumed_linear_vars(&self) -> Vec<(String, Span)> {
         let mut unconsumed = Vec::new();
         if let Some(scope) = self.scopes.last() {
             for (name, info) in scope {
                 if let TypeKind::Linear(_) = &info.ty.kind {
                     if !info.consumed {
-                        // We need the span of definition.
-                        // Currently SymbolInfo doesn't store the Span.
-                        // We will return the name, and the caller can error on the block close or closest approximation.
-                        // Since we don't store span in SymbolInfo (we should, but big refactor),
-                        // we will return just the name.
-                        // Caller will likely use the block's span or similar.
-                        // Wait, Type has a Span! info.ty.span
-                        unconsumed.push((name.clone(), info.ty.span.clone()));
+                        unconsumed.push((name.clone(), info.ty.span));
                     }
                 }
             }

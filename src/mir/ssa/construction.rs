@@ -8,19 +8,32 @@ use crate::mir::{
 };
 use std::collections::{HashMap, HashSet};
 
-/// Result of SSA construction.
+/// Result of SSA construction, containing version counts per local.
 pub struct SSAConstructionResult {
     /// The number of versions created for each original variable.
     pub versions: HashMap<Local, usize>,
 }
 
-/// Transform the MIR body into SSA form.
+/// Transform the MIR body into SSA form using iterated dominance frontiers.
+///
+/// This performs three phases:
+/// 1. Collect definition sites for each local
+/// 2. Insert Phi nodes at the iterated dominance frontier of each variable's definitions
+/// 3. Rename variables via dominator-tree walk, creating fresh versions at each definition
+///
+/// # Arguments
+///
+/// * `body` - The MIR function body to transform (mutated in place)
+///
+/// # Returns
+///
+/// An [`SSAConstructionResult`] containing version counts per original local.
 pub fn construct_ssa(body: &mut Body) -> SSAConstructionResult {
     // 1. Compute Dominator Tree (needs immutable body)
     let dom_tree = DominatorTree::compute(body);
 
     // 2. Initialize Builder (calculates def sites)
-    let mut builder = SSABuilder::new(&dom_tree);
+    let mut builder = SSABuilder::new(dom_tree);
 
     // 3. Run SSA construction (mutates body)
     builder.run(body)
@@ -40,15 +53,9 @@ struct SSABuilder {
 }
 
 impl SSABuilder {
-    fn new(dom_tree: &DominatorTree) -> Self {
-        let new_tree = DominatorTree {
-            immediate_dominators: dom_tree.immediate_dominators.clone(),
-            dominance_frontiers: dom_tree.dominance_frontiers.clone(),
-            children: dom_tree.children.clone(),
-        };
-
+    fn new(dom_tree: DominatorTree) -> Self {
         Self {
-            dom_tree: new_tree,
+            dom_tree,
             def_sites: HashMap::new(),
             version_stack: HashMap::new(),
             version_counts: HashMap::new(),
@@ -367,13 +374,14 @@ impl SSABuilder {
         local
     }
 
+    /// Resolve a potentially-renamed local back to its original pre-SSA local.
     fn get_original_local(&self, local: Local) -> Local {
-        local
+        self.new_to_old.get(&local).copied().unwrap_or(local)
     }
 
     fn new_version(&mut self, local_decls: &mut Vec<LocalDecl>, original: Local) -> Local {
         let ty = local_decls[original.0].ty.clone();
-        let span = local_decls[original.0].span.clone();
+        let span = local_decls[original.0].span;
 
         let new_decl = LocalDecl::new(ty, span);
         let new_idx = local_decls.len();

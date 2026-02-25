@@ -4,8 +4,8 @@
 use crate::ast::factory as ast;
 use crate::ast::types::TypeDeclarationKind;
 use crate::ast::*;
-use crate::error::syntax::{Span, SyntaxError, SyntaxErrorKind};
-use crate::lexer::{token_to_string, Token};
+use crate::error::syntax::{Span, SyntaxError};
+use crate::lexer::Token;
 
 use super::utils::{
     is_additive_op, is_assignment_op, is_equality_op, is_logical_and_op, is_logical_or_op,
@@ -56,11 +56,14 @@ impl<'source> Parser<'source> {
             None
         };
 
-        let span = expression.span.start..(if let Some(ref e) = else_branch {
-            e.span.end
-        } else {
-            condition.span.end
-        });
+        let span = Span::new(
+            expression.span.start,
+            if let Some(ref e) = else_branch {
+                e.span.end
+            } else {
+                condition.span.end
+            },
+        );
         let expression =
             ast::conditional_with_span(expression, condition, else_branch, if_statement_type, span);
 
@@ -108,7 +111,7 @@ impl<'source> Parser<'source> {
 
         let right = self.assignment_expression()?;
 
-        let span = left.span().start..right.span.end;
+        let span = Span::new(left.span().start, right.span.end);
         let assignment_expression = ast::assign_with_span(left, op, right, span);
 
         Ok(assignment_expression)
@@ -126,7 +129,7 @@ impl<'source> Parser<'source> {
             ;
     */
     pub(crate) fn relational_expression(&mut self) -> Result<Expression, SyntaxError> {
-        self._binary_expression(
+        self.binary_expression_precedence(
             Self::range_expression,
             is_relational_op,
             Self::eat_relational_op,
@@ -144,7 +147,7 @@ impl<'source> Parser<'source> {
             ;
     */
     pub(crate) fn equality_expression(&mut self) -> Result<Expression, SyntaxError> {
-        self._binary_expression(
+        self.binary_expression_precedence(
             Self::relational_expression,
             is_equality_op,
             Self::eat_equality_op,
@@ -161,7 +164,7 @@ impl<'source> Parser<'source> {
             ;
     */
     pub(crate) fn logical_and_expression(&mut self) -> Result<Expression, SyntaxError> {
-        self._binary_expression(
+        self.binary_expression_precedence(
             Self::equality_expression,
             is_logical_and_op,
             Self::eat_logical_and_op,
@@ -178,7 +181,7 @@ impl<'source> Parser<'source> {
             ;
     */
     pub(crate) fn logical_or_expression(&mut self) -> Result<Expression, SyntaxError> {
-        self._binary_expression(
+        self.binary_expression_precedence(
             Self::logical_and_expression,
             is_logical_or_op,
             Self::eat_logical_or_op,
@@ -219,19 +222,19 @@ impl<'source> Parser<'source> {
                     } else {
                         self.identifier()?
                     };
-                    let span = expression.span.start..property.span.end;
+                    let span = Span::new(expression.span.start, property.span.end);
                     ast::member_with_span(expression, property, span)
                 }
                 Some((Token::LBracket, _)) => {
                     self.eat_token(&Token::LBracket)?;
                     let index = self.expression()?;
                     let (_, rbracket_span) = self.eat_token(&Token::RBracket)?;
-                    let span = expression.span.start..rbracket_span.end;
+                    let span = Span::new(expression.span.start, rbracket_span.end);
                     ast::index_with_span(expression, index, span)
                 }
                 Some((Token::LParen, _)) => {
                     let (args, rparen_span) = self.arguments()?;
-                    let span = expression.span.start..rparen_span.end;
+                    let span = Span::new(expression.span.start, rparen_span.end);
                     ast::call_with_span(expression, args, span)
                 }
                 Some((Token::LessThan, _)) => {
@@ -254,7 +257,7 @@ impl<'source> Parser<'source> {
                         .last()
                         .map(|a| a.span.end)
                         .unwrap_or(expression.span.end);
-                    let span = expression.span.start..end;
+                    let span = Span::new(expression.span.start, end);
                     IdNode::new(
                         0,
                         ExpressionKind::TypeDeclaration(
@@ -289,10 +292,10 @@ impl<'source> Parser<'source> {
 
                             // Create the property node.
                             // The span of the property is the float span sans the leading dot.
-                            let prop_span = (span.start + 1)..span.end;
+                            let prop_span = Span::new(span.start + 1, span.end);
                             let property = ast::literal_with_span(ast::int_literal(val), prop_span);
 
-                            let span = expression.span.start..property.span.end;
+                            let span = Span::new(expression.span.start, property.span.end);
                             ast::member_with_span(expression, property, span)
                         } else {
                             // Contains exponent or other float chars, treat as boundary stop (not member access).
@@ -347,7 +350,7 @@ impl<'source> Parser<'source> {
                 if let ExpressionKind::Identifier(name, None) = expr.node {
                     self.eat_token(&Token::Colon)?;
                     let value = self.assignment_expression()?;
-                    let span = expr.span.start..value.span.end;
+                    let span = Span::new(expr.span.start, value.span.end);
                     args.push(ast::named_argument_with_span(name, value, span));
                 } else {
                     return Err(self.error_unexpected_token("identifier for named argument", ":"));
@@ -392,7 +395,7 @@ impl<'source> Parser<'source> {
                 (
                     self.source[second_span.start..second_span.end].to_string(),
                     Some(name),
-                    span.start..second_span.end,
+                    Span::new(span.start, second_span.end),
                 )
             }
             _ => (name, None, span),
@@ -422,7 +425,7 @@ impl<'source> Parser<'source> {
             ;
     */
     pub(crate) fn additive_expression(&mut self) -> Result<Expression, SyntaxError> {
-        self._binary_expression(
+        self.binary_expression_precedence(
             Self::multiplicative_expression,
             is_additive_op,
             Self::eat_additive_op,
@@ -437,7 +440,7 @@ impl<'source> Parser<'source> {
             ;
     */
     pub(crate) fn multiplicative_expression(&mut self) -> Result<Expression, SyntaxError> {
-        self._binary_expression(
+        self.binary_expression_precedence(
             Self::unary_expression,
             is_multiplicative_op,
             Self::eat_multiplicative_op,
@@ -445,7 +448,12 @@ impl<'source> Parser<'source> {
         )
     }
 
-    pub(crate) fn _binary_expression<F, G, E>(
+    /// Generic left-associative binary expression parser used by all
+    /// precedence levels. Parses `operand (op operand)*` using the provided
+    /// `create_branch` to parse each operand, `op_predicate` and `eat_op`
+    /// to match and consume operators, and `create_expression` to build the
+    /// resulting AST node.
+    pub(crate) fn binary_expression_precedence<F, G, E>(
         &mut self,
         mut create_branch: F,
         op_predicate: fn(&Token) -> bool,
@@ -467,7 +475,7 @@ impl<'source> Parser<'source> {
 
             let right = create_branch(self)?;
 
-            let span = left.span.start..right.span.end;
+            let span = Span::new(left.span.start, right.span.end);
             left = create_expression(left, op, right, span);
         }
 
@@ -508,7 +516,7 @@ impl<'source> Parser<'source> {
     ) -> Result<Expression, SyntaxError> {
         let (_, span) = self.eat_token(token)?;
         let operand = self.unary_expression()?;
-        let full_span = span.start..operand.span.end;
+        let full_span = Span::new(span.start, operand.span.end);
         Ok(ast::unary_with_span(op, operand, full_span))
     }
 
@@ -589,7 +597,7 @@ impl<'source> Parser<'source> {
                     if statements.is_empty() {
                         return Ok(expr);
                     } else {
-                        let span = expr.span.clone();
+                        let span = expr.span;
                         return Ok(ast::expr_with_span(
                             ExpressionKind::Block(statements, Box::new(expr)),
                             span,
@@ -662,11 +670,14 @@ impl<'source> Parser<'source> {
             None
         };
 
-        let span = condition.span.start..(if let Some(ref e) = else_expr {
-            e.span.end
-        } else {
-            then_expr.span.end
-        });
+        let span = Span::new(
+            condition.span.start,
+            if let Some(ref e) = else_expr {
+                e.span.end
+            } else {
+                then_expr.span.end
+            },
+        );
 
         Ok(ast::conditional_with_span(
             then_expr, condition, else_expr, if_type, span,
@@ -681,28 +692,27 @@ impl<'source> Parser<'source> {
     pub(crate) fn formatted_string_expression(&mut self) -> Result<Expression, SyntaxError> {
         let mut parts = Vec::new();
 
-        let start_token_str =
-            &token_to_string(&Token::FormattedStringStart(Box::new("".to_string())));
-        if let Some((Token::FormattedStringStart(start_text), _)) = self._lookahead.clone() {
-            self.eat(
-                |t| matches!(t, Token::FormattedStringStart(_)),
-                start_token_str,
-            )?;
+        // Consume the opening formatted-string token and extract its text.
+        let (start_token, _) = self.eat(
+            |t| matches!(t, Token::FormattedStringStart(_)),
+            "formatted string start",
+        )?;
+        if let Token::FormattedStringStart(start_text) = start_token {
             if !start_text.is_empty() {
                 parts.push(ast::literal(ast::string_literal(&start_text)));
             }
-        } else {
-            return Err(self.error_unexpected_lookahead_token(start_token_str));
         }
 
-        // Check for immediate end (f-string with no expressions)
-        if let Some((Token::FormattedStringEnd(end_text), _)) = self._lookahead.clone() {
-            self.eat(
+        // Check for immediate end (f-string with no expressions).
+        if matches!(&self._lookahead, Some((Token::FormattedStringEnd(_), _))) {
+            let (end_token, _) = self.eat(
                 |t| matches!(t, Token::FormattedStringEnd(_)),
-                &token_to_string(&Token::FormattedStringEnd(Box::new("".to_string()))),
+                "formatted string end",
             )?;
-            if !end_text.is_empty() {
-                parts.push(ast::literal(ast::string_literal(&end_text)));
+            if let Token::FormattedStringEnd(end_text) = end_token {
+                if !end_text.is_empty() {
+                    parts.push(ast::literal(ast::string_literal(&end_text)));
+                }
             }
             return Ok(ast::f_string(parts));
         }
@@ -710,23 +720,27 @@ impl<'source> Parser<'source> {
         while self._lookahead.is_some() {
             parts.push(self.expression()?);
 
-            if let Some((Token::FormattedStringMiddle(middle_text), _)) = self._lookahead.clone() {
-                self.eat(
+            if matches!(&self._lookahead, Some((Token::FormattedStringMiddle(_), _))) {
+                let (mid_token, _) = self.eat(
                     |t| matches!(t, Token::FormattedStringMiddle(_)),
-                    &token_to_string(&Token::FormattedStringMiddle(Box::new("".to_string()))),
+                    "formatted string middle",
                 )?;
-                if !middle_text.is_empty() {
-                    parts.push(ast::literal(ast::string_literal(&middle_text)));
+                if let Token::FormattedStringMiddle(middle_text) = mid_token {
+                    if !middle_text.is_empty() {
+                        parts.push(ast::literal(ast::string_literal(&middle_text)));
+                    }
                 }
-            } else if let Some((Token::FormattedStringEnd(end_text), _)) = self._lookahead.clone() {
-                self.eat(
+            } else if matches!(&self._lookahead, Some((Token::FormattedStringEnd(_), _))) {
+                let (end_token, _) = self.eat(
                     |t| matches!(t, Token::FormattedStringEnd(_)),
-                    &token_to_string(&Token::FormattedStringEnd(Box::new("".to_string()))),
+                    "formatted string end",
                 )?;
-                if !end_text.is_empty() {
-                    parts.push(ast::literal(ast::string_literal(&end_text)));
+                if let Token::FormattedStringEnd(end_text) = end_token {
+                    if !end_text.is_empty() {
+                        parts.push(ast::literal(ast::string_literal(&end_text)));
+                    }
                 }
-                break; // End of the f-string
+                break;
             } else {
                 return Err(
                     self.error_unexpected_lookahead_token("middle or end of a formatted string")
@@ -913,7 +927,7 @@ impl<'source> Parser<'source> {
                 if let Literal::Regex(regex_token) = self.regex_literal()? {
                     Ok(Pattern::Regex(regex_token))
                 } else {
-                    unreachable!()
+                    Err(self.error_unexpected_lookahead_token("regex pattern"))
                 }
             }
             _ if self.lookahead_is_literal() => {
@@ -1027,50 +1041,7 @@ impl<'source> Parser<'source> {
             ;
     */
     pub(crate) fn lambda_expression(&mut self) -> Result<Expression, SyntaxError> {
-        let mut properties = FunctionProperties {
-            is_async: false,
-            is_parallel: false,
-            is_gpu: false,
-            visibility: MemberVisibility::Public,
-        };
-
-        while self.lookahead_is_function_modifier() {
-            match &self._lookahead {
-                Some((Token::Async, _)) => {
-                    self.eat_token(&Token::Async)?;
-                    properties.is_async = true;
-                }
-                Some((Token::Parallel, _)) => {
-                    self.eat_token(&Token::Parallel)?;
-                    properties.is_parallel = true;
-                }
-                Some((Token::Gpu, _)) => {
-                    self.eat_token(&Token::Gpu)?;
-                    properties.is_gpu = true;
-                }
-                _ => break,
-            }
-        }
-
-        // Validate modifier combinations
-        if properties.is_async && properties.is_gpu {
-            return Err(SyntaxError::new(
-                SyntaxErrorKind::InvalidModifierCombination {
-                    combination: "async gpu".to_string(),
-                    reason: "GPU kernels are inherently asynchronous.".to_string(),
-                },
-                self.current_token_span(),
-            ));
-        }
-        if properties.is_async && properties.is_parallel {
-            return Err(SyntaxError::new(
-                SyntaxErrorKind::InvalidModifierCombination {
-                    combination: "async parallel".to_string(),
-                    reason: "Parallel functions represent a different execution model and cannot be async.".to_string(),
-                },
-                self.current_token_span(),
-            ));
-        }
+        let properties = self.function_modifiers(MemberVisibility::Public)?;
 
         self.eat_token(&Token::Fn)?;
 
@@ -1159,7 +1130,7 @@ impl<'source> Parser<'source> {
     */
     pub(crate) fn literal_expression(&mut self) -> Result<Expression, SyntaxError> {
         let span = if let Some((_, span)) = &self._lookahead {
-            span.clone()
+            *span
         } else {
             return Err(self.error_eof());
         };

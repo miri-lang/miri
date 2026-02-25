@@ -181,11 +181,8 @@ impl CraneliftBackend {
     }
 }
 
-impl Default for CraneliftBackend {
-    fn default() -> Self {
-        Self::new().expect("Failed to create Cranelift backend for host platform")
-    }
-}
+// NOTE: No Default impl — CraneliftBackend::new() can fail (target ISA lookup).
+// Callers must use CraneliftBackend::new() and handle the Result explicitly.
 
 impl Backend for CraneliftBackend {
     type Error = CodegenError;
@@ -351,9 +348,12 @@ impl CraneliftBackend {
 
         // Define the function
         module.define_function(func_id, ctx).map_err(|e| {
-            println!("=== Failed function {} ===", name);
-            println!("{}", ctx.func.display());
-            CodegenError::define_function(name, e.to_string())
+            // Include the Cranelift IR in the error message for diagnostics.
+            // This replaces direct println! to keep output channels clean.
+            CodegenError::define_function(
+                name,
+                format!("{}\n\nCranelift IR:\n{}", e, ctx.func.display()),
+            )
         })?;
 
         // Clear context for next function

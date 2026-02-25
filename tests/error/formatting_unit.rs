@@ -1,3 +1,4 @@
+use miri::error::syntax::Span;
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
@@ -9,7 +10,7 @@ fn test_format_diagnostic_full_with_span() {
     let source = "let x = 42";
     let diag = DiagnosticBuilder::error("Test Error")
         .message("Something went wrong")
-        .span(4..5)
+        .span(Span::new(4, 5))
         .build();
 
     let output = format_diagnostic_full(source, &diag);
@@ -40,7 +41,7 @@ fn test_format_diagnostic_full_warning() {
     let source = "let y = --x";
     let diag = DiagnosticBuilder::warning("Double Negation")
         .message("Double negation detected")
-        .span(8..11)
+        .span(Span::new(8, 11))
         .build();
 
     let output = format_diagnostic_full(source, &diag);

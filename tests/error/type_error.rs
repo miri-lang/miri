@@ -1,3 +1,4 @@
+use miri::error::syntax::Span;
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
@@ -7,7 +8,7 @@ use miri::error::TypeError;
 
 #[test]
 fn test_type_error_reportable() {
-    let error = TypeError::custom("Type mismatch".to_string(), 0..10, None);
+    let error = TypeError::custom("Type mismatch".to_string(), Span::new(0, 10), None);
     let diag = error.to_diagnostic();
 
     check_diagnostic(&diag, Severity::Error, true, true); // TypeError uses dynamic messages, no code
@@ -17,7 +18,7 @@ fn test_type_error_reportable() {
 fn test_type_error_with_help() {
     let error = TypeError::custom(
         "Unknown type 'intt'".to_string(),
-        0..4,
+        Span::new(0, 4),
         Some("Did you mean 'int'?".to_string()),
     );
     let diag = error.to_diagnostic();

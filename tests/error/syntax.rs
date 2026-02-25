@@ -8,7 +8,7 @@ use miri::error::SyntaxError;
 
 #[test]
 fn test_syntax_error_reportable() {
-    let error = SyntaxError::new(SyntaxErrorKind::InvalidToken, 0..5);
+    let error = SyntaxError::new(SyntaxErrorKind::InvalidToken, Span::new(0, 5));
     let diag = error.to_diagnostic();
 
     check_diagnostic(&diag, Severity::Error, true, true);
@@ -21,20 +21,20 @@ fn test_syntax_error_reportable() {
 #[test]
 fn test_syntax_error_all_variants_have_codes() {
     let variants: Vec<(SyntaxErrorKind, Span)> = vec![
-        (SyntaxErrorKind::InvalidToken, 0..1),
-        (SyntaxErrorKind::UnclosedMultilineComment, 0..5),
-        (SyntaxErrorKind::IndentationMismatch, 0..1),
-        (SyntaxErrorKind::UnclosedStringLiteral, 0..5),
+        (SyntaxErrorKind::InvalidToken, Span::new(0, 1)),
+        (SyntaxErrorKind::UnclosedMultilineComment, Span::new(0, 5)),
+        (SyntaxErrorKind::IndentationMismatch, Span::new(0, 1)),
+        (SyntaxErrorKind::UnclosedStringLiteral, Span::new(0, 5)),
         (
             SyntaxErrorKind::UnexpectedToken {
                 expected: "foo".to_string(),
                 found: "bar".to_string(),
             },
-            0..3,
+            Span::new(0, 3),
         ),
-        (SyntaxErrorKind::UnexpectedEOF, 0..0),
-        (SyntaxErrorKind::InvalidAssignmentTarget, 0..3),
-        (SyntaxErrorKind::IntegerLiteralOverflow, 0..10),
+        (SyntaxErrorKind::UnexpectedEOF, Span::new(0, 0)),
+        (SyntaxErrorKind::InvalidAssignmentTarget, Span::new(0, 3)),
+        (SyntaxErrorKind::IntegerLiteralOverflow, Span::new(0, 10)),
     ];
 
     for (kind, span) in variants {

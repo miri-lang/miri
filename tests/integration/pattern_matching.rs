@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::integration::utils::{assert_compiler_error, assert_runs_with_output};
+use crate::integration::utils::assert_runs_with_output;
 
 #[test]
 fn test_match_integer_literals() {

@@ -7,6 +7,13 @@ use crate::ast::types::TypeKind;
 use crate::mir::{Body, Constant, Local, Operand, Rvalue, StatementKind, TerminatorKind};
 use std::collections::HashMap;
 
+/// Replaces uses of locals with their known constant values and folds
+/// binary/unary operations on constants at compile time.
+///
+/// This pass collects all `_x = const` assignments, then substitutes uses of
+/// `_x` with the constant. Binary and unary operations on constants are folded
+/// into a single constant. `SwitchInt` terminators with constant discriminants
+/// are simplified to `Goto`.
 pub struct ConstantPropagation;
 
 impl OptimizationPass for ConstantPropagation {
@@ -225,13 +232,13 @@ fn fold_binary(op: crate::mir::BinOp, lhs: &Constant, rhs: &Constant) -> Option<
         op,
         BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
     ) {
-        crate::ast::types::Type::new(TypeKind::Boolean, lhs.span.clone())
+        crate::ast::types::Type::new(TypeKind::Boolean, lhs.span)
     } else {
         lhs.ty.clone()
     };
 
     Some(Constant {
-        span: lhs.span.clone(),
+        span: lhs.span,
         ty,
         literal: if matches!(
             op,
@@ -239,18 +246,8 @@ fn fold_binary(op: crate::mir::BinOp, lhs: &Constant, rhs: &Constant) -> Option<
         ) {
             Literal::Boolean(res != 0)
         } else {
-            // Need to reconstruct strictly typed integer literal
-            // Assuming I64 for simplicity in prototype, should verify type
-            match lhs.literal {
-                Literal::Integer(IntegerLiteral::I64(_)) => {
-                    Literal::Integer(IntegerLiteral::I64(res as i64))
-                }
-                Literal::Integer(IntegerLiteral::I32(_)) => {
-                    Literal::Integer(IntegerLiteral::I32(res as i32))
-                }
-                // ... handled others?
-                _ => Literal::Integer(IntegerLiteral::I64(res as i64)), // Fallback
-            }
+            // Reconstruct a typed integer literal preserving the LHS type
+            reconstruct_integer_literal(&lhs.literal, res)
         },
     })
 }
@@ -266,18 +263,47 @@ fn fold_unary(op: crate::mir::UnOp, operand: &Constant) -> Option<Constant> {
     };
 
     Some(Constant {
-        span: operand.span.clone(),
+        span: operand.span,
         ty: operand.ty.clone(),
-        literal: match operand.literal {
-            Literal::Integer(IntegerLiteral::I64(_)) => {
-                Literal::Integer(IntegerLiteral::I64(res as i64))
-            }
-            Literal::Integer(IntegerLiteral::I32(_)) => {
-                Literal::Integer(IntegerLiteral::I32(res as i32))
-            }
-            _ => Literal::Integer(IntegerLiteral::I64(res as i64)),
-        },
+        literal: reconstruct_integer_literal(&operand.literal, res),
     })
+}
+
+/// Reconstruct a typed integer literal from a computed `i128` value,
+/// preserving the original integer width from the source literal.
+fn reconstruct_integer_literal(source: &Literal, value: i128) -> Literal {
+    match source {
+        Literal::Integer(IntegerLiteral::I8(_)) => {
+            Literal::Integer(IntegerLiteral::I8(value as i8))
+        }
+        Literal::Integer(IntegerLiteral::I16(_)) => {
+            Literal::Integer(IntegerLiteral::I16(value as i16))
+        }
+        Literal::Integer(IntegerLiteral::I32(_)) => {
+            Literal::Integer(IntegerLiteral::I32(value as i32))
+        }
+        Literal::Integer(IntegerLiteral::I64(_)) => {
+            Literal::Integer(IntegerLiteral::I64(value as i64))
+        }
+        Literal::Integer(IntegerLiteral::I128(_)) => Literal::Integer(IntegerLiteral::I128(value)),
+        Literal::Integer(IntegerLiteral::U8(_)) => {
+            Literal::Integer(IntegerLiteral::U8(value as u8))
+        }
+        Literal::Integer(IntegerLiteral::U16(_)) => {
+            Literal::Integer(IntegerLiteral::U16(value as u16))
+        }
+        Literal::Integer(IntegerLiteral::U32(_)) => {
+            Literal::Integer(IntegerLiteral::U32(value as u32))
+        }
+        Literal::Integer(IntegerLiteral::U64(_)) => {
+            Literal::Integer(IntegerLiteral::U64(value as u64))
+        }
+        Literal::Integer(IntegerLiteral::U128(_)) => {
+            Literal::Integer(IntegerLiteral::U128(value as u128))
+        }
+        // Non-integer source (e.g. Boolean used in arithmetic): default to I64
+        _ => Literal::Integer(IntegerLiteral::I64(value as i64)),
+    }
 }
 
 fn get_int(c: &Constant) -> Option<i128> {

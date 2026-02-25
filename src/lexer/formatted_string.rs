@@ -2,7 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use super::token::{Token, TokenSpan};
-use crate::error::syntax::{SyntaxError, SyntaxErrorKind};
+use crate::error::syntax::{Span, SyntaxError, SyntaxErrorKind};
 use crate::lexer::Lexer;
 use logos::Lexer as LogosLexer;
 
@@ -22,7 +22,7 @@ pub fn lex_formatted_string(
         _ => {
             return Err(SyntaxError::new(
                 SyntaxErrorKind::InvalidFormattedString,
-                lexer.span(),
+                Span::new(lexer.span().start, lexer.span().end),
             ));
         }
     };
@@ -63,7 +63,7 @@ pub fn lex_formatted_string(
         if let Some(brace_pos) = next_brace_pos {
             // Handle the literal part before the expression
             let literal = &string_body[cursor..brace_pos];
-            let literal_span = (token_offset + cursor)..(token_offset + brace_pos);
+            let literal_span = Span::new(token_offset + cursor, token_offset + brace_pos);
             if is_first_part {
                 tokens.push((
                     Token::FormattedStringStart(Box::new(literal.to_string())),
@@ -96,7 +96,7 @@ pub fn lex_formatted_string(
             if expr_end == 0 {
                 return Err(SyntaxError::new(
                     SyntaxErrorKind::InvalidFormattedStringExpression,
-                    lexer.span(),
+                    Span::new(lexer.span().start, lexer.span().end),
                 ));
             }
 
@@ -108,7 +108,7 @@ pub fn lex_formatted_string(
                     ..(token_offset + expr_start + backslash_pos + 1);
                 return Err(SyntaxError::new(
                     SyntaxErrorKind::BackslashInFStringExpression,
-                    error_span,
+                    Span::new(error_span.start, error_span.end),
                 ));
             }
 
@@ -121,7 +121,7 @@ pub fn lex_formatted_string(
                 let original_start = token_offset + expr_start + span.start;
                 let original_end = token_offset + expr_start + span.end;
 
-                tokens.push((token, original_start..original_end));
+                tokens.push((token, Span::new(original_start, original_end)));
             }
 
             cursor = expr_end + 1;
@@ -138,17 +138,17 @@ pub fn lex_formatted_string(
         // The string had no expressions at all.
         tokens.push((
             Token::FormattedStringStart(Box::new(final_literal.to_string())),
-            final_span.clone(),
+            Span::new(final_span.start, final_span.end),
         ));
         // Also push an empty End token so the parser knows it ended.
         tokens.push((
             Token::FormattedStringEnd(Box::new("".to_string())),
-            final_span.end..final_span.end,
+            Span::new(final_span.end, final_span.end),
         ));
     } else {
         tokens.push((
             Token::FormattedStringEnd(Box::new(final_literal.to_string())),
-            final_span,
+            Span::new(final_span.start, final_span.end),
         ));
     }
 

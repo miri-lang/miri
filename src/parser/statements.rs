@@ -373,7 +373,7 @@ impl<'source> Parser<'source> {
         let iterable = if let ExpressionKind::Range(_, _, _) = &iterable_expr.node {
             iterable_expr
         } else {
-            let span = iterable_expr.span.clone();
+            let span = iterable_expr.span;
             ast::range_with_span(
                 iterable_expr,
                 None,

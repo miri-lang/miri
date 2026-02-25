@@ -8,7 +8,7 @@
 //! be directly formatted in an f-string, we route through a comparison that
 //! produces an `int` (0 / 1) that is then printed.
 
-use crate::integration::utils::{assert_runs, assert_runs_with_output};
+use crate::integration::utils::assert_runs_with_output;
 
 // =============================================================================
 // Boolean parameters and return types

@@ -23,6 +23,14 @@ use super::expression::lower_expression;
 use super::helpers::resolve_type;
 use super::variable::lower_variable;
 
+/// Lower an AST statement to MIR.
+///
+/// Dispatches on the statement kind and delegates to specialized lowering functions
+/// for control flow, variable declarations, type declarations, and imports.
+///
+/// # Errors
+///
+/// Returns `LoweringError` if any sub-expression or sub-statement fails to lower.
 pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<(), LoweringError> {
     match &stmt.node {
         StatementKind::Block(stmts) => {
@@ -32,7 +40,7 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
             for s in stmts {
                 lower_statement(ctx, s)?;
             }
-            ctx.pop_scope(stmt.span.clone());
+            ctx.pop_scope(stmt.span);
         }
         StatementKind::Return(ret_expr) => {
             if let Some(expr) = ret_expr {
@@ -62,11 +70,11 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
                             Place::new(crate::mir::Local(0)), // _0 is the return place
                             rvalue,
                         ),
-                        span: stmt.span.clone(),
+                        span: stmt.span,
                     });
                 }
             }
-            ctx.set_terminator(Terminator::new(TerminatorKind::Return, stmt.span.clone()));
+            ctx.set_terminator(Terminator::new(TerminatorKind::Return, stmt.span));
         }
         StatementKind::Variable(decls, _) => {
             lower_variable(ctx, decls, &stmt.span)?;
@@ -81,11 +89,11 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
                 }
             };
 
-            let temp = ctx.push_temp(ty, expr.span.clone());
+            let temp = ctx.push_temp(ty, expr.span);
 
             ctx.push_statement(crate::mir::Statement {
                 kind: MirStatementKind::Assign(Place::new(temp), Rvalue::Use(operand)),
-                span: expr.span.clone(),
+                span: expr.span,
             });
         }
         StatementKind::If(cond, then_block, else_block_opt, if_type) => {
@@ -379,12 +387,12 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
             let ret_ty = if let Some(ret_expr) = ret_type_expr {
                 super::resolve_type(ctx.type_checker, ret_expr)
             } else {
-                Type::new(TypeKind::Void, stmt.span.clone())
+                Type::new(TypeKind::Void, stmt.span)
             };
 
             // Create a new body for this nested function
-            let mut nested_body = Body::new(params.len(), stmt.span.clone(), execution_model);
-            nested_body.new_local(LocalDecl::new(ret_ty.clone(), stmt.span.clone()));
+            let mut nested_body = Body::new(params.len(), stmt.span, execution_model);
+            nested_body.new_local(LocalDecl::new(ret_ty.clone(), stmt.span));
 
             // Create a temporary context for lowering the nested function
             let mut nested_ctx =
@@ -393,7 +401,7 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
             // Lower parameters
             for param in params.iter() {
                 let param_ty = super::resolve_type(ctx.type_checker, &param.typ);
-                nested_ctx.push_local(param.name.clone(), param_ty, param.typ.span.clone());
+                nested_ctx.push_local(param.name.clone(), param_ty, param.typ.span);
             }
 
             // Lower the body if present
@@ -408,7 +416,7 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
             {
                 nested_ctx.set_terminator(crate::mir::Terminator::new(
                     crate::mir::TerminatorKind::Return,
-                    stmt.span.clone(),
+                    stmt.span,
                 ));
             }
 
@@ -435,9 +443,9 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
                         .collect(),
                     ret_type_expr.clone(),
                 ),
-                stmt.span.clone(),
+                stmt.span,
             );
-            ctx.push_local(name.clone(), func_ty, stmt.span.clone());
+            ctx.push_local(name.clone(), func_ty, stmt.span);
         }
         StatementKind::RuntimeFunctionDeclaration(..) => {
             // Runtime function declarations are extern bindings with no body.

@@ -41,6 +41,7 @@ pub enum IntegerLiteral {
 }
 
 impl IntegerLiteral {
+    /// Returns `true` if the literal value is zero.
     pub fn is_zero(&self) -> bool {
         match self {
             IntegerLiteral::I8(v) => *v == 0,
@@ -53,6 +54,26 @@ impl IntegerLiteral {
             IntegerLiteral::U32(v) => *v == 0,
             IntegerLiteral::U64(v) => *v == 0,
             IntegerLiteral::U128(v) => *v == 0,
+        }
+    }
+
+    /// Converts the integer literal to a `usize` index.
+    ///
+    /// Used by the type checker for compile-time tuple indexing and bounds checking.
+    /// Signed values are cast directly; callers should validate non-negativity
+    /// if required by context.
+    pub fn to_usize(&self) -> usize {
+        match self {
+            IntegerLiteral::I8(v) => *v as usize,
+            IntegerLiteral::I16(v) => *v as usize,
+            IntegerLiteral::I32(v) => *v as usize,
+            IntegerLiteral::I64(v) => *v as usize,
+            IntegerLiteral::I128(v) => *v as usize,
+            IntegerLiteral::U8(v) => *v as usize,
+            IntegerLiteral::U16(v) => *v as usize,
+            IntegerLiteral::U32(v) => *v as usize,
+            IntegerLiteral::U64(v) => *v as usize,
+            IntegerLiteral::U128(v) => *v as usize,
         }
     }
 }

@@ -5,7 +5,17 @@ use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable, Severity
 use crate::error::format::format_diagnostic;
 
 /// Byte offset range in source code, used for error reporting and AST spans.
-pub type Span = std::ops::Range<usize>;
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
+pub struct Span {
+    pub start: usize,
+    pub end: usize,
+}
+
+impl Span {
+    pub fn new(start: usize, end: usize) -> Self {
+        Self { start, end }
+    }
+}
 
 /// A syntax error from the lexer or parser, with its source location.
 #[derive(Debug, PartialEq, Clone)]
@@ -293,7 +303,7 @@ impl Reportable for SyntaxError {
             code: Some(props.code),
             title: props.title.to_string(),
             message: props.message.unwrap_or_else(|| props.title.to_string()),
-            span: Some(self.span.clone()),
+            span: Some(self.span),
             help: props.help,
             notes: Vec::new(),
         }

@@ -33,7 +33,11 @@ use std::sync::Arc;
 ///
 /// Each `FunctionTranslator` handles a single function, managing local variables,
 /// basic blocks, and the translation of statements and terminators.
-pub struct FunctionTranslator {
+///
+/// The translator is constructed once per function, builds the Cranelift IR via
+/// [`translate`](Self::translate), and then consumed via
+/// [`into_function`](Self::into_function) to yield the built [`Function`].
+pub struct FunctionTranslator<'a> {
     /// The Cranelift function being built.
     func: Function,
     /// Function builder context (reusable across functions).
@@ -43,7 +47,8 @@ pub struct FunctionTranslator {
     /// The types of MIR locals (for type information during translation).
     local_types: Vec<Type>,
     /// Type definitions from the type checker (for layout computation).
-    type_definitions: HashMap<String, TypeDefinition>,
+    /// Borrowed from the backend to avoid cloning the entire HashMap per function.
+    type_definitions: &'a HashMap<String, TypeDefinition>,
 }
 
 /// Context for module-level resources during translation.
@@ -58,17 +63,23 @@ struct TypeCtx<'a> {
     type_definitions: &'a HashMap<String, TypeDefinition>,
 }
 
-impl FunctionTranslator {
+impl<'a> FunctionTranslator<'a> {
     /// Create a new function translator.
+    ///
+    /// # Arguments
+    ///
+    /// * `isa` - The target instruction set architecture
+    /// * `body` - The MIR body whose local types will be cached
+    /// * `type_definitions` - Borrowed type definitions for layout computation
     pub fn new(
         isa: &Arc<dyn TargetIsa>,
         body: &Body,
-        type_definitions: &HashMap<String, TypeDefinition>,
+        type_definitions: &'a HashMap<String, TypeDefinition>,
     ) -> Self {
         let func = Function::new();
         let builder_ctx = FunctionBuilderContext::new();
 
-        // Cache local types
+        // Cache local types for fast lookup during translation
         let local_types = body.local_decls.iter().map(|d| d.ty.clone()).collect();
 
         Self {
@@ -76,7 +87,7 @@ impl FunctionTranslator {
             builder_ctx,
             call_conv: isa.default_call_conv(),
             local_types,
-            type_definitions: type_definitions.clone(),
+            type_definitions,
         }
     }
 
@@ -143,7 +154,7 @@ impl FunctionTranslator {
             };
             let type_ctx = TypeCtx {
                 local_types: &self.local_types,
-                type_definitions: &self.type_definitions,
+                type_definitions: self.type_definitions,
             };
 
             // Translate all statements
@@ -220,41 +231,24 @@ impl FunctionTranslator {
         match &stmt.kind {
             StatementKind::IncRef(place) => {
                 let ptr = Self::read_place(builder, place, locals, type_ctx)?;
-                // For now, assume ptr points to data preceded by 8-byte refcount
-                // Header is at ptr - 8
-
-                // TODO: Valid pointer check?
+                // The RC header lives at (ptr - 8). Managed allocations
+                // always place the header immediately before the payload,
+                // so this offset is guaranteed valid for heap-allocated objects.
                 let header_ptr = builder.ins().iadd_imm(ptr, -8);
-                let rc = builder.ins().load(
-                    cl_types::I64,
-                    cranelift_codegen::ir::MemFlags::new(),
-                    header_ptr,
-                    0,
-                );
+                let rc = builder
+                    .ins()
+                    .load(cl_types::I64, MemFlags::new(), header_ptr, 0);
                 let new_rc = builder.ins().iadd_imm(rc, 1);
-                builder.ins().store(
-                    cranelift_codegen::ir::MemFlags::new(),
-                    new_rc,
-                    header_ptr,
-                    0,
-                );
+                builder.ins().store(MemFlags::new(), new_rc, header_ptr, 0);
             }
             StatementKind::DecRef(place) => {
                 let ptr = Self::read_place(builder, place, locals, type_ctx)?;
                 let header_ptr = builder.ins().iadd_imm(ptr, -8);
-                let rc = builder.ins().load(
-                    cl_types::I64,
-                    cranelift_codegen::ir::MemFlags::new(),
-                    header_ptr,
-                    0,
-                );
+                let rc = builder
+                    .ins()
+                    .load(cl_types::I64, MemFlags::new(), header_ptr, 0);
                 let new_rc = builder.ins().iadd_imm(rc, -1);
-                builder.ins().store(
-                    cranelift_codegen::ir::MemFlags::new(),
-                    new_rc,
-                    header_ptr,
-                    0,
-                );
+                builder.ins().store(MemFlags::new(), new_rc, header_ptr, 0);
 
                 // If rc == 0, free
                 let zero = builder.ins().iconst(cl_types::I64, 0);
@@ -268,14 +262,7 @@ impl FunctionTranslator {
                     .brif(is_zero, then_block, &[], else_block, &[]);
 
                 builder.switch_to_block(then_block);
-                // Call free(header_ptr)
-                // We need to look up or define 'free'
-                // This requires access to the module/imports which we don't clean have here yet.
-                // Assuming a helper `trans.call_free(builder, header_ptr)`
-                // For this exercise, we will assume a placeholder helper or panic if not available
-                // But we can try to define it inline if we have the signature.
-                // But we can try to define it inline if we have the signature.
-                // See `call_libc` helper below.
+                // Reference count dropped to zero — deallocate via free(header_ptr)
                 Self::call_libc_free(builder, ctx, header_ptr)?;
 
                 builder.ins().jump(else_block, &[]);
@@ -332,9 +319,7 @@ impl FunctionTranslator {
 
                 // Init RC to 1
                 let one = builder.ins().iconst(cl_types::I64, 1);
-                builder
-                    .ins()
-                    .store(cranelift_codegen::ir::MemFlags::new(), one, ptr, 0);
+                builder.ins().store(MemFlags::new(), one, ptr, 0);
 
                 // Return ptr + 8
                 Ok(builder.ins().iadd_imm(ptr, 8))
@@ -890,7 +875,10 @@ impl FunctionTranslator {
             }
 
             // Apply the last projection as a store
-            match place.projection.last().unwrap() {
+            let last_proj = place.projection.last().ok_or_else(|| {
+                "assign_to_place: empty projection after non-empty check".to_string()
+            })?;
+            match last_proj {
                 PlaceElem::Deref => {
                     builder.ins().store(MemFlags::new(), value, addr, 0);
                 }
@@ -1038,7 +1026,9 @@ impl FunctionTranslator {
 
                 if dest_ty.kind != TypeKind::Void {
                     let result = builder.inst_results(call)[0];
-                    let dest_var = locals.get(&destination.local).unwrap();
+                    let dest_var = locals.get(&destination.local).ok_or_else(|| {
+                        format!("Unknown call destination local: {:?}", destination.local)
+                    })?;
                     builder.def_var(*dest_var, result);
                 }
 
@@ -1049,7 +1039,9 @@ impl FunctionTranslator {
             }
 
             TerminatorKind::Unreachable => {
-                builder.ins().trap(TrapCode::user(1).unwrap());
+                let trap_code = TrapCode::user(1)
+                    .ok_or_else(|| "Failed to create user trap code".to_string())?;
+                builder.ins().trap(trap_code);
             }
 
             TerminatorKind::GpuLaunch { .. } => {

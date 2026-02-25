@@ -10,6 +10,11 @@ use crate::mir::visitor::Visitor;
 use crate::mir::Body;
 use std::collections::HashSet;
 
+/// Removes assignments to locals that are never read.
+///
+/// This pass iterates to a fixpoint: after removing dead assignments, previously
+/// "used" locals may become dead. Only side-effect-free rvalues are removed.
+/// The return place `_0` is always considered live.
 pub struct DeadCodeElimination;
 
 struct UsedLocalsCollector {
@@ -59,7 +64,7 @@ impl OptimizationPass for DeadCodeElimination {
                         {
                             *stmt = Statement {
                                 kind: StatementKind::Nop,
-                                span: stmt.span.clone(),
+                                span: stmt.span,
                             };
                             iteration_changed = true;
                         }

@@ -93,7 +93,7 @@ impl CodegenError {
                 help: None,
             },
             CodegenError::Internal(msg) => ErrorProperties {
-                code: "E0305", // Reuse emit code for internal
+                code: "E0307",
                 title: "Internal Codegen Error",
                 message: Some(format!("Internal codegen error: {}", msg)),
                 help: None,

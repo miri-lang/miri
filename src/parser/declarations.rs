@@ -12,6 +12,94 @@ use super::utils::{is_guard, is_inheritance_modifier};
 use super::{DeclarationBlockConfig, Parser};
 
 impl<'source> Parser<'source> {
+    /// Parses function modifier tokens (`async`, `parallel`, `gpu`) and validates
+    /// that the resulting combination is legal. Returns a `FunctionProperties` struct
+    /// with the parsed modifiers and the given visibility.
+    pub(crate) fn function_modifiers(
+        &mut self,
+        visibility: MemberVisibility,
+    ) -> Result<FunctionProperties, SyntaxError> {
+        let mut properties = FunctionProperties {
+            is_async: false,
+            is_parallel: false,
+            is_gpu: false,
+            visibility,
+        };
+
+        while self.lookahead_is_function_modifier() {
+            match &self._lookahead {
+                Some((Token::Async, _)) => {
+                    self.eat_token(&Token::Async)?;
+                    properties.is_async = true;
+                }
+                Some((Token::Parallel, _)) => {
+                    self.eat_token(&Token::Parallel)?;
+                    properties.is_parallel = true;
+                }
+                Some((Token::Gpu, _)) => {
+                    self.eat_token(&Token::Gpu)?;
+                    properties.is_gpu = true;
+                }
+                _ => {
+                    return Err(self.error_unexpected_lookahead_token(
+                        "function modifier (async, parallel or gpu)",
+                    ));
+                }
+            }
+        }
+
+        if properties.is_async && properties.is_gpu {
+            return Err(SyntaxError::new(
+                SyntaxErrorKind::InvalidModifierCombination {
+                    combination: "async gpu".to_string(),
+                    reason: "GPU kernels are inherently asynchronous.".to_string(),
+                },
+                self.current_token_span(),
+            ));
+        }
+        if properties.is_async && properties.is_parallel {
+            return Err(SyntaxError::new(
+                SyntaxErrorKind::InvalidModifierCombination {
+                    combination: "async parallel".to_string(),
+                    reason: "Parallel functions represent a different execution model and cannot be async.".to_string(),
+                },
+                self.current_token_span(),
+            ));
+        }
+
+        Ok(properties)
+    }
+
+    /// Parses a typed field declaration (e.g., `name int`) for use inside
+    /// class bodies and class member statements.
+    fn typed_field_declaration(
+        &mut self,
+        visibility: MemberVisibility,
+    ) -> Result<Statement, SyntaxError> {
+        let name_expr = self.identifier()?;
+        let name = if let ExpressionKind::Identifier(n, _) = name_expr.node {
+            n
+        } else {
+            return Err(self.error_unexpected_token("identifier", "expression"));
+        };
+
+        let typ = self
+            .type_expression()?
+            .map(Box::new)
+            .ok_or_else(|| self.error_missing_type_expression())?;
+
+        self.eat_statement_end()?;
+
+        let decl = VariableDeclaration {
+            name,
+            typ: Some(typ),
+            initializer: None,
+            declaration_type: VariableDeclarationType::Mutable,
+            is_shared: false,
+        };
+        Ok(ast::variable_statement(vec![decl], visibility))
+    }
+
     pub(crate) fn class_member_statement(
         &mut self,
         visibility: MemberVisibility,
@@ -37,30 +125,7 @@ impl<'source> Parser<'source> {
                 self.eat_token(&Token::Abstract)?;
                 self.abstract_class_statement(visibility)?
             }
-            Some((Token::Identifier, _)) => {
-                let name_expr = self.identifier()?;
-                let name = if let ExpressionKind::Identifier(n, _) = name_expr.node {
-                    n
-                } else {
-                    return Err(self.error_unexpected_token("identifier", "expression"));
-                };
-
-                let typ = self
-                    .type_expression()?
-                    .map(Box::new)
-                    .ok_or_else(|| self.error_missing_type_expression())?;
-
-                self.eat_statement_end()?;
-
-                let decl = VariableDeclaration {
-                    name,
-                    typ: Some(typ),
-                    initializer: None,
-                    declaration_type: VariableDeclarationType::Mutable,
-                    is_shared: false,
-                };
-                ast::variable_statement(vec![decl], visibility)
-            }
+            Some((Token::Identifier, _)) => self.typed_field_declaration(visibility)?,
             _ => {
                 return Err(self.error_unexpected_lookahead_token(
                     "let, var, const, async, fn, gpu, runtime, enum, type, struct, class, trait, abstract or field declaration",
@@ -139,54 +204,7 @@ impl<'source> Parser<'source> {
         visibility: MemberVisibility,
         allow_abstract: bool,
     ) -> Result<Statement, SyntaxError> {
-        let mut properties = FunctionProperties {
-            is_async: false,
-            is_parallel: false,
-            is_gpu: false,
-            visibility,
-        };
-
-        while self.lookahead_is_function_modifier() {
-            match &self._lookahead {
-                Some((Token::Async, _)) => {
-                    self.eat_token(&Token::Async)?;
-                    properties.is_async = true;
-                }
-                Some((Token::Parallel, _)) => {
-                    self.eat_token(&Token::Parallel)?;
-                    properties.is_parallel = true;
-                }
-                Some((Token::Gpu, _)) => {
-                    self.eat_token(&Token::Gpu)?;
-                    properties.is_gpu = true;
-                }
-                _ => {
-                    return Err(self.error_unexpected_lookahead_token(
-                        "function modifier (async, parallel or gpu)",
-                    ));
-                }
-            }
-        }
-
-        // Validate modifier combinations
-        if properties.is_async && properties.is_gpu {
-            return Err(SyntaxError::new(
-                SyntaxErrorKind::InvalidModifierCombination {
-                    combination: "async gpu".to_string(),
-                    reason: "GPU kernels are inherently asynchronous.".to_string(),
-                },
-                self.current_token_span(),
-            ));
-        }
-        if properties.is_async && properties.is_parallel {
-            return Err(SyntaxError::new(
-                SyntaxErrorKind::InvalidModifierCombination {
-                    combination: "async parallel".to_string(),
-                    reason: "Parallel functions represent a different execution model and cannot be async.".to_string(),
-                },
-                self.current_token_span(),
-            ));
-        }
+        let properties = self.function_modifiers(visibility)?;
 
         self.eat_token(&Token::Fn)?;
 
@@ -232,11 +250,13 @@ impl<'source> Parser<'source> {
         };
 
         if name.is_empty() {
+            let body =
+                body.ok_or_else(|| self.error_unexpected_lookahead_token("a lambda body"))?;
             return Ok(ast::expression_statement(ast::lambda_expression(
                 generic_types,
                 parameters,
                 return_type,
-                body.expect("Lambda must have a body"),
+                body,
                 properties,
             )));
         }
@@ -700,13 +720,8 @@ impl<'source> Parser<'source> {
     }
 
     /// Parses a class member (field or method) with optional visibility modifier.
-    #[allow(dead_code)]
-    fn class_member_or_statement(&mut self) -> Result<Statement, SyntaxError> {
-        self.class_member_or_statement_with_abstract(false)
-    }
-
-    /// Parses a class member (field or method) with optional visibility modifier.
-    /// If allow_abstract is true, functions without bodies are allowed.
+    /// If `allow_abstract` is true, functions without bodies are treated as
+    /// abstract declarations rather than producing an error.
     fn class_member_or_statement_with_abstract(
         &mut self,
         allow_abstract: bool,
@@ -740,34 +755,8 @@ impl<'source> Parser<'source> {
                 self.function_declaration_with_context(visibility, allow_abstract)
             }
             Some((Token::Type, _)) => self.type_statement(visibility),
-            Some((Token::Runtime, _)) => Ok(self.runtime_function_declaration()?),
-            Some((Token::Identifier, _)) => {
-                let name_expr = self.identifier()?;
-                let name = if let ExpressionKind::Identifier(n, _) = name_expr.node {
-                    n
-                } else {
-                    return Err(self.error_unexpected_token("identifier", "expression"));
-                };
-
-                let typ = self
-                    .type_expression()?
-                    .map(Box::new)
-                    .ok_or_else(|| {
-                        println!("MissingTypeExpression after parsing identifier '{}', lookahead: {:?}", name, self._lookahead);
-                        self.error_missing_type_expression()
-                    })?;
-
-                self.eat_statement_end()?;
-
-                let decl = VariableDeclaration {
-                    name,
-                    typ: Some(typ),
-                    initializer: None,
-                    declaration_type: VariableDeclarationType::Mutable,
-                    is_shared: false,
-                };
-                Ok(ast::variable_statement(vec![decl], visibility))
-            }
+            Some((Token::Runtime, _)) => self.runtime_function_declaration(),
+            Some((Token::Identifier, _)) => self.typed_field_declaration(visibility),
             _ => Err(self.error_unexpected_lookahead_token(
                 "class member (let, var, const, fn, async, gpu, type, runtime, or field declaration)",
             )),

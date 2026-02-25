@@ -11,6 +11,12 @@ use crate::mir::visitor::MutVisitor;
 use crate::mir::Body;
 use std::collections::HashMap;
 
+/// Propagates simple copy assignments through a basic block.
+///
+/// When a local `_x = _y` is encountered, subsequent uses of `_x` within the
+/// same block are replaced with `_y`. This reduces unnecessary copies and
+/// enables downstream passes (dead code elimination) to remove the original
+/// assignment.
 pub struct CopyPropagation;
 
 struct Replacer<'a> {
@@ -59,11 +65,9 @@ impl OptimizationPass for CopyPropagation {
                         replacements.retain(|_, op| !uses_local(op, dest));
 
                         if let Rvalue::Use(op) = rvalue {
-                            if is_simple_operand(op) {
-                                replacements.insert(dest, op.clone());
-                            } else {
-                                replacements.remove(&dest);
-                            }
+                            // All Operand variants (Copy, Move, Constant) are
+                            // safe to propagate — they are pure value references.
+                            replacements.insert(dest, op.clone());
                         } else {
                             replacements.remove(&dest);
                         }
@@ -99,14 +103,10 @@ impl OptimizationPass for CopyPropagation {
     }
 }
 
+/// Returns `true` if the operand references the given local.
 fn uses_local(op: &Operand, target: Local) -> bool {
     match op {
-        Operand::Copy(p) | Operand::Move(p) => p.local == target,
+        Operand::Copy(place) | Operand::Move(place) => place.local == target,
         Operand::Constant(_) => false,
     }
-}
-
-fn is_simple_operand(_op: &Operand) -> bool {
-    // We propagate any operand that fits in Operand enum
-    true
 }

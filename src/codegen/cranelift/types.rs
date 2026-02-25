@@ -67,13 +67,15 @@ pub fn translate_type_kind(kind: &TypeKind) -> CraneliftType {
         TypeKind::Custom(_, _) => types::I64,
         TypeKind::Generic(_, _, _) => types::I64,
 
-        // Meta types shouldn't appear at codegen time
-        TypeKind::Meta(_) => panic!("Meta type should not appear during codegen"),
+        // Meta types should be resolved before codegen; treat as pointer-sized
+        // to avoid a panic. The type checker should prevent these from reaching codegen.
+        TypeKind::Meta(_) => types::I64,
 
         // Nullable types are pointers
         TypeKind::Nullable(_) => types::I64,
 
-        // Error types indicate a compiler bug
-        TypeKind::Error => panic!("Error type should not appear during codegen"),
+        // Error types indicate a prior compiler error; treat as pointer-sized
+        // to allow graceful continuation rather than a panic.
+        TypeKind::Error => types::I64,
     }
 }

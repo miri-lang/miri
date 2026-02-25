@@ -21,7 +21,7 @@ pub fn expr_with_span(kind: ExpressionKind, span: Span) -> Expression {
 }
 
 fn expr(kind: ExpressionKind) -> Expression {
-    expr_with_span(kind, 0..0)
+    expr_with_span(kind, Span::new(0, 0))
 }
 
 /// Creates a statement with a specific span.
@@ -35,7 +35,7 @@ pub fn stmt_with_span(kind: StatementKind, span: Span) -> Statement {
 
 /// Creates a statement with a default (empty) span.
 pub fn stmt(kind: StatementKind) -> Statement {
-    stmt_with_span(kind, 0..0)
+    stmt_with_span(kind, Span::new(0, 0))
 }
 
 /// Creates an identifier expression with a specific span.
@@ -176,7 +176,7 @@ pub fn generic_type_expression(
     constraint: Option<Box<Expression>>,
     kind: TypeDeclarationKind,
 ) -> Expression {
-    generic_type_expression_with_span(name_expression, constraint, kind, 0..0)
+    generic_type_expression_with_span(name_expression, constraint, kind, Span::new(0, 0))
 }
 
 /// Creates a conditional expression with a specific span.
@@ -580,7 +580,7 @@ pub fn variable_statement(
 
 /// Creates an expression statement (expression used as a statement).
 pub fn expression_statement(expr: Expression) -> Statement {
-    let span = expr.span.clone();
+    let span = expr.span;
     stmt_with_span(StatementKind::Expression(expr), span)
 }
 
@@ -751,7 +751,7 @@ pub fn type_expr_null(t: Type) -> Expression {
 
 /// Creates a Type of a specific kind with a default span.
 pub fn make_type(kind: TypeKind) -> Type {
-    Type::new(kind, 0..0)
+    Type::new(kind, Span::new(0, 0))
 }
 
 /// Creates an `Int` (arbitrary precision) type.

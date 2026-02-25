@@ -18,25 +18,19 @@ use crate::type_checker::context::{ClassDefinition, StructDefinition, TypeDefini
 
 pub fn lower_break(ctx: &mut LoweringContext, span: &Span) -> Result<(), LoweringError> {
     if let Some(target) = ctx.get_break_target() {
-        ctx.set_terminator(Terminator::new(
-            TerminatorKind::Goto { target },
-            span.clone(),
-        ));
+        ctx.set_terminator(Terminator::new(TerminatorKind::Goto { target }, *span));
         Ok(())
     } else {
-        Err(LoweringError::break_outside_loop(span.clone()))
+        Err(LoweringError::break_outside_loop(*span))
     }
 }
 
 pub fn lower_continue(ctx: &mut LoweringContext, span: &Span) -> Result<(), LoweringError> {
     if let Some(target) = ctx.get_continue_target() {
-        ctx.set_terminator(Terminator::new(
-            TerminatorKind::Goto { target },
-            span.clone(),
-        ));
+        ctx.set_terminator(Terminator::new(TerminatorKind::Goto { target }, *span));
         Ok(())
     } else {
-        Err(LoweringError::continue_outside_loop(span.clone()))
+        Err(LoweringError::continue_outside_loop(*span))
     }
 }
 
@@ -66,7 +60,7 @@ pub fn lower_if(
             targets: vec![(Discriminant::from(target_val), then_bb)],
             otherwise: other_target,
         },
-        span.clone(),
+        *span,
     ));
 
     // Lower then block
@@ -79,7 +73,7 @@ pub fn lower_if(
     {
         ctx.set_terminator(Terminator::new(
             TerminatorKind::Goto { target: join_bb },
-            span.clone(),
+            *span,
         ));
     }
 
@@ -94,7 +88,7 @@ pub fn lower_if(
     {
         ctx.set_terminator(Terminator::new(
             TerminatorKind::Goto { target: join_bb },
-            span.clone(),
+            *span,
         ));
     }
 
@@ -121,7 +115,7 @@ pub fn lower_while(
 
             ctx.set_terminator(Terminator::new(
                 TerminatorKind::Goto { target: header_bb },
-                span.clone(),
+                *span,
             ));
 
             ctx.set_current_block(header_bb);
@@ -138,7 +132,7 @@ pub fn lower_while(
                     targets: vec![(Discriminant::from(target_val), body_bb)],
                     otherwise: other_target,
                 },
-                span.clone(),
+                *span,
             ));
 
             ctx.enter_loop(exit_bb, header_bb);
@@ -150,7 +144,7 @@ pub fn lower_while(
             {
                 ctx.set_terminator(Terminator::new(
                     TerminatorKind::Goto { target: header_bb },
-                    span.clone(),
+                    *span,
                 ));
             }
             ctx.exit_loop();
@@ -164,7 +158,7 @@ pub fn lower_while(
 
             ctx.set_terminator(Terminator::new(
                 TerminatorKind::Goto { target: body_bb },
-                span.clone(),
+                *span,
             ));
 
             ctx.enter_loop(exit_bb, cond_bb);
@@ -176,7 +170,7 @@ pub fn lower_while(
             {
                 ctx.set_terminator(Terminator::new(
                     TerminatorKind::Goto { target: cond_bb },
-                    span.clone(),
+                    *span,
                 ));
             }
             ctx.exit_loop();
@@ -195,7 +189,7 @@ pub fn lower_while(
                     targets: vec![(Discriminant::from(target_val), body_bb)],
                     otherwise: other_target,
                 },
-                span.clone(),
+                *span,
             ));
 
             ctx.set_current_block(exit_bb);
@@ -206,7 +200,7 @@ pub fn lower_while(
 
             ctx.set_terminator(Terminator::new(
                 TerminatorKind::Goto { target: body_bb },
-                span.clone(),
+                *span,
             ));
 
             ctx.enter_loop(exit_bb, body_bb);
@@ -218,7 +212,7 @@ pub fn lower_while(
             {
                 ctx.set_terminator(Terminator::new(
                     TerminatorKind::Goto { target: body_bb },
-                    span.clone(),
+                    *span,
                 ));
             }
             ctx.exit_loop();
@@ -252,45 +246,45 @@ fn lower_for_over_iterable(
         match &ty.kind {
             TypeKind::List(_) | TypeKind::Array(_, _) => {
                 // For lists/arrays, element type would need to be extracted from type annotation
-                Type::new(TypeKind::Int, span.clone())
+                Type::new(TypeKind::Int, *span)
             }
             _ => ty.clone(),
         }
     } else {
-        Type::new(TypeKind::Int, span.clone())
+        Type::new(TypeKind::Int, *span)
     };
 
     // In lower_for_over_iterable, we want to keep the name if it's user defined.
     // The ctx.push_local logic already handles is_release stripping if we pass the name.
     // However, push_local takes String, and ctx handles the logic.
-    let loop_var = ctx.push_local(decl.name.clone(), elem_ty, span.clone());
+    let loop_var = ctx.push_local(decl.name.clone(), elem_ty, *span);
 
     // Lower the iterable
     let list_op = lower_expression(ctx, iterable, None)?;
     let list_ty = if let Some(ty) = ctx.type_checker.get_type(iterable.id) {
         ty.clone()
     } else {
-        Type::new(TypeKind::Void, span.clone())
+        Type::new(TypeKind::Void, *span)
     };
-    let list_local = ctx.push_temp(list_ty, span.clone());
+    let list_local = ctx.push_temp(list_ty, *span);
     ctx.push_statement(crate::mir::Statement {
         kind: StatementKind::Assign(Place::new(list_local), Rvalue::Use(list_op)),
-        span: span.clone(),
+        span: *span,
     });
 
     // Index variable
-    let idx_ty = Type::new(TypeKind::Int, span.clone());
-    let idx_var = ctx.push_temp(idx_ty.clone(), span.clone());
+    let idx_ty = Type::new(TypeKind::Int, *span);
+    let idx_var = ctx.push_temp(idx_ty.clone(), *span);
 
     // Initialize index to 0
     let zero = Operand::Constant(Box::new(Constant {
-        span: span.clone(),
+        span: *span,
         ty: idx_ty.clone(),
         literal: crate::ast::literal::Literal::Integer(crate::ast::literal::IntegerLiteral::I32(0)),
     }));
     ctx.push_statement(crate::mir::Statement {
         kind: StatementKind::Assign(Place::new(idx_var), Rvalue::Use(zero)),
-        span: span.clone(),
+        span: *span,
     });
 
     let header_bb = ctx.new_basic_block();
@@ -300,7 +294,7 @@ fn lower_for_over_iterable(
 
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Goto { target: header_bb },
-        span.clone(),
+        *span,
     ));
 
     // Determine if the iterable is a class implementing Iterable trait.
@@ -334,14 +328,14 @@ fn lower_for_over_iterable(
     // Header: Check idx < length
     ctx.set_current_block(header_bb);
 
-    let len_temp = ctx.push_temp(idx_ty.clone(), span.clone());
+    let len_temp = ctx.push_temp(idx_ty.clone(), *span);
 
     if let Some((ref class_name, _)) = iterable_class {
         // Call ClassName_length(iterable) via MIR terminator
         let length_symbol = format!("{}_length", class_name);
         let func_op = Operand::Constant(Box::new(Constant {
-            span: span.clone(),
-            ty: Type::new(TypeKind::Symbol, span.clone()),
+            span: *span,
+            ty: Type::new(TypeKind::Symbol, *span),
             literal: crate::ast::literal::Literal::Symbol(length_symbol),
         }));
         let after_len_bb = ctx.new_basic_block();
@@ -358,18 +352,18 @@ fn lower_for_over_iterable(
                 destination: Place::new(len_temp),
                 target: Some(after_len_bb),
             },
-            span.clone(),
+            *span,
         ));
         ctx.set_current_block(after_len_bb);
     } else {
         ctx.push_statement(crate::mir::Statement {
             kind: StatementKind::Assign(Place::new(len_temp), Rvalue::Len(Place::new(list_local))),
-            span: span.clone(),
+            span: *span,
         });
     }
 
-    let bool_ty = Type::new(TypeKind::Boolean, span.clone());
-    let cond_temp = ctx.push_temp(bool_ty, span.clone());
+    let bool_ty = Type::new(TypeKind::Boolean, *span);
+    let cond_temp = ctx.push_temp(bool_ty, *span);
     ctx.push_statement(crate::mir::Statement {
         kind: StatementKind::Assign(
             Place::new(cond_temp),
@@ -379,7 +373,7 @@ fn lower_for_over_iterable(
                 Box::new(Operand::Copy(Place::new(len_temp))),
             ),
         ),
-        span: span.clone(),
+        span: *span,
     });
 
     ctx.set_terminator(Terminator::new(
@@ -388,7 +382,7 @@ fn lower_for_over_iterable(
             targets: vec![(Discriminant::bool_true(), body_bb)],
             otherwise: exit_bb,
         },
-        span.clone(),
+        *span,
     ));
 
     // Body
@@ -400,8 +394,8 @@ fn lower_for_over_iterable(
         // Call ClassName_element_at(iterable, idx) via MIR terminator
         let element_at_symbol = format!("{}_element_at", class_name);
         let func_op = Operand::Constant(Box::new(Constant {
-            span: span.clone(),
-            ty: Type::new(TypeKind::Symbol, span.clone()),
+            span: *span,
+            ty: Type::new(TypeKind::Symbol, *span),
             literal: crate::ast::literal::Literal::Symbol(element_at_symbol),
         }));
         let after_elem_bb = ctx.new_basic_block();
@@ -421,7 +415,7 @@ fn lower_for_over_iterable(
                 destination: Place::new(loop_var),
                 target: Some(after_elem_bb),
             },
-            span.clone(),
+            *span,
         ));
         ctx.set_current_block(after_elem_bb);
     } else {
@@ -434,7 +428,7 @@ fn lower_for_over_iterable(
                 Place::new(loop_var),
                 Rvalue::Use(Operand::Copy(indexed_place)),
             ),
-            span: span.clone(),
+            span: *span,
         });
     }
 
@@ -448,7 +442,7 @@ fn lower_for_over_iterable(
             TerminatorKind::Goto {
                 target: increment_bb,
             },
-            span.clone(),
+            *span,
         ));
     }
     ctx.exit_loop();
@@ -456,7 +450,7 @@ fn lower_for_over_iterable(
     // Increment
     ctx.set_current_block(increment_bb);
     let one = Operand::Constant(Box::new(Constant {
-        span: span.clone(),
+        span: *span,
         ty: idx_ty,
         literal: crate::ast::literal::Literal::Integer(crate::ast::literal::IntegerLiteral::I32(1)),
     }));
@@ -469,16 +463,16 @@ fn lower_for_over_iterable(
                 Box::new(one),
             ),
         ),
-        span: span.clone(),
+        span: *span,
     });
 
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Goto { target: header_bb },
-        span.clone(),
+        *span,
     ));
 
     ctx.set_current_block(exit_bb);
-    ctx.pop_scope(span.clone());
+    ctx.pop_scope(*span);
     Ok(())
 }
 
@@ -518,14 +512,14 @@ pub fn lower_for(
         // 1. Initialize loop variable
         // Assumed single declaration for now
         let decl = &decls[0];
-        let loop_var_ty = Type::new(TypeKind::Int, span.clone()); // Assuming Int for range
-                                                                  // Provide the name so push_local can decide to strip it or not based on is_release
-        let loop_var = ctx.push_local(decl.name.clone(), loop_var_ty.clone(), span.clone());
+        let loop_var_ty = Type::new(TypeKind::Int, *span); // Assuming Int for range
+                                                           // Provide the name so push_local can decide to strip it or not based on is_release
+        let loop_var = ctx.push_local(decl.name.clone(), loop_var_ty.clone(), *span);
         let start_op = lower_expression(ctx, start, None)?;
 
         ctx.push_statement(crate::mir::Statement {
             kind: StatementKind::Assign(Place::new(loop_var), Rvalue::Use(start_op)),
-            span: span.clone(),
+            span: *span,
         });
 
         let header_bb = ctx.new_basic_block();
@@ -535,7 +529,7 @@ pub fn lower_for(
 
         ctx.set_terminator(Terminator::new(
             TerminatorKind::Goto { target: header_bb },
-            span.clone(),
+            *span,
         ));
 
         // 2. Header: Check condition
@@ -547,18 +541,18 @@ pub fn lower_for(
         let bin_op = match range_type {
             RangeExpressionType::Exclusive => BinOp::Lt,
             RangeExpressionType::Inclusive => BinOp::Le,
-            _ => return Err(LoweringError::unsupported_range_type(span.clone())),
+            _ => return Err(LoweringError::unsupported_range_type(*span)),
         };
 
-        let bool_ty = Type::new(TypeKind::Boolean, span.clone());
-        let cond_temp = ctx.push_temp(bool_ty, span.clone());
+        let bool_ty = Type::new(TypeKind::Boolean, *span);
+        let cond_temp = ctx.push_temp(bool_ty, *span);
 
         ctx.push_statement(crate::mir::Statement {
             kind: StatementKind::Assign(
                 Place::new(cond_temp),
                 Rvalue::BinaryOp(bin_op, Box::new(current_val), Box::new(end_op)),
             ),
-            span: span.clone(),
+            span: *span,
         });
 
         ctx.set_terminator(Terminator::new(
@@ -567,7 +561,7 @@ pub fn lower_for(
                 targets: vec![(Discriminant::bool_true(), body_bb)],
                 otherwise: exit_bb,
             },
-            span.clone(),
+            *span,
         ));
 
         // 3. Body
@@ -583,7 +577,7 @@ pub fn lower_for(
                 TerminatorKind::Goto {
                     target: increment_bb,
                 },
-                span.clone(),
+                *span,
             ));
         }
         ctx.exit_loop();
@@ -592,7 +586,7 @@ pub fn lower_for(
         ctx.set_current_block(increment_bb);
         // i = i + 1 - reuse loop_var_ty for the constant
         let one = Operand::Constant(Box::new(Constant {
-            span: span.clone(),
+            span: *span,
             ty: loop_var_ty,
             literal: crate::ast::literal::Literal::Integer(
                 crate::ast::literal::IntegerLiteral::I32(1),
@@ -605,20 +599,20 @@ pub fn lower_for(
                 Place::new(loop_var),
                 Rvalue::BinaryOp(BinOp::Add, Box::new(current_i), Box::new(one)),
             ),
-            span: span.clone(),
+            span: *span,
         });
 
         ctx.set_terminator(Terminator::new(
             TerminatorKind::Goto { target: header_bb },
-            span.clone(),
+            *span,
         ));
 
         ctx.set_current_block(exit_bb);
-        ctx.pop_scope(span.clone());
+        ctx.pop_scope(*span);
     } else {
         return Err(LoweringError::unsupported_expression(
             "For loop only supports Range or List iterables".to_string(),
-            span.clone(),
+            *span,
         ));
     }
     Ok(())
@@ -651,7 +645,7 @@ pub fn lower_call(
                                 return Err(LoweringError::invalid_gpu_launch_args(
                                     2,
                                     args.len(),
-                                    span.clone(),
+                                    *span,
                                 ));
                             }
 
@@ -660,7 +654,7 @@ pub fn lower_call(
 
                             // GPU launch returns void by default.
 
-                            let mut return_ty = Type::new(TypeKind::Void, span.clone());
+                            let mut return_ty = Type::new(TypeKind::Void, *span);
                             if let Some(ty) = ctx.type_checker.get_type(call_expr_id) {
                                 return_ty = ty.clone();
                             }
@@ -669,7 +663,7 @@ pub fn lower_call(
                             let (destination, op) = if let Some(d) = dest {
                                 (d.clone(), Operand::Copy(d))
                             } else {
-                                let temp = ctx.push_temp(return_ty, span.clone());
+                                let temp = ctx.push_temp(return_ty, *span);
                                 let p = Place::new(temp);
                                 (p.clone(), Operand::Copy(p))
                             };
@@ -683,7 +677,7 @@ pub fn lower_call(
                                     destination,
                                     target: Some(target_bb),
                                 },
-                                span.clone(),
+                                *span,
                             ));
 
                             ctx.set_current_block(target_bb);
@@ -728,15 +722,15 @@ pub fn lower_call(
                             }
 
                             let func_op = Operand::Constant(Box::new(crate::mir::Constant {
-                                span: span.clone(),
-                                ty: Type::new(TypeKind::Symbol, span.clone()),
+                                span: *span,
+                                ty: Type::new(TypeKind::Symbol, *span),
                                 literal: crate::ast::literal::Literal::Symbol(mangled_name),
                             }));
 
                             let (destination, op) = if let Some(d) = dest {
                                 (d.clone(), Operand::Copy(d))
                             } else {
-                                let temp = ctx.push_temp(return_ty, span.clone());
+                                let temp = ctx.push_temp(return_ty, *span);
                                 let p = Place::new(temp);
                                 (p.clone(), Operand::Copy(p))
                             };
@@ -749,7 +743,7 @@ pub fn lower_call(
                                     destination,
                                     target: Some(target_bb),
                                 },
-                                span.clone(),
+                                *span,
                             ));
                             ctx.set_current_block(target_bb);
                             return Ok(op);
@@ -807,13 +801,13 @@ pub fn lower_call(
 
                 let op_ty = op.ty(&ctx.body);
                 if op_ty.kind != target_ty.kind {
-                    let temp = ctx.push_temp(target_ty.clone(), arg.span.clone());
+                    let temp = ctx.push_temp(target_ty.clone(), arg.span);
                     ctx.push_statement(crate::mir::Statement {
                         kind: StatementKind::Assign(
                             Place::new(temp),
                             Rvalue::Cast(Box::new(op), target_ty.clone()),
                         ),
-                        span: arg.span.clone(),
+                        span: arg.span,
                     });
                     Operand::Copy(Place::new(temp))
                 } else {
@@ -856,7 +850,7 @@ pub fn lower_call(
     }
 
     // Determine return type (void for now, or from type checker)
-    let mut return_ty = Type::new(TypeKind::Void, span.clone());
+    let mut return_ty = Type::new(TypeKind::Void, *span);
 
     // Attempt to resolve return type from TypeChecker using the Call expression ID
     if let Some(ty) = ctx.type_checker.get_type(call_expr_id) {
@@ -868,7 +862,7 @@ pub fn lower_call(
         // We might want to verify types match, but we trust caller for DPS optimization
         (d.clone(), Operand::Copy(d))
     } else {
-        let temp = ctx.push_temp(return_ty, span.clone());
+        let temp = ctx.push_temp(return_ty, *span);
         let p = Place::new(temp);
         (p.clone(), Operand::Copy(p))
     };
@@ -882,7 +876,7 @@ pub fn lower_call(
             destination,
             target: Some(target_bb),
         },
-        span.clone(),
+        *span,
     ));
 
     ctx.set_current_block(target_bb);
@@ -932,20 +926,20 @@ fn lower_struct_constructor(
             return Err(LoweringError::missing_struct_field(
                 field_name.clone(),
                 struct_name.to_string(),
-                span.clone(),
+                *span,
             ));
         };
 
         // Cast if types don't match
         let op_ty = op.ty(&ctx.body);
         let op = if op_ty.kind != field_ty.kind {
-            let temp = ctx.push_temp(field_ty.clone(), span.clone());
+            let temp = ctx.push_temp(field_ty.clone(), *span);
             ctx.push_statement(crate::mir::Statement {
                 kind: StatementKind::Assign(
                     Place::new(temp),
                     Rvalue::Cast(Box::new(op), field_ty.clone()),
                 ),
-                span: span.clone(),
+                span: *span,
             });
             Operand::Copy(Place::new(temp))
         } else {
@@ -956,16 +950,13 @@ fn lower_struct_constructor(
     }
 
     // Create the struct type
-    let struct_ty = Type::new(
-        TypeKind::Custom(struct_name.to_string(), None),
-        span.clone(),
-    );
+    let struct_ty = Type::new(TypeKind::Custom(struct_name.to_string(), None), *span);
 
     // Assign aggregate to destination
     let (destination, result_op) = if let Some(d) = dest {
         (d.clone(), Operand::Copy(d))
     } else {
-        let temp = ctx.push_temp(struct_ty.clone(), span.clone());
+        let temp = ctx.push_temp(struct_ty.clone(), *span);
         let p = Place::new(temp);
         (p.clone(), Operand::Copy(p))
     };
@@ -975,7 +966,7 @@ fn lower_struct_constructor(
             destination,
             Rvalue::Aggregate(AggregateKind::Struct(struct_ty), operands),
         ),
-        span: span.clone(),
+        span: *span,
     });
 
     Ok(result_op)
@@ -1027,13 +1018,13 @@ fn lower_class_constructor(
         // Cast if types don't match
         let op_ty = op.ty(&ctx.body);
         let op = if op_ty.kind != field_info.ty.kind {
-            let temp = ctx.push_temp(field_info.ty.clone(), span.clone());
+            let temp = ctx.push_temp(field_info.ty.clone(), *span);
             ctx.push_statement(crate::mir::Statement {
                 kind: StatementKind::Assign(
                     Place::new(temp),
                     Rvalue::Cast(Box::new(op), field_info.ty.clone()),
                 ),
-                span: span.clone(),
+                span: *span,
             });
             Operand::Copy(Place::new(temp))
         } else {
@@ -1044,13 +1035,13 @@ fn lower_class_constructor(
     }
 
     // Create the class type
-    let class_ty = Type::new(TypeKind::Custom(class_name.to_string(), None), span.clone());
+    let class_ty = Type::new(TypeKind::Custom(class_name.to_string(), None), *span);
 
     // Assign aggregate to destination
     let (destination, result_op) = if let Some(d) = dest {
         (d.clone(), Operand::Copy(d))
     } else {
-        let temp = ctx.push_temp(class_ty.clone(), span.clone());
+        let temp = ctx.push_temp(class_ty.clone(), *span);
         let p = Place::new(temp);
         (p.clone(), Operand::Copy(p))
     };
@@ -1060,7 +1051,7 @@ fn lower_class_constructor(
             destination,
             Rvalue::Aggregate(AggregateKind::Class(class_ty), operands),
         ),
-        span: span.clone(),
+        span: *span,
     });
 
     Ok(result_op)
@@ -1087,7 +1078,7 @@ fn create_default_value(ty: &Type, span: &Span) -> Operand {
     };
 
     Operand::Constant(Box::new(Constant {
-        span: span.clone(),
+        span: *span,
         ty: ty.clone(),
         literal,
     }))

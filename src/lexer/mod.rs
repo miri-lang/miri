@@ -3,7 +3,7 @@
 
 use logos::Logos;
 
-use crate::error::syntax::{SyntaxError, SyntaxErrorKind};
+use crate::error::syntax::{Span, SyntaxError, SyntaxErrorKind};
 
 pub mod formatted_string;
 pub mod regex;
@@ -78,7 +78,7 @@ impl<'source> Lexer<'source> {
                     // This is where logos itself detects an error.
                     return Some(Err(SyntaxError::new(
                         SyntaxErrorKind::InvalidToken,
-                        self.inner.span(),
+                        Span::new(self.inner.span().start, self.inner.span().end),
                     )));
                 }
                 None => {
@@ -88,7 +88,7 @@ impl<'source> Lexer<'source> {
 
                         while self.indent_stack.len() > 1 {
                             self.pending_tokens_stack
-                                .push((Token::Dedent, source_len..source_len));
+                                .push((Token::Dedent, Span::new(source_len, source_len)));
                             self.indent_stack.pop();
                         }
 
@@ -117,27 +117,27 @@ impl<'source> Lexer<'source> {
                 }
                 Token::LParen => {
                     self.paren_level += 1;
-                    return Some(Ok((Token::LParen, span)));
+                    return Some(Ok((Token::LParen, Span::new(span.start, span.end))));
                 }
                 Token::RParen => {
                     self.paren_level = self.paren_level.saturating_sub(1);
-                    return Some(Ok((Token::RParen, span)));
+                    return Some(Ok((Token::RParen, Span::new(span.start, span.end))));
                 }
                 Token::LBracket => {
                     self.bracket_level += 1;
-                    return Some(Ok((Token::LBracket, span)));
+                    return Some(Ok((Token::LBracket, Span::new(span.start, span.end))));
                 }
                 Token::RBracket => {
                     self.bracket_level = self.bracket_level.saturating_sub(1);
-                    return Some(Ok((Token::RBracket, span)));
+                    return Some(Ok((Token::RBracket, Span::new(span.start, span.end))));
                 }
                 Token::LBrace => {
                     self.curly_brace_level += 1;
-                    return Some(Ok((Token::LBrace, span)));
+                    return Some(Ok((Token::LBrace, Span::new(span.start, span.end))));
                 }
                 Token::RBrace => {
                     self.curly_brace_level = self.curly_brace_level.saturating_sub(1);
-                    return Some(Ok((Token::RBrace, span)));
+                    return Some(Ok((Token::RBrace, Span::new(span.start, span.end))));
                 }
                 Token::SingleQuotedRegex | Token::DoubleQuotedRegex => {
                     let quote_char = if token == Token::SingleQuotedRegex {
@@ -146,12 +146,14 @@ impl<'source> Lexer<'source> {
                         '"'
                     };
                     match parse_regex_literal(&self.inner, quote_char) {
-                        Ok(regex) => return Some(Ok((Token::Regex(regex), span))),
+                        Ok(regex) => {
+                            return Some(Ok((Token::Regex(regex), Span::new(span.start, span.end))))
+                        }
                         Err(e) => return Some(Err(e)),
                     }
                 }
                 Token::SingleQuotedString | Token::DoubleQuotedString => {
-                    return Some(Ok((Token::String, span)));
+                    return Some(Ok((Token::String, Span::new(span.start, span.end))));
                 }
                 Token::SingleQuotedFormattedString | Token::DoubleQuotedFormattedString => {
                     let quote_char = if token == Token::SingleQuotedFormattedString {
@@ -177,28 +179,28 @@ impl<'source> Lexer<'source> {
                 Token::InvalidNumber => {
                     return Some(Err(SyntaxError::new(
                         SyntaxErrorKind::InvalidNumberLiteral,
-                        span,
+                        Span::new(span.start, span.end),
                     )));
                 }
                 Token::InvalidBinaryNumber => {
                     return Some(Err(SyntaxError::new(
                         SyntaxErrorKind::InvalidBinaryLiteral,
-                        span,
+                        Span::new(span.start, span.end),
                     )));
                 }
                 Token::InvalidHexNumber => {
                     return Some(Err(SyntaxError::new(
                         SyntaxErrorKind::InvalidHexLiteral,
-                        span,
+                        Span::new(span.start, span.end),
                     )));
                 }
                 Token::InvalidOctalNumber => {
                     return Some(Err(SyntaxError::new(
                         SyntaxErrorKind::InvalidOctalLiteral,
-                        span,
+                        Span::new(span.start, span.end),
                     )));
                 }
-                _ => return Some(Ok((token, span))),
+                _ => return Some(Ok((token, Span::new(span.start, span.end)))),
             }
         }
     }
@@ -230,7 +232,7 @@ impl<'source> Lexer<'source> {
 
         Err(SyntaxError::new(
             SyntaxErrorKind::UnclosedMultilineComment,
-            self.inner.span(),
+            Span::new(self.inner.span().start, self.inner.span().end),
         ))
     }
 
@@ -299,7 +301,7 @@ impl<'source> Lexer<'source> {
                 if !found_matching_indent {
                     return Err(SyntaxError::new(
                         SyntaxErrorKind::IndentationMismatch,
-                        token_end..token_end,
+                        Span::new(token_end, token_end),
                     ));
                 }
 
@@ -311,8 +313,10 @@ impl<'source> Lexer<'source> {
 
             if self.is_expression_statement_end() {
                 // If this is an expression statement end, return ExpressionStatementEnd token
-                self.pending_tokens_stack
-                    .push((Token::ExpressionStatementEnd, token_end..token_end));
+                self.pending_tokens_stack.push((
+                    Token::ExpressionStatementEnd,
+                    Span::new(token_end, token_end),
+                ));
             }
         }
 
@@ -333,32 +337,36 @@ impl<'source> Lexer<'source> {
                 if range_end < src.len() && &src[range_end..range_end + 1] == "=" {
                     // It's a range inclusive
                     self.pending_tokens_stack
-                        .push((Token::RangeInclusive, range_start..(range_end + 1)));
+                        .push((Token::RangeInclusive, Span::new(range_start, range_end + 1)));
                     self.inner.bump(2);
                 } else {
                     self.pending_tokens_stack
-                        .push((Token::Range, range_start..range_end));
+                        .push((Token::Range, Span::new(range_start, range_end)));
                     self.inner.bump(1);
                 }
                 self.pending_tokens_stack
-                    .push((Token::Int, self.inner.span().start..range_start));
+                    .push((Token::Int, Span::new(self.inner.span().start, range_start)));
 
                 return Ok(());
             } else if ch.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
                 // It's a method call on an integer e.g. `1.to_string()`
-                self.pending_tokens_stack
-                    .push((Token::Dot, self.inner.span().end - 1..self.inner.span().end));
+                self.pending_tokens_stack.push((
+                    Token::Dot,
+                    Span::new(self.inner.span().end - 1, self.inner.span().end),
+                ));
                 self.pending_tokens_stack.push((
                     Token::Int,
-                    self.inner.span().start..self.inner.span().end - 1,
+                    Span::new(self.inner.span().start, self.inner.span().end - 1),
                 ));
                 return Ok(());
             }
         }
 
         // It's a float
-        self.pending_tokens_stack
-            .push((Token::Float, self.inner.span()));
+        self.pending_tokens_stack.push((
+            Token::Float,
+            Span::new(self.inner.span().start, self.inner.span().end),
+        ));
 
         Ok(())
     }
@@ -412,13 +420,15 @@ impl<'source> Lexer<'source> {
     }
 
     fn push_indent(&mut self, i: usize, indent_len: usize) {
-        self.pending_tokens_stack.push((Token::Indent, i..i));
+        self.pending_tokens_stack
+            .push((Token::Indent, Span::new(i, i)));
         self.indent_stack.push(indent_len);
         self.indent_level += 1;
     }
 
     fn push_dedent(&mut self, i: usize) {
-        self.pending_tokens_stack.push((Token::Dedent, i..i));
+        self.pending_tokens_stack
+            .push((Token::Dedent, Span::new(i, i)));
         self.indent_stack.pop();
         self.indent_level -= 1;
     }

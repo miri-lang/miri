@@ -12,6 +12,7 @@ use crate::ast::Program;
 use crate::cli::args::CpuBackend;
 use crate::codegen::Backend;
 use crate::error::compiler::CompilerError;
+use crate::error::syntax::Span;
 use crate::lexer::Lexer;
 use crate::mir;
 use crate::parser::Parser;
@@ -102,7 +103,7 @@ fn collect_runtime_info(program: &Program, imported_stmts: &[Statement]) -> Runt
                     if !params.iter().any(|p| p.name == "allocator") {
                         param_types.push(translate_type(&crate::ast::types::Type::new(
                             crate::ast::types::TypeKind::Int,
-                            stmt.span.clone(),
+                            stmt.span,
                         )));
                     }
 
@@ -212,10 +213,10 @@ fn patch_main_return(program: &mut Program) {
                             stmts.push(return_zero);
                         }
                         _ => {
-                            let span = body_stmt.span.clone();
+                            let span = body_stmt.span;
                             let existing = std::mem::replace(
                                 body_stmt.as_mut(),
-                                stmt_with_span(StatementKind::Empty, 0..0),
+                                stmt_with_span(StatementKind::Empty, Span::new(0, 0)),
                             );
                             **body_stmt = stmt_with_span(
                                 StatementKind::Block(vec![existing, return_zero]),
@@ -474,10 +475,8 @@ impl Pipeline {
                         };
 
                     // Build the `self` type for this class
-                    let self_type = Type::new(
-                        TypeKind::Custom(class_name.to_string(), None),
-                        stmt.span.clone(),
-                    );
+                    let self_type =
+                        Type::new(TypeKind::Custom(class_name.to_string(), None), stmt.span);
 
                     // Compile each non-runtime method in the class body
                     for method_stmt in class_body {

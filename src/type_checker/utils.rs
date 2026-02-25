@@ -122,7 +122,11 @@ impl TypeChecker {
 
     /// Creates a type expression from a Type.
     pub(crate) fn create_type_expression(&self, ty: Type) -> Expression {
-        IdNode::new(0, ExpressionKind::Type(Box::new(ty), false), 0..0)
+        IdNode::new(
+            0,
+            ExpressionKind::Type(Box::new(ty), false),
+            Span::new(0, 0),
+        )
     }
 
     /// Extracts the element type from an iterable type.
@@ -206,7 +210,7 @@ impl TypeChecker {
         match self.extract_type_from_expression(expr) {
             Ok(t) => self.resolve_type_kind(t, expr, context),
             Err(msg) => {
-                self.report_error(msg, expr.span.clone());
+                self.report_error(msg, expr.span);
                 Self::error_type()
             }
         }
@@ -224,10 +228,7 @@ impl TypeChecker {
             TypeKind::Set(inner) => {
                 let resolved_inner = self.resolve_type_expression(&inner, context);
                 if let TypeKind::Nullable(_) = resolved_inner.kind {
-                    self.report_error(
-                        "Set elements cannot be nullable".to_string(),
-                        inner.span.clone(),
-                    );
+                    self.report_error("Set elements cannot be nullable".to_string(), inner.span);
                 }
                 make_type(TypeKind::Set(Box::new(
                     self.create_type_expression(resolved_inner),
@@ -236,7 +237,7 @@ impl TypeChecker {
             TypeKind::Map(k, v) => {
                 let rk = self.resolve_type_expression(&k, context);
                 if let TypeKind::Nullable(_) = rk.kind {
-                    self.report_error("Map keys cannot be nullable".to_string(), k.span.clone());
+                    self.report_error("Map keys cannot be nullable".to_string(), k.span);
                 }
                 let rv = self.resolve_type_expression(&v, context);
                 make_type(TypeKind::Map(
@@ -269,7 +270,7 @@ impl TypeChecker {
             }
             self.report_error(
                 "'Self' can only be used inside a class or trait".to_string(),
-                expr.span.clone(),
+                expr.span,
             );
             return Self::error_type();
         }
@@ -319,7 +320,7 @@ impl TypeChecker {
                         if let TypeKind::Nullable(_) = k.kind {
                             self.report_error(
                                 "Map keys cannot be nullable".to_string(),
-                                args[0].span.clone(),
+                                args[0].span,
                             );
                         }
                         let v = self.resolve_type_expression(&args[1], context);
@@ -349,7 +350,7 @@ impl TypeChecker {
                         if let TypeKind::Nullable(_) = t.kind {
                             self.report_error(
                                 "Set elements cannot be nullable".to_string(),
-                                args[0].span.clone(),
+                                args[0].span,
                             );
                         }
                         return Some(make_type(TypeKind::Set(Box::new(
@@ -401,28 +402,18 @@ impl TypeChecker {
     ) -> Type {
         match def {
             TypeDefinition::Struct(struct_def) => {
-                self.validate_generics(
-                    &resolved_args,
-                    &struct_def.generics,
-                    context,
-                    expr.span.clone(),
-                );
+                self.validate_generics(&resolved_args, &struct_def.generics, context, expr.span);
                 make_type(TypeKind::Custom(name.to_string(), resolved_args))
             }
             TypeDefinition::Enum(enum_def) => {
-                self.validate_generics(
-                    &resolved_args,
-                    &enum_def.generics,
-                    context,
-                    expr.span.clone(),
-                );
+                self.validate_generics(&resolved_args, &enum_def.generics, context, expr.span);
                 make_type(TypeKind::Custom(name.to_string(), resolved_args))
             }
             TypeDefinition::Generic(gen_def) => {
                 if resolved_args.is_some() {
                     self.report_error(
                         "Generic type parameter cannot have generic arguments".to_string(),
-                        expr.span.clone(),
+                        expr.span,
                     );
                 }
                 make_type(TypeKind::Generic(
@@ -435,21 +426,11 @@ impl TypeChecker {
                 self.resolve_type_alias(name, alias_def, resolved_args, expr, context)
             }
             TypeDefinition::Class(class_def) => {
-                self.validate_generics(
-                    &resolved_args,
-                    &class_def.generics,
-                    context,
-                    expr.span.clone(),
-                );
+                self.validate_generics(&resolved_args, &class_def.generics, context, expr.span);
                 make_type(TypeKind::Custom(name.to_string(), resolved_args))
             }
             TypeDefinition::Trait(trait_def) => {
-                self.validate_generics(
-                    &resolved_args,
-                    &trait_def.generics,
-                    context,
-                    expr.span.clone(),
-                );
+                self.validate_generics(&resolved_args, &trait_def.generics, context, expr.span);
                 make_type(TypeKind::Custom(name.to_string(), resolved_args))
             }
         }
@@ -513,7 +494,7 @@ impl TypeChecker {
                 name, expected, provided
             )
         };
-        self.report_error(message, expr.span.clone());
+        self.report_error(message, expr.span);
     }
 
     /// Reports an unknown type error with suggestions.
@@ -528,11 +509,11 @@ impl TypeChecker {
         if let Some(suggestion) = find_best_match(name, &candidates) {
             self.report_error_with_help(
                 format!("Unknown type: {}", name),
-                expr.span.clone(),
+                expr.span,
                 format!("Did you mean '{}'?", suggestion),
             );
         } else {
-            self.report_error(format!("Unknown type: {}", name), expr.span.clone());
+            self.report_error(format!("Unknown type: {}", name), expr.span);
         }
     }
 

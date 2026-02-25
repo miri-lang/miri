@@ -573,7 +573,7 @@ for i in 5..5
     count = count + 1
 print(f"{count}")
     "#,
-        "0", // 5..5 is empty (exclusive)
+        "0", // Span::new(5, 5) is empty (exclusive)
     );
 }
 

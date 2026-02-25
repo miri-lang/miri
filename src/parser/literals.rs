@@ -1,12 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+use std::borrow::Cow;
+
 use crate::ast::factory as ast;
 use crate::ast::*;
-use crate::error::syntax::{SyntaxError, SyntaxErrorKind};
+use crate::error::syntax::{Span, SyntaxError, SyntaxErrorKind};
 use crate::lexer::Token;
 
 use super::Parser;
+
+/// Strips underscore separators from a numeric literal, returning a `Cow`
+/// to avoid allocation when no underscores are present.
+fn strip_underscores(s: &str) -> Cow<'_, str> {
+    if s.contains('_') {
+        Cow::Owned(s.replace('_', ""))
+    } else {
+        Cow::Borrowed(s)
+    }
+}
 
 impl<'source> Parser<'source> {
     /*
@@ -45,7 +57,7 @@ impl<'source> Parser<'source> {
                 Err(self.error_unexpected_token_with_span(
                     "a valid literal",
                     &format!("{:?} with value '{}'", token, token_text),
-                    span.clone(),
+                    *span,
                 ))
             }
             None => Err(self.error_eof()),
@@ -60,14 +72,15 @@ impl<'source> Parser<'source> {
     pub(crate) fn integer_literal(&mut self, token_type: &Token) -> Result<Literal, SyntaxError> {
         match self.eat_token(token_type) {
             Ok(token) => {
-                let str_value = &self.source[token.1.start..token.1.end].replace("_", ""); // Remove underscores
+                let raw = &self.source[token.1.start..token.1.end];
+                let str_value = strip_underscores(raw);
 
                 // Parse the value based on the token type
                 let value = match token_type {
                     Token::Int => str_value.parse::<i128>().map_err(|_| {
                         SyntaxError::new(
                             SyntaxErrorKind::InvalidIntegerLiteral,
-                            token.1.start..token.1.end,
+                            Span::new(token.1.start, token.1.end),
                         )
                     })?,
                     Token::BinaryNumber => {
@@ -75,7 +88,7 @@ impl<'source> Parser<'source> {
                         i128::from_str_radix(&str_value[2..], 2).map_err(|_| {
                             SyntaxError::new(
                                 SyntaxErrorKind::InvalidBinaryLiteral,
-                                token.1.start..token.1.end,
+                                Span::new(token.1.start, token.1.end),
                             )
                         })?
                     }
@@ -84,7 +97,7 @@ impl<'source> Parser<'source> {
                         i128::from_str_radix(&str_value[2..], 16).map_err(|_| {
                             SyntaxError::new(
                                 SyntaxErrorKind::InvalidHexLiteral,
-                                token.1.start..token.1.end,
+                                Span::new(token.1.start, token.1.end),
                             )
                         })?
                     }
@@ -93,7 +106,7 @@ impl<'source> Parser<'source> {
                         i128::from_str_radix(&str_value[2..], 8).map_err(|_| {
                             SyntaxError::new(
                                 SyntaxErrorKind::InvalidOctalLiteral,
-                                token.1.start..token.1.end,
+                                Span::new(token.1.start, token.1.end),
                             )
                         })?
                     }
@@ -103,7 +116,7 @@ impl<'source> Parser<'source> {
                                 expected: "integer literal".to_string(),
                                 found: format!("{:?}", token_type),
                             },
-                            token.1.start..token.1.end,
+                            Span::new(token.1.start, token.1.end),
                         ));
                     }
                 };
@@ -124,9 +137,10 @@ impl<'source> Parser<'source> {
             Ok(token) => {
                 let err = SyntaxError::new(
                     SyntaxErrorKind::InvalidFloatLiteral,
-                    token.1.start..token.1.end,
+                    Span::new(token.1.start, token.1.end),
                 );
-                let str_value = &self.source[token.1.start..token.1.end].replace("_", ""); // Remove underscores
+                let raw = &self.source[token.1.start..token.1.end];
+                let str_value = strip_underscores(raw);
                 let f32_value = str_value.parse::<f32>().map_err(|_| err.clone())?;
                 let uses_exponent = str_value.contains('e') || str_value.contains('E');
                 let f32_str = if uses_exponent {
@@ -150,7 +164,7 @@ impl<'source> Parser<'source> {
                     }
                 }
 
-                let normalized_input = normalize(str_value);
+                let normalized_input = normalize(&str_value);
                 let normalized_f32 = normalize(&f32_str);
 
                 // If the f32 representation matches the original string, return as f32
@@ -211,7 +225,7 @@ impl<'source> Parser<'source> {
                     _ => {
                         return Err(SyntaxError::new(
                             SyntaxErrorKind::InvalidBooleanLiteral,
-                            token.1.start..token.1.end,
+                            Span::new(token.1.start, token.1.end),
                         ));
                     }
                 };
@@ -247,8 +261,7 @@ impl<'source> Parser<'source> {
         if let (Token::Regex(regex_data), _) = token_span {
             Ok(ast::regex_literal_from_token(*regex_data))
         } else {
-            // This branch should be unreachable if the predicate in `eat` is correct.
-            unreachable!();
+            Err(self.error_unexpected_lookahead_token("regex literal"))
         }
     }
 }

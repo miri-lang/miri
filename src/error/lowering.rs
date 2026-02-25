@@ -277,7 +277,7 @@ impl Reportable for LoweringError {
             code: Some(props.code),
             title: props.title.to_string(),
             message: props.message.unwrap_or_else(|| props.title.to_string()),
-            span: Some(self.span.clone()),
+            span: Some(self.span),
             help,
             notes: Vec::new(),
         }

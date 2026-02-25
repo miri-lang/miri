@@ -233,7 +233,7 @@ impl TypeChecker {
                                 "Type {} does not satisfy constraint {} {}",
                                 arg_type, param_def.kind, constraint
                             ),
-                            arg_expr.span.clone(),
+                            arg_expr.span,
                         );
                     }
                 }

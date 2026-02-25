@@ -61,60 +61,44 @@ impl TypeChecker {
         let ty = match &expr.node {
             ExpressionKind::Literal(lit) => self.infer_literal(lit),
             ExpressionKind::Binary(left, op, right) => {
-                self.infer_binary(left, op, right, expr.span.clone(), context)
+                self.infer_binary(left, op, right, expr.span, context)
             }
             ExpressionKind::Logical(left, op, right) => {
-                self.infer_logical(left, op, right, expr.span.clone(), context)
+                self.infer_logical(left, op, right, expr.span, context)
             }
-            ExpressionKind::Unary(op, operand) => {
-                self.infer_unary(op, operand, expr.span.clone(), context)
-            }
-            ExpressionKind::Identifier(name, _) => {
-                self.infer_identifier(name, expr.span.clone(), context)
-            }
+            ExpressionKind::Unary(op, operand) => self.infer_unary(op, operand, expr.span, context),
+            ExpressionKind::Identifier(name, _) => self.infer_identifier(name, expr.span, context),
             ExpressionKind::Assignment(lhs, op, rhs) => {
-                self.infer_assignment(lhs, op, rhs, expr.span.clone(), context)
+                self.infer_assignment(lhs, op, rhs, expr.span, context)
             }
-            ExpressionKind::Call(func, args) => {
-                self.infer_call(func, args, expr.span.clone(), context)
-            }
+            ExpressionKind::Call(func, args) => self.infer_call(func, args, expr.span, context),
             ExpressionKind::Range(start, end, kind) => {
-                self.infer_range(start, end, kind, expr.span.clone(), context)
+                self.infer_range(start, end, kind, expr.span, context)
             }
             ExpressionKind::List(elements) => self.infer_list(elements, context),
             ExpressionKind::Map(entries) => self.infer_map(entries, context),
             ExpressionKind::Set(elements) => self.infer_set(elements, context),
             ExpressionKind::Tuple(elements) => self.infer_tuple(elements, context),
-            ExpressionKind::Index(obj, index) => {
-                self.infer_index(obj, index, expr.span.clone(), context)
-            }
-            ExpressionKind::Member(obj, prop) => {
-                self.infer_member(obj, prop, expr.span.clone(), context)
-            }
+            ExpressionKind::Index(obj, index) => self.infer_index(obj, index, expr.span, context),
+            ExpressionKind::Member(obj, prop) => self.infer_member(obj, prop, expr.span, context),
             ExpressionKind::Match(subject, branches) => {
-                self.infer_match(subject, branches, expr.span.clone(), context)
+                self.infer_match(subject, branches, expr.span, context)
             }
             ExpressionKind::Conditional(then_expr, cond_expr, else_expr, _) => {
-                self.infer_conditional(then_expr, cond_expr, else_expr, expr.span.clone(), context)
+                self.infer_conditional(then_expr, cond_expr, else_expr, expr.span, context)
             }
             ExpressionKind::FormattedString(parts) => self.infer_formatted_string(parts, context),
             ExpressionKind::Lambda(generics, params, return_type, body, properties) => {
                 self.infer_lambda(generics, params, return_type, body, properties, context)
             }
-            ExpressionKind::TypeDeclaration(expr, generics, kind, target) => self
-                .infer_generic_instantiation(
-                    expr,
-                    generics,
-                    kind,
-                    target,
-                    expr.span.clone(),
-                    context,
-                ),
+            ExpressionKind::TypeDeclaration(expr, generics, kind, target) => {
+                self.infer_generic_instantiation(expr, generics, kind, target, expr.span, context)
+            }
             ExpressionKind::NamedArgument(_, value) => self.infer_expression(value, context),
             ExpressionKind::EnumValue(name, values) => {
-                self.infer_enum_value(name, values, expr.span.clone(), context)
+                self.infer_enum_value(name, values, expr.span, context)
             }
-            ExpressionKind::Super => self.infer_super(expr.span.clone(), context),
+            ExpressionKind::Super => self.infer_super(expr.span, context),
             ExpressionKind::Block(statements, final_expr) => {
                 // Type check all statements, then the final expression determines the type
                 for stmt in statements {
@@ -122,7 +106,16 @@ impl TypeChecker {
                 }
                 self.infer_expression(final_expr, context)
             }
-            _ => ast_factory::make_type(TypeKind::Int), // Default fallback for unimplemented expressions
+            // These expression kinds are handled elsewhere (parser, type expressions, etc.)
+            // and should not appear as top-level inferred expressions. Guard, GenericType,
+            // Type, StructMember, Array, and ImportPath are structural AST nodes that are
+            // consumed by their parent expressions during type checking.
+            ExpressionKind::Guard(_, _)
+            | ExpressionKind::GenericType(_, _, _)
+            | ExpressionKind::Type(_, _)
+            | ExpressionKind::StructMember(_, _)
+            | ExpressionKind::Array(_, _)
+            | ExpressionKind::ImportPath(_, _) => Self::error_type(),
         };
 
         self.types.insert(expr.id, ty.clone());
@@ -147,14 +140,14 @@ impl TypeChecker {
                 return ast_factory::make_type(TypeKind::Result(
                     Box::new(ast_factory::expr_with_span(
                         ExpressionKind::Type(Box::new(val_type), false),
-                        span.clone(),
+                        span,
                     )),
                     Box::new(ast_factory::expr_with_span(
                         ExpressionKind::Type(
                             Box::new(ast_factory::make_type(TypeKind::Void)),
                             false,
                         ),
-                        span.clone(),
+                        span,
                     )),
                 ));
             } else if id_name == "Err" {
@@ -170,11 +163,11 @@ impl TypeChecker {
                             Box::new(ast_factory::make_type(TypeKind::Void)),
                             false,
                         ),
-                        span.clone(),
+                        span,
                     )),
                     Box::new(ast_factory::expr_with_span(
                         ExpressionKind::Type(Box::new(val_type), false),
-                        span.clone(),
+                        span,
                     )),
                 ));
             }
@@ -205,7 +198,7 @@ impl TypeChecker {
                                     variant_types.len(),
                                     values.len()
                                 ),
-                                span.clone(),
+                                span,
                             );
                             return ast_factory::make_type(TypeKind::Error);
                         }
@@ -240,7 +233,7 @@ impl TypeChecker {
                                                 "Type mismatch in enum variant '{}.{}': expected {}, got {}",
                                                 enum_name, variant_name, var_type, val_type
                                             ),
-                                            val.span.clone(),
+                                            val.span,
                                         );
                                 }
                             }
@@ -258,7 +251,7 @@ impl TypeChecker {
                                             "Type mismatch in enum variant '{}.{}': expected {}, got {}",
                                             enum_name, variant_name, substituted, val_type
                                         ),
-                                        val.span.clone(),
+                                        val.span,
                                     );
                                 }
                             }
@@ -380,7 +373,7 @@ impl TypeChecker {
                 _ => false,
             };
             if is_zero {
-                self.report_error("Division by zero".to_string(), right.span.clone());
+                self.report_error("Division by zero".to_string(), right.span);
                 return ast_factory::make_type(TypeKind::Error);
             }
         }
@@ -415,17 +408,17 @@ impl TypeChecker {
         // Check for double negation pattern (--x)
         if matches!(op, UnaryOp::Negate) {
             if let ExpressionKind::Unary(UnaryOp::Negate, _) = &operand.node {
-                self.report_warning("use of a double negation".to_string(), span.clone());
+                self.report_warning("use of a double negation".to_string(), span);
             }
         } else if matches!(op, UnaryOp::Decrement) {
-            self.report_warning("use of a double negation".to_string(), span.clone());
+            self.report_warning("use of a double negation".to_string(), span);
         }
 
         // Validate await context: allowed outside functions or inside async functions
         if matches!(op, UnaryOp::Await) && context.in_function && !context.in_async_function {
             self.report_error(
                 "'await' can only be used in async functions or at the top level".to_string(),
-                span.clone(),
+                span,
             );
             return ast_factory::make_type(TypeKind::Error);
         }
@@ -440,8 +433,11 @@ impl TypeChecker {
         }
     }
 
+    /// Infers the type of an identifier reference.
+    ///
+    /// Handles special identifiers (`None`, `Ok`, `Err`, `self`), scope lookup,
+    /// visibility checking, and linear type consumption tracking.
     fn infer_identifier(&mut self, name: &str, span: Span, context: &mut Context) -> Type {
-        // println!("Inferring identifier: {}", name);
         if name == "None" {
             return ast_factory::make_type(TypeKind::Nullable(Box::new(ast_factory::make_type(
                 TypeKind::Void,
@@ -570,12 +566,12 @@ impl TypeChecker {
                     if name != "self" && !context.is_mutable(name) {
                         self.report_error(
                             format!("Cannot assign to immutable variable '{}'", name),
-                            span.clone(),
+                            span,
                         );
                     }
-                    self.infer_identifier(name, id_expr.span.clone(), context)
+                    self.infer_identifier(name, id_expr.span, context)
                 } else {
-                    self.report_error("Invalid assignment target".to_string(), span.clone());
+                    self.report_error("Invalid assignment target".to_string(), span);
                     ast_factory::make_type(TypeKind::Error)
                 }
             }
@@ -584,10 +580,10 @@ impl TypeChecker {
                     if !self.is_mutable_expression(obj, context) {
                         self.report_error(
                             "Cannot assign to field of immutable variable".to_string(),
-                            span.clone(),
+                            span,
                         );
                     }
-                    self.infer_member(obj, prop, member_expr.span.clone(), context)
+                    self.infer_member(obj, prop, member_expr.span, context)
                 } else {
                     ast_factory::make_type(TypeKind::Error)
                 }
@@ -597,10 +593,10 @@ impl TypeChecker {
                     if !self.is_mutable_expression(obj, context) {
                         self.report_error(
                             "Cannot assign to element of immutable variable".to_string(),
-                            span.clone(),
+                            span,
                         );
                     }
-                    self.infer_index(obj, index, index_expr.span.clone(), context)
+                    self.infer_index(obj, index, index_expr.span, context)
                 } else {
                     ast_factory::make_type(TypeKind::Error)
                 }
@@ -610,7 +606,7 @@ impl TypeChecker {
         if matches!(op, AssignmentOp::AssignDiv | AssignmentOp::AssignMod) {
             if let ExpressionKind::Literal(lit) = &rhs.node {
                 if lit.is_zero() {
-                    self.report_error("Division by zero".to_string(), rhs.span.clone());
+                    self.report_error("Division by zero".to_string(), rhs.span);
                 }
             }
         }
@@ -621,13 +617,17 @@ impl TypeChecker {
                     "Type mismatch in assignment: cannot assign {} to {}",
                     rhs_type, lhs_type
                 ),
-                span.clone(),
+                span,
             );
         }
 
         lhs_type
     }
 
+    /// Infers the return type of a function or constructor call.
+    ///
+    /// Handles positional and named arguments, generic type inference,
+    /// struct/class constructors via `Meta` types, and argument validation.
     fn infer_call(
         &mut self,
         func: &Expression,
@@ -645,20 +645,17 @@ impl TypeChecker {
             match &arg.node {
                 ExpressionKind::NamedArgument(name, value) => {
                     if named_args.contains_key(name) {
-                        self.report_error(
-                            format!("Duplicate argument '{}'", name),
-                            arg.span.clone(),
-                        );
+                        self.report_error(format!("Duplicate argument '{}'", name), arg.span);
                     } else {
                         let ty = self.infer_expression(value, context);
-                        named_args.insert(name.clone(), (value, ty, arg.span.clone()));
+                        named_args.insert(name.clone(), (value, ty, arg.span));
                     }
                 }
                 _ => {
                     if !named_args.is_empty() {
                         self.report_error(
                             "Positional arguments cannot follow named arguments".to_string(),
-                            arg.span.clone(),
+                            arg.span,
                         );
                     }
                     let ty = self.infer_expression(arg, context);
@@ -706,13 +703,13 @@ impl TypeChecker {
                                     "Type mismatch for argument '{}': expected {}, got {}",
                                     param.name, concrete_param_type, arg_type
                                 ),
-                                arg_expr.map(|e| e.span.clone()).unwrap_or(span.clone()),
+                                arg_expr.map(|e| e.span).unwrap_or(span),
                             );
                         }
                     } else if param.default_value.is_none() {
                         self.report_error(
                             format!("Missing argument for parameter '{}'", param.name),
-                            span.clone(),
+                            span,
                         );
                     }
                 }
@@ -724,7 +721,7 @@ impl TypeChecker {
                             params.len(),
                             positional_args.len()
                         ),
-                        span.clone(),
+                        span,
                     );
                 }
 
@@ -778,7 +775,7 @@ impl TypeChecker {
                                     "Cannot instantiate abstract class '{}'. Abstract classes cannot be instantiated directly.",
                                     name
                                 ),
-                                span.clone(),
+                                span,
                             );
                             return make_type(TypeKind::Error);
                         }
@@ -822,13 +819,13 @@ impl TypeChecker {
                                             "Type mismatch for field '{}': expected {}, got {}",
                                             field_name, concrete_field_type, arg_type
                                         ),
-                                        arg_expr.map(|e| e.span.clone()).unwrap_or(span.clone()),
+                                        arg_expr.map(|e| e.span).unwrap_or(span),
                                     );
                                 }
                             } else {
                                 self.report_error(
                                     format!("Missing argument for field '{}'", field_name),
-                                    span.clone(),
+                                    span,
                                 );
                             }
                         }
@@ -840,7 +837,7 @@ impl TypeChecker {
                                     def.fields.len(),
                                     positional_args.len()
                                 ),
-                                span.clone(),
+                                span,
                             );
                         }
 
@@ -870,7 +867,7 @@ impl TypeChecker {
             _ => {
                 self.report_error(
                     format!("Expression is not callable: {}", func_type),
-                    func.span.clone(),
+                    func.span,
                 );
                 make_type(TypeKind::Error)
             }
@@ -920,7 +917,7 @@ impl TypeChecker {
             if !self.are_compatible(&first_type, &element_type, context) {
                 self.report_error(
                     "List elements must have the same type".to_string(),
-                    element.span.clone(),
+                    element.span,
                 );
                 has_error = true;
             }
@@ -953,17 +950,11 @@ impl TypeChecker {
             let v_type = self.infer_expression(val, context);
 
             if !self.are_compatible(&key_type, &k_type, context) {
-                self.report_error(
-                    "Map keys must have the same type".to_string(),
-                    key.span.clone(),
-                );
+                self.report_error("Map keys must have the same type".to_string(), key.span);
                 has_error = true;
             }
             if !self.are_compatible(&val_type, &v_type, context) {
-                self.report_error(
-                    "Map values must have the same type".to_string(),
-                    val.span.clone(),
-                );
+                self.report_error("Map values must have the same type".to_string(), val.span);
                 has_error = true;
             }
         }
@@ -993,7 +984,7 @@ impl TypeChecker {
             if !self.are_compatible(&first_type, &element_type, context) {
                 self.report_error(
                     "Set elements must have the same type".to_string(),
-                    element.span.clone(),
+                    element.span,
                 );
                 has_error = true;
             }
@@ -1006,7 +997,7 @@ impl TypeChecker {
         if let TypeKind::Nullable(_) = first_type.kind {
             self.report_error(
                 "Set elements cannot be nullable".to_string(),
-                elements[0].span.clone(),
+                elements[0].span,
             );
         }
 
@@ -1024,6 +1015,10 @@ impl TypeChecker {
         make_type(TypeKind::Tuple(element_types))
     }
 
+    /// Infers the type of an index access expression (`obj[index]`).
+    ///
+    /// Supports list, map, tuple, string, and array indexing, as well as
+    /// range-based slicing for lists, strings, and homogeneous tuples.
     fn infer_index(
         &mut self,
         obj: &Expression,
@@ -1044,7 +1039,7 @@ impl TypeChecker {
                         if !matches!(range_inner.kind, TypeKind::Int) {
                             self.report_error(
                                 "Slice range must be of integer type".to_string(),
-                                index.span.clone(),
+                                index.span,
                             );
                             return make_type(TypeKind::Error);
                         }
@@ -1086,10 +1081,7 @@ impl TypeChecker {
         match obj_type.kind {
             TypeKind::List(inner_type_expr) => {
                 if !matches!(index_type.kind, TypeKind::Int) {
-                    self.report_error(
-                        "List index must be an integer".to_string(),
-                        index.span.clone(),
-                    );
+                    self.report_error("List index must be an integer".to_string(), index.span);
                     return make_type(TypeKind::Error);
                 }
                 self.resolve_type_expression(&inner_type_expr, context)
@@ -1097,7 +1089,7 @@ impl TypeChecker {
             TypeKind::Map(key_type_expr, val_type_expr) => {
                 let key_type = self.resolve_type_expression(&key_type_expr, context);
                 if !self.are_compatible(&key_type, &index_type, context) {
-                    self.report_error("Invalid map key type".to_string(), index.span.clone());
+                    self.report_error("Invalid map key type".to_string(), index.span);
                     return make_type(TypeKind::Error);
                 }
                 self.resolve_type_expression(&val_type_expr, context)
@@ -1120,10 +1112,7 @@ impl TypeChecker {
 
                 if is_homogeneous {
                     if !matches!(index_type.kind, TypeKind::Int) {
-                        self.report_error(
-                            "Tuple index must be an integer".to_string(),
-                            index.span.clone(),
-                        );
+                        self.report_error("Tuple index must be an integer".to_string(), index.span);
                         return make_type(TypeKind::Error);
                     }
                     // If homogeneous, we can return the type of the first element (or any element)
@@ -1138,18 +1127,7 @@ impl TypeChecker {
 
                     // If it's a literal, we can still check bounds
                     if let ExpressionKind::Literal(Literal::Integer(val)) = &index.node {
-                        let idx = match val {
-                            crate::ast::IntegerLiteral::I8(v) => *v as usize,
-                            crate::ast::IntegerLiteral::I16(v) => *v as usize,
-                            crate::ast::IntegerLiteral::I32(v) => *v as usize,
-                            crate::ast::IntegerLiteral::I64(v) => *v as usize,
-                            crate::ast::IntegerLiteral::I128(v) => *v as usize,
-                            crate::ast::IntegerLiteral::U8(v) => *v as usize,
-                            crate::ast::IntegerLiteral::U16(v) => *v as usize,
-                            crate::ast::IntegerLiteral::U32(v) => *v as usize,
-                            crate::ast::IntegerLiteral::U64(v) => *v as usize,
-                            crate::ast::IntegerLiteral::U128(v) => *v as usize,
-                        };
+                        let idx = val.to_usize();
                         if idx >= element_type_exprs.len() {
                             self.report_error("Tuple index out of bounds".to_string(), span);
                             return make_type(TypeKind::Error);
@@ -1160,18 +1138,7 @@ impl TypeChecker {
                 } else {
                     // For heterogeneous tuple, index must be a compile-time integer literal
                     if let ExpressionKind::Literal(Literal::Integer(val)) = &index.node {
-                        let idx = match val {
-                            crate::ast::IntegerLiteral::I8(v) => *v as usize,
-                            crate::ast::IntegerLiteral::I16(v) => *v as usize,
-                            crate::ast::IntegerLiteral::I32(v) => *v as usize,
-                            crate::ast::IntegerLiteral::I64(v) => *v as usize,
-                            crate::ast::IntegerLiteral::I128(v) => *v as usize,
-                            crate::ast::IntegerLiteral::U8(v) => *v as usize,
-                            crate::ast::IntegerLiteral::U16(v) => *v as usize,
-                            crate::ast::IntegerLiteral::U32(v) => *v as usize,
-                            crate::ast::IntegerLiteral::U64(v) => *v as usize,
-                            crate::ast::IntegerLiteral::U128(v) => *v as usize,
-                        };
+                        let idx = val.to_usize();
 
                         if idx < element_type_exprs.len() {
                             self.resolve_type_expression(&element_type_exprs[idx], context)
@@ -1183,7 +1150,7 @@ impl TypeChecker {
                         self.report_error(
                             "Tuple index must be an integer literal for heterogeneous tuples"
                                 .to_string(),
-                            index.span.clone(),
+                            index.span,
                         );
                         make_type(TypeKind::Error)
                     }
@@ -1191,10 +1158,7 @@ impl TypeChecker {
             }
             TypeKind::String => {
                 if !matches!(index_type.kind, TypeKind::Int) {
-                    self.report_error(
-                        "String index must be an integer".to_string(),
-                        index.span.clone(),
-                    );
+                    self.report_error("String index must be an integer".to_string(), index.span);
                     return make_type(TypeKind::Error);
                 }
                 make_type(TypeKind::String) // Indexing a string returns a string (char)
@@ -1207,6 +1171,10 @@ impl TypeChecker {
         }
     }
 
+    /// Infers the type of a member access expression (`obj.prop`).
+    ///
+    /// Handles tuple indexing, struct/class field access, enum variant access,
+    /// nullable/result built-in methods, and inheritance chain lookup.
     fn infer_member(
         &mut self,
         obj: &Expression,
@@ -1218,18 +1186,7 @@ impl TypeChecker {
 
         if let TypeKind::Tuple(element_types) = &obj_type.kind {
             if let ExpressionKind::Literal(Literal::Integer(val)) = &prop.node {
-                let idx = match val {
-                    crate::ast::IntegerLiteral::I8(v) => *v as usize,
-                    crate::ast::IntegerLiteral::I16(v) => *v as usize,
-                    crate::ast::IntegerLiteral::I32(v) => *v as usize,
-                    crate::ast::IntegerLiteral::I64(v) => *v as usize,
-                    crate::ast::IntegerLiteral::I128(v) => *v as usize,
-                    crate::ast::IntegerLiteral::U8(v) => *v as usize,
-                    crate::ast::IntegerLiteral::U16(v) => *v as usize,
-                    crate::ast::IntegerLiteral::U32(v) => *v as usize,
-                    crate::ast::IntegerLiteral::U64(v) => *v as usize,
-                    crate::ast::IntegerLiteral::U128(v) => *v as usize,
-                };
+                let idx = val.to_usize();
 
                 if idx < element_types.len() {
                     return self.resolve_type_expression(&element_types[idx], context);
@@ -1245,7 +1202,7 @@ impl TypeChecker {
         } else {
             self.report_error(
                 "Member property must be an identifier".to_string(),
-                prop.span.clone(),
+                prop.span,
             );
             return make_type(TypeKind::Error);
         };
@@ -1650,6 +1607,10 @@ impl TypeChecker {
         }
     }
 
+    /// Infers the type of a match expression.
+    ///
+    /// Validates exhaustiveness for enum subjects, checks pattern types,
+    /// and ensures all branch bodies produce compatible types.
     fn infer_match(
         &mut self,
         subject: &Expression,
@@ -1733,7 +1694,7 @@ impl TypeChecker {
                             name,
                             missing.join(", ")
                         ),
-                        span.clone(),
+                        span,
                     );
                 }
             }
@@ -1748,7 +1709,7 @@ impl TypeChecker {
         for branch in branches {
             context.enter_scope();
             for pattern in &branch.patterns {
-                self.check_pattern(pattern, &subject_type, context, span.clone());
+                self.check_pattern(pattern, &subject_type, context, span);
             }
 
             let body_type = self.infer_statement_type(&branch.body, context);
@@ -1761,7 +1722,7 @@ impl TypeChecker {
                             "Match branch types mismatch: expected {}, got {}",
                             first, body_type
                         ),
-                        span.clone(),
+                        span,
                     );
                 }
             } else {
@@ -1870,7 +1831,7 @@ impl TypeChecker {
                             "Invalid return type: expected {}, got {}",
                             expected, implicit_return_type
                         ),
-                        body.span.clone(),
+                        body.span,
                     );
                 }
             } else if !self.are_compatible(&expected, &implicit_return_type, context)
@@ -1881,7 +1842,7 @@ impl TypeChecker {
                         "Invalid return type: expected {}, got {}",
                         expected, implicit_return_type
                     ),
-                    body.span.clone(),
+                    body.span,
                 );
             }
             return_type_expr.clone()
@@ -1954,7 +1915,7 @@ impl TypeChecker {
         if !matches!(cond_type.kind, TypeKind::Boolean) {
             self.report_error(
                 format!("Conditional condition must be a boolean, got {}", cond_type),
-                cond_expr.span.clone(),
+                cond_expr.span,
             );
         }
 
@@ -1993,6 +1954,13 @@ impl TypeChecker {
         make_type(TypeKind::String)
     }
 
+    /// Validates a match pattern against the expected subject type.
+    ///
+    /// Binds pattern variables in the current scope and validates:
+    /// - Literal patterns against subject type
+    /// - Tuple destructuring with element count
+    /// - Enum variant patterns with binding count and generic substitution
+    /// - Regex patterns against string subjects
     fn check_pattern(
         &mut self,
         pattern: &Pattern,
@@ -2036,7 +2004,7 @@ impl TypeChecker {
                                 elem_types.len(),
                                 patterns.len()
                             ),
-                            span.clone(),
+                            span,
                         );
                         return;
                     }
@@ -2047,7 +2015,7 @@ impl TypeChecker {
                     for (i, pat) in patterns.iter().enumerate() {
                         let elem_type =
                             self.resolve_type_expression(&elem_types_cloned[i], context);
-                        self.check_pattern(pat, &elem_type, context, span.clone());
+                        self.check_pattern(pat, &elem_type, context, span);
                     }
                 } else {
                     self.report_error(
@@ -2069,7 +2037,7 @@ impl TypeChecker {
                         if !enum_def.variants.contains_key(member) {
                             self.report_error(
                                 format!("Enum '{}' has no variant '{}'", parent_name, member),
-                                span.clone(),
+                                span,
                             );
                         }
                         // Check if subject type matches the enum type
@@ -2125,7 +2093,7 @@ impl TypeChecker {
                         } else {
                             self.report_error(
                                 "Complex member patterns are not supported".to_string(),
-                                span.clone(),
+                                span,
                             );
                             return;
                         }
@@ -2160,7 +2128,7 @@ impl TypeChecker {
                                     variant_types.len(),
                                     bindings.len()
                                 ),
-                                span.clone(),
+                                span,
                             );
                             return;
                         }
@@ -2196,7 +2164,7 @@ impl TypeChecker {
                             } else {
                                 self.substitute_type(var_type, &generic_mapping)
                             };
-                            self.check_pattern(binding, &resolved_type, context, span.clone());
+                            self.check_pattern(binding, &resolved_type, context, span);
                         }
 
                         // Check if subject type matches the enum type
