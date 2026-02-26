@@ -16,6 +16,7 @@ Thank you for your interest in contributing to Miri! This guide will help you ge
 
    ```bash
    cargo test
+   cd src/runtime/core && cargo test
    ```
 
 ## Before Submitting
@@ -40,11 +41,20 @@ All Clippy warnings must be resolved.
 
 ### 3. Run Tests
 
+To test the main compiler and standard library:
+
 ```bash
 cargo test
 ```
 
-All tests must pass. If you're adding new functionality, include appropriate tests.
+To test the runtime components, you must explicitly change directories:
+
+```bash
+cd src/runtime/core
+cargo test
+```
+
+All tests across components must pass. If you're adding new functionality, include appropriate tests.
 
 ## Code Style
 

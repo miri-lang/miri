@@ -31,7 +31,7 @@ pub use transformation::*;
 /// The caller (Miri compiled code) is responsible for eventually freeing
 /// this pointer via [`miri_rt_string_free`].
 #[inline]
-fn into_raw_ptr(s: MiriString) -> *mut MiriString {
+pub(crate) fn into_raw_ptr(s: MiriString) -> *mut MiriString {
     Box::into_raw(Box::new(s))
 }
 

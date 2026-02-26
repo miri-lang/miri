@@ -9,11 +9,11 @@ use std::str;
 /// across the FFI boundary.
 ///
 /// # Memory Layout
-/// | Field      | Type       | Description                                      |
-/// |------------|------------|--------------------------------------------------|
+/// | Field      | Type       | Description                                          |
+/// |------------|------------|------------------------------------------------------|
 /// | `data`     | `*mut u8`  | Pointer to UTF-8 encoded bytes (not null-terminated) |
-/// | `len`      | `usize`    | Number of bytes in the string                    |
-/// | `capacity` | `usize`    | Allocated capacity in bytes                      |
+/// | `len`      | `usize`    | Number of bytes in the string                        |
+/// | `capacity` | `usize`    | Allocated capacity in bytes                          |
 ///
 /// # Ownership
 /// The `data` pointer is allocated via [`crate::alloc::miri_alloc`] and freed
@@ -40,7 +40,11 @@ impl MiriString {
     /// Creates a `MiriString` by copying the bytes from a Rust `&str`.
     ///
     /// Returns an empty `MiriString` if the input is empty or if allocation fails.
+    ///
+    /// Named `from_str` for ergonomics; `FromStr` trait is not implemented because
+    /// this constructor is infallible (returns empty on failure, never errors).
     #[must_use]
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         if s.is_empty() {
             return Self::new();

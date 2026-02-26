@@ -32,6 +32,9 @@ pub unsafe extern "C" fn miri_rt_string_char_count(ptr: *const MiriString) -> us
 }
 
 /// Returns 1 if the string is empty (or null), 0 otherwise.
+///
+/// # Safety
+/// - `ptr` must be a valid pointer to a `MiriString`, or null.
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_string_is_empty(ptr: *const MiriString) -> u8 {
     if ptr.is_null() {
@@ -98,10 +101,7 @@ pub unsafe extern "C" fn miri_rt_string_ends_with(
 /// # Safety
 /// - Both pointers must be valid `MiriString` pointers with valid UTF-8, or null.
 #[no_mangle]
-pub unsafe extern "C" fn miri_rt_string_equals(
-    a: *const MiriString,
-    b: *const MiriString,
-) -> u8 {
+pub unsafe extern "C" fn miri_rt_string_equals(a: *const MiriString, b: *const MiriString) -> u8 {
     let a_str = deref_as_str(a);
     let b_str = deref_as_str(b);
     bool_to_ffi(a_str == b_str)

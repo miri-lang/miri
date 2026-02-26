@@ -5,9 +5,8 @@ use tempfile::NamedTempFile;
 pub const BINARY_NAME: &str = pkg_name!();
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-#[allow(deprecated)]
 pub fn miri_cmd() -> Command {
-    Command::cargo_bin(BINARY_NAME).unwrap()
+    Command::new(assert_cmd::cargo_bin!("miri"))
 }
 
 pub struct CompilerResult {

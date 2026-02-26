@@ -211,10 +211,7 @@ pub unsafe extern "C" fn miri_rt_string_repeat(
 ///
 /// # Safety
 /// `ptr` must be a valid `MiriString` pointer or null.
-unsafe fn transform_str(
-    ptr: *const MiriString,
-    transform: fn(&str) -> String,
-) -> *mut MiriString {
+unsafe fn transform_str(ptr: *const MiriString, transform: fn(&str) -> String) -> *mut MiriString {
     if ptr.is_null() {
         return miri_rt_string_new();
     }

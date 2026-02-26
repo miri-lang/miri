@@ -119,9 +119,16 @@ The binary will be available at `target/release/miri`.
 
 ## Running Tests
 
-Run the full test suite:
+Run the full test suite for the compiler and standard library:
 
 ```bash
+cargo test
+```
+
+To run tests for the runtime components (like the Miri core runtime), navigate to the runtime directory:
+
+```bash
+cd src/runtime/core
 cargo test
 ```
 
