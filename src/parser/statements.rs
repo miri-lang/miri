@@ -3,7 +3,7 @@
 
 use crate::ast::factory as ast;
 use crate::ast::*;
-use crate::error::syntax::SyntaxError;
+use crate::error::syntax::{SyntaxError, SyntaxErrorKind};
 use crate::lexer::Token;
 
 use super::Parser;
@@ -200,7 +200,17 @@ impl<'source> Parser<'source> {
         accept_initializer: bool,
         is_shared: bool,
     ) -> Result<VariableDeclaration, SyntaxError> {
-        let name = self.parse_simple_identifier()?;
+        let name_expr = self.identifier()?;
+        let name_span = name_expr.span;
+        let name = if let ExpressionKind::Identifier(id, class_opt) = name_expr.node {
+            if let Some(class) = class_opt {
+                return Err(self
+                    .error_unexpected_token("a simple identifier", &format!("{}::{}", class, id)));
+            }
+            id
+        } else {
+            return Err(self.error_unexpected_token("identifier", &format!("{:?}", name_expr)));
+        };
 
         let typ = self.type_expression()?.map(Box::new);
 
@@ -218,8 +228,9 @@ impl<'source> Parser<'source> {
 
         // Constants must have an initializer
         if matches!(declaration_type, VariableDeclarationType::Constant) && initializer.is_none() {
-            return Err(self.error_unexpected_lookahead_token(
-                "'=' (constant declaration must have an initializer)",
+            return Err(SyntaxError::new(
+                SyntaxErrorKind::MissingConstantInitializer { name: name.clone() },
+                name_span,
             ));
         }
 

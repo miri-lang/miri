@@ -50,7 +50,7 @@ use crate::ast::*;
 use crate::error::syntax::Span;
 use crate::lexer::Lexer;
 use crate::parser::Parser;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
@@ -307,9 +307,9 @@ impl TypeChecker {
         _alias: &Option<Box<Expression>>,
         context: &mut Context,
     ) {
-        // 1. Extract path string
-        let path_str = match Self::extract_import_path(path) {
-            Some(p) => p,
+        // 1. Extract path string and import kind
+        let (path_str, import_kind) = match Self::extract_import_path_with_kind(path) {
+            Some(result) => result,
             None => {
                 self.report_error("Invalid import path".to_string(), path.span);
                 return;
@@ -386,8 +386,68 @@ impl TypeChecker {
         let old_module = self.current_module.clone();
         self.current_module = path_str.clone();
 
+        // Snapshot global_scope keys before loading the module so we can
+        // restrict visibility for selective imports afterwards.
+        let pre_import_globals: HashSet<String> = self.global_scope.keys().cloned().collect();
+        let pre_import_types: HashSet<String> = context
+            .type_definitions
+            .last()
+            .map(|scope| scope.keys().cloned().collect())
+            .unwrap_or_default();
+
         for stmt in &module_ast.body {
             self.check_statement(stmt, context);
+        }
+
+        // 6. For selective imports, restrict visibility to only the named items.
+        // The entire module was type-checked above (needed for internal consistency),
+        // but only the explicitly listed symbols should be visible to user code.
+        if let ImportPathKind::Multi(ref items) = import_kind {
+            let selected_names: HashSet<String> = items
+                .iter()
+                .filter_map(|(expr, _alias)| {
+                    if let ExpressionKind::Identifier(name, _) = &expr.node {
+                        Some(name.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Remove symbols added by this module that are not in the selective list
+            let module_name = &path_str;
+            self.global_scope.retain(|name, info| {
+                if info.module == *module_name
+                    && !pre_import_globals.contains(name)
+                    && !selected_names.contains(name)
+                {
+                    return false;
+                }
+                true
+            });
+
+            // Remove type definitions added by this module that are not selected
+            if let Some(scope) = context.type_definitions.last_mut() {
+                scope.retain(|name, _| {
+                    if !pre_import_types.contains(name) && !selected_names.contains(name) {
+                        return false;
+                    }
+                    true
+                });
+            }
+
+            // Also clean up the context's symbol scopes
+            if let Some(scope) = context.scopes.last_mut() {
+                scope.retain(|name, info| {
+                    if info.module == *module_name
+                        && !pre_import_globals.contains(name)
+                        && !selected_names.contains(name)
+                    {
+                        return false;
+                    }
+                    true
+                });
+            }
         }
 
         // Collect imported statements for MIR lowering and codegen
@@ -396,9 +456,13 @@ impl TypeChecker {
         self.current_module = old_module;
     }
 
-    fn extract_import_path(expr: &Expression) -> Option<String> {
+    /// Extracts the module path string and import kind from a use-statement expression.
+    ///
+    /// For `use system.io.{println}`, returns `("system.io", Multi([...]))`.
+    /// For `use system.io`, returns `("system.io", Simple)`.
+    fn extract_import_path_with_kind(expr: &Expression) -> Option<(String, ImportPathKind)> {
         match &expr.node {
-            ExpressionKind::ImportPath(segments, _) => {
+            ExpressionKind::ImportPath(segments, kind) => {
                 let parts: Vec<String> = segments
                     .iter()
                     .filter_map(|s| {
@@ -409,17 +473,17 @@ impl TypeChecker {
                         }
                     })
                     .collect();
-                Some(parts.join("."))
+                Some((parts.join("."), kind.clone()))
             }
-            ExpressionKind::Identifier(name, _) => Some(name.clone()),
+            ExpressionKind::Identifier(name, _) => Some((name.clone(), ImportPathKind::Simple)),
             ExpressionKind::Member(obj, member) => {
-                let parent = Self::extract_import_path(obj)?;
+                let (parent, kind) = Self::extract_import_path_with_kind(obj)?;
                 let member_name = if let ExpressionKind::Identifier(n, _) = &member.node {
                     n
                 } else {
                     return None;
                 };
-                Some(format!("{}.{}", parent, member_name))
+                Some((format!("{}.{}", parent, member_name), kind))
             }
             _ => None,
         }
@@ -746,11 +810,17 @@ impl TypeChecker {
                         // If inferred type is NOT nullable (and not None), warn
                         if !matches!(inferred_type.kind, TypeKind::Nullable(_)) {
                             self.report_warning(
+                                "W0003",
+                                "Unnecessary Nullable Declaration".to_string(),
                                 format!(
-                                    "Variable '{}' is immutable but declared as nullable. Consider removing '?' to make it non-nullable.",
+                                    "Unnecessary nullable declaration for variable '{}'",
                                     decl.name
                                 ),
                                 type_expr.span,
+                                Some(format!(
+                                    "Variable '{}' is immutable and its initializer is not nullable. Remove `?` from the type to simplify.",
+                                    decl.name
+                                )),
                             );
                         }
                     }

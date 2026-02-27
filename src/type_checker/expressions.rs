@@ -413,12 +413,27 @@ impl TypeChecker {
         // Check for double negation pattern (--x)
         if matches!(op, UnaryOp::Negate) {
             if let ExpressionKind::Unary(UnaryOp::Negate, _) = &operand.node {
-                self.report_warning("use of a double negation".to_string(), span);
+                self.report_warning(
+                    "W0001",
+                    "Unnecessary Double Negation".to_string(),
+                    "Unnecessary double negation".to_string(),
+                    span,
+                    Some(
+                        "The two negations cancel out. If this is intentional, consider simplifying to just the inner expression."
+                            .to_string(),
+                    ),
+                );
             }
         } else if matches!(op, UnaryOp::Decrement) {
             self.report_warning(
-                "decrement operator is treated as double negation".to_string(),
+                "W0002",
+                "Decrement Operator Not Supported".to_string(),
+                "Decrement operator not supported".to_string(),
                 span,
+                Some(
+                    "`--x` is parsed as two negations (`-(-x)`), not as a decrement. Miri does not have a decrement operator — use `x = x - 1` instead."
+                        .to_string(),
+                ),
             );
         }
 
@@ -573,10 +588,17 @@ impl TypeChecker {
                 if let ExpressionKind::Identifier(name, _) = &id_expr.node {
                     // 'self' is always mutable in class context (for constructor assignment)
                     if name != "self" && !context.is_mutable(name) {
-                        self.report_error(
-                            format!("Cannot assign to immutable variable '{}'", name),
-                            span,
-                        );
+                        if context.is_constant(name) {
+                            self.report_error(
+                                format!("Cannot assign to constant '{}'", name),
+                                span,
+                            );
+                        } else {
+                            self.report_error(
+                                format!("Cannot assign to immutable variable '{}'", name),
+                                span,
+                            );
+                        }
                     }
                     self.infer_identifier(name, id_expr.span, context)
                 } else {

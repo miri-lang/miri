@@ -278,6 +278,16 @@ impl Context {
         false
     }
 
+    /// Checks if a variable is a constant.
+    pub fn is_constant(&self, name: &str) -> bool {
+        for scope in self.scopes.iter().rev() {
+            if let Some(info) = scope.get(name) {
+                return info.is_constant;
+            }
+        }
+        false
+    }
+
     /// Marks a symbol as consumed. Returns true if it was already consumed.
     pub fn mark_consumed(&mut self, name: &str) -> bool {
         for scope in self.scopes.iter_mut().rev() {

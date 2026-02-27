@@ -34,7 +34,7 @@ fn const_assignment_is_error() {
 const x = 10
 x = 20
         ",
-        "Cannot assign to immutable variable",
+        "Cannot assign to constant",
     );
 }
 

@@ -37,7 +37,7 @@ fn test_binary_operations_on_integers() {
 
 #[test]
 fn test_double_negation() {
-    assert_compiler_warning("--5", "decrement operator is treated as double negation");
+    assert_compiler_warning("--5", "Decrement operator not supported");
 }
 
 #[test]

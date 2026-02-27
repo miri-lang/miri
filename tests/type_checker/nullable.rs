@@ -23,7 +23,7 @@ fn test_none_assignment_to_non_nullable_error() {
 fn test_nullable_immutable_warning() {
     type_checker_warning_test(
         "let x int? = 5",
-        "Variable 'x' is immutable but declared as nullable",
+        "Unnecessary nullable declaration for variable 'x'",
     );
 }
 

@@ -4,9 +4,10 @@
 use crate::ast::factory as ast;
 use crate::ast::types::TypeDeclarationKind;
 use crate::ast::*;
-use crate::error::syntax::{Span, SyntaxError};
+use crate::error::syntax::{Span, SyntaxError, SyntaxErrorKind};
 use crate::lexer::Token;
 
+use super::literals::unescape_string;
 use super::utils::{
     is_additive_op, is_assignment_op, is_equality_op, is_logical_and_op, is_logical_or_op,
     is_multiplicative_op, is_relational_op,
@@ -552,6 +553,26 @@ impl<'source> Parser<'source> {
             Some((Token::Match, _)) => self.match_expression(),
             Some((Token::FormattedStringStart(_), _)) => self.formatted_string_expression(),
             Some((Token::If, _)) | Some((Token::Unless, _)) => self.prefix_if_expression(),
+            Some((Token::Ampersand, span)) => {
+                let span = *span;
+                Err(SyntaxError::new(
+                    SyntaxErrorKind::UnsupportedCStyleOperator {
+                        found: "&&".to_string(),
+                        suggestion: "and".to_string(),
+                    },
+                    span,
+                ))
+            }
+            Some((Token::Pipe, span)) => {
+                let span = *span;
+                Err(SyntaxError::new(
+                    SyntaxErrorKind::UnsupportedCStyleOperator {
+                        found: "||".to_string(),
+                        suggestion: "or".to_string(),
+                    },
+                    span,
+                ))
+            }
             _ => Err(self.error_unexpected_lookahead_token("an expression")),
         }
     }
@@ -699,7 +720,8 @@ impl<'source> Parser<'source> {
         )?;
         if let Token::FormattedStringStart(start_text) = start_token {
             if !start_text.is_empty() {
-                parts.push(ast::literal(ast::string_literal(&start_text)));
+                let unescaped = unescape_string(&start_text);
+                parts.push(ast::literal(ast::string_literal(&unescaped)));
             }
         }
 
@@ -711,7 +733,8 @@ impl<'source> Parser<'source> {
             )?;
             if let Token::FormattedStringEnd(end_text) = end_token {
                 if !end_text.is_empty() {
-                    parts.push(ast::literal(ast::string_literal(&end_text)));
+                    let unescaped = unescape_string(&end_text);
+                    parts.push(ast::literal(ast::string_literal(&unescaped)));
                 }
             }
             return Ok(ast::f_string(parts));
@@ -727,7 +750,8 @@ impl<'source> Parser<'source> {
                 )?;
                 if let Token::FormattedStringMiddle(middle_text) = mid_token {
                     if !middle_text.is_empty() {
-                        parts.push(ast::literal(ast::string_literal(&middle_text)));
+                        let unescaped = unescape_string(&middle_text);
+                        parts.push(ast::literal(ast::string_literal(&unescaped)));
                     }
                 }
             } else if matches!(&self._lookahead, Some((Token::FormattedStringEnd(_), _))) {
@@ -737,7 +761,8 @@ impl<'source> Parser<'source> {
                 )?;
                 if let Token::FormattedStringEnd(end_text) = end_token {
                     if !end_text.is_empty() {
-                        parts.push(ast::literal(ast::string_literal(&end_text)));
+                        let unescaped = unescape_string(&end_text);
+                        parts.push(ast::literal(ast::string_literal(&unescaped)));
                     }
                 }
                 break;

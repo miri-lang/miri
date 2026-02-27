@@ -81,6 +81,17 @@ pub enum SyntaxErrorKind {
     UnknownRuntime {
         name: String,
     },
+
+    /// A constant declaration is missing its required initializer.
+    MissingConstantInitializer {
+        name: String,
+    },
+
+    /// A C-style operator was used instead of the Miri keyword equivalent.
+    UnsupportedCStyleOperator {
+        found: String,
+        suggestion: String,
+    },
 }
 
 impl SyntaxErrorKind {
@@ -279,6 +290,18 @@ impl SyntaxErrorKind {
                 message: Some(format!("Unknown runtime '{}'", name)),
                 help: Some("Known runtimes: \"core\".".to_string()),
             },
+            Self::MissingConstantInitializer { name } => ErrorProperties {
+                code: "E0033",
+                title: "Missing Constant Initializer",
+                message: Some(format!("Constant '{}' must be initialized with a value", name)),
+                help: Some("Add '= <value>' after the constant name, e.g. 'const X = 1'.".to_string()),
+            },
+            Self::UnsupportedCStyleOperator { found, suggestion } => ErrorProperties {
+                code: "E0034",
+                title: "Unsupported C-Style Operator",
+                message: Some(format!("'{}' is not a valid operator in Miri", found)),
+                help: Some(format!("Use '{}' instead of '{}'.", suggestion, found)),
+            },
         }
     }
 }
@@ -311,13 +334,8 @@ impl Reportable for SyntaxError {
 
     fn report(&self, source: &str) -> String {
         let props = self.kind.properties();
-        format_diagnostic(
-            source,
-            &self.span,
-            props.title,
-            "error",
-            props.help.as_deref(),
-        )
+        let message = props.message.as_deref().unwrap_or(props.title);
+        format_diagnostic(source, &self.span, message, "error", props.help.as_deref())
     }
 }
 

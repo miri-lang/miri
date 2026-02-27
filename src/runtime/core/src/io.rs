@@ -5,6 +5,35 @@
 
 use crate::string::MiriString;
 use std::io::{self, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Tracks whether stdout output needs a trailing newline at program exit.
+///
+/// Set to `true` by `miri_rt_print` (no newline) and `false` by `miri_rt_println`.
+/// Checked by an atexit handler to emit a final newline, preventing the shell
+/// (e.g. zsh) from appending a `%` marker to incomplete output lines.
+static STDOUT_NEEDS_NEWLINE: AtomicBool = AtomicBool::new(false);
+static ATEXIT_REGISTERED: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn flush_trailing_newline() {
+    if STDOUT_NEEDS_NEWLINE.load(Ordering::Relaxed) {
+        let _ = io::stdout().write_all(b"\n");
+        let _ = io::stdout().flush();
+    }
+}
+
+fn ensure_atexit_registered() {
+    if !ATEXIT_REGISTERED.swap(true, Ordering::Relaxed) {
+        unsafe {
+            libc_atexit(flush_trailing_newline);
+        }
+    }
+}
+
+extern "C" {
+    #[link_name = "atexit"]
+    fn libc_atexit(func: extern "C" fn()) -> i32;
+}
 
 /// Prints a `MiriString` to stdout without a trailing newline.
 ///
@@ -18,8 +47,11 @@ pub unsafe extern "C" fn miri_rt_print(s: *const MiriString) {
     if s.is_null() {
         return;
     }
-    print!("{}", (*s).as_str());
+    ensure_atexit_registered();
+    let text = (*s).as_str();
+    print!("{}", text);
     let _ = io::stdout().flush();
+    STDOUT_NEEDS_NEWLINE.store(!text.ends_with('\n'), Ordering::Relaxed);
 }
 
 /// Prints a `MiriString` to stdout with a trailing newline.
@@ -35,6 +67,7 @@ pub unsafe extern "C" fn miri_rt_println(s: *const MiriString) {
         return;
     }
     println!("{}", (*s).as_str());
+    STDOUT_NEEDS_NEWLINE.store(false, Ordering::Relaxed);
 }
 
 /// Prints a `MiriString` to stderr without a trailing newline.

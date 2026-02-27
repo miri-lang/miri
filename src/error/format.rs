@@ -137,6 +137,9 @@ pub fn format_diagnostic_full(source: &str, diag: &Diagnostic) -> String {
 }
 
 /// Formats an error message with source context and optional help text.
+///
+/// Delegates to [`format_diagnostic_full`] by constructing a [`Diagnostic`]
+/// internally, ensuring all output goes through a single code path.
 pub fn format_diagnostic(
     source: &str,
     span: &Span,
@@ -144,101 +147,31 @@ pub fn format_diagnostic(
     level: &str,
     help: Option<&str>,
 ) -> String {
+    let severity = match level {
+        "warning" => Severity::Warning,
+        "note" => Severity::Note,
+        _ => Severity::Error,
+    };
+
     // If the span points outside the user's source (e.g. from a stdlib module),
-    // format the diagnostic without source context to avoid panicking.
-    if span.start >= source.len() {
-        let level_color = if level == "warning" {
-            "\x1b[33m"
-        } else {
-            "\x1b[31m"
-        };
-        let mut out = format!("\x1b[1m{level_color}{level}: \x1b[0m{message}\n");
-        if let Some(h) = help {
-            out.push_str(&format!("  = help: {h}\n"));
-        }
-        return out;
-    }
-
-    let (line_num, col_num, line_str) = find_line_info(source, span.start);
-    let len = if span.end > span.start {
-        span.end - span.start
+    // omit it to avoid panicking in format_diagnostic_full.
+    let span = if span.start < source.len() {
+        Some(*span)
     } else {
-        1
+        None
     };
 
-    // Colors
-    let color_reset = "\x1b[0m";
-    let color_bold = "\x1b[1m";
-    let color_red = "\x1b[31m";
-    let color_yellow = "\x1b[33m";
-    let color_blue = "\x1b[34m";
-
-    let level_color = if level == "error" {
-        color_red
-    } else {
-        color_yellow
+    let diagnostic = Diagnostic {
+        severity,
+        code: None,
+        title: message.to_string(),
+        message: message.to_string(),
+        span,
+        help: help.map(|h| h.to_string()),
+        notes: Vec::new(),
     };
 
-    let gutter_width = line_num.to_string().len();
-    let padding = " ".repeat(col_num.saturating_sub(1));
-    let underline = "^".repeat(len);
-
-    let mut output = String::new();
-
-    // Header: error: message
-    output.push_str(&format!(
-        "{}{}{}: {}{}\n",
-        color_bold, level_color, level, color_reset, message
-    ));
-
-    // Location: --> line:col
-    output.push_str(&format!(
-        "{}-->{} line {}:{}\n",
-        color_blue, color_reset, line_num, col_num
-    ));
-
-    // Empty line with pipe
-    output.push_str(&format!(
-        "{} {} |{}\n",
-        " ".repeat(gutter_width),
-        color_blue,
-        color_reset
-    ));
-
-    // Code line
-    output.push_str(&format!(
-        "{} {} |{} {}\n",
-        color_blue, line_num, color_reset, line_str
-    ));
-
-    // Underline
-    output.push_str(&format!(
-        "{} {} |{} {}{}{}{}",
-        " ".repeat(gutter_width),
-        color_blue,
-        color_reset,
-        padding,
-        color_bold,
-        level_color,
-        underline
-    ));
-
-    // Help message inline with underline if short, or on next line
-    if let Some(h) = help {
-        output.push_str(&format!(" help: {}", h));
-    }
-    output.push_str(color_reset);
-    output.push('\n');
-
-    // Closing empty line with pipe
-    output.push_str(&format!(
-        "{} {} |{}\n",
-        " ".repeat(gutter_width),
-        color_blue,
-        color_reset
-    ));
-
-    output
+    format_diagnostic_full(source, &diagnostic)
 }
 
 /// Computes the Levenshtein edit distance between two strings.

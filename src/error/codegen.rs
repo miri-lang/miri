@@ -87,7 +87,7 @@ impl CodegenError {
                 code: "E0306",
                 title: "Backend Not Supported",
                 message: Some(format!(
-                    "{} backend is not yet supported. Stay tuned!",
+                    "{} backend is not yet available. Use the Cranelift backend (default) instead.",
                     backend
                 )),
                 help: None,

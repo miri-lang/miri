@@ -116,7 +116,7 @@ fn test_build_cpu_backend_llvm() {
         .assert()
         .failure()
         .stderr(predicates::str::contains(
-            "LLVM backend is not yet supported",
+            "LLVM backend is not yet available",
         ));
 }
 

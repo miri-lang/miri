@@ -52,7 +52,20 @@ impl CompilerError {
                 .collect::<Vec<_>>()
                 .join("\n"),
             CompilerError::Lowering(e) => e.report(source),
-            _ => format!("{}", self),
+            CompilerError::Io(e) => format!("\x1b[1m\x1b[31merror: \x1b[0mI/O Error: {}\n", e),
+            CompilerError::FileNotFound(path) => {
+                format!("\x1b[1m\x1b[31merror: \x1b[0mFile not found: {}\n", path)
+            }
+            CompilerError::Internal(msg) => format!(
+                "\x1b[1m\x1b[31merror: \x1b[0mInternal compiler error: {}\n  = help: Please report this at https://github.com/vshynkarenko/miri/issues\n",
+                msg
+            ),
+            CompilerError::Codegen(msg) => {
+                format!("\x1b[1m\x1b[31merror: \x1b[0mCode generation error: {}\n", msg)
+            }
+            CompilerError::Runtime(msg) => {
+                format!("\x1b[1m\x1b[31merror: \x1b[0mRuntime error: {}\n", msg)
+            }
         }
     }
 }

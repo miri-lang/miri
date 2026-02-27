@@ -356,6 +356,43 @@ print(s.trim().to_lower())
 }
 
 #[test]
+fn test_string_escape_newline() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+print("line1\nline2")
+    "#,
+        "line1\nline2",
+    );
+}
+
+#[test]
+fn test_string_escape_tab() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+print("col1\tcol2")
+    "#,
+        "col1\tcol2",
+    );
+}
+
+#[test]
+fn test_formatted_string_escape_newline() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+let x = 42
+print(f"value:\t{x}\n")
+    "#,
+        "value:\t42\n",
+    );
+}
+
+#[test]
 fn test_string_invalid_method_error() {
     assert_compiler_error(
         r#"

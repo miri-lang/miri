@@ -97,25 +97,38 @@ impl InterpreterErrorKind {
                 message: Some(format!("Invalid operand for {}: {}", operation, operand)),
                 help: Some("Ensure the operand is valid for the operation.".to_string()),
             },
-            Self::UndefinedLocal(idx) => ErrorProperties {
+            Self::UndefinedLocal(_) => ErrorProperties {
                 code: "E0406",
                 title: "Undefined Local Variable",
-                message: Some(format!("Undefined local variable: _{}", idx)),
-                help: Some("Internal error: Local variable accessed but not defined.".to_string()),
-            },
-            Self::UninitializedLocal(idx) => ErrorProperties {
-                code: "E0407",
-                title: "Uninitialized Local Variable",
-                message: Some(format!("Uninitialized local variable: _{}", idx)),
+                message: Some(
+                    "A variable was used but was never defined. This is an internal compiler error — please report it."
+                        .to_string(),
+                ),
                 help: Some(
-                    "Internal error: Local variable accessed before initialization.".to_string(),
+                    "Please report this at https://github.com/vshynkarenko/miri/issues".to_string(),
                 ),
             },
-            Self::InvalidBlock(idx) => ErrorProperties {
+            Self::UninitializedLocal(_) => ErrorProperties {
+                code: "E0407",
+                title: "Uninitialized Local Variable",
+                message: Some(
+                    "A variable was used before being initialized. This is an internal compiler error — please report it."
+                        .to_string(),
+                ),
+                help: Some(
+                    "Please report this at https://github.com/vshynkarenko/miri/issues".to_string(),
+                ),
+            },
+            Self::InvalidBlock(_) => ErrorProperties {
                 code: "E0408",
                 title: "Invalid Block",
-                message: Some(format!("Invalid basic block: bb{}", idx)),
-                help: Some("Internal error: Jump to a non-existent basic block.".to_string()),
+                message: Some(
+                    "Execution reached an invalid code path. This is an internal compiler error — please report it."
+                        .to_string(),
+                ),
+                help: Some(
+                    "Please report this at https://github.com/vshynkarenko/miri/issues".to_string(),
+                ),
             },
             Self::StackOverflow => ErrorProperties {
                 code: "E0409",
@@ -133,7 +146,9 @@ impl InterpreterErrorKind {
                 code: "E0411",
                 title: "Internal Error",
                 message: Some(format!("Internal error: {}", msg)),
-                help: Some("Please report this issue to the Miri developers.".to_string()),
+                help: Some(
+                    "Please report this at https://github.com/vshynkarenko/miri/issues".to_string(),
+                ),
             },
         }
     }

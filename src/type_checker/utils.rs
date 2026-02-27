@@ -568,16 +568,23 @@ impl TypeChecker {
             .push(TypeError::custom(message, span, Some(help)));
     }
 
-    /// Reports a type warning.
-    pub(crate) fn report_warning(&mut self, message: String, span: Span) {
+    /// Reports a type warning with an error code, title, message, and help text.
+    pub(crate) fn report_warning(
+        &mut self,
+        code: &'static str,
+        title: String,
+        message: String,
+        span: Span,
+        help: Option<String>,
+    ) {
         use crate::error::diagnostic::{Diagnostic, Severity};
         self.warnings.push(Diagnostic {
             severity: Severity::Warning,
-            code: None,
-            title: message.clone(),
+            code: Some(code),
+            title,
             message,
             span: Some(span),
-            help: None,
+            help,
             notes: Vec::new(),
         });
     }

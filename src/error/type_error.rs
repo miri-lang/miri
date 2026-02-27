@@ -131,7 +131,7 @@ impl TypeErrorKind {
                 ),
             },
             Self::Custom { message, .. } => ErrorProperties {
-                code: "E0101",
+                code: "E0110",
                 title: "Type Error",
                 message: Some(message.clone()),
                 help: None,

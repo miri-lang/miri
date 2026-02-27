@@ -25,7 +25,7 @@ fn assert_example_error(source: &str, expected_fragments: &[&str]) {
 fn example_01_syntax_error() {
     assert_example_error(
         include_str!("../examples/incorrect/01_syntax_error.mi"),
-        &["Unexpected Token"],
+        &["Expected an expression, but found end of expression"],
     );
 }
 

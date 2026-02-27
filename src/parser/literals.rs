@@ -10,6 +10,38 @@ use crate::lexer::Token;
 
 use super::Parser;
 
+/// Processes escape sequences in a string literal, returning a `Cow`
+/// to avoid allocation when no escape sequences are present.
+pub(crate) fn unescape_string(s: &str) -> Cow<'_, str> {
+    if !s.contains('\\') {
+        return Cow::Borrowed(s);
+    }
+
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            match chars.next() {
+                Some('n') => result.push('\n'),
+                Some('t') => result.push('\t'),
+                Some('r') => result.push('\r'),
+                Some('\\') => result.push('\\'),
+                Some('0') => result.push('\0'),
+                Some('\'') => result.push('\''),
+                Some('"') => result.push('"'),
+                Some(other) => {
+                    result.push('\\');
+                    result.push(other);
+                }
+                None => result.push('\\'),
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    Cow::Owned(result)
+}
+
 /// Strips underscore separators from a numeric literal, returning a `Cow`
 /// to avoid allocation when no underscores are present.
 fn strip_underscores(s: &str) -> Cow<'_, str> {
@@ -202,7 +234,8 @@ impl<'source> Parser<'source> {
                     str_value = &str_value[1..str_value.len() - 1];
                 }
 
-                let literal = ast::string_literal(str_value);
+                let unescaped = unescape_string(str_value);
+                let literal = ast::string_literal(&unescaped);
                 Ok(literal)
             }
             Err(e) => Err(e),

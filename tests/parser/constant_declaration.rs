@@ -62,9 +62,8 @@ fn const_boolean_literal() {
 fn const_without_initializer_is_error() {
     parser_error_test(
         "const x",
-        &SyntaxErrorKind::UnexpectedToken {
-            expected: "'=' (constant declaration must have an initializer)".to_string(),
-            found: "end of file".to_string(),
+        &SyntaxErrorKind::MissingConstantInitializer {
+            name: "x".to_string(),
         },
     );
 }
@@ -73,9 +72,8 @@ fn const_without_initializer_is_error() {
 fn const_typed_without_initializer_is_error() {
     parser_error_test(
         "const x i32",
-        &SyntaxErrorKind::UnexpectedToken {
-            expected: "'=' (constant declaration must have an initializer)".to_string(),
-            found: "end of file".to_string(),
+        &SyntaxErrorKind::MissingConstantInitializer {
+            name: "x".to_string(),
         },
     );
 }

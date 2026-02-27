@@ -28,6 +28,7 @@ pub mod nullable;
 pub mod rawptr;
 pub mod result;
 pub mod runtime_function;
+pub mod selective_import;
 pub mod self_super;
 pub mod set;
 pub mod shadowing;

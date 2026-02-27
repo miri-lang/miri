@@ -64,14 +64,18 @@ impl LoweringErrorKind {
                 title: "Unsupported Expression",
                 message: Some(format!("Unsupported expression: {}", desc)),
                 help: Some(
-                    "This expression type is not yet supported in MIR lowering.".to_string(),
+                    "This expression is not yet supported by the compiler. Try rewriting it using simpler constructs."
+                        .to_string(),
                 ),
             },
             Self::UnsupportedStatement { desc } => ErrorProperties {
                 code: "E0201",
                 title: "Unsupported Statement",
                 message: Some(format!("Unsupported statement: {}", desc)),
-                help: Some("This statement type is not yet supported in MIR lowering.".to_string()),
+                help: Some(
+                    "This statement is not yet supported by the compiler. Try rewriting it using simpler constructs."
+                        .to_string(),
+                ),
             },
             Self::UndefinedVariable { name } => ErrorProperties {
                 code: "E0202",
@@ -79,11 +83,16 @@ impl LoweringErrorKind {
                 message: Some(format!("Undefined variable: {}", name)),
                 help: Some("Ensure the variable is defined before use.".to_string()),
             },
-            Self::TypeNotFound { expr_id } => ErrorProperties {
+            Self::TypeNotFound { .. } => ErrorProperties {
                 code: "E0203",
                 title: "Type Not Found",
-                message: Some(format!("Type not found for expression ID {}", expr_id)),
-                help: Some("This indicates an internal type checking failure.".to_string()),
+                message: Some(
+                    "Could not determine the type of this expression. This is an internal compiler error — please report it."
+                        .to_string(),
+                ),
+                help: Some(
+                    "Please report this at https://github.com/vshynkarenko/miri/issues".to_string(),
+                ),
             },
             Self::BreakOutsideLoop => ErrorProperties {
                 code: "E0204",
@@ -107,7 +116,9 @@ impl LoweringErrorKind {
                 code: "E0207",
                 title: "Unsupported Operator",
                 message: Some(format!("Unsupported operator: {}", op)),
-                help: Some("This operator is not yet supported in MIR lowering.".to_string()),
+                help: Some(
+                    "Supported operators: +, -, *, /, %, ==, !=, <, >, <=, >=, &&, ||.".to_string(),
+                ),
             },
             Self::UnsupportedRangeType => ErrorProperties {
                 code: "E0208",
@@ -131,7 +142,10 @@ impl LoweringErrorKind {
                 code: "E0210",
                 title: "Unsupported Type",
                 message: Some(format!("Unsupported type: {}", desc)),
-                help: Some("This type is not yet supported in MIR lowering.".to_string()),
+                help: Some(
+                    "This type is not yet supported by the compiler. Use a supported type instead."
+                        .to_string(),
+                ),
             },
             Self::MissingStructField { field, struct_name } => ErrorProperties {
                 code: "E0211",

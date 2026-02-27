@@ -2,7 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use serde::Serialize;
 use std::fs;
 use std::path::PathBuf;
@@ -32,7 +32,7 @@ pub fn main() -> Result<()> {
             } => run_tests(filter, format, dir, cli.verbose),
         },
         None => {
-            println!("TODO: print help");
+            Cli::command().print_help()?;
             Ok(())
         }
     }
@@ -102,7 +102,15 @@ fn check_file(path: PathBuf, _verbose: u8) -> Result<()> {
                     miri::error::format::format_diagnostic_full(&source, warning)
                 );
             }
-            println!("Check passed. No errors found.");
+            let warning_count = result.type_checker.warnings.len();
+            if warning_count > 0 {
+                println!(
+                    "Check passed. No errors found. {} warning(s) emitted.",
+                    warning_count
+                );
+            } else {
+                println!("Check passed. No errors or warnings found.");
+            }
             Ok(())
         }
         Err(e) => {

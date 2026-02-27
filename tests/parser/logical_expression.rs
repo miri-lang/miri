@@ -144,3 +144,36 @@ fn test_error_on_missing_rhs_logical() {
     // The parser should fail if a logical operator is not followed by an expression.
     parser_error_test("a or", &SyntaxErrorKind::UnexpectedEOF);
 }
+
+#[test]
+fn test_error_on_double_ampersand_suggests_and() {
+    parser_error_test(
+        "a && b",
+        &SyntaxErrorKind::UnsupportedCStyleOperator {
+            found: "&&".to_string(),
+            suggestion: "and".to_string(),
+        },
+    );
+}
+
+#[test]
+fn test_error_on_double_pipe_suggests_or() {
+    parser_error_test(
+        "a || b",
+        &SyntaxErrorKind::UnsupportedCStyleOperator {
+            found: "||".to_string(),
+            suggestion: "or".to_string(),
+        },
+    );
+}
+
+#[test]
+fn test_error_on_double_ampersand_in_complex_expression() {
+    parser_error_test(
+        "x >= 300 && x < 400",
+        &SyntaxErrorKind::UnsupportedCStyleOperator {
+            found: "&&".to_string(),
+            suggestion: "and".to_string(),
+        },
+    );
+}
