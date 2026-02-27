@@ -1,0 +1,115 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+//! Expression lowering - converts AST expressions to MIR.
+
+use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::types::{Type, TypeKind};
+use crate::error::lowering::LoweringError;
+use crate::mir::{
+    AggregateKind, Constant, Dimension, GpuIntrinsic, Operand, Place, Rvalue,
+    StatementKind as MirStatementKind,
+};
+
+use std::rc::Rc;
+
+use crate::mir::lowering::context::LoweringContext;
+use crate::mir::lowering::control_flow::lower_call;
+use crate::mir::lowering::expression::lower_expression;
+use crate::mir::lowering::helpers::resolve_type;
+
+pub(crate) fn lower_call_expr(
+    ctx: &mut LoweringContext,
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let ExpressionKind::Call(func, args) = &expr.node else {
+        unreachable!()
+    };
+    // Check for legacy GPU intrinsic function names (gpu_thread_idx_x etc.)
+    if let ExpressionKind::Identifier(name, _) = &func.node {
+        let intrinsic_rvalue = match name.as_str() {
+            "gpu_thread_idx_x" => Some(Rvalue::GpuIntrinsic(GpuIntrinsic::ThreadIdx(Dimension::X))),
+            "gpu_thread_idx_y" => Some(Rvalue::GpuIntrinsic(GpuIntrinsic::ThreadIdx(Dimension::Y))),
+            "gpu_thread_idx_z" => Some(Rvalue::GpuIntrinsic(GpuIntrinsic::ThreadIdx(Dimension::Z))),
+            "gpu_block_idx_x" => Some(Rvalue::GpuIntrinsic(GpuIntrinsic::BlockIdx(Dimension::X))),
+            "gpu_block_idx_y" => Some(Rvalue::GpuIntrinsic(GpuIntrinsic::BlockIdx(Dimension::Y))),
+            "gpu_block_idx_z" => Some(Rvalue::GpuIntrinsic(GpuIntrinsic::BlockIdx(Dimension::Z))),
+            _ => None,
+        };
+
+        if let Some(rvalue) = intrinsic_rvalue {
+            let (target, ret_op) = if let Some(ref d) = dest {
+                (d.clone(), Operand::Copy(d.clone()))
+            } else {
+                let temp = ctx.push_temp(Type::new(TypeKind::Int, expr.span), expr.span);
+                (Place::new(temp), Operand::Copy(Place::new(temp)))
+            };
+            ctx.push_statement(crate::mir::Statement {
+                kind: MirStatementKind::Assign(target, rvalue),
+                span: expr.span,
+            });
+            return Ok(ret_op);
+        }
+    }
+
+    // Check for enum variant with associated values (e.g., Event.Click(1, 2))
+    if let ExpressionKind::Member(enum_expr, variant_expr) = &func.node {
+        if let ExpressionKind::Identifier(type_name, _) = &enum_expr.node {
+            if let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) =
+                ctx.type_checker.global_type_definitions.get(type_name)
+            {
+                if let ExpressionKind::Identifier(variant_name, _) = &variant_expr.node {
+                    if let Some((discriminant, _)) = enum_def
+                        .variants
+                        .iter()
+                        .enumerate()
+                        .find(|(_, (name, _))| name.as_str() == variant_name)
+                    {
+                        // Variant with associated values.
+                        // Create discriminant constant
+                        let discr_op = Operand::Constant(Box::new(Constant {
+                            span: expr.span,
+                            ty: Type::new(TypeKind::Int, expr.span),
+                            literal: crate::ast::literal::Literal::Integer(
+                                crate::ast::literal::IntegerLiteral::I32(discriminant as i32),
+                            ),
+                        }));
+
+                        // Lower all arguments
+                        let mut ops = vec![discr_op];
+                        for arg in args {
+                            ops.push(lower_expression(ctx, arg, None)?);
+                        }
+
+                        // DPS: use the caller-provided destination if given,
+                        // otherwise allocate a fresh temp.
+                        let target = if let Some(d) = dest {
+                            d
+                        } else {
+                            let ty = resolve_type(ctx.type_checker, expr);
+                            Place::new(ctx.push_temp(ty, expr.span))
+                        };
+
+                        ctx.push_statement(crate::mir::Statement {
+                            kind: MirStatementKind::Assign(
+                                target.clone(),
+                                Rvalue::Aggregate(
+                                    AggregateKind::Enum(
+                                        Rc::from(type_name.as_str()),
+                                        Rc::from(variant_name.as_str()),
+                                    ),
+                                    ops,
+                                ),
+                            ),
+                            span: expr.span,
+                        });
+                        return Ok(Operand::Copy(target));
+                    }
+                }
+            }
+        }
+    }
+
+    lower_call(ctx, &expr.span, expr.id, func, args, dest)
+}

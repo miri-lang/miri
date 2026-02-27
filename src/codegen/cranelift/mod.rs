@@ -7,6 +7,8 @@
 //! Cranelift is a fast code generator suitable for both JIT and AOT compilation.
 
 pub mod layout;
+pub mod translate_rvalue;
+pub mod translate_statement;
 mod translator;
 mod types;
 

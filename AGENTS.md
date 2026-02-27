@@ -41,5 +41,6 @@ Before proposing or completing a change, you must verify your work by running:
 ## 6. Workflow
 - When fixing Rust code, never use broad sed commands to apply changes. Always use targeted Edit tool operations on specific lines to avoid breaking valid code.
 - When implementing multi-phase features (runtime modules, stdlib, codegen), complete one phase fully with passing tests before starting the next. Do not start a new phase if the current one has compilation errors.
+- When creating temporary files (e.g. scripts, backup copies), always create them in the `.tmp/` directory and remove them after use.
 
 By absolutely adhering to these rules, you will maintain the zero-cost abstractions, representational safety, and immense code quality required for the Miri compiler.
