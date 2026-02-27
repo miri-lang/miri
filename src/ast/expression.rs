@@ -11,6 +11,16 @@ use crate::ast::types::{Type, TypeDeclarationKind};
 use crate::error::syntax::Span;
 use std::fmt;
 
+/// Data for a lambda expression, boxed to reduce `ExpressionKind` enum size.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct LambdaData {
+    pub generics: Option<Vec<Expression>>,
+    pub params: Vec<Parameter>,
+    pub return_type: Option<Box<Expression>>,
+    pub body: Box<Statement>,
+    pub properties: FunctionProperties,
+}
+
 /// The kind of range expression.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RangeExpressionType {
@@ -127,13 +137,8 @@ pub enum ExpressionKind {
     StructMember(Box<Expression>, Box<Expression>),
 
     /// A lambda function (e.g., `fn (x int) int: x + 1`).
-    Lambda(
-        Option<Vec<Expression>>,
-        Vec<Parameter>,
-        Option<Box<Expression>>,
-        Box<Statement>,
-        FunctionProperties,
-    ),
+    /// Boxed to reduce enum size since lambda data is large.
+    Lambda(Box<LambdaData>),
 
     /// A list literal (e.g., `[1, 2, 3]`).
     List(Vec<Expression>),

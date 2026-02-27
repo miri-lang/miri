@@ -6,6 +6,14 @@ use crate::ast::expression::Expression;
 use crate::error::syntax::Span;
 use std::fmt;
 
+/// Data for a function type, boxed to reduce `TypeKind` enum size.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FunctionTypeData {
+    pub generics: Option<Vec<Expression>>,
+    pub params: Vec<Parameter>,
+    pub return_type: Option<Box<Expression>>,
+}
+
 /// Represents a type expression
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Type {
@@ -82,12 +90,8 @@ pub enum TypeKind {
     Result(Box<Expression>, Box<Expression>),
     /// Future type (e.g., `future<i32>`).
     Future(Box<Expression>),
-    /// Function type (e.g., `fn<T>(x int) float`).
-    Function(
-        Option<Vec<Expression>>,
-        Vec<Parameter>,
-        Option<Box<Expression>>,
-    ),
+    /// Function type (e.g., `fn<T>(x int) float`). Boxed to reduce enum size.
+    Function(Box<FunctionTypeData>),
 
     /// Generic type (e.g., `T extends SomeClass`).
     Generic(String, Option<Box<Type>>, TypeDeclarationKind),
@@ -152,7 +156,7 @@ impl TypeKind {
             | TypeKind::Set(_)
             | TypeKind::Result(_, _)
             | TypeKind::Future(_)
-            | TypeKind::Function(_, _, _)
+            | TypeKind::Function(_)
             | TypeKind::Generic(_, _, _)
             | TypeKind::Custom(_, _)
             | TypeKind::Meta(_) => false,
@@ -208,16 +212,16 @@ impl fmt::Display for TypeKind {
             TypeKind::Set(inner) => write!(f, "Set({})", inner.node),
             TypeKind::Result(ok, err) => write!(f, "Result({}, {})", ok.node, err.node),
             TypeKind::Future(inner) => write!(f, "Future({})", inner.node),
-            TypeKind::Function(_, params, ret) => {
+            TypeKind::Function(func) => {
                 write!(f, "Function(")?;
-                for (i, p) in params.iter().enumerate() {
+                for (i, p) in func.params.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
                     write!(f, "{}", p.typ.node)?;
                 }
                 write!(f, ")")?;
-                if let Some(ret) = ret {
+                if let Some(ret) = &func.return_type {
                     write!(f, " -> {}", ret.node)?;
                 }
                 Ok(())

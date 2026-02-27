@@ -2,7 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::ast::factory as ast;
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::{FunctionTypeData, Type, TypeKind};
 use crate::ast::*;
 use crate::error::syntax::SyntaxError;
 use crate::lexer::Token;
@@ -198,7 +198,11 @@ impl<'source> Parser<'source> {
                 self.eat_token(&Token::RParen)?;
 
                 let return_type = self.return_type_expression()?;
-                let typ = TypeKind::Function(generic_types, parameters, return_type);
+                let typ = TypeKind::Function(Box::new(FunctionTypeData {
+                    generics: generic_types,
+                    params: parameters,
+                    return_type,
+                }));
                 Some(ast::type_expr_non_null(ast::make_type(typ)))
             }
             _ => return Ok(None),
@@ -297,7 +301,11 @@ impl<'source> Parser<'source> {
                 self.eat_token(&Token::RParen)?;
 
                 let return_type = self.return_type_expression()?;
-                ast::make_type(TypeKind::Function(generic_types, parameters, return_type))
+                ast::make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                    generics: generic_types,
+                    params: parameters,
+                    return_type,
+                })))
             }
             _ => match &self._lookahead {
                 Some((Token::LessThan, _)) => {

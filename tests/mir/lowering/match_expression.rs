@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::mir::utils::{mir_snapshot_contains_test, mir_snapshot_test};
+use crate::mir::utils::{mir_lower_code, mir_snapshot_contains_test, mir_snapshot_test};
+use miri::ast::types::TypeKind;
+use miri::mir::StatementKind;
 
 #[test]
 fn test_match_literal_patterns() {
@@ -239,5 +241,71 @@ fn main()
         _: 0
 "#,
         &["// x", "// result", "const Integer(I8(100))"],
+    );
+}
+
+// =============================================================================
+// Regression tests for bind_pattern bug fixes
+// =============================================================================
+
+/// Regression test: tuple pattern destructuring must assign element types,
+/// not the whole tuple type. Previously, each bound variable incorrectly
+/// received the full tuple type (e.g., Tuple([int, string])) instead of the
+/// individual element type (e.g., int or string).
+#[test]
+fn test_tuple_pattern_element_types() {
+    let body = mir_lower_code(
+        r#"
+fn main()
+    let t = (10, 20)
+    match t
+        (a, b): a
+"#,
+    );
+
+    // Find locals named "a" and "b" and verify they have int type, not tuple type
+    for decl in &body.local_decls {
+        if decl.name.as_deref() == Some("a") || decl.name.as_deref() == Some("b") {
+            assert!(
+                !matches!(decl.ty.kind, TypeKind::Tuple(_)),
+                "Tuple pattern variable '{}' should have element type, not tuple type. Got: {:?}",
+                decl.name.as_deref().unwrap_or("?"),
+                decl.ty.kind
+            );
+        }
+    }
+}
+
+/// Regression test: enum variant pattern destructuring must use push_local
+/// (which tracks scope) instead of directly inserting into variable_map.
+/// This ensures StorageDead is emitted when the scope exits.
+#[test]
+fn test_enum_variant_binding_scope_tracking() {
+    let body = mir_lower_code(
+        r#"
+enum Event: Click(int), Move(int)
+fn main()
+    let e = Event.Click(42)
+    match e
+        Event.Click(x): x
+        Event.Move(y): y
+"#,
+    );
+
+    // Verify that StorageLive is emitted for pattern-bound variables
+    // (push_local emits StorageLive, push_temp does not when used with manual insert)
+    let has_storage_live_for_binding = body.basic_blocks.iter().any(|bb| {
+        bb.statements.iter().any(|stmt| {
+            if let StatementKind::StorageLive(place) = &stmt.kind {
+                let name = body.local_decls[place.local.0].name.as_deref();
+                name == Some("x") || name == Some("y")
+            } else {
+                false
+            }
+        })
+    });
+    assert!(
+        has_storage_live_for_binding,
+        "Expected StorageLive for pattern-bound variables (x, y) to ensure proper scope tracking"
     );
 }

@@ -14,10 +14,12 @@ use crate::mir::{
     TerminatorKind, UnOp,
 };
 
+use std::rc::Rc;
+
 use super::context::LoweringContext;
 use super::control_flow::lower_call;
 use super::helpers::{
-    bind_pattern, literal_to_u128, lower_as_return, lower_to_local, resolve_type,
+    bind_pattern, ensure_place, literal_to_u128, lower_as_return, lower_to_local, resolve_type,
 };
 use super::statement::lower_statement;
 
@@ -246,21 +248,7 @@ pub fn lower_expression(
                                     if let Some(idx) =
                                         def.fields.iter().position(|(f, _, _)| f == field_name)
                                     {
-                                        // Ensure obj is a Place
-                                        let obj_place = match obj_operand {
-                                            Operand::Copy(p) | Operand::Move(p) => p,
-                                            Operand::Constant(c) => {
-                                                let temp = ctx.push_temp(c.ty.clone(), obj.span);
-                                                ctx.push_statement(crate::mir::Statement {
-                                                    kind: MirStatementKind::Assign(
-                                                        Place::new(temp),
-                                                        Rvalue::Use(Operand::Constant(c)),
-                                                    ),
-                                                    span: obj.span,
-                                                });
-                                                Place::new(temp)
-                                            }
-                                        };
+                                        let obj_place = ensure_place(ctx, obj_operand, obj.span);
 
                                         // Create field projection
                                         let mut target_place = obj_place;
@@ -355,21 +343,7 @@ pub fn lower_expression(
                         // Get the object operand
                         let obj_operand = lower_expression(ctx, obj, None)?;
 
-                        // Ensure obj is a Place
-                        let obj_place = match obj_operand {
-                            Operand::Copy(p) | Operand::Move(p) => p,
-                            Operand::Constant(c) => {
-                                let temp = ctx.push_temp(c.ty.clone(), obj.span);
-                                ctx.push_statement(crate::mir::Statement {
-                                    kind: MirStatementKind::Assign(
-                                        Place::new(temp),
-                                        Rvalue::Use(Operand::Constant(c)),
-                                    ),
-                                    span: obj.span,
-                                });
-                                Place::new(temp)
-                            }
-                        };
+                        let obj_place = ensure_place(ctx, obj_operand, obj.span);
 
                         // Lower index expression
                         let index_operand = lower_expression(ctx, idx, None)?;
@@ -482,7 +456,12 @@ pub fn lower_expression(
                 // For now, implement as a call to built-in `contains` function
                 // Backend will handle the actual membership test
                 let result_ty = Type::new(TypeKind::Boolean, expr.span);
-                let temp = ctx.push_temp(result_ty, expr.span);
+                let (destination, ret_op) = if let Some(d) = dest {
+                    (d.clone(), Operand::Copy(d))
+                } else {
+                    let temp = ctx.push_temp(result_ty, expr.span);
+                    (Place::new(temp), Operand::Copy(Place::new(temp)))
+                };
 
                 // Create call to __contains(collection, element) -> bool
                 let contains_fn = Operand::Constant(Box::new(Constant {
@@ -496,14 +475,14 @@ pub fn lower_expression(
                     TerminatorKind::Call {
                         func: contains_fn,
                         args: vec![rhs_op, lhs_op], // (collection, element)
-                        destination: Place::new(temp),
+                        destination,
                         target: Some(target_bb),
                     },
                     expr.span,
                 ));
                 ctx.set_current_block(target_bb);
 
-                return Ok(Operand::Copy(Place::new(temp)));
+                return Ok(ret_op);
             }
 
             let lhs_op = lower_expression(ctx, lhs, None)?;
@@ -783,12 +762,17 @@ pub fn lower_expression(
                 };
 
                 if let Some(rvalue) = intrinsic_rvalue {
-                    let temp = ctx.push_temp(Type::new(TypeKind::Int, expr.span), expr.span);
+                    let (target, ret_op) = if let Some(ref d) = dest {
+                        (d.clone(), Operand::Copy(d.clone()))
+                    } else {
+                        let temp = ctx.push_temp(Type::new(TypeKind::Int, expr.span), expr.span);
+                        (Place::new(temp), Operand::Copy(Place::new(temp)))
+                    };
                     ctx.push_statement(crate::mir::Statement {
-                        kind: MirStatementKind::Assign(Place::new(temp), rvalue),
+                        kind: MirStatementKind::Assign(target, rvalue),
                         span: expr.span,
                     });
-                    return Ok(Operand::Copy(Place::new(temp)));
+                    return Ok(ret_op);
                 }
             }
 
@@ -837,8 +821,8 @@ pub fn lower_expression(
                                         target.clone(),
                                         Rvalue::Aggregate(
                                             AggregateKind::Enum(
-                                                type_name.clone(),
-                                                variant_name.clone(),
+                                                Rc::from(type_name.as_str()),
+                                                Rc::from(variant_name.as_str()),
                                             ),
                                             ops,
                                         ),
@@ -957,21 +941,7 @@ pub fn lower_expression(
                         crate::ast::literal::IntegerLiteral::U128(v) => *v as usize,
                     };
 
-                    // Ensure obj is a Place
-                    let obj_place = match obj_operand {
-                        Operand::Copy(p) | Operand::Move(p) => p,
-                        Operand::Constant(c) => {
-                            let temp = ctx.push_temp(c.ty.clone(), obj.span);
-                            ctx.push_statement(crate::mir::Statement {
-                                kind: MirStatementKind::Assign(
-                                    Place::new(temp),
-                                    Rvalue::Use(Operand::Constant(c)),
-                                ),
-                                span: obj.span,
-                            });
-                            Place::new(temp)
-                        }
-                    };
+                    let obj_place = ensure_place(ctx, obj_operand, obj.span);
 
                     let mut target_place = obj_place;
                     target_place.projection.push(PlaceElem::Field(idx));
@@ -1007,21 +977,7 @@ pub fn lower_expression(
                 {
                     if let ExpressionKind::Identifier(field_name, _) = &prop.node {
                         if let Some(idx) = def.fields.iter().position(|(f, _, _)| f == field_name) {
-                            // Ensure obj is a Place (copy to temp if constant)
-                            let place = match obj_operand {
-                                Operand::Copy(p) | Operand::Move(p) => p,
-                                Operand::Constant(c) => {
-                                    let temp = ctx.push_temp(c.ty.clone(), obj.span);
-                                    ctx.push_statement(crate::mir::Statement {
-                                        kind: MirStatementKind::Assign(
-                                            Place::new(temp),
-                                            Rvalue::Use(Operand::Constant(c)),
-                                        ),
-                                        span: obj.span,
-                                    });
-                                    Place::new(temp)
-                                }
-                            };
+                            let place = ensure_place(ctx, obj_operand, obj.span);
 
                             // Create new place with projection
                             let mut new_place = place.clone();
@@ -1063,21 +1019,7 @@ pub fn lower_expression(
                             .enumerate()
                             .find(|(_, (f, _))| *f == field_name)
                         {
-                            // Ensure obj is a Place (copy to temp if constant)
-                            let place = match obj_operand {
-                                Operand::Copy(p) | Operand::Move(p) => p,
-                                Operand::Constant(c) => {
-                                    let temp = ctx.push_temp(c.ty.clone(), obj.span);
-                                    ctx.push_statement(crate::mir::Statement {
-                                        kind: MirStatementKind::Assign(
-                                            Place::new(temp),
-                                            Rvalue::Use(Operand::Constant(c)),
-                                        ),
-                                        span: obj.span,
-                                    });
-                                    Place::new(temp)
-                                }
-                            };
+                            let place = ensure_place(ctx, obj_operand, obj.span);
 
                             // Create new place with projection
                             let mut new_place = place.clone();
@@ -1141,15 +1083,15 @@ pub fn lower_expression(
                                     ),
                                 }));
 
+                                let enum_type_rc: Rc<str> = Rc::from(type_name.as_str());
+                                let enum_variant_rc: Rc<str> = Rc::from(variant_name.as_str());
+
                                 if let Some(d) = dest {
                                     ctx.push_statement(crate::mir::Statement {
                                         kind: MirStatementKind::Assign(
                                             d.clone(),
                                             Rvalue::Aggregate(
-                                                AggregateKind::Enum(
-                                                    type_name.clone(),
-                                                    variant_name.clone(),
-                                                ),
+                                                AggregateKind::Enum(enum_type_rc, enum_variant_rc),
                                                 vec![discr_op],
                                             ),
                                         ),
@@ -1162,10 +1104,7 @@ pub fn lower_expression(
                                         kind: MirStatementKind::Assign(
                                             Place::new(temp),
                                             Rvalue::Aggregate(
-                                                AggregateKind::Enum(
-                                                    type_name.clone(),
-                                                    variant_name.clone(),
-                                                ),
+                                                AggregateKind::Enum(enum_type_rc, enum_variant_rc),
                                                 vec![discr_op],
                                             ),
                                         ),
@@ -1400,21 +1339,7 @@ pub fn lower_expression(
             // Lower object to get a place
             let obj_operand = lower_expression(ctx, obj, None)?;
 
-            // Ensure object is in a place (copy to temp if constant)
-            let obj_place = match obj_operand {
-                Operand::Copy(p) | Operand::Move(p) => p,
-                Operand::Constant(c) => {
-                    let temp = ctx.push_temp(c.ty.clone(), obj.span);
-                    ctx.push_statement(crate::mir::Statement {
-                        kind: MirStatementKind::Assign(
-                            Place::new(temp),
-                            Rvalue::Use(Operand::Constant(c)),
-                        ),
-                        span: obj.span,
-                    });
-                    Place::new(temp)
-                }
-            };
+            let obj_place = ensure_place(ctx, obj_operand, obj.span);
 
             // Lower index expression
             let index_operand = lower_expression(ctx, index_expr, None)?;
@@ -1920,18 +1845,27 @@ pub fn lower_expression(
             }));
 
             // Create tuple aggregate (start, end, is_inclusive)
-            let ty = resolve_type(ctx.type_checker, expr);
-            let temp = ctx.push_temp(ty, expr.span);
+            let (target, ret_op) = if let Some(d) = dest {
+                (d.clone(), Operand::Copy(d))
+            } else {
+                let ty = resolve_type(ctx.type_checker, expr);
+                let temp = ctx.push_temp(ty, expr.span);
+                (Place::new(temp), Operand::Copy(Place::new(temp)))
+            };
             ctx.push_statement(crate::mir::Statement {
                 kind: MirStatementKind::Assign(
-                    Place::new(temp),
+                    target,
                     Rvalue::Aggregate(AggregateKind::Tuple, vec![start_op, end_op, inclusive_op]),
                 ),
                 span: expr.span,
             });
-            Ok(Operand::Copy(Place::new(temp)))
+            Ok(ret_op)
         }
-        ExpressionKind::Lambda(_generics, params, ret_type_expr, body, props) => {
+        ExpressionKind::Lambda(lambda) => {
+            let params = &lambda.params;
+            let ret_type_expr = &lambda.return_type;
+            let body = &lambda.body;
+            let props = &lambda.properties;
             // Lambda expressions create an anonymous function.
             // We lower the body to a separate MIR Body and track captured variables.
 
@@ -2113,6 +2047,18 @@ pub fn lower_expression(
                 accumulator = result;
             }
 
+            // DPS: if a destination was provided, write the final result into it
+            if let Some(d) = dest {
+                ctx.push_statement(crate::mir::Statement {
+                    kind: MirStatementKind::Assign(
+                        d.clone(),
+                        Rvalue::Use(Operand::Copy(Place::new(accumulator))),
+                    ),
+                    span: expr.span,
+                });
+                return Ok(Operand::Copy(d));
+            }
+
             Ok(Operand::Copy(Place::new(accumulator)))
         }
         ExpressionKind::Guard(guard_op, guard_expr) => {
@@ -2157,7 +2103,7 @@ pub fn lower_expression(
         ExpressionKind::NamedArgument(_name, value_expr) => {
             // Named argument: extract the value and lower it
             // The name is used by the type checker for struct field matching
-            lower_expression(ctx, value_expr, None)
+            lower_expression(ctx, value_expr, dest)
         }
         ExpressionKind::Super => {
             // Super refers to the parent class instance.
@@ -2197,9 +2143,6 @@ pub fn lower_expression(
                                 .enumerate()
                                 .find(|(_, (name, _))| name.as_str() == variant_name)
                             {
-                                let ty = resolve_type(ctx.type_checker, expr);
-                                let temp = ctx.push_temp(ty, expr.span);
-
                                 // Create discriminant constant
                                 let discr_op = Operand::Constant(Box::new(Constant {
                                     span: expr.span,
@@ -2217,20 +2160,29 @@ pub fn lower_expression(
                                     ops.push(lower_expression(ctx, arg, None)?);
                                 }
 
+                                // DPS: use the caller-provided destination if given,
+                                // otherwise allocate a fresh temp.
+                                let target = if let Some(d) = dest {
+                                    d
+                                } else {
+                                    let ty = resolve_type(ctx.type_checker, expr);
+                                    Place::new(ctx.push_temp(ty, expr.span))
+                                };
+
                                 ctx.push_statement(crate::mir::Statement {
                                     kind: MirStatementKind::Assign(
-                                        Place::new(temp),
+                                        target.clone(),
                                         Rvalue::Aggregate(
                                             AggregateKind::Enum(
-                                                type_name.clone(),
-                                                variant_name.clone(),
+                                                Rc::from(type_name.as_str()),
+                                                Rc::from(variant_name.as_str()),
                                             ),
                                             ops,
                                         ),
                                     ),
                                     span: expr.span,
                                 });
-                                return Ok(Operand::Copy(Place::new(temp)));
+                                return Ok(Operand::Copy(target));
                             }
                         }
                     }

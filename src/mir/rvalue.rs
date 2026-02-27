@@ -5,6 +5,7 @@ use crate::ast::types::Type;
 use crate::mir::operand::Operand;
 use crate::mir::place::Place;
 use std::fmt;
+use std::rc::Rc;
 
 /// Kind of aggregate being constructed.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -29,9 +30,10 @@ pub enum AggregateKind {
     /// Operands alternate: key1, val1, key2, val2, ...
     Map,
     /// An enum variant, e.g., `Color.Red("#ff0000")` - tagged union
-    /// First string is the enum type name, second is the variant name
-    /// First operand is the discriminant, followed by associated values
-    Enum(String, String),
+    /// First `Rc<str>` is the enum type name, second is the variant name.
+    /// Uses `Rc<str>` to avoid repeated string cloning during lowering.
+    /// First operand is the discriminant, followed by associated values.
+    Enum(Rc<str>, Rc<str>),
 }
 
 /// Right-hand value: the result of a computation.

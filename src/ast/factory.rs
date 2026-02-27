@@ -885,7 +885,11 @@ pub fn type_function(
     params: Vec<Parameter>,
     return_type: Option<Box<Expression>>,
 ) -> Type {
-    make_type(TypeKind::Function(generics, params, return_type))
+    make_type(TypeKind::Function(Box::new(FunctionTypeData {
+        generics,
+        params,
+        return_type,
+    })))
 }
 
 /// Creates a `Symbol` type.
@@ -1018,15 +1022,15 @@ pub fn class_statement_with_abstract(
     visibility: MemberVisibility,
     is_abstract: bool,
 ) -> Statement {
-    stmt(StatementKind::Class(
-        Box::new(name),
-        generic_types,
+    stmt(StatementKind::Class(Box::new(ClassData {
+        name: Box::new(name),
+        generics: generic_types,
         base_class,
         traits,
         body,
         visibility,
         is_abstract,
-    ))
+    })))
 }
 
 /// Creates an abstract class declaration statement.
@@ -1225,26 +1229,30 @@ impl FunctionBuilder {
 
     /// Builds a function declaration statement with the given body.
     pub fn build(self, body: Statement) -> Statement {
-        stmt(StatementKind::FunctionDeclaration(
-            self.name,
-            self.generic_types,
-            self.parameters,
-            self.return_type,
-            Some(Box::new(body)),
-            self.properties,
-        ))
+        stmt(StatementKind::FunctionDeclaration(Box::new(
+            FunctionDeclarationData {
+                name: self.name,
+                generics: self.generic_types,
+                params: self.parameters,
+                return_type: self.return_type,
+                body: Some(Box::new(body)),
+                properties: self.properties,
+            },
+        )))
     }
 
     /// Builds an abstract function declaration (no body).
     pub fn build_abstract(self) -> Statement {
-        stmt(StatementKind::FunctionDeclaration(
-            self.name,
-            self.generic_types,
-            self.parameters,
-            self.return_type,
-            None,
-            self.properties,
-        ))
+        stmt(StatementKind::FunctionDeclaration(Box::new(
+            FunctionDeclarationData {
+                name: self.name,
+                generics: self.generic_types,
+                params: self.parameters,
+                return_type: self.return_type,
+                body: None,
+                properties: self.properties,
+            },
+        )))
     }
 
     /// Builds a function declaration with an empty body.
@@ -1254,13 +1262,13 @@ impl FunctionBuilder {
 
     /// Builds a lambda expression with the given body.
     pub fn build_lambda(self, body: Statement) -> Expression {
-        expr(ExpressionKind::Lambda(
-            self.generic_types,
-            self.parameters,
-            self.return_type,
-            Box::new(body),
-            self.properties,
-        ))
+        expr(ExpressionKind::Lambda(Box::new(LambdaData {
+            generics: self.generic_types,
+            params: self.parameters,
+            return_type: self.return_type,
+            body: Box::new(body),
+            properties: self.properties,
+        })))
     }
 
     /// Builds a lambda expression with an empty body.
@@ -1283,14 +1291,16 @@ pub fn function_declaration(
     body: Statement,
     properties: FunctionProperties,
 ) -> Statement {
-    stmt(StatementKind::FunctionDeclaration(
-        name.into(),
-        generic_types,
-        parameters,
-        return_type,
-        Some(Box::new(body)),
-        properties,
-    ))
+    stmt(StatementKind::FunctionDeclaration(Box::new(
+        FunctionDeclarationData {
+            name: name.into(),
+            generics: generic_types,
+            params: parameters,
+            return_type,
+            body: Some(Box::new(body)),
+            properties,
+        },
+    )))
 }
 
 /// Creates an abstract function declaration (no body).
@@ -1301,14 +1311,16 @@ pub fn abstract_function_declaration(
     return_type: Option<Box<Expression>>,
     properties: FunctionProperties,
 ) -> Statement {
-    stmt(StatementKind::FunctionDeclaration(
-        name.into(),
-        generic_types,
-        parameters,
-        return_type,
-        None,
-        properties,
-    ))
+    stmt(StatementKind::FunctionDeclaration(Box::new(
+        FunctionDeclarationData {
+            name: name.into(),
+            generics: generic_types,
+            params: parameters,
+            return_type,
+            body: None,
+            properties,
+        },
+    )))
 }
 
 /// Creates a runtime function declaration (extern binding to a runtime library).
@@ -1339,13 +1351,13 @@ pub fn lambda_expression(
     body: Statement,
     properties: FunctionProperties,
 ) -> Expression {
-    expr(ExpressionKind::Lambda(
-        generic_types,
-        parameters,
+    expr(ExpressionKind::Lambda(Box::new(LambdaData {
+        generics: generic_types,
+        params: parameters,
         return_type,
-        Box::new(body),
+        body: Box::new(body),
         properties,
-    ))
+    })))
 }
 
 /// Creates a named argument expression.

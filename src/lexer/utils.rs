@@ -2,9 +2,11 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use super::token::Token;
+use std::borrow::Cow;
 
 /// Returns a human-readable string representation of a token for error messages.
-pub fn token_to_string(token: &Token) -> String {
+/// Uses `Cow<'static, str>` to avoid allocations for known static strings.
+pub fn token_to_string(token: &Token) -> Cow<'static, str> {
     match token {
         Token::Colon => ":".into(),
         Token::DoubleColon => "::".into(),
@@ -53,6 +55,6 @@ pub fn token_to_string(token: &Token) -> String {
         Token::FormattedStringStart(_) => "start of a formatted string".into(),
         Token::FormattedStringMiddle(_) => "middle of a formatted string".into(),
         Token::FormattedStringEnd(_) => "end of a formatted string".into(),
-        _ => format!("{:?}", token).to_lowercase(),
+        _ => Cow::Owned(format!("{:?}", token).to_lowercase()),
     }
 }

@@ -287,22 +287,20 @@ impl TypeChecker {
         t2: &Type,
         context: &Context,
     ) -> Option<bool> {
-        if let (TypeKind::Function(gen1, params1, ret1), TypeKind::Function(gen2, params2, ret2)) =
-            (&t1.kind, &t2.kind)
-        {
+        if let (TypeKind::Function(f1), TypeKind::Function(f2)) = (&t1.kind, &t2.kind) {
             // Check generics count
-            let gen1_len = gen1.as_ref().map(|v| v.len()).unwrap_or(0);
-            let gen2_len = gen2.as_ref().map(|v| v.len()).unwrap_or(0);
+            let gen1_len = f1.generics.as_ref().map(|v| v.len()).unwrap_or(0);
+            let gen2_len = f2.generics.as_ref().map(|v| v.len()).unwrap_or(0);
             if gen1_len != gen2_len {
                 return Some(false);
             }
 
             // Check parameters
-            if params1.len() != params2.len() {
+            if f1.params.len() != f2.params.len() {
                 return Some(false);
             }
 
-            for (p1, p2) in params1.iter().zip(params2.iter()) {
+            for (p1, p2) in f1.params.iter().zip(f2.params.iter()) {
                 let t1 = self
                     .extract_type_from_expression(&p1.typ)
                     .unwrap_or(crate::ast::factory::make_type(TypeKind::Error));
@@ -315,11 +313,13 @@ impl TypeChecker {
             }
 
             // Check return type
-            let r1 = ret1
+            let r1 = f1
+                .return_type
                 .as_ref()
                 .and_then(|r| self.extract_type_from_expression(r).ok())
                 .unwrap_or(crate::ast::factory::make_type(TypeKind::Void));
-            let r2 = ret2
+            let r2 = f2
+                .return_type
                 .as_ref()
                 .and_then(|r| self.extract_type_from_expression(r).ok())
                 .unwrap_or(crate::ast::factory::make_type(TypeKind::Void));

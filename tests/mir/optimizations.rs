@@ -14,8 +14,8 @@ fn get_main_mir(source: &str, is_release: bool) -> miri::mir::Body {
         .body
         .iter()
         .find(|stmt| {
-            if let AstStatementKind::FunctionDeclaration(name, ..) = &stmt.node {
-                name == "main"
+            if let AstStatementKind::FunctionDeclaration(func) = &stmt.node {
+                func.name == "main"
             } else {
                 false
             }

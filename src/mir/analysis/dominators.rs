@@ -169,45 +169,32 @@ fn compute_immediate_dominators(
     idoms
 }
 
-/// Find the Lowest Common Ancestor of two nodes in the dominator tree built so far.
-/// Note: This relies on `idoms` being partially populated.
+/// Find the Lowest Common Ancestor of two nodes in the dominator tree built so far
+/// using the Cooper-Harvey-Kennedy finger-walk algorithm. This uses block indices
+/// as RPO numbers (since blocks are processed in ascending order) and requires
+/// zero allocations — just two walking pointers.
 fn intersect(
     idoms: &HashMap<BasicBlock, BasicBlock>,
     b1: BasicBlock,
     b2: BasicBlock,
 ) -> BasicBlock {
-    // Trace ancestors of both nodes to find the first common one.
-    let mut visited = HashSet::new();
-    let mut curr = b1;
-    visited.insert(curr);
-    while let Some(&parent) = idoms.get(&curr) {
-        curr = parent;
-        visited.insert(curr);
-        if curr.0 == 0 {
-            break;
-        } // Reached entry
-    }
-    // Entry is always visited if we reach it or it was start
-    if curr.0 == 0 {
-        visited.insert(BasicBlock(0));
-    }
-
-    curr = b2;
-    while !visited.contains(&curr) {
-        if let Some(&parent) = idoms.get(&curr) {
-            curr = parent;
-        } else {
-            // Should be entry if not found, but if we satisfy the precondition
-            // that preds are processed, we should convert to entry.
-            // But loop condition handles it.
-            // If we are here, it means we reached a root that is not in b1's chain?
-            // This happens if the graph is disconnected or during early iterations.
-            // Assume 0 is common root.
-            return BasicBlock(0);
+    let mut finger1 = b1;
+    let mut finger2 = b2;
+    while finger1 != finger2 {
+        while finger1.0 > finger2.0 {
+            match idoms.get(&finger1) {
+                Some(&parent) => finger1 = parent,
+                None => return BasicBlock(0),
+            }
+        }
+        while finger2.0 > finger1.0 {
+            match idoms.get(&finger2) {
+                Some(&parent) => finger2 = parent,
+                None => return BasicBlock(0),
+            }
         }
     }
-
-    curr
+    finger1
 }
 
 /// Compute dominance frontiers.

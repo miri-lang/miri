@@ -88,9 +88,14 @@ impl TypeChecker {
                 self.infer_conditional(then_expr, cond_expr, else_expr, expr.span, context)
             }
             ExpressionKind::FormattedString(parts) => self.infer_formatted_string(parts, context),
-            ExpressionKind::Lambda(generics, params, return_type, body, properties) => {
-                self.infer_lambda(generics, params, return_type, body, properties, context)
-            }
+            ExpressionKind::Lambda(lambda) => self.infer_lambda(
+                &lambda.generics,
+                &lambda.params,
+                &lambda.return_type,
+                &lambda.body,
+                &lambda.properties,
+                context,
+            ),
             ExpressionKind::TypeDeclaration(expr, generics, kind, target) => {
                 self.infer_generic_instantiation(expr, generics, kind, target, expr.span, context)
             }
@@ -411,7 +416,10 @@ impl TypeChecker {
                 self.report_warning("use of a double negation".to_string(), span);
             }
         } else if matches!(op, UnaryOp::Decrement) {
-            self.report_warning("use of a double negation".to_string(), span);
+            self.report_warning(
+                "decrement operator is treated as double negation".to_string(),
+                span,
+            );
         }
 
         // Validate await context: allowed outside functions or inside async functions
@@ -458,16 +466,16 @@ impl TypeChecker {
                 Box::new(void_expr),
             ));
 
-            return ast_factory::make_type(TypeKind::Function(
-                Some(vec![t_expr.clone()]),
-                vec![Parameter {
+            return ast_factory::make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                generics: Some(vec![t_expr.clone()]),
+                params: vec![Parameter {
                     name: "value".to_string(),
                     typ: Box::new(t_expr),
                     guard: None,
                     default_value: None,
                 }],
-                Some(Box::new(ast_factory::type_expr_non_null(return_type))),
-            ));
+                return_type: Some(Box::new(ast_factory::type_expr_non_null(return_type))),
+            })));
         }
         if name == "Err" {
             // fn<E>(error E): result<Void, E>
@@ -484,16 +492,16 @@ impl TypeChecker {
                 Box::new(e_expr.clone()),
             ));
 
-            return ast_factory::make_type(TypeKind::Function(
-                Some(vec![e_expr.clone()]),
-                vec![Parameter {
+            return ast_factory::make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                generics: Some(vec![e_expr.clone()]),
+                params: vec![Parameter {
                     name: "error".to_string(),
                     typ: Box::new(e_expr),
                     guard: None,
                     default_value: None,
                 }],
-                Some(Box::new(ast_factory::type_expr_non_null(return_type))),
-            ));
+                return_type: Some(Box::new(ast_factory::type_expr_non_null(return_type))),
+            })));
         }
 
         // Handle 'self' keyword - refers to current class instance
@@ -503,6 +511,7 @@ impl TypeChecker {
 
         let info_opt = context
             .resolve_info(name)
+            .cloned()
             .or_else(|| self.global_scope.get(name).cloned());
 
         if let Some(info) = info_opt {
@@ -665,17 +674,17 @@ impl TypeChecker {
         }
 
         match &func_type.kind {
-            TypeKind::Function(generics, params, return_type_expr) => {
+            TypeKind::Function(func_data) => {
                 let mut generic_map = std::collections::HashMap::new();
 
-                if let Some(gens) = &generics {
+                if let Some(gens) = &func_data.generics {
                     context.enter_scope();
                     self.define_generics(gens, context);
                 }
 
                 let mut pos_iter = positional_args.iter();
 
-                for param in params {
+                for param in &func_data.params {
                     let param_type = self.resolve_type_expression(&param.typ, context);
 
                     let (arg_expr, arg_type) = if let Some((expr, ty)) = pos_iter.next() {
@@ -687,11 +696,11 @@ impl TypeChecker {
                     };
 
                     if let Some(arg_type) = arg_type {
-                        if generics.is_some() {
+                        if func_data.generics.is_some() {
                             self.infer_generic_types(&param_type, &arg_type, &mut generic_map);
                         }
 
-                        let concrete_param_type = if generics.is_some() {
+                        let concrete_param_type = if func_data.generics.is_some() {
                             self.substitute_type(&param_type, &generic_map)
                         } else {
                             param_type.clone()
@@ -718,7 +727,7 @@ impl TypeChecker {
                     self.report_error(
                         format!(
                             "Too many positional arguments: expected {}, got {}",
-                            params.len(),
+                            func_data.params.len(),
                             positional_args.len()
                         ),
                         span,
@@ -729,9 +738,9 @@ impl TypeChecker {
                     self.report_error(format!("Unknown argument '{}'", name), span);
                 }
 
-                let return_type = if let Some(rt_expr) = return_type_expr {
+                let return_type = if let Some(rt_expr) = &func_data.return_type {
                     let rt = self.resolve_type_expression(rt_expr, context);
-                    if generics.is_some() {
+                    if func_data.generics.is_some() {
                         self.substitute_type(&rt, &generic_map)
                     } else {
                         rt
@@ -740,7 +749,7 @@ impl TypeChecker {
                     ast_factory::make_type(TypeKind::Void)
                 };
 
-                if generics.is_some() {
+                if func_data.generics.is_some() {
                     context.exit_scope();
                 }
 
@@ -1214,39 +1223,39 @@ impl TypeChecker {
             TypeKind::Result(ok_type, _) => {
                 if prop_name == "unwrap" {
                     let t = self.resolve_type_expression(ok_type, context);
-                    return make_type(TypeKind::Function(
-                        None,
-                        vec![],
-                        Some(Box::new(ast_factory::type_expr_non_null(t))),
-                    ));
+                    return make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                        generics: None,
+                        params: vec![],
+                        return_type: Some(Box::new(ast_factory::type_expr_non_null(t))),
+                    })));
                 } else if prop_name == "is_ok" || prop_name == "is_err" {
-                    return make_type(TypeKind::Function(
-                        None,
-                        vec![],
-                        Some(Box::new(ast_factory::type_expr_non_null(make_type(
+                    return make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                        generics: None,
+                        params: vec![],
+                        return_type: Some(Box::new(ast_factory::type_expr_non_null(make_type(
                             TypeKind::Boolean,
                         )))),
-                    ));
+                    })));
                 }
                 (None, None)
             }
             TypeKind::Nullable(inner_type) => {
                 if prop_name == "unwrap" {
-                    return make_type(TypeKind::Function(
-                        None,
-                        vec![],
-                        Some(Box::new(ast_factory::type_expr_non_null(
+                    return make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                        generics: None,
+                        params: vec![],
+                        return_type: Some(Box::new(ast_factory::type_expr_non_null(
                             *inner_type.clone(),
                         ))),
-                    ));
+                    })));
                 } else if prop_name == "is_some" || prop_name == "is_none" {
-                    return make_type(TypeKind::Function(
-                        None,
-                        vec![],
-                        Some(Box::new(ast_factory::type_expr_non_null(make_type(
+                    return make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                        generics: None,
+                        params: vec![],
+                        return_type: Some(Box::new(ast_factory::type_expr_non_null(make_type(
                             TypeKind::Boolean,
                         )))),
-                    ));
+                    })));
                 }
                 (None, None)
             }
@@ -1286,9 +1295,9 @@ impl TypeChecker {
                     )]),
                 ));
 
-                return ast_factory::make_type(TypeKind::Function(
-                    None,
-                    vec![
+                return ast_factory::make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                    generics: None,
+                    params: vec![
                         Parameter {
                             name: "grid".to_string(),
                             typ: dim3_expr.clone(),
@@ -1302,8 +1311,8 @@ impl TypeChecker {
                             default_value: None,
                         },
                     ],
-                    Some(Box::new(ast_factory::type_expr_non_null(future_void_type))),
-                ));
+                    return_type: Some(Box::new(ast_factory::type_expr_non_null(future_void_type))),
+                })));
             }
         }
 
@@ -1422,7 +1431,11 @@ impl TypeChecker {
                                 ))
                             };
 
-                        return make_type(TypeKind::Function(None, params, return_type_expr));
+                        return make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                            generics: None,
+                            params,
+                            return_type: return_type_expr,
+                        })));
                     }
 
                     // If not found, try the base class
@@ -1553,13 +1566,13 @@ impl TypeChecker {
                                         default_value: None,
                                     })
                                     .collect();
-                                make_type(TypeKind::Function(
-                                    None,
+                                make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                                    generics: None,
                                     params,
-                                    Some(Box::new(self.create_type_expression(make_type(
-                                        TypeKind::Custom(name.clone(), type_args),
-                                    )))),
-                                ))
+                                    return_type: Some(Box::new(self.create_type_expression(
+                                        make_type(TypeKind::Custom(name.clone(), type_args)),
+                                    ))),
+                                })))
                             }
                         } else {
                             let candidates: Vec<&str> =
@@ -1896,11 +1909,11 @@ impl TypeChecker {
         context.loop_depth = old_loop_depth;
         context.exit_scope();
 
-        make_type(TypeKind::Function(
-            generics.clone(),
-            params.to_vec(),
-            final_return_type_expr,
-        ))
+        make_type(TypeKind::Function(Box::new(FunctionTypeData {
+            generics: generics.clone(),
+            params: params.to_vec(),
+            return_type: final_return_type_expr,
+        })))
     }
 
     fn infer_conditional(
@@ -2239,7 +2252,10 @@ impl TypeChecker {
             if let Some(args) = generics {
                 let expr_type = self.infer_expression(expr, context);
                 match expr_type.kind {
-                    TypeKind::Function(Some(params), func_params, ret) => {
+                    TypeKind::Function(func_data) if func_data.generics.is_some() => {
+                        let params = func_data.generics.as_ref().unwrap();
+                        let func_params = &func_data.params;
+                        let ret = &func_data.return_type;
                         let mut mapping = HashMap::new();
                         if params.len() != args.len() {
                             self.report_error("Generic argument count mismatch".to_string(), span);
@@ -2271,7 +2287,7 @@ impl TypeChecker {
 
                         let new_ret = if let Some(r) = ret {
                             let r_type = self
-                                .extract_type_from_expression(&r)
+                                .extract_type_from_expression(r)
                                 .unwrap_or(make_type(TypeKind::Error));
                             let new_r_type = self.substitute_type(&r_type, &mapping);
                             Some(Box::new(self.create_type_expression(new_r_type)))
@@ -2279,7 +2295,11 @@ impl TypeChecker {
                             None
                         };
 
-                        return make_type(TypeKind::Function(None, new_params, new_ret));
+                        return make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                            generics: None,
+                            params: new_params,
+                            return_type: new_ret,
+                        })));
                     }
                     TypeKind::Meta(inner) => {
                         if let TypeKind::Custom(name, _) = inner.kind {

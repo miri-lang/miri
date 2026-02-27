@@ -25,8 +25,8 @@ use crate::type_checker::TypeChecker;
 
 fn has_main_function(program: &Program) -> bool {
     program.body.iter().any(|s| {
-        if let StatementKind::FunctionDeclaration(name, ..) = &s.node {
-            name == "main"
+        if let StatementKind::FunctionDeclaration(decl) = &s.node {
+            decl.name == "main"
         } else {
             false
         }
@@ -122,8 +122,8 @@ fn collect_runtime_info(program: &Program, imported_stmts: &[Statement]) -> Runt
             // Class-level runtime declarations are NOT pre-declared as Cranelift imports
             // because they are called with different signatures (no allocator injection)
             // from compiled class methods. The translator handles them dynamically.
-            StatementKind::Class(_, _, _, _, class_body, _, _) => {
-                for class_stmt in class_body {
+            StatementKind::Class(class_data) => {
+                for class_stmt in &class_data.body {
                     if let StatementKind::RuntimeFunctionDeclaration(runtime_kind, ..) =
                         &class_stmt.node
                     {
@@ -193,21 +193,13 @@ fn patch_main_return(program: &mut Program) {
     let int_ret = type_expr_non_null(type_int());
 
     for stmt in &mut program.body {
-        if let StatementKind::FunctionDeclaration(
-            name,
-            _generics,
-            _params,
-            ret_type,
-            body,
-            _props,
-        ) = &mut stmt.node
-        {
-            if name == "main" && ret_type.is_none() {
+        if let StatementKind::FunctionDeclaration(decl) = &mut stmt.node {
+            if decl.name == "main" && decl.return_type.is_none() {
                 // Set return type to Int
-                *ret_type = Some(Box::new(int_ret));
+                decl.return_type = Some(Box::new(int_ret));
 
                 // Append `return 0` to the body
-                if let Some(body_stmt) = body {
+                if let Some(body_stmt) = &mut decl.body {
                     match &mut body_stmt.node {
                         StatementKind::Block(stmts) => {
                             stmts.push(return_zero);
@@ -436,22 +428,22 @@ impl Pipeline {
 
         // Lower functions from the program AST
         for stmt in &result.ast.body {
-            if let StatementKind::FunctionDeclaration(name, _, _, _, _, _) = &stmt.node {
+            if let StatementKind::FunctionDeclaration(decl) = &stmt.node {
                 let body =
                     mir::lowering::lower_function(stmt, &result.type_checker, is_release, true)
                         .map_err(|e| {
                             CompilerError::Codegen(format!("MIR lowering failed: {}", e))
                         })?;
-                lowered_names.insert(name.clone());
-                bodies.push((name.clone(), body));
+                lowered_names.insert(decl.name.clone());
+                bodies.push((decl.name.clone(), body));
             }
         }
 
         // Lower functions and class methods imported from stdlib modules
         for stmt in &result.type_checker.imported_statements {
             match &stmt.node {
-                StatementKind::FunctionDeclaration(name, _, _, _, _, _) => {
-                    if !lowered_names.contains(name) {
+                StatementKind::FunctionDeclaration(decl) => {
+                    if !lowered_names.contains(&decl.name) {
                         let body = mir::lowering::lower_function(
                             stmt,
                             &result.type_checker,
@@ -461,14 +453,14 @@ impl Pipeline {
                         .map_err(|e| {
                             CompilerError::Codegen(format!("MIR lowering failed: {}", e))
                         })?;
-                        lowered_names.insert(name.clone());
-                        bodies.push((name.clone(), body));
+                        lowered_names.insert(decl.name.clone());
+                        bodies.push((decl.name.clone(), body));
                     }
                 }
-                StatementKind::Class(class_name_expr, _, _, _, class_body, _, _) => {
+                StatementKind::Class(class_data) => {
                     // Extract the class name string
                     let class_name =
-                        if let ExpressionKind::Identifier(name, _) = &class_name_expr.node {
+                        if let ExpressionKind::Identifier(name, _) = &class_data.name.node {
                             name.as_str()
                         } else {
                             continue;
@@ -479,22 +471,20 @@ impl Pipeline {
                         Type::new(TypeKind::Custom(class_name.to_string(), None), stmt.span);
 
                     // Compile each non-runtime method in the class body
-                    for method_stmt in class_body {
-                        if let StatementKind::FunctionDeclaration(method_name, _, _, _, body, _) =
-                            &method_stmt.node
-                        {
+                    for method_stmt in &class_data.body {
+                        if let StatementKind::FunctionDeclaration(method_decl) = &method_stmt.node {
                             // Skip methods without a body (abstract/forward declarations)
-                            if body.is_none() {
+                            if method_decl.body.is_none() {
                                 continue;
                             }
 
                             // Skip constructors — `init` has special semantics and is not
                             // called from compiled code (strings are created as literals).
-                            if method_name == "init" {
+                            if method_decl.name == "init" {
                                 continue;
                             }
 
-                            let mangled = format!("{}_{}", class_name, method_name);
+                            let mangled = format!("{}_{}", class_name, method_decl.name);
                             if lowered_names.contains(&mangled) {
                                 continue;
                             }

@@ -2,7 +2,7 @@ use crate::ast::literal::Literal;
 use crate::ast::types::Type;
 use crate::error::syntax::Span;
 use crate::mir::body::Body;
-use crate::mir::place::{Place, PlaceElem};
+use crate::mir::place::Place;
 use std::fmt;
 
 /// An operand for an Rvalue.
@@ -17,27 +17,14 @@ pub enum Operand {
 }
 
 impl Operand {
-    pub fn ty(&self, body: &Body) -> Type {
+    /// Returns a reference to the type of this operand.
+    ///
+    /// For place operands (Move/Copy), returns the type from the body's local declarations.
+    /// For constants, returns the constant's type.
+    pub fn ty<'a>(&'a self, body: &'a Body) -> &'a Type {
         match self {
-            Operand::Move(place) | Operand::Copy(place) => {
-                let ty = body.local_decls[place.local.0].ty.clone();
-                for elem in &place.projection {
-                    match elem {
-                        PlaceElem::Deref => {
-                            // TODO: Implement Deref type resolution if we support pointers
-                        }
-                        PlaceElem::Field(_idx) => {
-                            // TODO: Implement field type resolution for tuples/structs
-                            if let crate::ast::types::TypeKind::Tuple(_elements) = &ty.kind {}
-                        }
-                        PlaceElem::Index(_) => {
-                            // TODO: Array/List element type
-                        }
-                    }
-                }
-                ty
-            }
-            Operand::Constant(c) => c.ty.clone(),
+            Operand::Move(place) | Operand::Copy(place) => &body.local_decls[place.local.0].ty,
+            Operand::Constant(c) => &c.ty,
         }
     }
 }

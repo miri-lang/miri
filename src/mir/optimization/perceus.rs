@@ -46,34 +46,32 @@ impl OptimizationPass for Perceus {
             return false;
         }
 
-        // Process each block in-place by collecting insertions, then applying them.
+        // Process each block with a single-pass rebuild to avoid O(n^2) Vec::insert.
         for block_data in &mut body.basic_blocks {
-            let mut insertions: Vec<(usize, Statement)> = Vec::new();
+            let old_stmts = std::mem::take(&mut block_data.statements);
+            let mut new_stmts = Vec::with_capacity(old_stmts.len());
+            let mut block_changed = false;
 
-            for (idx, stmt) in block_data.statements.iter().enumerate() {
+            for stmt in old_stmts {
                 match &stmt.kind {
                     StatementKind::Assign(_lhs, rvalue) => {
                         if let Some(place) = get_rvalue_source_place(rvalue) {
                             if managed_locals.contains(&place.local) {
-                                insertions.push((
-                                    idx,
-                                    Statement {
-                                        kind: StatementKind::IncRef(place),
-                                        span: stmt.span,
-                                    },
-                                ));
+                                new_stmts.push(Statement {
+                                    kind: StatementKind::IncRef(place),
+                                    span: stmt.span,
+                                });
+                                block_changed = true;
                             }
                         }
                     }
                     StatementKind::StorageDead(place) => {
                         if managed_locals.contains(&place.local) {
-                            insertions.push((
-                                idx,
-                                Statement {
-                                    kind: StatementKind::DecRef(place.clone()),
-                                    span: stmt.span,
-                                },
-                            ));
+                            new_stmts.push(Statement {
+                                kind: StatementKind::DecRef(place.clone()),
+                                span: stmt.span,
+                            });
+                            block_changed = true;
                         }
                     }
                     StatementKind::StorageLive(_)
@@ -82,15 +80,13 @@ impl OptimizationPass for Perceus {
                     | StatementKind::DecRef(_)
                     | StatementKind::Dealloc(_) => {}
                 }
+                new_stmts.push(stmt);
             }
 
-            if !insertions.is_empty() {
+            if block_changed {
                 changed = true;
-                // Insert in reverse order to preserve indices
-                for (idx, stmt) in insertions.into_iter().rev() {
-                    block_data.statements.insert(idx, stmt);
-                }
             }
+            block_data.statements = new_stmts;
         }
 
         changed

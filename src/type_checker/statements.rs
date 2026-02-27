@@ -112,10 +112,10 @@ fn check_returns(stmt: &Statement) -> ReturnStatus {
         | StatementKind::For(_, _, _)
         | StatementKind::Break
         | StatementKind::Continue
-        | StatementKind::FunctionDeclaration(_, _, _, _, _, _)
+        | StatementKind::FunctionDeclaration(_)
         | StatementKind::Struct(_, _, _, _)
         | StatementKind::Enum(_, _, _, _)
-        | StatementKind::Class(_, _, _, _, _, _, _)
+        | StatementKind::Class(_)
         | StatementKind::Trait(_, _, _, _, _)
         | StatementKind::Type(_, _)
         | StatementKind::RuntimeFunctionDeclaration(_, _, _, _)
@@ -167,15 +167,15 @@ impl TypeChecker {
 
         // Update global symbol as well
         if let Some(info) = self.global_scope.get_mut(name) {
-            if let TypeKind::Function(gens, params, _) = &info.ty.kind {
+            if let TypeKind::Function(func_data) = &info.ty.kind {
                 let type_expr = crate::ast::factory::type_expr_non_null(expr_type.clone());
                 self.types.insert(type_expr.id, expr_type.clone());
 
-                info.ty = make_type(TypeKind::Function(
-                    gens.clone(),
-                    params.clone(),
-                    Some(Box::new(type_expr)),
-                ));
+                info.ty = make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                    generics: func_data.generics.clone(),
+                    params: func_data.params.clone(),
+                    return_type: Some(Box::new(type_expr)),
+                })));
             }
         }
     }
@@ -205,21 +205,14 @@ impl TypeChecker {
             StatementKind::Break => self.check_break(context, statement.span),
             StatementKind::Continue => self.check_continue(context, statement.span),
             StatementKind::Return(expr) => self.check_return(expr, context, statement.span),
-            StatementKind::FunctionDeclaration(
-                name,
-                generics,
-                params,
-                return_type,
-                body,
-                props,
-            ) => self.check_function_declaration(
+            StatementKind::FunctionDeclaration(decl) => self.check_function_declaration(
                 FunctionDeclarationInfo {
-                    name,
-                    generics,
-                    params,
-                    return_type,
-                    body: body.as_ref().map(|b| b.as_ref()),
-                    properties: props,
+                    name: &decl.name,
+                    generics: &decl.generics,
+                    params: &decl.params,
+                    return_type: &decl.return_type,
+                    body: decl.body.as_ref().map(|b| b.as_ref()),
+                    properties: &decl.properties,
                 },
                 context,
             ),
@@ -229,19 +222,17 @@ impl TypeChecker {
             StatementKind::Enum(name, generics, variants, vis) => {
                 self.check_enum(name, generics, variants, vis, context)
             }
-            StatementKind::Class(name, generics, base_class, traits, body, vis, is_abstract) => {
-                self.check_class(
-                    name,
-                    generics,
-                    base_class,
-                    traits,
-                    body,
-                    vis,
-                    context,
-                    statement.span,
-                    *is_abstract,
-                )
-            }
+            StatementKind::Class(class_data) => self.check_class(
+                &class_data.name,
+                &class_data.generics,
+                &class_data.base_class,
+                &class_data.traits,
+                &class_data.body,
+                &class_data.visibility,
+                context,
+                statement.span,
+                class_data.is_abstract,
+            ),
             StatementKind::Trait(name, generics, parent_traits, body, vis) => self.check_trait(
                 name,
                 generics,
@@ -258,11 +249,11 @@ impl TypeChecker {
                 // Runtime functions are extern bindings. Register their type
                 // signature in the current scope so calls can be type-checked,
                 // but skip body checking since they have no body.
-                let func_type = make_type(TypeKind::Function(
-                    None,
-                    params.to_vec(),
-                    return_type_expr.clone(),
-                ));
+                let func_type = make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                    generics: None,
+                    params: params.to_vec(),
+                    return_type: return_type_expr.clone(),
+                })));
 
                 if context.scopes.len() == 1 {
                     self.global_scope.insert(
@@ -1090,17 +1081,17 @@ impl TypeChecker {
             properties,
         } = info;
 
-        let func_type = make_type(TypeKind::Function(
-            generics.clone(),
-            params.to_vec(),
-            return_type_expr.clone(),
-        ));
+        let func_type = make_type(TypeKind::Function(Box::new(FunctionTypeData {
+            generics: generics.clone(),
+            params: params.to_vec(),
+            return_type: return_type_expr.clone(),
+        })));
 
         // Don't let imported non-generic functions shadow built-in generic ones
         // (e.g. system.io's print(String) should not override the built-in print<T>)
         let is_shadowing_builtin_generic = if let Some(existing) = self.global_scope.get(name) {
             existing.module == "std"
-                && matches!(&existing.ty.kind, TypeKind::Function(Some(gens), _, _) if !gens.is_empty())
+                && matches!(&existing.ty.kind, TypeKind::Function(fd) if fd.generics.as_ref().is_some_and(|g| !g.is_empty()))
                 && self.current_module != "Main"
         } else {
             false
@@ -1231,25 +1222,25 @@ impl TypeChecker {
             let kernel_return_type = make_type(TypeKind::Custom("Kernel".to_string(), None));
 
             if let Some(info) = self.global_scope.get_mut(name) {
-                if let TypeKind::Function(gens, params, _) = &info.ty.kind {
-                    info.ty = make_type(TypeKind::Function(
-                        gens.clone(),
-                        params.clone(),
-                        Some(Box::new(crate::ast::factory::type_expr_non_null(
+                if let TypeKind::Function(func) = &info.ty.kind {
+                    info.ty = make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                        generics: func.generics.clone(),
+                        params: func.params.clone(),
+                        return_type: Some(Box::new(crate::ast::factory::type_expr_non_null(
                             kernel_return_type.clone(),
                         ))),
-                    ));
+                    })));
                 }
             }
             context.update_symbol_type(
                 name,
-                make_type(TypeKind::Function(
-                    generics.clone(),
-                    params.to_vec(),
-                    Some(Box::new(crate::ast::factory::type_expr_non_null(
+                make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                    generics: generics.clone(),
+                    params: params.to_vec(),
+                    return_type: Some(Box::new(crate::ast::factory::type_expr_non_null(
                         kernel_return_type.clone(),
                     ))),
-                )),
+                }))),
             );
 
             // Inject 'gpu_context' object (type GpuContext)
@@ -1737,22 +1728,16 @@ impl TypeChecker {
                         );
                     }
                 }
-                StatementKind::FunctionDeclaration(
-                    method_name,
-                    _methodgenerics,
-                    params,
-                    return_type,
-                    _method_body,
-                    props,
-                ) => {
+                StatementKind::FunctionDeclaration(decl) => {
                     // Collect method signature only (don't check body yet)
-                    let return_ty = if let Some(rt_expr) = return_type {
+                    let return_ty = if let Some(rt_expr) = &decl.return_type {
                         self.resolve_type_expression(rt_expr, context)
                     } else {
                         make_type(TypeKind::Void)
                     };
 
-                    let param_types: Vec<(String, Type)> = params
+                    let param_types: Vec<(String, Type)> = decl
+                        .params
                         .iter()
                         .map(|p| {
                             (
@@ -1763,19 +1748,18 @@ impl TypeChecker {
                         .collect();
 
                     // Method is abstract if it has no body OR has an empty body
-                    // Parser creates empty_statement() for abstract methods, not None
-                    let method_is_abstract = _method_body.as_ref().is_none_or(|body| {
+                    let method_is_abstract = decl.body.as_ref().is_none_or(|body| {
                         matches!(&body.node, StatementKind::Empty)
                             || matches!(&body.node, StatementKind::Block(stmts) if stmts.is_empty())
                     });
 
                     methods.insert(
-                        method_name.clone(),
+                        decl.name.clone(),
                         MethodInfo {
                             params: param_types,
                             return_type: return_ty,
-                            visibility: props.visibility.clone(),
-                            is_constructor: method_name == "init",
+                            visibility: decl.properties.visibility.clone(),
+                            is_constructor: decl.name == "init",
                             is_abstract: method_is_abstract,
                         },
                     );
@@ -1792,11 +1776,11 @@ impl TypeChecker {
                     // Runtime functions inside a class are extern bindings used
                     // by the class methods. Register them in scope so calls
                     // type-check, and also in the global scope for codegen.
-                    let func_type = make_type(TypeKind::Function(
-                        None,
-                        params.to_vec(),
-                        return_type_expr.clone(),
-                    ));
+                    let func_type = make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                        generics: None,
+                        params: params.to_vec(),
+                        return_type: return_type_expr.clone(),
+                    })));
 
                     self.global_scope.insert(
                         rt_name.to_string(),
@@ -1954,18 +1938,11 @@ impl TypeChecker {
                     // Look through method_statements to find the init body
                     let mut found_super_init = false;
                     for stmt in &method_statements {
-                        if let StatementKind::FunctionDeclaration(
-                            method_name,
-                            _,
-                            _,
-                            _,
-                            Some(method_body),
-                            _,
-                        ) = &stmt.node
-                        {
-                            if method_name == "init" {
-                                // Check if body contains super.init()
-                                found_super_init = self.contains_super_init_call(method_body);
+                        if let StatementKind::FunctionDeclaration(decl) = &stmt.node {
+                            if decl.name == "init" {
+                                if let Some(method_body) = &decl.body {
+                                    found_super_init = self.contains_super_init_call(method_body);
+                                }
                                 break;
                             }
                         }
@@ -2200,17 +2177,9 @@ impl TypeChecker {
         // PASS 2: Check method bodies (now class is registered)
         // Skip abstract methods (no body) as they don't need body checking
         for stmt in method_statements {
-            if let StatementKind::FunctionDeclaration(
-                method_name,
-                methodgenerics,
-                params,
-                return_type,
-                method_body,
-                props,
-            ) = &stmt.node
-            {
+            if let StatementKind::FunctionDeclaration(decl) = &stmt.node {
                 // Skip abstract methods (those with no body or empty body)
-                let is_abstract = method_body.as_ref().is_none_or(|body| {
+                let is_abstract = decl.body.as_ref().is_none_or(|body| {
                     matches!(&body.node, StatementKind::Empty)
                         || matches!(&body.node, StatementKind::Block(stmts) if stmts.is_empty())
                 });
@@ -2220,12 +2189,12 @@ impl TypeChecker {
 
                 self.check_function_declaration(
                     FunctionDeclarationInfo {
-                        name: method_name,
-                        generics: methodgenerics,
-                        params,
-                        return_type,
-                        body: method_body.as_ref().map(|b| b.as_ref()),
-                        properties: props,
+                        name: &decl.name,
+                        generics: &decl.generics,
+                        params: &decl.params,
+                        return_type: &decl.return_type,
+                        body: decl.body.as_ref().map(|b| b.as_ref()),
+                        properties: &decl.properties,
                     },
                     context,
                 );
@@ -2299,35 +2268,29 @@ impl TypeChecker {
 
         for stmt in body {
             match &stmt.node {
-                StatementKind::FunctionDeclaration(
-                    method_name,
-                    method_generics,
-                    params,
-                    return_type,
-                    method_body,
-                    props,
-                ) => {
+                StatementKind::FunctionDeclaration(decl) => {
                     // Check the function declaration
                     self.check_function_declaration(
                         FunctionDeclarationInfo {
-                            name: method_name,
-                            generics: method_generics,
-                            params,
-                            return_type,
-                            body: method_body.as_ref().map(|b| b.as_ref()),
-                            properties: props,
+                            name: &decl.name,
+                            generics: &decl.generics,
+                            params: &decl.params,
+                            return_type: &decl.return_type,
+                            body: decl.body.as_ref().map(|b| b.as_ref()),
+                            properties: &decl.properties,
                         },
                         context,
                     );
 
                     // Collect method info
-                    let return_ty = if let Some(rt_expr) = return_type {
+                    let return_ty = if let Some(rt_expr) = &decl.return_type {
                         self.resolve_type_expression(rt_expr, context)
                     } else {
                         make_type(TypeKind::Void)
                     };
 
-                    let param_types: Vec<(String, Type)> = params
+                    let param_types: Vec<(String, Type)> = decl
+                        .params
                         .iter()
                         .map(|p| {
                             (
@@ -2338,14 +2301,14 @@ impl TypeChecker {
                         .collect();
 
                     // Trait methods are abstract if they have no body
-                    let method_is_abstract = method_body.is_none();
+                    let method_is_abstract = decl.body.is_none();
 
                     methods.insert(
-                        method_name.clone(),
+                        decl.name.clone(),
                         MethodInfo {
                             params: param_types,
                             return_type: return_ty,
-                            visibility: props.visibility.clone(),
+                            visibility: decl.properties.visibility.clone(),
                             is_constructor: false,
                             is_abstract: method_is_abstract,
                         },

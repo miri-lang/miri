@@ -495,13 +495,13 @@ pub fn assert_function_parameter_count(input: &str, expected_count: usize) {
     );
 
     match &program.body[0].node {
-        StatementKind::FunctionDeclaration(_, _, params, ..) => {
+        StatementKind::FunctionDeclaration(func) => {
             assert_eq!(
-                params.len(),
+                func.params.len(),
                 expected_count,
                 "Expected {} parameters, got {}",
                 expected_count,
-                params.len()
+                func.params.len()
             );
         }
         other => {

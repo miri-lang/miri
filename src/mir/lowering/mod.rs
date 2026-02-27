@@ -56,27 +56,28 @@ pub fn lower_function(
     is_release: bool,
     inject_allocator: bool,
 ) -> Result<Body, LoweringError> {
-    let StatementKind::FunctionDeclaration(
-        name,
-        _generics,
-        params,
-        ret_type_expr,
-        body_stmt,
-        props,
-    ) = &ast_func.node
-    else {
+    let StatementKind::FunctionDeclaration(decl) = &ast_func.node else {
         return Err(LoweringError::unsupported_statement(
             "Expected FunctionDeclaration".to_string(),
             ast_func.span,
         ));
     };
+    let name = &decl.name;
+    let params = &decl.params;
+    let ret_type_expr = &decl.return_type;
+    let body_stmt = &decl.body;
+    let props = &decl.properties;
 
     // Resolve return type: explicit annotation > type checker inference > void
     let ret_ty = if let Some(ret_expr) = ret_type_expr {
         resolve_type(tc, ret_expr)
     } else if let Some(ty) = tc.get_variable_type(name) {
-        if let TypeKind::Function(_, _, Some(rt)) = &ty.kind {
-            resolve_type(tc, rt)
+        if let TypeKind::Function(func) = &ty.kind {
+            if let Some(rt) = &func.return_type {
+                resolve_type(tc, rt)
+            } else {
+                Type::new(TypeKind::Void, ast_func.span)
+            }
         } else {
             Type::new(TypeKind::Void, ast_func.span)
         }
@@ -144,20 +145,16 @@ pub fn lower_class_method(
     tc: &TypeChecker,
     is_release: bool,
 ) -> Result<Body, LoweringError> {
-    let StatementKind::FunctionDeclaration(
-        _name,
-        _generics,
-        params,
-        ret_type_expr,
-        body_stmt,
-        props,
-    ) = &ast_method.node
-    else {
+    let StatementKind::FunctionDeclaration(decl) = &ast_method.node else {
         return Err(LoweringError::unsupported_statement(
             "Expected FunctionDeclaration for class method".to_string(),
             ast_method.span,
         ));
     };
+    let params = &decl.params;
+    let ret_type_expr = &decl.return_type;
+    let body_stmt = &decl.body;
+    let props = &decl.properties;
 
     let ret_ty = if let Some(ret_expr) = ret_type_expr {
         resolve_type(tc, ret_expr)

@@ -8,6 +8,7 @@ use crate::ast::pattern::Pattern;
 use crate::ast::statement::{Statement, StatementKind};
 use crate::ast::types::{Type, TypeKind};
 use crate::error::lowering::LoweringError;
+use crate::error::syntax::Span;
 use crate::mir::{
     Discriminant, Operand, Place, PlaceElem, Rvalue, StatementKind as MirStatementKind, Terminator,
     TerminatorKind,
@@ -17,6 +18,25 @@ use crate::type_checker::TypeChecker;
 use super::context::LoweringContext;
 use super::expression::lower_expression;
 use super::statement::lower_statement;
+
+/// Ensure an operand is materialized as a `Place`.
+///
+/// If the operand is already a `Copy` or `Move` of a place, returns it directly.
+/// If the operand is a `Constant`, stores it in a fresh temp local and returns
+/// that temp's place.
+pub fn ensure_place(ctx: &mut LoweringContext, operand: Operand, span: Span) -> Place {
+    match operand {
+        Operand::Copy(p) | Operand::Move(p) => p,
+        Operand::Constant(c) => {
+            let temp = ctx.push_temp(c.ty.clone(), span);
+            ctx.push_statement(crate::mir::Statement {
+                kind: MirStatementKind::Assign(Place::new(temp), Rvalue::Use(Operand::Constant(c))),
+                span,
+            });
+            Place::new(temp)
+        }
+    }
+}
 
 /// Resolve an AST type expression to a concrete `Type`.
 ///
@@ -115,12 +135,26 @@ pub fn bind_pattern(
         Pattern::Tuple(patterns) => {
             // For tuple destructuring, create bindings for each element
             // Tuple fields are statically known, so we use Field projection
+
+            // Extract element types from the tuple type definition
+            let tuple_ty = ctx.body.local_decls[subject_local.0].ty.clone();
+            let element_types: Vec<Type> = if let TypeKind::Tuple(elems) = &tuple_ty.kind {
+                elems
+                    .iter()
+                    .map(|e| resolve_type(ctx.type_checker, e))
+                    .collect()
+            } else {
+                // Fallback: use the whole tuple type (should not happen after type checking)
+                vec![tuple_ty.clone(); patterns.len()]
+            };
+
             for (i, p) in patterns.iter().enumerate() {
                 if let Pattern::Identifier(name) = p {
-                    let ty = ctx.body.local_decls[subject_local.0].ty.clone();
-                    let elem_local = ctx.push_temp(ty, *span);
-                    let name_rc: std::rc::Rc<str> = std::rc::Rc::from(name.as_str());
-                    ctx.body.local_decls[elem_local.0].name = Some(name_rc.clone());
+                    let elem_ty = element_types
+                        .get(i)
+                        .cloned()
+                        .unwrap_or_else(|| Type::new(TypeKind::Void, *span));
+                    let elem_local = ctx.push_local(name.clone(), elem_ty, *span);
 
                     // Create Field projection for tuple element (static index)
                     let mut place = Place::new(subject_local);
@@ -133,8 +167,6 @@ pub fn bind_pattern(
                         ),
                         span: *span,
                     });
-
-                    ctx.variable_map.insert(name_rc, elem_local);
                 }
             }
         }
@@ -171,9 +203,7 @@ pub fn bind_pattern(
                         .and_then(|types| types.get(i))
                         .cloned()
                         .unwrap_or_else(|| Type::new(TypeKind::Void, *span));
-                    let elem_local = ctx.push_temp(ty, *span);
-                    let name_rc: std::rc::Rc<str> = std::rc::Rc::from(name.as_str());
-                    ctx.body.local_decls[elem_local.0].name = Some(name_rc.clone());
+                    let elem_local = ctx.push_local(name.clone(), ty, *span);
 
                     // Create Field projection for element (i+1 to skip discriminant at field 0)
                     let mut place = Place::new(subject_local);
@@ -186,8 +216,6 @@ pub fn bind_pattern(
                         ),
                         span: *span,
                     });
-
-                    ctx.variable_map.insert(name_rc, elem_local);
                 }
             }
         }

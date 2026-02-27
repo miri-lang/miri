@@ -18,7 +18,7 @@ impl<'source> Parser<'source> {
     pub(crate) fn eat(
         &mut self,
         expected: impl Fn(&Token) -> bool,
-        expected_str: &str,
+        expected_str: impl FnOnce() -> String,
     ) -> Result<TokenSpan, SyntaxError> {
         let token = &self._lookahead;
 
@@ -30,8 +30,8 @@ impl<'source> Parser<'source> {
             }
             Some((found, _)) => Err(SyntaxError::new(
                 SyntaxErrorKind::UnexpectedToken {
-                    expected: expected_str.to_string(),
-                    found: token_to_string(found),
+                    expected: expected_str(),
+                    found: token_to_string(found).into_owned(),
                 },
                 Span::new(self.source.len(), self.source.len()),
             )),
@@ -48,14 +48,18 @@ impl<'source> Parser<'source> {
     }
 
     pub(crate) fn eat_token(&mut self, expected: &Token) -> Result<TokenSpan, SyntaxError> {
-        self.eat(|t| t == expected, &token_to_string(expected))
+        let expected_clone = expected.clone();
+        self.eat(
+            |t| t == expected,
+            move || token_to_string(&expected_clone).into_owned(),
+        )
     }
 
     pub(crate) fn eat_binary_op(
         &mut self,
         match_token: fn(&Token) -> bool,
     ) -> Result<TokenSpan, SyntaxError> {
-        self.eat(match_token, "binary operator")
+        self.eat(match_token, || "binary operator".to_string())
     }
 
     pub(crate) fn match_lookahead_type(&self, match_token: fn(&Token) -> bool) -> bool {
@@ -99,9 +103,10 @@ impl<'source> Parser<'source> {
     }
 
     pub(crate) fn lookahead_as_string(&self) -> String {
-        self._lookahead
-            .as_ref()
-            .map_or("end of file".to_string(), |(t, _)| token_to_string(t))
+        self._lookahead.as_ref().map_or_else(
+            || "end of file".to_string(),
+            |(t, _)| token_to_string(t).into_owned(),
+        )
     }
 
     pub(crate) fn lookahead_is_guard(&self) -> bool {

@@ -44,8 +44,8 @@ pub struct FunctionTranslator<'a> {
     builder_ctx: FunctionBuilderContext,
     /// Default calling convention for the target.
     call_conv: CallConv,
-    /// The types of MIR locals (for type information during translation).
-    local_types: Vec<Type>,
+    /// Borrowed references to MIR local types to avoid cloning.
+    local_types: Vec<&'a Type>,
     /// Type definitions from the type checker (for layout computation).
     /// Borrowed from the backend to avoid cloning the entire HashMap per function.
     type_definitions: &'a HashMap<String, TypeDefinition>,
@@ -55,11 +55,15 @@ pub struct FunctionTranslator<'a> {
 struct ModuleCtx<'a> {
     module: &'a mut ObjectModule,
     string_literals: &'a mut HashMap<String, String>,
+    /// Cached FuncId for libc malloc to avoid re-declaring per call site.
+    malloc_func_id: Option<cranelift_module::FuncId>,
+    /// Cached FuncId for libc free to avoid re-declaring per call site.
+    free_func_id: Option<cranelift_module::FuncId>,
 }
 
 /// Context for type information during translation.
 struct TypeCtx<'a> {
-    local_types: &'a [Type],
+    local_types: &'a [&'a Type],
     type_definitions: &'a HashMap<String, TypeDefinition>,
 }
 
@@ -73,14 +77,14 @@ impl<'a> FunctionTranslator<'a> {
     /// * `type_definitions` - Borrowed type definitions for layout computation
     pub fn new(
         isa: &Arc<dyn TargetIsa>,
-        body: &Body,
+        body: &'a Body,
         type_definitions: &'a HashMap<String, TypeDefinition>,
     ) -> Self {
         let func = Function::new();
         let builder_ctx = FunctionBuilderContext::new();
 
-        // Cache local types for fast lookup during translation
-        let local_types = body.local_decls.iter().map(|d| d.ty.clone()).collect();
+        // Borrow local types for fast lookup during translation (avoids cloning)
+        let local_types = body.local_decls.iter().map(|d| &d.ty).collect();
 
         Self {
             func,
@@ -104,9 +108,10 @@ impl<'a> FunctionTranslator<'a> {
         // Create function builder
         let mut builder = FunctionBuilder::new(&mut self.func, &mut self.builder_ctx);
 
-        // Keep track of locals and blocks
-        let mut locals: HashMap<Local, Variable> = HashMap::new();
-        let mut blocks: HashMap<BasicBlock, Block> = HashMap::new();
+        // Keep track of locals and blocks (pre-sized to avoid rehashing)
+        let mut locals: HashMap<Local, Variable> = HashMap::with_capacity(body.local_decls.len());
+        let mut blocks: HashMap<BasicBlock, Block> =
+            HashMap::with_capacity(body.basic_blocks.len());
 
         // Declare all local variables
         for (idx, local_decl) in body.local_decls.iter().enumerate() {
@@ -151,6 +156,8 @@ impl<'a> FunctionTranslator<'a> {
             let mut module_ctx = ModuleCtx {
                 module,
                 string_literals,
+                malloc_func_id: None,
+                free_func_id: None,
             };
             let type_ctx = TypeCtx {
                 local_types: &self.local_types,
@@ -781,8 +788,8 @@ impl<'a> FunctionTranslator<'a> {
                         .get(local)
                         .ok_or_else(|| format!("Unknown index local: {:?}", local))?;
                     let idx_val = builder.use_var(*idx_var);
-                    let elem_size = builder.ins().iconst(cl_types::I64, 8);
-                    let byte_offset = builder.ins().imul(idx_val, elem_size);
+                    let shift = builder.ins().iconst(cl_types::I64, 3);
+                    let byte_offset = builder.ins().ishl(idx_val, shift);
                     let elem_addr = builder.ins().iadd(value, byte_offset);
                     value = builder
                         .ins()
@@ -815,11 +822,14 @@ impl<'a> FunctionTranslator<'a> {
             if from_ty.bytes() > to_ty.bytes() {
                 Ok(builder.ins().ireduce(to_ty, value))
             } else {
-                // Assume signed extension as Miri defaults to signed ints
                 Ok(builder.ins().sextend(to_ty, value))
-                // For unsigned extension, use uextend
-                // builder.ins().uextend(to_ty, value)
             }
+        } else if from_ty.is_float() && to_ty.is_int() {
+            // Float to integer conversion (signed)
+            Ok(builder.ins().fcvt_to_sint(to_ty, value))
+        } else if from_ty.is_int() && to_ty.is_float() {
+            // Integer to float conversion (signed)
+            Ok(builder.ins().fcvt_from_sint(to_ty, value))
         } else {
             Err(format!(
                 "Unsupported implicit cast from {} to {}",
@@ -867,8 +877,8 @@ impl<'a> FunctionTranslator<'a> {
                             .get(local)
                             .ok_or_else(|| format!("Unknown index local: {:?}", local))?;
                         let idx_val = builder.use_var(*idx_var);
-                        let elem_size = builder.ins().iconst(cl_types::I64, 8);
-                        let byte_offset = builder.ins().imul(idx_val, elem_size);
+                        let shift = builder.ins().iconst(cl_types::I64, 3);
+                        let byte_offset = builder.ins().ishl(idx_val, shift);
                         addr = builder.ins().iadd(addr, byte_offset);
                     }
                 }
@@ -892,8 +902,8 @@ impl<'a> FunctionTranslator<'a> {
                         .get(local)
                         .ok_or_else(|| format!("Unknown index local: {:?}", local))?;
                     let idx_val = builder.use_var(*idx_var);
-                    let elem_size = builder.ins().iconst(cl_types::I64, 8);
-                    let byte_offset = builder.ins().imul(idx_val, elem_size);
+                    let shift = builder.ins().iconst(cl_types::I64, 3);
+                    let byte_offset = builder.ins().ishl(idx_val, shift);
                     let elem_addr = builder.ins().iadd(addr, byte_offset);
                     builder.ins().store(MemFlags::new(), value, elem_addr, 0);
                 }
@@ -1052,46 +1062,56 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
-    /// Helper to call libc malloc.
+    /// Helper to call libc malloc, caching the FuncId across invocations.
     fn call_libc_malloc(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         size: Value,
     ) -> Result<Value, String> {
-        let name = "malloc";
-        let sig = Signature {
-            params: vec![AbiParam::new(cl_types::I64)],
-            returns: vec![AbiParam::new(cl_types::I64)],
-            call_conv: builder.func.signature.call_conv,
+        let func_id = match ctx.malloc_func_id {
+            Some(id) => id,
+            None => {
+                let sig = Signature {
+                    params: vec![AbiParam::new(cl_types::I64)],
+                    returns: vec![AbiParam::new(cl_types::I64)],
+                    call_conv: builder.func.signature.call_conv,
+                };
+                let id = ctx
+                    .module
+                    .declare_function("malloc", Linkage::Import, &sig)
+                    .map_err(|e| format!("Failed to declare malloc: {}", e))?;
+                ctx.malloc_func_id = Some(id);
+                id
+            }
         };
-
-        let func_id = ctx
-            .module
-            .declare_function(name, Linkage::Import, &sig)
-            .map_err(|e| format!("Failed to declare malloc: {}", e))?;
 
         let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
         let call = builder.ins().call(local_func, &[size]);
         Ok(builder.inst_results(call)[0])
     }
 
-    /// Helper to call libc free.
+    /// Helper to call libc free, caching the FuncId across invocations.
     fn call_libc_free(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         ptr: Value,
     ) -> Result<(), String> {
-        let name = "free";
-        let sig = Signature {
-            params: vec![AbiParam::new(cl_types::I64)],
-            returns: vec![],
-            call_conv: builder.func.signature.call_conv,
+        let func_id = match ctx.free_func_id {
+            Some(id) => id,
+            None => {
+                let sig = Signature {
+                    params: vec![AbiParam::new(cl_types::I64)],
+                    returns: vec![],
+                    call_conv: builder.func.signature.call_conv,
+                };
+                let id = ctx
+                    .module
+                    .declare_function("free", Linkage::Import, &sig)
+                    .map_err(|e| format!("Failed to declare free: {}", e))?;
+                ctx.free_func_id = Some(id);
+                id
+            }
         };
-
-        let func_id = ctx
-            .module
-            .declare_function(name, Linkage::Import, &sig)
-            .map_err(|e| format!("Failed to declare free: {}", e))?;
 
         let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
         builder.ins().call(local_func, &[ptr]);

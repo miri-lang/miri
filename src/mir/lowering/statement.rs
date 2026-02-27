@@ -177,17 +177,9 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
                 }
             }
         }
-        StatementKind::Class(
-            name_expr,
-            _generics,
-            _base_class,
-            _traits,
-            _body,
-            _vis,
-            _is_abstract,
-        ) => {
+        StatementKind::Class(class_data) => {
             // Lower class declaration by looking up the type definition from type checker
-            if let ExpressionKind::Identifier(name, _) = &name_expr.node {
+            if let ExpressionKind::Identifier(name, _) = &class_data.name.node {
                 if let Some(TypeDefinition::Class(def)) =
                     ctx.type_checker.global_type_definitions.get(name)
                 {
@@ -360,14 +352,12 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
         StatementKind::Empty => {
             // Empty statement - no-op, nothing to do
         }
-        StatementKind::FunctionDeclaration(
-            name,
-            _generics,
-            params,
-            ret_type_expr,
-            body_stmt,
-            props,
-        ) => {
+        StatementKind::FunctionDeclaration(decl) => {
+            let name = &decl.name;
+            let params = &decl.params;
+            let ret_type_expr = &decl.return_type;
+            let body_stmt = &decl.body;
+            let props = &decl.properties;
             // Nested function declarations are lowered to LambdaInfo
             // and stored for later codegen. A local variable is created
             // that references this function.
@@ -430,9 +420,9 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
 
             // Create a local variable for this function reference
             let func_ty = Type::new(
-                TypeKind::Function(
-                    None,
-                    params
+                TypeKind::Function(Box::new(crate::ast::types::FunctionTypeData {
+                    generics: None,
+                    params: params
                         .iter()
                         .map(|p| crate::ast::common::Parameter {
                             name: p.name.clone(),
@@ -441,8 +431,8 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
                             default_value: p.default_value.clone(),
                         })
                         .collect(),
-                    ret_type_expr.clone(),
-                ),
+                    return_type: ret_type_expr.clone(),
+                })),
                 stmt.span,
             );
             ctx.push_local(name.clone(), func_ty, stmt.span);

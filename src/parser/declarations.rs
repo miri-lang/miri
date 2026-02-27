@@ -313,7 +313,9 @@ impl<'source> Parser<'source> {
             ));
         }
 
-        let token_span = self.eat(is_inheritance_modifier, "extends, includes or implements")?;
+        let token_span = self.eat(is_inheritance_modifier, || {
+            "extends, includes or implements".to_string()
+        })?;
         let kind = match token_span.0 {
             Token::Extends => TypeDeclarationKind::Extends,
             Token::Implements => TypeDeclarationKind::Implements,
@@ -406,7 +408,7 @@ impl<'source> Parser<'source> {
             _ => return Err(self.error_unexpected_lookahead_token("guard operator")),
         };
 
-        self.eat(is_guard, "guard operator")?;
+        self.eat(is_guard, || "guard operator".to_string())?;
         if self._lookahead.is_some() && self.lookahead_is_in() {
             self.eat_token(&Token::In)?;
             guard_op = GuardOp::NotIn;

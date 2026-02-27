@@ -5,6 +5,30 @@ use crate::ast::common::{FunctionProperties, MemberVisibility, Parameter, Runtim
 use crate::ast::expression::Expression;
 use crate::ast::node::IdNode;
 
+/// Data for a function declaration, boxed to reduce `StatementKind` enum size.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FunctionDeclarationData {
+    pub name: String,
+    pub generics: Option<Vec<Expression>>,
+    pub params: Vec<Parameter>,
+    pub return_type: Option<Box<Expression>>,
+    /// Body is None for abstract functions in traits/abstract classes.
+    pub body: Option<Box<Statement>>,
+    pub properties: FunctionProperties,
+}
+
+/// Data for a class declaration, boxed to reduce `StatementKind` enum size.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ClassData {
+    pub name: Box<Expression>,
+    pub generics: Option<Vec<Expression>>,
+    pub base_class: Option<Box<Expression>>,
+    pub traits: Vec<Expression>,
+    pub body: Vec<Statement>,
+    pub visibility: MemberVisibility,
+    pub is_abstract: bool,
+}
+
 /// Represents the type of an if statement
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum IfStatementType {
@@ -75,17 +99,8 @@ pub enum StatementKind {
     /// A for loop.
     For(Vec<VariableDeclaration>, Box<Expression>, Box<Statement>),
 
-    /// A function declaration.
-    /// (name, generics, params, return_type, body, properties)
-    /// Note: body is None for abstract functions in traits/abstract classes.
-    FunctionDeclaration(
-        String,
-        Option<Vec<Expression>>,
-        Vec<Parameter>,
-        Option<Box<Expression>>,
-        Option<Box<Statement>>, // None for abstract functions
-        FunctionProperties,
-    ),
+    /// A function declaration. Boxed to reduce enum size.
+    FunctionDeclaration(Box<FunctionDeclarationData>),
 
     /// A return statement.
     Return(Option<Box<Expression>>),
@@ -112,17 +127,8 @@ pub enum StatementKind {
         MemberVisibility,
     ),
 
-    /// A class declaration.
-    /// (name, generics, base_class, traits, body, visibility, is_abstract)
-    Class(
-        Box<Expression>,         // Class name
-        Option<Vec<Expression>>, // Generic type parameters
-        Option<Box<Expression>>, // Base class (single, via extends)
-        Vec<Expression>,         // Implemented traits (via implements)
-        Vec<Statement>,          // Class body (fields + methods)
-        MemberVisibility,        // Class visibility
-        bool,                    // is_abstract
-    ),
+    /// A class declaration. Boxed to reduce enum size.
+    Class(Box<ClassData>),
 
     /// A trait declaration.
     /// (name, generics, parent_traits, body, visibility)

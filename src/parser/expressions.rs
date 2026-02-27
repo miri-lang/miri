@@ -695,7 +695,7 @@ impl<'source> Parser<'source> {
         // Consume the opening formatted-string token and extract its text.
         let (start_token, _) = self.eat(
             |t| matches!(t, Token::FormattedStringStart(_)),
-            "formatted string start",
+            || "formatted string start".to_string(),
         )?;
         if let Token::FormattedStringStart(start_text) = start_token {
             if !start_text.is_empty() {
@@ -707,7 +707,7 @@ impl<'source> Parser<'source> {
         if matches!(&self._lookahead, Some((Token::FormattedStringEnd(_), _))) {
             let (end_token, _) = self.eat(
                 |t| matches!(t, Token::FormattedStringEnd(_)),
-                "formatted string end",
+                || "formatted string end".to_string(),
             )?;
             if let Token::FormattedStringEnd(end_text) = end_token {
                 if !end_text.is_empty() {
@@ -723,7 +723,7 @@ impl<'source> Parser<'source> {
             if matches!(&self._lookahead, Some((Token::FormattedStringMiddle(_), _))) {
                 let (mid_token, _) = self.eat(
                     |t| matches!(t, Token::FormattedStringMiddle(_)),
-                    "formatted string middle",
+                    || "formatted string middle".to_string(),
                 )?;
                 if let Token::FormattedStringMiddle(middle_text) = mid_token {
                     if !middle_text.is_empty() {
@@ -733,7 +733,7 @@ impl<'source> Parser<'source> {
             } else if matches!(&self._lookahead, Some((Token::FormattedStringEnd(_), _))) {
                 let (end_token, _) = self.eat(
                     |t| matches!(t, Token::FormattedStringEnd(_)),
-                    "formatted string end",
+                    || "formatted string end".to_string(),
                 )?;
                 if let Token::FormattedStringEnd(end_text) = end_token {
                     if !end_text.is_empty() {

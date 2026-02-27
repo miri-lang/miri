@@ -61,7 +61,7 @@ pub fn translate_type_kind(kind: &TypeKind) -> CraneliftType {
         TypeKind::Future(_) => types::I64,
 
         // Function types are function pointers
-        TypeKind::Function(_, _, _) => types::I64,
+        TypeKind::Function(_) => types::I64,
 
         // User-defined types are pointers
         TypeKind::Custom(_, _) => types::I64,

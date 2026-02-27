@@ -21,8 +21,8 @@ pub fn mir_lower_code(source: &str) -> Body {
         .body
         .iter()
         .find(|stmt| {
-            if let AstStatementKind::FunctionDeclaration(name, ..) = &stmt.node {
-                name == "main"
+            if let AstStatementKind::FunctionDeclaration(func) = &stmt.node {
+                func.name == "main"
             } else {
                 false
             }

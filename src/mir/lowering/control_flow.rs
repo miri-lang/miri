@@ -242,11 +242,11 @@ fn lower_for_over_iterable(
     let decl = &decls[0];
     // Infer element type from type checker or default to Int
     let elem_ty = if let Some(ty) = ctx.type_checker.get_type(iterable.id) {
-        // Try to extract element type from list type
+        // Extract element type from list/array type parameters
         match &ty.kind {
-            TypeKind::List(_) | TypeKind::Array(_, _) => {
-                // For lists/arrays, element type would need to be extracted from type annotation
-                Type::new(TypeKind::Int, *span)
+            TypeKind::List(elem_type_expr) => super::resolve_type(ctx.type_checker, elem_type_expr),
+            TypeKind::Array(elem_type_expr, _) => {
+                super::resolve_type(ctx.type_checker, elem_type_expr)
             }
             _ => ty.clone(),
         }
@@ -782,8 +782,8 @@ pub fn lower_call(
     // Try to get function type to check parameters
     let func_ty = ctx.type_checker.get_type(func.id);
     let param_types = if let Some(ty) = func_ty {
-        if let TypeKind::Function(_, params, _) = &ty.kind {
-            Some(params.clone())
+        if let TypeKind::Function(func) = &ty.kind {
+            Some(func.params.clone())
         } else {
             None
         }
@@ -1063,15 +1063,16 @@ fn create_default_value(ty: &Type, span: &Span) -> Operand {
     use crate::mir::Constant;
 
     let literal = match &ty.kind {
-        TypeKind::Int
-        | TypeKind::I32
-        | TypeKind::I64
-        | TypeKind::I8
-        | TypeKind::I16
-        | TypeKind::I128 => Literal::Integer(IntegerLiteral::I32(0)),
-        TypeKind::U8 | TypeKind::U16 | TypeKind::U32 | TypeKind::U64 | TypeKind::U128 => {
-            Literal::Integer(IntegerLiteral::I32(0))
-        }
+        TypeKind::Int | TypeKind::I32 => Literal::Integer(IntegerLiteral::I32(0)),
+        TypeKind::I8 => Literal::Integer(IntegerLiteral::I8(0)),
+        TypeKind::I16 => Literal::Integer(IntegerLiteral::I16(0)),
+        TypeKind::I64 => Literal::Integer(IntegerLiteral::I64(0)),
+        TypeKind::I128 => Literal::Integer(IntegerLiteral::I128(0)),
+        TypeKind::U8 => Literal::Integer(IntegerLiteral::U8(0)),
+        TypeKind::U16 => Literal::Integer(IntegerLiteral::U16(0)),
+        TypeKind::U32 => Literal::Integer(IntegerLiteral::U32(0)),
+        TypeKind::U64 => Literal::Integer(IntegerLiteral::U64(0)),
+        TypeKind::U128 => Literal::Integer(IntegerLiteral::U128(0)),
         TypeKind::Boolean => Literal::Boolean(false),
         TypeKind::String => Literal::String(String::new()),
         _ => Literal::None,

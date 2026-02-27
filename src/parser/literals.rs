@@ -257,7 +257,10 @@ impl<'source> Parser<'source> {
             ;
     */
     pub(crate) fn regex_literal(&mut self) -> Result<Literal, SyntaxError> {
-        let token_span = self.eat(|t| matches!(t, Token::Regex(_)), "regex literal")?;
+        let token_span = self.eat(
+            |t| matches!(t, Token::Regex(_)),
+            || "regex literal".to_string(),
+        )?;
         if let (Token::Regex(regex_data), _) = token_span {
             Ok(ast::regex_literal_from_token(*regex_data))
         } else {

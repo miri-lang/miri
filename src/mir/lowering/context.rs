@@ -166,16 +166,23 @@ impl<'a> LoweringContext<'a> {
         decl.is_user_variable = true;
         let local = self.body.new_local(decl);
 
-        // Track in current scope
+        // Track in current scope and update variable map (single hash lookup via entry API)
         if let Some(scope) = self.scope_stack.last_mut() {
-            // If this name already exists, save it as shadowed
-            if let Some(old_local) = self.variable_map.get(&name_rc) {
-                scope.shadowed.insert(name_rc.clone(), *old_local);
-            }
             scope.introduced.push(name_rc.clone());
         }
 
-        self.variable_map.insert(name_rc, local);
+        match self.variable_map.entry(name_rc) {
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                let old_local = *entry.get();
+                if let Some(scope) = self.scope_stack.last_mut() {
+                    scope.shadowed.insert(entry.key().clone(), old_local);
+                }
+                entry.insert(local);
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(local);
+            }
+        }
 
         // Emit StorageLive for the new local
         self.push_statement(crate::mir::Statement {
@@ -198,16 +205,23 @@ impl<'a> LoweringContext<'a> {
         decl.is_user_variable = true;
         let local = self.body.new_local(decl);
 
-        // Track in current scope
+        // Track in current scope and update variable map (single hash lookup via entry API)
         if let Some(scope) = self.scope_stack.last_mut() {
-            // If this name already exists, save it as shadowed
-            if let Some(old_local) = self.variable_map.get(&name_rc) {
-                scope.shadowed.insert(name_rc.clone(), *old_local);
-            }
             scope.introduced.push(name_rc.clone());
         }
 
-        self.variable_map.insert(name_rc, local);
+        match self.variable_map.entry(name_rc) {
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                let old_local = *entry.get();
+                if let Some(scope) = self.scope_stack.last_mut() {
+                    scope.shadowed.insert(entry.key().clone(), old_local);
+                }
+                entry.insert(local);
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(local);
+            }
+        }
         // implicit StorageLive: parameters are live upon entry
 
         local

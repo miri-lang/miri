@@ -23,7 +23,7 @@ pub fn lower_variable(
             } else {
                 // Must lower to infer type
                 let op = lower_expression(ctx, init_expr, None)?;
-                let ty = op.ty(&ctx.body);
+                let ty = op.ty(&ctx.body).clone();
                 (ty, Some(init_expr), Some(op))
             }
         } else {

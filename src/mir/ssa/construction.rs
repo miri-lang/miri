@@ -10,8 +10,8 @@ use std::collections::{HashMap, HashSet};
 
 /// Result of SSA construction, containing version counts per local.
 pub struct SSAConstructionResult {
-    /// The number of versions created for each original variable.
-    pub versions: HashMap<Local, usize>,
+    /// The number of versions created for each original variable, indexed by `Local.0`.
+    pub versions: Vec<usize>,
 }
 
 /// Transform the MIR body into SSA form using iterated dominance frontiers.
@@ -33,7 +33,8 @@ pub fn construct_ssa(body: &mut Body) -> SSAConstructionResult {
     let dom_tree = DominatorTree::compute(body);
 
     // 2. Initialize Builder (calculates def sites)
-    let mut builder = SSABuilder::new(dom_tree);
+    let num_locals = body.local_decls.len();
+    let mut builder = SSABuilder::new(dom_tree, num_locals);
 
     // 3. Run SSA construction (mutates body)
     builder.run(body)
@@ -41,24 +42,23 @@ pub fn construct_ssa(body: &mut Body) -> SSAConstructionResult {
 
 struct SSABuilder {
     dom_tree: DominatorTree,
-    /// For each variable, list of blocks where it is defined (assigned).
-    def_sites: HashMap<Local, HashSet<BasicBlock>>,
-    /// For each variable (and original local), mapping to the current SSA version (local index).
-    /// Stack of versions for renaming.
-    version_stack: HashMap<Local, Vec<Local>>,
-    /// Counter for generating new versions.
-    version_counts: HashMap<Local, usize>,
-    /// Map from new renamed local to original local.
+    /// For each original local, the set of blocks where it is defined. Indexed by `Local.0`.
+    def_sites: Vec<HashSet<BasicBlock>>,
+    /// Stack of SSA versions for each original local during renaming. Indexed by `Local.0`.
+    version_stack: Vec<Vec<Local>>,
+    /// Counter for generating new versions per original local. Indexed by `Local.0`.
+    version_counts: Vec<usize>,
+    /// Map from new renamed local to original local (sparse, only for SSA-created locals).
     new_to_old: HashMap<Local, Local>,
 }
 
 impl SSABuilder {
-    fn new(dom_tree: DominatorTree) -> Self {
+    fn new(dom_tree: DominatorTree, num_locals: usize) -> Self {
         Self {
             dom_tree,
-            def_sites: HashMap::new(),
-            version_stack: HashMap::new(),
-            version_counts: HashMap::new(),
+            def_sites: vec![HashSet::new(); num_locals],
+            version_stack: vec![Vec::new(); num_locals],
+            version_counts: vec![0; num_locals],
             new_to_old: HashMap::new(),
         }
     }
@@ -67,8 +67,7 @@ impl SSABuilder {
         // For each argument, set current version to itself.
         for i in 1..=body.arg_count {
             let local = Local(i);
-            // We consider the original local as the "0-th version".
-            self.version_stack.entry(local).or_default().push(local);
+            self.version_stack[local.0].push(local);
         }
     }
 
@@ -88,7 +87,7 @@ impl SSABuilder {
         self.rename_variables(body, BasicBlock(0));
 
         SSAConstructionResult {
-            versions: self.version_counts.clone(),
+            versions: std::mem::take(&mut self.version_counts),
         }
     }
 
@@ -98,22 +97,17 @@ impl SSABuilder {
             let bb = BasicBlock(i);
             for stmt in &block.statements {
                 if let StatementKind::Assign(place, _) = &stmt.kind {
-                    // Only track simple locals for now (no projections)
                     if place.projection.is_empty() {
-                        self.def_sites.entry(place.local).or_default().insert(bb);
+                        self.def_sites[place.local.0].insert(bb);
                     }
                 }
             }
-            // Terminators can also define variables (call destinations)
             if let Some(terminator) = &block.terminator {
                 match &terminator.kind {
                     TerminatorKind::Call { destination, .. }
                     | TerminatorKind::GpuLaunch { destination, .. } => {
                         if destination.projection.is_empty() {
-                            self.def_sites
-                                .entry(destination.local)
-                                .or_default()
-                                .insert(bb);
+                            self.def_sites[destination.local.0].insert(bb);
                         }
                     }
                     _ => {}
@@ -123,18 +117,18 @@ impl SSABuilder {
 
         // Function parameters are defined in the entry block (implicitly)
         for i in 1..=body.arg_count {
-            self.def_sites
-                .entry(Local(i))
-                .or_default()
-                .insert(BasicBlock(0));
+            self.def_sites[i].insert(BasicBlock(0));
         }
     }
 
     /// Insert trivial Phi nodes at the iterated dominance frontier of definition sites.
     fn insert_phi_nodes(&mut self, body: &mut Body) {
-        // For each variable, find the Iterated Dominance Frontier (IDF)
-        for (local, defs) in &self.def_sites {
-            let mut worklist: Vec<BasicBlock> = defs.iter().cloned().collect();
+        for (idx, defs) in self.def_sites.iter().enumerate() {
+            if defs.is_empty() {
+                continue;
+            }
+            let local = Local(idx);
+            let mut worklist: Vec<BasicBlock> = defs.iter().copied().collect();
             let mut processed = HashSet::new();
             let mut has_phi = HashSet::new();
 
@@ -142,8 +136,7 @@ impl SSABuilder {
                 if let Some(frontier) = self.dom_tree.dominance_frontiers.get(&block) {
                     for &df_node in frontier {
                         if !has_phi.contains(&df_node) {
-                            // Insert Phi for 'local' at 'df_node'
-                            insert_phi(body, *local, df_node);
+                            insert_phi(body, local, df_node);
                             has_phi.insert(df_node);
 
                             if !processed.contains(&df_node) {
@@ -160,8 +153,10 @@ impl SSABuilder {
     fn rename_variables(&mut self, body: &mut Body, block: BasicBlock) {
         let (basic_blocks, local_decls) = (&mut body.basic_blocks, &mut body.local_decls);
 
-        // Track which stack entries we added to pop them later
-        let mut pushed_counts: HashMap<Local, usize> = HashMap::new();
+        // Track which stack entries we added per original local, to pop them later.
+        // Sized for original locals only; new SSA locals always map back to an original.
+        let num_originals = self.version_stack.len();
+        let mut pushed_counts: Vec<usize> = vec![0; num_originals];
 
         // 1. Rename Phis (definitions part) and Statements
         let stmt_count = basic_blocks[block.0].statements.len();
@@ -172,7 +167,7 @@ impl SSABuilder {
                 if let StatementKind::Assign(place, _) = &s.kind {
                     let local = place.local;
                     let new_local = self.new_version(local_decls, local);
-                    *pushed_counts.entry(local).or_default() += 1;
+                    pushed_counts[local.0] += 1;
 
                     // Mutate
                     if let StatementKind::Assign(p, _) =
@@ -208,7 +203,7 @@ impl SSABuilder {
                         let new_local = self.new_version(local_decls, place.local);
                         let original = self.get_original_local(place.local);
                         place.local = new_local;
-                        *pushed_counts.entry(original).or_default() += 1;
+                        pushed_counts[original.0] += 1;
                     }
                 }
             }
@@ -228,7 +223,7 @@ impl SSABuilder {
                         let new_local = self.new_version(local_decls, destination.local);
                         let original = self.get_original_local(destination.local);
                         destination.local = new_local;
-                        *pushed_counts.entry(original).or_default() += 1;
+                        pushed_counts[original.0] += 1;
                     }
                 }
                 _ => {}
@@ -278,11 +273,10 @@ impl SSABuilder {
         }
 
         // 4. Pop stack
-        for (local, count) in pushed_counts {
-            if let Some(stack) = self.version_stack.get_mut(&local) {
-                for _ in 0..count {
-                    stack.pop();
-                }
+        for (idx, &count) in pushed_counts.iter().enumerate() {
+            if count > 0 {
+                let stack = &mut self.version_stack[idx];
+                stack.truncate(stack.len().saturating_sub(count));
             }
         }
     }
@@ -366,8 +360,8 @@ impl SSABuilder {
 
     fn get_current_version(&self, local: Local) -> Local {
         let original = self.get_original_local(local);
-        if let Some(stack) = self.version_stack.get(&original) {
-            if let Some(&top) = stack.last() {
+        if original.0 < self.version_stack.len() {
+            if let Some(&top) = self.version_stack[original.0].last() {
                 return top;
             }
         }
@@ -388,11 +382,8 @@ impl SSABuilder {
         local_decls.push(new_decl);
         let new_local = Local(new_idx);
 
-        self.version_stack
-            .entry(original)
-            .or_default()
-            .push(new_local);
-
+        self.version_stack[original.0].push(new_local);
+        self.version_counts[original.0] += 1;
         self.new_to_old.insert(new_local, original);
 
         new_local

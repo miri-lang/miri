@@ -258,10 +258,11 @@ impl Context {
     }
 
     /// Resolves a symbol by name, searching from the innermost scope outwards.
-    pub fn resolve_info(&self, name: &str) -> Option<SymbolInfo> {
+    /// Returns a reference to avoid cloning; callers should clone only when mutation is needed.
+    pub fn resolve_info(&self, name: &str) -> Option<&SymbolInfo> {
         for scope in self.scopes.iter().rev() {
             if let Some(info) = scope.get(name) {
-                return Some(info.clone());
+                return Some(info);
             }
         }
         None

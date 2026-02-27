@@ -104,7 +104,7 @@ pub fn field_layout(
         | TypeKind::Set(_)
         | TypeKind::Result(_, _)
         | TypeKind::Future(_)
-        | TypeKind::Function(_, _, _)
+        | TypeKind::Function(_)
         | TypeKind::Generic(_, _, _)
         | TypeKind::Meta(_)
         | TypeKind::Nullable(_)
@@ -143,15 +143,12 @@ pub fn aggregate_size(
                     }
                     TypeDefinition::Enum(enum_def) => {
                         // discriminant (8 bytes) + max payload size
+                        // Each payload field is stored at 8-byte alignment to match
+                        // field_layout which uses 8-byte slots per field.
                         let max_payload: u32 = enum_def
                             .variants
                             .values()
-                            .map(|fields| {
-                                fields
-                                    .iter()
-                                    .map(|ty| translate_type_kind(&ty.kind).bytes())
-                                    .sum::<u32>()
-                            })
+                            .map(|fields| (fields.len() as u32) * 8)
                             .max()
                             .unwrap_or(0);
                         8 + max_payload
