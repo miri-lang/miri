@@ -300,37 +300,27 @@ fn lower_for_over_iterable(
     // Determine if the iterable is a class implementing Iterable trait.
     // If so, we use method calls (ClassName_length, ClassName_element_at)
     // instead of raw Rvalue::Len and PlaceElem::Index.
-    let iterable_class = {
-        let list_ty_kind = ctx
-            .type_checker
-            .get_type(iterable.id)
-            .map(|ty| ty.kind.clone());
-        match list_ty_kind {
-            Some(TypeKind::String) => Some("String".to_string()),
-            Some(TypeKind::Custom(name, _)) => Some(name),
+    let iterable_class: Option<String> = ctx
+        .type_checker
+        .get_type(iterable.id)
+        .and_then(|ty| match &ty.kind {
+            TypeKind::String => Some("String".to_string()),
+            TypeKind::Custom(name, _) => Some(name.clone()),
             _ => None,
-        }
-        .and_then(|name| {
-            if let Some(TypeDefinition::Class(class_def)) =
-                ctx.type_checker.global_type_definitions.get(&name)
-            {
-                if class_def.traits.iter().any(|t| t == "Iterable") {
-                    Some((name, class_def.clone()))
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
         })
-    };
+        .filter(|name| {
+            matches!(
+                ctx.type_checker.global_type_definitions.get(name),
+                Some(TypeDefinition::Class(class_def)) if class_def.traits.iter().any(|t| t == "Iterable")
+            )
+        });
 
     // Header: Check idx < length
     ctx.set_current_block(header_bb);
 
     let len_temp = ctx.push_temp(idx_ty.clone(), *span);
 
-    if let Some((ref class_name, _)) = iterable_class {
+    if let Some(ref class_name) = iterable_class {
         // Call ClassName_length(iterable) via MIR terminator
         let length_symbol = format!("{}_length", class_name);
         let func_op = Operand::Constant(Box::new(Constant {
@@ -390,7 +380,7 @@ fn lower_for_over_iterable(
     ctx.set_current_block(body_bb);
 
     // Assign loop_var = element_at(idx) or list[idx]
-    if let Some((ref class_name, _)) = iterable_class {
+    if let Some(ref class_name) = iterable_class {
         // Call ClassName_element_at(iterable, idx) via MIR terminator
         let element_at_symbol = format!("{}_element_at", class_name);
         let func_op = Operand::Constant(Box::new(Constant {
@@ -903,13 +893,13 @@ fn lower_struct_constructor(
 ) -> Result<Operand, LoweringError> {
     // Separate positional and named arguments
     let mut positional_args = Vec::new();
-    let mut named_args = std::collections::HashMap::new();
+    let mut named_args: std::collections::HashMap<&str, Operand> = std::collections::HashMap::new();
 
     for arg in args {
         match &arg.node {
             ExpressionKind::NamedArgument(name, value) => {
                 let op = lower_expression(ctx, value, None)?;
-                named_args.insert(name.clone(), op);
+                named_args.insert(name, op);
             }
             _ => {
                 let op = lower_expression(ctx, arg, None)?;
@@ -926,7 +916,7 @@ fn lower_struct_constructor(
         let op = if let Some(op) = pos_iter.next() {
             // Positional argument
             op
-        } else if let Some(op) = named_args.remove(field_name) {
+        } else if let Some(op) = named_args.remove(field_name.as_str()) {
             // Named argument
             op
         } else {
@@ -991,13 +981,13 @@ fn lower_class_constructor(
 ) -> Result<Operand, LoweringError> {
     // Separate positional and named arguments
     let mut positional_args = Vec::new();
-    let mut named_args = std::collections::HashMap::new();
+    let mut named_args: std::collections::HashMap<&str, Operand> = std::collections::HashMap::new();
 
     for arg in args {
         match &arg.node {
             ExpressionKind::NamedArgument(name, value) => {
                 let op = lower_expression(ctx, value, None)?;
-                named_args.insert(name.clone(), op);
+                named_args.insert(name, op);
             }
             _ => {
                 let op = lower_expression(ctx, arg, None)?;
@@ -1014,7 +1004,7 @@ fn lower_class_constructor(
         let op = if let Some(op) = pos_iter.next() {
             // Positional argument
             op
-        } else if let Some(op) = named_args.remove(field_name) {
+        } else if let Some(op) = named_args.remove(field_name.as_str()) {
             // Named argument
             op
         } else {

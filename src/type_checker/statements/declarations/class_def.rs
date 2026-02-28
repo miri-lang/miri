@@ -109,10 +109,10 @@ impl TypeChecker {
         // Check for circular inheritance
         if let Some(ref base_name) = base_class_name {
             let mut visited = std::collections::HashSet::new();
-            visited.insert(name.clone());
-            let mut current = base_name.clone();
+            visited.insert(name.as_str());
+            let mut current: &str = base_name;
             loop {
-                if visited.contains(&current) {
+                if visited.contains(current) {
                     self.report_error(
                         format!(
                             "Circular inheritance detected: class '{}' eventually extends itself",
@@ -122,11 +122,11 @@ impl TypeChecker {
                     );
                     break;
                 }
-                visited.insert(current.clone());
+                visited.insert(current);
                 // Get the base class of current
-                if let Some(relation) = self.hierarchy.get(&current) {
+                if let Some(relation) = self.hierarchy.get(current) {
                     if let Some(ref next_base) = relation.extends {
-                        current = next_base.clone();
+                        current = next_base;
                     } else {
                         break; // No more base classes
                     }
@@ -318,8 +318,8 @@ impl TypeChecker {
         let override_errors: Vec<String> = if let Some(ref base_name) = base_class_name {
             let mut errors = Vec::new();
             // Walk up the inheritance chain to find parent methods
-            let mut current_base = Some(base_name.clone());
-            while let Some(ref class_name) = current_base {
+            let mut current_base: Option<&str> = Some(base_name);
+            while let Some(class_name) = current_base {
                 if let Some(TypeDefinition::Class(base_def)) =
                     self.global_type_definitions.get(class_name)
                 {
@@ -371,7 +371,7 @@ impl TypeChecker {
                         }
                     }
                     // Move to the next ancestor
-                    current_base = base_def.base_class.clone();
+                    current_base = base_def.base_class.as_deref();
                 } else {
                     break;
                 }
@@ -391,8 +391,8 @@ impl TypeChecker {
             // Check if parent has an accessible init method
             let parent_has_init = {
                 let mut has_init = false;
-                let mut current_base = Some(base_name.clone());
-                while let Some(ref check_class) = current_base {
+                let mut current_base: Option<&str> = Some(base_name);
+                while let Some(check_class) = current_base {
                     if let Some(TypeDefinition::Class(base_def)) =
                         self.global_type_definitions.get(check_class)
                     {
@@ -406,7 +406,7 @@ impl TypeChecker {
                                 break;
                             }
                         }
-                        current_base = base_def.base_class.clone();
+                        current_base = base_def.base_class.as_deref();
                     } else {
                         break;
                     }
@@ -450,19 +450,19 @@ impl TypeChecker {
                 // Collect all abstract methods from the entire inheritance chain
                 let missing_methods: Vec<(String, String)> = {
                     let mut missing = Vec::new();
-                    let mut current_base = Some(base_name.clone());
+                    let mut current_base: Option<&str> = Some(base_name);
 
-                    while let Some(ref class_name) = current_base {
+                    while let Some(class_name) = current_base {
                         if let Some(TypeDefinition::Class(base_def)) =
                             self.global_type_definitions.get(class_name)
                         {
                             for (method_name, method_info) in &base_def.methods {
                                 if method_info.is_abstract && !methods.contains_key(method_name) {
-                                    missing.push((method_name.clone(), class_name.clone()));
+                                    missing.push((method_name.clone(), class_name.to_string()));
                                 }
                             }
                             // Move to the next ancestor
-                            current_base = base_def.base_class.clone();
+                            current_base = base_def.base_class.as_deref();
                         } else {
                             break;
                         }
@@ -488,17 +488,17 @@ impl TypeChecker {
             // Collect all methods from trait hierarchy (including parent traits)
             let all_trait_methods: HashMap<String, (MethodInfo, String)> = {
                 let mut all_methods = HashMap::new();
-                let mut traits_to_check = vec![trait_name.clone()];
+                let mut traits_to_check: Vec<&str> = vec![trait_name];
                 let mut visited_traits = std::collections::HashSet::new();
 
                 while let Some(current_trait_name) = traits_to_check.pop() {
-                    if visited_traits.contains(&current_trait_name) {
+                    if visited_traits.contains(current_trait_name) {
                         continue;
                     }
-                    visited_traits.insert(current_trait_name.clone());
+                    visited_traits.insert(current_trait_name);
 
                     if let Some(TypeDefinition::Trait(trait_def)) =
-                        self.global_type_definitions.get(&current_trait_name)
+                        self.global_type_definitions.get(current_trait_name)
                     {
                         // Add methods from this trait
                         for (method_name, method_info) in &trait_def.methods {
@@ -506,14 +506,14 @@ impl TypeChecker {
                             if !all_methods.contains_key(method_name) {
                                 all_methods.insert(
                                     method_name.clone(),
-                                    (method_info.clone(), current_trait_name.clone()),
+                                    (method_info.clone(), current_trait_name.to_string()),
                                 );
                             }
                         }
 
                         // Add parent traits to check
                         for parent_trait in &trait_def.parent_traits {
-                            traits_to_check.push(parent_trait.clone());
+                            traits_to_check.push(parent_trait);
                         }
                     }
                 }
@@ -616,13 +616,13 @@ impl TypeChecker {
             is_abstract,
         };
 
-        // Register class type definition so self.* lookups work
-        context.define_type(name.clone(), TypeDefinition::Class(class_def.clone()));
         // scopes.len() == 2 because we're in [base_scope, class_scope]
         if context.scopes.len() == 2 {
             self.global_type_definitions
                 .insert(name.clone(), TypeDefinition::Class(class_def.clone()));
         }
+        // Register class type definition so self.* lookups work (move, no clone)
+        context.define_type(name.clone(), TypeDefinition::Class(class_def));
 
         // Define class type symbol (as a constructor/type)
         let class_type_meta = make_type(TypeKind::Meta(Box::new(make_type(TypeKind::Custom(
@@ -646,7 +646,7 @@ impl TypeChecker {
         }
 
         context.define(
-            name.clone(),
+            name,
             SymbolInfo::new(
                 class_type_meta,
                 false,

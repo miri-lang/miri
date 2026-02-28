@@ -81,43 +81,31 @@ impl TypeChecker {
             return_type: return_type_expr.clone(),
         })));
 
-        // Don't let imported non-generic functions shadow built-in generic ones
-        // (e.g. system.io's print(String) should not override the built-in print<T>)
-        let is_shadowing_builtin_generic = if let Some(existing) = self.global_scope.get(name) {
-            existing.module == "std"
-                && matches!(&existing.ty.kind, TypeKind::Function(fd) if fd.generics.as_ref().is_some_and(|g| !g.is_empty()))
-                && self.current_module != "Main"
-        } else {
-            false
-        };
-
-        if !is_shadowing_builtin_generic {
-            if context.scopes.len() == 1 {
-                self.global_scope.insert(
-                    name.to_string(),
-                    SymbolInfo::new(
-                        func_type.clone(),
-                        false,
-                        false,
-                        properties.visibility.clone(),
-                        self.current_module.clone(),
-                        None,
-                    ),
-                );
-            }
-
-            context.define(
+        if context.scopes.len() == 1 {
+            self.global_scope.insert(
                 name.to_string(),
                 SymbolInfo::new(
-                    func_type,
+                    func_type.clone(),
                     false,
                     false,
                     properties.visibility.clone(),
                     self.current_module.clone(),
                     None,
                 ),
-            ); // Functions are immutable
+            );
         }
+
+        context.define(
+            name.to_string(),
+            SymbolInfo::new(
+                func_type,
+                false,
+                false,
+                properties.visibility.clone(),
+                self.current_module.clone(),
+                None,
+            ),
+        ); // Functions are immutable
 
         context.enter_scope();
 
