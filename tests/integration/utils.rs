@@ -3,6 +3,13 @@
 
 use crate::utils::{miri_check, miri_run};
 
+/// Checks whether the output contains an error header in either format:
+/// - `error:` (plain, no error code)
+/// - `error[E0xxx]:` (with error code)
+fn has_error_header(output: &str) -> bool {
+    output.contains("error:") || output.contains("error[")
+}
+
 /// Assert that the code successfully compiles to an executable.
 pub fn assert_runs(code: &str) {
     let result = miri_run(code);
@@ -64,7 +71,7 @@ pub fn assert_compiler_error(code: &str, expected_error: &str) {
     let result = miri_check(code);
     let output = result.output();
 
-    if !output.contains("error:") {
+    if !has_error_header(&output) {
         panic!(
             "Expected invalid program, but got no errors.\nOutput:\n{}",
             output
@@ -97,7 +104,7 @@ pub fn assert_runtime_error(code: &str, expected_error: &str) {
     let result = miri_run(code);
     let output = result.output();
 
-    if !output.contains("error:") {
+    if !has_error_header(&output) {
         panic!(
             "Expected invalid program, but got no errors.\nOutput:\n{}",
             output

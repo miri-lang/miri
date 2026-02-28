@@ -3,8 +3,7 @@
 
 //! Error types for MIR lowering.
 
-use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable, Severity};
-use crate::error::format::format_diagnostic;
+use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable, Severity, BUG_REPORT_URL};
 use crate::error::syntax::Span;
 
 /// An error produced during MIR lowering, with its source location.
@@ -90,9 +89,7 @@ impl LoweringErrorKind {
                     "Could not determine the type of this expression. This is an internal compiler error — please report it."
                         .to_string(),
                 ),
-                help: Some(
-                    "Please report this at https://github.com/vshynkarenko/miri/issues".to_string(),
-                ),
+                help: Some(format!("Please report this at {}", BUG_REPORT_URL)),
             },
             Self::BreakOutsideLoop => ErrorProperties {
                 code: "E0204",
@@ -295,23 +292,6 @@ impl Reportable for LoweringError {
             help,
             notes: Vec::new(),
         }
-    }
-
-    fn report(&self, source: &str) -> String {
-        let props = self.kind.properties();
-        let help = if let LoweringErrorKind::Custom { help, .. } = &self.kind {
-            help.as_deref()
-        } else {
-            props.help.as_deref()
-        };
-
-        format_diagnostic(
-            source,
-            &self.span,
-            props.message.as_deref().unwrap_or(props.title),
-            "error",
-            help,
-        )
     }
 }
 

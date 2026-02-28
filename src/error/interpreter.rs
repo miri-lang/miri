@@ -6,7 +6,7 @@
 //! Error types for the MIR interpreter, consolidated in the error module
 //! for consistent formatting and reporting.
 
-use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable, Severity};
+use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable, Severity, BUG_REPORT_URL};
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,7 +105,7 @@ impl InterpreterErrorKind {
                         .to_string(),
                 ),
                 help: Some(
-                    "Please report this at https://github.com/vshynkarenko/miri/issues".to_string(),
+                    format!("Please report this at {}", BUG_REPORT_URL),
                 ),
             },
             Self::UninitializedLocal(_) => ErrorProperties {
@@ -116,7 +116,7 @@ impl InterpreterErrorKind {
                         .to_string(),
                 ),
                 help: Some(
-                    "Please report this at https://github.com/vshynkarenko/miri/issues".to_string(),
+                    format!("Please report this at {}", BUG_REPORT_URL),
                 ),
             },
             Self::InvalidBlock(_) => ErrorProperties {
@@ -127,7 +127,7 @@ impl InterpreterErrorKind {
                         .to_string(),
                 ),
                 help: Some(
-                    "Please report this at https://github.com/vshynkarenko/miri/issues".to_string(),
+                    format!("Please report this at {}", BUG_REPORT_URL),
                 ),
             },
             Self::StackOverflow => ErrorProperties {
@@ -147,7 +147,7 @@ impl InterpreterErrorKind {
                 title: "Internal Error",
                 message: Some(format!("Internal error: {}", msg)),
                 help: Some(
-                    "Please report this at https://github.com/vshynkarenko/miri/issues".to_string(),
+                    format!("Please report this at {}", BUG_REPORT_URL),
                 ),
             },
         }

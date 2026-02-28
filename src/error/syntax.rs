@@ -2,7 +2,6 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable, Severity};
-use crate::error::format::format_diagnostic;
 
 /// Byte offset range in source code, used for error reporting and AST spans.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
@@ -318,24 +317,34 @@ impl SyntaxError {
     }
 }
 
+impl std::fmt::Display for SyntaxError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let props = self.kind.properties();
+        write!(f, "{}", props.message.as_deref().unwrap_or(props.title))
+    }
+}
+
 impl Reportable for SyntaxError {
     fn to_diagnostic(&self) -> Diagnostic {
         let props = self.kind.properties();
+
+        // If the span points outside the user's source (e.g. from a stdlib module),
+        // omit it to avoid panicking in format_diagnostic_full.
+        let span = if self.span.start < usize::MAX {
+            Some(self.span)
+        } else {
+            None
+        };
+
         Diagnostic {
             severity: Severity::Error,
             code: Some(props.code),
             title: props.title.to_string(),
             message: props.message.unwrap_or_else(|| props.title.to_string()),
-            span: Some(self.span),
+            span,
             help: props.help,
             notes: Vec::new(),
         }
-    }
-
-    fn report(&self, source: &str) -> String {
-        let props = self.kind.properties();
-        let message = props.message.as_deref().unwrap_or(props.title);
-        format_diagnostic(source, &self.span, message, "error", props.help.as_deref())
     }
 }
 

@@ -5,10 +5,79 @@
 //!
 //! This module provides functions for formatting error and warning messages
 //! with source context, underlining, and helpful suggestions.
+//!
+//! All color output is gated on TTY detection: when stderr is not a terminal
+//! (e.g. piped to a file or another process), ANSI escape codes are omitted
+//! entirely so that output remains clean and parseable.
+
+use std::io::IsTerminal;
 
 use crate::error::diagnostic::{Diagnostic, Severity};
 use crate::error::syntax::find_line_info;
-use crate::error::syntax::Span;
+
+/// ANSI color scheme that resolves to real escape codes on a TTY
+/// or empty strings when output is redirected.
+///
+/// All diagnostic formatting flows through this struct to ensure
+/// consistent color handling across the entire error pipeline.
+pub struct ColorScheme {
+    /// Reset all attributes.
+    pub reset: &'static str,
+    /// Bold text.
+    pub bold: &'static str,
+    /// Red (used for errors).
+    pub red: &'static str,
+    /// Yellow (used for warnings).
+    pub yellow: &'static str,
+    /// Blue (used for line-number gutters and location arrows).
+    pub blue: &'static str,
+    /// Cyan (used for notes).
+    pub cyan: &'static str,
+}
+
+impl ColorScheme {
+    /// Detects whether stderr is a terminal and returns the appropriate scheme.
+    pub fn detect() -> Self {
+        if std::io::stderr().is_terminal() {
+            Self::colored()
+        } else {
+            Self::plain()
+        }
+    }
+
+    /// Returns a scheme with real ANSI escape codes.
+    pub fn colored() -> Self {
+        Self {
+            reset: "\x1b[0m",
+            bold: "\x1b[1m",
+            red: "\x1b[31m",
+            yellow: "\x1b[33m",
+            blue: "\x1b[34m",
+            cyan: "\x1b[36m",
+        }
+    }
+
+    /// Returns a scheme with empty strings (no color).
+    pub fn plain() -> Self {
+        Self {
+            reset: "",
+            bold: "",
+            red: "",
+            yellow: "",
+            blue: "",
+            cyan: "",
+        }
+    }
+
+    /// Returns the color associated with the given severity level.
+    pub fn severity_color(&self, severity: Severity) -> &'static str {
+        match severity {
+            Severity::Error => self.red,
+            Severity::Warning => self.yellow,
+            Severity::Note => self.cyan,
+        }
+    }
+}
 
 /// Format a diagnostic using the full Diagnostic struct.
 ///
@@ -18,26 +87,19 @@ use crate::error::syntax::Span;
 /// - Title and message
 /// - Source code context with underline
 /// - Help text and notes
+///
+/// Color output is automatically enabled when stderr is a terminal and
+/// disabled when output is redirected to a file or pipe.
 pub fn format_diagnostic_full(source: &str, diag: &Diagnostic) -> String {
-    // Colors
-    let color_reset = "\x1b[0m";
-    let color_bold = "\x1b[1m";
-    let color_red = "\x1b[31m";
-    let color_yellow = "\x1b[33m";
-    let color_blue = "\x1b[34m";
-    let color_cyan = "\x1b[36m";
+    let colors = ColorScheme::detect();
 
-    let level_color = match diag.severity {
-        Severity::Error => color_red,
-        Severity::Warning => color_yellow,
-        Severity::Note => color_cyan,
-    };
+    let level_color = colors.severity_color(diag.severity);
 
     let level = diag.severity.as_str();
     let mut output = String::new();
 
     // Header: error[E0001]: Title
-    output.push_str(color_bold);
+    output.push_str(colors.bold);
     output.push_str(level_color);
     output.push_str(level);
     if let Some(code) = diag.code {
@@ -46,12 +108,16 @@ pub fn format_diagnostic_full(source: &str, diag: &Diagnostic) -> String {
         output.push(']');
     }
     output.push_str(": ");
-    output.push_str(color_reset);
+    output.push_str(colors.reset);
     output.push_str(&diag.title);
     output.push('\n');
 
-    // If we have a span, show source context
-    if let Some(ref span) = diag.span {
+    // If we have a span that falls within the source, show source context.
+    // Spans from stdlib modules may point outside the user's source string;
+    // treat those as spanless to avoid panicking in find_line_info.
+    let effective_span = diag.span.filter(|s| s.start < source.len());
+
+    if let Some(ref span) = effective_span {
         let (line_num, col_num, line_str) = find_line_info(source, span.start);
         let len = if span.end > span.start {
             span.end - span.start
@@ -66,31 +132,31 @@ pub fn format_diagnostic_full(source: &str, diag: &Diagnostic) -> String {
         // Location: --> line:col
         output.push_str(&format!(
             "{}-->{} line {}:{}\n",
-            color_blue, color_reset, line_num, col_num
+            colors.blue, colors.reset, line_num, col_num
         ));
 
         // Empty line with pipe
         output.push_str(&format!(
             "{} {} |{}\n",
             " ".repeat(gutter_width),
-            color_blue,
-            color_reset
+            colors.blue,
+            colors.reset
         ));
 
         // Code line
         output.push_str(&format!(
             "{} {} |{} {}\n",
-            color_blue, line_num, color_reset, line_str
+            colors.blue, line_num, colors.reset, line_str
         ));
 
         // Underline with message if different from title
         output.push_str(&format!(
             "{} {} |{} {}{}{}{}",
             " ".repeat(gutter_width),
-            color_blue,
-            color_reset,
+            colors.blue,
+            colors.reset,
             padding,
-            color_bold,
+            colors.bold,
             level_color,
             underline
         ));
@@ -105,15 +171,15 @@ pub fn format_diagnostic_full(source: &str, diag: &Diagnostic) -> String {
         if let Some(ref h) = diag.help {
             output.push_str(&format!(" help: {}", h));
         }
-        output.push_str(color_reset);
+        output.push_str(colors.reset);
         output.push('\n');
 
         // Closing empty line with pipe
         output.push_str(&format!(
             "{} {} |{}\n",
             " ".repeat(gutter_width),
-            color_blue,
-            color_reset
+            colors.blue,
+            colors.reset
         ));
     } else {
         // No span - just show the message if different from title
@@ -129,49 +195,11 @@ pub fn format_diagnostic_full(source: &str, diag: &Diagnostic) -> String {
     for note in &diag.notes {
         output.push_str(&format!(
             "  {}= note:{} {}\n",
-            color_cyan, color_reset, note
+            colors.cyan, colors.reset, note
         ));
     }
 
     output
-}
-
-/// Formats an error message with source context and optional help text.
-///
-/// Delegates to [`format_diagnostic_full`] by constructing a [`Diagnostic`]
-/// internally, ensuring all output goes through a single code path.
-pub fn format_diagnostic(
-    source: &str,
-    span: &Span,
-    message: &str,
-    level: &str,
-    help: Option<&str>,
-) -> String {
-    let severity = match level {
-        "warning" => Severity::Warning,
-        "note" => Severity::Note,
-        _ => Severity::Error,
-    };
-
-    // If the span points outside the user's source (e.g. from a stdlib module),
-    // omit it to avoid panicking in format_diagnostic_full.
-    let span = if span.start < source.len() {
-        Some(*span)
-    } else {
-        None
-    };
-
-    let diagnostic = Diagnostic {
-        severity,
-        code: None,
-        title: message.to_string(),
-        message: message.to_string(),
-        span,
-        help: help.map(|h| h.to_string()),
-        notes: Vec::new(),
-    };
-
-    format_diagnostic_full(source, &diagnostic)
 }
 
 /// Computes the Levenshtein edit distance between two strings.

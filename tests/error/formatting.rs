@@ -13,7 +13,8 @@ fn main()
     check_error_output(
         code,
         &[
-            "error: Undefined variable: aa",
+            "error[",
+            "Undefined variable: aa",
             "help: Did you mean 'a'?",
             "let b = aa",
             "        ^^",
@@ -30,7 +31,8 @@ fn main()
     check_error_output(
         code,
         &[
-            "error: Unknown type: strng",
+            "error[",
+            "Unknown type: strng",
             "help: Did you mean 'String'?",
             "let s strng = \"hello\"",
             "      ^^^^^",
@@ -54,7 +56,8 @@ fn main()
     check_error_output(
         code,
         &[
-            "error: Type 'Point' has no field 'z'",
+            "error[E0110]",
+            "Type 'Point' has no field 'z'",
             "let v = p.z",
             "        ^^^",
         ],
@@ -74,7 +77,8 @@ fn main()
     check_error_output(
         code,
         &[
-            "error: Enum 'Status' has no variant 'Errr'",
+            "error[E0110]",
+            "Enum 'Status' has no variant 'Errr'",
             "help: Did you mean 'Error'?",
             "let s = Status.Errr",
             "        ^^^^^^^^^^^",
@@ -93,8 +97,8 @@ fn main()
     check_error_output(
         code,
         &[
-            "error: Undefined variable: aa",
-            "error: Undefined variable: bb",
+            "Undefined variable: aa",
+            "Undefined variable: bb",
             "let b = aa",
             "        ^^",
             "let c = bb",
@@ -109,7 +113,7 @@ fn test_type_mismatch_formatting() {
 fn main()
     let a int = "string"
 "#;
-    check_error_output(code, &["error:", "let a int = \"string\""]);
+    check_error_output(code, &["error[", "let a int = \"string\""]);
 }
 
 #[test]

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+use crate::error::diagnostic::{Diagnostic, Reportable, Severity, BUG_REPORT_URL};
+use crate::error::format::format_diagnostic_full;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::SyntaxError;
 use crate::error::type_error::TypeError;
@@ -12,10 +14,10 @@ pub enum CompilerError {
     #[error("I/O Error: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("Lexer Error: {0:?}")]
+    #[error("Lexer Error: {0}")]
     Lexer(SyntaxError),
 
-    #[error("Parser Error: {0:?}")]
+    #[error("Parser Error: {0}")]
     Parser(SyntaxError),
 
     #[error("Type Error: {0}")]
@@ -42,29 +44,80 @@ pub enum CompilerError {
 
 impl CompilerError {
     /// Formats this error for terminal display using the given source code.
+    ///
+    /// All variants are routed through [`format_diagnostic_full`] to ensure
+    /// consistent formatting and TTY-aware color output.
     pub fn report(&self, source: &str) -> String {
         match self {
-            CompilerError::Lexer(e) | CompilerError::Parser(e) => e.report(source),
-            CompilerError::Type(e) => e.report(source),
+            CompilerError::Lexer(e) | CompilerError::Parser(e) => {
+                format_diagnostic_full(source, &e.to_diagnostic())
+            }
+            CompilerError::Type(e) => format_diagnostic_full(source, &e.to_diagnostic()),
             CompilerError::TypeErrors(errs) => errs
                 .iter()
-                .map(|e| e.report(source))
+                .map(|e| format_diagnostic_full(source, &e.to_diagnostic()))
                 .collect::<Vec<_>>()
                 .join("\n"),
-            CompilerError::Lowering(e) => e.report(source),
-            CompilerError::Io(e) => format!("\x1b[1m\x1b[31merror: \x1b[0mI/O Error: {}\n", e),
-            CompilerError::FileNotFound(path) => {
-                format!("\x1b[1m\x1b[31merror: \x1b[0mFile not found: {}\n", path)
+            CompilerError::Lowering(e) => format_diagnostic_full(source, &e.to_diagnostic()),
+            CompilerError::Io(e) => {
+                let diagnostic = Diagnostic {
+                    severity: Severity::Error,
+                    code: None,
+                    title: "I/O Error".to_string(),
+                    message: format!("{}", e),
+                    span: None,
+                    help: None,
+                    notes: Vec::new(),
+                };
+                format_diagnostic_full(source, &diagnostic)
             }
-            CompilerError::Internal(msg) => format!(
-                "\x1b[1m\x1b[31merror: \x1b[0mInternal compiler error: {}\n  = help: Please report this at https://github.com/vshynkarenko/miri/issues\n",
-                msg
-            ),
+            CompilerError::FileNotFound(path) => {
+                let diagnostic = Diagnostic {
+                    severity: Severity::Error,
+                    code: None,
+                    title: "File Not Found".to_string(),
+                    message: format!("File not found: {}", path),
+                    span: None,
+                    help: None,
+                    notes: Vec::new(),
+                };
+                format_diagnostic_full(source, &diagnostic)
+            }
+            CompilerError::Internal(msg) => {
+                let diagnostic = Diagnostic {
+                    severity: Severity::Error,
+                    code: None,
+                    title: "Internal Compiler Error".to_string(),
+                    message: msg.clone(),
+                    span: None,
+                    help: Some(format!("Please report this at {}", BUG_REPORT_URL)),
+                    notes: Vec::new(),
+                };
+                format_diagnostic_full(source, &diagnostic)
+            }
             CompilerError::Codegen(msg) => {
-                format!("\x1b[1m\x1b[31merror: \x1b[0mCode generation error: {}\n", msg)
+                let diagnostic = Diagnostic {
+                    severity: Severity::Error,
+                    code: None,
+                    title: "Code Generation Error".to_string(),
+                    message: msg.clone(),
+                    span: None,
+                    help: None,
+                    notes: Vec::new(),
+                };
+                format_diagnostic_full(source, &diagnostic)
             }
             CompilerError::Runtime(msg) => {
-                format!("\x1b[1m\x1b[31merror: \x1b[0mRuntime error: {}\n", msg)
+                let diagnostic = Diagnostic {
+                    severity: Severity::Error,
+                    code: None,
+                    title: "Runtime Error".to_string(),
+                    message: msg.clone(),
+                    span: None,
+                    help: None,
+                    notes: Vec::new(),
+                };
+                format_diagnostic_full(source, &diagnostic)
             }
         }
     }

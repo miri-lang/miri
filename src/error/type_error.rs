@@ -2,7 +2,6 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable, Severity};
-use crate::error::format::format_diagnostic;
 use crate::error::syntax::Span;
 
 /// A type error detected during type checking, with its source location.
@@ -178,23 +177,6 @@ impl Reportable for TypeError {
             help,
             notes: Vec::new(),
         }
-    }
-
-    fn report(&self, source: &str) -> String {
-        let props = self.kind.properties();
-        let help = if let TypeErrorKind::Custom { help, .. } = &self.kind {
-            help.as_deref()
-        } else {
-            props.help.as_deref()
-        };
-
-        format_diagnostic(
-            source,
-            &self.span,
-            props.message.as_deref().unwrap_or(props.title),
-            "error",
-            help,
-        )
     }
 }
 

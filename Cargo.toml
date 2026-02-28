@@ -2,7 +2,7 @@
 name = "miri"
 version = "0.1.0-alpha.1"
 description = "A modern, GPU-first, statically-typed programming language"
-repository = "https://github.com/vshynkarenko/miri"
+repository = "https://github.com/miri-lang/miri"
 edition = "2021"
 
 [features]

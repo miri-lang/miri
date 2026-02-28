@@ -10,6 +10,9 @@
 
 use crate::error::syntax::Span;
 
+/// The official URL for reporting internal compiler errors.
+pub const BUG_REPORT_URL: &str = "https://github.com/miri-lang/miri/issues";
+
 /// Diagnostic severity level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
