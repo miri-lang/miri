@@ -1,8 +1,8 @@
-# Miri
+# The Miri Programming Language
 
-**A modern, GPU-first, statically-typed programming language designed for balancing high performance and developer productivity in the age of GenAI.**
+**A modern, GPU-first, statically-typed, compiled programming language designed for balancing high performance and safety in the age of Generative AI.**
 
-Miri combines the readability of Python with the safety and speed of Rust—essential in the age of Generative AI, where humans define intent and invariants, and AI fills in safe, verifiable, high-performance implementations.
+Miri is designed for agentic engineering, where humans define intent and AI fills in safe, verifiable, high-performance implementations.
 
 ## Current State (v0.1.0-alpha.1)
 

@@ -9,9 +9,9 @@ Unlike the linear stream of tokens produced by the Lexer, the AST forms a tree t
 ## Architecture
 
 -   **Expressions (`Expression`)**: Nodes representing computations that produce values, such as binary operations (`a + b`), function calls (`foo()`), literals (`42`), and memory access (`x[0]`).
--   **Statements (`Statement`)**: Nodes representing actions that do not explicitly yield a value in Miri, such as variable declarations (`let x = 10`), assignments (`x = 20`), and loops (`while x < 10 { ... }`).
+-   **Statements (`Statement`)**: Nodes representing actions that do not explicitly yield a value in Miri, such as variable declarations (`let x = 10`), assignments (`x = 20`), and loops (`while x < 10: ...`).
 -   **Declarations (`Declaration`)**: Top-level constructs that introduce new entities into the program, such as functions (`fn`), classes (`class`), enums (`enum`), and structs (`struct`).
--   **Types (`TypeExpression`)**: Syntactic representations of types as written by the programmer (e.g., `int`, `[string]`, `Map<K, V>`).
+-   **Types (`TypeExpression`)**: Syntactic representations of types as written by the programmer (e.g., `int`, `[String]`, `Map<K, V>`).
 
 ## Design Principles
 

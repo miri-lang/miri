@@ -10,7 +10,7 @@ The code generation phase maps MIR constructs directly into target-specific inst
 
 ## Architecture
 
--   **Backend Traits**: The system is abstracted behind common traits to support multiple generation targets (e.g., Cranelift, LLVM, SPIR-V).
+-   **Backend Traits**: The system is abstracted behind common traits to support multiple generation targets (e.g., Cranelift, LLVM, SPIR-V, CUDA, WebAssembly, etc.).
 -   **Translator (`translator.rs`)**: The core loop that visits MIR Basic Blocks and issues backend API calls.
 -   **Variables and Locals**: MIR locals (`_0`, `_1`, etc.) are mapped to backend stack slots or virtual registers.
 -   **Function Declarations**: Miri functions are exported with defined signatures (`declare_func_in_func`).

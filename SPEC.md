@@ -1,7 +1,5 @@
 # Miri Language Specification (v0.1.0-alpha.1)
 
-A modern, minimal, AI-friendly programming language for high-performance, concurrent, and GPU-accelerated applications.
-
 *This specification documents the currently implemented features of Miri v0.1.0-alpha.1.*
 
 ---
@@ -39,10 +37,13 @@ let z int = 30       // explicitly typed
 ### Built-in Types
 
 ```miri
-int                  // integer, size depends on the CPU
-float                // floating point, size depends on the CPU
-String               // string
-bool                 // boolean
+int                        // integer, size depends on the CPU
+i8, i16, i32, i64, i128    // signed integers
+u8, u16, u32, u64, u128    // unsigned integers
+float                      // floating point, size depends on the CPU
+f32, f64                   // floating point
+bool                       // boolean
+String                     // string
 ```
 
 ---
@@ -67,6 +68,8 @@ fn main()
     println("Program started")
 ```
 
+If no main function is defined, the program wraps all top-level code in a main function.
+
 ---
 
 ## Control Flow
@@ -83,6 +86,12 @@ else
 
 unless x == 0
     print("Non-zero")
+
+// Ternary operator
+let result = "Large" if x > 10 else "Small"
+
+// Same, but with inline if
+let result = if x > 10: "Large" else: "Small"
 ```
 
 ### Loops
@@ -143,6 +152,7 @@ match x: 1: "One", 2: "Two"
 
 ```miri
 let s = "Hello"
+let name = "Miri"
 let f = f"Hello, {name}"
 ```
 
