@@ -11,7 +11,7 @@ use super::super::Parser;
 
 impl<'source> Parser<'source> {
     /*
-    */
+     */
     pub(crate) fn formatted_string_expression(&mut self) -> Result<Expression, SyntaxError> {
         let mut parts = Vec::new();
 
@@ -77,5 +77,4 @@ impl<'source> Parser<'source> {
 
         Ok(ast::f_string(parts))
     }
-
 }

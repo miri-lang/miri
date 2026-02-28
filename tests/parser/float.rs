@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+#![allow(clippy::approx_constant)]
+
 use super::utils::{parser_error_test, parser_test, run_float_tests};
 use miri::ast::factory::{
     binary, call, expression_statement, float32, float32_literal_expression, float64, identifier,
@@ -30,14 +32,14 @@ fn test_parse_float_literal_edge_cases() {
         ("3.14159265", float64(3.14159265)), // too long for f32
         // Largest and smallest values
         ("3.4028235e38", float32(3.4028235e38)), // max f32
-        ("1.17549435e-38", float32(1.17549435e-38)), // min normal f32
+        ("1.17549435e-38", float32(1.175_494_4e-38)), // min normal f32
         ("1.7976931348623157e308", float64(1.7976931348623157e308)), // max f64
         ("2.2250738585072014e-308", float64(2.2250738585072014e-308)), // min normal f64
         // Zeros
         ("0.0", float32(0.0)),
         ("0.000000", float32(0.0)),
         // Underscore formatting
-        ("123_456.789", float32(123_456.789)),
+        ("123_456.789", float32(123_456.79)),
         ("1_000_000.1234567", float64(1_000_000.1234567)),
         ("1_000_000.12345678", float64(1_000_000.12345678)), // too long
         // Scientific notation variants

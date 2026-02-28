@@ -11,7 +11,7 @@ use super::super::Parser;
 
 impl<'source> Parser<'source> {
     /*
-    */
+     */
     /// Parses an enum variant declaration (name with optional associated types).
     pub fn enum_value_expression(&mut self) -> Result<Expression, SyntaxError> {
         let identifier = self.identifier()?;
@@ -29,7 +29,7 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn type_statement(
         &mut self,
         visibility: MemberVisibility,
@@ -49,7 +49,7 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn type_declaration(&mut self) -> Result<Expression, SyntaxError> {
         let name = self.identifier()?;
         let generic_types = self.generic_types_expression()?;
@@ -94,5 +94,4 @@ impl<'source> Parser<'source> {
             type_expr,
         ))
     }
-
 }

@@ -337,14 +337,14 @@ else
         identifier("x"),
         block(vec![variable_statement(
             vec![let_variable(
-                "y".into(),
+                "y",
                 None,
                 opt_expr(int_literal_expression(10)),
             )],
             MemberVisibility::Public,
         )]),
         Some(block(vec![variable_statement(
-            vec![var("z".into(), None, opt_expr(int_literal_expression(20)))],
+            vec![var("z", None, opt_expr(int_literal_expression(20)))],
             MemberVisibility::Public,
         )])),
     );

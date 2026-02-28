@@ -19,7 +19,7 @@ print(\"Hello\")
 ",
         vec![expression_statement(call(
             identifier("print"),
-            vec![string_literal_expression("Hello".into())],
+            vec![string_literal_expression("Hello")],
         ))],
     );
 }

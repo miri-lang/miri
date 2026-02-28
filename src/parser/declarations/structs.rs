@@ -10,7 +10,7 @@ use super::super::{DeclarationBlockConfig, Parser};
 
 impl<'source> Parser<'source> {
     /*
-    */
+     */
     pub(crate) fn struct_statement(
         &mut self,
         visibility: MemberVisibility,
@@ -33,7 +33,7 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn struct_member_expression(&mut self) -> Result<Expression, SyntaxError> {
         let name = self.identifier()?;
         let typ = self
@@ -41,5 +41,4 @@ impl<'source> Parser<'source> {
             .ok_or_else(|| self.error_missing_struct_member_type())?;
         Ok(ast::struct_member_expression(name, typ))
     }
-
 }

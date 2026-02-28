@@ -70,7 +70,7 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn function_declaration(
         &mut self,
         visibility: MemberVisibility,
@@ -79,7 +79,7 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn runtime_function_declaration(&mut self) -> Result<Statement, SyntaxError> {
         self.eat_token(&Token::Runtime)?;
 
@@ -201,7 +201,7 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn parameter_list(&mut self) -> Result<Vec<Parameter>, SyntaxError> {
         let mut parameters = vec![self.parameter()?];
 
@@ -218,7 +218,7 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn parameter(&mut self) -> Result<Parameter, SyntaxError> {
         let name = self.parse_simple_identifier()?;
 
@@ -252,7 +252,7 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn guard_expression(&mut self) -> Result<Expression, SyntaxError> {
         let mut guard_op = match &self._lookahead {
             Some((Token::GreaterThan, _)) => GuardOp::GreaterThan,
@@ -273,5 +273,4 @@ impl<'source> Parser<'source> {
         let expression = self.expression()?;
         Ok(ast::guard(guard_op, expression))
     }
-
 }

@@ -9,15 +9,11 @@
 use crate::ast::types::{Type, TypeKind};
 use crate::codegen::cranelift::layout;
 use crate::codegen::cranelift::types::translate_type;
-use crate::mir::{
-    BasicBlock, Body, Local, Place, PlaceElem,
-};
+use crate::mir::{BasicBlock, Body, Local, Place, PlaceElem};
 use crate::type_checker::context::TypeDefinition;
 
 use cranelift_codegen::ir::types as cl_types;
-use cranelift_codegen::ir::{
-    AbiParam, Block, Function, InstBuilder, MemFlags, Signature, Value,
-};
+use cranelift_codegen::ir::{AbiParam, Block, Function, InstBuilder, MemFlags, Signature, Value};
 use cranelift_codegen::isa::{CallConv, TargetIsa};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::{Linkage, Module};

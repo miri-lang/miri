@@ -3,8 +3,7 @@ use crate::ast::types::TypeKind;
 use crate::codegen::cranelift::translator::{FunctionTranslator, ModuleCtx, TypeCtx};
 use crate::codegen::cranelift::types::translate_type;
 use crate::mir::{
-    BasicBlock, Body, Local, Operand, Statement, StatementKind, Terminator,
-    TerminatorKind,
+    BasicBlock, Body, Local, Operand, Statement, StatementKind, Terminator, TerminatorKind,
 };
 use cranelift_codegen::ir::{
     condcodes::IntCC, types as cl_types, AbiParam, Block, InstBuilder, MemFlags, Signature,

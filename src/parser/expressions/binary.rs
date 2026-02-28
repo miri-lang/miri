@@ -7,14 +7,14 @@ use crate::error::syntax::{Span, SyntaxError};
 use crate::lexer::Token;
 
 use super::super::utils::{
-    is_additive_op, is_equality_op, is_logical_and_op, is_logical_or_op,
-    is_multiplicative_op, is_relational_op,
+    is_additive_op, is_equality_op, is_logical_and_op, is_logical_or_op, is_multiplicative_op,
+    is_relational_op,
 };
 use super::super::Parser;
 
 impl<'source> Parser<'source> {
     /*
-    */
+     */
     pub(crate) fn relational_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.binary_expression_precedence(
             Self::range_expression,
@@ -25,7 +25,7 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn equality_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.binary_expression_precedence(
             Self::relational_expression,
@@ -36,7 +36,7 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn logical_and_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.binary_expression_precedence(
             Self::equality_expression,
@@ -47,7 +47,7 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn logical_or_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.binary_expression_precedence(
             Self::logical_and_expression,
@@ -58,7 +58,7 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn additive_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.binary_expression_precedence(
             Self::multiplicative_expression,
@@ -69,7 +69,7 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn multiplicative_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.binary_expression_precedence(
             Self::unary_expression,
@@ -112,5 +112,4 @@ impl<'source> Parser<'source> {
 
         Ok(left)
     }
-
 }

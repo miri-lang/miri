@@ -10,7 +10,7 @@ use super::super::Parser;
 
 impl<'source> Parser<'source> {
     /*
-    */
+     */
     pub(crate) fn range_expression(&mut self) -> Result<Expression, SyntaxError> {
         let start = self.additive_expression()?;
 
@@ -36,5 +36,4 @@ impl<'source> Parser<'source> {
             _ => Ok(start),
         }
     }
-
 }

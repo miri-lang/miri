@@ -10,7 +10,7 @@ use super::super::Parser;
 
 impl<'source> Parser<'source> {
     /*
-    */
+     */
     pub(crate) fn lambda_expression(&mut self) -> Result<Expression, SyntaxError> {
         let properties = self.function_modifiers(MemberVisibility::Public)?;
 
@@ -50,5 +50,4 @@ impl<'source> Parser<'source> {
             properties,
         ))
     }
-
 }

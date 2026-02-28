@@ -10,7 +10,7 @@ use super::super::Parser;
 
 impl<'source> Parser<'source> {
     /*
-    */
+     */
     pub(crate) fn identifier(&mut self) -> Result<Expression, SyntaxError> {
         let (name, span) = if self.match_lookahead_type(|t| matches!(t, Token::None)) {
             let (_, span) = self.eat_token(&Token::None)?;
@@ -55,7 +55,7 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn primary_expression(&mut self) -> Result<Expression, SyntaxError> {
         if self._lookahead.is_none() {
             return Err(self.error_eof());
@@ -106,7 +106,7 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn parenthesized_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.eat_token(&Token::LParen)?;
 
@@ -141,5 +141,4 @@ impl<'source> Parser<'source> {
         self.eat_token(&Token::RParen)?;
         Ok(ast::tuple(elements))
     }
-
 }

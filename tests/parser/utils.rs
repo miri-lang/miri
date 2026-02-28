@@ -17,11 +17,11 @@ fn parse(input: &str) -> Result<Program, SyntaxError> {
     parser.parse()
 }
 
-pub fn parse_program<'src>(input: &'src str) -> Program {
+pub fn parse_program(input: &str) -> Program {
     parse(input).unwrap()
 }
 
-pub fn parser_test<'src>(input: &'src str, _expected_body: Vec<Statement>) {
+pub fn parser_test(input: &str, _expected_body: Vec<Statement>) {
     let program = parse_program(input);
     assert_eq!(
         program,

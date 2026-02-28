@@ -10,7 +10,7 @@ use super::super::Parser;
 
 impl<'source> Parser<'source> {
     /*
-    */
+     */
     pub(crate) fn conditional_expression(&mut self) -> Result<Expression, SyntaxError> {
         let expression = self.logical_or_expression()?;
 
@@ -180,7 +180,7 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn match_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.eat_token(&Token::Match)?;
         let value = self.expression()?;
@@ -228,7 +228,7 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn match_branch_list(
         &mut self,
         inline_mode: bool,
@@ -264,7 +264,7 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn match_branch(&mut self) -> Result<MatchBranch, SyntaxError> {
         let mut patterns = vec![self.pattern()?];
         while self.match_lookahead_type(|t| t == &Token::Pipe) {
@@ -306,5 +306,4 @@ impl<'source> Parser<'source> {
             body: Box::new(body),
         })
     }
-
 }

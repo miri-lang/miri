@@ -46,48 +46,38 @@ pub fn lower_expression(
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     match &expr.node {
-        ExpressionKind::Literal(lit) => literal_expr::lower_literal_expr(ctx, expr, dest),
-        ExpressionKind::Identifier(name, _) => {
-            identifier_expr::lower_identifier_expr(ctx, expr, dest)
-        }
-        ExpressionKind::Assignment(lhs, op, rhs) => {
-            assignment_expr::lower_assignment_expr(ctx, expr, dest)
-        }
-        ExpressionKind::Binary(lhs, op, rhs) => binary_expr::lower_binary_expr(ctx, expr, dest),
-        ExpressionKind::Unary(op, operand) => unary_expr::lower_unary_expr(ctx, expr, dest),
-        ExpressionKind::Call(func, args) => call_expr::lower_call_expr(ctx, expr, dest),
-        ExpressionKind::Member(obj, prop) => member_expr::lower_member_expr(ctx, expr, dest),
-        ExpressionKind::Tuple(elements) => tuple_expr::lower_tuple_expr(ctx, expr, dest),
-        ExpressionKind::List(elements) => list_expr::lower_list_expr(ctx, expr, dest),
-        ExpressionKind::Array(elements, _size) => array_expr::lower_array_expr(ctx, expr, dest),
+        ExpressionKind::Literal(..) => literal_expr::lower_literal_expr(ctx, expr, dest),
+        ExpressionKind::Identifier(..) => identifier_expr::lower_identifier_expr(ctx, expr, dest),
+        ExpressionKind::Assignment(..) => assignment_expr::lower_assignment_expr(ctx, expr, dest),
+        ExpressionKind::Binary(..) => binary_expr::lower_binary_expr(ctx, expr, dest),
+        ExpressionKind::Unary(..) => unary_expr::lower_unary_expr(ctx, expr, dest),
+        ExpressionKind::Call(..) => call_expr::lower_call_expr(ctx, expr, dest),
+        ExpressionKind::Member(..) => member_expr::lower_member_expr(ctx, expr, dest),
+        ExpressionKind::Tuple(..) => tuple_expr::lower_tuple_expr(ctx, expr, dest),
+        ExpressionKind::List(..) => list_expr::lower_list_expr(ctx, expr, dest),
+        ExpressionKind::Array(..) => array_expr::lower_array_expr(ctx, expr, dest),
 
-        ExpressionKind::Set(elements) => set_expr::lower_set_expr(ctx, expr, dest),
-        ExpressionKind::Map(pairs) => map_expr::lower_map_expr(ctx, expr, dest),
-        ExpressionKind::Index(obj, index_expr) => index_expr::lower_index_expr(ctx, expr, dest),
-        ExpressionKind::Match(subject, branches) => match_expr::lower_match_expr(ctx, expr, dest),
-        ExpressionKind::Logical(lhs, op, rhs) => logical_expr::lower_logical_expr(ctx, expr, dest),
-        ExpressionKind::Conditional(then_expr, cond_expr, else_expr_opt, if_type) => {
+        ExpressionKind::Set(..) => set_expr::lower_set_expr(ctx, expr, dest),
+        ExpressionKind::Map(..) => map_expr::lower_map_expr(ctx, expr, dest),
+        ExpressionKind::Index(..) => index_expr::lower_index_expr(ctx, expr, dest),
+        ExpressionKind::Match(..) => match_expr::lower_match_expr(ctx, expr, dest),
+        ExpressionKind::Logical(..) => logical_expr::lower_logical_expr(ctx, expr, dest),
+        ExpressionKind::Conditional(..) => {
             conditional_expr::lower_conditional_expr(ctx, expr, dest)
         }
-        ExpressionKind::Range(start_expr, end_expr_opt, range_type) => {
-            range_expr::lower_range_expr(ctx, expr, dest)
-        }
-        ExpressionKind::Lambda(lambda) => lambda_expr::lower_lambda_expr(ctx, expr, dest),
-        ExpressionKind::FormattedString(parts) => {
+        ExpressionKind::Range(..) => range_expr::lower_range_expr(ctx, expr, dest),
+        ExpressionKind::Lambda(..) => lambda_expr::lower_lambda_expr(ctx, expr, dest),
+        ExpressionKind::FormattedString(..) => {
             formattedstring_expr::lower_formattedstring_expr(ctx, expr, dest)
         }
-        ExpressionKind::Guard(guard_op, guard_expr) => {
-            guard_expr::lower_guard_expr(ctx, expr, dest)
-        }
-        ExpressionKind::NamedArgument(_name, value_expr) => {
+        ExpressionKind::Guard(..) => guard_expr::lower_guard_expr(ctx, expr, dest),
+        ExpressionKind::NamedArgument(..) => {
             namedargument_expr::lower_namedargument_expr(ctx, expr, dest)
         }
         ExpressionKind::Super => super_expr::lower_super_expr(ctx, expr, dest),
-        ExpressionKind::EnumValue(enum_expr, args) => {
-            enumvalue_expr::lower_enumvalue_expr(ctx, expr, dest)
-        }
-        ExpressionKind::Type(ty, _is_nullable) => type_expr::lower_type_expr(ctx, expr, dest),
-        ExpressionKind::StructMember(_, _) => {
+        ExpressionKind::EnumValue(..) => enumvalue_expr::lower_enumvalue_expr(ctx, expr, dest),
+        ExpressionKind::Type(..) => type_expr::lower_type_expr(ctx, expr, dest),
+        ExpressionKind::StructMember(..) => {
             structmember_expr::lower_structmember_expr(ctx, expr, dest)
         }
         ExpressionKind::GenericType(_, _, _) | ExpressionKind::TypeDeclaration(_, _, _, _) => {

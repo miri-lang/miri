@@ -11,13 +11,13 @@ use super::super::Parser;
 
 impl<'source> Parser<'source> {
     /*
-    */
+     */
     pub(crate) fn expression(&mut self) -> Result<Expression, SyntaxError> {
         self.assignment_expression()
     }
 
     /*
-    */
+     */
     pub(crate) fn assignment_expression(&mut self) -> Result<Expression, SyntaxError> {
         let left = self.conditional_expression()?;
 
@@ -60,9 +60,8 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn left_hand_side_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.call_member_expression()
     }
-
 }

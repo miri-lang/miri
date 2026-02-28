@@ -9,7 +9,7 @@ use super::super::Parser;
 
 impl<'source> Parser<'source> {
     /*
-    */
+     */
     pub(crate) fn pattern(&mut self) -> Result<Pattern, SyntaxError> {
         match &self._lookahead {
             Some((Token::Default, _)) => {
@@ -53,7 +53,7 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn tuple_pattern(&mut self) -> Result<Pattern, SyntaxError> {
         self.eat_token(&Token::LParen)?;
         let mut patterns = Vec::new();
@@ -70,5 +70,4 @@ impl<'source> Parser<'source> {
         self.eat_token(&Token::RParen)?;
         Ok(Pattern::Tuple(patterns))
     }
-
 }

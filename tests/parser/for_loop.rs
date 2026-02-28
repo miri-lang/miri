@@ -17,7 +17,7 @@ fn test_for_loop() {
 for x in 1..=5
     y = x
 ",
-        vec![let_variable("x".into(), None, None)],
+        vec![let_variable("x", None, None)],
         range(
             int_literal_expression(1),
             opt_expr(int_literal_expression(5)),
@@ -37,7 +37,7 @@ fn test_for_loop_inline() {
         "
 for x in 1..5: y = x
 ",
-        vec![let_variable("x".into(), None, None)],
+        vec![let_variable("x", None, None)],
         range(
             int_literal_expression(1),
             opt_expr(int_literal_expression(5)),
@@ -57,10 +57,7 @@ fn test_for_loop_hashmap() {
         "
 for k, v in hash: y = k + v
 ",
-        vec![
-            let_variable("k".into(), None, None),
-            let_variable("v".into(), None, None),
-        ],
+        vec![let_variable("k", None, None), let_variable("v", None, None)],
         range(
             identifier("hash"),
             None,
@@ -80,7 +77,7 @@ fn test_for_loop_string() {
         "
 for ch in \"hello\": y = ch
 ",
-        vec![let_variable("ch".into(), None, None)],
+        vec![let_variable("ch", None, None)],
         range(
             string_literal_expression("hello"),
             None,
@@ -102,14 +99,14 @@ for i in 1..3
     for c in \"ab\"
         // nested body
 ",
-        vec![let_variable("i".into(), None, None)],
+        vec![let_variable("i", None, None)],
         range(
             int_literal_expression(1),
             opt_expr(int_literal_expression(3)),
             RangeExpressionType::Exclusive,
         ),
         block(vec![for_statement(
-            vec![let_variable("c".into(), None, None)],
+            vec![let_variable("c", None, None)],
             range(
                 string_literal_expression("ab"),
                 None,
@@ -126,14 +123,14 @@ fn test_for_loop_nested_inline() {
         "
 for i in 1..3: for c in \"ab\": // nested body
 ",
-        vec![let_variable("i".into(), None, None)],
+        vec![let_variable("i", None, None)],
         range(
             int_literal_expression(1),
             opt_expr(int_literal_expression(3)),
             RangeExpressionType::Exclusive,
         ),
         for_statement(
-            vec![let_variable("c".into(), None, None)],
+            vec![let_variable("c", None, None)],
             range(
                 string_literal_expression("ab"),
                 None,
@@ -151,7 +148,7 @@ fn test_for_loop_with_typed_variable() {
 for i int in 1..=10: // do something
 ",
         vec![let_variable(
-            "i".into(),
+            "i",
             opt_expr(type_expr_non_null(type_int())),
             None,
         )],
@@ -171,7 +168,7 @@ fn test_for_loop_with_empty_body() {
 for item in my_list
     // This loop is intentionally empty
 ",
-        vec![let_variable("item".into(), None, None)],
+        vec![let_variable("item", None, None)],
         range(
             identifier("my_list"),
             None,

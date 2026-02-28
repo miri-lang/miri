@@ -10,7 +10,7 @@ use super::super::Parser;
 
 impl<'source> Parser<'source> {
     /*
-    */
+     */
     pub(crate) fn unary_expression(&mut self) -> Result<Expression, SyntaxError> {
         match &self._lookahead {
             Some((Token::Plus, _)) => self.create_unary_expression(&Token::Plus, UnaryOp::Plus),
@@ -40,5 +40,4 @@ impl<'source> Parser<'source> {
         let full_span = Span::new(span.start, operand.span.end);
         Ok(ast::unary_with_span(op, operand, full_span))
     }
-
 }

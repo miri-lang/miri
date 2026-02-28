@@ -11,7 +11,7 @@ use super::super::Parser;
 
 impl<'source> Parser<'source> {
     /*
-    */
+     */
     pub(crate) fn call_member_expression(&mut self) -> Result<Expression, SyntaxError> {
         let mut expression = self.primary_expression()?;
 
@@ -120,7 +120,7 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn arguments(&mut self) -> Result<(Vec<Expression>, Span), SyntaxError> {
         self.eat_token(&Token::LParen)?;
 
@@ -135,7 +135,7 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn argument_list(&mut self) -> Result<Vec<Expression>, SyntaxError> {
         let mut args = Vec::new();
 
@@ -168,5 +168,4 @@ impl<'source> Parser<'source> {
 
         Ok(args)
     }
-
 }

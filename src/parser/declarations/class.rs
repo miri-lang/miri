@@ -124,7 +124,7 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn class_statement(
         &mut self,
         visibility: MemberVisibility,
@@ -172,7 +172,7 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn abstract_class_statement(
         &mut self,
         visibility: MemberVisibility,
@@ -221,7 +221,7 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn trait_statement(
         &mut self,
         visibility: MemberVisibility,
@@ -344,5 +344,4 @@ impl<'source> Parser<'source> {
             _ => Err(self.error_unexpected_token("identifier", format!("{:?}", name).as_str())),
         }
     }
-
 }

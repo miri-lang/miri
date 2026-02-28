@@ -10,7 +10,7 @@ use super::super::{DeclarationBlockConfig, Parser};
 
 impl<'source> Parser<'source> {
     /*
-    */
+     */
     pub(crate) fn enum_statement(
         &mut self,
         visibility: MemberVisibility,
@@ -30,5 +30,4 @@ impl<'source> Parser<'source> {
             generic_types,
         )
     }
-
 }

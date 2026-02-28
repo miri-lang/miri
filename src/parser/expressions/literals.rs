@@ -10,7 +10,7 @@ use super::super::Parser;
 
 impl<'source> Parser<'source> {
     /*
-    */
+     */
     pub(crate) fn list_literal_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.eat_token(&Token::LBracket)?;
 
@@ -28,7 +28,7 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn brace_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.eat_token(&Token::LBrace)?;
 
@@ -76,7 +76,7 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn literal_expression(&mut self) -> Result<Expression, SyntaxError> {
         let span = if let Some((_, span)) = &self._lookahead {
             *span
@@ -86,5 +86,4 @@ impl<'source> Parser<'source> {
         let literal = self.literal()?;
         Ok(ast::literal_with_span(literal, span))
     }
-
 }

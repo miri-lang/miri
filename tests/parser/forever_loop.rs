@@ -67,9 +67,7 @@ fn test_forever_loop_inline() {
         "
 forever: x
 ",
-        vec![forever_statement(expression_statement(identifier(
-            "x".into(),
-        )))],
+        vec![forever_statement(expression_statement(identifier("x")))],
     );
 }
 

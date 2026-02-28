@@ -9,8 +9,8 @@
 //! - Floating-point (f32, f64)
 //! - Boolean operands
 //! - String equality (`==`) and inequality (`!=`)
-//! Combined and edge-case patterns: negation of comparison results,
-//! short-circuit evaluation, comparison results stored in variables.
+//!   Combined and edge-case patterns: negation of comparison results,
+//!   short-circuit evaluation, comparison results stored in variables.
 
 use crate::integration::utils::{assert_operation_outputs, assert_runs_with_output};
 

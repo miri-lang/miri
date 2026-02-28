@@ -505,7 +505,15 @@ pub fn lower_for(
 
     if let ExpressionKind::Range(start, end_opt, range_type) = &iterable.node {
         // Range iteration: for i in start..end
-        let end = end_opt.as_ref().expect("Range must have end");
+        let end = match end_opt.as_ref() {
+            Some(e) => e,
+            None => {
+                return Err(LoweringError::unsupported_expression(
+                    "Range iteration requires an upper bound".to_string(),
+                    *span,
+                ));
+            }
+        };
 
         ctx.push_scope(); // For the loop variable
 

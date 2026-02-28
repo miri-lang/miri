@@ -12,7 +12,7 @@ use super::super::Parser;
 
 impl<'source> Parser<'source> {
     /*
-    */
+     */
     pub(crate) fn generic_types_declaration(&mut self) -> Result<Vec<Expression>, SyntaxError> {
         self.eat_token(&Token::LessThan)?;
 
@@ -27,7 +27,7 @@ impl<'source> Parser<'source> {
     }
 
     /*
-    */
+     */
     pub(crate) fn generic_type(&mut self) -> Result<Expression, SyntaxError> {
         let identifier = self.identifier()?;
         if self._lookahead.is_none() || !self.lookahead_is_inheritance_modifier() {
@@ -52,5 +52,4 @@ impl<'source> Parser<'source> {
 
         Ok(ast::generic_type_expression(identifier, typ, kind))
     }
-
 }

@@ -10,9 +10,9 @@ use crate::mir::{Operand, Place};
 use crate::mir::lowering::context::LoweringContext;
 
 pub(crate) fn lower_structmember_expr(
-    ctx: &mut LoweringContext,
+    _ctx: &mut LoweringContext,
     expr: &Expression,
-    dest: Option<Place>,
+    _dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     let ExpressionKind::StructMember(_, _) = &expr.node else {
         unreachable!()

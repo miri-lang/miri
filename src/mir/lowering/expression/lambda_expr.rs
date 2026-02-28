@@ -18,7 +18,7 @@ use crate::mir::lowering::helpers::{lower_as_return, resolve_type};
 pub(crate) fn lower_lambda_expr(
     ctx: &mut LoweringContext,
     expr: &Expression,
-    dest: Option<Place>,
+    _dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     let ExpressionKind::Lambda(lambda) = &expr.node else {
         unreachable!()

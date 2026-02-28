@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use super::utils::*;
-use miri::ast::factory::*;
-
 // #[test]
 // fn test_array_variable_definitions() {
 //     type_checker_vars_type_test(

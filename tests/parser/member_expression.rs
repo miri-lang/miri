@@ -17,7 +17,7 @@ obj.prop
 ",
         vec![expression_statement(member(
             identifier("obj"),
-            identifier("prop").into(),
+            identifier("prop"),
         ))],
     );
 }
@@ -29,7 +29,7 @@ fn test_assign_to_member_expression() {
 obj.prop = 1
 ",
         vec![expression_statement(assign(
-            lhs_member(identifier("obj"), identifier("prop").into()),
+            lhs_member(identifier("obj"), identifier("prop")),
             AssignmentOp::Assign,
             int_literal_expression(1),
         ))],
@@ -43,7 +43,7 @@ fn test_assign_to_index_expression() {
 obj['prop'] = 1
 ",
         vec![expression_statement(assign(
-            lhs_index(identifier("obj"), string_literal_expression("prop".into())),
+            lhs_index(identifier("obj"), string_literal_expression("prop")),
             AssignmentOp::Assign,
             int_literal_expression(1),
         ))],
@@ -60,7 +60,7 @@ obj.a.b['prop'][0] = 1.0
             lhs_index(
                 index(
                     member(member(identifier("obj"), identifier("a")), identifier("b")),
-                    string_literal_expression("prop".into()),
+                    string_literal_expression("prop"),
                 ),
                 int_literal_expression(0),
             ),

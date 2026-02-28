@@ -18,7 +18,7 @@ let x = 10 if y > 5 else 20
 ",
         vec![variable_statement(
             vec![let_variable(
-                "x".into(),
+                "x",
                 None,
                 opt_expr(if_conditional(
                     int_literal_expression(10),
@@ -43,7 +43,7 @@ var x = 100 if y % 2 == 0
 ",
         vec![variable_statement(
             vec![var(
-                "x".into(),
+                "x",
                 None,
                 opt_expr(if_conditional(
                     int_literal_expression(100),
@@ -68,7 +68,7 @@ var x = 1 unless y
 ",
         vec![variable_statement(
             vec![var(
-                "x".into(),
+                "x",
                 None,
                 opt_expr(unless_conditional(
                     int_literal_expression(1),

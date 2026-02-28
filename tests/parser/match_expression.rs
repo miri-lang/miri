@@ -452,7 +452,7 @@ match c
                 vec![let_variable(
                     "c",
                     None,
-                    opt_expr(member(identifier("Color"), identifier("Red").into())),
+                    opt_expr(member(identifier("Color"), identifier("Red"))),
                 )],
                 MemberVisibility::Public,
             ),
@@ -516,7 +516,7 @@ match c
                     "c",
                     None,
                     opt_expr(call(
-                        member(identifier("Color"), identifier("Red").into()),
+                        member(identifier("Color"), identifier("Red")),
                         vec![string_literal_expression("#ff0000")],
                     )),
                 )],

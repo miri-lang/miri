@@ -14,7 +14,7 @@ use crate::mir::lowering::expression::lower_expression;
 pub(crate) fn lower_guard_expr(
     ctx: &mut LoweringContext,
     expr: &Expression,
-    dest: Option<Place>,
+    _dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     let ExpressionKind::Guard(guard_op, guard_expr) = &expr.node else {
         unreachable!()

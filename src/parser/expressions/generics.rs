@@ -37,5 +37,4 @@ impl<'source> Parser<'source> {
         let return_type = self.type_expression()?.map(Box::new);
         Ok(return_type)
     }
-
 }

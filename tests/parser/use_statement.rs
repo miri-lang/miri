@@ -15,7 +15,7 @@ fn test_use_statement_package_module() {
 // Package module 
 use calc
 ",
-        vec![use_statement(import_path("calc".into()), None)],
+        vec![use_statement(import_path("calc"), None)],
     );
 }
 
@@ -26,10 +26,7 @@ fn test_use_statement_multiple_segments() {
 // Package module with path
 use calc.path.some_module
 ",
-        vec![use_statement(
-            import_path("calc.path.some_module".into()),
-            None,
-        )],
+        vec![use_statement(import_path("calc.path.some_module"), None)],
     );
 }
 
@@ -41,7 +38,7 @@ fn test_use_statement_alias() {
 use system.math as M
 ",
         vec![use_statement(
-            import_path("system.math".into()),
+            import_path("system.math"),
             opt_expr(identifier("M")),
         )],
     );
@@ -116,8 +113,8 @@ use system.io.{print, println}
 use system.{io, net as network}
 ",
         vec![
-            use_statement(import_path("system.math".into()), None),
-            use_statement(import_path("local.users.user".into()), None),
+            use_statement(import_path("system.math"), None),
+            use_statement(import_path("local.users.user"), None),
             use_statement(
                 import_path_multi(
                     "system.io",
