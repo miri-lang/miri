@@ -91,10 +91,9 @@ impl<'a> FunctionTranslator<'a> {
                     total_size += ty.bytes();
                 }
 
-                // Allocate stack slot
-                let slot_data = StackSlotData::new(StackSlotKind::ExplicitSlot, total_size, 0);
-                let slot = builder.create_sized_stack_slot(slot_data);
-                let addr = builder.ins().stack_addr(cl_types::I64, slot, 0);
+                // Heap-allocate so the pointer survives returning from functions
+                let size_val = builder.ins().iconst(cl_types::I64, total_size as i64);
+                let addr = Self::call_libc_malloc(builder, ctx, size_val)?;
 
                 // Store each field
                 for (i, val) in translated.into_iter().enumerate() {
