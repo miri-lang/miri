@@ -78,6 +78,11 @@ impl TypeChecker {
             }
         }
 
+        // Suppress cascade: if either operand already has an error type, propagate silently
+        if matches!(left_ty.kind, TypeKind::Error) || matches!(right_ty.kind, TypeKind::Error) {
+            return ast_factory::make_type(TypeKind::Error);
+        }
+
         match self.check_binary_op_types(&left_ty, op, &right_ty, context) {
             Ok(t) => t,
             Err(msg) => {

@@ -71,7 +71,7 @@ pub fn resolve_type(tc: &TypeChecker, expr: &Expression) -> Type {
                 match name.as_str() {
                     "int" => Type::new(TypeKind::Int, expr.span),
                     "bool" => Type::new(TypeKind::Boolean, expr.span),
-                    "string" => Type::new(TypeKind::String, expr.span),
+                    "String" => Type::new(TypeKind::String, expr.span),
                     "float" => Type::new(TypeKind::Float, expr.span),
                     "void" => Type::new(TypeKind::Void, expr.span),
                     // Fallback: Unknown primitive type - use Error type instead of panicking

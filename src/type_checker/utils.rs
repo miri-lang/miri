@@ -557,15 +557,21 @@ impl TypeChecker {
 
     // ==================== Error Reporting ====================
 
-    /// Reports a type error.
+    /// Reports a type error, deduplicating identical (message, span) pairs.
     pub(crate) fn report_error(&mut self, message: String, span: Span) {
-        self.errors.push(TypeError::custom(message, span, None));
+        let key = (message.clone(), span);
+        if self.reported_errors.insert(key) {
+            self.errors.push(TypeError::custom(message, span, None));
+        }
     }
 
-    /// Reports a type error with a help message.
+    /// Reports a type error with a help message, deduplicating identical (message, span) pairs.
     pub(crate) fn report_error_with_help(&mut self, message: String, span: Span, help: String) {
-        self.errors
-            .push(TypeError::custom(message, span, Some(help)));
+        let key = (message.clone(), span);
+        if self.reported_errors.insert(key) {
+            self.errors
+                .push(TypeError::custom(message, span, Some(help)));
+        }
     }
 
     /// Reports a type warning with an error code, title, message, and help text.

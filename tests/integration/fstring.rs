@@ -311,7 +311,7 @@ fn test_fstring_in_function_return() {
 use system.io
 use system.string
 
-fn greet(name string) string
+fn greet(name String) String
     f"Hello, {name}!"
 
 print(greet("Miri"))
@@ -326,7 +326,7 @@ fn test_fstring_in_function_body_with_int() {
         r#"
 use system.io
 
-fn describe(n int) string
+fn describe(n int) String
     f"value={n}"
 
 print(describe(7))
@@ -376,7 +376,7 @@ fn test_fstring_as_string_param() {
 use system.io
 use system.string
 
-fn show(s string)
+fn show(s String)
     println(s)
 
 let x = 99

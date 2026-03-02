@@ -79,7 +79,7 @@ x
 #[test]
 fn test_shadowing_parameter() {
     let source = "
-fn foo(x int) string:
+fn foo(x int) String:
     let x = \"string\"
     return x
 
@@ -121,7 +121,7 @@ match x
 fn test_shadowing_global_with_local() {
     let source = "
 let x = 1
-fn foo() string:
+fn foo() String:
     let x = \"string\"
     return x
 

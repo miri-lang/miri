@@ -91,18 +91,18 @@ fn test_trait_extends_multiple_parents() {
     // Trait extends multiple parent traits
     let code = "
 trait Readable
-    fn read() string
+    fn read() String
 
 trait Writable
-    fn write(data string) int
+    fn write(data String) int
 
 trait ReadWrite extends Readable, Writable
     fn flush() int
 
 class File implements ReadWrite
-    fn read() string
+    fn read() String
         \"data\"
-    fn write(data string) int
+    fn write(data String) int
         1
     fn flush() int
         1
@@ -115,16 +115,16 @@ fn test_trait_extends_multiple_missing_one_error() {
     // Missing method from one parent trait
     let code = "
 trait Readable
-    fn read() string
+    fn read() String
 
 trait Writable
-    fn write(data string) int
+    fn write(data String) int
 
 trait ReadWrite extends Readable, Writable
     fn flush() int
 
 class File implements ReadWrite
-    fn read() string
+    fn read() String
         \"data\"
     fn flush() int
         1

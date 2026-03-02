@@ -126,8 +126,12 @@ impl TypeChecker {
         let final_return_type_expr = if let Some(expected) = expected_return_type {
             let is_void_implicit = matches!(implicit_return_type.kind, TypeKind::Void);
             let is_void_expected = matches!(expected.kind, TypeKind::Void);
+            let is_error = matches!(expected.kind, TypeKind::Error)
+                || matches!(implicit_return_type.kind, TypeKind::Error);
 
-            if !is_void_expected && is_void_implicit {
+            if is_error {
+                // Suppress cascade: a prior error already reported the root cause
+            } else if !is_void_expected && is_void_implicit {
                 // Check if the last statement was a return statement?
                 let ends_with_return = match &body.node {
                     StatementKind::Block(stmts) => {

@@ -57,7 +57,7 @@ fn test_enum_with_associated_values() {
     let code = "
 enum Result
     Ok(int)
-    Err(string)
+    Err(String)
 
 let ok = Result.Ok(42)
 let err = Result.Err(\"error\")
@@ -70,7 +70,7 @@ fn test_enum_associated_value_type_mismatch() {
     let code = "
 enum Result
     Ok(int)
-    Err(string)
+    Err(String)
 
 let ok = Result.Ok(\"42\")
     ";

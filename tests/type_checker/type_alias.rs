@@ -104,7 +104,7 @@ let list IntList = [1, 2, 3]
 fn test_type_alias_with_map() {
     type_checker_test(
         "
-type StringIntMap is {string: int}
+type StringIntMap is {String: int}
 let map StringIntMap = {\"a\": 1, \"b\": 2}
 ",
     );
@@ -114,7 +114,7 @@ let map StringIntMap = {\"a\": 1, \"b\": 2}
 fn test_type_alias_with_tuple() {
     type_checker_test(
         "
-type Pair is (int, string)
+type Pair is (int, String)
 let p Pair = (1, \"hello\")
 ",
     );
@@ -188,7 +188,7 @@ process(42)
 fn test_type_alias_complex_nested() {
     type_checker_test(
         "
-type UserMap is {string: [int]}
+type UserMap is {String: [int]}
 let map UserMap = {\"scores\": [1, 2, 3]}
 ",
     );
@@ -341,7 +341,7 @@ let p3 Point = (5, 6)
 fn test_type_alias_with_complex_map() {
     type_checker_test(
         "
-type UserScores is {string: [int]}
+type UserScores is {String: [int]}
 let scores UserScores = {\"alice\": [100, 95], \"bob\": [80, 85]}
 ",
     );

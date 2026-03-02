@@ -2,7 +2,7 @@
 // Demonstrates match expressions with literal arms, guard conditions, and wildcards.
 use system.io
 
-fn describe(n int) string
+fn describe(n int) String
     match n
         0: "zero"
         1: "one"

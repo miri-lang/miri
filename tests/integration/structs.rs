@@ -58,7 +58,7 @@ fn test_struct_multiple_fields() {
     assert_runs(
         r#"
 struct Person
-    name string
+    name String
     age int
     active bool
 
@@ -97,7 +97,7 @@ fn test_struct_mixed_types_field_access() {
 use system.io
 
 struct Record
-    name string
+    name String
     count int
     active bool
 

@@ -30,6 +30,12 @@ impl TypeChecker {
             return true;
         }
 
+        // Suppress cascade errors: if either type is Error (from a prior error),
+        // treat them as compatible to avoid noisy secondary diagnostics.
+        if matches!(t1.kind, TypeKind::Error) || matches!(t2.kind, TypeKind::Error) {
+            return true;
+        }
+
         // Handle nullable types
         if let Some(result) = self.check_nullable_compatibility(t1, t2, context) {
             return result;

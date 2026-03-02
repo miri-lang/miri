@@ -24,6 +24,7 @@
 use crate::ast::types::Type;
 use crate::ast::*;
 use crate::error::diagnostic::Diagnostic;
+use crate::error::syntax::Span;
 use crate::error::type_error::TypeError;
 use std::collections::HashMap;
 
@@ -71,6 +72,9 @@ pub struct TypeChecker {
     pub(crate) global_type_definitions: HashMap<String, TypeDefinition>,
     /// Set of modules that have been loaded to prevent cycles.
     pub(crate) loaded_modules: std::collections::HashSet<String>,
+    /// Tracks (message, span) pairs to deduplicate errors reported multiple times
+    /// for the same source location (e.g. when a type expression is resolved twice).
+    pub(crate) reported_errors: std::collections::HashSet<(String, Span)>,
     /// AST statements collected from imported modules.
     /// These need to be included in MIR lowering and codegen.
     pub imported_statements: Vec<Statement>,
@@ -99,6 +103,7 @@ impl TypeChecker {
             global_scope,
             global_type_definitions,
             loaded_modules: std::collections::HashSet::new(),
+            reported_errors: std::collections::HashSet::new(),
             imported_statements: Vec::new(),
         }
     }

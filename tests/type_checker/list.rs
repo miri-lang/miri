@@ -98,7 +98,7 @@ fn test_empty_list() {
 fn test_empty_list_with_specified_types() {
     type_checker_vars_type_test(
         "
-    let l1 [string] = []
+    let l1 [String] = []
 ",
         vec![("l1", type_list(type_string()))],
     );
@@ -137,7 +137,7 @@ let l [int] = [1, 2, 3]
 fn test_list_assignment_mismatch_type() {
     type_checker_error_test(
         "
-let l [string] = [1, 2, 3]
+let l [String] = [1, 2, 3]
 ",
         "Type mismatch for variable",
     );
@@ -218,7 +218,7 @@ l[0](1)
 fn test_list_of_functions_mismatch() {
     type_checker_error_test(
         "
-let l = [fn(x int): x, fn(x string): x]
+let l = [fn(x int): x, fn(x String): x]
 ",
         "List elements must have the same type",
     );

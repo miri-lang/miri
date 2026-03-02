@@ -39,8 +39,8 @@ fn test_string_comparisons() {
 fn test_explicit_string_type() {
     type_checker_vars_type_test(
         "
-let x string = \"hello\"
-let y string = 'world'
+let x String = \"hello\"
+let y String = 'world'
 ",
         vec![("x", type_string()), ("y", type_string())],
     );
@@ -133,7 +133,7 @@ fn test_formatted_string_type_error_in_expression() {
 fn test_formatted_string_function_call() {
     type_checker_test(
         "
-fn get_name() string: \"World\"
+fn get_name() String: \"World\"
 let s = f\"Hello {get_name()}\"
 ",
     );

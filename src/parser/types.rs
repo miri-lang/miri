@@ -4,7 +4,7 @@
 use crate::ast::factory as ast;
 use crate::ast::types::{FunctionTypeData, Type, TypeKind};
 use crate::ast::*;
-use crate::error::syntax::SyntaxError;
+use crate::error::syntax::{Span, SyntaxError};
 use crate::lexer::Token;
 
 use super::Parser;
@@ -26,9 +26,9 @@ impl<'source> Parser<'source> {
 
         let base_typ_expr: Option<Expression> = match &self._lookahead {
             Some((Token::Identifier, _)) => {
-                let type_name = self.identifier_to_type_name()?;
+                let (type_name, span) = self.identifier_to_type_name()?;
                 let typ = self.type_name_to_type(type_name)?;
-                Some(ast::type_expr_non_null(typ))
+                Some(ast::type_expression_with_span(typ, false, span))
             }
             Some((Token::LBracket, _)) => {
                 self.eat_token(&Token::LBracket)?;
@@ -239,7 +239,7 @@ impl<'source> Parser<'source> {
             "float" => ast::make_type(TypeKind::Float),
             "f32" => ast::make_type(TypeKind::F32),
             "f64" => ast::make_type(TypeKind::F64),
-            "String" | "string" => ast::make_type(TypeKind::String),
+            "String" => ast::make_type(TypeKind::String),
             "bool" => ast::make_type(TypeKind::Boolean),
             "symbol" => ast::make_type(TypeKind::Symbol),
             "RawPtr" => ast::make_type(TypeKind::RawPtr),
@@ -321,10 +321,12 @@ impl<'source> Parser<'source> {
         })
     }
 
-    pub(crate) fn identifier_to_type_name(&mut self) -> Result<String, SyntaxError> {
-        Ok(match self.identifier()?.node {
-            ExpressionKind::Identifier(id, Some(class)) => format!("{}::{}", class, id), // Reconstruct the full path
-            ExpressionKind::Identifier(id, None) => id,
+    pub(crate) fn identifier_to_type_name(&mut self) -> Result<(String, Span), SyntaxError> {
+        let ident = self.identifier()?;
+        let span = ident.span;
+        Ok(match ident.node {
+            ExpressionKind::Identifier(id, Some(class)) => (format!("{}::{}", class, id), span), // Reconstruct the full path
+            ExpressionKind::Identifier(id, None) => (id, span),
             _ => return Err(self.error_unexpected_token("identifier", &self.lookahead_as_string())),
         })
     }

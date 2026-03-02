@@ -12,7 +12,7 @@ struct Interface
 
 struct Implementation
     x int
-    y string
+    y String
 
 struct Container<T implements Interface>
     val T
@@ -29,7 +29,7 @@ struct Interface
     x int
 
 struct BadImpl
-    y string
+    y String
 
 struct Container<T implements Interface>
     val T
@@ -95,7 +95,7 @@ struct Pair<K, V>
     key K
     value V
 
-var p Pair<string, int>
+var p Pair<String, int>
 p.key = \"key\"
 p.value = 10
 p.value
@@ -109,7 +109,7 @@ fn test_generic_argument_count_mismatch() {
 struct Box<T>
     value T
 
-let b Box<int, string>
+let b Box<int, String>
     ";
     type_checker_error_test(source, "Generic argument count mismatch");
 }
@@ -145,7 +145,7 @@ fn test_generic_struct_with_map() {
 struct MapContainer<K, V>
     items {K: V}
 
-var c MapContainer<string, int>
+var c MapContainer<String, int>
 c.items = {\"a\": 1}
 c.items[\"a\"]
     ";
@@ -162,7 +162,7 @@ struct Inner<T>
     val T
 
 let o Outer<int>
-let i Inner<string>
+let i Inner<String>
     ";
     type_checker_test(source);
 }
@@ -214,7 +214,7 @@ struct Box<T>
     value T
 
 let b = Box(1)
-let s string = b.value
+let s String = b.value
 ";
     type_checker_error_test(source, "Type mismatch");
 }
@@ -290,7 +290,7 @@ struct Triple<A, B, C>
     second B
     third C
 
-let t Triple<int, string, bool>
+let t Triple<int, String, bool>
 ",
     );
 }
@@ -378,7 +378,7 @@ fn test_generic_with_complex_inner_type() {
 struct Container<T>
     items [T]
 
-let c Container<{string: int}>
+let c Container<{String: int}>
 ",
     );
 }

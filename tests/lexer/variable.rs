@@ -13,14 +13,14 @@ let x = 10                                   // inferred
 var y = 20                                   // mutable
 let z int = 30                               // explicitly typed
 let num = 5.0                                // float
-let str string = 'Hello'                     // string
+let str String = 'Hello'                     // string
 let is_active = true                         // boolean
 let even = 10 % 2 == 0                       // even number check
-let m = map<string, int>()                   // map declaration
+let m = map<String, int>()                   // map declaration
 let arr1 = [10, 20, 30]                      // array
 let arr2 [float] = [1.0, 2.0, 3.0]           // array with type
 let dict1 = {key1: 'A', key2: 'B'}           // dictionary
-let dict2 {string: int} = {key1: 1, key2: 2} // dictionary with type
+let dict2 {String: int} = {key1: 1, key2: 2} // dictionary with type
 ",
         vec![
             Token::Let,

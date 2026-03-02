@@ -313,7 +313,7 @@ fn test_return_value_direct() {
 
 #[test]
 fn test_return_string_literal() {
-    mir_lowering_terminator_test("fn main() string: \"hello\"", TerminatorKind::Return);
+    mir_lowering_terminator_test("fn main() String: \"hello\"", TerminatorKind::Return);
 }
 
 #[test]

@@ -11,13 +11,13 @@ use crate::type_checker::utils::{type_checker_error_test, type_checker_test};
 fn test_multiple_constrained_generics() {
     let code = "
 trait Printable
-    fn print() string
+    fn print() String
 
 trait Comparable
     fn compare(other int) int
 
 class Document implements Printable
-    fn print() string
+    fn print() String
         \"doc\"
 
 class Number implements Comparable
@@ -35,13 +35,13 @@ class Processor<P implements Printable, C implements Comparable>
 fn test_multiple_constrained_generics_instantiation() {
     let code = "
 trait Printable
-    fn print() string
+    fn print() String
 
 trait Comparable
     fn compare(other int) int
 
 class Document implements Printable
-    fn print() string
+    fn print() String
         \"doc\"
 
 class Number implements Comparable
@@ -61,7 +61,7 @@ let proc Processor<Document, Number>
 fn test_multiple_constrained_generics_fail_first() {
     let code = "
 trait Printable
-    fn print() string
+    fn print() String
 
 trait Comparable
     fn compare(other int) int
@@ -86,13 +86,13 @@ let proc Processor<Plain, Number>
 fn test_multiple_constrained_generics_fail_second() {
     let code = "
 trait Printable
-    fn print() string
+    fn print() String
 
 trait Comparable
     fn compare(other int) int
 
 class Document implements Printable
-    fn print() string
+    fn print() String
         \"doc\"
 
 class Plain
@@ -113,17 +113,17 @@ let proc Processor<Document, Plain>
 fn test_constrained_generic_method_access() {
     let code = "
 class Animal
-    var name string
-    public fn speak() string
+    var name String
+    public fn speak() String
         \"sound\"
 
 class Dog extends Animal
-    public fn speak() string
+    public fn speak() String
         \"bark\"
 
 class Kennel<T extends Animal>
     var pet T
-    fn getPetSound() string
+    fn getPetSound() String
         self.pet.speak()
 
 let k Kennel<Dog>

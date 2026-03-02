@@ -17,7 +17,7 @@ fn test_map_variable_definitions() {
     type_checker_vars_type_test(
         "
         let m1 {int: int} = { 10: 100, 20: 200 } 
-        let m2 map<string, float> = { \"a\": 1.1, \"b\": 2.2 }
+        let m2 map<String, float> = { \"a\": 1.1, \"b\": 2.2 }
         let m3 map<i128, f64> = { 1: 1.1, 2: 2.2 }
 ",
         vec![
@@ -66,7 +66,7 @@ let k = \"a\"
 fn test_map_indexing_function_call() {
     type_checker_expr_type_test(
         "
-fn get_key() string
+fn get_key() String
     return \"a\"
 
 { \"a\": 1 }[get_key()]
@@ -82,7 +82,7 @@ fn test_map_indexing_generic_function_call() {
 fn get_key<T>(key T) T
     return key
 
-{ \"a\": 1.2 }[get_key<string>(\"a\")]
+{ \"a\": 1.2 }[get_key<String>(\"a\")]
 ",
         type_f32(),
     );
@@ -108,7 +108,7 @@ fn test_empty_map() {
 fn test_empty_map_with_specified_types() {
     type_checker_vars_type_test(
         "
-    let m1 {string: int} = {}
+    let m1 {String: int} = {}
 ",
         vec![("m1", type_map(type_string(), type_int()))],
     );
@@ -118,7 +118,7 @@ fn test_empty_map_with_specified_types() {
 fn test_empty_map_with_specified_types_named() {
     type_checker_vars_type_test(
         "
-    let m2 map<string, float> = {}
+    let m2 map<String, float> = {}
 ",
         vec![("m2", type_map(type_string(), type_float()))],
     );
@@ -136,7 +136,7 @@ fn test_nested_map() {
 fn test_map_assignment_exact() {
     type_checker_test(
         "
-let m {string: int} = { \"a\": 1 }
+let m {String: int} = { \"a\": 1 }
 ",
     );
 }
@@ -155,7 +155,7 @@ let m {int: int} = { \"a\": 1 }
 fn test_map_assignment_mismatch_value() {
     type_checker_error_test(
         "
-let m {string: string} = { \"a\": 1 }
+let m {String: String} = { \"a\": 1 }
 ",
         "Type mismatch for variable",
     );
@@ -207,7 +207,7 @@ m[\"inc\"](1)
 fn test_map_of_functions_mismatch() {
     type_checker_error_test(
         "
-let m = { \"inc\": fn(x int): x + 1, \"dec\": fn(x string): x }
+let m = { \"inc\": fn(x int): x + 1, \"dec\": fn(x String): x }
 ",
         "Map values must have the same type",
     );

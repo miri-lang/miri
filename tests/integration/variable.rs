@@ -12,7 +12,7 @@ fn variable_declaration() {
         "var y = 20",
         "let z int = 30",
         "var w float = 40.0",
-        "let s string = \"hello\"",
+        "let s String = \"hello\"",
         "var b bool = true",
     ]);
 }

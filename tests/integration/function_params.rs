@@ -485,7 +485,7 @@ fn test_string_identity_param() {
 use system.io
 use system.string
 
-fn identity_str(s string) string
+fn identity_str(s String) String
     s
 
 fn main()
@@ -503,7 +503,7 @@ fn test_string_param_size() {
 use system.io
 use system.string
 
-fn str_len(s string) int
+fn str_len(s String) int
     s.size()
 
 fn main()
@@ -521,7 +521,7 @@ fn test_string_two_params_concat() {
 use system.io
 use system.string
 
-fn join(a string, b string) string
+fn join(a String, b String) String
     a.concat(b)
 
 fn main()
@@ -539,7 +539,7 @@ fn test_string_param_equality_check() {
 use system.io
 use system.string
 
-fn is_empty_str(s string) bool
+fn is_empty_str(s String) bool
     s.is_empty()
 
 fn main()

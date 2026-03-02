@@ -248,7 +248,7 @@ fn test_runtime_io_smoke() {
         r#"
 use system.io
 
-runtime fn miri_rt_println(s string)
+runtime fn miri_rt_println(s String)
 fn main()
     miri_rt_println("IO Smoke Test")
     println(f"{1}")

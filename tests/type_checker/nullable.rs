@@ -40,7 +40,10 @@ fn test_nullable_list_of_non_nullable() {
         vec![("list", type_null(type_list(type_int())))],
     );
 
-    type_checker_error_test("var list [int]? = [1, None]", "Type mismatch");
+    type_checker_error_test(
+        "var list [int]? = [1, None]",
+        "List elements must have the same type",
+    );
 }
 
 #[test]
@@ -75,19 +78,19 @@ fn test_nullable_map_values() {
     // {string: int?}
     type_checker_test(
         "
-var map {string: int?} = {\"a\": 1}
+var map {String: int?} = {\"a\": 1}
 map[\"b\"] = None
         ",
     );
 
-    type_checker_error_test("var map {string: int} = {\"a\": None}", "Type mismatch");
+    type_checker_error_test("var map {String: int} = {\"a\": None}", "Type mismatch");
 }
 
 #[test]
 fn test_nullable_map_itself() {
     type_checker_vars_type_test(
         "
-var map {string: int}? = {\"a\": 1}
+var map {String: int}? = {\"a\": 1}
 map = None
     ",
         vec![("map", type_null(type_map(type_string(), type_int())))],
@@ -97,7 +100,7 @@ map = None
 #[test]
 fn test_nullable_map_key() {
     type_checker_error_test(
-        "var map {string?: int} = {None: 1}",
+        "var map {String?: int} = {None: 1}",
         "Map keys cannot be nullable",
     );
 }

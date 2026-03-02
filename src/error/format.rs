@@ -167,12 +167,19 @@ pub fn format_diagnostic_full(source: &str, diag: &Diagnostic) -> String {
             output.push_str(&diag.message);
         }
 
-        // Help message inline with underline
-        if let Some(ref h) = diag.help {
-            output.push_str(&format!(" help: {}", h));
-        }
         output.push_str(colors.reset);
         output.push('\n');
+
+        // Help message on its own line
+        if let Some(ref h) = diag.help {
+            output.push_str(&format!(
+                "{} {} |{}\n",
+                " ".repeat(gutter_width),
+                colors.blue,
+                colors.reset
+            ));
+            output.push_str(&format!("  {}= help:{} {}\n", colors.cyan, colors.reset, h));
+        }
 
         // Closing empty line with pipe
         output.push_str(&format!(

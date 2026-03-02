@@ -46,7 +46,7 @@ class Animal
         1
 
 class Dog extends Animal
-    fn speak() string
+    fn speak() String
         \"bark\"
     ";
     type_checker_error_test(code, "incompatible return type");
@@ -76,7 +76,7 @@ class Calculator
         a + b
 
 class WrongCalculator extends Calculator
-    fn add(a string, b int) int
+    fn add(a String, b int) int
         1
     ";
     type_checker_error_test(code, "incompatible parameter");

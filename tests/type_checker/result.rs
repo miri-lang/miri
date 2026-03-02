@@ -25,7 +25,7 @@ r
 #[test]
 fn test_result_ok_assignment() {
     let source = "
-let r result<int, string> = Ok(10)
+let r result<int, String> = Ok(10)
 r
     ";
     type_checker_expr_type_test(source, type_result(type_int(), type_string()));
@@ -34,7 +34,7 @@ r
 #[test]
 fn test_result_err_assignment() {
     let source = "
-let r result<int, string> = Err(\"fail\")
+let r result<int, String> = Err(\"fail\")
 r
     ";
     type_checker_expr_type_test(source, type_result(type_int(), type_string()));
@@ -43,7 +43,7 @@ r
 #[test]
 fn test_result_ok_type_mismatch() {
     let source = "
-let r result<int, string> = Ok(\"wrong\")
+let r result<int, String> = Ok(\"wrong\")
     ";
     type_checker_error_test(source, "Type mismatch");
 }
@@ -51,7 +51,7 @@ let r result<int, string> = Ok(\"wrong\")
 #[test]
 fn test_result_err_type_mismatch() {
     let source = "
-let r result<int, string> = Err(10)
+let r result<int, String> = Err(10)
     ";
     type_checker_error_test(source, "Type mismatch");
 }
@@ -96,7 +96,7 @@ r.unwrap()
 #[test]
 fn test_result_methods_unwrap_typed() {
     let source = "
-let r result<int, string> = Err(\"error\")
+let r result<int, String> = Err(\"error\")
 r.unwrap()
     ";
     // unwrap on typed Result returns the Ok type (Int)
@@ -106,7 +106,7 @@ r.unwrap()
 #[test]
 fn test_nested_result() {
     let source = "
-let r result<result<int, string>, bool> = Ok(Ok(10))
+let r result<result<int, String>, bool> = Ok(Ok(10))
 r
     ";
     type_checker_expr_type_test(
@@ -118,7 +118,7 @@ r
 #[test]
 fn test_nested_result_unwrap() {
     let source = "
-let r result<result<int, string>, bool> = Ok(Ok(10))
+let r result<result<int, String>, bool> = Ok(Ok(10))
 r.unwrap().unwrap()
     ";
     type_checker_expr_type_test(source, type_int());
@@ -175,7 +175,7 @@ fn test_result_custom_struct_error() {
     let source = "
 struct MyError
     code int
-    message string
+    message String
 
 let e = MyError(code: 404, message: \"Not Found\")
 let r result<int, MyError> = Err(e)
@@ -206,7 +206,7 @@ let r result<int, MyError> = Err(e)
 fn test_result_custom_error_return() {
     let source = "
 struct MyError
-    msg string
+    msg String
 
 fn fail() result<int, MyError>
     return Err(MyError(msg: \"fail\"))

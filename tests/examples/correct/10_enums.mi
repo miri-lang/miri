@@ -12,7 +12,7 @@ enum Shape
     Circle(int)
     Rectangle(int)
 
-fn direction_name(d Direction) string
+fn direction_name(d Direction) String
     match d
         Direction.North: "north"
         Direction.South: "south"

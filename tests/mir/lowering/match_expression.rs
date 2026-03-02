@@ -148,7 +148,7 @@ fn main()
 fn test_match_enum_with_binding() {
     mir_snapshot_contains_test(
         r#"
-enum Color: Red(string), Green(string), Blue(string)
+enum Color: Red(String), Green(String), Blue(String)
 
 fn main()
     let c = Color.Red('#ff0000')

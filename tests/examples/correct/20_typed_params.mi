@@ -12,7 +12,7 @@ fn half_f32(x f32) f32
 fn negate_bool(b bool) bool
     not b
 
-fn upper(s string) string
+fn upper(s String) String
     s.to_upper()
 
 fn main()

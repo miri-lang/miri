@@ -9,10 +9,10 @@ use crate::type_checker::utils::{type_checker_error_test, type_checker_test};
 fn test_access_parent_public_field_via_self() {
     let code = "
 class Animal
-    public var name string
+    public var name String
 
 class Dog extends Animal
-    fn getName() string
+    fn getName() String
         self.name
     ";
     type_checker_test(code);
@@ -50,11 +50,11 @@ class Dog extends Animal
 fn test_access_parent_public_method_via_self() {
     let code = "
 class Animal
-    public fn speak() string
+    public fn speak() String
         \"sound\"
 
 class Dog extends Animal
-    fn bark() string
+    fn bark() String
         self.speak()
     ";
     type_checker_test(code);
@@ -64,11 +64,11 @@ class Dog extends Animal
 fn test_access_parent_protected_method_via_self() {
     let code = "
 class Animal
-    protected fn getInfo() string
+    protected fn getInfo() String
         \"info\"
 
 class Dog extends Animal
-    fn info() string
+    fn info() String
         self.getInfo()
     ";
     type_checker_test(code);
@@ -78,11 +78,11 @@ class Dog extends Animal
 fn test_access_parent_private_method_via_self_error() {
     let code = "
 class Animal
-    private fn secretMethod() string
+    private fn secretMethod() String
         \"secret\"
 
 class Dog extends Animal
-    fn tryAccess() string
+    fn tryAccess() String
         self.secretMethod()
     ";
     type_checker_error_test(code, "Private and cannot be accessed");
@@ -94,13 +94,13 @@ class Dog extends Animal
 fn test_multi_level_field_access() {
     let code = "
 class Animal
-    protected var name string
+    protected var name String
 
 class Mammal extends Animal
     protected var legs int
 
 class Dog extends Mammal
-    fn describe() string
+    fn describe() String
         self.name
     ";
     type_checker_test(code);
@@ -130,13 +130,13 @@ class Dog extends Mammal
 fn test_child_overrides_parent_method() {
     let code = "
 class Animal
-    fn speak() string
+    fn speak() String
         \"sound\"
 
 class Dog extends Animal
-    fn speak() string
+    fn speak() String
         \"bark\"
-    fn test() string
+    fn test() String
         self.speak()
     ";
     type_checker_test(code);
@@ -146,13 +146,13 @@ class Dog extends Animal
 fn test_access_own_and_parent_fields() {
     let code = "
 class Animal
-    protected var name string
+    protected var name String
 
 class Dog extends Animal
-    var breed string
-    fn describe() string
+    var breed String
+    fn describe() String
         self.name
-    fn getBreed() string
+    fn getBreed() String
         self.breed
     ";
     type_checker_test(code);
@@ -164,13 +164,13 @@ class Dog extends Animal
 fn test_external_access_inherited_public_field() {
     let code = "
 class Animal
-    public var name string
+    public var name String
 
 class Dog extends Animal
-    var breed string
+    var breed String
 
 class Vet
-    fn checkName(d Dog) string
+    fn checkName(d Dog) String
         d.name
     ";
     type_checker_test(code);
@@ -183,7 +183,7 @@ class Animal
     protected var age int
 
 class Dog extends Animal
-    var breed string
+    var breed String
 
 class Vet
     fn checkAge(d Dog) int

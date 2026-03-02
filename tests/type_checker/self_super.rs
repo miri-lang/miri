@@ -63,11 +63,11 @@ fn foo()
 fn test_super_method_call() {
     let code = "
 class Animal
-    protected fn speak() string
+    protected fn speak() String
         \"generic sound\"
 
 class Dog extends Animal
-    fn speak() string
+    fn speak() String
         super.speak()
     ";
     type_checker_test(code);
@@ -125,12 +125,12 @@ fn test_self_and_super_in_derived_class() {
     let code = "
 class Parent
     var name String
-    protected fn greet() string
+    protected fn greet() String
         \"Hello\"
 
 class Child extends Parent
     var age int
-    fn greet() string
+    fn greet() String
         super.greet()
     fn setAge(a int)
         self.age = a

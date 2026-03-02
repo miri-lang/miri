@@ -5,7 +5,7 @@ use system.io
 fn add(a int, b int) int
     a + b
 
-fn greet(name string) string
+fn greet(name String) String
     f"Hello, {name}!"
 
 fn main()

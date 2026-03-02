@@ -2,7 +2,7 @@
 // Classic FizzBuzz from 1 to 15 using match with guard conditions.
 use system.io
 
-fn fizzbuzz(n int) string
+fn fizzbuzz(n int) String
     match n
         x if x % 15 == 0: "FizzBuzz"
         x if x % 3 == 0: "Fizz"

@@ -23,7 +23,7 @@ fn test_enum_with_data() {
         r#"
 enum Result
     Success(int)
-    Failure(string)
+    Failure(String)
 
 fn main()
     let r = Result.Success(42)

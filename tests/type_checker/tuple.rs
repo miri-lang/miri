@@ -119,7 +119,7 @@ fn test_tuple_match_type_mismatch() {
     type_checker_error_test(
         "
 match (1, \"a\")
-    (i, 1): i // 1 is int, but second element is string
+    (i, 1): i // 1 is int, but second element is String
 ",
         "Pattern type mismatch",
     );
@@ -151,7 +151,7 @@ match 1
 fn test_tuple_as_function_arg() {
     type_checker_test(
         "
-fn f(t (int, string))
+fn f(t (int, String))
     return
 f((1, \"a\"))
 ",
@@ -162,7 +162,7 @@ f((1, \"a\"))
 fn test_tuple_return_type() {
     type_checker_test(
         "
-fn f() (int, string)
+fn f() (int, String)
     return (1, \"a\")
 ",
     );
@@ -172,7 +172,7 @@ fn f() (int, string)
 fn test_tuple_return_type_mismatch() {
     type_checker_error_test(
         "
-fn f() (int, string)
+fn f() (int, String)
     return (1, 1)
 ",
         "Invalid return type",
