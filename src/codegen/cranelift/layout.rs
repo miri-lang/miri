@@ -10,15 +10,17 @@ use crate::ast::expression::ExpressionKind;
 use crate::ast::types::TypeKind;
 use crate::codegen::cranelift::types::translate_type_kind;
 use crate::type_checker::context::TypeDefinition;
-use cranelift_codegen::ir::types as cl_types;
 use cranelift_codegen::ir::Type as CraneliftType;
 use std::collections::HashMap;
 
 /// Extract a Cranelift type from a type expression (used in tuples).
-fn type_from_expression(expr: &crate::ast::expression::Expression) -> CraneliftType {
+fn type_from_expression(
+    expr: &crate::ast::expression::Expression,
+    ptr_ty: CraneliftType,
+) -> CraneliftType {
     match &expr.node {
-        ExpressionKind::Type(ty, _) => translate_type_kind(&ty.kind),
-        _ => cl_types::I64, // Fallback to pointer size
+        ExpressionKind::Type(ty, _) => translate_type_kind(&ty.kind, ptr_ty),
+        _ => ptr_ty, // Fallback to pointer size
     }
 }
 
@@ -27,19 +29,21 @@ pub fn field_layout(
     local_type: &TypeKind,
     field_idx: usize,
     type_definitions: &HashMap<String, TypeDefinition>,
+    ptr_ty: CraneliftType,
 ) -> (i32, CraneliftType) {
+    let ptr_size = ptr_ty.bytes() as i32;
     match local_type {
         TypeKind::Tuple(element_exprs) => {
             let mut offset: i32 = 0;
             for (i, elem_expr) in element_exprs.iter().enumerate() {
-                let cl_ty = type_from_expression(elem_expr);
+                let cl_ty = type_from_expression(elem_expr, ptr_ty);
                 if i == field_idx {
                     return (offset, cl_ty);
                 }
                 offset += cl_ty.bytes() as i32;
             }
             // Fallback if field_idx is out of range
-            (offset, cl_types::I64)
+            (offset, ptr_ty)
         }
         TypeKind::Custom(name, _) => {
             if let Some(def) = type_definitions.get(name) {
@@ -49,66 +53,36 @@ pub fn field_layout(
                         for (i, (_field_name, field_ty, _vis)) in
                             struct_def.fields.iter().enumerate()
                         {
-                            let cl_ty = translate_type_kind(&field_ty.kind);
+                            let cl_ty = translate_type_kind(&field_ty.kind, ptr_ty);
                             if i == field_idx {
                                 return (offset, cl_ty);
                             }
                             offset += cl_ty.bytes() as i32;
                         }
-                        (offset, cl_types::I64)
+                        (offset, ptr_ty)
                     }
                     TypeDefinition::Enum(_) => {
-                        // Discriminant is 8 bytes (I64) at offset 0; payload starts at offset 8
+                        // Discriminant is pointer-sized at offset 0; payload starts at offset ptr_size
                         if field_idx == 0 {
-                            (0, cl_types::I64) // discriminant
+                            (0, ptr_ty) // discriminant
                         } else {
-                            let payload_offset = 8 + ((field_idx - 1) as i32 * 8);
-                            (payload_offset, cl_types::I64)
+                            let payload_offset = ptr_size + ((field_idx - 1) as i32 * ptr_size);
+                            (payload_offset, ptr_ty)
                         }
                     }
                     // Generic, Alias, Class, Trait — assume pointer-sized fields
                     TypeDefinition::Generic(_)
                     | TypeDefinition::Alias(_)
                     | TypeDefinition::Class(_)
-                    | TypeDefinition::Trait(_) => ((field_idx as i32) * 8, cl_types::I64),
+                    | TypeDefinition::Trait(_) => ((field_idx as i32) * ptr_size, ptr_ty),
                 }
             } else {
                 // Type not found — assume pointer-sized fields
-                ((field_idx as i32) * 8, cl_types::I64)
+                ((field_idx as i32) * ptr_size, ptr_ty)
             }
         }
         // All other types: assume pointer-sized fields
-        TypeKind::Linear(_)
-        | TypeKind::I8
-        | TypeKind::U8
-        | TypeKind::I16
-        | TypeKind::U16
-        | TypeKind::I32
-        | TypeKind::U32
-        | TypeKind::I64
-        | TypeKind::U64
-        | TypeKind::I128
-        | TypeKind::U128
-        | TypeKind::Int
-        | TypeKind::F32
-        | TypeKind::F64
-        | TypeKind::Float
-        | TypeKind::Boolean
-        | TypeKind::Void
-        | TypeKind::String
-        | TypeKind::Symbol
-        | TypeKind::RawPtr
-        | TypeKind::List(_)
-        | TypeKind::Array(_, _)
-        | TypeKind::Map(_, _)
-        | TypeKind::Set(_)
-        | TypeKind::Result(_, _)
-        | TypeKind::Future(_)
-        | TypeKind::Function(_)
-        | TypeKind::Generic(_, _, _)
-        | TypeKind::Meta(_)
-        | TypeKind::Nullable(_)
-        | TypeKind::Error => ((field_idx as i32) * 8, cl_types::I64),
+        _ => ((field_idx as i32) * ptr_size, ptr_ty),
     }
 }
 
@@ -116,16 +90,18 @@ pub fn field_layout(
 ///
 /// Returns the size in bytes needed to represent the given aggregate type
 /// on the stack. For structs, this is the sum of field sizes. For enums,
-/// it is the discriminant (8 bytes) plus the largest variant payload.
+/// it is the discriminant plus the largest variant payload.
 pub fn aggregate_size(
     local_type: &TypeKind,
     type_definitions: &HashMap<String, TypeDefinition>,
+    ptr_ty: CraneliftType,
 ) -> u32 {
+    let ptr_size = ptr_ty.bytes();
     match local_type {
         TypeKind::Tuple(element_exprs) => {
             let mut total: u32 = 0;
             for elem_expr in element_exprs {
-                let cl_ty = type_from_expression(elem_expr);
+                let cl_ty = type_from_expression(elem_expr, ptr_ty);
                 total += cl_ty.bytes();
             }
             total
@@ -136,34 +112,34 @@ pub fn aggregate_size(
                     TypeDefinition::Struct(struct_def) => {
                         let mut total: u32 = 0;
                         for (_field_name, field_ty, _vis) in &struct_def.fields {
-                            let cl_ty = translate_type_kind(&field_ty.kind);
+                            let cl_ty = translate_type_kind(&field_ty.kind, ptr_ty);
                             total += cl_ty.bytes();
                         }
                         total
                     }
                     TypeDefinition::Enum(enum_def) => {
-                        // discriminant (8 bytes) + max payload size
-                        // Each payload field is stored at 8-byte alignment to match
-                        // field_layout which uses 8-byte slots per field.
+                        // discriminant + max payload size
+                        // Each payload field is stored at pointer-size alignment to match
+                        // field_layout which uses pointer-sized slots per field.
                         let max_payload: u32 = enum_def
                             .variants
                             .values()
-                            .map(|fields| (fields.len() as u32) * 8)
+                            .map(|fields| (fields.len() as u32) * ptr_size)
                             .max()
                             .unwrap_or(0);
-                        8 + max_payload
+                        ptr_size + max_payload
                     }
                     // Generic, Alias, Class, Trait — pointer-sized
                     TypeDefinition::Generic(_)
                     | TypeDefinition::Alias(_)
                     | TypeDefinition::Class(_)
-                    | TypeDefinition::Trait(_) => 8,
+                    | TypeDefinition::Trait(_) => ptr_size,
                 }
             } else {
-                8
+                ptr_size
             }
         }
         // All non-aggregate types: pointer-sized
-        _ => 8,
+        _ => ptr_size,
     }
 }

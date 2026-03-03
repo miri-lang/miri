@@ -22,30 +22,32 @@ impl<'a> FunctionTranslator<'a> {
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
     ) -> Result<(), String> {
+        let ptr_type = type_ctx.ptr_type;
+        let ptr_size = ptr_type.bytes() as i32;
         match &stmt.kind {
             StatementKind::IncRef(place) => {
                 let ptr = Self::read_place(builder, place, locals, type_ctx)?;
-                // The RC header lives at (ptr - 8). Managed allocations
+                // The RC header lives at (ptr - ptr_size). Managed allocations
                 // always place the header immediately before the payload,
                 // so this offset is guaranteed valid for heap-allocated objects.
-                let header_ptr = builder.ins().iadd_imm(ptr, -8);
+                let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size as i64));
                 let rc = builder
                     .ins()
-                    .load(cl_types::I64, MemFlags::new(), header_ptr, 0);
+                    .load(ptr_type, MemFlags::new(), header_ptr, 0);
                 let new_rc = builder.ins().iadd_imm(rc, 1);
                 builder.ins().store(MemFlags::new(), new_rc, header_ptr, 0);
             }
             StatementKind::DecRef(place) => {
                 let ptr = Self::read_place(builder, place, locals, type_ctx)?;
-                let header_ptr = builder.ins().iadd_imm(ptr, -8);
+                let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size as i64));
                 let rc = builder
                     .ins()
-                    .load(cl_types::I64, MemFlags::new(), header_ptr, 0);
+                    .load(ptr_type, MemFlags::new(), header_ptr, 0);
                 let new_rc = builder.ins().iadd_imm(rc, -1);
                 builder.ins().store(MemFlags::new(), new_rc, header_ptr, 0);
 
                 // If rc == 0, free
-                let zero = builder.ins().iconst(cl_types::I64, 0);
+                let zero = builder.ins().iconst(ptr_type, 0);
                 let is_zero = builder.ins().icmp(IntCC::Equal, new_rc, zero);
 
                 let then_block = builder.create_block();
@@ -66,7 +68,7 @@ impl<'a> FunctionTranslator<'a> {
             }
             StatementKind::Dealloc(place) => {
                 let ptr = Self::read_place(builder, place, locals, type_ctx)?;
-                let header_ptr = builder.ins().iadd_imm(ptr, -8);
+                let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size as i64));
                 Self::call_libc_free(builder, ctx, header_ptr)?;
             }
             StatementKind::Assign(place, rvalue) => {
@@ -74,7 +76,7 @@ impl<'a> FunctionTranslator<'a> {
 
                 // Handle implicit casts (e.g. float -> f32, i8 -> i32)
                 let dest_ty = &type_ctx.local_types[place.local.0];
-                let dest_cl_ty = translate_type(dest_ty);
+                let dest_cl_ty = translate_type(dest_ty, ptr_type);
                 let val_ty = builder.func.dfg.value_type(value);
 
                 if dest_cl_ty != val_ty {
@@ -102,6 +104,7 @@ impl<'a> FunctionTranslator<'a> {
         blocks: &HashMap<BasicBlock, Block>,
         type_ctx: &TypeCtx,
     ) -> Result<(), String> {
+        let ptr_type = type_ctx.ptr_type;
         match &terminator.kind {
             TerminatorKind::Return => {
                 // Return the value in local 0 (return place)
@@ -202,7 +205,7 @@ impl<'a> FunctionTranslator<'a> {
                 }
 
                 let dest_ty = &body.local_decls[destination.local.0].ty;
-                let cl_dest_ty = translate_type(dest_ty);
+                let cl_dest_ty = translate_type(dest_ty, ptr_type);
                 if dest_ty.kind != TypeKind::Void {
                     sig.returns.push(AbiParam::new(cl_dest_ty));
                 }

@@ -12,14 +12,14 @@ use cranelift_codegen::ir::Type as CraneliftType;
 /// # Panics
 ///
 /// Panics if the type cannot be represented in Cranelift (e.g., collections).
-pub fn translate_type(ty: &Type) -> CraneliftType {
-    translate_type_kind(&ty.kind)
+pub fn translate_type(ty: &Type, ptr_ty: CraneliftType) -> CraneliftType {
+    translate_type_kind(&ty.kind, ptr_ty)
 }
 
 /// Translate a Miri TypeKind to a Cranelift type.
-pub fn translate_type_kind(kind: &TypeKind) -> CraneliftType {
+pub fn translate_type_kind(kind: &TypeKind, ptr_ty: CraneliftType) -> CraneliftType {
     match kind {
-        TypeKind::Linear(_) => types::I64,
+        TypeKind::Linear(_) => ptr_ty,
         // Integer types - signed and unsigned use the same Cranelift type
         TypeKind::I8 | TypeKind::U8 => types::I8,
         TypeKind::I16 | TypeKind::U16 => types::I16,
@@ -28,8 +28,7 @@ pub fn translate_type_kind(kind: &TypeKind) -> CraneliftType {
         TypeKind::I128 | TypeKind::U128 => types::I128,
 
         // Platform-dependent integer
-        // TODO: use I64 for now, but we should have some logic for it
-        TypeKind::Int => types::I64,
+        TypeKind::Int => ptr_ty,
 
         // Floating point types
         TypeKind::F32 => types::F32,
@@ -42,40 +41,39 @@ pub fn translate_type_kind(kind: &TypeKind) -> CraneliftType {
         TypeKind::Void => types::I8,
 
         // String is a pointer
-        TypeKind::String => types::I64,
+        TypeKind::String => ptr_ty,
 
-        // Symbol type - represented as I64
-        TypeKind::Symbol => types::I64,
+        // Symbol type - represented as pointer-sized integer
+        TypeKind::Symbol => ptr_ty,
 
         // Raw pointer - maps to target pointer width
-        // TODO: use I32 on 32-bit targets
-        TypeKind::RawPtr => types::I64,
+        TypeKind::RawPtr => ptr_ty,
 
         // Collections are represented as pointers
-        TypeKind::List(_) => types::I64,
-        TypeKind::Array(_, _) => types::I64,
-        TypeKind::Map(_, _) => types::I64,
-        TypeKind::Set(_) => types::I64,
-        TypeKind::Tuple(_) => types::I64,
-        TypeKind::Result(_, _) => types::I64,
-        TypeKind::Future(_) => types::I64,
+        TypeKind::List(_) => ptr_ty,
+        TypeKind::Array(_, _) => ptr_ty,
+        TypeKind::Map(_, _) => ptr_ty,
+        TypeKind::Set(_) => ptr_ty,
+        TypeKind::Tuple(_) => ptr_ty,
+        TypeKind::Result(_, _) => ptr_ty,
+        TypeKind::Future(_) => ptr_ty,
 
         // Function types are function pointers
-        TypeKind::Function(_) => types::I64,
+        TypeKind::Function(_) => ptr_ty,
 
         // User-defined types are pointers
-        TypeKind::Custom(_, _) => types::I64,
-        TypeKind::Generic(_, _, _) => types::I64,
+        TypeKind::Custom(_, _) => ptr_ty,
+        TypeKind::Generic(_, _, _) => ptr_ty,
 
         // Meta types should be resolved before codegen; treat as pointer-sized
         // to avoid a panic. The type checker should prevent these from reaching codegen.
-        TypeKind::Meta(_) => types::I64,
+        TypeKind::Meta(_) => ptr_ty,
 
         // Nullable types are pointers
-        TypeKind::Nullable(_) => types::I64,
+        TypeKind::Nullable(_) => ptr_ty,
 
         // Error types indicate a prior compiler error; treat as pointer-sized
         // to allow graceful continuation rather than a panic.
-        TypeKind::Error => types::I64,
+        TypeKind::Error => ptr_ty,
     }
 }
