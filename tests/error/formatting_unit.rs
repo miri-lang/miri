@@ -69,14 +69,20 @@ fn test_levenshtein_distance() {
 fn test_find_best_match_exact() {
     use miri::error::format::find_best_match;
     let candidates = vec!["apple", "banana", "cherry"];
-    assert_eq!(find_best_match("apple", &candidates), Some("apple".to_string()));
+    assert_eq!(
+        find_best_match("apple", &candidates),
+        Some("apple".to_string())
+    );
 }
 
 #[test]
 fn test_find_best_match_close() {
     use miri::error::format::find_best_match;
     let candidates = vec!["apple", "banana", "cherry"];
-    assert_eq!(find_best_match("appl", &candidates), Some("apple".to_string()));
+    assert_eq!(
+        find_best_match("appl", &candidates),
+        Some("apple".to_string())
+    );
 }
 
 #[test]
@@ -97,13 +103,22 @@ fn test_find_best_match_empty_candidates() {
 fn test_find_best_match_best_of_multiple() {
     use miri::error::format::find_best_match;
     let candidates = vec!["apple", "apply", "app"];
-    assert_eq!(find_best_match("appl", &candidates), Some("apple".to_string()));
+    assert_eq!(
+        find_best_match("appl", &candidates),
+        Some("apple".to_string())
+    );
 }
 
 #[test]
 fn test_find_best_match_unicode() {
     use miri::error::format::find_best_match;
     let candidates = vec!["🦀rust", "🚀fast"];
-    assert_eq!(find_best_match("🦀rust", &candidates), Some("🦀rust".to_string()));
-    assert_eq!(find_best_match("🦀rus", &candidates), Some("🦀rust".to_string()));
+    assert_eq!(
+        find_best_match("🦀rust", &candidates),
+        Some("🦀rust".to_string())
+    );
+    assert_eq!(
+        find_best_match("🦀rus", &candidates),
+        Some("🦀rust".to_string())
+    );
 }
