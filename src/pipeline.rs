@@ -396,8 +396,9 @@ impl Pipeline {
                 .tempdir()
                 .map_err(|e| {
                     CompilerError::Codegen(format!("Failed to create build directory: {}", e))
-                })?
-                .into_path();
+                })?;
+            #[allow(deprecated)]
+            let unique_dir = unique_dir.into_path();
             let out = unique_dir.join("a.out");
             (unique_dir, out)
         };
