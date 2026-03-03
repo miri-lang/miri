@@ -200,6 +200,8 @@ pub enum Token {
     Caret,
     #[token("?")]
     QuestionMark,
+    #[token("??")]
+    QuestionQuestion,
     #[token("~")]
     Tilde,
 

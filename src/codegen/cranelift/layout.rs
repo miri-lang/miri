@@ -107,7 +107,7 @@ pub fn field_layout(
         | TypeKind::Function(_)
         | TypeKind::Generic(_, _, _)
         | TypeKind::Meta(_)
-        | TypeKind::Nullable(_)
+        | TypeKind::Option(_)
         | TypeKind::Error => ((field_idx as i32) * 8, cl_types::I64),
     }
 }

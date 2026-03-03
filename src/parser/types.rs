@@ -214,9 +214,11 @@ impl<'source> Parser<'source> {
         };
 
         if self.match_lookahead_type(|t| t == &Token::QuestionMark) {
-            self.eat_token(&Token::QuestionMark)?;
+            let base_span = final_expr.span;
+            let (_, q_span) = self.eat_token(&Token::QuestionMark)?;
+            let combined_span = Span::new(base_span.start, q_span.end);
             if let ExpressionKind::Type(inner_type, _) = final_expr.node {
-                final_expr = ast::type_expr_null(*inner_type);
+                final_expr = ast::type_expression_with_span(*inner_type, true, combined_span);
             }
         }
 
@@ -255,6 +257,8 @@ impl<'source> Parser<'source> {
             "Array" => self.generic_array_type_expression()?,
             "List" => self.generic_one_type_expression("List element type", TypeKind::List)?,
             "Set" => self.generic_one_type_expression("Set element type", TypeKind::Set)?,
+            // "Option" is handled as a Custom type and resolved by the type checker
+            // via resolve_builtin_type_alias, so it falls through to the default case.
             "Tuple" => {
                 let inner = self.multiple_element_type_expressions(
                     "Tuple item type",

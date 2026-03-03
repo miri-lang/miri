@@ -20,7 +20,7 @@ pub fn type_checker_error_test(source: &str, expected_error: &str) {
     let pipeline = Pipeline::new();
     match pipeline.frontend(source) {
         Ok(_) => panic!("Expected error '{}', but got success", expected_error),
-        Err(CompilerError::TypeErrors(errors)) => {
+        Err(CompilerError::TypeErrors { errors, .. }) => {
             let found = errors
                 .iter()
                 .any(|e| e.to_string().contains(expected_error));
@@ -36,7 +36,7 @@ pub fn type_checker_errors_test(source: &str, expected_errors: Vec<&str>) {
     let pipeline = Pipeline::new();
     match pipeline.frontend(source) {
         Ok(_) => panic!("Expected errors, but got success"),
-        Err(CompilerError::TypeErrors(errors)) => {
+        Err(CompilerError::TypeErrors { errors, .. }) => {
             let error_messages: Vec<String> =
                 errors.iter().map(|e| e.to_string().clone()).collect();
             for expected in expected_errors {

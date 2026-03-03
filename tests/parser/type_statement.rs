@@ -3,7 +3,7 @@
 
 use super::utils::{parser_error_test, parser_test, type_map_expr};
 use miri::ast::factory::{
-    generic_type, type_custom, type_declaration, type_expr_non_null, type_expr_null, type_int,
+    generic_type, type_custom, type_declaration, type_expr_non_null, type_expr_option, type_int,
     type_statement, type_string,
 };
 use miri::ast::types::TypeDeclarationKind;
@@ -41,7 +41,7 @@ type UserMap is {String: User?}
                 TypeDeclarationKind::Is,
                 opt_expr(type_expr_non_null(type_map_expr(
                     type_expr_non_null(type_string()),
-                    type_expr_null(type_custom("User", None)),
+                    type_expr_option(type_custom("User", None)),
                 ))),
             )],
             MemberVisibility::Public,
@@ -168,7 +168,7 @@ fn test_generic_type_alias() {
                 "Optional",
                 Some(vec![generic_type("T", None)]),
                 TypeDeclarationKind::Is,
-                opt_expr(type_expr_null(type_custom("T", None))),
+                opt_expr(type_expr_option(type_custom("T", None))),
             )],
             MemberVisibility::Public,
         )],

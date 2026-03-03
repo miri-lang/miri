@@ -59,7 +59,7 @@ pub fn resolve_type(tc: &TypeChecker, expr: &Expression) -> Type {
     match &expr.node {
         ExpressionKind::Type(t, is_nullable) => {
             if *is_nullable {
-                Type::new(TypeKind::Nullable(t.clone()), expr.span)
+                Type::new(TypeKind::Option(t.clone()), expr.span)
             } else {
                 *t.clone()
             }
@@ -171,6 +171,43 @@ pub fn bind_pattern(
             }
         }
         Pattern::EnumVariant(parent, bindings) => {
+            // Handle Option Some(x) pattern — bind subject directly (identity, like unwrap)
+            let is_option_some = {
+                let subject_ty = &ctx.body.local_decls[subject_local.0].ty;
+                if matches!(subject_ty.kind, TypeKind::Option(_)) {
+                    match parent.as_ref() {
+                        Pattern::Identifier(name) => name == "Some",
+                        Pattern::Member(enum_pat, variant) => {
+                            matches!(enum_pat.as_ref(), Pattern::Identifier(n) if n == "Option")
+                                && variant == "Some"
+                        }
+                        _ => false,
+                    }
+                } else {
+                    false
+                }
+            };
+            if is_option_some {
+                if let Some(Pattern::Identifier(name)) = bindings.first() {
+                    let subject_ty = ctx.body.local_decls[subject_local.0].ty.clone();
+                    // The inner type is the same as the subject (Option<T> has same repr as T)
+                    let inner_ty = if let TypeKind::Option(inner) = &subject_ty.kind {
+                        inner.as_ref().clone()
+                    } else {
+                        subject_ty
+                    };
+                    let var_local = ctx.push_local(name.clone(), inner_ty, *span);
+                    ctx.push_statement(crate::mir::Statement {
+                        kind: MirStatementKind::Assign(
+                            Place::new(var_local),
+                            Rvalue::Use(Operand::Copy(Place::new(subject_local))),
+                        ),
+                        span: *span,
+                    });
+                }
+                return Ok(());
+            }
+
             // For enum variant destructuring, extract associated values.
             // The aggregate is (discriminant, val1, val2, ...), so bindings use Field(i+1).
 
@@ -319,6 +356,34 @@ pub fn lower_as_return(
         }
         StatementKind::If(cond, then_stmt, else_stmt, if_type) => {
             let cond_op = lower_expression(ctx, cond, None)?;
+            // Coerce Option condition to bool
+            let cond_op = if let Some(cond_ty) = ctx.type_checker.get_type(cond.id) {
+                if let TypeKind::Option(inner_ty) = &cond_ty.kind {
+                    let none_val = Operand::Constant(Box::new(crate::mir::Constant {
+                        span: stmt.span,
+                        ty: inner_ty.as_ref().clone(),
+                        literal: crate::ast::literal::Literal::None,
+                    }));
+                    let bool_ty = Type::new(TypeKind::Boolean, stmt.span);
+                    let temp = ctx.push_temp(bool_ty, stmt.span);
+                    ctx.push_statement(crate::mir::Statement {
+                        kind: MirStatementKind::Assign(
+                            Place::new(temp),
+                            Rvalue::BinaryOp(
+                                crate::mir::BinOp::Ne,
+                                Box::new(cond_op),
+                                Box::new(none_val),
+                            ),
+                        ),
+                        span: stmt.span,
+                    });
+                    Operand::Copy(Place::new(temp))
+                } else {
+                    cond_op
+                }
+            } else {
+                cond_op
+            };
             let then_bb = ctx.new_basic_block();
             let else_bb = ctx.new_basic_block();
             let join_bb = ctx.new_basic_block();

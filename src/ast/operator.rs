@@ -23,6 +23,7 @@ pub enum BinaryOp {
     Or,
     Range,
     In,
+    NullCoalesce,
 }
 
 /// Represents a guard operator

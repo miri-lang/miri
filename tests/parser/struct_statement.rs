@@ -4,7 +4,7 @@
 use super::utils::{parser_error_test, parser_test, run_parser_error_tests};
 use miri::ast::factory::{
     generic_type, generic_type_with_kind, identifier, struct_member, struct_statement, type_bool,
-    type_custom, type_expr_non_null, type_expr_null, type_float, type_int, type_list, type_map,
+    type_custom, type_expr_non_null, type_expr_option, type_float, type_int, type_list, type_map,
     type_string,
 };
 use miri::ast::types::TypeDeclarationKind;
@@ -63,7 +63,7 @@ struct UserProfile
             None,
             vec![
                 struct_member("id", type_expr_non_null(type_string())),
-                struct_member("aliases", type_expr_null(type_list(type_string()))),
+                struct_member("aliases", type_expr_option(type_list(type_string()))),
                 struct_member(
                     "preferences",
                     type_expr_non_null(type_map(type_string(), type_bool())),
@@ -151,7 +151,7 @@ fn test_generic_struct() {
             Some(vec![generic_type("T", None)]),
             vec![struct_member(
                 "value",
-                type_expr_null(type_custom("T", None)),
+                type_expr_option(type_custom("T", None)),
             )],
             MemberVisibility::Public,
         )],

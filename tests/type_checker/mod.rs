@@ -24,7 +24,7 @@ pub mod match_expression;
 pub mod method_override;
 pub mod multiple_errors;
 pub mod mutability;
-pub mod nullable;
+pub mod option;
 pub mod rawptr;
 pub mod result;
 pub mod runtime_function;
