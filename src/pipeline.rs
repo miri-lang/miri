@@ -300,10 +300,9 @@ impl Pipeline {
 
     /// Compile and execute the source, returning the process exit code.
     pub fn run(&self, source: &str) -> Result<i32, CompilerError> {
-        let temp_dir = std::env::temp_dir().join(format!("miri_run_{}", std::process::id()));
-        fs::create_dir_all(&temp_dir)?;
-
-        let executable_path = temp_dir.join("program");
+        let temp_dir = tempfile::tempdir()
+            .map_err(|e| CompilerError::Codegen(format!("Failed to create temp dir: {}", e)))?;
+        let executable_path = temp_dir.path().join("program");
 
         let build_opts = BuildOptions {
             out_path: Some(executable_path.clone()),
@@ -392,16 +391,13 @@ impl Pipeline {
                 .unwrap_or_else(|| PathBuf::from("."));
             (work_dir, out)
         } else {
-            use std::time::{SystemTime, UNIX_EPOCH};
-            let timestamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let unique_dir = std::env::temp_dir().join("miri_build").join(format!(
-                "{}_{}",
-                timestamp,
-                std::process::id()
-            ));
+            let unique_dir = tempfile::Builder::new()
+                .prefix("miri_build_")
+                .tempdir()
+                .map_err(|e| {
+                    CompilerError::Codegen(format!("Failed to create build directory: {}", e))
+                })?
+                .into_path();
             let out = unique_dir.join("a.out");
             (unique_dir, out)
         };
