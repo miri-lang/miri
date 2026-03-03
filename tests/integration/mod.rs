@@ -24,5 +24,6 @@ pub mod set;
 pub mod strings;
 pub mod structs;
 pub mod tuple;
+pub mod type_alias;
 pub mod utils;
 pub mod variable;
