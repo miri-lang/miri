@@ -77,7 +77,11 @@ struct RuntimeInfo {
 /// Extracts the symbol names, parameter types, and return types so the codegen
 /// backend can declare them as external imports, and collects which runtime
 /// libraries must be linked.
-fn collect_runtime_info(program: &Program, imported_stmts: &[Statement]) -> RuntimeInfo {
+fn collect_runtime_info(
+    program: &Program,
+    imported_stmts: &[Statement],
+    #[cfg(feature = "cranelift")] ptr_ty: Option<cranelift_codegen::ir::Type>,
+) -> RuntimeInfo {
     #[cfg(feature = "cranelift")]
     let mut imports = Vec::new();
     let mut required_runtimes = HashSet::new();
@@ -90,26 +94,31 @@ fn collect_runtime_info(program: &Program, imported_stmts: &[Statement]) -> Runt
                 required_runtimes.insert(runtime_kind.clone());
 
                 #[cfg(feature = "cranelift")]
-                {
+                if let Some(ptr_ty) = ptr_ty {
                     use crate::codegen::cranelift::translate_type;
                     use crate::type_checker::resolve_type_name;
 
                     let mut param_types: Vec<_> = params
                         .iter()
-                        .filter_map(|p| resolve_type_name(&p.typ).map(|t| translate_type(&t)))
+                        .filter_map(|p| {
+                            resolve_type_name(&p.typ).map(|t| translate_type(&t, ptr_ty))
+                        })
                         .collect();
 
                     // Inject implicit allocator if not explicitly declared
                     if !params.iter().any(|p| p.name == "allocator") {
-                        param_types.push(translate_type(&crate::ast::types::Type::new(
-                            crate::ast::types::TypeKind::Int,
-                            stmt.span,
-                        )));
+                        param_types.push(translate_type(
+                            &crate::ast::types::Type::new(
+                                crate::ast::types::TypeKind::Int,
+                                stmt.span,
+                            ),
+                            ptr_ty,
+                        ));
                     }
 
                     let ret_type = return_type
                         .as_ref()
-                        .and_then(|rt| resolve_type_name(rt).map(|t| translate_type(&t)));
+                        .and_then(|rt| resolve_type_name(rt).map(|t| translate_type(&t, ptr_ty)));
 
                     imports.push(crate::codegen::cranelift::RuntimeImport {
                         name: name.clone(),
@@ -338,12 +347,8 @@ impl Pipeline {
     pub fn build(&self, source: &str, opts: &BuildOptions) -> Result<PathBuf, CompilerError> {
         let pipeline_result = self.frontend_script(source)?;
         let mir_bodies = self.lower_to_mir(&pipeline_result, opts.release)?;
-        let runtime_info = collect_runtime_info(
-            &pipeline_result.ast,
-            &pipeline_result.type_checker.imported_statements,
-        );
 
-        let object_bytes = match opts.cpu_backend {
+        let (object_bytes, required_runtimes) = match opts.cpu_backend {
             CpuBackend::Cranelift => {
                 #[cfg(feature = "cranelift")]
                 {
@@ -352,6 +357,13 @@ impl Pipeline {
                         .map_err(|e| CompilerError::Codegen(e.to_string()))?;
                     backend.set_type_definitions(
                         pipeline_result.type_checker.type_definitions().clone(),
+                    );
+
+                    let ptr_ty = backend.pointer_type();
+                    let runtime_info = collect_runtime_info(
+                        &pipeline_result.ast,
+                        &pipeline_result.type_checker.imported_statements,
+                        Some(ptr_ty),
                     );
                     backend.set_runtime_imports(runtime_info.imports);
 
@@ -364,7 +376,7 @@ impl Pipeline {
                         .compile(&bodies_ref, &Default::default())
                         .map_err(|e| CompilerError::Codegen(e.to_string()))?;
 
-                    artifact.bytes
+                    (artifact.bytes, runtime_info.required_runtimes)
                 }
                 #[cfg(not(feature = "cranelift"))]
                 {
@@ -378,6 +390,13 @@ impl Pipeline {
                 use crate::codegen::LlvmBackend;
                 let backend = LlvmBackend;
 
+                let runtime_info = collect_runtime_info(
+                    &pipeline_result.ast,
+                    &pipeline_result.type_checker.imported_statements,
+                    #[cfg(feature = "cranelift")]
+                    None,
+                );
+
                 let bodies_ref: Vec<(&str, &mir::Body)> = mir_bodies
                     .iter()
                     .map(|(name, body)| (name.as_str(), body))
@@ -387,7 +406,7 @@ impl Pipeline {
                     .compile(&bodies_ref, &Default::default())
                     .map_err(|e| CompilerError::Codegen(e.to_string()))?;
 
-                artifact.bytes
+                (artifact.bytes, runtime_info.required_runtimes)
             }
         };
 
@@ -419,7 +438,7 @@ impl Pipeline {
         // intermediate `.o` file.
         let object_path = out_path.with_extension("o");
         fs::write(&object_path, &object_bytes)?;
-        self.link_executable(&object_path, &out_path, &runtime_info.required_runtimes)?;
+        self.link_executable(&object_path, &out_path, &required_runtimes)?;
 
         Ok(out_path)
     }

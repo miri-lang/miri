@@ -19,22 +19,25 @@ impl<'a> FunctionTranslator<'a> {
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
     ) -> Result<Value, String> {
+        let ptr_type = type_ctx.ptr_type;
+        let ptr_size = ptr_type.bytes() as i32;
+
         match rvalue {
             Rvalue::Allocate(size_op, _, _) => {
                 let size = Self::translate_operand(builder, ctx, size_op, locals, type_ctx)?;
 
-                // Add 8 bytes for header
-                let total_size = builder.ins().iadd_imm(size, 8);
+                // Add ptr_size bytes for header
+                let total_size = builder.ins().iadd_imm(size, ptr_size as i64);
 
                 // Call malloc
                 let ptr = Self::call_libc_malloc(builder, ctx, total_size)?;
 
                 // Init RC to 1
-                let one = builder.ins().iconst(cl_types::I64, 1);
+                let one = builder.ins().iconst(ptr_type, 1);
                 builder.ins().store(MemFlags::new(), one, ptr, 0);
 
-                // Return ptr + 8
-                Ok(builder.ins().iadd_imm(ptr, 8))
+                // Return ptr + ptr_size
+                Ok(builder.ins().iadd_imm(ptr, ptr_size as i64))
             }
             Rvalue::Use(operand) => {
                 Self::translate_operand(builder, ctx, operand, locals, type_ctx)
@@ -57,14 +60,14 @@ impl<'a> FunctionTranslator<'a> {
                 let size = val_ty.bytes();
                 let slot_data = StackSlotData::new(StackSlotKind::ExplicitSlot, size, 0);
                 let slot = builder.create_sized_stack_slot(slot_data);
-                let addr = builder.ins().stack_addr(cl_types::I64, slot, 0);
+                let addr = builder.ins().stack_addr(ptr_type, slot, 0);
                 builder.ins().store(MemFlags::new(), value, addr, 0);
                 Ok(addr)
             }
 
             Rvalue::Aggregate(kind, operands) => {
                 if operands.is_empty() {
-                    return Ok(builder.ins().iconst(cl_types::I64, 0));
+                    return Ok(builder.ins().iconst(ptr_type, 0));
                 }
                 // Single-element aggregates can be returned directly, UNLESS they are
                 // structs/classes/enums which need pointer-based field access.
@@ -92,7 +95,7 @@ impl<'a> FunctionTranslator<'a> {
                 }
 
                 // Heap-allocate so the pointer survives returning from functions
-                let size_val = builder.ins().iconst(cl_types::I64, total_size as i64);
+                let size_val = builder.ins().iconst(ptr_type, total_size as i64);
                 let addr = Self::call_libc_malloc(builder, ctx, size_val)?;
 
                 // Store each field
@@ -107,7 +110,7 @@ impl<'a> FunctionTranslator<'a> {
 
             Rvalue::Cast(operand, ty) => {
                 let value = Self::translate_operand(builder, ctx, operand, locals, type_ctx)?;
-                let dest_ty = translate_type(ty);
+                let dest_ty = translate_type(ty, ptr_type);
                 let src_ty = builder.func.dfg.value_type(value);
 
                 Self::cast_value(builder, value, src_ty, dest_ty)
@@ -118,7 +121,7 @@ impl<'a> FunctionTranslator<'a> {
                 // Full implementation would dereference the place and get length
                 // This is currently only used in for-loops over lists
                 // where we rewrite to while loops with explicit bounds
-                Ok(builder.ins().iconst(cl_types::I64, 0))
+                Ok(builder.ins().iconst(ptr_type, 0))
             }
 
             Rvalue::GpuIntrinsic(_intrinsic) => {
@@ -144,7 +147,9 @@ impl<'a> FunctionTranslator<'a> {
                 Self::read_place(builder, place, locals, type_ctx)
             }
 
-            Operand::Constant(constant) => Self::translate_constant(builder, ctx, constant),
+            Operand::Constant(constant) => {
+                Self::translate_constant(builder, ctx, constant, type_ctx)
+            }
         }
     }
     /// Translate a constant to a Cranelift value.
@@ -152,8 +157,11 @@ impl<'a> FunctionTranslator<'a> {
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         constant: &Constant,
+        type_ctx: &TypeCtx,
     ) -> Result<Value, String> {
-        let cl_type = translate_type(&constant.ty);
+        let ptr_type = type_ctx.ptr_type;
+        let ptr_size = ptr_type.bytes() as i32;
+        let cl_type = translate_type(&constant.ty, ptr_type);
 
         match &constant.literal {
             Literal::Integer(int_lit) => {
@@ -213,7 +221,7 @@ impl<'a> FunctionTranslator<'a> {
                     .declare_data(&bytes_symbol, Linkage::Export, false, false)
                     .map_err(|e| format!("Error declaring string bytes: {}", e))?;
                 let bytes_gv = ctx.module.declare_data_in_func(bytes_id, builder.func);
-                let bytes_addr = builder.ins().symbol_value(cl_types::I64, bytes_gv);
+                let bytes_addr = builder.ins().symbol_value(ptr_type, bytes_gv);
 
                 // Use Lazy Init Cache
                 let cache_symbol = format!("{}_wrapper_cache", params_symbol);
@@ -222,14 +230,12 @@ impl<'a> FunctionTranslator<'a> {
                     .declare_data(&cache_symbol, Linkage::Export, true, false)
                     .map_err(|e| format!("Error declaring cache: {}", e))?;
                 let cache_gv = ctx.module.declare_data_in_func(cache_id, builder.func);
-                let cache_ptr = builder.ins().symbol_value(cl_types::I64, cache_gv);
+                let cache_ptr = builder.ins().symbol_value(ptr_type, cache_gv);
 
                 // Load cache
-                let cached_val = builder
-                    .ins()
-                    .load(cl_types::I64, MemFlags::new(), cache_ptr, 0);
+                let cached_val = builder.ins().load(ptr_type, MemFlags::new(), cache_ptr, 0);
 
-                let zero = builder.ins().iconst(cl_types::I64, 0);
+                let zero = builder.ins().iconst(ptr_type, 0);
                 let is_zero = builder.ins().icmp(IntCC::Equal, cached_val, zero);
 
                 let init_block = builder.create_block();
@@ -241,26 +247,36 @@ impl<'a> FunctionTranslator<'a> {
 
                 builder.switch_to_block(init_block);
 
-                // Alloc RC header (8 bytes) + MiriString (24 bytes) = 32 bytes
-                // Layout: [RC header @ 0] [MiriString @ 8]
+                // Alloc RC header (ptr_size bytes) + MiriString (3 * ptr_size bytes) = 4 * ptr_size bytes
+                // Layout: [RC header @ 0] [MiriString @ ptr_size]
                 // This matches the Rvalue::Allocate convention where the
-                // returned pointer (raw_ptr + 8) is a valid *const MiriString
+                // returned pointer (raw_ptr + ptr_size) is a valid *const MiriString
                 // that can be passed directly to runtime C functions, while
-                // IncRef/DecRef access the header at (ptr - 8).
-                let alloc_size = builder.ins().iconst(cl_types::I64, 32);
+                // IncRef/DecRef access the header at (ptr - ptr_size).
+                let alloc_size = builder.ins().iconst(ptr_type, (ptr_size * 4) as i64);
                 let raw_ptr = Self::call_libc_malloc(builder, ctx, alloc_size)?;
 
                 // Offset 0: RC header (immortal)
-                let header = builder.ins().iconst(cl_types::I64, 1 << 60);
+                let header = if ptr_type == cl_types::I32 {
+                    builder.ins().iconst(ptr_type, 1 << 28)
+                } else {
+                    builder.ins().iconst(ptr_type, 1 << 60)
+                };
                 builder.ins().store(MemFlags::new(), header, raw_ptr, 0);
 
-                // Offset 8: MiriString.data (pointer to string bytes)
-                builder.ins().store(MemFlags::new(), bytes_addr, raw_ptr, 8);
-                // Offset 16: MiriString.len
-                let len_val = builder.ins().iconst(cl_types::I64, s.len() as i64);
-                builder.ins().store(MemFlags::new(), len_val, raw_ptr, 16);
-                // Offset 24: MiriString.capacity (same as len for literals)
-                builder.ins().store(MemFlags::new(), len_val, raw_ptr, 24);
+                // Offset ptr_size: MiriString.data (pointer to string bytes)
+                builder
+                    .ins()
+                    .store(MemFlags::new(), bytes_addr, raw_ptr, ptr_size);
+                // Offset 2 * ptr_size: MiriString.len
+                let len_val = builder.ins().iconst(ptr_type, s.len() as i64);
+                builder
+                    .ins()
+                    .store(MemFlags::new(), len_val, raw_ptr, 2 * ptr_size);
+                // Offset 3 * ptr_size: MiriString.capacity (same as len for literals)
+                builder
+                    .ins()
+                    .store(MemFlags::new(), len_val, raw_ptr, 3 * ptr_size);
 
                 // Update Cache
                 builder.ins().store(MemFlags::new(), raw_ptr, cache_ptr, 0);
@@ -270,17 +286,15 @@ impl<'a> FunctionTranslator<'a> {
 
                 builder.switch_to_block(continue_block);
                 // Load cached raw_ptr
-                let cached_raw = builder
-                    .ins()
-                    .load(cl_types::I64, MemFlags::new(), cache_ptr, 0);
+                let cached_raw = builder.ins().load(ptr_type, MemFlags::new(), cache_ptr, 0);
 
                 // Return pointer past header — a valid *const MiriString
-                Ok(builder.ins().iadd_imm(cached_raw, 8))
+                Ok(builder.ins().iadd_imm(cached_raw, ptr_size as i64))
             }
 
             Literal::Symbol(_) => {
-                // Symbols are represented as I64
-                Ok(builder.ins().iconst(cl_types::I64, 0))
+                // Symbols are represented as pointer-sized integers
+                Ok(builder.ins().iconst(ptr_type, 0))
             }
 
             Literal::Regex(_) => Err("Regex constants not supported in codegen".to_string()),

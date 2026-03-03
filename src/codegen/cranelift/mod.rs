@@ -146,6 +146,11 @@ impl CraneliftBackend {
         self.isa.triple()
     }
 
+    /// Get the pointer type for the target ISA.
+    pub fn pointer_type(&self) -> cranelift_codegen::ir::Type {
+        self.isa.pointer_type()
+    }
+
     /// Set the type definitions for layout computation.
     pub fn set_type_definitions(&mut self, defs: HashMap<String, TypeDefinition>) {
         self.type_definitions = defs;
@@ -254,6 +259,8 @@ impl Backend for CraneliftBackend {
         }
 
         // Define string literals as static data
+        let ptr_type = isa.pointer_type();
+        let ptr_size = ptr_type.bytes();
         for (literal, symbol_name) in string_literals {
             // 1. Define the raw bytes
             let bytes_symbol = format!("{}_bytes", symbol_name);
@@ -273,7 +280,7 @@ impl Backend for CraneliftBackend {
                 .map_err(|e| CodegenError::Module(e.to_string()))?;
 
             let mut cache_ctx = DataDescription::new();
-            cache_ctx.define_zeroinit(8);
+            cache_ctx.define_zeroinit(ptr_size as usize);
 
             module
                 .define_data(cache_id, &cache_ctx)
