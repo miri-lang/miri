@@ -26,18 +26,40 @@ impl<'a> FunctionTranslator<'a> {
         match &stmt.kind {
             StatementKind::IncRef(place) => {
                 let ptr = Self::read_place(builder, place, locals, type_ctx)?;
-                // The RC header lives at (ptr - ptr_size). Managed allocations
-                // always place the header immediately before the payload,
-                // so this offset is guaranteed valid for heap-allocated objects.
                 let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size as i64));
                 let rc = builder.ins().load(ptr_type, MemFlags::new(), header_ptr, 0);
+
+                // Check if immortal (high bit set; negative if signed)
+                let is_immortal = builder.ins().icmp_imm(IntCC::SignedLessThan, rc, 0);
+                let then_block = builder.create_block();
+                let merge_block = builder.create_block();
+                builder
+                    .ins()
+                    .brif(is_immortal, merge_block, &[], then_block, &[]);
+
+                builder.switch_to_block(then_block);
                 let new_rc = builder.ins().iadd_imm(rc, 1);
                 builder.ins().store(MemFlags::new(), new_rc, header_ptr, 0);
+                builder.ins().jump(merge_block, &[]);
+
+                builder.seal_block(then_block);
+                builder.switch_to_block(merge_block);
+                builder.seal_block(merge_block);
             }
             StatementKind::DecRef(place) => {
                 let ptr = Self::read_place(builder, place, locals, type_ctx)?;
                 let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size as i64));
                 let rc = builder.ins().load(ptr_type, MemFlags::new(), header_ptr, 0);
+
+                // Check if immortal (high bit set; negative if signed)
+                let is_immortal = builder.ins().icmp_imm(IntCC::SignedLessThan, rc, 0);
+                let dec_block = builder.create_block();
+                let merge_block = builder.create_block();
+                builder
+                    .ins()
+                    .brif(is_immortal, merge_block, &[], dec_block, &[]);
+
+                builder.switch_to_block(dec_block);
                 let new_rc = builder.ins().iadd_imm(rc, -1);
                 builder.ins().store(MemFlags::new(), new_rc, header_ptr, 0);
 
@@ -45,21 +67,20 @@ impl<'a> FunctionTranslator<'a> {
                 let zero = builder.ins().iconst(ptr_type, 0);
                 let is_zero = builder.ins().icmp(IntCC::Equal, new_rc, zero);
 
-                let then_block = builder.create_block();
-                let else_block = builder.create_block();
-
+                let free_block = builder.create_block();
                 builder
                     .ins()
-                    .brif(is_zero, then_block, &[], else_block, &[]);
+                    .brif(is_zero, free_block, &[], merge_block, &[]);
 
-                builder.switch_to_block(then_block);
-                // Reference count dropped to zero — deallocate via free(header_ptr)
+                builder.switch_to_block(free_block);
                 Self::call_libc_free(builder, ctx, header_ptr)?;
+                builder.ins().jump(merge_block, &[]);
 
-                builder.ins().jump(else_block, &[]);
-                builder.seal_block(then_block);
-                builder.switch_to_block(else_block);
-                builder.seal_block(else_block);
+                builder.seal_block(dec_block);
+                builder.seal_block(free_block);
+
+                builder.switch_to_block(merge_block);
+                builder.seal_block(merge_block);
             }
             StatementKind::Dealloc(place) => {
                 let ptr = Self::read_place(builder, place, locals, type_ctx)?;

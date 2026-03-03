@@ -23,21 +23,34 @@ impl<'a> FunctionTranslator<'a> {
         let ptr_size = ptr_type.bytes() as i32;
 
         match rvalue {
-            Rvalue::Allocate(size_op, _, _) => {
+            Rvalue::Allocate(size_op, align_op, _) => {
                 let size = Self::translate_operand(builder, ctx, size_op, locals, type_ctx)?;
+                let align = Self::translate_operand(builder, ctx, align_op, locals, type_ctx)?;
 
-                // Add ptr_size bytes for header
-                let total_size = builder.ins().iadd_imm(size, ptr_size as i64);
+                // For now, we use libc malloc which doesn't take alignment directly.
+                // We'd need aligned_alloc for full support.
+                // However, we MUST still ensure the RC header doesn't break alignment.
+                // We'll over-allocate and align the payload.
 
-                // Call malloc
-                let ptr = Self::call_libc_malloc(builder, ctx, total_size)?;
+                // Header is ptr_size
+                let total_size = builder.ins().iadd(size, align);
+                let total_size = builder.ins().iadd_imm(total_size, ptr_size as i64);
 
-                // Init RC to 1
+                let raw_ptr = Self::call_libc_malloc(builder, ctx, total_size)?;
+
+                // Payload starts at align_to(raw_ptr + ptr_size, align)
+                let payload_base = builder.ins().iadd_imm(raw_ptr, ptr_size as i64);
+                let mask = builder.ins().ineg(align);
+                let align_minus_1 = builder.ins().iadd_imm(align, -1);
+                let bumped = builder.ins().iadd(payload_base, align_minus_1);
+                let ptr = builder.ins().band(bumped, mask);
+
+                // RC header lives at (ptr - ptr_size)
+                let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size as i64));
                 let one = builder.ins().iconst(ptr_type, 1);
-                builder.ins().store(MemFlags::new(), one, ptr, 0);
+                builder.ins().store(MemFlags::new(), one, header_ptr, 0);
 
-                // Return ptr + ptr_size
-                Ok(builder.ins().iadd_imm(ptr, ptr_size as i64))
+                Ok(ptr)
             }
             Rvalue::Use(operand) => {
                 Self::translate_operand(builder, ctx, operand, locals, type_ctx)
@@ -58,7 +71,8 @@ impl<'a> FunctionTranslator<'a> {
                 let value = Self::read_place(builder, place, locals, type_ctx)?;
                 let val_ty = builder.func.dfg.value_type(value);
                 let size = val_ty.bytes();
-                let slot_data = StackSlotData::new(StackSlotKind::ExplicitSlot, size, 0);
+                let align = size; // Simplification for scalars
+                let slot_data = StackSlotData::new(StackSlotKind::ExplicitSlot, size, align as u8);
                 let slot = builder.create_sized_stack_slot(slot_data);
                 let addr = builder.ins().stack_addr(ptr_type, slot, 0);
                 builder.ins().store(MemFlags::new(), value, addr, 0);
@@ -69,8 +83,9 @@ impl<'a> FunctionTranslator<'a> {
                 if operands.is_empty() {
                     return Ok(builder.ins().iconst(ptr_type, 0));
                 }
-                // Single-element aggregates can be returned directly, UNLESS they are
-                // structs/classes/enums which need pointer-based field access.
+
+                // Single-element aggregates can be returned directly UNLESS they need
+                // pointer-based layout (like enums or structs that might be expected as pointers).
                 let needs_pointer_layout = matches!(
                     kind,
                     AggregateKind::Struct(_) | AggregateKind::Class(_) | AggregateKind::Enum(_, _)
@@ -85,27 +100,48 @@ impl<'a> FunctionTranslator<'a> {
                     .map(|op| Self::translate_operand(builder, ctx, op, locals, type_ctx))
                     .collect::<Result<_, _>>()?;
 
-                // Compute field offsets from operand types
-                let mut total_size: u32 = 0;
+                // Compute field offsets with proper alignment
+                let mut current_offset: u32 = 0;
                 let mut field_offsets = Vec::new();
+                let mut max_align: u32 = 1;
+
+                let is_enum = matches!(kind, AggregateKind::Enum(_, _));
+
                 for &val in &translated {
                     let ty = builder.func.dfg.value_type(val);
-                    field_offsets.push(total_size);
-                    total_size += ty.bytes();
+                    let align = if is_enum { ptr_size as u32 } else { ty.bytes() };
+                    max_align = max_align.max(align);
+
+                    // Align current_offset to this field's alignment
+                    current_offset = (current_offset + align - 1) & !(align - 1);
+                    field_offsets.push(current_offset);
+                    current_offset += if is_enum { ptr_size as u32 } else { ty.bytes() };
                 }
 
-                // Heap-allocate so the pointer survives returning from functions
-                let size_val = builder.ins().iconst(ptr_type, total_size as i64);
-                let addr = Self::call_libc_malloc(builder, ctx, size_val)?;
+                // Final size must be a multiple of the max alignment
+                let total_size = (current_offset + max_align - 1) & !(max_align - 1);
+
+                // Heap-allocate for now.
+                // Add ptr_size for RC header
+                let alloc_size = builder
+                    .ins()
+                    .iconst(ptr_type, (total_size + ptr_size as u32) as i64);
+                let raw_ptr = Self::call_libc_malloc(builder, ctx, alloc_size)?;
+
+                // Store RC = 1
+                let one = builder.ins().iconst(ptr_type, 1);
+                builder.ins().store(MemFlags::new(), one, raw_ptr, 0);
+
+                let payload_ptr = builder.ins().iadd_imm(raw_ptr, ptr_size as i64);
 
                 // Store each field
                 for (i, val) in translated.into_iter().enumerate() {
                     builder
                         .ins()
-                        .store(MemFlags::new(), val, addr, field_offsets[i] as i32);
+                        .store(MemFlags::new(), val, payload_ptr, field_offsets[i] as i32);
                 }
 
-                Ok(addr)
+                Ok(payload_ptr)
             }
 
             Rvalue::Cast(operand, ty) => {
@@ -207,89 +243,23 @@ impl<'a> FunctionTranslator<'a> {
             }
 
             Literal::String(s) => {
-                // Get Bytes Symbol address (safe code relocation)
                 let next_idx = ctx.string_literals.len();
-                let params_symbol = ctx
+                let symbol_name = ctx
                     .string_literals
                     .entry(s.clone())
                     .or_insert_with(|| format!(".miri_str_{}", next_idx))
                     .clone();
 
-                let bytes_symbol = format!("{}_bytes", params_symbol);
-                let bytes_id = ctx
+                let struct_symbol = format!("{}_struct", symbol_name);
+                let struct_id = ctx
                     .module
-                    .declare_data(&bytes_symbol, Linkage::Export, false, false)
-                    .map_err(|e| format!("Error declaring string bytes: {}", e))?;
-                let bytes_gv = ctx.module.declare_data_in_func(bytes_id, builder.func);
-                let bytes_addr = builder.ins().symbol_value(ptr_type, bytes_gv);
+                    .declare_data(&struct_symbol, Linkage::Export, false, false)
+                    .map_err(|e| format!("Error declaring string struct: {}", e))?;
+                let struct_gv = ctx.module.declare_data_in_func(struct_id, builder.func);
+                let struct_addr = builder.ins().symbol_value(ptr_type, struct_gv);
 
-                // Use Lazy Init Cache
-                let cache_symbol = format!("{}_wrapper_cache", params_symbol);
-                let cache_id = ctx
-                    .module
-                    .declare_data(&cache_symbol, Linkage::Export, true, false)
-                    .map_err(|e| format!("Error declaring cache: {}", e))?;
-                let cache_gv = ctx.module.declare_data_in_func(cache_id, builder.func);
-                let cache_ptr = builder.ins().symbol_value(ptr_type, cache_gv);
-
-                // Load cache
-                let cached_val = builder.ins().load(ptr_type, MemFlags::new(), cache_ptr, 0);
-
-                let zero = builder.ins().iconst(ptr_type, 0);
-                let is_zero = builder.ins().icmp(IntCC::Equal, cached_val, zero);
-
-                let init_block = builder.create_block();
-                let continue_block = builder.create_block();
-
-                builder
-                    .ins()
-                    .brif(is_zero, init_block, &[], continue_block, &[]);
-
-                builder.switch_to_block(init_block);
-
-                // Alloc RC header (ptr_size bytes) + MiriString (3 * ptr_size bytes) = 4 * ptr_size bytes
-                // Layout: [RC header @ 0] [MiriString @ ptr_size]
-                // This matches the Rvalue::Allocate convention where the
-                // returned pointer (raw_ptr + ptr_size) is a valid *const MiriString
-                // that can be passed directly to runtime C functions, while
-                // IncRef/DecRef access the header at (ptr - ptr_size).
-                let alloc_size = builder.ins().iconst(ptr_type, (ptr_size * 4) as i64);
-                let raw_ptr = Self::call_libc_malloc(builder, ctx, alloc_size)?;
-
-                // Offset 0: RC header (immortal)
-                let header = if ptr_type == cl_types::I32 {
-                    builder.ins().iconst(ptr_type, 1 << 28)
-                } else {
-                    builder.ins().iconst(ptr_type, 1 << 60)
-                };
-                builder.ins().store(MemFlags::new(), header, raw_ptr, 0);
-
-                // Offset ptr_size: MiriString.data (pointer to string bytes)
-                builder
-                    .ins()
-                    .store(MemFlags::new(), bytes_addr, raw_ptr, ptr_size);
-                // Offset 2 * ptr_size: MiriString.len
-                let len_val = builder.ins().iconst(ptr_type, s.len() as i64);
-                builder
-                    .ins()
-                    .store(MemFlags::new(), len_val, raw_ptr, 2 * ptr_size);
-                // Offset 3 * ptr_size: MiriString.capacity (same as len for literals)
-                builder
-                    .ins()
-                    .store(MemFlags::new(), len_val, raw_ptr, 3 * ptr_size);
-
-                // Update Cache
-                builder.ins().store(MemFlags::new(), raw_ptr, cache_ptr, 0);
-
-                builder.ins().jump(continue_block, &[]);
-                builder.seal_block(init_block);
-
-                builder.switch_to_block(continue_block);
-                // Load cached raw_ptr
-                let cached_raw = builder.ins().load(ptr_type, MemFlags::new(), cache_ptr, 0);
-
-                // Return pointer past header — a valid *const MiriString
-                Ok(builder.ins().iadd_imm(cached_raw, ptr_size as i64))
+                // Return pointer past RC header (at offset ptr_size) — a valid *const MiriString
+                Ok(builder.ins().iadd_imm(struct_addr, ptr_size as i64))
             }
 
             Literal::Identifier(_) => {
