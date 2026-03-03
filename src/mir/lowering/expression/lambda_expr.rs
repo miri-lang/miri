@@ -113,7 +113,7 @@ pub(crate) fn lower_lambda_expr(
     };
     ctx.lambda_bodies.push(lambda_info);
 
-    // Create a constant symbol representing the lambda
+    // Create a constant identifier representing the lambda
     // Backends will look up the lambda body by this name
     let temp = ctx.push_temp(lambda_ty.clone(), expr.span);
     ctx.push_statement(crate::mir::Statement {
@@ -122,7 +122,7 @@ pub(crate) fn lower_lambda_expr(
             Rvalue::Use(Operand::Constant(Box::new(Constant {
                 span: expr.span,
                 ty: lambda_ty,
-                literal: crate::ast::literal::Literal::Symbol(lambda_name),
+                literal: crate::ast::literal::Literal::Identifier(lambda_name),
             }))),
         ),
         span: expr.span,

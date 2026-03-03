@@ -43,8 +43,8 @@ pub fn translate_type_kind(kind: &TypeKind, ptr_ty: CraneliftType) -> CraneliftT
         // String is a pointer
         TypeKind::String => ptr_ty,
 
-        // Symbol type - represented as pointer-sized integer
-        TypeKind::Symbol => ptr_ty,
+        // Identifier type - represented as pointer-sized integer
+        TypeKind::Identifier => ptr_ty,
 
         // Raw pointer - maps to target pointer width
         TypeKind::RawPtr => ptr_ty,

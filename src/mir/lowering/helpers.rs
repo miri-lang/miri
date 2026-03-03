@@ -105,7 +105,7 @@ pub fn literal_to_u128(lit: &crate::ast::literal::Literal) -> Option<u128> {
             IntegerLiteral::U128(v) => Some(*v),
         },
         Literal::Boolean(b) => Some(if *b { 1 } else { 0 }),
-        // String, Float, Symbol - can't be used with SwitchInt directly
+        // String, Float, Identifier - can't be used with SwitchInt directly
         _ => None,
     }
 }

@@ -40,8 +40,8 @@ pub(crate) fn lower_binary_expr(
         // Create call to __contains(collection, element) -> bool
         let contains_fn = Operand::Constant(Box::new(Constant {
             span: expr.span,
-            ty: Type::new(TypeKind::Symbol, expr.span),
-            literal: crate::ast::literal::Literal::Symbol("__contains".to_string()),
+            ty: Type::new(TypeKind::Identifier, expr.span),
+            literal: crate::ast::literal::Literal::Identifier("__contains".to_string()),
         }));
 
         let target_bb = ctx.new_basic_block();
@@ -108,8 +108,8 @@ pub(crate) fn lower_binary_expr(
 
                         let func_op = Operand::Constant(Box::new(Constant {
                             span: expr.span,
-                            ty: Type::new(TypeKind::Symbol, expr.span),
-                            literal: Literal::Symbol(mangled_name),
+                            ty: Type::new(TypeKind::Identifier, expr.span),
+                            literal: Literal::Identifier(mangled_name),
                         }));
 
                         if negate {

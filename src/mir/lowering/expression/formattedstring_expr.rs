@@ -79,8 +79,8 @@ pub(crate) fn lower_formattedstring_expr(
         }
         let func_op = Operand::Constant(Box::new(Constant {
             span: expr.span,
-            ty: Type::new(TypeKind::Symbol, expr.span),
-            literal: Literal::Symbol("String_concat".to_string()),
+            ty: Type::new(TypeKind::Identifier, expr.span),
+            literal: Literal::Identifier("String_concat".to_string()),
         }));
         let result = ctx.push_temp(Type::new(TypeKind::String, expr.span), expr.span);
         let target_bb = ctx.new_basic_block();

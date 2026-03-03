@@ -377,14 +377,9 @@ pub fn boolean_literal(val: bool) -> Expression {
     expr(ExpressionKind::Literal(boolean(val)))
 }
 
-/// Creates a symbol literal.
-pub fn symbol(val: &str) -> Literal {
-    Literal::Symbol(val.to_string())
-}
-
-/// Creates a symbol literal expression.
-pub fn symbol_literal(val: &str) -> Expression {
-    expr(ExpressionKind::Literal(symbol(val)))
+/// Creates an identifier literal (internal, used for function/type references in MIR).
+pub fn identifier_literal_value(val: &str) -> Literal {
+    Literal::Identifier(val.to_string())
 }
 
 /// Creates a regex literal from a token.
@@ -902,9 +897,9 @@ pub fn type_function(
     })))
 }
 
-/// Creates a `Symbol` type.
-pub fn type_symbol() -> Type {
-    make_type(TypeKind::Symbol)
+/// Creates an `Identifier` type (internal, used for function/type references in MIR).
+pub fn type_identifier() -> Type {
+    make_type(TypeKind::Identifier)
 }
 
 /// Creates a `RawPtr` type (platform-width opaque pointer).

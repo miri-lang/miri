@@ -28,17 +28,17 @@ pub(crate) fn lower_member_expr(
     let obj_operand = lower_expression(ctx, obj, None)?;
 
     // Handle GPU Intrinsics (gpu_context.thread_idx.x, etc.)
-    // This uses a two-step lowering: gpu_context.thread_idx => intermediate symbol,
-    // then intermediate_symbol.x => actual GpuIntrinsic rvalue.
+    // This uses a two-step lowering: gpu_context.thread_idx => intermediate identifier,
+    // then intermediate_identifier.x => actual GpuIntrinsic rvalue.
     if let Operand::Constant(c) = &obj_operand {
-        if let crate::ast::literal::Literal::Symbol(sym) = &c.literal {
+        if let crate::ast::literal::Literal::Identifier(sym) = &c.literal {
             if sym == "gpu_context" {
                 if let ExpressionKind::Identifier(prop_name, _) = &prop.node {
-                    // Return intermediate symbol for chained access
+                    // Return intermediate identifier for chained access
                     return Ok(Operand::Constant(Box::new(Constant {
                         span: expr.span,
                         ty: Type::new(TypeKind::Void, expr.span),
-                        literal: crate::ast::literal::Literal::Symbol(format!(
+                        literal: crate::ast::literal::Literal::Identifier(format!(
                             "gpu_context.{}",
                             prop_name
                         )),
@@ -340,8 +340,8 @@ pub(crate) fn lower_member_expr(
 
                         let func_op = Operand::Constant(Box::new(Constant {
                             span: expr.span,
-                            ty: crate::ast::types::Type::new(TypeKind::Symbol, expr.span),
-                            literal: crate::ast::literal::Literal::Symbol(mangled_name),
+                            ty: crate::ast::types::Type::new(TypeKind::Identifier, expr.span),
+                            literal: crate::ast::literal::Literal::Identifier(mangled_name),
                         }));
 
                         let mut call_args = vec![obj_operand];

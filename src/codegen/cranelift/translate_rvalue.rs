@@ -292,8 +292,8 @@ impl<'a> FunctionTranslator<'a> {
                 Ok(builder.ins().iadd_imm(cached_raw, ptr_size as i64))
             }
 
-            Literal::Symbol(_) => {
-                // Symbols are represented as pointer-sized integers
+            Literal::Identifier(_) => {
+                // Identifiers are represented as pointer-sized integers
                 Ok(builder.ins().iconst(ptr_type, 0))
             }
 

@@ -59,7 +59,6 @@ impl<'source> Parser<'source> {
             : FloatLiteral
             : StringLiteral
             : BooleanLiteral
-            : SymbolLiteral
             ;
     */
     pub(crate) fn literal(&mut self) -> Result<Literal, SyntaxError> {
@@ -76,7 +75,6 @@ impl<'source> Parser<'source> {
                 Ok(Literal::None)
             }
             Some((Token::String, _)) => self.string_literal(),
-            Some((Token::Symbol, _)) => self.symbol_literal(),
             Some((Token::Regex(_), _)) => self.regex_literal(),
             Some((Token::FormattedStringStart(_), _))
             | Some((Token::FormattedStringMiddle(_), _))
@@ -262,22 +260,6 @@ impl<'source> Parser<'source> {
                         ));
                     }
                 };
-                Ok(literal)
-            }
-            Err(e) => Err(e),
-        }
-    }
-
-    /*
-        SymbolLiteral
-            : SYMBOL
-            ;
-    */
-    pub(crate) fn symbol_literal(&mut self) -> Result<Literal, SyntaxError> {
-        match self.eat_token(&Token::Symbol) {
-            Ok(token) => {
-                let str_value = &self.source[token.1.start + 1..token.1.end]; // Remove leading colon
-                let literal = ast::symbol(str_value);
                 Ok(literal)
             }
             Err(e) => Err(e),

@@ -59,7 +59,7 @@ impl TypeChecker {
             },
             Literal::Boolean(_) => ast_factory::make_type(TypeKind::Boolean),
             Literal::String(_) => ast_factory::make_type(TypeKind::String),
-            Literal::Symbol(_) => ast_factory::make_type(TypeKind::Symbol),
+            Literal::Identifier(_) => ast_factory::make_type(TypeKind::Identifier),
             Literal::Regex(_) => ast_factory::make_type(TypeKind::Custom("Regex".into(), None)),
             Literal::None => ast_factory::make_type(TypeKind::Option(Box::new(
                 ast_factory::make_type(TypeKind::Void),

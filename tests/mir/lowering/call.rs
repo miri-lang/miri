@@ -17,7 +17,7 @@ fn main()
 
             bb0: {
                 StorageLive(_1); 
-                _1 = const Symbol("foo")() -> bb1;
+                _1 = const Identifier("foo")() -> bb1;
             }
 
             bb1: {
@@ -42,7 +42,7 @@ fn main()
 
             bb0: {
                 StorageLive(_1);
-                _1 = const Symbol("add")(const Integer(I8(1)), const Integer(I8(2))) -> bb1;
+                _1 = const Identifier("add")(const Integer(I8(1)), const Integer(I8(2))) -> bb1;
             }
 
             bb1: {
@@ -69,11 +69,11 @@ fn main()
 
             bb0: {
                 StorageLive(_1);
-                _2 = const Symbol("mul")(const Integer(I8(2)), const Integer(I8(3))) -> bb1;
+                _2 = const Identifier("mul")(const Integer(I8(2)), const Integer(I8(3))) -> bb1;
             }
 
             bb1: {
-                _1 = const Symbol("add")(_2, const Integer(I8(4))) -> bb2;
+                _1 = const Identifier("add")(_2, const Integer(I8(4))) -> bb2;
             }
 
             bb2: {
@@ -99,7 +99,7 @@ fn main()
             let _2: void;
 
             bb0: {
-                _1 = const Symbol("do_something")() -> bb1;
+                _1 = const Identifier("do_something")() -> bb1;
             }
 
             bb1: {

@@ -435,7 +435,6 @@ pub(crate) fn is_literal(token: &Token) -> bool {
             | Token::True
             | Token::False
             | Token::String
-            | Token::Symbol
             | Token::Regex(_)
             | Token::None
     )

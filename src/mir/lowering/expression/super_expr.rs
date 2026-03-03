@@ -23,7 +23,7 @@ pub(crate) fn lower_super_expr(
     let constant = Operand::Constant(Box::new(Constant {
         span: expr.span,
         ty,
-        literal: crate::ast::literal::Literal::Symbol("super".to_string()),
+        literal: crate::ast::literal::Literal::Identifier("super".to_string()),
     }));
 
     if let Some(d) = dest {

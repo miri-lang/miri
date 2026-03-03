@@ -243,7 +243,6 @@ impl<'source> Parser<'source> {
             "f64" => ast::make_type(TypeKind::F64),
             "String" => ast::make_type(TypeKind::String),
             "bool" => ast::make_type(TypeKind::Boolean),
-            "symbol" => ast::make_type(TypeKind::Symbol),
             "RawPtr" => ast::make_type(TypeKind::RawPtr),
             "Result" | "result" => self.generic_two_types_expression(
                 "Ok result type",

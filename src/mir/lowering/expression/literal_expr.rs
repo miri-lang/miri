@@ -50,7 +50,7 @@ pub(crate) fn lower_literal_expr(
                     FloatLiteral::F64(_) => Type::new(TypeKind::F64, expr.span),
                 }
             }
-            crate::ast::literal::Literal::Symbol(_) => Type::new(TypeKind::Symbol, expr.span),
+            crate::ast::literal::Literal::Identifier(_) => Type::new(TypeKind::Identifier, expr.span),
             crate::ast::literal::Literal::Regex(_) => {
                 // Regex literals are represented as strings internally
                 Type::new(TypeKind::String, expr.span)

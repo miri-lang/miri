@@ -27,7 +27,7 @@ impl Type {
     }
 
     /// Returns true if this type has Copy semantics (can be duplicated without invalidating source).
-    /// Primitive types (integers, floats, booleans, symbols) are Copy.
+    /// Primitive types (integers, floats, booleans) are Copy.
     /// Complex types (strings, lists, maps, custom types) require Move.
     pub fn is_copy(&self) -> bool {
         self.kind.is_copy()
@@ -68,8 +68,8 @@ pub enum TypeKind {
     String,
     /// Boolean type.
     Boolean,
-    /// Symbol type.
-    Symbol,
+    /// Identifier type (internal, used for function/type references in MIR).
+    Identifier,
     /// Raw pointer type (platform-width, opaque).
     ///
     /// Used in runtime/intrinsic function declarations and private class
@@ -122,7 +122,7 @@ pub enum TypeDeclarationKind {
 
 impl TypeKind {
     /// Returns true if this type kind has Copy semantics.
-    /// Primitive types (integers, floats, booleans, symbols, void) are Copy.
+    /// Primitive types (integers, floats, booleans, void) are Copy.
     /// Complex types (strings, lists, maps, custom types) require Move.
     pub fn is_copy(&self) -> bool {
         match self {
@@ -142,7 +142,7 @@ impl TypeKind {
             | TypeKind::F32
             | TypeKind::F64
             | TypeKind::Boolean
-            | TypeKind::Symbol
+            | TypeKind::Identifier
             | TypeKind::RawPtr
             | TypeKind::Void
             | TypeKind::Error => true,
@@ -194,7 +194,7 @@ impl fmt::Display for TypeKind {
             TypeKind::F64 => write!(f, "f64"),
             TypeKind::String => write!(f, "String"),
             TypeKind::Boolean => write!(f, "bool"),
-            TypeKind::Symbol => write!(f, "symbol"),
+            TypeKind::Identifier => write!(f, "identifier"),
             TypeKind::RawPtr => write!(f, "RawPtr"),
             TypeKind::List(inner) => write!(f, "List({})", inner.node),
             TypeKind::Array(inner, size) => write!(f, "Array({}, {})", inner.node, size.node),
