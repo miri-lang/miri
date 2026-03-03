@@ -176,7 +176,12 @@ fn test_double_colon_operator() {
         ),
         (
             "a:::b",
-            vec![Token::Identifier, Token::DoubleColon, Token::Symbol],
+            vec![
+                Token::Identifier,
+                Token::DoubleColon,
+                Token::Colon,
+                Token::Identifier,
+            ],
         ),
     ]);
 }

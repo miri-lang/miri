@@ -81,7 +81,7 @@ fn main()
 
             bb0: {
                 _1 = const Integer(I8(10)) as i64;
-                _2 = const Symbol("take_i64")(_1) -> bb1;
+                _2 = const Identifier("take_i64")(_1) -> bb1;
             }
 
             bb1: {

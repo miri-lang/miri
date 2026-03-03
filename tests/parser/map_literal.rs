@@ -5,7 +5,7 @@ use super::utils::{parser_error_test, parser_test};
 use miri::ast::factory::{
     binary, block, call, expression_statement, for_statement, identifier, index,
     int_literal_expression, iter_obj, lambda, let_variable, map, member, string_literal_expression,
-    symbol_literal, variable_statement,
+    variable_statement,
 };
 use miri::ast::{opt_expr, BinaryOp, MemberVisibility};
 use miri::error::syntax::SyntaxErrorKind;
@@ -254,17 +254,16 @@ fn test_map_with_complex_keys() {
 }
 
 #[test]
-fn test_map_with_symbol_keys() {
-    // A common pattern is to use symbols as keys.
+fn test_map_with_string_keys() {
     parser_test(
-        "let m = {:a: 1, :b: 2}",
+        "let m = {'a': 1, 'b': 2}",
         vec![variable_statement(
             vec![let_variable(
                 "m",
                 None,
                 opt_expr(map(vec![
-                    (symbol_literal("a"), int_literal_expression(1)),
-                    (symbol_literal("b"), int_literal_expression(2)),
+                    (string_literal_expression("a"), int_literal_expression(1)),
+                    (string_literal_expression("b"), int_literal_expression(2)),
                 ])),
             )],
             MemberVisibility::Public,

@@ -5,7 +5,7 @@ use super::utils::{parser_error_test, parser_test};
 use miri::ast::factory::{
     binary, block, call, expression_statement, for_statement, identifier, index,
     int_literal_expression, iter_obj, lambda, let_variable, map, member, string_literal_expression,
-    symbol_literal, tuple, variable_statement,
+    tuple, variable_statement,
 };
 use miri::ast::{opt_expr, BinaryOp, MemberVisibility};
 use miri::error::syntax::SyntaxErrorKind;
@@ -13,13 +13,13 @@ use miri::error::syntax::SyntaxErrorKind;
 #[test]
 fn test_tuple_literal_assignment() {
     parser_test(
-        "let t = (:ok, 'Hello', 200)",
+        "let t = ('ok', 'Hello', 200)",
         vec![variable_statement(
             vec![let_variable(
                 "t",
                 None,
                 opt_expr(tuple(vec![
-                    symbol_literal("ok"),
+                    string_literal_expression("ok"),
                     string_literal_expression("Hello"),
                     int_literal_expression(200),
                 ])),
@@ -44,13 +44,13 @@ fn test_tuple_index_access() {
 fn test_for_loop_over_tuple_literal() {
     parser_test(
         "
-for el in (:ok, 200)
+for el in ('ok', 200)
     print(el)
 ",
         vec![for_statement(
             vec![let_variable("el", None, None)],
             iter_obj(tuple(vec![
-                symbol_literal("ok"),
+                string_literal_expression("ok"),
                 int_literal_expression(200),
             ])),
             block(vec![expression_statement(call(
@@ -64,10 +64,10 @@ for el in (:ok, 200)
 #[test]
 fn test_method_call_on_tuple_literal() {
     parser_test(
-        "(:ok, 200).len()",
+        "('ok', 200).len()",
         vec![expression_statement(call(
             member(
-                tuple(vec![symbol_literal("ok"), int_literal_expression(200)]),
+                tuple(vec![string_literal_expression("ok"), int_literal_expression(200)]),
                 identifier("len"),
             ),
             vec![],

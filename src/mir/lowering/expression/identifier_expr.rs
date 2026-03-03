@@ -39,12 +39,12 @@ pub(crate) fn lower_identifier_expr(
             }
         }
     } else {
-        // Assume global function/symbol
+        // Assume global function/identifier
         // In a real compiler we would check if it exists in globals
         let constant = Operand::Constant(Box::new(Constant {
             span: expr.span,
-            ty: Type::new(TypeKind::Symbol, expr.span),
-            literal: crate::ast::literal::Literal::Symbol(name.clone()),
+            ty: Type::new(TypeKind::Identifier, expr.span),
+            literal: crate::ast::literal::Literal::Identifier(name.clone()),
         }));
 
         if let Some(d) = dest {

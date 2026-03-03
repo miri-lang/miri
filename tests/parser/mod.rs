@@ -38,7 +38,6 @@ pub mod runtime_function_declaration;
 pub mod set_literal;
 pub mod string;
 pub mod struct_statement;
-pub mod symbol;
 pub mod trait_statement;
 pub mod tuple_literal;
 pub mod type_expression;

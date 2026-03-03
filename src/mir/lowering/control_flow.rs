@@ -325,8 +325,8 @@ fn lower_for_over_iterable(
         let length_symbol = format!("{}_length", class_name);
         let func_op = Operand::Constant(Box::new(Constant {
             span: *span,
-            ty: Type::new(TypeKind::Symbol, *span),
-            literal: crate::ast::literal::Literal::Symbol(length_symbol),
+            ty: Type::new(TypeKind::Identifier, *span),
+            literal: crate::ast::literal::Literal::Identifier(length_symbol),
         }));
         let after_len_bb = ctx.new_basic_block();
         ctx.set_terminator(Terminator::new(
@@ -385,8 +385,8 @@ fn lower_for_over_iterable(
         let element_at_symbol = format!("{}_element_at", class_name);
         let func_op = Operand::Constant(Box::new(Constant {
             span: *span,
-            ty: Type::new(TypeKind::Symbol, *span),
-            literal: crate::ast::literal::Literal::Symbol(element_at_symbol),
+            ty: Type::new(TypeKind::Identifier, *span),
+            literal: crate::ast::literal::Literal::Identifier(element_at_symbol),
         }));
         let after_elem_bb = ctx.new_basic_block();
         ctx.set_terminator(Terminator::new(
@@ -721,8 +721,8 @@ pub fn lower_call(
 
                             let func_op = Operand::Constant(Box::new(crate::mir::Constant {
                                 span: *span,
-                                ty: Type::new(TypeKind::Symbol, *span),
-                                literal: crate::ast::literal::Literal::Symbol(mangled_name),
+                                ty: Type::new(TypeKind::Identifier, *span),
+                                literal: crate::ast::literal::Literal::Identifier(mangled_name),
                             }));
 
                             let (destination, op) = if let Some(d) = dest {

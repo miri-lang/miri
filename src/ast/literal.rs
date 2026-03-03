@@ -10,7 +10,7 @@ pub enum Literal {
     Float(FloatLiteral),
     String(String),
     Boolean(bool),
-    Symbol(String),
+    Identifier(String),
     Regex(RegexToken),
     None,
 }

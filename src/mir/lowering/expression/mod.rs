@@ -214,8 +214,8 @@ fn emit_runtime_to_string(
     let result = ctx.push_temp(Type::new(TypeKind::String, *span), *span);
     let func_op = Operand::Constant(Box::new(Constant {
         span: *span,
-        ty: Type::new(TypeKind::Symbol, *span),
-        literal: Literal::Symbol(runtime_fn.to_string()),
+        ty: Type::new(TypeKind::Identifier, *span),
+        literal: Literal::Identifier(runtime_fn.to_string()),
     }));
     let target_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(

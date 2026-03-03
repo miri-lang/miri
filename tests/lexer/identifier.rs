@@ -29,11 +29,9 @@ fn test_unicode_identifiers() {
 }
 
 #[test]
-fn test_symbol_identifier_boundaries() {
+fn test_colon_identifier_boundaries() {
     run_lexer_tests(vec![
-        (":symbol", vec![Token::Symbol]),
         ("identifier:", vec![Token::Identifier, Token::Colon]),
-        (":one:two", vec![Token::Symbol, Token::Symbol]),
     ]);
 }
 

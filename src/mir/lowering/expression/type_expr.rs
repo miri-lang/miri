@@ -19,12 +19,12 @@ pub(crate) fn lower_type_expr(
         unreachable!()
     };
     // Type expressions used as values (metatype operations)
-    // Return a symbol representing the type name
+    // Return an identifier representing the type name
     let type_name = format!("{}", ty);
     let constant = Operand::Constant(Box::new(Constant {
         span: expr.span,
-        ty: Type::new(TypeKind::Symbol, expr.span),
-        literal: crate::ast::literal::Literal::Symbol(type_name),
+        ty: Type::new(TypeKind::Identifier, expr.span),
+        literal: crate::ast::literal::Literal::Identifier(type_name),
     }));
 
     if let Some(d) = dest {

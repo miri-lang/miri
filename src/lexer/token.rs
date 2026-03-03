@@ -208,9 +208,6 @@ pub enum Token {
     // Identifiers and Literals
     #[regex("[a-zA-Z_][a-zA-Z0-9_]*")]
     Identifier,
-    #[regex(":[a-zA-Z_][a-zA-Z0-9_]*")]
-    Symbol,
-
     #[regex(r#"re'[^'\\]*(?:\\.[^'\\]*)*'[igmsu]*"#)]
     SingleQuotedRegex,
     #[regex(r#"re"[^"\\]*(?:\\.[^"\\]*)*"[igmsu]*"#)]

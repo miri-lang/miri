@@ -177,7 +177,7 @@ impl<'a> FunctionTranslator<'a> {
                 // Handle function calls
                 let func_name = match func {
                     Operand::Constant(c) => match &c.literal {
-                        Literal::Symbol(name) => Some(name.clone()),
+                        Literal::Identifier(name) => Some(name.clone()),
                         _ => None,
                     },
                     _ => None,
