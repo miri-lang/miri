@@ -6,8 +6,7 @@ use crate::mir::{
     BasicBlock, Body, Local, Operand, Statement, StatementKind, Terminator, TerminatorKind,
 };
 use cranelift_codegen::ir::{
-    condcodes::IntCC, types as cl_types, AbiParam, Block, InstBuilder, MemFlags, Signature,
-    TrapCode,
+    condcodes::IntCC, AbiParam, Block, InstBuilder, MemFlags, Signature, TrapCode,
 };
 use cranelift_frontend::{FunctionBuilder, Variable};
 use cranelift_module::{Linkage, Module};
@@ -31,18 +30,14 @@ impl<'a> FunctionTranslator<'a> {
                 // always place the header immediately before the payload,
                 // so this offset is guaranteed valid for heap-allocated objects.
                 let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size as i64));
-                let rc = builder
-                    .ins()
-                    .load(ptr_type, MemFlags::new(), header_ptr, 0);
+                let rc = builder.ins().load(ptr_type, MemFlags::new(), header_ptr, 0);
                 let new_rc = builder.ins().iadd_imm(rc, 1);
                 builder.ins().store(MemFlags::new(), new_rc, header_ptr, 0);
             }
             StatementKind::DecRef(place) => {
                 let ptr = Self::read_place(builder, place, locals, type_ctx)?;
                 let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size as i64));
-                let rc = builder
-                    .ins()
-                    .load(ptr_type, MemFlags::new(), header_ptr, 0);
+                let rc = builder.ins().load(ptr_type, MemFlags::new(), header_ptr, 0);
                 let new_rc = builder.ins().iadd_imm(rc, -1);
                 builder.ins().store(MemFlags::new(), new_rc, header_ptr, 0);
 

@@ -147,7 +147,9 @@ impl<'a> FunctionTranslator<'a> {
                 Self::read_place(builder, place, locals, type_ctx)
             }
 
-            Operand::Constant(constant) => Self::translate_constant(builder, ctx, constant, type_ctx),
+            Operand::Constant(constant) => {
+                Self::translate_constant(builder, ctx, constant, type_ctx)
+            }
         }
     }
     /// Translate a constant to a Cranelift value.
@@ -231,9 +233,7 @@ impl<'a> FunctionTranslator<'a> {
                 let cache_ptr = builder.ins().symbol_value(ptr_type, cache_gv);
 
                 // Load cache
-                let cached_val = builder
-                    .ins()
-                    .load(ptr_type, MemFlags::new(), cache_ptr, 0);
+                let cached_val = builder.ins().load(ptr_type, MemFlags::new(), cache_ptr, 0);
 
                 let zero = builder.ins().iconst(ptr_type, 0);
                 let is_zero = builder.ins().icmp(IntCC::Equal, cached_val, zero);
@@ -286,9 +286,7 @@ impl<'a> FunctionTranslator<'a> {
 
                 builder.switch_to_block(continue_block);
                 // Load cached raw_ptr
-                let cached_raw = builder
-                    .ins()
-                    .load(ptr_type, MemFlags::new(), cache_ptr, 0);
+                let cached_raw = builder.ins().load(ptr_type, MemFlags::new(), cache_ptr, 0);
 
                 // Return pointer past header — a valid *const MiriString
                 Ok(builder.ins().iadd_imm(cached_raw, ptr_size as i64))
