@@ -36,6 +36,8 @@ pub struct FunctionTranslator<'a> {
     builder_ctx: FunctionBuilderContext,
     /// Default calling convention for the target.
     call_conv: CallConv,
+    /// Target pointer type.
+    ptr_type: cl_types::Type,
     /// Borrowed references to MIR local types to avoid cloning.
     local_types: Vec<&'a Type>,
     /// Type definitions from the type checker (for layout computation).
@@ -57,6 +59,7 @@ pub(crate) struct ModuleCtx<'a> {
 pub(crate) struct TypeCtx<'a> {
     pub(crate) local_types: &'a [&'a Type],
     pub(crate) type_definitions: &'a HashMap<String, TypeDefinition>,
+    pub(crate) ptr_type: cl_types::Type,
 }
 
 impl<'a> FunctionTranslator<'a> {
@@ -74,6 +77,7 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Self {
         let func = Function::new();
         let builder_ctx = FunctionBuilderContext::new();
+        let ptr_type = isa.pointer_type();
 
         // Borrow local types for fast lookup during translation (avoids cloning)
         let local_types = body.local_decls.iter().map(|d| &d.ty).collect();
@@ -82,6 +86,7 @@ impl<'a> FunctionTranslator<'a> {
             func,
             builder_ctx,
             call_conv: isa.default_call_conv(),
+            ptr_type,
             local_types,
             type_definitions,
         }
@@ -107,7 +112,7 @@ impl<'a> FunctionTranslator<'a> {
         // Declare all local variables
         for (idx, local_decl) in body.local_decls.iter().enumerate() {
             let local = Local(idx);
-            let cl_type = translate_type(&local_decl.ty);
+            let cl_type = translate_type(&local_decl.ty, self.ptr_type);
             let var = builder.declare_var(cl_type);
 
             locals.insert(local, var);
@@ -153,6 +158,7 @@ impl<'a> FunctionTranslator<'a> {
             let type_ctx = TypeCtx {
                 local_types: &self.local_types,
                 type_definitions: self.type_definitions,
+                ptr_type: self.ptr_type,
             };
 
             // Translate all statements
@@ -198,7 +204,7 @@ impl<'a> FunctionTranslator<'a> {
         if !body.local_decls.is_empty() {
             let ret_ty = &body.local_decls[0].ty;
             if ret_ty.kind != TypeKind::Void {
-                let cl_type = translate_type(ret_ty);
+                let cl_type = translate_type(ret_ty, self.ptr_type);
                 self.func.signature.returns.push(AbiParam::new(cl_type));
             }
         }
@@ -207,7 +213,7 @@ impl<'a> FunctionTranslator<'a> {
         for i in 1..=body.arg_count {
             if i < body.local_decls.len() {
                 let param_ty = &body.local_decls[i].ty;
-                let cl_type = translate_type(param_ty);
+                let cl_type = translate_type(param_ty, self.ptr_type);
                 self.func.signature.params.push(AbiParam::new(cl_type));
             }
         }
@@ -223,6 +229,7 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<Value, String> {
         let local_types = type_ctx.local_types;
         let type_definitions = type_ctx.type_definitions;
+        let ptr_type = type_ctx.ptr_type;
         let var = locals
             .get(&place.local)
             .ok_or_else(|| format!("Unknown local: {:?}", place.local))?;
@@ -232,12 +239,12 @@ impl<'a> FunctionTranslator<'a> {
         for proj in &place.projection {
             match proj {
                 PlaceElem::Deref => {
-                    value = builder.ins().load(cl_types::I64, MemFlags::new(), value, 0);
+                    value = builder.ins().load(ptr_type, MemFlags::new(), value, 0);
                 }
                 PlaceElem::Field(idx) => {
                     let base_type = &local_types[place.local.0];
                     let (offset, field_ty) =
-                        layout::field_layout(&base_type.kind, *idx, type_definitions);
+                        layout::field_layout(&base_type.kind, *idx, type_definitions, ptr_type);
                     value = builder.ins().load(field_ty, MemFlags::new(), value, offset);
                 }
                 PlaceElem::Index(local) => {
@@ -245,12 +252,13 @@ impl<'a> FunctionTranslator<'a> {
                         .get(local)
                         .ok_or_else(|| format!("Unknown index local: {:?}", local))?;
                     let idx_val = builder.use_var(*idx_var);
-                    let shift = builder.ins().iconst(cl_types::I64, 3);
+                    let shift = match ptr_type {
+                        cl_types::I32 => builder.ins().iconst(ptr_type, 2),
+                        _ => builder.ins().iconst(ptr_type, 3),
+                    };
                     let byte_offset = builder.ins().ishl(idx_val, shift);
                     let elem_addr = builder.ins().iadd(value, byte_offset);
-                    value = builder
-                        .ins()
-                        .load(cl_types::I64, MemFlags::new(), elem_addr, 0);
+                    value = builder.ins().load(ptr_type, MemFlags::new(), elem_addr, 0);
                 }
             }
         }
@@ -303,6 +311,7 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<(), String> {
         let local_types = type_ctx.local_types;
         let type_definitions = type_ctx.type_definitions;
+        let ptr_type = type_ctx.ptr_type;
         if place.projection.is_empty() {
             let var = locals
                 .get(&place.local)
@@ -319,12 +328,12 @@ impl<'a> FunctionTranslator<'a> {
             for proj in &place.projection[..place.projection.len() - 1] {
                 match proj {
                     PlaceElem::Deref => {
-                        addr = builder.ins().load(cl_types::I64, MemFlags::new(), addr, 0);
+                        addr = builder.ins().load(ptr_type, MemFlags::new(), addr, 0);
                     }
                     PlaceElem::Field(idx) => {
                         let base_type = &local_types[place.local.0];
                         let (offset, _) =
-                            layout::field_layout(&base_type.kind, *idx, type_definitions);
+                            layout::field_layout(&base_type.kind, *idx, type_definitions, ptr_type);
                         addr = builder.ins().iadd_imm(addr, offset as i64);
                     }
                     PlaceElem::Index(local) => {
@@ -332,7 +341,10 @@ impl<'a> FunctionTranslator<'a> {
                             .get(local)
                             .ok_or_else(|| format!("Unknown index local: {:?}", local))?;
                         let idx_val = builder.use_var(*idx_var);
-                        let shift = builder.ins().iconst(cl_types::I64, 3);
+                        let shift = match ptr_type {
+                            cl_types::I32 => builder.ins().iconst(ptr_type, 2),
+                            _ => builder.ins().iconst(ptr_type, 3),
+                        };
                         let byte_offset = builder.ins().ishl(idx_val, shift);
                         addr = builder.ins().iadd(addr, byte_offset);
                     }
@@ -349,7 +361,8 @@ impl<'a> FunctionTranslator<'a> {
                 }
                 PlaceElem::Field(idx) => {
                     let base_type = &local_types[place.local.0];
-                    let (offset, _) = layout::field_layout(&base_type.kind, *idx, type_definitions);
+                    let (offset, _) =
+                        layout::field_layout(&base_type.kind, *idx, type_definitions, ptr_type);
                     builder.ins().store(MemFlags::new(), value, addr, offset);
                 }
                 PlaceElem::Index(local) => {
@@ -357,7 +370,10 @@ impl<'a> FunctionTranslator<'a> {
                         .get(local)
                         .ok_or_else(|| format!("Unknown index local: {:?}", local))?;
                     let idx_val = builder.use_var(*idx_var);
-                    let shift = builder.ins().iconst(cl_types::I64, 3);
+                    let shift = match ptr_type {
+                        cl_types::I32 => builder.ins().iconst(ptr_type, 2),
+                        _ => builder.ins().iconst(ptr_type, 3),
+                    };
                     let byte_offset = builder.ins().ishl(idx_val, shift);
                     let elem_addr = builder.ins().iadd(addr, byte_offset);
                     builder.ins().store(MemFlags::new(), value, elem_addr, 0);
@@ -372,12 +388,13 @@ impl<'a> FunctionTranslator<'a> {
         ctx: &mut ModuleCtx,
         size: Value,
     ) -> Result<Value, String> {
+        let ptr_type = builder.func.dfg.value_type(size);
         let func_id = match ctx.malloc_func_id {
             Some(id) => id,
             None => {
                 let sig = Signature {
-                    params: vec![AbiParam::new(cl_types::I64)],
-                    returns: vec![AbiParam::new(cl_types::I64)],
+                    params: vec![AbiParam::new(ptr_type)],
+                    returns: vec![AbiParam::new(ptr_type)],
                     call_conv: builder.func.signature.call_conv,
                 };
                 let id = ctx
@@ -399,11 +416,12 @@ impl<'a> FunctionTranslator<'a> {
         ctx: &mut ModuleCtx,
         ptr: Value,
     ) -> Result<(), String> {
+        let ptr_type = builder.func.dfg.value_type(ptr);
         let func_id = match ctx.free_func_id {
             Some(id) => id,
             None => {
                 let sig = Signature {
-                    params: vec![AbiParam::new(cl_types::I64)],
+                    params: vec![AbiParam::new(ptr_type)],
                     returns: vec![],
                     call_conv: builder.func.signature.call_conv,
                 };
