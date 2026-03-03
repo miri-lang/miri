@@ -258,7 +258,7 @@ impl Backend for CraneliftBackend {
             )?;
         }
 
-        // Define string literals as static data
+        // Define string literals as static data structures
         let ptr_type = isa.pointer_type();
         let ptr_size = ptr_type.bytes();
         for (literal, symbol_name) in string_literals {
@@ -273,17 +273,46 @@ impl Backend for CraneliftBackend {
                 .define_data(bytes_id, &bytes_ctx)
                 .map_err(|e| CodegenError::Module(e.to_string()))?;
 
-            // 3. Define the Wrapper Cache (for lazy initialization)
-            let cache_symbol = format!("{}_wrapper_cache", symbol_name);
-            let cache_id = module
-                .declare_data(&cache_symbol, Linkage::Export, true, false)
+            // 2. Define the MiriString struct: [RC, DataPtr, Len, Cap]
+            let struct_symbol = format!("{}_struct", symbol_name);
+            let struct_id = module
+                .declare_data(&struct_symbol, Linkage::Export, false, false)
                 .map_err(|e| CodegenError::Module(e.to_string()))?;
 
-            let mut cache_ctx = DataDescription::new();
-            cache_ctx.define_zeroinit(ptr_size as usize);
+            let mut struct_ctx = DataDescription::new();
+            let mut data = vec![0u8; 4 * ptr_size as usize];
+
+            // RC header: set high bit to indicate immortal/constant object
+            let immortal_rc = if ptr_size == 4 {
+                (1u32 << 31) as u64
+            } else {
+                1u64 << 63
+            };
+
+            if ptr_size == 4 {
+                data[0..4].copy_from_slice(&(immortal_rc as u32).to_ne_bytes());
+            } else {
+                data[0..8].copy_from_slice(&immortal_rc.to_ne_bytes());
+            }
+
+            // Len and Cap (both same for literals)
+            let len = literal.len() as u64;
+            if ptr_size == 4 {
+                data[8..12].copy_from_slice(&(len as u32).to_ne_bytes());
+                data[12..16].copy_from_slice(&(len as u32).to_ne_bytes());
+            } else {
+                data[16..24].copy_from_slice(&len.to_ne_bytes());
+                data[24..32].copy_from_slice(&len.to_ne_bytes());
+            }
+
+            struct_ctx.define(data.into_boxed_slice());
+
+            // Relocation for the data pointer at offset ptr_size
+            let bytes_ref = module.declare_data_in_data(bytes_id, &mut struct_ctx);
+            struct_ctx.write_data_addr(ptr_size as u32, bytes_ref, 0);
 
             module
-                .define_data(cache_id, &cache_ctx)
+                .define_data(struct_id, &struct_ctx)
                 .map_err(|e| CodegenError::Module(e.to_string()))?;
         }
 

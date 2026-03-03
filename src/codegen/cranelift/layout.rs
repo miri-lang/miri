@@ -13,6 +13,20 @@ use crate::type_checker::context::TypeDefinition;
 use cranelift_codegen::ir::Type as CraneliftType;
 use std::collections::HashMap;
 
+/// Align an offset up to the given alignment.
+fn align_to(offset: i32, alignment: i32) -> i32 {
+    if alignment <= 1 {
+        return offset;
+    }
+    (offset + alignment - 1) & !(alignment - 1)
+}
+
+/// Get the alignment of a Cranelift type.
+/// For scalars, alignment is equal to size.
+fn type_alignment(cl_ty: CraneliftType) -> i32 {
+    cl_ty.bytes() as i32
+}
+
 /// Extract a Cranelift type from a type expression (used in tuples).
 fn type_from_expression(
     expr: &crate::ast::expression::Expression,
@@ -37,6 +51,8 @@ pub fn field_layout(
             let mut offset: i32 = 0;
             for (i, elem_expr) in element_exprs.iter().enumerate() {
                 let cl_ty = type_from_expression(elem_expr, ptr_ty);
+                let alignment = type_alignment(cl_ty);
+                offset = align_to(offset, alignment);
                 if i == field_idx {
                     return (offset, cl_ty);
                 }
@@ -54,6 +70,8 @@ pub fn field_layout(
                             struct_def.fields.iter().enumerate()
                         {
                             let cl_ty = translate_type_kind(&field_ty.kind, ptr_ty);
+                            let alignment = type_alignment(cl_ty);
+                            offset = align_to(offset, alignment);
                             if i == field_idx {
                                 return (offset, cl_ty);
                             }
@@ -66,6 +84,8 @@ pub fn field_layout(
                         if field_idx == 0 {
                             (0, ptr_ty) // discriminant
                         } else {
+                            // Enums currently use pointer-sized slots for all fields to simplify.
+                            // Payload starts after the discriminant (pointer-sized).
                             let payload_offset = ptr_size + ((field_idx - 1) as i32 * ptr_size);
                             (payload_offset, ptr_ty)
                         }
@@ -97,25 +117,33 @@ pub fn aggregate_size(
     ptr_ty: CraneliftType,
 ) -> u32 {
     let ptr_size = ptr_ty.bytes();
+    let mut max_align = ptr_size as i32;
+
     match local_type {
         TypeKind::Tuple(element_exprs) => {
-            let mut total: u32 = 0;
+            let mut total: i32 = 0;
             for elem_expr in element_exprs {
                 let cl_ty = type_from_expression(elem_expr, ptr_ty);
-                total += cl_ty.bytes();
+                let alignment = type_alignment(cl_ty);
+                max_align = max_align.max(alignment);
+                total = align_to(total, alignment);
+                total += cl_ty.bytes() as i32;
             }
-            total
+            align_to(total, max_align) as u32
         }
         TypeKind::Custom(name, _) => {
             if let Some(def) = type_definitions.get(name) {
                 match def {
                     TypeDefinition::Struct(struct_def) => {
-                        let mut total: u32 = 0;
+                        let mut total: i32 = 0;
                         for (_field_name, field_ty, _vis) in &struct_def.fields {
                             let cl_ty = translate_type_kind(&field_ty.kind, ptr_ty);
-                            total += cl_ty.bytes();
+                            let alignment = type_alignment(cl_ty);
+                            max_align = max_align.max(alignment);
+                            total = align_to(total, alignment);
+                            total += cl_ty.bytes() as i32;
                         }
-                        total
+                        align_to(total, max_align) as u32
                     }
                     TypeDefinition::Enum(enum_def) => {
                         // discriminant + max payload size
