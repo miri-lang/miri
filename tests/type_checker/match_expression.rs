@@ -273,17 +273,17 @@ match c
 fn test_match_generic_enum_binding_type() {
     // Verify that bindings in generic enum patterns get concrete types
     let source = "
-enum Option<T>
-    Some(T)
-    None
+enum Maybe<T>
+    Just(T)
+    Nothing
 
 fn takes_int(x int) int
     x
 
-fn process(o Option<int>) int
+fn process(o Maybe<int>) int
     match o
-        Option.Some(x): takes_int(x)
-        Option.None: 0
+        Maybe.Just(x): takes_int(x)
+        Maybe.Nothing: 0
 ";
     type_checker_test(source);
 }
@@ -304,4 +304,62 @@ match s
     Shape.Empty: 0
 ";
     type_checker_test(source);
+}
+
+#[test]
+fn test_match_option_some_none() {
+    let source = "
+var x int? = 5
+let res = match x
+    Some(v): v
+    None: 0
+";
+    type_checker_vars_type_test(source, vec![("res", type_int())]);
+}
+
+#[test]
+fn test_match_option_qualified() {
+    let source = "
+var x int? = 5
+let res = match x
+    Option.Some(v): v
+    Option.None: 0
+";
+    type_checker_vars_type_test(source, vec![("res", type_int())]);
+}
+
+#[test]
+fn test_match_option_non_exhaustive() {
+    let source = "
+var x int? = 5
+match x
+    Some(v): v
+";
+    type_checker_error_test(source, "Non-exhaustive match on Option");
+}
+
+#[test]
+fn test_match_option_binding_type() {
+    // Verify that v gets the inner type (int), not Option<int>
+    let source = "
+fn takes_int(x int) int
+    x
+
+var x int? = 5
+match x
+    Some(v): takes_int(v)
+    None: 0
+";
+    type_checker_test(source);
+}
+
+#[test]
+fn test_match_option_with_default() {
+    let source = "
+var x int? = 5
+let res = match x
+    Some(v): v
+    default: 0
+";
+    type_checker_vars_type_test(source, vec![("res", type_int())]);
 }

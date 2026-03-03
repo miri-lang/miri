@@ -448,8 +448,8 @@ impl TypeChecker {
         if !is_abstract {
             if let Some(ref base_name) = base_class_name {
                 // Collect all abstract methods from the entire inheritance chain
-                let missing_methods: Vec<(String, String)> = {
-                    let mut missing = Vec::new();
+                let missing_errors: Vec<String> = {
+                    let mut errors = Vec::new();
                     let mut current_base: Option<&str> = Some(base_name);
 
                     while let Some(class_name) = current_base {
@@ -458,7 +458,10 @@ impl TypeChecker {
                         {
                             for (method_name, method_info) in &base_def.methods {
                                 if method_info.is_abstract && !methods.contains_key(method_name) {
-                                    missing.push((method_name.clone(), class_name.to_string()));
+                                    errors.push(format!(
+                                        "Class '{}' must implement abstract method '{}' from class '{}'",
+                                        name, method_name, class_name
+                                    ));
                                 }
                             }
                             // Move to the next ancestor
@@ -467,18 +470,12 @@ impl TypeChecker {
                             break;
                         }
                     }
-                    missing
+                    errors
                 };
 
                 // Report errors for missing methods
-                for (method_name, origin_class) in missing_methods {
-                    self.report_error(
-                        format!(
-                            "Class '{}' must implement abstract method '{}' from class '{}'",
-                            name, method_name, origin_class
-                        ),
-                        span,
-                    );
+                for error in missing_errors {
+                    self.report_error(error, span);
                 }
             }
         }

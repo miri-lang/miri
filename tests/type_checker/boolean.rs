@@ -300,21 +300,21 @@ fn test_nullable_boolean_assignment() {
 let x bool? = true
 x
 ",
-        type_null(type_bool()),
+        type_option(type_bool()),
     );
     type_checker_expr_type_test(
         "
 let y bool? = false
 y
 ",
-        type_null(type_bool()),
+        type_option(type_bool()),
     );
     type_checker_expr_type_test(
         "
 let z bool? = None
 z
 ",
-        type_null(type_bool()),
+        type_option(type_bool()),
     );
 }
 

@@ -144,6 +144,77 @@ impl TypeChecker {
             }
         }
 
+        // Check exhaustiveness for Option types
+        if matches!(subject_type.kind, TypeKind::Option(_)) {
+            let mut has_some = false;
+            let mut has_none = false;
+            let mut is_exhaustive = false;
+
+            for branch in branches {
+                if branch.guard.is_none() {
+                    for pattern in &branch.patterns {
+                        match pattern {
+                            Pattern::Default => {
+                                is_exhaustive = true;
+                            }
+                            Pattern::Literal(crate::ast::literal::Literal::None) => {
+                                has_none = true;
+                            }
+                            Pattern::Identifier(_) => {
+                                // Variable binding covers everything
+                                is_exhaustive = true;
+                            }
+                            Pattern::Member(parent, member) => {
+                                if let Pattern::Identifier(parent_name) = &**parent {
+                                    if parent_name == "Option" {
+                                        match member.as_str() {
+                                            "Some" => has_some = true,
+                                            "None" => has_none = true,
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                            }
+                            Pattern::EnumVariant(parent, _) => match &**parent {
+                                Pattern::Identifier(name) if name == "Some" => {
+                                    has_some = true;
+                                }
+                                Pattern::Member(enum_pat, variant) => {
+                                    if let Pattern::Identifier(name) = &**enum_pat {
+                                        if name == "Option" && variant == "Some" {
+                                            has_some = true;
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            },
+                            _ => {}
+                        }
+                    }
+                }
+                if is_exhaustive {
+                    break;
+                }
+            }
+
+            if !(is_exhaustive || has_some && has_none) {
+                let mut missing = Vec::new();
+                if !has_some {
+                    missing.push("Some");
+                }
+                if !has_none {
+                    missing.push("None");
+                }
+                self.report_error(
+                    format!(
+                        "Non-exhaustive match on Option. Missing variants: {}",
+                        missing.join(", ")
+                    ),
+                    span,
+                );
+            }
+        }
+
         if branches.is_empty() {
             return make_type(TypeKind::Void);
         }
@@ -153,7 +224,7 @@ impl TypeChecker {
         for branch in branches {
             context.enter_scope();
             for pattern in &branch.patterns {
-                self.check_pattern(pattern, &subject_type, context, span);
+                self.check_pattern(pattern, &subject_type, context, span, branch.is_mutable);
             }
 
             let body_type = self.infer_statement_type(&branch.body, context);
@@ -234,9 +305,16 @@ impl TypeChecker {
         subject_type: &Type,
         context: &mut Context,
         span: Span,
+        is_mutable: bool,
     ) {
         match pattern {
             Pattern::Literal(lit) => {
+                // None literal on Option subject is the None variant match
+                if matches!(lit, crate::ast::literal::Literal::None)
+                    && matches!(subject_type.kind, TypeKind::Option(_))
+                {
+                    return;
+                }
                 let lit_type = self.infer_literal(lit);
                 if !self.are_compatible(subject_type, &lit_type, context) {
                     self.report_error(
@@ -249,18 +327,18 @@ impl TypeChecker {
                 }
             }
             Pattern::Identifier(name) => {
-                // Bind variable
+                // Bind variable (mutable when `var` was used)
                 context.define(
                     name.clone(),
                     SymbolInfo::new(
                         subject_type.clone(),
-                        false,
+                        is_mutable,
                         false,
                         MemberVisibility::Public,
                         self.current_module.clone(),
                         None,
                     ),
-                ); // Immutable binding by default
+                );
             }
             Pattern::Tuple(patterns) => {
                 if let TypeKind::Tuple(elem_types) = &subject_type.kind {
@@ -282,7 +360,7 @@ impl TypeChecker {
                     for (i, pat) in patterns.iter().enumerate() {
                         let elem_type =
                             self.resolve_type_expression(&elem_types_cloned[i], context);
-                        self.check_pattern(pat, &elem_type, context, span);
+                        self.check_pattern(pat, &elem_type, context, span, is_mutable);
                     }
                 } else {
                     self.report_error(
@@ -295,6 +373,15 @@ impl TypeChecker {
                 }
             }
             Pattern::Member(parent, member) => {
+                // Option.None pattern
+                if let Pattern::Identifier(parent_name) = &**parent {
+                    if parent_name == "Option"
+                        && member == "None"
+                        && matches!(subject_type.kind, TypeKind::Option(_))
+                    {
+                        return;
+                    }
+                }
                 if let Pattern::Identifier(parent_name) = &**parent {
                     let enum_def_opt = context
                         .resolve_type_definition(parent_name)
@@ -352,6 +439,43 @@ impl TypeChecker {
             }
             Pattern::Default => {}
             Pattern::EnumVariant(parent_pattern, bindings) => {
+                // Handle Option patterns: Some(x) or Option.Some(x)
+                if matches!(subject_type.kind, TypeKind::Option(_)) {
+                    let is_option_some = match &**parent_pattern {
+                        // Some(x) — bare identifier
+                        Pattern::Identifier(name) => name == "Some",
+                        // Option.Some(x) — qualified
+                        Pattern::Member(enum_pat, variant) => {
+                            if let Pattern::Identifier(name) = &**enum_pat {
+                                name == "Option" && variant == "Some"
+                            } else {
+                                false
+                            }
+                        }
+                        _ => false,
+                    };
+                    if is_option_some {
+                        if bindings.len() != 1 {
+                            self.report_error(
+                                format!("Some pattern expects 1 binding, got {}", bindings.len()),
+                                span,
+                            );
+                            return;
+                        }
+                        if let TypeKind::Option(inner) = &subject_type.kind {
+                            let inner_type = inner.as_ref().clone();
+                            self.check_pattern(
+                                &bindings[0],
+                                &inner_type,
+                                context,
+                                span,
+                                is_mutable,
+                            );
+                        }
+                        return;
+                    }
+                }
+
                 // Extract enum name and variant name from parent pattern
                 let (enum_name, variant_name) = match &**parent_pattern {
                     Pattern::Member(enum_pat, variant) => {
@@ -431,7 +555,7 @@ impl TypeChecker {
                             } else {
                                 self.substitute_type(var_type, &generic_mapping)
                             };
-                            self.check_pattern(binding, &resolved_type, context, span);
+                            self.check_pattern(binding, &resolved_type, context, span, is_mutable);
                         }
 
                         // Check if subject type matches the enum type

@@ -25,20 +25,20 @@ fn test_set_type_generic() {
 
 #[test]
 fn test_set_nullable_element_error() {
-    type_checker_error_test("var x {int?} = {None}", "Set elements cannot be nullable");
+    type_checker_error_test("var x {int?} = {None}", "Set elements cannot be optional");
 }
 
 #[test]
 fn test_set_nullable_element_generic_error() {
     type_checker_error_test(
         "var x set<int?> = {None}",
-        "Set elements cannot be nullable",
+        "Set elements cannot be optional",
     );
 }
 
 #[test]
 fn test_set_literal_with_none_error() {
-    type_checker_error_test("{None}", "Set elements cannot be nullable");
+    type_checker_error_test("{None}", "Set elements cannot be optional");
 }
 
 #[test]

@@ -299,6 +299,26 @@ pub(crate) fn lower_member_expr(
         }
     }
 
+    // Handle Option member access — delegate to the inner type.
+    // For example, Option<String>.length should still work via unwrap semantics.
+    // Note: most Option method calls (unwrap, is_some, is_none) are handled in
+    // lower_call in control_flow.rs. This handles property-style access.
+    if let TypeKind::Option(_) = &obj_ty.kind {
+        // Option member access as property is not supported directly.
+        // Method calls like .unwrap(), .is_some(), .is_none() go through lower_call.
+        // If we get here, it means a non-call member access on Option which the
+        // type checker should have rejected. Return a clear error.
+        if let ExpressionKind::Identifier(prop_name, _) = &prop.node {
+            return Err(LoweringError::unsupported_expression(
+                format!(
+                    "Cannot access property '{}' on optional type '{}'. Use .unwrap() first",
+                    prop_name, obj_ty
+                ),
+                expr.span,
+            ));
+        }
+    }
+
     // Handle class method-as-property access (e.g. s.length, s.size).
     // Zero-arg methods on class types can be accessed as properties.
     let class_name = match &obj_ty.kind {

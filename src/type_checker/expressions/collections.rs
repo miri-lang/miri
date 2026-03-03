@@ -145,9 +145,9 @@ impl TypeChecker {
             return make_type(TypeKind::Error);
         }
 
-        if let TypeKind::Nullable(_) = first_type.kind {
+        if let TypeKind::Option(_) = first_type.kind {
             self.report_error(
-                "Set elements cannot be nullable".to_string(),
+                "Set elements cannot be optional".to_string(),
                 elements[0].span,
             );
         }

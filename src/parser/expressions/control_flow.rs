@@ -12,7 +12,13 @@ impl<'source> Parser<'source> {
     /*
      */
     pub(crate) fn conditional_expression(&mut self) -> Result<Expression, SyntaxError> {
-        let expression = self.logical_or_expression()?;
+        let expression = self.null_coalesce_expression()?;
+
+        // Block-like expressions (e.g. match) should not consume a postfix `if`/`unless`,
+        // because `if` after a match block is always a new statement.
+        if matches!(expression.node, ExpressionKind::Match(..)) {
+            return Ok(expression);
+        }
 
         if !self.match_lookahead_type(|t| t == &Token::If || t == &Token::Unless) {
             return Ok(expression);
@@ -304,6 +310,7 @@ impl<'source> Parser<'source> {
             patterns,
             guard,
             body: Box::new(body),
+            is_mutable: false,
         })
     }
 }

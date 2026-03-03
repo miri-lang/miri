@@ -62,9 +62,31 @@ impl TypeChecker {
         context: &mut Context,
     ) -> Type {
         if name == "None" {
-            return ast_factory::make_type(TypeKind::Nullable(Box::new(ast_factory::make_type(
+            return ast_factory::make_type(TypeKind::Option(Box::new(ast_factory::make_type(
                 TypeKind::Void,
             ))));
+        }
+        if name == "Some" {
+            // fn<T>(value T): T?
+            let t_param = ast_factory::make_type(TypeKind::Generic(
+                "T".to_string(),
+                None,
+                TypeDeclarationKind::None,
+            ));
+            let t_expr = ast_factory::type_expr_non_null(t_param.clone());
+
+            let return_type = ast_factory::make_type(TypeKind::Option(Box::new(t_param)));
+
+            return ast_factory::make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                generics: Some(vec![t_expr.clone()]),
+                params: vec![Parameter {
+                    name: "value".to_string(),
+                    typ: Box::new(t_expr),
+                    guard: None,
+                    default_value: None,
+                }],
+                return_type: Some(Box::new(ast_factory::type_expr_non_null(return_type))),
+            })));
         }
         if name == "Ok" {
             // fn<T>(value T): result<T, Void>
@@ -159,6 +181,7 @@ impl TypeChecker {
         }
         candidates.extend(self.global_scope.keys().map(|s| s.as_str()));
         candidates.push("None");
+        candidates.push("Some");
         candidates.push("Ok");
         candidates.push("Err");
 

@@ -185,7 +185,7 @@ impl TypeChecker {
     /// Determines the type of a variable from its initializer and/or type annotation.
     ///
     /// When both are present, validates compatibility and returns the declared type.
-    /// Warns when immutable variables are unnecessarily declared nullable.
+    /// Warns when immutable variables are unnecessarily declared optional.
     pub(crate) fn determine_variable_type(
         &mut self,
         decl: &VariableDeclaration,
@@ -231,21 +231,21 @@ impl TypeChecker {
                     );
                 }
             } else {
-                // Check for warning: assigning non-nullable to nullable immutable variable
-                if let TypeKind::Nullable(_) = &declared_type.kind {
+                // Check for warning: assigning non-optional to optional immutable variable
+                if let TypeKind::Option(_) = &declared_type.kind {
                     if !matches!(decl.declaration_type, VariableDeclarationType::Mutable) {
-                        // If inferred type is NOT nullable (and not None), warn
-                        if !matches!(inferred_type.kind, TypeKind::Nullable(_)) {
+                        // If inferred type is NOT optional (and not None), warn
+                        if !matches!(inferred_type.kind, TypeKind::Option(_)) {
                             self.report_warning(
                                 "W0003",
-                                "Unnecessary Nullable Declaration".to_string(),
+                                "Unnecessary Optional Declaration".to_string(),
                                 format!(
-                                    "Unnecessary nullable declaration for variable '{}'",
+                                    "Unnecessary optional declaration for variable '{}'",
                                     decl.name
                                 ),
                                 type_expr.span,
                                 Some(format!(
-                                    "Variable '{}' is immutable and its initializer is not nullable. Remove `?` from the type to simplify.",
+                                    "Variable '{}' is immutable and its initializer is not optional. Remove `?` from the type to simplify.",
                                     decl.name
                                 )),
                             );

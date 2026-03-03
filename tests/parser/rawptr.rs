@@ -3,7 +3,7 @@
 
 use super::utils::{parser_test, type_statement_test};
 use miri::ast::factory::{
-    func, let_variable, parameter, type_expr_non_null, type_expr_null, type_int, type_rawptr,
+    func, let_variable, parameter, type_expr_non_null, type_expr_option, type_int, type_rawptr,
     variable_statement,
 };
 use miri::ast::{opt_expr, MemberVisibility};
@@ -15,7 +15,7 @@ fn test_rawptr_as_variable_type() {
 
 #[test]
 fn test_rawptr_nullable() {
-    type_statement_test("RawPtr?", type_expr_null(type_rawptr()));
+    type_statement_test("RawPtr?", type_expr_option(type_rawptr()));
 }
 
 #[test]

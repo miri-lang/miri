@@ -202,14 +202,14 @@ fn test_nullable_float() {
 let x f32? = 1.0
 x
 ",
-        type_null(type_f32()),
+        type_option(type_f32()),
     );
     type_checker_expr_type_test(
         "
 let y f32? = None
 y
 ",
-        type_null(type_f32()),
+        type_option(type_f32()),
     );
 }
 

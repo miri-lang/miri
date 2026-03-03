@@ -6,7 +6,7 @@
 //! This module handles determining whether types are compatible for
 //! assignments, function calls, and operations. It includes support for:
 //! - Structural type equality
-//! - Nullable type compatibility
+//! - Option type compatibility
 //! - Numeric type widening
 //! - Subtyping (inheritance, interfaces, mixins)
 //! - Generic type constraints
@@ -20,7 +20,7 @@ impl TypeChecker {
     ///
     /// This function handles:
     /// - Exact type equality
-    /// - Nullable type compatibility (`T` is compatible with `T?`, `None` is compatible with `T?`)
+    /// - Option type compatibility (`T` is compatible with `T?`, `None` is compatible with `T?`)
     /// - Numeric type compatibility (literals, widening)
     /// - Inheritance/Interface implementation (via `is_subtype`)
     /// - Generic type constraints
@@ -36,8 +36,8 @@ impl TypeChecker {
             return true;
         }
 
-        // Handle nullable types
-        if let Some(result) = self.check_nullable_compatibility(t1, t2, context) {
+        // Handle optional types
+        if let Some(result) = self.check_option_compatibility(t1, t2, context) {
             return result;
         }
 
@@ -75,27 +75,22 @@ impl TypeChecker {
         t1 == t2
     }
 
-    /// Checks nullable type compatibility.
-    fn check_nullable_compatibility(
-        &self,
-        t1: &Type,
-        t2: &Type,
-        context: &Context,
-    ) -> Option<bool> {
-        if let TypeKind::Nullable(inner) = &t1.kind {
-            // Nullable(T) accepts T or None
-            if let TypeKind::Nullable(inner2) = &t2.kind {
+    /// Checks option type compatibility.
+    fn check_option_compatibility(&self, t1: &Type, t2: &Type, context: &Context) -> Option<bool> {
+        if let TypeKind::Option(inner) = &t1.kind {
+            // Option(T) accepts T or None
+            if let TypeKind::Option(inner2) = &t2.kind {
                 if matches!(inner2.kind, TypeKind::Void) {
-                    return Some(true); // None is compatible with any nullable
+                    return Some(true); // None is compatible with any optional
                 }
                 return Some(self.are_compatible(inner, inner2, context));
             }
-            // Also accepts non-nullable T
+            // Also accepts non-optional T
             return Some(self.are_compatible(inner, t2, context));
         }
 
-        // Non-nullable type cannot accept nullable
-        if let TypeKind::Nullable(_) = &t2.kind {
+        // Non-optional type cannot accept optional
+        if let TypeKind::Option(_) = &t2.kind {
             return Some(false);
         }
 
@@ -222,13 +217,13 @@ impl TypeChecker {
                 }
                 Some(false)
             }
-            (TypeKind::Nullable(inner1), TypeKind::Nullable(inner2)) => {
+            (TypeKind::Option(inner1), TypeKind::Option(inner2)) => {
                 if matches!(inner2.kind, TypeKind::Void) {
                     return Some(true);
                 }
                 Some(self.are_compatible(inner1, inner2, context))
             }
-            (TypeKind::Nullable(inner1), _) => Some(self.are_compatible(inner1, t2, context)),
+            (TypeKind::Option(inner1), _) => Some(self.are_compatible(inner1, t2, context)),
             (TypeKind::Result(ok1, err1), TypeKind::Result(ok2, err2)) => {
                 Some(self.check_result_compatible(ok1, err1, ok2, err2, context))
             }

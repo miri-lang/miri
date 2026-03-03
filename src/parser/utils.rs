@@ -28,12 +28,12 @@ impl<'source> Parser<'source> {
                 self._lookahead = self.lexer.next().transpose()?;
                 Ok(result)
             }
-            Some((found, _)) => Err(SyntaxError::new(
+            Some((found, span)) => Err(SyntaxError::new(
                 SyntaxErrorKind::UnexpectedToken {
                     expected: expected_str(),
                     found: token_to_string(found).into_owned(),
                 },
-                Span::new(self.source.len(), self.source.len()),
+                *span,
             )),
             None => {
                 if expected(&Token::ExpressionStatementEnd) {
@@ -137,42 +137,6 @@ impl<'source> Parser<'source> {
         self.match_lookahead_type(is_function_modifier)
     }
 
-    pub(crate) fn lookahead_is_statement_start(&self) -> bool {
-        self.match_lookahead_type(|t| {
-            matches!(
-                t,
-                Token::Public
-                    | Token::Protected
-                    | Token::Private
-                    | Token::Indent
-                    | Token::Let
-                    | Token::Var
-                    | Token::If
-                    | Token::Unless
-                    | Token::While
-                    | Token::Until
-                    | Token::Do
-                    | Token::Forever
-                    | Token::For
-                    | Token::Async
-                    | Token::Fn
-                    | Token::Parallel
-                    | Token::Gpu
-                    | Token::Return
-                    | Token::Runtime
-                    | Token::Use
-                    | Token::Type
-                    | Token::Break
-                    | Token::Continue
-                    | Token::Enum
-                    | Token::Struct
-                    | Token::Extends
-                    | Token::Implements
-                    | Token::Includes
-            )
-        })
-    }
-
     pub(crate) fn eat_additive_op(&mut self) -> Result<BinaryOp, Result<Expression, SyntaxError>> {
         let op = match self.eat_binary_op(is_additive_op) {
             Ok(token) => match token.0 {
@@ -241,6 +205,19 @@ impl<'source> Parser<'source> {
             Ok(token) => match token.0 {
                 Token::Or => BinaryOp::Or,
                 _ => return Err(Err(self.error_unexpected_operator(token, "or"))),
+            },
+            Err(err) => return Err(Err(err)),
+        };
+        Ok(op)
+    }
+
+    pub(crate) fn eat_null_coalesce_op(
+        &mut self,
+    ) -> Result<BinaryOp, Result<Expression, SyntaxError>> {
+        let op = match self.eat_binary_op(is_null_coalesce_op) {
+            Ok(token) => match token.0 {
+                Token::QuestionQuestion => BinaryOp::NullCoalesce,
+                _ => return Err(Err(self.error_unexpected_operator(token, "??"))),
             },
             Err(err) => return Err(Err(err)),
         };
@@ -526,4 +503,8 @@ pub(crate) fn is_inheritance_modifier(token: &Token) -> bool {
 
 pub(crate) fn is_function_modifier(token: &Token) -> bool {
     matches!(token, Token::Async | Token::Gpu | Token::Parallel)
+}
+
+pub(crate) fn is_null_coalesce_op(token: &Token) -> bool {
+    matches!(token, Token::QuestionQuestion)
 }

@@ -744,9 +744,14 @@ pub fn type_expr_non_null(t: Type) -> Expression {
     type_expression(t, false)
 }
 
-/// Creates a nullable type expression.
-pub fn type_expr_null(t: Type) -> Expression {
+/// Creates an optional type expression.
+pub fn type_expr_option(t: Type) -> Expression {
     type_expression(t, true)
+}
+
+/// Creates an optional type expression (legacy alias).
+pub fn type_expr_null(t: Type) -> Expression {
+    type_expr_option(t)
 }
 
 /// Creates a Type of a specific kind with a default span.
@@ -856,9 +861,14 @@ pub fn type_tuple(elements: Vec<Type>) -> Type {
     ))
 }
 
-/// Creates a nullable wrapped type.
+/// Creates an optional wrapped type.
+pub fn type_option(inner: Type) -> Type {
+    make_type(TypeKind::Option(Box::new(inner)))
+}
+
+/// Creates an optional wrapped type (legacy alias).
 pub fn type_null(inner: Type) -> Type {
-    make_type(TypeKind::Nullable(Box::new(inner)))
+    type_option(inner)
 }
 
 /// Creates a `Result` type.

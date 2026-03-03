@@ -74,8 +74,8 @@ impl TypeChecker {
                 }
             }
 
-            // Nullable<T> matches Nullable<concrete>
-            (TypeKind::Nullable(p_inner), TypeKind::Nullable(a_inner)) => {
+            // Option<T> matches Option<concrete>
+            (TypeKind::Option(p_inner), TypeKind::Option(a_inner)) => {
                 self.infer_generic_types(p_inner, a_inner, mapping);
             }
 
@@ -176,7 +176,7 @@ impl TypeChecker {
                 }
             }
 
-            TypeKind::Nullable(inner) => make_type(TypeKind::Nullable(Box::new(
+            TypeKind::Option(inner) => make_type(TypeKind::Option(Box::new(
                 self.substitute_type(inner, mapping),
             ))),
 

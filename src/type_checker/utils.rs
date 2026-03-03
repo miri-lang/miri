@@ -187,7 +187,7 @@ impl TypeChecker {
         match &expr.node {
             ExpressionKind::Type(t, is_nullable) => {
                 if *is_nullable {
-                    Ok(make_type(TypeKind::Nullable(t.clone())))
+                    Ok(make_type(TypeKind::Option(t.clone())))
                 } else {
                     Ok(*t.clone())
                 }
@@ -202,7 +202,7 @@ impl TypeChecker {
     ///
     /// Handles:
     /// - Built-in collection types (List, Set, Map, Range)
-    /// - Nullable types
+    /// - Option types
     /// - Custom types with generic arguments
     /// - Type aliases
     /// - Generic type parameters
@@ -227,8 +227,8 @@ impl TypeChecker {
             }
             TypeKind::Set(inner) => {
                 let resolved_inner = self.resolve_type_expression(&inner, context);
-                if let TypeKind::Nullable(_) = resolved_inner.kind {
-                    self.report_error("Set elements cannot be nullable".to_string(), inner.span);
+                if let TypeKind::Option(_) = resolved_inner.kind {
+                    self.report_error("Set elements cannot be optional".to_string(), inner.span);
                 }
                 make_type(TypeKind::Set(Box::new(
                     self.create_type_expression(resolved_inner),
@@ -236,8 +236,8 @@ impl TypeChecker {
             }
             TypeKind::Map(k, v) => {
                 let rk = self.resolve_type_expression(&k, context);
-                if let TypeKind::Nullable(_) = rk.kind {
-                    self.report_error("Map keys cannot be nullable".to_string(), k.span);
+                if let TypeKind::Option(_) = rk.kind {
+                    self.report_error("Map keys cannot be optional".to_string(), k.span);
                 }
                 let rv = self.resolve_type_expression(&v, context);
                 make_type(TypeKind::Map(
@@ -245,10 +245,10 @@ impl TypeChecker {
                     Box::new(self.create_type_expression(rv)),
                 ))
             }
-            TypeKind::Nullable(inner) => {
+            TypeKind::Option(inner) => {
                 let inner_expr = self.create_type_expression(*inner);
                 let resolved_inner = self.resolve_type_expression(&inner_expr, context);
-                make_type(TypeKind::Nullable(Box::new(resolved_inner)))
+                make_type(TypeKind::Option(Box::new(resolved_inner)))
             }
             TypeKind::Custom(name, args) => self.resolve_custom_type(&name, args, expr, context),
             _ => make_type(t.kind),
@@ -317,9 +317,9 @@ impl TypeChecker {
                 if let Some(args) = args {
                     if args.len() == 2 {
                         let k = self.resolve_type_expression(&args[0], context);
-                        if let TypeKind::Nullable(_) = k.kind {
+                        if let TypeKind::Option(_) = k.kind {
                             self.report_error(
-                                "Map keys cannot be nullable".to_string(),
+                                "Map keys cannot be optional".to_string(),
                                 args[0].span,
                             );
                         }
@@ -347,9 +347,9 @@ impl TypeChecker {
                 if let Some(args) = args {
                     if args.len() == 1 {
                         let t = self.resolve_type_expression(&args[0], context);
-                        if let TypeKind::Nullable(_) = t.kind {
+                        if let TypeKind::Option(_) = t.kind {
                             self.report_error(
-                                "Set elements cannot be nullable".to_string(),
+                                "Set elements cannot be optional".to_string(),
                                 args[0].span,
                             );
                         }
@@ -375,6 +375,15 @@ impl TypeChecker {
                         "Range".to_string(),
                         Some(vec![self.create_type_expression(make_type(TypeKind::Int))]),
                     )));
+                }
+                None
+            }
+            "Option" => {
+                if let Some(args) = args {
+                    if args.len() == 1 {
+                        let t = self.resolve_type_expression(&args[0], context);
+                        return Some(make_type(TypeKind::Option(Box::new(t))));
+                    }
                 }
                 None
             }

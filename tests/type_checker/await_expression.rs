@@ -102,7 +102,7 @@ fn test_await_nullable_future() {
 let f Future<int?>
 await f
 ",
-        type_null(type_int()),
+        type_option(type_int()),
     );
 }
 

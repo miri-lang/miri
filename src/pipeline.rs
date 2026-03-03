@@ -277,7 +277,10 @@ impl Pipeline {
         let mut type_checker = crate::type_checker::TypeChecker::new();
         type_checker
             .check(&ast)
-            .map_err(CompilerError::TypeErrors)?;
+            .map_err(|errors| CompilerError::TypeErrors {
+                errors,
+                warnings: type_checker.warnings.clone(),
+            })?;
 
         Ok(PipelineResult { ast, type_checker })
     }
@@ -295,7 +298,10 @@ impl Pipeline {
         let mut type_checker = crate::type_checker::TypeChecker::new();
         type_checker
             .check(&ast)
-            .map_err(CompilerError::TypeErrors)?;
+            .map_err(|errors| CompilerError::TypeErrors {
+                errors,
+                warnings: type_checker.warnings.clone(),
+            })?;
 
         for warning in &type_checker.warnings {
             eprintln!(

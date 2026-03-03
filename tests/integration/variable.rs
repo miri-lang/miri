@@ -204,4 +204,15 @@ fn nullable_types() {
         "#,
         "Type mismatch",
     );
+
+    // Null coalescing ?? operator
+    assert_runs(
+        r#"
+        var x int? = 10
+        let y int = x ?? 0
+        "#,
+    );
+
+    // Some() constructor
+    assert_runs("let x = Some(42)");
 }

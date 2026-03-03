@@ -12,6 +12,8 @@ pub struct MatchBranch {
     pub patterns: Vec<Pattern>,
     pub guard: Option<Box<Expression>>,
     pub body: Box<Statement>,
+    /// Whether pattern bindings in this branch should be mutable (`var` vs `let`).
+    pub is_mutable: bool,
 }
 
 /// Represents a pattern in a match expression

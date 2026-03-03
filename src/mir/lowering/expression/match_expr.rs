@@ -68,11 +68,55 @@ pub(crate) fn lower_match_expr(
         Vec<u128>, // discriminants covered; empty ⇒ catch-all
     )> = Vec::new();
 
+    let is_option_subject = matches!(subject_ty.kind, TypeKind::Option(_));
+
     for branch in branches {
         let branch_bb = ctx.new_basic_block();
         let mut arm_discrs: Vec<u128> = Vec::new();
 
         for pattern in &branch.patterns {
+            // Handle Option-specific patterns
+            if is_option_subject {
+                match pattern {
+                    Pattern::Literal(crate::ast::literal::Literal::None) => {
+                        // None literal pattern → discriminant 0
+                        arm_discrs.push(0);
+                        if seen_discrs.insert(0) {
+                            switch_targets.push((Discriminant::from(0u128), branch_bb));
+                        }
+                        continue;
+                    }
+                    Pattern::Member(parent, member)
+                        if matches!(&**parent, Pattern::Identifier(n) if n == "Option")
+                            && member == "None" =>
+                    {
+                        arm_discrs.push(0);
+                        if seen_discrs.insert(0) {
+                            switch_targets.push((Discriminant::from(0u128), branch_bb));
+                        }
+                        continue;
+                    }
+                    Pattern::EnumVariant(parent, _) => {
+                        let is_some = match &**parent {
+                            Pattern::Identifier(name) => name == "Some",
+                            Pattern::Member(enum_pat, variant) => {
+                                matches!(&**enum_pat, Pattern::Identifier(n) if n == "Option")
+                                    && variant == "Some"
+                            }
+                            _ => false,
+                        };
+                        if is_some {
+                            // Some(x) → otherwise (any non-zero value)
+                            if otherwise_bb.is_none() {
+                                otherwise_bb = Some(branch_bb);
+                            }
+                            continue;
+                        }
+                    }
+                    _ => {} // Fall through to generic handling
+                }
+            }
+
             match pattern {
                 Pattern::Literal(lit) => {
                     if let Some(val) = literal_to_u128(lit) {

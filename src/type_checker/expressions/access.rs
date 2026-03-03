@@ -212,7 +212,7 @@ impl TypeChecker {
     /// Infers the type of a member access expression (`obj.prop`).
     ///
     /// Handles tuple indexing, struct/class field access, enum variant access,
-    /// nullable/result built-in methods, and inheritance chain lookup.
+    /// option/result built-in methods, and inheritance chain lookup.
     pub(crate) fn infer_member(
         &mut self,
         obj: &Expression,
@@ -268,26 +268,7 @@ impl TypeChecker {
                 }
                 (None, None)
             }
-            TypeKind::Nullable(inner_type) => {
-                if prop_name == "unwrap" {
-                    return make_type(TypeKind::Function(Box::new(FunctionTypeData {
-                        generics: None,
-                        params: vec![],
-                        return_type: Some(Box::new(ast_factory::type_expr_non_null(
-                            *inner_type.clone(),
-                        ))),
-                    })));
-                } else if prop_name == "is_some" || prop_name == "is_none" {
-                    return make_type(TypeKind::Function(Box::new(FunctionTypeData {
-                        generics: None,
-                        params: vec![],
-                        return_type: Some(Box::new(ast_factory::type_expr_non_null(make_type(
-                            TypeKind::Boolean,
-                        )))),
-                    })));
-                }
-                (None, None)
-            }
+            TypeKind::Option(_) => (None, None),
             // For generic types with constraints (T extends SomeClass), use constraint for member lookup
             TypeKind::Generic(_, Some(constraint), _) => {
                 // Use the constraint type for member lookup

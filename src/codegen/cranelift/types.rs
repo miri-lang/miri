@@ -69,8 +69,8 @@ pub fn translate_type_kind(kind: &TypeKind, ptr_ty: CraneliftType) -> CraneliftT
         // to avoid a panic. The type checker should prevent these from reaching codegen.
         TypeKind::Meta(_) => ptr_ty,
 
-        // Nullable types are pointers
-        TypeKind::Nullable(_) => ptr_ty,
+        // Option types are pointers
+        TypeKind::Option(_) => ptr_ty,
 
         // Error types indicate a prior compiler error; treat as pointer-sized
         // to allow graceful continuation rather than a panic.

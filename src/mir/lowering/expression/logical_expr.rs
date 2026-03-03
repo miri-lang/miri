@@ -7,8 +7,8 @@ use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::mir::{
-    Constant, Discriminant, Operand, Place, Rvalue, StatementKind as MirStatementKind, Terminator,
-    TerminatorKind,
+    BinOp, Constant, Discriminant, Operand, Place, Rvalue, StatementKind as MirStatementKind,
+    Terminator, TerminatorKind,
 };
 
 use crate::mir::lowering::context::LoweringContext;
@@ -22,6 +22,11 @@ pub(crate) fn lower_logical_expr(
     let ExpressionKind::Logical(lhs, op, rhs) = &expr.node else {
         unreachable!()
     };
+    // Handle null coalescing operator (??) separately
+    if matches!(op, crate::ast::operator::BinaryOp::NullCoalesce) {
+        return lower_null_coalesce(ctx, expr, lhs, rhs, dest);
+    }
+
     // Short-circuit evaluation for logical operators:
     // - and: if lhs is false, skip rhs and return false
     // - or: if lhs is true, skip rhs and return true
@@ -120,6 +125,105 @@ pub(crate) fn lower_logical_expr(
     // `let var = a and b`), write the result into it so the caller's variable is
     // populated.  Without this the Logical arm ignores `dest` and the variable
     // stays at its zero-initialised default (false).
+    if let Some(ref d) = dest {
+        ctx.push_statement(crate::mir::Statement {
+            kind: MirStatementKind::Assign(
+                d.clone(),
+                Rvalue::Use(Operand::Copy(Place::new(result_local))),
+            ),
+            span: expr.span,
+        });
+        return Ok(Operand::Copy(d.clone()));
+    }
+
+    Ok(Operand::Copy(Place::new(result_local)))
+}
+
+/// Lowers the `??` (null coalescing) operator.
+///
+/// Pattern: evaluate LHS, compare with None. If None → evaluate RHS.
+/// If Some → use LHS directly (Option<T> == T at runtime).
+fn lower_null_coalesce(
+    ctx: &mut LoweringContext,
+    expr: &Expression,
+    lhs: &Expression,
+    rhs: &Expression,
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    // Determine the inner type T from Option<T>
+    let lhs_checked_ty = ctx.type_checker.get_type(lhs.id).cloned();
+    let inner_ty = if let Some(ref ty) = lhs_checked_ty {
+        if let TypeKind::Option(inner) = &ty.kind {
+            inner.as_ref().clone()
+        } else {
+            ty.clone()
+        }
+    } else {
+        Type::new(TypeKind::Int, expr.span)
+    };
+
+    let result_local = ctx.push_temp(inner_ty.clone(), expr.span);
+
+    // Evaluate LHS
+    let lhs_op = lower_expression(ctx, lhs, None)?;
+
+    // Create None constant for comparison
+    let none_val = Operand::Constant(Box::new(Constant {
+        span: expr.span,
+        ty: inner_ty.clone(),
+        literal: crate::ast::literal::Literal::None,
+    }));
+
+    // Compare LHS with None
+    let is_none_local = ctx.push_temp(Type::new(TypeKind::Boolean, expr.span), expr.span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            Place::new(is_none_local),
+            Rvalue::BinaryOp(BinOp::Eq, Box::new(lhs_op.clone()), Box::new(none_val)),
+        ),
+        span: expr.span,
+    });
+
+    let rhs_bb = ctx.new_basic_block();
+    let some_bb = ctx.new_basic_block();
+    let final_bb = ctx.new_basic_block();
+
+    // If None → evaluate RHS, else → use LHS
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::SwitchInt {
+            discr: Operand::Copy(Place::new(is_none_local)),
+            targets: vec![(Discriminant::bool_true(), rhs_bb)], // is_none == true → rhs
+            otherwise: some_bb,                                 // is_none == false → use lhs
+        },
+        expr.span,
+    ));
+
+    // Some block: assign LHS directly to result (Option<T> == T at runtime)
+    ctx.set_current_block(some_bb);
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(Place::new(result_local), Rvalue::Use(lhs_op)),
+        span: expr.span,
+    });
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Goto { target: final_bb },
+        expr.span,
+    ));
+
+    // RHS block: evaluate RHS and assign to result
+    ctx.set_current_block(rhs_bb);
+    let rhs_op = lower_expression(ctx, rhs, None)?;
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(Place::new(result_local), Rvalue::Use(rhs_op)),
+        span: expr.span,
+    });
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Goto { target: final_bb },
+        expr.span,
+    ));
+
+    ctx.set_current_block(final_bb);
+
+    // DPS: write result into destination if provided
     if let Some(ref d) = dest {
         ctx.push_statement(crate::mir::Statement {
             kind: MirStatementKind::Assign(
