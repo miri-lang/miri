@@ -15,6 +15,7 @@ pub mod list;
 pub mod map;
 pub mod oop;
 pub mod operator_traits;
+pub mod option;
 pub mod pattern_matching;
 pub mod primitive_types;
 pub mod runtime_function;

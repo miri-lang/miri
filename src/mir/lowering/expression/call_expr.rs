@@ -26,6 +26,13 @@ pub(crate) fn lower_call_expr(
     let ExpressionKind::Call(func, args) = &expr.node else {
         unreachable!()
     };
+    // Handle Some(value) constructor — identity operation at runtime
+    if let ExpressionKind::Identifier(name, _) = &func.node {
+        if name == "Some" && args.len() == 1 {
+            return lower_expression(ctx, &args[0], dest);
+        }
+    }
+
     // Check for legacy GPU intrinsic function names (gpu_thread_idx_x etc.)
     if let ExpressionKind::Identifier(name, _) = &func.node {
         let intrinsic_rvalue = match name.as_str() {

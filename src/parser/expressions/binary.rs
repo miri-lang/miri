@@ -8,7 +8,7 @@ use crate::lexer::Token;
 
 use super::super::utils::{
     is_additive_op, is_equality_op, is_logical_and_op, is_logical_or_op, is_multiplicative_op,
-    is_relational_op,
+    is_null_coalesce_op, is_relational_op,
 };
 use super::super::Parser;
 
@@ -53,6 +53,17 @@ impl<'source> Parser<'source> {
             Self::logical_and_expression,
             is_logical_or_op,
             Self::eat_logical_or_op,
+            ast::logical_with_span,
+        )
+    }
+
+    /*
+     */
+    pub(crate) fn null_coalesce_expression(&mut self) -> Result<Expression, SyntaxError> {
+        self.binary_expression_precedence(
+            Self::logical_or_expression,
+            is_null_coalesce_op,
+            Self::eat_null_coalesce_op,
             ast::logical_with_span,
         )
     }

@@ -5,7 +5,7 @@ use std::vec;
 
 use super::utils::{parser_error_test, parser_test};
 use miri::ast::factory::{
-    enum_statement, enum_value, identifier, type_bool, type_expr_non_null, type_expr_null,
+    enum_statement, enum_value, identifier, type_bool, type_expr_non_null, type_expr_option,
     type_int, type_list, type_map, type_string,
 };
 use miri::ast::MemberVisibility;
@@ -127,7 +127,7 @@ enum Data: Point([int]?), Config({String: bool})
             identifier("Data"),
             None,
             vec![
-                enum_value("Point", vec![type_expr_null(type_list(type_int()))]),
+                enum_value("Point", vec![type_expr_option(type_list(type_int()))]),
                 enum_value(
                     "Config",
                     vec![type_expr_non_null(type_map(type_string(), type_bool()))],

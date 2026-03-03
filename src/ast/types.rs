@@ -100,8 +100,8 @@ pub enum TypeKind {
     Custom(String, Option<Vec<Expression>>),
     /// Metatype (type of a type).
     Meta(Box<Type>),
-    /// Nullable type wrapper.
-    Nullable(Box<Type>),
+    /// Option type wrapper (e.g., `T?` or `Option<T>`).
+    Option(Box<Type>),
     /// Void type.
     Void,
     /// Error type (for type checking).
@@ -160,8 +160,8 @@ impl TypeKind {
             | TypeKind::Generic(_, _, _)
             | TypeKind::Custom(_, _)
             | TypeKind::Meta(_) => false,
-            // Nullable: inherits from inner type
-            TypeKind::Nullable(inner) => inner.kind.is_copy(),
+            // Option: inherits from inner type
+            TypeKind::Option(inner) => inner.kind.is_copy(),
             // Tuple: Check that all elements are Copy (simplified - we'd need to resolve types)
             // For now, treat tuples as Copy since lowering doesn't track element types here
             TypeKind::Tuple(_) => true,
@@ -242,7 +242,7 @@ impl fmt::Display for TypeKind {
                 Ok(())
             }
             TypeKind::Meta(inner) => write!(f, "meta({})", inner),
-            TypeKind::Nullable(inner) => write!(f, "nullable({})", inner),
+            TypeKind::Option(inner) => write!(f, "{}?", inner),
             TypeKind::Void => write!(f, "void"),
             TypeKind::Error => write!(f, "error"),
             TypeKind::Linear(inner) => write!(f, "linear({})", inner),

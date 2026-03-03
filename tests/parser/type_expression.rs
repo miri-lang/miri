@@ -7,10 +7,10 @@ use super::utils::{
 };
 use miri::ast::factory::{
     func, generic_type, let_variable, parameter, type_array, type_bool, type_custom,
-    type_expr_non_null, type_expr_null, type_f32, type_f64, type_float, type_function, type_future,
-    type_i128, type_i16, type_i32, type_i64, type_i8, type_int, type_list, type_map, type_result,
-    type_set, type_string, type_symbol, type_tuple, type_u128, type_u16, type_u32, type_u64,
-    type_u8, variable_statement,
+    type_expr_non_null, type_expr_option, type_f32, type_f64, type_float, type_function,
+    type_future, type_i128, type_i16, type_i32, type_i64, type_i8, type_int, type_list, type_map,
+    type_result, type_set, type_string, type_symbol, type_tuple, type_u128, type_u16, type_u32,
+    type_u64, type_u8, variable_statement,
 };
 use miri::ast::{opt_expr, MemberVisibility};
 use miri::error::syntax::SyntaxErrorKind;
@@ -35,7 +35,7 @@ fn process_data(data {String: bool}?)
         vec![func("process_data")
             .params(vec![parameter(
                 "data".into(),
-                type_expr_null(type_map(type_string(), type_bool())),
+                type_expr_option(type_map(type_string(), type_bool())),
                 None,
                 None,
             )])
@@ -51,9 +51,9 @@ fn get_coordinates() (float, float?, float)?
     // body
 ",
         vec![func("get_coordinates")
-            .return_type(type_expr_null(type_tuple_expr(vec![
+            .return_type(type_expr_option(type_tuple_expr(vec![
                 type_expr_non_null(type_float()),
-                type_expr_null(type_float()),
+                type_expr_option(type_float()),
                 type_expr_non_null(type_float()),
             ])))
             .build_empty_body()],
@@ -79,7 +79,7 @@ fn get_data() MyContainer<[int]?, Future<String>>
             .return_type(type_expr_non_null(type_custom(
                 "MyContainer",
                 Some(vec![
-                    type_expr_null(type_list(type_int())),          // [int]?
+                    type_expr_option(type_list(type_int())),        // [int]?
                     type_expr_non_null(type_future(type_string())), // future<string>
                 ]),
             )))
@@ -130,15 +130,15 @@ fn test_error_empty_generic_parameters() {
 fn test_deeply_nested_collection_type() {
     type_statement_test(
         "[[{String: (int?, bool)}]?]?",
-        type_expr_null(
+        type_expr_option(
             // The outer list is nullable: `[...]`?
-            type_list_expr(type_expr_null(
+            type_list_expr(type_expr_option(
                 // The inner list is nullable: `[{...}]?`
                 type_list_expr(type_expr_non_null(type_map_expr(
                     // The map itself is not nullable
                     type_expr_non_null(type_string()),
                     type_expr_non_null(type_tuple_expr(vec![
-                        type_expr_null(type_int()), // int?
+                        type_expr_option(type_int()), // int?
                         type_expr_non_null(type_bool()),
                     ])),
                 ))),
@@ -172,7 +172,7 @@ fn test_multi_element_tuple_with_trailing_comma() {
 fn test_nullable_function_type() {
     type_statement_test(
         "(fn(s String) bool)?",
-        type_expr_null(type_function(
+        type_expr_option(type_function(
             None,
             vec![parameter(
                 "s".into(),
@@ -195,7 +195,7 @@ fn test_error_ambiguous_nullable_function_return() {
                 opt_expr(type_expr_non_null(type_function(
                     None,
                     vec![],
-                    opt_expr(type_expr_null(type_int())), // The `?` applies to the return type, not the function itself.
+                    opt_expr(type_expr_option(type_int())), // The `?` applies to the return type, not the function itself.
                 ))),
                 None,
             )],
@@ -206,7 +206,7 @@ fn test_error_ambiguous_nullable_function_return() {
 
 #[test]
 fn test_simple_nullable_built_in_type() {
-    type_statement_test("int?", type_expr_null(type_int()));
+    type_statement_test("int?", type_expr_option(type_int()));
 }
 
 #[test]
@@ -236,7 +236,7 @@ fn test_error_double_nullable() {
         "let x int??",
         &SyntaxErrorKind::UnexpectedToken {
             expected: "an expression".to_string(),
-            found: "?".to_string(),
+            found: "??".to_string(),
         },
     );
 }
@@ -280,7 +280,7 @@ fn test_system_types() {
         type_statement_test(name, type_expr_non_null(mapped_type.clone()));
         type_statement_test(
             format!("{}?", name).as_str(),
-            type_expr_null(mapped_type.clone()),
+            type_expr_option(mapped_type.clone()),
         );
     }
 }
@@ -293,7 +293,7 @@ fn test_function_type_with_named_parameters() {
             None, // no generics
             vec![
                 parameter("x".into(), type_expr_non_null(type_int()), None, None),
-                parameter("y".into(), type_expr_null(type_string()), None, None),
+                parameter("y".into(), type_expr_option(type_string()), None, None),
             ],
             opt_expr(type_expr_non_null(type_bool())),
         )),
@@ -382,13 +382,13 @@ fn test_crazy_nested_function_type() {
                 ),
                 parameter(
                     "items".into(),
-                    type_expr_null(type_list(type_custom("T", None))),
+                    type_expr_option(type_list(type_custom("T", None))),
                     None,
                     None,
                 ),
             ],
             // return type: (fn() T)?
-            opt_expr(type_expr_null(type_function(
+            opt_expr(type_expr_option(type_function(
                 // <-- This is now a nullable function, not a tuple
                 None,
                 vec![],

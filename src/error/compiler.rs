@@ -23,8 +23,11 @@ pub enum CompilerError {
     #[error("Type Error: {0}")]
     Type(TypeError),
 
-    #[error("Type Errors: {0:?}")]
-    TypeErrors(Vec<TypeError>),
+    #[error("Type Errors: {errors:?}")]
+    TypeErrors {
+        errors: Vec<TypeError>,
+        warnings: Vec<Diagnostic>,
+    },
 
     #[error("File not found: {0}")]
     FileNotFound(String),
@@ -53,11 +56,18 @@ impl CompilerError {
                 format_diagnostic_full(source, &e.to_diagnostic())
             }
             CompilerError::Type(e) => format_diagnostic_full(source, &e.to_diagnostic()),
-            CompilerError::TypeErrors(errs) => errs
-                .iter()
-                .map(|e| format_diagnostic_full(source, &e.to_diagnostic()))
-                .collect::<Vec<_>>()
-                .join("\n"),
+            CompilerError::TypeErrors { errors, warnings } => {
+                let mut parts: Vec<String> = warnings
+                    .iter()
+                    .map(|w| format_diagnostic_full(source, w))
+                    .collect();
+                parts.extend(
+                    errors
+                        .iter()
+                        .map(|e| format_diagnostic_full(source, &e.to_diagnostic())),
+                );
+                parts.join("\n")
+            }
             CompilerError::Lowering(e) => format_diagnostic_full(source, &e.to_diagnostic()),
             CompilerError::Io(e) => {
                 let diagnostic = Diagnostic {

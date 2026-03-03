@@ -39,6 +39,7 @@ impl TypeChecker {
                 self.check_bitwise_op(left, right, context)
             }
             BinaryOp::In => self.check_membership_op(left, right, context),
+            BinaryOp::NullCoalesce => self.check_null_coalesce_op(left, right, context),
             BinaryOp::Not | BinaryOp::Range => {
                 Ok(crate::ast::factory::make_type(TypeKind::Boolean))
             }
@@ -305,6 +306,32 @@ impl TypeChecker {
                     ))
                 }
             }
+        }
+    }
+
+    /// Checks null coalescing operation (`??`).
+    /// LHS must be `Option<T>`, RHS must be compatible with `T`. Result type is `T`.
+    fn check_null_coalesce_op(
+        &mut self,
+        left: &Type,
+        right: &Type,
+        context: &Context,
+    ) -> Result<Type, String> {
+        if let TypeKind::Option(inner) = &left.kind {
+            let inner_ty = inner.as_ref().clone();
+            if self.are_compatible(&inner_ty, right, context) {
+                Ok(inner_ty)
+            } else {
+                Err(format!(
+                    "Type mismatch in '??': Option contains {}, but default value is {}",
+                    inner_ty, right
+                ))
+            }
+        } else {
+            Err(format!(
+                "Left side of '??' must be an Option type, got {}",
+                left
+            ))
         }
     }
 

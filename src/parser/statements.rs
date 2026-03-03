@@ -293,6 +293,63 @@ impl<'source> Parser<'source> {
         } else {
             self.eat_token(&Token::If)?;
         }
+
+        // Check for `if let` / `if var` desugaring
+        if matches!(
+            &self._lookahead,
+            Some((Token::Let, _)) | Some((Token::Var, _))
+        ) {
+            // Eat let/var and track mutability
+            let is_mutable = matches!(&self._lookahead, Some((Token::Var, _)));
+            let token = if is_mutable { Token::Var } else { Token::Let };
+            self.eat_token(&token)?;
+
+            let pattern = self.pattern()?;
+            self.eat_token(&Token::Assign)?;
+            let value = self.expression()?;
+            let then_body = self.statement_body()?;
+
+            self.try_eat_expression_end();
+
+            let else_body = if self.lookahead_is_else() {
+                self.eat_token(&Token::Else)?;
+                Some(self.statement_body()?)
+            } else {
+                None
+            };
+
+            // Desugar: if let Pattern = value: body [else: else_body]
+            // =>  match value { Pattern: body, <complement>: else_body_or_empty }
+            //
+            // For Option patterns like Some(x), use None as the complement
+            // instead of default, because the MIR lowering treats Some(x) as
+            // the catch-all "otherwise" target. Using default would overwrite it.
+            let else_pattern = if matches!(
+                &pattern,
+                Pattern::EnumVariant(parent, _)
+                    if matches!(parent.as_ref(), Pattern::Identifier(n) if n == "Some")
+            ) {
+                Pattern::Literal(crate::ast::literal::Literal::None)
+            } else {
+                Pattern::Default
+            };
+
+            let then_branch = MatchBranch {
+                patterns: vec![pattern],
+                guard: None,
+                body: Box::new(then_body),
+                is_mutable,
+            };
+            let else_branch = MatchBranch {
+                patterns: vec![else_pattern],
+                guard: None,
+                body: Box::new(else_body.unwrap_or_else(ast::empty_statement)),
+                is_mutable: false,
+            };
+            let match_expr = ast::match_expression(value, vec![then_branch, else_branch]);
+            return Ok(ast::expression_statement(match_expr));
+        }
+
         let condition = self.expression()?;
         let then_block = self.statement_body()?;
 
@@ -355,6 +412,57 @@ impl<'source> Parser<'source> {
             condition = self.expression()?;
         } else {
             self.eat_token(&Token::While)?;
+
+            // Check for `while let` / `while var` desugaring
+            if matches!(
+                &self._lookahead,
+                Some((Token::Let, _)) | Some((Token::Var, _))
+            ) {
+                // Track mutability for `while var` vs `while let`
+                let is_mutable = matches!(&self._lookahead, Some((Token::Var, _)));
+                let token = if is_mutable { Token::Var } else { Token::Let };
+                self.eat_token(&token)?;
+
+                let pattern = self.pattern()?;
+                self.eat_token(&Token::Assign)?;
+                let value = self.expression()?;
+                let body = self.statement_body()?;
+
+                // Desugar: while let Pattern = value: body
+                // =>  forever: match value { Pattern: body, <complement>: break }
+                let break_pattern = if matches!(
+                    &pattern,
+                    Pattern::EnumVariant(parent, _)
+                        if matches!(parent.as_ref(), Pattern::Identifier(n) if n == "Some")
+                ) {
+                    Pattern::Literal(crate::ast::literal::Literal::None)
+                } else {
+                    Pattern::Default
+                };
+
+                let match_branch = MatchBranch {
+                    patterns: vec![pattern],
+                    guard: None,
+                    body: Box::new(body),
+                    is_mutable,
+                };
+                let break_branch = MatchBranch {
+                    patterns: vec![break_pattern],
+                    guard: None,
+                    body: Box::new(ast::break_statement()),
+                    is_mutable: false,
+                };
+                let match_expr = ast::match_expression(value, vec![match_branch, break_branch]);
+                let match_stmt = ast::expression_statement(match_expr);
+                let loop_body = ast::block_statement(vec![match_stmt]);
+
+                return Ok(ast::while_statement_with_type(
+                    ast::literal(ast::boolean(true)),
+                    loop_body,
+                    WhileStatementType::Forever,
+                ));
+            }
+
             condition = self.expression()?;
             then_block = self.statement_body()?;
         }
@@ -532,16 +640,11 @@ impl<'source> Parser<'source> {
     pub(crate) fn expression_statement(&mut self) -> Result<Statement, SyntaxError> {
         let expression = self.expression()?;
 
-        // Special handling for block expressions (like Match) which might consume the Dedent
-        // and thus not require a trailing newline if followed by another statement.
+        // Block expressions (like Match) consume their own Dedent, so there may not be
+        // an ExpressionStatementEnd token after them. Consume it if present, then return.
         if matches!(expression.node, ExpressionKind::Match(..)) {
-            // If we are at a statement start or end of block, we can skip eat_statement_end
-            if self.lookahead_is_statement_start()
-                || self.lookahead_is_dedent()
-                || self._lookahead.is_none()
-            {
-                return Ok(ast::expression_statement(expression));
-            }
+            self.try_eat_expression_end();
+            return Ok(ast::expression_statement(expression));
         }
 
         self.eat_statement_end()?;
