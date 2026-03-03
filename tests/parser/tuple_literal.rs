@@ -67,7 +67,10 @@ fn test_method_call_on_tuple_literal() {
         "('ok', 200).len()",
         vec![expression_statement(call(
             member(
-                tuple(vec![string_literal_expression("ok"), int_literal_expression(200)]),
+                tuple(vec![
+                    string_literal_expression("ok"),
+                    int_literal_expression(200),
+                ]),
                 identifier("len"),
             ),
             vec![],

@@ -9,8 +9,8 @@ use miri::ast::factory::{
     func, generic_type, let_variable, parameter, type_array, type_bool, type_custom,
     type_expr_non_null, type_expr_option, type_f32, type_f64, type_float, type_function,
     type_future, type_i128, type_i16, type_i32, type_i64, type_i8, type_int, type_list, type_map,
-    type_result, type_set, type_string, type_tuple, type_u128, type_u16, type_u32,
-    type_u64, type_u8, variable_statement,
+    type_result, type_set, type_string, type_tuple, type_u128, type_u16, type_u32, type_u64,
+    type_u8, variable_statement,
 };
 use miri::ast::{opt_expr, MemberVisibility};
 use miri::error::syntax::SyntaxErrorKind;

@@ -30,9 +30,7 @@ fn test_unicode_identifiers() {
 
 #[test]
 fn test_colon_identifier_boundaries() {
-    run_lexer_tests(vec![
-        ("identifier:", vec![Token::Identifier, Token::Colon]),
-    ]);
+    run_lexer_tests(vec![("identifier:", vec![Token::Identifier, Token::Colon])]);
 }
 
 #[test]
