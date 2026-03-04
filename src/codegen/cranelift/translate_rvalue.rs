@@ -1,4 +1,5 @@
 use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
+use crate::ast::types::TypeKind;
 use crate::codegen::cranelift::translator::{FunctionTranslator, ModuleCtx, TypeCtx};
 use crate::codegen::cranelift::types::translate_type;
 use crate::mir::{AggregateKind, BinOp, Constant, Local, Operand, Rvalue, UnOp};
@@ -122,17 +123,31 @@ impl<'a> FunctionTranslator<'a> {
                 let total_size = (current_offset + max_align - 1) & !(max_align - 1);
 
                 // Heap-allocate for now.
-                // Add ptr_size for RC header
+                // For Array/List, we add ptr_size for RC header AND ptr_size for LEN header.
+                // For others, just ptr_size for RC header.
+                let is_collection = matches!(kind, AggregateKind::Array | AggregateKind::List);
+                let header_size = if is_collection {
+                    2 * ptr_size
+                } else {
+                    ptr_size
+                };
+
                 let alloc_size = builder
                     .ins()
-                    .iconst(ptr_type, (total_size + ptr_size as u32) as i64);
+                    .iconst(ptr_type, (total_size + header_size as u32) as i64);
                 let raw_ptr = Self::call_libc_malloc(builder, ctx, alloc_size)?;
 
                 // Store RC = 1
                 let one = builder.ins().iconst(ptr_type, 1);
                 builder.ins().store(MemFlags::new(), one, raw_ptr, 0);
 
-                let payload_ptr = builder.ins().iadd_imm(raw_ptr, ptr_size as i64);
+                if is_collection {
+                    // Store LEN
+                    let len = builder.ins().iconst(ptr_type, operands.len() as i64);
+                    builder.ins().store(MemFlags::new(), len, raw_ptr, ptr_size);
+                }
+
+                let payload_ptr = builder.ins().iadd_imm(raw_ptr, header_size as i64);
 
                 // Store each field
                 for (i, val) in translated.into_iter().enumerate() {
@@ -152,12 +167,60 @@ impl<'a> FunctionTranslator<'a> {
                 Self::cast_value(builder, value, src_ty, dest_ty)
             }
 
-            Rvalue::Len(_place) => {
-                // For now, return a placeholder length
-                // Full implementation would dereference the place and get length
-                // This is currently only used in for-loops over lists
-                // where we rewrite to while loops with explicit bounds
-                Ok(builder.ins().iconst(ptr_type, 0))
+            Rvalue::Len(place) => {
+                let ty = type_ctx.local_types[place.local.0];
+                match &ty.kind {
+                    TypeKind::Array(_, _) | TypeKind::List(_) | TypeKind::String => {
+                        let ptr = Self::read_place(builder, place, locals, type_ctx)?;
+
+                        // Handle null pointer (empty collection)
+                        let is_null = builder.ins().icmp_imm(
+                            cranelift_codegen::ir::condcodes::IntCC::Equal,
+                            ptr,
+                            0,
+                        );
+
+                        let null_bb = builder.create_block();
+                        let load_bb = builder.create_block();
+                        let merge_bb = builder.create_block();
+
+                        // Use a variable to store the length and merge from both branches
+                        let len_var = builder.declare_var(ptr_type);
+
+                        builder.ins().brif(is_null, null_bb, &[], load_bb, &[]);
+
+                        // Branch 1: Null pointer, length is 0
+                        builder.switch_to_block(null_bb);
+                        let zero = builder.ins().iconst(ptr_type, 0);
+                        builder.def_var(len_var, zero);
+                        builder.ins().jump(merge_bb, &[]);
+                        builder.seal_block(null_bb);
+
+                        // Branch 2: Non-null pointer, load length from header
+                        builder.switch_to_block(load_bb);
+                        let header_offset = if matches!(ty.kind, TypeKind::String) {
+                            ptr_size
+                        } else {
+                            -ptr_size
+                        };
+                        let len = builder
+                            .ins()
+                            .load(ptr_type, MemFlags::new(), ptr, header_offset);
+                        builder.def_var(len_var, len);
+                        builder.ins().jump(merge_bb, &[]);
+                        builder.seal_block(load_bb);
+
+                        // Back to merge block to continue
+                        builder.switch_to_block(merge_bb);
+                        builder.seal_block(merge_bb);
+
+                        Ok(builder.use_var(len_var))
+                    }
+                    _ => {
+                        // Non-collection types: return 0 as fallback
+                        Ok(builder.ins().iconst(ptr_type, 0))
+                    }
+                }
             }
 
             Rvalue::GpuIntrinsic(_intrinsic) => {

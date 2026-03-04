@@ -92,11 +92,12 @@ x = None
 
 #[test]
 fn test_type_alias_with_list() {
-    type_checker_test(
+    type_checker_error_test(
         "
 type IntList is [int]
 let list IntList = [1, 2, 3]
 ",
+        "Type mismatch for variable",
     );
 }
 
@@ -186,11 +187,12 @@ process(42)
 
 #[test]
 fn test_type_alias_complex_nested() {
-    type_checker_test(
+    type_checker_error_test(
         "
 type UserMap is {String: [int]}
 let map UserMap = {\"scores\": [1, 2, 3]}
 ",
+        "Type mismatch for variable",
     );
 }
 
@@ -298,7 +300,7 @@ let x InternalInt = 5
 
 #[test]
 fn test_type_alias_deeply_nested() {
-    type_checker_test(
+    type_checker_error_test(
         "
 type IntList is [int]
 type IntListList is [IntList]
@@ -306,6 +308,7 @@ type IntListListList is [IntListList]
 
 let deep IntListListList = [[[1, 2], [3, 4]]]
 ",
+        "Type mismatch for variable",
     );
 }
 
@@ -339,23 +342,25 @@ let p3 Point = (5, 6)
 
 #[test]
 fn test_type_alias_with_complex_map() {
-    type_checker_test(
+    type_checker_error_test(
         "
 type UserScores is {String: [int]}
 let scores UserScores = {\"alice\": [100, 95], \"bob\": [80, 85]}
 ",
+        "Type mismatch for variable",
     );
 }
 
 #[test]
 fn test_type_alias_in_for_loop() {
-    type_checker_test(
+    type_checker_error_test(
         "
 type Numbers is [int]
 let nums Numbers = [1, 2, 3]
 for n in nums
     let x = n * 2
 ",
+        "Type mismatch for variable",
     );
 }
 

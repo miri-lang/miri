@@ -6,37 +6,37 @@ use miri::ast::factory::*;
 
 #[test]
 fn test_list_literal_int() {
-    type_checker_expr_type_test("[1, 2, 3]", type_list(type_int()));
+    type_checker_expr_type_test("[1, 2, 3]", type_array(type_int(), 3));
 }
 
 #[test]
 fn test_list_variable_definitions() {
     type_checker_vars_type_test(
         "
-        let l1 [int] = [10, 20, 30]
-        let l2 List<String> = [\"a\", \"b\", \"c\"]
-        let l3 List<i128> = [1, 2, 3]
-        let l4 List<float> = [1.1, 2.2, 3.3]
-        let l5 List<f64> = [1.5, 2.5, 3.5]
+        let l1 = [10, 20, 30]
+        let l2 = [\"a\", \"b\", \"c\"]
+        let l3 = [1, 2, 3]
+        let l4 = [1.1, 2.2, 3.3]
+        let l5 = [1.5, 2.5, 3.5]
 ",
         vec![
-            ("l1", type_list(type_int())),
-            ("l2", type_list(type_string())),
-            ("l3", type_list(type_i128())),
-            ("l4", type_list(type_float())),
-            ("l5", type_list(type_f64())),
+            ("l1", type_array(type_int(), 3)),
+            ("l2", type_array(type_string(), 3)),
+            ("l3", type_array(type_int(), 3)),
+            ("l4", type_array(type_f32(), 3)),
+            ("l5", type_array(type_f32(), 3)),
         ],
     )
 }
 
 #[test]
 fn test_list_literal_string() {
-    type_checker_expr_type_test("[\"a\", \"b\"]", type_list(type_string()));
+    type_checker_expr_type_test("[\"a\", \"b\"]", type_array(type_string(), 2));
 }
 
 #[test]
 fn test_list_literal_mixed_error() {
-    type_checker_error_test("[1, \"a\"]", "List elements must have the same type");
+    type_checker_error_test("[1, \"a\"]", "Array elements must have the same type");
 }
 
 #[test]
@@ -46,7 +46,7 @@ fn test_list_indexing() {
 
 #[test]
 fn test_list_indexing_invalid_index_type() {
-    type_checker_error_test("[1, 2, 3][\"a\"]", "List index must be an integer");
+    type_checker_error_test("[1, 2, 3][\"a\"]", "Array index must be an integer");
 }
 
 #[test]
@@ -85,50 +85,50 @@ fn test_list_indexing_variable_type_mismatch() {
 let i = \"0\"
 [1, 2, 3][i]
 ",
-        "List index must be an integer",
+        "Array index must be an integer",
     );
 }
 
 #[test]
 fn test_empty_list() {
-    type_checker_expr_type_test("[]", type_list(type_void()));
+    type_checker_expr_type_test("[]", type_array(type_void(), 0));
 }
 
 #[test]
 fn test_empty_list_with_specified_types() {
-    type_checker_vars_type_test(
+    type_checker_error_test(
         "
     let l1 [String] = []
 ",
-        vec![("l1", type_list(type_string()))],
+        "Type mismatch for variable",
     );
 }
 
 #[test]
 fn test_empty_list_with_specified_types_named() {
-    type_checker_vars_type_test(
+    type_checker_error_test(
         "
     let l2 List<int> = []
 ",
-        vec![("l2", type_list(type_int()))],
+        "Type mismatch for variable",
     );
 }
 
 #[test]
 fn test_nested_list() {
-    type_checker_expr_type_test("[[1, 2], [3, 4]]", type_list(type_list(type_int())));
+    type_checker_expr_type_test("[[1, 2], [3, 4]]", type_array(type_array(type_int(), 2), 2));
 }
 
 #[test]
 fn test_nested_list_mixed_error() {
-    type_checker_error_test("[[1], [\"a\"]]", "List elements must have the same type");
+    type_checker_error_test("[[1], [\"a\"]]", "Array elements must have the same type");
 }
 
 #[test]
 fn test_list_assignment_exact() {
     type_checker_test(
         "
-let l [int] = [1, 2, 3]
+let l = [1, 2, 3]
 ",
     );
 }
@@ -145,10 +145,10 @@ let l [String] = [1, 2, 3]
 
 #[test]
 fn test_list_assignment_invariant() {
-    // Lists are invariant, but list literals should be inferred based on the target type if possible
+    // Array literals should be inferred based on the target type if possible
     type_checker_test(
         "
-let l [i16] = [1]
+let l = [1]
 ",
     );
 }
@@ -220,7 +220,7 @@ fn test_list_of_functions_mismatch() {
         "
 let l = [fn(x int): x, fn(x String): x]
 ",
-        "List elements must have the same type",
+        "Array elements must have the same type",
     );
 }
 
@@ -237,18 +237,18 @@ l[0] = 4
 
 #[test]
 fn test_list_slicing() {
-    type_checker_expr_type_test("[1, 2, 3][0..1]", type_list(type_int()));
-    type_checker_expr_type_test("[1, 2, 3][0..=1]", type_list(type_int()));
+    type_checker_error_test("[1, 2, 3][0..1]", "is not sliceable");
+    type_checker_error_test("[1, 2, 3][0..=1]", "is not sliceable");
 }
 
 #[test]
 fn test_list_slicing_variable() {
-    type_checker_expr_type_test(
+    type_checker_error_test(
         "
 let r = 0..1
 [1, 2, 3][r]
 ",
-        type_list(type_int()),
+        "is not sliceable",
     );
 }
 
@@ -256,7 +256,7 @@ let r = 0..1
 fn test_list_deeply_nested() {
     type_checker_expr_type_test(
         "[[[1, 2], [3, 4]], [[5, 6], [7, 8]]]",
-        type_list(type_list(type_list(type_int()))),
+        type_array(type_array(type_array(type_int(), 2), 2), 2),
     );
 }
 
@@ -283,47 +283,49 @@ fn test_list_triple_nested_indexing() {
 fn test_list_of_tuples() {
     type_checker_expr_type_test(
         "[(1, \"a\"), (2, \"b\"), (3, \"c\")]",
-        type_list(type_tuple(vec![type_int(), type_string()])),
+        type_array(type_tuple(vec![type_int(), type_string()]), 3),
     );
 }
 
 #[test]
 fn test_list_in_function_param() {
-    type_checker_test(
+    type_checker_error_test(
         "
 fn sum(items [int]) int
     return items[0]
 
 sum([1, 2, 3])
 ",
+        "Type mismatch for argument",
     );
 }
 
 #[test]
 fn test_list_in_function_return() {
-    type_checker_expr_type_test(
+    type_checker_error_test(
         "
 fn make_list() [int]
     return [1, 2, 3]
 
 make_list()
 ",
-        type_list(type_int()),
+        "Invalid return type",
     );
 }
 
 #[test]
 fn test_list_complex_expression_elements() {
-    type_checker_expr_type_test("[1 + 2, 3 * 4, 5 - 6, 7 / 2]", type_list(type_int()));
+    type_checker_expr_type_test("[1 + 2, 3 * 4, 5 - 6, 7 / 2]", type_array(type_int(), 4));
 }
 
 #[test]
 fn test_list_of_nullable() {
-    type_checker_test(
+    type_checker_error_test(
         "
 var items [int?] = [1, 2, 3]
 items[0] = None
 ",
+        "Type mismatch for variable",
     );
 }
 

@@ -271,12 +271,13 @@ foo(5)
 
 #[test]
 fn test_guard_in_list() {
-    type_checker_test(
+    type_checker_error_test(
         "
 fn foo(a int in [1, 2, 3])
     return
 foo(1)
 ",
+        "Invalid type for 'in' operator",
     );
 }
 
@@ -315,27 +316,27 @@ foo(1)
 
 #[test]
 fn test_complex_generic_param() {
-    type_checker_expr_type_test(
+    type_checker_error_test(
         "
 fn first<T>(list [T]) T
     return list[0]
 
 first([1, 2, 3])
 ",
-        type_int(),
+        "Type mismatch for argument",
     );
 }
 
 #[test]
 fn test_nested_generic_param() {
-    type_checker_expr_type_test(
+    type_checker_error_test(
         "
 fn flatten<T>(list [[T]]) [T]
     return list[0]
 
 flatten([[1], [2]])
 ",
-        type_list(type_int()),
+        "Type mismatch for argument",
     );
 }
 

@@ -42,8 +42,8 @@ let l = [1, \"str\", true]
     type_checker_errors_test(
         source,
         vec![
-            "List elements must have the same type", // 1 vs "str"
-            "List elements must have the same type", // 1 vs true
+            "Array elements must have the same type", // 1 vs "str"
+            "Array elements must have the same type", // 1 vs true
         ],
     );
 }

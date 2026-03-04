@@ -34,6 +34,7 @@ impl OptimizationPass for Perceus {
                     &decl.ty.kind,
                     TypeKind::String
                         | TypeKind::List(_)
+                        | TypeKind::Array(_, _)
                         | TypeKind::Map(_, _)
                         | TypeKind::Set(_)
                         | TypeKind::Custom(_, _)
