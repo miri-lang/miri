@@ -398,23 +398,23 @@ impl TypeChecker {
     /// Checks if a type implements an interface (structural typing for structs).
     pub(crate) fn check_implements(&self, ty: &Type, constraint: &Type, context: &Context) -> bool {
         let (constraint_name, ty_name) = match (&constraint.kind, &ty.kind) {
-            (TypeKind::Custom(cn, _), TypeKind::Custom(tn, _)) => (cn.clone(), tn.clone()),
+            (TypeKind::Custom(cn, _), TypeKind::Custom(tn, _)) => (cn.as_str(), tn.as_str()),
             _ => return false,
         };
 
         // Check hierarchy first
-        if self.is_subtype(&ty_name, &constraint_name) {
+        if self.is_subtype(ty_name, constraint_name) {
             return true;
         }
 
         // Structural typing for structs
         let constraint_def = context
-            .resolve_type_definition(&constraint_name)
-            .or_else(|| self.global_type_definitions.get(&constraint_name));
+            .resolve_type_definition(constraint_name)
+            .or_else(|| self.global_type_definitions.get(constraint_name));
 
         let ty_def = context
-            .resolve_type_definition(&ty_name)
-            .or_else(|| self.global_type_definitions.get(&ty_name));
+            .resolve_type_definition(ty_name)
+            .or_else(|| self.global_type_definitions.get(ty_name));
 
         match (constraint_def, ty_def) {
             (Some(TypeDefinition::Struct(c_def)), Some(TypeDefinition::Struct(t_def))) => {
@@ -439,23 +439,23 @@ impl TypeChecker {
     /// Checks if a type includes another (mixin pattern).
     pub(crate) fn check_includes(&self, ty: &Type, constraint: &Type, context: &Context) -> bool {
         let (constraint_name, ty_name) = match (&constraint.kind, &ty.kind) {
-            (TypeKind::Custom(cn, _), TypeKind::Custom(tn, _)) => (cn.clone(), tn.clone()),
+            (TypeKind::Custom(cn, _), TypeKind::Custom(tn, _)) => (cn.as_str(), tn.as_str()),
             _ => return false,
         };
 
         // Check hierarchy first
-        if self.is_subtype(&ty_name, &constraint_name) {
+        if self.is_subtype(ty_name, constraint_name) {
             return true;
         }
 
         // Structural checking
         let constraint_def = context
-            .resolve_type_definition(&constraint_name)
-            .or_else(|| self.global_type_definitions.get(&constraint_name));
+            .resolve_type_definition(constraint_name)
+            .or_else(|| self.global_type_definitions.get(constraint_name));
 
         let ty_def = context
-            .resolve_type_definition(&ty_name)
-            .or_else(|| self.global_type_definitions.get(&ty_name));
+            .resolve_type_definition(ty_name)
+            .or_else(|| self.global_type_definitions.get(ty_name));
 
         match constraint_def {
             Some(TypeDefinition::Class(class_def)) => {

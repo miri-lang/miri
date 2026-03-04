@@ -24,7 +24,8 @@ impl<'source> Parser<'source> {
         }
 
         self.eat_token(&Token::RBracket)?;
-        Ok(ast::list(elements))
+        let size = ast::int_literal_expression(elements.len() as i128);
+        Ok(ast::array(elements, Box::new(size)))
     }
 
     /*

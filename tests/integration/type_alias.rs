@@ -68,8 +68,8 @@ println(f"{double(21)}")
 fn type_alias_with_list() {
     assert_runs(
         r#"
-type IntList is [int]
-let nums IntList = [1, 2, 3]
+type IntArray is [int; 3]
+let nums IntArray = [1, 2, 3]
 "#,
     );
 }
@@ -124,7 +124,7 @@ let p = Point(1, 2)
 fn type_alias_in_for_loop() {
     assert_runs(
         r#"
-type Numbers is [int]
+type Numbers is [int; 3]
 let nums Numbers = [1, 2, 3]
 for n in nums
     let x = n * 2
@@ -145,9 +145,9 @@ fn type_alias_multiple_uses() {
 fn type_alias_deeply_nested() {
     assert_runs(
         r#"
-type IntList is [int]
-type IntListList is [IntList]
-let deep IntListList = [[1, 2], [3, 4]]
+type IntArray is [int; 2]
+type IntArrayArray is [[int; 2]; 2]
+let deep IntArrayArray = [[1, 2], [3, 4]]
 "#,
     );
 }

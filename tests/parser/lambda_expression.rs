@@ -3,8 +3,8 @@
 
 use super::utils::{parser_error_test, parser_test};
 use miri::ast::factory::{
-    binary, block, boolean_literal, call, empty_statement, expression_statement, func,
-    generic_type, guard, identifier, int_literal_expression, lambda, let_variable, list, parameter,
+    array, binary, block, boolean_literal, call, empty_statement, expression_statement, func,
+    generic_type, guard, identifier, int_literal_expression, lambda, let_variable, parameter,
     return_statement, string_literal_expression, type_bool, type_custom, type_expr_non_null,
     type_function, type_int, type_string, unary, variable_statement,
 };
@@ -311,11 +311,14 @@ func(
                         expression_statement(call(identifier("print"), vec![identifier("x")])),
                         return_statement(opt_expr(identifier("x"))),
                     ])),
-                list(vec![
-                    int_literal_expression(6),
-                    int_literal_expression(7),
-                    int_literal_expression(8),
-                ]),
+                array(
+                    vec![
+                        int_literal_expression(6),
+                        int_literal_expression(7),
+                        int_literal_expression(8),
+                    ],
+                    Box::new(int_literal_expression(3)),
+                ),
                 string_literal_expression("Some string"),
             ],
         ))],

@@ -106,10 +106,10 @@ fn main()
 }
 
 #[test]
-fn test_enum_with_list_type() {
+fn test_enum_with_array_type() {
     mir_snapshot_contains_test(
         r#"
-enum Data: Numbers([int])
+enum Data: Numbers([int; 3])
 fn main()
     let d = Data.Numbers([1, 2, 3])
 "#,

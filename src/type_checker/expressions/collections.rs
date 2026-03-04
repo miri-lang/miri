@@ -42,7 +42,7 @@
 //! - Enum variant construction: `Ok(value)`, `Err(error)`
 //! - Generic type instantiation
 
-use crate::ast::factory::make_type;
+use crate::ast::factory::{make_type, type_array};
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::*;
 use crate::type_checker::context::Context;
@@ -77,6 +77,44 @@ impl TypeChecker {
         make_type(TypeKind::List(Box::new(
             self.create_type_expression(first_type),
         )))
+    }
+
+    /// Infers the type of an array literal expression (`[1, 2, 3]`).
+    ///
+    /// All elements must have the same type. Returns `Array(element_type, size)`.
+    pub(crate) fn infer_array(
+        &mut self,
+        elements: &[Expression],
+        size: &Expression,
+        context: &mut Context,
+    ) -> Type {
+        if elements.is_empty() {
+            let inner_type = make_type(TypeKind::Void);
+            return type_array(inner_type, 0);
+        }
+
+        let first_type = self.infer_expression(&elements[0], context);
+        let mut has_error = false;
+
+        for element in &elements[1..] {
+            let element_type = self.infer_expression(element, context);
+            if !self.are_compatible(&first_type, &element_type, context) {
+                self.report_error(
+                    "Array elements must have the same type".to_string(),
+                    element.span,
+                );
+                has_error = true;
+            }
+        }
+
+        if has_error {
+            return make_type(TypeKind::Error);
+        }
+
+        make_type(TypeKind::Array(
+            Box::new(self.create_type_expression(first_type)),
+            Box::new(size.clone()),
+        ))
     }
 
     pub(crate) fn infer_map(

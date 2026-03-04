@@ -3,9 +3,9 @@
 
 use super::utils::{parser_error_test, parser_test};
 use miri::ast::factory::{
-    binary, block, call, expression_statement, for_statement, identifier, index,
-    int_literal_expression, lambda, let_variable, list, member, parameter, range,
-    type_expr_non_null, type_int, variable_statement,
+    array, binary, block, call, expression_statement, for_statement, identifier, index,
+    int_literal_expression, lambda, let_variable, member, parameter, range, type_expr_non_null,
+    type_int, variable_statement,
 };
 use miri::ast::{opt_expr, BinaryOp, MemberVisibility, RangeExpressionType};
 use miri::error::syntax::SyntaxErrorKind;
@@ -18,11 +18,14 @@ fn test_list_literal_assignment() {
             vec![let_variable(
                 "lst",
                 None,
-                opt_expr(list(vec![
-                    int_literal_expression(1),
-                    int_literal_expression(2),
-                    int_literal_expression(3),
-                ])),
+                opt_expr(array(
+                    vec![
+                        int_literal_expression(1),
+                        int_literal_expression(2),
+                        int_literal_expression(3),
+                    ],
+                    Box::new(int_literal_expression(3)),
+                )),
             )],
             MemberVisibility::Public,
         )],
@@ -50,11 +53,14 @@ for el in [1, 2, 3]
         vec![for_statement(
             vec![let_variable("el", None, None)],
             range(
-                list(vec![
-                    int_literal_expression(1),
-                    int_literal_expression(2),
-                    int_literal_expression(3),
-                ]),
+                array(
+                    vec![
+                        int_literal_expression(1),
+                        int_literal_expression(2),
+                        int_literal_expression(3),
+                    ],
+                    Box::new(int_literal_expression(3)),
+                ),
                 None,
                 RangeExpressionType::IterableObject,
             ),
@@ -72,11 +78,14 @@ fn test_method_call_on_list_literal() {
         "[1, 2, 3].each(fn (el int): print(el))",
         vec![expression_statement(call(
             member(
-                list(vec![
-                    int_literal_expression(1),
-                    int_literal_expression(2),
-                    int_literal_expression(3),
-                ]),
+                array(
+                    vec![
+                        int_literal_expression(1),
+                        int_literal_expression(2),
+                        int_literal_expression(3),
+                    ],
+                    Box::new(int_literal_expression(3)),
+                ),
                 identifier("each"),
             ),
             vec![lambda()
@@ -102,10 +111,13 @@ fn test_list_of_lambdas() {
             vec![let_variable(
                 "funcs",
                 None,
-                opt_expr(list(vec![
-                    lambda().build_lambda(expression_statement(int_literal_expression(1))),
-                    lambda().build_lambda(expression_statement(int_literal_expression(2))),
-                ])),
+                opt_expr(array(
+                    vec![
+                        lambda().build_lambda(expression_statement(int_literal_expression(1))),
+                        lambda().build_lambda(expression_statement(int_literal_expression(2))),
+                    ],
+                    Box::new(int_literal_expression(2)),
+                )),
             )],
             MemberVisibility::Public,
         )],
@@ -117,7 +129,11 @@ fn test_empty_list() {
     parser_test(
         "let empty = []",
         vec![variable_statement(
-            vec![let_variable("empty", None, opt_expr(list(vec![])))],
+            vec![let_variable(
+                "empty",
+                None,
+                opt_expr(array(vec![], Box::new(int_literal_expression(0)))),
+            )],
             MemberVisibility::Public,
         )],
     );
@@ -131,10 +147,10 @@ fn test_list_with_trailing_comma() {
             vec![let_variable(
                 "arr",
                 None,
-                opt_expr(list(vec![
-                    int_literal_expression(1),
-                    int_literal_expression(2),
-                ])),
+                opt_expr(array(
+                    vec![int_literal_expression(1), int_literal_expression(2)],
+                    Box::new(int_literal_expression(2)),
+                )),
             )],
             MemberVisibility::Public,
         )],
@@ -149,10 +165,19 @@ fn test_nested_lists() {
             vec![let_variable(
                 "matrix",
                 None,
-                opt_expr(list(vec![
-                    list(vec![int_literal_expression(1), int_literal_expression(2)]),
-                    list(vec![int_literal_expression(3), int_literal_expression(4)]),
-                ])),
+                opt_expr(array(
+                    vec![
+                        array(
+                            vec![int_literal_expression(1), int_literal_expression(2)],
+                            Box::new(int_literal_expression(2)),
+                        ),
+                        array(
+                            vec![int_literal_expression(3), int_literal_expression(4)],
+                            Box::new(int_literal_expression(2)),
+                        ),
+                    ],
+                    Box::new(int_literal_expression(2)),
+                )),
             )],
             MemberVisibility::Public,
         )],
@@ -179,16 +204,31 @@ let matrix = [
             vec![let_variable(
                 "matrix",
                 None,
-                opt_expr(list(vec![
-                    list(vec![int_literal_expression(1), int_literal_expression(2)]),
-                    list(vec![int_literal_expression(3), int_literal_expression(4)]),
-                    list(vec![int_literal_expression(5)]),
-                    list(vec![
-                        int_literal_expression(6),
-                        int_literal_expression(7),
-                        int_literal_expression(8),
-                    ]),
-                ])),
+                opt_expr(array(
+                    vec![
+                        array(
+                            vec![int_literal_expression(1), int_literal_expression(2)],
+                            Box::new(int_literal_expression(2)),
+                        ),
+                        array(
+                            vec![int_literal_expression(3), int_literal_expression(4)],
+                            Box::new(int_literal_expression(2)),
+                        ),
+                        array(
+                            vec![int_literal_expression(5)],
+                            Box::new(int_literal_expression(1)),
+                        ),
+                        array(
+                            vec![
+                                int_literal_expression(6),
+                                int_literal_expression(7),
+                                int_literal_expression(8),
+                            ],
+                            Box::new(int_literal_expression(3)),
+                        ),
+                    ],
+                    Box::new(int_literal_expression(4)),
+                )),
             )],
             MemberVisibility::Public,
         )],
@@ -221,11 +261,14 @@ fn test_list_index_precedence() {
 ",
         vec![expression_statement(binary(
             index(
-                list(vec![
-                    int_literal_expression(1),
-                    int_literal_expression(2),
-                    int_literal_expression(3),
-                ]),
+                array(
+                    vec![
+                        int_literal_expression(1),
+                        int_literal_expression(2),
+                        int_literal_expression(3),
+                    ],
+                    Box::new(int_literal_expression(3)),
+                ),
                 int_literal_expression(0),
             ),
             BinaryOp::Add,

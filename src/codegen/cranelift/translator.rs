@@ -6,6 +6,8 @@
 //! This module translates MIR (Mid-level IR) functions into Cranelift IR,
 //! which can then be compiled to machine code.
 
+use crate::ast::expression::ExpressionKind;
+use crate::ast::literal::{IntegerLiteral, Literal};
 use crate::ast::types::{Type, TypeKind};
 use crate::codegen::cranelift::layout;
 use crate::codegen::cranelift::types::translate_type;
@@ -13,7 +15,9 @@ use crate::mir::{BasicBlock, Body, Local, Place, PlaceElem};
 use crate::type_checker::context::TypeDefinition;
 
 use cranelift_codegen::ir::types as cl_types;
-use cranelift_codegen::ir::{AbiParam, Block, Function, InstBuilder, MemFlags, Signature, Value};
+use cranelift_codegen::ir::{
+    AbiParam, Block, Function, InstBuilder, MemFlags, Signature, TrapCode, Value,
+};
 use cranelift_codegen::isa::{CallConv, TargetIsa};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::{Linkage, Module};
@@ -230,6 +234,7 @@ impl<'a> FunctionTranslator<'a> {
         let local_types = type_ctx.local_types;
         let type_definitions = type_ctx.type_definitions;
         let ptr_type = type_ctx.ptr_type;
+        let ptr_size = ptr_type.bytes();
         let var = locals
             .get(&place.local)
             .ok_or_else(|| format!("Unknown local: {:?}", place.local))?;
@@ -252,13 +257,51 @@ impl<'a> FunctionTranslator<'a> {
                         .get(local)
                         .ok_or_else(|| format!("Unknown index local: {:?}", local))?;
                     let idx_val = builder.use_var(*idx_var);
-                    let shift = match ptr_type {
-                        cl_types::I32 => builder.ins().iconst(ptr_type, 2),
-                        _ => builder.ins().iconst(ptr_type, 3),
+
+                    // Get element type and its Cranelift representation
+                    let base_type = &local_types[place.local.0];
+                    let elem_type = match &base_type.kind {
+                        TypeKind::Array(elem_ty_expr, _) | TypeKind::List(elem_ty_expr) => {
+                            match &elem_ty_expr.node {
+                                ExpressionKind::Type(ty, _) => &ty.kind,
+                                _ => &TypeKind::Int, // Fallback
+                            }
+                        }
+                        _ => &TypeKind::Int, // Fallback
                     };
-                    let byte_offset = builder.ins().ishl(idx_val, shift);
+                    let cl_elem_ty =
+                        crate::codegen::cranelift::types::translate_type_kind(elem_type, ptr_type);
+                    let elem_size = cl_elem_ty.bytes() as i32;
+
+                    // Runtime bounds check
+                    let len_val = if let Some(len) =
+                        Self::array_len_from_type(&local_types[place.local.0].kind, ptr_type)
+                    {
+                        // Use compile-time literal length if available
+                        builder.ins().iconst(ptr_type, len)
+                    } else {
+                        // Read runtime length from the collection header
+                        // Collection: [RC] [LEN] [DATA...]. ptr points to DATA.
+                        // Length is at offset -ptr_size.
+                        builder
+                            .ins()
+                            .load(ptr_type, MemFlags::new(), value, -(ptr_size as i32))
+                    };
+
+                    let oob = builder.ins().icmp(
+                        cranelift_codegen::ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
+                        idx_val,
+                        len_val,
+                    );
+                    builder.ins().trapnz(oob, TrapCode::unwrap_user(1));
+
+                    // Calculate byte offset: index * elem_size
+                    let elem_size_val = builder.ins().iconst(ptr_type, elem_size as i64);
+                    let byte_offset = builder.ins().imul(idx_val, elem_size_val);
                     let elem_addr = builder.ins().iadd(value, byte_offset);
-                    value = builder.ins().load(ptr_type, MemFlags::new(), elem_addr, 0);
+                    value = builder
+                        .ins()
+                        .load(cl_elem_ty, MemFlags::new(), elem_addr, 0);
                 }
             }
         }
@@ -301,6 +344,31 @@ impl<'a> FunctionTranslator<'a> {
             ))
         }
     }
+    /// Extracts the compile-time array length from a TypeKind, if it is an Array type.
+    ///
+    /// Returns `Some(length)` for `TypeKind::Array(_, size_expr)` where size is a literal,
+    /// or `None` for non-array types or non-literal sizes.
+    fn array_len_from_type(kind: &TypeKind, _ptr_type: cl_types::Type) -> Option<i64> {
+        if let TypeKind::Array(_, size_expr) = kind {
+            if let ExpressionKind::Literal(Literal::Integer(n)) = &size_expr.node {
+                let size = match n {
+                    IntegerLiteral::I8(v) => *v as i64,
+                    IntegerLiteral::I16(v) => *v as i64,
+                    IntegerLiteral::I32(v) => *v as i64,
+                    IntegerLiteral::I64(v) => *v,
+                    IntegerLiteral::I128(v) => *v as i64,
+                    IntegerLiteral::U8(v) => *v as i64,
+                    IntegerLiteral::U16(v) => *v as i64,
+                    IntegerLiteral::U32(v) => *v as i64,
+                    IntegerLiteral::U64(v) => *v as i64,
+                    IntegerLiteral::U128(v) => *v as i64,
+                };
+                return Some(size);
+            }
+        }
+        None
+    }
+
     /// Assign a value to a place.
     pub(crate) fn assign_to_place(
         builder: &mut FunctionBuilder,
@@ -312,6 +380,7 @@ impl<'a> FunctionTranslator<'a> {
         let local_types = type_ctx.local_types;
         let type_definitions = type_ctx.type_definitions;
         let ptr_type = type_ctx.ptr_type;
+        let ptr_size = ptr_type.bytes();
         if place.projection.is_empty() {
             let var = locals
                 .get(&place.local)
@@ -341,11 +410,48 @@ impl<'a> FunctionTranslator<'a> {
                             .get(local)
                             .ok_or_else(|| format!("Unknown index local: {:?}", local))?;
                         let idx_val = builder.use_var(*idx_var);
-                        let shift = match ptr_type {
-                            cl_types::I32 => builder.ins().iconst(ptr_type, 2),
-                            _ => builder.ins().iconst(ptr_type, 3),
+
+                        // Get element type and its Cranelift representation
+                        let base_type = &local_types[place.local.0];
+                        let elem_type = match &base_type.kind {
+                            TypeKind::Array(elem_ty_expr, _) | TypeKind::List(elem_ty_expr) => {
+                                match &elem_ty_expr.node {
+                                    ExpressionKind::Type(ty, _) => &ty.kind,
+                                    _ => &TypeKind::Int, // Fallback
+                                }
+                            }
+                            _ => &TypeKind::Int, // Fallback
                         };
-                        let byte_offset = builder.ins().ishl(idx_val, shift);
+                        let cl_elem_ty = crate::codegen::cranelift::types::translate_type_kind(
+                            elem_type, ptr_type,
+                        );
+                        let elem_size = cl_elem_ty.bytes() as i32;
+
+                        // Runtime bounds check
+                        let len_val = if let Some(len) =
+                            Self::array_len_from_type(&local_types[place.local.0].kind, ptr_type)
+                        {
+                            // Use compile-time literal length if available
+                            builder.ins().iconst(ptr_type, len)
+                        } else {
+                            // Read runtime length from the collection header
+                            // Collection: [RC] [LEN] [DATA...]. ptr points to DATA.
+                            // Length is at offset -ptr_size.
+                            builder
+                                .ins()
+                                .load(ptr_type, MemFlags::new(), addr, -(ptr_size as i32))
+                        };
+
+                        let oob = builder.ins().icmp(
+                            cranelift_codegen::ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
+                            idx_val,
+                            len_val,
+                        );
+                        builder.ins().trapnz(oob, TrapCode::unwrap_user(1));
+
+                        // Calculate byte offset: index * elem_size
+                        let elem_size_val = builder.ins().iconst(ptr_type, elem_size as i64);
+                        let byte_offset = builder.ins().imul(idx_val, elem_size_val);
                         addr = builder.ins().iadd(addr, byte_offset);
                     }
                 }
@@ -370,11 +476,47 @@ impl<'a> FunctionTranslator<'a> {
                         .get(local)
                         .ok_or_else(|| format!("Unknown index local: {:?}", local))?;
                     let idx_val = builder.use_var(*idx_var);
-                    let shift = match ptr_type {
-                        cl_types::I32 => builder.ins().iconst(ptr_type, 2),
-                        _ => builder.ins().iconst(ptr_type, 3),
+
+                    // Get element type and its Cranelift representation
+                    let base_type = &local_types[place.local.0];
+                    let elem_type = match &base_type.kind {
+                        TypeKind::Array(elem_ty_expr, _) | TypeKind::List(elem_ty_expr) => {
+                            match &elem_ty_expr.node {
+                                ExpressionKind::Type(ty, _) => &ty.kind,
+                                _ => &TypeKind::Int, // Fallback
+                            }
+                        }
+                        _ => &TypeKind::Int, // Fallback
                     };
-                    let byte_offset = builder.ins().ishl(idx_val, shift);
+                    let cl_elem_ty =
+                        crate::codegen::cranelift::types::translate_type_kind(elem_type, ptr_type);
+                    let elem_size = cl_elem_ty.bytes() as i32;
+
+                    // Runtime bounds check
+                    let len_val = if let Some(len) =
+                        Self::array_len_from_type(&local_types[place.local.0].kind, ptr_type)
+                    {
+                        // Use compile-time literal length if available
+                        builder.ins().iconst(ptr_type, len)
+                    } else {
+                        // Read runtime length from the collection header
+                        // Collection: [RC] [LEN] [DATA...]. ptr points to DATA.
+                        // Length is at offset -ptr_size.
+                        builder
+                            .ins()
+                            .load(ptr_type, MemFlags::new(), addr, -(ptr_size as i32))
+                    };
+
+                    let oob = builder.ins().icmp(
+                        cranelift_codegen::ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
+                        idx_val,
+                        len_val,
+                    );
+                    builder.ins().trapnz(oob, TrapCode::unwrap_user(1));
+
+                    // Calculate byte offset: index * elem_size
+                    let elem_size_val = builder.ins().iconst(ptr_type, elem_size as i64);
+                    let byte_offset = builder.ins().imul(idx_val, elem_size_val);
                     let elem_addr = builder.ins().iadd(addr, byte_offset);
                     builder.ins().store(MemFlags::new(), value, elem_addr, 0);
                 }
