@@ -336,11 +336,27 @@ impl<'source> Parser<'source> {
 
     pub(crate) fn inheritance_identifier(&mut self) -> Result<Expression, SyntaxError> {
         let name = self.identifier()?;
-        match name.node {
+        match &name.node {
             ExpressionKind::Identifier(_, Some(_)) => {
                 Err(self.error_invalid_inheritance_identifier())
             }
-            ExpressionKind::Identifier(_, None) => Ok(name),
+            ExpressionKind::Identifier(_, None) => {
+                // Check for optional generic type arguments: Collection<T>
+                if let Some(generic_args) = self.generic_types_expression()? {
+                    let span = name.span;
+                    Ok(crate::ast::factory::expr_with_span(
+                        ExpressionKind::TypeDeclaration(
+                            Box::new(name),
+                            Some(generic_args),
+                            crate::ast::types::TypeDeclarationKind::None,
+                            None,
+                        ),
+                        span,
+                    ))
+                } else {
+                    Ok(name)
+                }
+            }
             _ => Err(self.error_unexpected_token("identifier", format!("{:?}", name).as_str())),
         }
     }

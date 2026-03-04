@@ -253,8 +253,20 @@ impl<'source> Parser<'source> {
                 self.generic_two_types_expression("Map key type", "Map value type", TypeKind::Map)?
             }
             "Future" => self.generic_one_type_expression("Future result type", TypeKind::Future)?,
-            "Array" => self.generic_array_type_expression()?,
-            "List" => self.generic_one_type_expression("List element type", TypeKind::List)?,
+            "Array" => {
+                if self.lookahead_is_less_than() {
+                    self.generic_array_type_expression()?
+                } else {
+                    ast::make_type(TypeKind::Custom(type_name, None))
+                }
+            }
+            "List" => {
+                if self.lookahead_is_less_than() {
+                    self.generic_one_type_expression("List element type", TypeKind::List)?
+                } else {
+                    ast::make_type(TypeKind::Custom(type_name, None))
+                }
+            }
             "Set" => self.generic_one_type_expression("Set element type", TypeKind::Set)?,
             // "Option" is handled as a Custom type and resolved by the type checker
             // via resolve_builtin_type_alias, so it falls through to the default case.

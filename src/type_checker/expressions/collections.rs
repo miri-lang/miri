@@ -63,7 +63,7 @@ impl TypeChecker {
             let element_type = self.infer_expression(element, context);
             if !self.are_compatible(&first_type, &element_type, context) {
                 self.report_error(
-                    "List elements must have the same type".to_string(),
+                    "Array elements must have the same type".to_string(),
                     element.span,
                 );
                 has_error = true;

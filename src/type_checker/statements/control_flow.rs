@@ -299,9 +299,38 @@ impl TypeChecker {
                     );
                 }
             } else {
-                self.report_error(
-                    format!("Expected tuple for destructuring, got {}", element_type),
-                    span,
+                // For non-tuple iterables (List, Array, String), the pattern
+                // `for x, idx in list` means: x = element, idx = loop index (int).
+                let is_mutable_0 = match decls[0].declaration_type {
+                    VariableDeclarationType::Mutable => true,
+                    VariableDeclarationType::Immutable | VariableDeclarationType::Constant => false,
+                };
+                let is_mutable_1 = match decls[1].declaration_type {
+                    VariableDeclarationType::Mutable => true,
+                    VariableDeclarationType::Immutable | VariableDeclarationType::Constant => false,
+                };
+
+                context.define(
+                    decls[0].name.clone(),
+                    SymbolInfo::new(
+                        element_type.clone(),
+                        is_mutable_0,
+                        false,
+                        MemberVisibility::Public,
+                        self.current_module.clone(),
+                        None,
+                    ),
+                );
+                context.define(
+                    decls[1].name.clone(),
+                    SymbolInfo::new(
+                        make_type(TypeKind::Int),
+                        is_mutable_1,
+                        false,
+                        MemberVisibility::Public,
+                        self.current_module.clone(),
+                        None,
+                    ),
                 );
             }
         } else {

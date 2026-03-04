@@ -12,29 +12,15 @@
 ///     for x in a
 ///         println(f"{x}")
 
-use system.collections.collection
+use system.ops
 
-public class Array<T, Size> implements Collection<T>
-    /// Internal pointer to the runtime array structure.
-    private _inner RawPtr
-
-    // =========================================================================
-    // Runtime function declarations
-    // These map to miri_rt_* functions in the Rust runtime.
-    // =========================================================================
-
-    runtime "core" fn miri_rt_array_new(elem_count int, elem_size int) RawPtr
-    runtime "core" fn miri_rt_array_free(ptr RawPtr)
-    runtime "core" fn miri_rt_array_len(ptr RawPtr) int
-    runtime "core" fn miri_rt_array_clone(ptr RawPtr) RawPtr
-
-    // =========================================================================
-    // Collection<T> implementation
-    // =========================================================================
+public class Array<T, Size> implements Iterable
 
     /// Returns the number of elements in the array (always equals Size).
-    public fn length() int: miri_rt_array_len(_inner)
+    /// Handled as a built-in operation by the compiler.
+    public fn length() int: 0
 
-    /// Returns true if the array has zero elements.
-    public fn is_empty() bool
-        return self.length() == 0
+    /// Returns the element at the given index.
+    /// This enables for-loop iteration: `for x in array`.
+    /// Handled as a built-in operation by the compiler.
+    public fn element_at(index int) Self: self

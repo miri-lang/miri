@@ -272,6 +272,7 @@ impl TypeChecker {
         // Try to resolve the type definition for the object's type
         let (type_name, type_args) = match &obj_type.kind {
             TypeKind::String => (Some("String".to_string()), None),
+            TypeKind::List(_) => (Some("List".to_string()), None),
             TypeKind::Custom(name, args) => (Some(name.clone()), args.clone()),
             TypeKind::Result(ok_type, _) => {
                 if prop_name == "unwrap" {
