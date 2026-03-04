@@ -1,0 +1,23 @@
+/// A dynamic list (vector) that grows as needed.
+///
+/// List<T> provides O(1) amortized append and O(1) indexed access.
+/// It is the most commonly used collection type for ordered sequences.
+///
+/// Example:
+///     let numbers = List([1, 2, 3])
+///     println(f"{numbers[0]}")  // 1
+///     for x in numbers
+///         println(f"{x}")
+
+use system.ops
+
+public class List<T> implements Iterable
+
+    /// Returns the number of elements in the list.
+    /// Handled as a built-in operation by the compiler.
+    public fn length() int: 0
+
+    /// Returns the element at the given index.
+    /// This enables for-loop iteration: `for x in list`.
+    /// Handled as a built-in operation by the compiler.
+    public fn element_at(index int) Self: self

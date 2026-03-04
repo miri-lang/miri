@@ -208,6 +208,28 @@ impl TypeChecker {
                             return make_type(TypeKind::Error);
                         }
 
+                        // Special handling for List constructor: List([1,2,3]) → TypeKind::List(int)
+                        // This produces a built-in List type so the existing codegen
+                        // infrastructure for indexing, for-loops, and bounds checking works.
+                        if name == "List" {
+                            // Infer element type from the argument (expected to be an array)
+                            if let Some((_, arg_type)) = positional_args.first() {
+                                let elem_type = match &arg_type.kind {
+                                    TypeKind::Array(inner, _) | TypeKind::List(inner) => {
+                                        self.resolve_type_expression(inner, context)
+                                    }
+                                    _ => arg_type.clone(),
+                                };
+                                return make_type(TypeKind::List(Box::new(
+                                    self.create_type_expression(elem_type),
+                                )));
+                            }
+                            // Empty List() or no args
+                            return make_type(TypeKind::List(Box::new(
+                                self.create_type_expression(make_type(TypeKind::Void)),
+                            )));
+                        }
+
                         // Class constructors are handled via init method
                         // For now, just return the class type
                         return make_type(TypeKind::Custom(name.clone(), None));

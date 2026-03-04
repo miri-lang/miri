@@ -211,6 +211,12 @@ impl TypeChecker {
         let params_len = params.as_ref().map_or(0, |v| v.len());
 
         if args_len != params_len {
+            // Allow bare class name references inside own class body.
+            // e.g., inside `class List<T>`, a parameter typed as `List` (without `<T>`)
+            // is valid — it refers to the current class type.
+            if args_len == 0 && context.current_class.is_some() {
+                return;
+            }
             self.report_error(
                 format!(
                     "Generic argument count mismatch: expected {}, got {}",

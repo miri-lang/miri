@@ -713,8 +713,49 @@ pub fn lower_call(
     // the mangled function `{ClassName}_{method_name}`.
     if let ExpressionKind::Member(obj, method_expr) = &func.node {
         if let Some(obj_ty) = ctx.type_checker.get_type(obj.id) {
+            // Intercept built-in .length() calls on List/Array/String types.
+            // These are handled natively by the codegen via Rvalue::Len which reads
+            // the LEN field from the RC+LEN+DATA memory layout.
+            if let ExpressionKind::Identifier(method_name, _) = &method_expr.node {
+                if method_name == "length"
+                    && matches!(
+                        &obj_ty.kind,
+                        TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::String
+                    )
+                {
+                    let obj_op = lower_expression(ctx, obj, None)?;
+                    // Create a temp local to hold the object, so we can form Place for Rvalue::Len
+                    let obj_local = ctx.push_temp(obj_ty.clone(), *span);
+                    ctx.push_statement(crate::mir::Statement {
+                        kind: StatementKind::Assign(Place::new(obj_local), Rvalue::Use(obj_op)),
+                        span: *span,
+                    });
+
+                    let len_ty = Type::new(TypeKind::Int, *span);
+                    let (destination, op) = if let Some(d) = dest {
+                        (d.clone(), Operand::Copy(d))
+                    } else {
+                        let temp = ctx.push_temp(len_ty, *span);
+                        let p = Place::new(temp);
+                        (p.clone(), Operand::Copy(p))
+                    };
+
+                    ctx.push_statement(crate::mir::Statement {
+                        kind: StatementKind::Assign(
+                            destination,
+                            Rvalue::Len(Place::new(obj_local)),
+                        ),
+                        span: *span,
+                    });
+
+                    return Ok(op);
+                }
+            }
+
             let class_name = match &obj_ty.kind {
                 TypeKind::String => Some("String".to_string()),
+                TypeKind::List(_) => Some("List".to_string()),
+                TypeKind::Array(_, _) => Some("Array".to_string()),
                 TypeKind::Custom(name, _) => Some(name.clone()),
                 _ => None,
             };
@@ -788,6 +829,45 @@ pub fn lower_call(
                 if let Some(TypeDefinition::Class(def)) =
                     ctx.type_checker.global_type_definitions.get(type_name)
                 {
+                    // Special handling for List constructor: List([1,2,3])
+                    // Emit AggregateKind::List with the array elements instead of
+                    // AggregateKind::Class so the codegen produces the correct
+                    // memory layout (RC + LEN + DATA).
+                    if type_name == "List" && args.len() == 1 {
+                        if let ExpressionKind::Array(elements, _) = &args[0].node {
+                            let ops: Vec<Operand> = elements
+                                .iter()
+                                .map(|e| lower_expression(ctx, e, None))
+                                .collect::<Result<_, _>>()?;
+
+                            let ty = super::helpers::resolve_type(ctx.type_checker, &args[0]);
+                            // Get the call expression's inferred type (TypeKind::List)
+                            let list_ty =
+                                if let Some(call_ty) = ctx.type_checker.get_type(call_expr_id) {
+                                    call_ty.clone()
+                                } else {
+                                    ty
+                                };
+
+                            let (destination, result_op) = if let Some(d) = dest {
+                                (d.clone(), Operand::Copy(d))
+                            } else {
+                                let temp = ctx.push_temp(list_ty, *span);
+                                let p = Place::new(temp);
+                                (p.clone(), Operand::Copy(p))
+                            };
+
+                            ctx.push_statement(crate::mir::Statement {
+                                kind: StatementKind::Assign(
+                                    destination,
+                                    Rvalue::Aggregate(AggregateKind::List, ops),
+                                ),
+                                span: *span,
+                            });
+                            return Ok(result_op);
+                        }
+                    }
+
                     // This is a class constructor - emit Aggregate instead of Call
                     return lower_class_constructor(ctx, span, type_name, def, args, dest);
                 }
