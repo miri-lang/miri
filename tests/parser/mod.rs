@@ -8,6 +8,7 @@ pub mod basic;
 pub mod binary_expression;
 pub mod boolean;
 pub mod break_statement;
+pub mod call_member;
 pub mod class_statement;
 pub mod conditional_expression;
 pub mod constant_declaration;
