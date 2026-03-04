@@ -262,12 +262,12 @@ fn predicate(x int) bool: x > 0
 
 #[test]
 fn test_boolean_list() {
-    type_checker_expr_type_test("[true, false, true]", type_list(type_bool()));
+    type_checker_expr_type_test("[true, false, true]", type_array(type_bool(), 3));
 }
 
 #[test]
 fn test_boolean_list_expression() {
-    type_checker_expr_type_test("[1 > 0, 1 == 1, true or false]", type_list(type_bool()));
+    type_checker_expr_type_test("[1 > 0, 1 == 1, true or false]", type_array(type_bool(), 3));
 }
 
 #[test]

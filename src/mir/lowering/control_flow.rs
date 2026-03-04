@@ -259,6 +259,15 @@ fn lower_for_over_iterable(
     // However, push_local takes String, and ctx handles the logic.
     let loop_var = ctx.push_local(decl.name.clone(), elem_ty, *span);
 
+    // If there's a second declaration, it's the index variable (for val, idx in ...)
+    let idx_loop_var = if decls.len() > 1 {
+        let idx_decl = &decls[1];
+        let idx_ty = Type::new(TypeKind::Int, *span);
+        Some(ctx.push_local(idx_decl.name.clone(), idx_ty, *span))
+    } else {
+        None
+    };
+
     // Lower the iterable
     let list_op = lower_expression(ctx, iterable, None)?;
     let list_ty = if let Some(ty) = ctx.type_checker.get_type(iterable.id) {
@@ -417,6 +426,17 @@ fn lower_for_over_iterable(
             kind: StatementKind::Assign(
                 Place::new(loop_var),
                 Rvalue::Use(Operand::Copy(indexed_place)),
+            ),
+            span: *span,
+        });
+    }
+
+    // If there's an index variable, assign it the current index value
+    if let Some(idx_local) = idx_loop_var {
+        ctx.push_statement(crate::mir::Statement {
+            kind: StatementKind::Assign(
+                Place::new(idx_local),
+                Rvalue::Use(Operand::Copy(Place::new(idx_var))),
             ),
             span: *span,
         });

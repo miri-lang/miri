@@ -187,12 +187,12 @@ let x = add(1.0, 2.0)
 
 #[test]
 fn test_float_list() {
-    type_checker_expr_type_test("[1.0, 2.0, 3.0]", type_list(type_f32()));
+    type_checker_expr_type_test("[1.0, 2.0, 3.0]", type_array(type_f32(), 3));
 }
 
 #[test]
 fn test_float_list_mismatch() {
-    type_checker_error_test("[1.0, 1]", "List elements must have the same type");
+    type_checker_error_test("[1.0, 1]", "Array elements must have the same type");
 }
 
 #[test]

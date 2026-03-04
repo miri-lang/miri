@@ -48,11 +48,11 @@ impl<'source> Parser<'source> {
                     // If there is no whitespace, it's a generic argument list.
                     // e.g. `a < b` (comparison), `foo<T>` (generic)
                     let prev_end = expression.span.end;
-                    let current_start = self
-                        ._lookahead
-                        .as_ref()
-                        .map(|(_, span)| span.start)
-                        .unwrap_or(prev_end + 1);
+                    let current_start = if let Some((_, ref span)) = self._lookahead {
+                        span.start
+                    } else {
+                        break;
+                    };
 
                     if current_start > prev_end {
                         break;

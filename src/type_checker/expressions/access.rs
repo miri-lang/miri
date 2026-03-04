@@ -117,6 +117,30 @@ impl TypeChecker {
         }
 
         match obj_type.kind {
+            TypeKind::Array(inner_type_expr, size_expr) => {
+                if !matches!(index_type.kind, TypeKind::Int) {
+                    self.report_error("Array index must be an integer".to_string(), index.span);
+                    return make_type(TypeKind::Error);
+                }
+                // Compile-time bounds check for literal indices
+                if let ExpressionKind::Literal(Literal::Integer(idx_val)) = &index.node {
+                    let idx = idx_val.to_usize();
+                    if let ExpressionKind::Literal(Literal::Integer(size_val)) = &size_expr.node {
+                        let size = size_val.to_usize();
+                        if idx >= size {
+                            self.report_error(
+                                format!(
+                                    "Array index out of bounds: index {} but array has {} elements",
+                                    idx, size
+                                ),
+                                span,
+                            );
+                            return make_type(TypeKind::Error);
+                        }
+                    }
+                }
+                self.resolve_type_expression(&inner_type_expr, context)
+            }
             TypeKind::List(inner_type_expr) => {
                 if !matches!(index_type.kind, TypeKind::Int) {
                     self.report_error("List index must be an integer".to_string(), index.span);

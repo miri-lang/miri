@@ -1,0 +1,56 @@
+/// Base trait for all collection types.
+///
+/// Provides a common interface for querying collection properties
+/// and iterating over elements.
+public trait Collection<T>
+    /// Returns the number of elements in the collection.
+    fn length() int
+
+    /// Returns true if the collection has no elements.
+    fn is_empty() bool
+
+    /// Returns an iterator over the collection's elements.
+    fn iter() Iterator<T>
+
+
+/// An iterator over a collection's elements.
+///
+/// Iterators are lazy - they don't compute values until requested.
+public trait Iterator<T>
+    /// Returns the next element, or None if exhausted.
+    fn next() Option<T>
+
+    /// Returns true if there are more elements.
+    fn has_next() bool
+
+
+/// A trait for collections that can be modified.
+public trait MutableCollection<T> extends Collection<T>
+    /// Removes all elements from the collection.
+    fn clear()
+
+
+/// A trait for collections that support indexed access.
+public trait Indexed<T>
+    /// Gets the element at the given index.
+    /// Panics if index is out of bounds.
+    fn get(index int) T
+
+    /// Sets the element at the given index.
+    /// Panics if index is out of bounds.
+    fn set(index int, value T)
+
+    /// Gets the first element, or None if empty.
+    fn first() Option<T>
+
+    /// Gets the last element, or None if empty.
+    fn last() Option<T>
+
+
+/// A trait for types that can be hashed.
+///
+/// Required for use as keys in Map<K,V> or elements in Set<T>.
+/// The compiler enforces that Map keys and Set elements implement Hashable.
+public trait Hashable
+    /// Returns a hash code for this value.
+    fn hash() int
