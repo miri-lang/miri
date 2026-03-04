@@ -1,0 +1,40 @@
+/// A fixed-size array with elements of a single type.
+///
+/// Array<T, Size> has a compile-time constant size that cannot change after
+/// creation. For array literals like `[1, 2, 3]`, the compiler handles
+/// construction and indexing directly via codegen.
+///
+/// The `Size` parameter is a compile-time constant integer (value generic).
+///
+/// Example:
+///     let a = [1, 2, 3]
+///     println(f"{a[0]}")  // 1
+///     for x in a
+///         println(f"{x}")
+
+use system.collections.collection
+
+public class Array<T, Size> implements Collection<T>
+    /// Internal pointer to the runtime array structure.
+    private _inner RawPtr
+
+    // =========================================================================
+    // Runtime function declarations
+    // These map to miri_rt_* functions in the Rust runtime.
+    // =========================================================================
+
+    runtime "core" fn miri_rt_array_new(elem_count int, elem_size int) RawPtr
+    runtime "core" fn miri_rt_array_free(ptr RawPtr)
+    runtime "core" fn miri_rt_array_len(ptr RawPtr) int
+    runtime "core" fn miri_rt_array_clone(ptr RawPtr) RawPtr
+
+    // =========================================================================
+    // Collection<T> implementation
+    // =========================================================================
+
+    /// Returns the number of elements in the array (always equals Size).
+    public fn length() int: miri_rt_array_len(_inner)
+
+    /// Returns true if the array has zero elements.
+    public fn is_empty() bool
+        return self.length() == 0

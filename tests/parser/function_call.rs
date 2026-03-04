@@ -7,8 +7,8 @@ use miri::error::syntax::SyntaxErrorKind;
 
 use super::utils::{parser_error_test, parser_test};
 use miri::ast::factory::{
-    binary, boolean_literal, call, expression_statement, identifier, index, int_literal_expression,
-    list, map, member, set, string_literal_expression, unary,
+    array, binary, boolean_literal, call, expression_statement, identifier, index,
+    int_literal_expression, map, member, set, string_literal_expression, unary,
 };
 
 #[test]
@@ -108,11 +108,14 @@ my_func(
                         string_literal_expression("of"),
                         string_literal_expression("strings"),
                     ]),
-                    list(vec![
-                        int_literal_expression(0),
-                        int_literal_expression(1),
-                        int_literal_expression(2),
-                    ]),
+                    array(
+                        vec![
+                            int_literal_expression(0),
+                            int_literal_expression(1),
+                            int_literal_expression(2),
+                        ],
+                        Box::new(int_literal_expression(3)),
+                    ),
                     map(vec![
                         (string_literal_expression("a"), int_literal_expression(10)),
                         (string_literal_expression("b"), int_literal_expression(20)),

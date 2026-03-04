@@ -137,6 +137,9 @@ impl TypeChecker {
             TypeKind::List(inner) => self
                 .extract_type_from_expression(inner)
                 .unwrap_or_else(|_| Self::error_type()),
+            TypeKind::Array(inner, _) => self
+                .extract_type_from_expression(inner)
+                .unwrap_or_else(|_| Self::error_type()),
             TypeKind::String => make_type(TypeKind::String),
             TypeKind::Set(inner) => self
                 .extract_type_from_expression(inner)

@@ -118,15 +118,15 @@ impl TypeChecker {
                 }
                 self.infer_expression(final_expr, context)
             }
+            ExpressionKind::Array(elements, size) => self.infer_array(elements, size, context),
             // These expression kinds are handled elsewhere (parser, type expressions, etc.)
             // and should not appear as top-level inferred expressions. Guard, GenericType,
-            // Type, StructMember, Array, and ImportPath are structural AST nodes that are
+            // Type, StructMember, and ImportPath are structural AST nodes that are
             // consumed by their parent expressions during type checking.
             ExpressionKind::Guard(_, _)
             | ExpressionKind::GenericType(_, _, _)
             | ExpressionKind::Type(_, _)
             | ExpressionKind::StructMember(_, _)
-            | ExpressionKind::Array(_, _)
             | ExpressionKind::ImportPath(_, _) => Self::error_type(),
         };
 

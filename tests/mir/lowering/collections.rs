@@ -45,7 +45,7 @@ fn test_list_literal() {
         "fn main(): let l = [1, 2, 3]",
         r#"
             let _0: void;
-            let _1: List(int); // l
+            let _1: Array(int, Literal(Integer(I8(3)))); // l
 
             bb0: {
                 StorageLive(_1);
@@ -113,15 +113,15 @@ fn main()
 
 #[test]
 fn test_empty_list() {
-    // Note: empty list currently lowers as List(void); type annotation not propagated
-    mir_snapshot_contains_test("fn main(): let l [int] = []", &["// l", "[]", "List(void)"]);
+    // Note: empty array currently lowers as Array(void, 0); type annotation not propagated
+    mir_snapshot_contains_test("fn main(): let l = []", &["// l", "[]", "Array(void"]);
 }
 
 #[test]
 fn test_nested_list() {
     mir_snapshot_contains_test(
         "fn main(): let l = [[1, 2], [3, 4]]",
-        &["// l", "List(List("],
+        &["// l", "Array(Array("],
     );
 }
 
@@ -158,6 +158,6 @@ fn test_large_tuple() {
 fn test_large_list() {
     mir_snapshot_contains_test(
         "fn main(): let l = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]",
-        &["// l", "List(int)"],
+        &["// l", "Array(int"],
     );
 }

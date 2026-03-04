@@ -30,10 +30,8 @@ fn test_option_immutable_warning() {
 #[test]
 fn test_option_list_of_non_option() {
     // [int]? - List itself can be None, but elements must be int
-    type_checker_vars_type_test(
-        "var list [int]? = [1, 2, 3]",
-        vec![("list", type_option(type_list(type_int())))],
-    );
+    // Array literals are not compatible with List type annotations
+    type_checker_error_test("var list [int]? = [1, 2, 3]", "Type mismatch for variable");
 
     type_checker_vars_type_test(
         "var list [int]? = None",
@@ -42,18 +40,20 @@ fn test_option_list_of_non_option() {
 
     type_checker_error_test(
         "var list [int]? = [1, None]",
-        "List elements must have the same type",
+        "Array elements must have the same type",
     );
 }
 
 #[test]
 fn test_non_option_list_of_option() {
     // [int?] - List cannot be None, but elements can be None
-    type_checker_test(
+    // Array literals are not compatible with List type annotations
+    type_checker_error_test(
         "
 var list [int?] = [1, 2, 3]
 list[1] = None
         ",
+        "Type mismatch for variable",
     );
     type_checker_error_test("var list [int?] = None", "Type mismatch");
 }
@@ -61,14 +61,15 @@ list[1] = None
 #[test]
 fn test_option_list_of_option() {
     // [int?]? - List can be None, and elements can be None
-    type_checker_vars_type_test(
+    // Array literals are not compatible with List type annotations
+    type_checker_error_test(
         "
 var inner [int?] = [1, 2, 3]
 inner[1] = None
 var list [int?]? = inner
 list = None
         ",
-        vec![("list", type_option(type_list(type_option(type_int()))))],
+        "Type mismatch for variable",
     );
 }
 

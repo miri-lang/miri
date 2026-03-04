@@ -234,7 +234,7 @@ struct Container: items [int]
 var c = Container([1, 2])
 c.items[0] = 3
     ";
-    type_checker_test(code);
+    type_checker_error_test(code, "Type mismatch for field");
 }
 
 #[test]

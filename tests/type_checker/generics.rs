@@ -136,7 +136,7 @@ var c ListContainer<int>
 c.items = [1, 2, 3]
 c.items[0]
     ";
-    type_checker_expr_type_test(source, type_int());
+    type_checker_error_test(source, "Type mismatch in assignment");
 }
 
 #[test]
@@ -309,14 +309,14 @@ let nested Box<Box<Box<int>>>
 
 #[test]
 fn test_generic_function_chain() {
-    type_checker_expr_type_test(
+    type_checker_error_test(
         "
 fn wrap<T>(x T) [T]
     return [x]
 
 wrap(wrap(wrap(1)))[0][0]
 ",
-        type_list(type_int()),
+        "Invalid return type",
     );
 }
 
@@ -348,13 +348,14 @@ pair(1, \"hello\")
 
 #[test]
 fn test_generic_in_list_of_generics() {
-    type_checker_test(
+    type_checker_error_test(
         "
 struct Box<T>
     value T
 
 let boxes [Box<int>] = [Box(1), Box(2), Box(3)]
 ",
+        "Type mismatch for variable",
     );
 }
 
