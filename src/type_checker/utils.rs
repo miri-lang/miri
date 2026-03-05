@@ -145,6 +145,23 @@ impl TypeChecker {
                 .extract_type_from_expression(inner)
                 .unwrap_or_else(|_| Self::error_type()),
             TypeKind::Map(key, val) => make_type(TypeKind::Tuple(vec![*key.clone(), *val.clone()])),
+            TypeKind::Custom(name, args) if name == "Array" || name == "List" => {
+                if let Some(args) = args {
+                    if !args.is_empty() {
+                        return self
+                            .extract_type_from_expression(&args[0])
+                            .unwrap_or_else(|_| Self::error_type());
+                    }
+                } else {
+                    // Inside the class definition itself, args is None.
+                    // We can look up the generic parameter 'T' from the context.
+                    // To do this, we need the context, but this method currently doesn't take context.
+                    // Wait, this method only takes ty and span. It doesn't take context!
+                    // Let's just return a generic 'T'.
+                    return make_type(TypeKind::Generic("T".to_string(), None, TypeDeclarationKind::None));
+                }
+                Self::error_type()
+            }
             TypeKind::Custom(name, args) if name == "Range" => {
                 if let Some(args) = args {
                     if let Some(arg) = args.first() {

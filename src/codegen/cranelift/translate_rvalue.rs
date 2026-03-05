@@ -169,57 +169,61 @@ impl<'a> FunctionTranslator<'a> {
 
             Rvalue::Len(place) => {
                 let ty = type_ctx.local_types[place.local.0];
-                match &ty.kind {
-                    TypeKind::Array(_, _) | TypeKind::List(_) | TypeKind::String => {
-                        let ptr = Self::read_place(builder, place, locals, type_ctx)?;
+                let is_collection = match &ty.kind {
+                    TypeKind::Array(_, _) | TypeKind::List(_) | TypeKind::String => true,
+                    TypeKind::Custom(name, _) if name == "Array" || name == "List" => true,
+                    _ => false,
+                };
+                
+                if is_collection {
+                    let ptr = Self::read_place(builder, place, locals, type_ctx)?;
 
-                        // Handle null pointer (empty collection)
-                        let is_null = builder.ins().icmp_imm(
-                            cranelift_codegen::ir::condcodes::IntCC::Equal,
-                            ptr,
-                            0,
-                        );
+                    // Handle null pointer (empty collection)
+                    let is_null = builder.ins().icmp_imm(
+                        cranelift_codegen::ir::condcodes::IntCC::Equal,
+                        ptr,
+                        0,
+                    );
 
-                        let null_bb = builder.create_block();
-                        let load_bb = builder.create_block();
-                        let merge_bb = builder.create_block();
+                    let null_bb = builder.create_block();
+                    let load_bb = builder.create_block();
+                    let merge_bb = builder.create_block();
 
-                        // Use a variable to store the length and merge from both branches
-                        let len_var = builder.declare_var(ptr_type);
+                    // Use a variable to store the length and merge from both branches
+                    let len_var = builder.declare_var(ptr_type);
 
-                        builder.ins().brif(is_null, null_bb, &[], load_bb, &[]);
+                    builder.ins().brif(is_null, null_bb, &[], load_bb, &[]);
 
-                        // Branch 1: Null pointer, length is 0
-                        builder.switch_to_block(null_bb);
-                        let zero = builder.ins().iconst(ptr_type, 0);
-                        builder.def_var(len_var, zero);
-                        builder.ins().jump(merge_bb, &[]);
-                        builder.seal_block(null_bb);
+                    // Branch 1: Null pointer, length is 0
+                    builder.switch_to_block(null_bb);
+                    let zero = builder.ins().iconst(ptr_type, 0);
+                    builder.def_var(len_var, zero);
+                    builder.ins().jump(merge_bb, &[]);
+                    builder.seal_block(null_bb);
 
-                        // Branch 2: Non-null pointer, load length from header
-                        builder.switch_to_block(load_bb);
-                        let header_offset = if matches!(ty.kind, TypeKind::String) {
-                            ptr_size
-                        } else {
-                            -ptr_size
-                        };
-                        let len = builder
-                            .ins()
-                            .load(ptr_type, MemFlags::new(), ptr, header_offset);
-                        builder.def_var(len_var, len);
-                        builder.ins().jump(merge_bb, &[]);
-                        builder.seal_block(load_bb);
+                    // Branch 2: Non-null pointer, load length from header
+                    builder.switch_to_block(load_bb);
+                    let header_offset = match &ty.kind {
+                        TypeKind::String => ptr_size,
+                        TypeKind::List(_) => ptr_size,
+                        TypeKind::Custom(name, _) if name == "List" => ptr_size,
+                        _ => -ptr_size,
+                    };
+                    let len = builder
+                        .ins()
+                        .load(ptr_type, MemFlags::new(), ptr, header_offset);
+                    builder.def_var(len_var, len);
+                    builder.ins().jump(merge_bb, &[]);
+                    builder.seal_block(load_bb);
 
-                        // Back to merge block to continue
-                        builder.switch_to_block(merge_bb);
-                        builder.seal_block(merge_bb);
+                    // Back to merge block to continue
+                    builder.switch_to_block(merge_bb);
+                    builder.seal_block(merge_bb);
 
-                        Ok(builder.use_var(len_var))
-                    }
-                    _ => {
-                        // Non-collection types: return 0 as fallback
-                        Ok(builder.ins().iconst(ptr_type, 0))
-                    }
+                    Ok(builder.use_var(len_var))
+                } else {
+                    // Non-collection types: return 0 as fallback
+                    Ok(builder.ins().iconst(ptr_type, 0))
                 }
             }
 

@@ -182,11 +182,11 @@ pub fn lower_class_method(
         ctx.push_param(param.name.clone(), param_ty, param.typ.span);
     }
 
-    // Inject allocator into the ABI for call-site compatibility, but do NOT
-    // register it in variable_map so that internal calls to runtime C functions
-    // do not receive the allocator as an extra argument.
+    // Inject allocator into the ABI for call-site compatibility.
+    // We MUST register it in variable_map so that method-to-method calls can pass the allocator.
     let allocator_decl = LocalDecl::new(Type::new(TypeKind::Int, ast_method.span), ast_method.span);
-    ctx.body.new_local(allocator_decl);
+    let alloc_local = ctx.body.new_local(allocator_decl);
+    ctx.variable_map.insert("allocator".into(), alloc_local);
     ctx.body.arg_count += 1;
 
     // Lower body

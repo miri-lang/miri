@@ -1,23 +1,90 @@
-/// A dynamic list (vector) that grows as needed.
-///
-/// List<T> provides O(1) amortized append and O(1) indexed access.
-/// It is the most commonly used collection type for ordered sequences.
-///
-/// Example:
-///     let numbers = List([1, 2, 3])
-///     println(f"{numbers[0]}")  // 1
-///     for x in numbers
-///         println(f"{x}")
-
 use system.ops
 
 public class List<T> implements Iterable
 
+    runtime "core" fn miri_rt_list_len(l Self) int
+    runtime "core" fn miri_rt_list_push(l Self, item T)
+    runtime "core" fn miri_rt_list_pop(l Self) bool
+    runtime "core" fn miri_rt_list_set(l Self, index int, item T) bool
+    runtime "core" fn miri_rt_list_insert(l Self, index int, item T) bool
+    runtime "core" fn miri_rt_list_remove(l Self, index int) bool
+    runtime "core" fn miri_rt_list_clear(l Self)
+    runtime "core" fn miri_rt_list_reverse(l Self)
+    runtime "core" fn miri_rt_list_is_empty(l Self) bool
+
     /// Returns the number of elements in the list.
-    /// Handled as a built-in operation by the compiler.
-    public fn length() int: 0
+    public fn length() int: miri_rt_list_len(self)
 
     /// Returns the element at the given index.
     /// This enables for-loop iteration: `for x in list`.
-    /// Handled as a built-in operation by the compiler.
     public fn element_at(index int) Self: self
+
+    /// Appends an element to the end of the list.
+    public fn push(item T)
+        miri_rt_list_push(self, item)
+
+    /// Removes and returns the last element of the list.
+    public fn pop() T
+        let item = self[self.length() - 1]
+        miri_rt_list_pop(self)
+        return item
+
+    /// Returns the element at the given index.
+    public fn get(index int) T: self[index]
+
+    /// Sets the element at the given index.
+    public fn set(index int, value T): self[index] = value
+
+    /// Inserts an element at the given index.
+    public fn insert(index int, item T)
+        miri_rt_list_insert(self, index, item)
+
+    /// Removes and returns the element at the given index.
+    public fn remove_at(index int) T
+        let item = self[index]
+        miri_rt_list_remove(self, index)
+        return item
+
+    /// Removes the first occurrence of the given item from the list.
+    /// Returns true if an item was removed, false otherwise.
+    public fn remove(item T) bool
+        let idx = self.index_of(item)
+        if idx != -1
+            miri_rt_list_remove(self, idx)
+            return true
+        return false
+
+    /// Removes all elements from the list.
+    public fn clear()
+        miri_rt_list_clear(self)
+
+    /// Reverses the list in place.
+    public fn reverse()
+        miri_rt_list_reverse(self)
+
+    /// Returns true if the list has no elements.
+    public fn is_empty() bool: miri_rt_list_is_empty(self)
+
+    /// Returns the index of the last element, or -1 if empty.
+    public fn last_index() int: self.length() - 1
+
+    /// Returns the first element of the list, or None if empty.
+    public fn first() T?: self[0] if self.length() > 0 else None
+
+    /// Returns the last element of the list, or None if empty.
+    public fn last() T?: self[self.length() - 1] if self.length() > 0 else None
+
+    /// Returns true if the list contains the given item.
+    public fn contains(item T) bool
+        for x in self
+            if x == item: return true
+        return false
+
+    /// Returns the index of the first occurrence of the given item, or -1 if not found.
+    public fn index_of(item T) int
+        var i = 0
+        let len = self.length()
+        while i < len
+            if self[i] == item: return i
+            i += 1
+        return -1

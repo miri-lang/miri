@@ -267,6 +267,20 @@ impl<'a> FunctionTranslator<'a> {
                                 _ => &TypeKind::Int, // Fallback
                             }
                         }
+                        TypeKind::Custom(name, args) if name == "Array" || name == "List" => {
+                            if let Some(args) = args {
+                                if let Some(arg) = args.first() {
+                                    match &arg.node {
+                                        ExpressionKind::Type(ty, _) => &ty.kind,
+                                        _ => &TypeKind::Int,
+                                    }
+                                } else {
+                                    &TypeKind::Int
+                                }
+                            } else {
+                                &TypeKind::Int
+                            }
+                        }
                         _ => &TypeKind::Int, // Fallback
                     };
                     let cl_elem_ty =
@@ -274,13 +288,19 @@ impl<'a> FunctionTranslator<'a> {
                     let elem_size = cl_elem_ty.bytes() as i32;
 
                     // Runtime bounds check
-                    let len_val = if let Some(len) =
-                        Self::array_len_from_type(&local_types[place.local.0].kind, ptr_type)
+                    let is_list = matches!(&base_type.kind, TypeKind::List(_)) || 
+                                  matches!(&base_type.kind, TypeKind::Custom(name, _) if name == "List");
+                    
+                    let len_val = if is_list {
+                        // For List, length is at offset 8 of the MiriList struct
+                        builder.ins().load(ptr_type, MemFlags::new(), value, 8)
+                    } else if let Some(len) =
+                        Self::array_len_from_type(&base_type.kind, ptr_type)
                     {
                         // Use compile-time literal length if available
                         builder.ins().iconst(ptr_type, len)
                     } else {
-                        // Read runtime length from the collection header
+                        // Read runtime length from the collection header (Array/String)
                         // Collection: [RC] [LEN] [DATA...]. ptr points to DATA.
                         // Length is at offset -ptr_size.
                         builder
@@ -298,7 +318,15 @@ impl<'a> FunctionTranslator<'a> {
                     // Calculate byte offset: index * elem_size
                     let elem_size_val = builder.ins().iconst(ptr_type, elem_size as i64);
                     let byte_offset = builder.ins().imul(idx_val, elem_size_val);
-                    let elem_addr = builder.ins().iadd(value, byte_offset);
+                    
+                    let data_ptr = if is_list {
+                        // For List, elements are at data_ptr which is at offset 0
+                        builder.ins().load(ptr_type, MemFlags::new(), value, 0)
+                    } else {
+                        value
+                    };
+
+                    let elem_addr = builder.ins().iadd(data_ptr, byte_offset);
                     value = builder
                         .ins()
                         .load(cl_elem_ty, MemFlags::new(), elem_addr, 0);
@@ -420,6 +448,20 @@ impl<'a> FunctionTranslator<'a> {
                                     _ => &TypeKind::Int, // Fallback
                                 }
                             }
+                            TypeKind::Custom(name, args) if name == "Array" || name == "List" => {
+                                if let Some(args) = args {
+                                    if let Some(arg) = args.first() {
+                                        match &arg.node {
+                                            ExpressionKind::Type(ty, _) => &ty.kind,
+                                            _ => &TypeKind::Int,
+                                        }
+                                    } else {
+                                        &TypeKind::Int
+                                    }
+                                } else {
+                                    &TypeKind::Int
+                                }
+                            }
                             _ => &TypeKind::Int, // Fallback
                         };
                         let cl_elem_ty = crate::codegen::cranelift::types::translate_type_kind(
@@ -428,13 +470,19 @@ impl<'a> FunctionTranslator<'a> {
                         let elem_size = cl_elem_ty.bytes() as i32;
 
                         // Runtime bounds check
-                        let len_val = if let Some(len) =
-                            Self::array_len_from_type(&local_types[place.local.0].kind, ptr_type)
+                        let is_list = matches!(&base_type.kind, TypeKind::List(_)) || 
+                                      matches!(&base_type.kind, TypeKind::Custom(name, _) if name == "List");
+
+                        let len_val = if is_list {
+                            // For List, length is at offset 8 of the MiriList struct
+                            builder.ins().load(ptr_type, MemFlags::new(), addr, 8)
+                        } else if let Some(len) =
+                            Self::array_len_from_type(&base_type.kind, ptr_type)
                         {
                             // Use compile-time literal length if available
                             builder.ins().iconst(ptr_type, len)
                         } else {
-                            // Read runtime length from the collection header
+                            // Read runtime length from the collection header (Array/String)
                             // Collection: [RC] [LEN] [DATA...]. ptr points to DATA.
                             // Length is at offset -ptr_size.
                             builder
@@ -452,7 +500,15 @@ impl<'a> FunctionTranslator<'a> {
                         // Calculate byte offset: index * elem_size
                         let elem_size_val = builder.ins().iconst(ptr_type, elem_size as i64);
                         let byte_offset = builder.ins().imul(idx_val, elem_size_val);
-                        addr = builder.ins().iadd(addr, byte_offset);
+                        
+                        let data_ptr = if is_list {
+                            // For List, elements are at data_ptr which is at offset 0
+                            builder.ins().load(ptr_type, MemFlags::new(), addr, 0)
+                        } else {
+                            addr
+                        };
+
+                        addr = builder.ins().iadd(data_ptr, byte_offset);
                     }
                 }
             }
@@ -486,6 +542,20 @@ impl<'a> FunctionTranslator<'a> {
                                 _ => &TypeKind::Int, // Fallback
                             }
                         }
+                        TypeKind::Custom(name, args) if name == "Array" || name == "List" => {
+                            if let Some(args) = args {
+                                if let Some(arg) = args.first() {
+                                    match &arg.node {
+                                        ExpressionKind::Type(ty, _) => &ty.kind,
+                                        _ => &TypeKind::Int,
+                                    }
+                                } else {
+                                    &TypeKind::Int
+                                }
+                            } else {
+                                &TypeKind::Int
+                            }
+                        }
                         _ => &TypeKind::Int, // Fallback
                     };
                     let cl_elem_ty =
@@ -493,13 +563,19 @@ impl<'a> FunctionTranslator<'a> {
                     let elem_size = cl_elem_ty.bytes() as i32;
 
                     // Runtime bounds check
-                    let len_val = if let Some(len) =
-                        Self::array_len_from_type(&local_types[place.local.0].kind, ptr_type)
+                    let is_list = matches!(&base_type.kind, TypeKind::List(_)) || 
+                                  matches!(&base_type.kind, TypeKind::Custom(name, _) if name == "List");
+
+                    let len_val = if is_list {
+                        // For List, length is at offset 8 of the MiriList struct
+                        builder.ins().load(ptr_type, MemFlags::new(), addr, 8)
+                    } else if let Some(len) =
+                        Self::array_len_from_type(&base_type.kind, ptr_type)
                     {
                         // Use compile-time literal length if available
                         builder.ins().iconst(ptr_type, len)
                     } else {
-                        // Read runtime length from the collection header
+                        // Read runtime length from the collection header (Array/String)
                         // Collection: [RC] [LEN] [DATA...]. ptr points to DATA.
                         // Length is at offset -ptr_size.
                         builder
@@ -517,7 +593,15 @@ impl<'a> FunctionTranslator<'a> {
                     // Calculate byte offset: index * elem_size
                     let elem_size_val = builder.ins().iconst(ptr_type, elem_size as i64);
                     let byte_offset = builder.ins().imul(idx_val, elem_size_val);
-                    let elem_addr = builder.ins().iadd(addr, byte_offset);
+                    
+                    let data_ptr = if is_list {
+                        // For List, elements are at data_ptr which is at offset 0
+                        builder.ins().load(ptr_type, MemFlags::new(), addr, 0)
+                    } else {
+                        addr
+                    };
+
+                    let elem_addr = builder.ins().iadd(data_ptr, byte_offset);
                     builder.ins().store(MemFlags::new(), value, elem_addr, 0);
                 }
             }

@@ -280,6 +280,7 @@ impl Backend for CraneliftBackend {
                 .map_err(|e| CodegenError::Module(e.to_string()))?;
 
             let mut struct_ctx = DataDescription::new();
+            struct_ctx.set_align(ptr_size as u64);
             let mut data = vec![0u8; 4 * ptr_size as usize];
 
             // RC header: set high bit to indicate immortal/constant object

@@ -221,7 +221,7 @@ pub unsafe extern "C" fn miri_rt_array_to_list(ptr: *const MiriArray) -> *mut Mi
     }
     for i in 0..arr.elem_count {
         let src = arr.data.add(i * arr.elem_size);
-        crate::miri_rt_list_push(list, src);
+        (*list).push(src);
     }
     list
 }
