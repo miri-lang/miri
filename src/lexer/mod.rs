@@ -306,8 +306,12 @@ impl<'source> Lexer<'source> {
                 }
 
                 // Pop indentation levels and generate Dedent tokens
-                while indent_len < *self.indent_stack.last().unwrap() {
-                    self.push_dedent(token_end);
+                while let Some(&last_indent) = self.indent_stack.last() {
+                    if indent_len < last_indent {
+                        self.push_dedent(token_end);
+                    } else {
+                        break;
+                    }
                 }
             }
 
