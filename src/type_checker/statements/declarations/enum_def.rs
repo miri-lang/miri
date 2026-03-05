@@ -111,7 +111,6 @@ impl TypeChecker {
         let enum_def = EnumDefinition {
             variants: variant_map,
             generics: generic_defs.clone(),
-            module: self.current_module.clone(),
         };
 
         if generics.is_some() {

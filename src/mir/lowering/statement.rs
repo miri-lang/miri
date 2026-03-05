@@ -172,7 +172,7 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
                         name: name.clone(),
                         variants,
                         generics,
-                        module: def.module.clone(),
+                        module: ctx.type_checker.current_module.clone(),
                     }));
                 }
             }
