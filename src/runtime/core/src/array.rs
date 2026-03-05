@@ -51,6 +51,7 @@ impl Drop for MiriArray {
 /// All elements are zeroed. Returns null if the allocation fails or if
 /// `elem_count` or `elem_size` is zero.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_array_new(
     elem_count: usize,
     elem_size: usize,
@@ -93,6 +94,7 @@ pub unsafe extern "C" fn miri_rt_array_new(
 
 /// Frees the array and its backing storage.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_array_free(ptr: *mut MiriArray) {
     if !ptr.is_null() {
         let _ = Box::from_raw(ptr);
@@ -101,6 +103,7 @@ pub unsafe extern "C" fn miri_rt_array_free(ptr: *mut MiriArray) {
 
 /// Returns the number of elements in the array (fixed at creation).
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_array_len(ptr: *const MiriArray) -> usize {
     if ptr.is_null() {
         return 0;
@@ -112,6 +115,7 @@ pub unsafe extern "C" fn miri_rt_array_len(ptr: *const MiriArray) -> usize {
 ///
 /// Returns null if the index is out of bounds.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_array_get(
     ptr: *const MiriArray,
     index: usize,
@@ -130,6 +134,7 @@ pub unsafe extern "C" fn miri_rt_array_get(
 ///
 /// Returns null if the index is out of bounds.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_array_get_mut(
     ptr: *mut MiriArray,
     index: usize,
@@ -148,6 +153,7 @@ pub unsafe extern "C" fn miri_rt_array_get_mut(
 ///
 /// Returns true (1) if successful, false (0) if the index is out of bounds.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_array_set(
     ptr: *mut MiriArray,
     index: usize,
@@ -167,6 +173,7 @@ pub unsafe extern "C" fn miri_rt_array_set(
 
 /// Fills all elements with the given value.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_array_fill(ptr: *mut MiriArray, elem: *const u8) {
     if ptr.is_null() || elem.is_null() {
         return;
@@ -183,6 +190,7 @@ pub unsafe extern "C" fn miri_rt_array_fill(ptr: *mut MiriArray, elem: *const u8
 
 /// Returns a clone of the array.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_array_clone(ptr: *const MiriArray) -> *mut MiriArray {
     if ptr.is_null() {
         return miri_rt_array_new(0, 0);
@@ -199,6 +207,7 @@ pub unsafe extern "C" fn miri_rt_array_clone(ptr: *const MiriArray) -> *mut Miri
 ///
 /// The pointer is valid for `elem_count * elem_size` bytes.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_array_data(ptr: *const MiriArray) -> *const u8 {
     if ptr.is_null() {
         return ptr::null();
@@ -210,6 +219,7 @@ pub unsafe extern "C" fn miri_rt_array_data(ptr: *const MiriArray) -> *const u8 
 ///
 /// The caller owns the returned list and must free it with `miri_rt_list_free`.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_array_to_list(ptr: *const MiriArray) -> *mut MiriList {
     if ptr.is_null() {
         return crate::miri_rt_list_new(0);
