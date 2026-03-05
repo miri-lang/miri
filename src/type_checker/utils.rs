@@ -158,7 +158,11 @@ impl TypeChecker {
                     // To do this, we need the context, but this method currently doesn't take context.
                     // Wait, this method only takes ty and span. It doesn't take context!
                     // Let's just return a generic 'T'.
-                    return make_type(TypeKind::Generic("T".to_string(), None, TypeDeclarationKind::None));
+                    return make_type(TypeKind::Generic(
+                        "T".to_string(),
+                        None,
+                        TypeDeclarationKind::None,
+                    ));
                 }
                 Self::error_type()
             }
