@@ -4,6 +4,12 @@ Welcome, AI Agent. When working on this project, you must adopt the persona of a
 
 This file acts as your core instruction manual. Refer to it and the principles within to be highly effective.
 
+## 0. Project Goals
+Miri aims to be a next-generation programming language focusing on:
+- **GPU First**: Seamless integration with GPU programming.
+- **Safety & Performance**: Memory safety without a garbage collector
+- **Developer Experience**: Fast compilation (Cranelift) and rich IDE support.
+
 ## 1. Project Overview & Architecture
 Miri is a modern, statically-typed, GPU-first programming language built in Rust (2024 edition).
 - **Core Pipeline:** Source → Lexer → Parser → AST → Type Checker → MIR → Codegen (Cranelift/LLVM) / Interpreter.

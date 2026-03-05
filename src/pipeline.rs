@@ -98,23 +98,12 @@ fn collect_runtime_info(
                     use crate::codegen::cranelift::translate_type;
                     use crate::type_checker::resolve_type_name;
 
-                    let mut param_types: Vec<_> = params
+                    let param_types: Vec<_> = params
                         .iter()
                         .filter_map(|p| {
                             resolve_type_name(&p.typ).map(|t| translate_type(&t, ptr_ty))
                         })
                         .collect();
-
-                    // Inject implicit allocator if not explicitly declared
-                    if !params.iter().any(|p| p.name == "allocator") {
-                        param_types.push(translate_type(
-                            &crate::ast::types::Type::new(
-                                crate::ast::types::TypeKind::Int,
-                                stmt.span,
-                            ),
-                            ptr_ty,
-                        ));
-                    }
 
                     let ret_type = return_type
                         .as_ref()
@@ -127,16 +116,36 @@ fn collect_runtime_info(
                     });
                 }
             }
-            // Walk class bodies to collect required runtimes for linking.
-            // Class-level runtime declarations are NOT pre-declared as Cranelift imports
-            // because they are called with different signatures (no allocator injection)
-            // from compiled class methods. The translator handles them dynamically.
+            // Walk class bodies to collect required runtimes for linking and imports.
             StatementKind::Class(class_data) => {
                 for class_stmt in &class_data.body {
-                    if let StatementKind::RuntimeFunctionDeclaration(runtime_kind, ..) =
+                    if let StatementKind::RuntimeFunctionDeclaration(runtime_kind, name, params, return_type) =
                         &class_stmt.node
                     {
                         required_runtimes.insert(runtime_kind.clone());
+
+                        #[cfg(feature = "cranelift")]
+                        if let Some(ptr_ty) = ptr_ty {
+                            use crate::codegen::cranelift::translate_type;
+                            use crate::type_checker::resolve_type_name;
+
+                            let param_types: Vec<_> = params
+                                .iter()
+                                .filter_map(|p| {
+                                    resolve_type_name(&p.typ).map(|t| translate_type(&t, ptr_ty))
+                                })
+                                .collect();
+
+                            let ret_type = return_type
+                                .as_ref()
+                                .and_then(|rt| resolve_type_name(rt).map(|t| translate_type(&t, ptr_ty)));
+
+                            imports.push(crate::codegen::cranelift::RuntimeImport {
+                                name: name.clone(),
+                                param_types,
+                                return_type: ret_type,
+                            });
+                        }
                     }
                 }
             }

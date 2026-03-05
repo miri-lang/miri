@@ -137,6 +137,41 @@ print(f"{[1, 2, 3][0]}")
 }
 
 // =========================================================================
+// BaseList methods
+// =========================================================================
+
+#[test]
+fn test_array_baselist_methods() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.array
+let a = [10, 20, 30]
+println(f"{a.first() ?? -1}")
+println(f"{a.last() ?? -1}")
+println(f"{a.is_empty()}")
+println(f"{a.contains(20)}")
+println(f"{a.index_of(30)}")
+"#,
+        "10\n30\nfalse\ntrue\n2",
+    );
+}
+
+#[test]
+fn test_array_reverse() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.array
+let a = [10000000000, 20000000000, 30000000000]
+a.reverse()
+println(f"{a[0]} {a[1]} {a[2]}")
+"#,
+        "30000000000 20000000000 10000000000",
+    );
+}
+
+// =========================================================================
 // Compile-time error tests
 // =========================================================================
 

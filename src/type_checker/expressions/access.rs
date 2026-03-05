@@ -148,6 +148,26 @@ impl TypeChecker {
                 }
                 self.resolve_type_expression(&inner_type_expr, context)
             }
+            TypeKind::Custom(name, args) if name == "Array" || name == "List" => {
+                if !matches!(index_type.kind, TypeKind::Int) {
+                    self.report_error(format!("{} index must be an integer", name), index.span);
+                    return make_type(TypeKind::Error);
+                }
+                if let Some(args) = args {
+                    if let Some(inner_type_expr) = args.first() {
+                        return self.resolve_type_expression(inner_type_expr, context);
+                    }
+                } else {
+                    // Inside the class definition itself, args is None.
+                    // We can look up the generic parameter 'T' from the context.
+                    if let Some(TypeDefinition::Generic(g)) = context.resolve_type_definition("T") {
+                        return make_type(TypeKind::Generic(g.name.clone(), g.constraint.clone().map(Box::new), g.kind.clone()));
+                    } else {
+                        return make_type(TypeKind::Generic("T".to_string(), None, TypeDeclarationKind::None));
+                    }
+                }
+                make_type(TypeKind::Error)
+            }
             TypeKind::Map(key_type_expr, val_type_expr) => {
                 let key_type = self.resolve_type_expression(&key_type_expr, context);
                 if !self.are_compatible(&key_type, &index_type, context) {
@@ -272,8 +292,24 @@ impl TypeChecker {
         // Try to resolve the type definition for the object's type
         let (type_name, type_args) = match &obj_type.kind {
             TypeKind::String => (Some("String".to_string()), None),
-            TypeKind::List(_) => (Some("List".to_string()), None),
+            TypeKind::List(inner_expr) => {
+                let inner_ty = self.resolve_type_expression(inner_expr, context);
+                (
+                    Some("List".to_string()),
+                    Some(vec![self.create_type_expression(inner_ty)]),
+                )
+            }
             TypeKind::Custom(name, args) => (Some(name.clone()), args.clone()),
+            TypeKind::Array(inner_expr, size_expr) => {
+                let inner_ty = self.resolve_type_expression(inner_expr, context);
+                (
+                    Some("Array".to_string()),
+                    Some(vec![
+                        self.create_type_expression(inner_ty),
+                        *size_expr.clone(),
+                    ]),
+                )
+            }
             TypeKind::Result(ok_type, _) => {
                 if prop_name == "unwrap" {
                     let t = self.resolve_type_expression(ok_type, context);
@@ -407,6 +443,21 @@ impl TypeChecker {
                 let mut search_class_def = def.clone();
 
                 loop {
+                    // Substitute generic parameters if present
+                    let mut mapping = std::collections::HashMap::new();
+                    if let Some(generics) = &search_class_def.generics {
+                        if let Some(type_args) = &type_args {
+                            if generics.len() == type_args.len() {
+                                for (param, arg_expr) in generics.iter().zip(type_args.iter()) {
+                                    let arg_type = self
+                                        .extract_type_from_expression(arg_expr)
+                                        .unwrap_or(make_type(TypeKind::Error));
+                                    mapping.insert(param.name.clone(), arg_type);
+                                }
+                            }
+                        }
+                    }
+
                     // Check fields in current class
                     if let Some(field_info) = search_class_def.fields.get(prop_name) {
                         // Check visibility for class field
@@ -424,7 +475,12 @@ impl TypeChecker {
                             );
                             return make_type(TypeKind::Error);
                         }
-                        return field_info.ty.clone();
+                        
+                        if mapping.is_empty() {
+                            return field_info.ty.clone();
+                        } else {
+                            return self.substitute_type(&field_info.ty, &mapping);
+                        }
                     }
 
                     // Check methods in current class
@@ -449,11 +505,18 @@ impl TypeChecker {
                         let params: Vec<Parameter> = method_info
                             .params
                             .iter()
-                            .map(|(name, ty)| Parameter {
-                                name: name.clone(),
-                                typ: Box::new(self.create_type_expression(ty.clone())),
-                                guard: None,
-                                default_value: None,
+                            .map(|(name, ty)| {
+                                let substituted_ty = if mapping.is_empty() {
+                                    ty.clone()
+                                } else {
+                                    self.substitute_type(ty, &mapping)
+                                };
+                                Parameter {
+                                    name: name.clone(),
+                                    typ: Box::new(self.create_type_expression(substituted_ty)),
+                                    guard: None,
+                                    default_value: None,
+                                }
                             })
                             .collect();
 
@@ -461,8 +524,13 @@ impl TypeChecker {
                             if matches!(method_info.return_type.kind, TypeKind::Void) {
                                 None
                             } else {
+                                let substituted_ret = if mapping.is_empty() {
+                                    method_info.return_type.clone()
+                                } else {
+                                    self.substitute_type(&method_info.return_type, &mapping)
+                                };
                                 Some(Box::new(
-                                    self.create_type_expression(method_info.return_type.clone()),
+                                    self.create_type_expression(substituted_ret),
                                 ))
                             };
 

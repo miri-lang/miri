@@ -224,9 +224,9 @@ impl TypeChecker {
                                     self.create_type_expression(elem_type),
                                 )));
                             }
-                            // Empty List() or no args
+                            // Empty List() or no args: return List<Error> to allow inference/any type
                             return make_type(TypeKind::List(Box::new(
-                                self.create_type_expression(make_type(TypeKind::Void)),
+                                self.create_type_expression(make_type(TypeKind::Error)),
                             )));
                         }
 

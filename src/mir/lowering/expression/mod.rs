@@ -160,23 +160,18 @@ pub(super) fn emit_to_string(
             let call_args = vec![float_op];
             emit_runtime_to_string(ctx, "miri_rt_float_to_string", call_args, span)
         }
-        TypeKind::Int | TypeKind::I64 | TypeKind::U64 => {
-            // Already 64-bit — pass directly to the runtime (no widening needed).
-            let call_args = vec![operand];
-            emit_runtime_to_string(ctx, "miri_rt_int_to_string", call_args, span)
-        }
-        TypeKind::I8
-        | TypeKind::I16
+        TypeKind::Int
+        | TypeKind::I64
+        | TypeKind::U64
         | TypeKind::I32
-        | TypeKind::I128
-        | TypeKind::U8
-        | TypeKind::U16
+        | TypeKind::I16
+        | TypeKind::I8
         | TypeKind::U32
-        | TypeKind::U128 => {
-            // miri_rt_int_to_string expects i64. Widen the narrow integer to Int
-            // (I64) before calling the runtime, mirroring the boolean path above.
-            // Uses sextend (signed extension), which is correct for signed types
-            // and for unsigned types with values ≤ the signed maximum of their width.
+        | TypeKind::U16
+        | TypeKind::U8
+        | TypeKind::I128
+        | TypeKind::U128
+        | TypeKind::Error => {
             let int_ty = Type::new(TypeKind::Int, *span);
             let int_temp = ctx.push_temp(int_ty.clone(), *span);
             ctx.push_statement(crate::mir::Statement {

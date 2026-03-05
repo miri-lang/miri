@@ -249,6 +249,24 @@ impl Drop for MiriList {
 // FFI Functions
 // =============================================================================
 
+/// Creates a new list from a raw memory buffer containing elements.
+/// This is used by the compiler to lower List([1, 2, 3]) literals.
+#[no_mangle]
+pub unsafe extern "C" fn miri_rt_list_new_from_raw(
+    data: *const u8,
+    len: usize,
+    elem_size: usize,
+) -> *mut MiriList {
+    if data.is_null() || len == 0 {
+        return miri_rt_list_new(elem_size);
+    }
+    let list = miri_rt_list_new(elem_size);
+    for i in 0..len {
+        (*list).push(data.add(i * elem_size));
+    }
+    list
+}
+
 /// Creates a new empty list with the given element size.
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_list_new(elem_size: usize) -> *mut MiriList {
@@ -295,21 +313,27 @@ pub unsafe extern "C" fn miri_rt_list_is_empty(ptr: *const MiriList) -> u8 {
 
 /// Pushes an element to the end of the list.
 #[no_mangle]
-pub unsafe extern "C" fn miri_rt_list_push(ptr: *mut MiriList, elem: *const u8) {
-    if ptr.is_null() || elem.is_null() {
+pub unsafe extern "C" fn miri_rt_list_push(ptr: *mut MiriList, val: u64) {
+    if ptr.is_null() {
         return;
     }
-    (*ptr).push(elem);
+    let list = &mut *ptr;
+    list.push(&val as *const u64 as *const u8);
 }
 
 /// Pops the last element from the list.
 /// Returns true (1) if successful, false (0) if the list was empty.
 #[no_mangle]
-pub unsafe extern "C" fn miri_rt_list_pop(ptr: *mut MiriList, out: *mut u8) -> u8 {
-    if ptr.is_null() || out.is_null() {
+pub unsafe extern "C" fn miri_rt_list_pop(ptr: *mut MiriList) -> u8 {
+    if ptr.is_null() {
         return 0;
     }
-    if (*ptr).pop(out) { 1 } else { 0 }
+    let list = &mut *ptr;
+    if list.len == 0 {
+        return 0;
+    }
+    list.len -= 1;
+    1
 }
 
 /// Gets a pointer to the element at the given index.
@@ -337,12 +361,13 @@ pub unsafe extern "C" fn miri_rt_list_get_mut(ptr: *mut MiriList, index: usize) 
 pub unsafe extern "C" fn miri_rt_list_set(
     ptr: *mut MiriList,
     index: usize,
-    elem: *const u8,
+    val: u64,
 ) -> u8 {
-    if ptr.is_null() || elem.is_null() {
+    if ptr.is_null() {
         return 0;
     }
-    if (*ptr).set(index, elem) { 1 } else { 0 }
+    let list = &mut *ptr;
+    if list.set(index, &val as *const u64 as *const u8) { 1 } else { 0 }
 }
 
 /// Inserts an element at the given index.
@@ -351,12 +376,13 @@ pub unsafe extern "C" fn miri_rt_list_set(
 pub unsafe extern "C" fn miri_rt_list_insert(
     ptr: *mut MiriList,
     index: usize,
-    elem: *const u8,
+    val: u64,
 ) -> u8 {
-    if ptr.is_null() || elem.is_null() {
+    if ptr.is_null() {
         return 0;
     }
-    if (*ptr).insert(index, elem) { 1 } else { 0 }
+    let list = &mut *ptr;
+    if list.insert(index, &val as *const u64 as *const u8) { 1 } else { 0 }
 }
 
 /// Removes the element at the given index.
@@ -365,12 +391,25 @@ pub unsafe extern "C" fn miri_rt_list_insert(
 pub unsafe extern "C" fn miri_rt_list_remove(
     ptr: *mut MiriList,
     index: usize,
-    out: *mut u8,
 ) -> u8 {
-    if ptr.is_null() || out.is_null() {
+    if ptr.is_null() {
         return 0;
     }
-    if (*ptr).remove(index, out) { 1 } else { 0 }
+    let list = &mut *ptr;
+    if index >= list.len {
+        return 0;
+    }
+
+    // Shift elements down
+    if index < list.len - 1 {
+        let dest = list.data.add(index * list.elem_size);
+        let src = list.data.add((index + 1) * list.elem_size);
+        let count = (list.len - index - 1) * list.elem_size;
+        ptr::copy(src, dest, count);
+    }
+
+    list.len -= 1;
+    1
 }
 
 /// Clears all elements from the list.
