@@ -314,7 +314,7 @@ fn lower_for_over_iterable(
         .get_type(iterable.id)
         .and_then(|ty| match &ty.kind {
             TypeKind::String => Some("String".to_string()),
-            TypeKind::Custom(name, _) => Some(name.clone()),
+            TypeKind::Custom(name, _) if name != "Array" && name != "List" => Some(name.clone()),
             _ => None,
         })
         .filter(|name| {
@@ -335,7 +335,7 @@ fn lower_for_over_iterable(
         let func_op = Operand::Constant(Box::new(Constant {
             span: *span,
             ty: Type::new(TypeKind::Identifier, *span),
-            literal: crate::ast::literal::Literal::Identifier(length_symbol),
+            literal: crate::ast::literal::Literal::Identifier(length_symbol.clone()),
         }));
         let after_len_bb = ctx.new_basic_block();
         ctx.set_terminator(Terminator::new(
@@ -343,8 +343,10 @@ fn lower_for_over_iterable(
                 func: func_op,
                 args: {
                     let mut args = vec![Operand::Copy(Place::new(list_local))];
-                    if let Some(&allocator) = ctx.variable_map.get("allocator") {
-                        args.push(Operand::Copy(Place::new(allocator)));
+                    if !length_symbol.starts_with("miri_") {
+                        if let Some(&allocator) = ctx.variable_map.get("allocator") {
+                            args.push(Operand::Copy(Place::new(allocator)));
+                        }
                     }
                     args
                 },
@@ -395,7 +397,7 @@ fn lower_for_over_iterable(
         let func_op = Operand::Constant(Box::new(Constant {
             span: *span,
             ty: Type::new(TypeKind::Identifier, *span),
-            literal: crate::ast::literal::Literal::Identifier(element_at_symbol),
+            literal: crate::ast::literal::Literal::Identifier(element_at_symbol.clone()),
         }));
         let after_elem_bb = ctx.new_basic_block();
         ctx.set_terminator(Terminator::new(
@@ -406,8 +408,10 @@ fn lower_for_over_iterable(
                         Operand::Copy(Place::new(list_local)),
                         Operand::Copy(Place::new(idx_var)),
                     ];
-                    if let Some(&allocator) = ctx.variable_map.get("allocator") {
-                        args.push(Operand::Copy(Place::new(allocator)));
+                    if !element_at_symbol.starts_with("miri_") {
+                        if let Some(&allocator) = ctx.variable_map.get("allocator") {
+                            args.push(Operand::Copy(Place::new(allocator)));
+                        }
                     }
                     args
                 },
@@ -718,10 +722,13 @@ pub fn lower_call(
             // the LEN field from the RC+LEN+DATA memory layout.
             if let ExpressionKind::Identifier(method_name, _) = &method_expr.node {
                 if method_name == "length"
-                    && matches!(
+                    && (matches!(
                         &obj_ty.kind,
                         TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::String
-                    )
+                    ) || matches!(
+                        &obj_ty.kind,
+                        TypeKind::Custom(name, _) if name == "Array" || name == "List"
+                    ))
                 {
                     let obj_op = lower_expression(ctx, obj, None)?;
                     // Create a temp local to hold the object, so we can form Place for Rvalue::Len
@@ -749,6 +756,194 @@ pub fn lower_call(
                     });
 
                     return Ok(op);
+                }
+
+                if (method_name == "element_at" || method_name == "get")
+                    && (matches!(
+                        &obj_ty.kind,
+                        TypeKind::List(_) | TypeKind::Array(_, _)
+                    ) || matches!(
+                        &obj_ty.kind,
+                        TypeKind::Custom(name, _) if name == "Array" || name == "List"
+                    ))
+                    && args.len() == 1
+                {
+                    let obj_op = lower_expression(ctx, obj, None)?;
+                    let index_op = lower_expression(ctx, &args[0], None)?;
+
+                    // Create a temp local to hold the object
+                    let obj_local = ctx.push_temp(obj_ty.clone(), *span);
+                    ctx.push_statement(crate::mir::Statement {
+                        kind: StatementKind::Assign(Place::new(obj_local), Rvalue::Use(obj_op)),
+                        span: *span,
+                    });
+
+                    // Ensure index is in a local for Projection
+                    let index_local = match index_op {
+                        Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => p.local,
+                        _ => {
+                            let temp = ctx.push_temp(Type::new(TypeKind::Int, args[0].span), args[0].span);
+                            ctx.push_statement(crate::mir::Statement {
+                                kind: StatementKind::Assign(Place::new(temp), Rvalue::Use(index_op)),
+                                span: args[0].span,
+                            });
+                            temp
+                        }
+                    };
+
+                    let mut indexed_place = Place::new(obj_local);
+                    indexed_place.projection.push(crate::mir::PlaceElem::Index(index_local));
+
+                    let elem_ty = if let Some(t) = ctx.type_checker.get_type(call_expr_id) {
+                        t.clone()
+                    } else {
+                        Type::new(TypeKind::Int, *span)
+                    };
+
+                    let (destination, op) = if let Some(d) = dest {
+                        (d.clone(), Operand::Copy(d))
+                    } else {
+                        let temp = ctx.push_temp(elem_ty, *span);
+                        let p = Place::new(temp);
+                        (p.clone(), Operand::Copy(p))
+                    };
+
+                    ctx.push_statement(crate::mir::Statement {
+                        kind: StatementKind::Assign(
+                            destination,
+                            Rvalue::Use(Operand::Copy(indexed_place)),
+                        ),
+                        span: *span,
+                    });
+
+                    return Ok(op);
+                }
+
+                if method_name == "push"
+                    && (matches!(&obj_ty.kind, TypeKind::List(_))
+                        || matches!(&obj_ty.kind, TypeKind::Custom(name, _) if name == "List"))
+                    && args.len() == 1
+                {
+                    let obj_op = lower_expression(ctx, obj, None)?;
+                    let item_op = lower_expression(ctx, &args[0], None)?;
+
+                    // Create a temp local for the item so we can pass its address
+                    let item_ty = item_op.ty(&ctx.body);
+                    let item_local = ctx.push_temp(item_ty.clone(), args[0].span);
+                    ctx.push_statement(crate::mir::Statement {
+                        kind: StatementKind::Assign(Place::new(item_local), Rvalue::Use(item_op)),
+                        span: args[0].span,
+                    });
+
+                    let func_op = Operand::Constant(Box::new(Constant {
+                        span: *span,
+                        ty: Type::new(TypeKind::Identifier, *span),
+                        literal: crate::ast::literal::Literal::Identifier("miri_rt_list_push".to_string()),
+                    }));
+
+                    let target_bb = ctx.new_basic_block();
+                    // push returns void, but Call requires a destination. Use a dummy.
+                    let dummy_dest = ctx.push_temp(Type::new(TypeKind::Void, *span), *span);
+
+                    ctx.set_terminator(Terminator::new(
+                        TerminatorKind::Call {
+                            func: func_op,
+                            args: vec![obj_op, Operand::Copy(Place::new(item_local))],
+                            destination: Place::new(dummy_dest),
+                            target: Some(target_bb),
+                        },
+                        *span,
+                    ));
+
+                    ctx.set_current_block(target_bb);
+                    return Ok(Operand::Copy(Place::new(dummy_dest)));
+                }
+
+                if method_name == "set"
+                    && (matches!(&obj_ty.kind, TypeKind::List(_) | TypeKind::Array(_, _))
+                        || matches!(&obj_ty.kind, TypeKind::Custom(name, _) if name == "Array" || name == "List"))
+                    && args.len() == 2
+                {
+                    let obj_op = lower_expression(ctx, obj, None)?;
+                    let index_op = lower_expression(ctx, &args[0], None)?;
+                    let item_op = lower_expression(ctx, &args[1], None)?;
+
+                    // For 'set', we can just use MIR assignment to an indexed place!
+                    // obj[index] = item
+                    
+                    // Create a temp local to hold the object
+                    let obj_local = ctx.push_temp(obj_ty.clone(), *span);
+                    ctx.push_statement(crate::mir::Statement {
+                        kind: StatementKind::Assign(Place::new(obj_local), Rvalue::Use(obj_op)),
+                        span: *span,
+                    });
+
+                    // Ensure index is in a local for Projection
+                    let index_local = match index_op {
+                        Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => p.local,
+                        _ => {
+                            let temp = ctx.push_temp(Type::new(TypeKind::Int, args[0].span), args[0].span);
+                            ctx.push_statement(crate::mir::Statement {
+                                kind: StatementKind::Assign(Place::new(temp), Rvalue::Use(index_op)),
+                                span: args[0].span,
+                            });
+                            temp
+                        }
+                    };
+
+                    let mut indexed_place = Place::new(obj_local);
+                    indexed_place.projection.push(crate::mir::PlaceElem::Index(index_local));
+
+                    ctx.push_statement(crate::mir::Statement {
+                        kind: StatementKind::Assign(indexed_place, Rvalue::Use(item_op)),
+                        span: *span,
+                    });
+
+                    return Ok(Operand::Constant(Box::new(Constant {
+                        span: *span,
+                        ty: Type::new(TypeKind::Void, *span),
+                        literal: crate::ast::literal::Literal::None,
+                    })));
+                }
+
+                if method_name == "insert"
+                    && (matches!(&obj_ty.kind, TypeKind::List(_))
+                        || matches!(&obj_ty.kind, TypeKind::Custom(name, _) if name == "List"))
+                    && args.len() == 2
+                {
+                    let obj_op = lower_expression(ctx, obj, None)?;
+                    let index_op = lower_expression(ctx, &args[0], None)?;
+                    let item_op = lower_expression(ctx, &args[1], None)?;
+
+                    // Create a temp local for the item so we can pass its address
+                    let item_ty = item_op.ty(&ctx.body);
+                    let item_local = ctx.push_temp(item_ty.clone(), args[1].span);
+                    ctx.push_statement(crate::mir::Statement {
+                        kind: StatementKind::Assign(Place::new(item_local), Rvalue::Use(item_op)),
+                        span: args[1].span,
+                    });
+
+                    let func_op = Operand::Constant(Box::new(Constant {
+                        span: *span,
+                        ty: Type::new(TypeKind::Identifier, *span),
+                        literal: crate::ast::literal::Literal::Identifier("miri_rt_list_insert".to_string()),
+                    }));
+
+                    let target_bb = ctx.new_basic_block();
+                    let result_temp = ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span);
+
+                    ctx.set_terminator(Terminator::new(
+                        TerminatorKind::Call {
+                            func: func_op,
+                            args: vec![obj_op, index_op, Operand::Copy(Place::new(item_local))],
+                            destination: Place::new(result_temp),
+                            target: Some(target_bb),
+                        },
+                        *span,
+                    ));
+
+                    ctx.set_current_block(target_bb);
+                    return Ok(Operand::Copy(Place::new(result_temp)));
                 }
             }
 
@@ -829,43 +1024,101 @@ pub fn lower_call(
                 if let Some(TypeDefinition::Class(def)) =
                     ctx.type_checker.global_type_definitions.get(type_name)
                 {
-                    // Special handling for List constructor: List([1,2,3])
-                    // Emit AggregateKind::List with the array elements instead of
-                    // AggregateKind::Class so the codegen produces the correct
-                    // memory layout (RC + LEN + DATA).
-                    if type_name == "List" && args.len() == 1 {
-                        if let ExpressionKind::Array(elements, _) = &args[0].node {
-                            let ops: Vec<Operand> = elements
-                                .iter()
-                                .map(|e| lower_expression(ctx, e, None))
-                                .collect::<Result<_, _>>()?;
-
-                            let ty = super::helpers::resolve_type(ctx.type_checker, &args[0]);
-                            // Get the call expression's inferred type (TypeKind::List)
-                            let list_ty =
-                                if let Some(call_ty) = ctx.type_checker.get_type(call_expr_id) {
-                                    call_ty.clone()
-                                } else {
-                                    ty
-                                };
-
-                            let (destination, result_op) = if let Some(d) = dest {
-                                (d.clone(), Operand::Copy(d))
+                    if type_name == "List" {
+                        let list_ty =
+                            if let Some(call_ty) = ctx.type_checker.get_type(call_expr_id) {
+                                call_ty.clone()
                             } else {
-                                let temp = ctx.push_temp(list_ty, *span);
-                                let p = Place::new(temp);
-                                (p.clone(), Operand::Copy(p))
+                                Type::new(TypeKind::Int, *span)
                             };
 
-                            ctx.push_statement(crate::mir::Statement {
-                                kind: StatementKind::Assign(
-                                    destination,
-                                    Rvalue::Aggregate(AggregateKind::List, ops),
-                                ),
+                        let (destination, result_op) = if let Some(d) = dest {
+                            (d.clone(), Operand::Copy(d))
+                        } else {
+                            let temp = ctx.push_temp(list_ty.clone(), *span);
+                            let p = Place::new(temp);
+                            (p.clone(), Operand::Copy(p))
+                        };
+
+                        let target_bb = ctx.new_basic_block();
+
+                        if args.len() == 1 {
+                            let array_op = lower_expression(ctx, &args[0], None)?;
+                            
+                            // Determine array length and element size
+                            let mut len_val = 0;
+                            let mut elem_size = 8;
+                            if let ExpressionKind::Array(elements, _) = &args[0].node {
+                                len_val = elements.len() as i64;
+                                // Simple approximation, type checker handles specifics
+                                if elements.is_empty() {
+                                    elem_size = 8;
+                                } else {
+                                    elem_size = match ctx.type_checker.get_type(elements[0].id) {
+                                        Some(ty) => match &ty.kind {
+                                            TypeKind::Int | TypeKind::I64 | TypeKind::F64 | TypeKind::Float => 8,
+                                            TypeKind::I32 | TypeKind::F32 => 4,
+                                            TypeKind::I16 => 2,
+                                            TypeKind::I8 | TypeKind::Boolean => 1,
+                                            _ => 8,
+                                        },
+                                        None => 8,
+                                    };
+                                }
+                            }
+
+                            let len_op = Operand::Constant(Box::new(Constant {
                                 span: *span,
-                            });
-                            return Ok(result_op);
+                                ty: Type::new(TypeKind::Int, *span),
+                                literal: crate::ast::literal::Literal::Integer(crate::ast::literal::IntegerLiteral::I64(len_val)),
+                            }));
+
+                            let size_op = Operand::Constant(Box::new(Constant {
+                                span: *span,
+                                ty: Type::new(TypeKind::Int, *span),
+                                literal: crate::ast::literal::Literal::Integer(crate::ast::literal::IntegerLiteral::I64(elem_size)),
+                            }));
+
+                            let func_op = Operand::Constant(Box::new(Constant {
+                                span: *span,
+                                ty: Type::new(TypeKind::Identifier, *span),
+                                literal: crate::ast::literal::Literal::Identifier("miri_rt_list_new_from_raw".to_string()),
+                            }));
+
+                            ctx.set_terminator(Terminator::new(
+                                TerminatorKind::Call {
+                                    func: func_op,
+                                    args: vec![array_op, len_op, size_op],
+                                    destination: destination.clone(),
+                                    target: Some(target_bb),
+                                },
+                                *span,
+                            ));
+                        } else {
+                            // Assuming element size is 8 for simplicity, or 0 if it doesn't matter yet
+                            let size_op = Operand::Constant(Box::new(Constant {
+                                span: *span,
+                                ty: Type::new(TypeKind::Int, *span),
+                                literal: crate::ast::literal::Literal::Integer(crate::ast::literal::IntegerLiteral::I64(8)),
+                            }));
+                            let func_op = Operand::Constant(Box::new(Constant {
+                                span: *span,
+                                ty: Type::new(TypeKind::Identifier, *span),
+                                literal: crate::ast::literal::Literal::Identifier("miri_rt_list_new".to_string()),
+                            }));
+                            ctx.set_terminator(Terminator::new(
+                                TerminatorKind::Call {
+                                    func: func_op,
+                                    args: vec![size_op],
+                                    destination: destination.clone(),
+                                    target: Some(target_bb),
+                                },
+                                *span,
+                            ));
                         }
+
+                        ctx.set_current_block(target_bb);
+                        return Ok(result_op);
                     }
 
                     // This is a class constructor - emit Aggregate instead of Call
@@ -933,17 +1186,25 @@ pub fn lower_call(
     }
 
     // Implicit Allocator Injection at Call Site
-    if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
-        let already_has_alloc = arg_ops.iter().any(|op| {
-            if let Operand::Copy(p) | Operand::Move(p) = op {
-                p.local == alloc_local
-            } else {
-                false
-            }
-        });
+    let is_runtime_fn = if let ExpressionKind::Identifier(name, _) = &func.node {
+        name.starts_with("miri_")
+    } else {
+        false
+    };
 
-        if !already_has_alloc {
-            arg_ops.push(Operand::Copy(Place::new(alloc_local)));
+    if !is_runtime_fn {
+        if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
+            let already_has_alloc = arg_ops.iter().any(|op| {
+                if let Operand::Copy(p) | Operand::Move(p) = op {
+                    p.local == alloc_local
+                } else {
+                    false
+                }
+            });
+
+            if !already_has_alloc {
+                arg_ops.push(Operand::Copy(Place::new(alloc_local)));
+            }
         }
     }
 

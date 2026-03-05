@@ -314,20 +314,46 @@ impl<'source> Parser<'source> {
             _ => MemberVisibility::Private, // Default visibility is private
         };
 
+        // Check for 'abstract' keyword
+        let is_abstract_method = if self.match_lookahead_type(|t| t == &Token::Abstract) {
+            self.eat_token(&Token::Abstract)?;
+            true
+        } else {
+            false
+        };
+
         // Parse based on token
         match &self._lookahead {
             Some((Token::Let, _)) | Some((Token::Var, _)) | Some((Token::Const, _)) => {
+                if is_abstract_method {
+                    return Err(self.error_unexpected_token("method declaration", "variable declaration after 'abstract'"));
+                }
                 self.variable_statement(visibility)
             }
             Some((Token::Async, _))
             | Some((Token::Fn, _))
             | Some((Token::Gpu, _))
             | Some((Token::Parallel, _)) => {
-                self.function_declaration_with_context(visibility, allow_abstract)
+                self.function_declaration_with_context(visibility, allow_abstract || is_abstract_method)
             }
-            Some((Token::Type, _)) => self.type_statement(visibility),
-            Some((Token::Runtime, _)) => self.runtime_function_declaration(),
-            Some((Token::Identifier, _)) => self.typed_field_declaration(visibility),
+            Some((Token::Type, _)) => {
+                if is_abstract_method {
+                    return Err(self.error_unexpected_token("method declaration", "type declaration after 'abstract'"));
+                }
+                self.type_statement(visibility)
+            }
+            Some((Token::Runtime, _)) => {
+                if is_abstract_method {
+                    return Err(self.error_unexpected_token("method declaration", "runtime function after 'abstract'"));
+                }
+                self.runtime_function_declaration()
+            }
+            Some((Token::Identifier, _)) => {
+                if is_abstract_method {
+                    return Err(self.error_unexpected_token("method declaration", "field declaration after 'abstract'"));
+                }
+                self.typed_field_declaration(visibility)
+            }
             _ => Err(self.error_unexpected_lookahead_token(
                 "class member (let, var, const, fn, async, gpu, type, runtime, or field declaration)",
             )),

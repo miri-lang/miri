@@ -89,8 +89,12 @@ impl TypeChecker {
             return Some(self.are_compatible(inner, t2, context));
         }
 
-        // Non-optional type cannot accept optional
+        // Non-optional type cannot accept optional — but defer when t1 is a
+        // generic parameter so the generic compatibility check can handle it.
         if let TypeKind::Option(_) = &t2.kind {
+            if matches!(t1.kind, TypeKind::Generic(..)) {
+                return None;
+            }
             return Some(false);
         }
 
