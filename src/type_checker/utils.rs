@@ -511,7 +511,8 @@ impl TypeChecker {
 
     /// Reports an unknown type error with suggestions.
     fn report_unknown_type(&mut self, name: &str, expr: &Expression, context: &Context) {
-        let mut candidates: Vec<&str> = Vec::new();
+        let capacity = context.type_definitions.iter().map(|s| s.len()).sum::<usize>() + self.global_type_definitions.len() + 6;
+        let mut candidates: Vec<&str> = Vec::with_capacity(capacity);
         for scope in &context.type_definitions {
             candidates.extend(scope.keys().map(|s| s.as_str()));
         }
