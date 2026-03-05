@@ -184,14 +184,20 @@ fn wrap_script_in_main(program: &mut Program) {
     // Separate top-level declarations (use, class, struct, etc.) from executable statements.
     let mut top_level = Vec::new();
     let mut body_stmts = Vec::new();
+
+    // First, verify we can wrap the program. If not, return early.
     for stmt in &program.body {
-        if is_top_level_stmt(stmt) {
-            top_level.push(stmt.clone());
-        } else if is_wrappable_stmt(stmt) {
-            body_stmts.push(stmt.clone());
-        } else {
-            // Non-wrappable, non-top-level statement — cannot wrap this program.
+        if !is_top_level_stmt(stmt) && !is_wrappable_stmt(stmt) {
             return;
+        }
+    }
+
+    let old_body = std::mem::take(&mut program.body);
+    for stmt in old_body {
+        if is_top_level_stmt(&stmt) {
+            top_level.push(stmt);
+        } else if is_wrappable_stmt(&stmt) {
+            body_stmts.push(stmt);
         }
     }
 
