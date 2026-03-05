@@ -174,7 +174,7 @@ impl<'a> FunctionTranslator<'a> {
                     TypeKind::Custom(name, _) if name == "Array" || name == "List" => true,
                     _ => false,
                 };
-                
+
                 if is_collection {
                     let ptr = Self::read_place(builder, place, locals, type_ctx)?;
 

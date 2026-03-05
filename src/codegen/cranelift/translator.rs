@@ -288,15 +288,13 @@ impl<'a> FunctionTranslator<'a> {
                     let elem_size = cl_elem_ty.bytes() as i32;
 
                     // Runtime bounds check
-                    let is_list = matches!(&base_type.kind, TypeKind::List(_)) || 
-                                  matches!(&base_type.kind, TypeKind::Custom(name, _) if name == "List");
-                    
+                    let is_list = matches!(&base_type.kind, TypeKind::List(_))
+                        || matches!(&base_type.kind, TypeKind::Custom(name, _) if name == "List");
+
                     let len_val = if is_list {
                         // For List, length is at offset 8 of the MiriList struct
                         builder.ins().load(ptr_type, MemFlags::new(), value, 8)
-                    } else if let Some(len) =
-                        Self::array_len_from_type(&base_type.kind, ptr_type)
-                    {
+                    } else if let Some(len) = Self::array_len_from_type(&base_type.kind, ptr_type) {
                         // Use compile-time literal length if available
                         builder.ins().iconst(ptr_type, len)
                     } else {
@@ -318,7 +316,7 @@ impl<'a> FunctionTranslator<'a> {
                     // Calculate byte offset: index * elem_size
                     let elem_size_val = builder.ins().iconst(ptr_type, elem_size as i64);
                     let byte_offset = builder.ins().imul(idx_val, elem_size_val);
-                    
+
                     let data_ptr = if is_list {
                         // For List, elements are at data_ptr which is at offset 0
                         builder.ins().load(ptr_type, MemFlags::new(), value, 0)
@@ -470,8 +468,8 @@ impl<'a> FunctionTranslator<'a> {
                         let elem_size = cl_elem_ty.bytes() as i32;
 
                         // Runtime bounds check
-                        let is_list = matches!(&base_type.kind, TypeKind::List(_)) || 
-                                      matches!(&base_type.kind, TypeKind::Custom(name, _) if name == "List");
+                        let is_list = matches!(&base_type.kind, TypeKind::List(_))
+                            || matches!(&base_type.kind, TypeKind::Custom(name, _) if name == "List");
 
                         let len_val = if is_list {
                             // For List, length is at offset 8 of the MiriList struct
@@ -500,7 +498,7 @@ impl<'a> FunctionTranslator<'a> {
                         // Calculate byte offset: index * elem_size
                         let elem_size_val = builder.ins().iconst(ptr_type, elem_size as i64);
                         let byte_offset = builder.ins().imul(idx_val, elem_size_val);
-                        
+
                         let data_ptr = if is_list {
                             // For List, elements are at data_ptr which is at offset 0
                             builder.ins().load(ptr_type, MemFlags::new(), addr, 0)
@@ -563,15 +561,13 @@ impl<'a> FunctionTranslator<'a> {
                     let elem_size = cl_elem_ty.bytes() as i32;
 
                     // Runtime bounds check
-                    let is_list = matches!(&base_type.kind, TypeKind::List(_)) || 
-                                  matches!(&base_type.kind, TypeKind::Custom(name, _) if name == "List");
+                    let is_list = matches!(&base_type.kind, TypeKind::List(_))
+                        || matches!(&base_type.kind, TypeKind::Custom(name, _) if name == "List");
 
                     let len_val = if is_list {
                         // For List, length is at offset 8 of the MiriList struct
                         builder.ins().load(ptr_type, MemFlags::new(), addr, 8)
-                    } else if let Some(len) =
-                        Self::array_len_from_type(&base_type.kind, ptr_type)
-                    {
+                    } else if let Some(len) = Self::array_len_from_type(&base_type.kind, ptr_type) {
                         // Use compile-time literal length if available
                         builder.ins().iconst(ptr_type, len)
                     } else {
@@ -593,7 +589,7 @@ impl<'a> FunctionTranslator<'a> {
                     // Calculate byte offset: index * elem_size
                     let elem_size_val = builder.ins().iconst(ptr_type, elem_size as i64);
                     let byte_offset = builder.ins().imul(idx_val, elem_size_val);
-                    
+
                     let data_ptr = if is_list {
                         // For List, elements are at data_ptr which is at offset 0
                         builder.ins().load(ptr_type, MemFlags::new(), addr, 0)
