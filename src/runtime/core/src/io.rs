@@ -43,6 +43,7 @@ extern "C" {
 /// # Safety
 /// - `s` must be a valid pointer to a `MiriString` with valid UTF-8, or null.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_print(s: *const MiriString) {
     if s.is_null() {
         return;
@@ -61,6 +62,7 @@ pub unsafe extern "C" fn miri_rt_print(s: *const MiriString) {
 /// # Safety
 /// - `s` must be a valid pointer to a `MiriString` with valid UTF-8, or null.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_println(s: *const MiriString) {
     if s.is_null() {
         println!();
@@ -77,6 +79,7 @@ pub unsafe extern "C" fn miri_rt_println(s: *const MiriString) {
 /// # Safety
 /// - `s` must be a valid pointer to a `MiriString` with valid UTF-8, or null.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_eprint(s: *const MiriString) {
     if s.is_null() {
         return;
@@ -92,6 +95,7 @@ pub unsafe extern "C" fn miri_rt_eprint(s: *const MiriString) {
 /// # Safety
 /// - `s` must be a valid pointer to a `MiriString` with valid UTF-8, or null.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_eprintln(s: *const MiriString) {
     if s.is_null() {
         eprintln!();
