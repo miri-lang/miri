@@ -7,3 +7,7 @@
 **Vulnerability:** The lexer panics (`unwrap()`) when attempting to handle unclosed indentation structures because it assumes the `indent_stack` will never be empty while dedenting.
 **Learning:** Compilers must not trust their own internal state tracking blindly when processing untrusted input streams. An unexpected EOF or malformed whitespace can deplete stacks faster than expected.
 **Prevention:** Use safe pattern matching (e.g., `while let Some(...) = stack.last()`) and break cleanly when stacks are depleted during whitespace processing.
+## 2024-05-15 - Unhandled Error in Drop
+**Vulnerability:** `unwrap()` inside `Drop` implementations in core runtime types (`MiriList`, `MiriArray`).
+**Learning:** `unwrap()` in `Drop` is particularly dangerous. If the `unwrap()` panics during unwinding from another panic, it causes an immediate abort of the process (double panic). For memory allocations, an invalid layout can panic the program instead of failing gracefully.
+**Prevention:** Avoid panicking (`unwrap`, `expect`) inside `Drop` handlers. Gracefully swallow errors if there is no way to propagate them, especially since `Drop` cannot return a `Result`.
