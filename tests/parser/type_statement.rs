@@ -145,17 +145,12 @@ fn test_error_type_statement_missing_identifier() {
 
 #[test]
 fn test_protected_type_alias() {
-    parser_test(
+    parser_error_test(
         "protected type MyInt is int",
-        vec![type_statement(
-            vec![type_declaration(
-                "MyInt",
-                None,
-                TypeDeclarationKind::Is,
-                opt_expr(type_expr_non_null(type_int())),
-            )],
-            MemberVisibility::Protected,
-        )],
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "public or private visibility".to_string(),
+            found: "protected".to_string(),
+        },
     );
 }
 
