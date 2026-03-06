@@ -34,6 +34,10 @@ impl<'source> Parser<'source> {
         &mut self,
         visibility: MemberVisibility,
     ) -> Result<Statement, SyntaxError> {
+        if visibility == MemberVisibility::Protected {
+            return Err(self.error_unexpected_token("public or private visibility", "protected"));
+        }
+
         self.eat_token(&Token::Type)?;
         let mut declarations = vec![self.type_declaration()?];
 
