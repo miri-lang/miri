@@ -200,6 +200,7 @@ impl TypeChecker {
                         );
                         continue;
                     }
+                    let name = name.to_string();
 
                     // Handle "type F is map<string, int>" or "type Optional<T> is T?"
                     if *kind == TypeDeclarationKind::Is {
@@ -275,13 +276,14 @@ impl TypeChecker {
 
                         // Validate that target type exists
                         if let Ok(target_name) = self.extract_type_name(target) {
-                            if !self.global_type_definitions.contains_key(&target_name) {
+                            if !self.global_type_definitions.contains_key(target_name) {
                                 self.report_error(
                                     format!("Unknown type '{}' in type declaration", target_name),
                                     target.span,
                                 );
                                 continue;
                             }
+                            let target_name = target_name.to_string();
 
                             // Register new type and add hierarchy relationship
                             self.global_type_definitions.insert(
