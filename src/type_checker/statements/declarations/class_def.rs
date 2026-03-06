@@ -66,7 +66,7 @@ impl TypeChecker {
     ) {
         // Extract class name
         let name = match self.extract_type_name(name_expr) {
-            Ok(n) => n,
+            Ok(n) => n.to_string(),
             Err(_) => {
                 self.report_error("Invalid class name".to_string(), name_expr.span);
                 return;
@@ -89,13 +89,13 @@ impl TypeChecker {
             match self.extract_type_name(base_expr) {
                 Ok(base_name) => {
                     // Check base class exists
-                    if !self.global_type_definitions.contains_key(&base_name) {
+                    if !self.global_type_definitions.contains_key(base_name) {
                         self.report_error(
                             format!("Base class '{}' is not defined", base_name),
                             base_expr.span,
                         );
                     }
-                    Some(base_name)
+                    Some(base_name.to_string())
                 }
                 Err(_) => {
                     self.report_error("Invalid base class name".to_string(), base_expr.span);
@@ -137,16 +137,16 @@ impl TypeChecker {
         }
 
         // Validate traits exist
-        let mut trait_names = Vec::new();
+        let mut trait_names = Vec::with_capacity(traits.len());
         for trait_expr in traits {
             if let Ok(trait_name) = self.extract_type_name(trait_expr) {
-                if !self.global_type_definitions.contains_key(&trait_name) {
+                if !self.global_type_definitions.contains_key(trait_name) {
                     self.report_error(
                         format!("Trait '{}' is not defined", trait_name),
                         trait_expr.span,
                     );
                 }
-                trait_names.push(trait_name);
+                trait_names.push(trait_name.to_string());
             }
         }
 
@@ -177,7 +177,7 @@ impl TypeChecker {
         let mut fields: BTreeMap<String, FieldInfo> = BTreeMap::new();
         let mut methods: BTreeMap<String, MethodInfo> = BTreeMap::new();
         // Store method info for second pass body checking
-        let mut method_statements: Vec<&Statement> = Vec::new();
+        let mut method_statements: Vec<&Statement> = Vec::with_capacity(body.len());
 
         for stmt in body {
             match &stmt.node {
