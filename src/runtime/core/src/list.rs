@@ -92,19 +92,23 @@ impl MiriList {
         let new_size = new_capacity * self.elem_size;
         let layout = match Layout::from_size_align(new_size, 8) {
             Ok(layout) => layout,
-            Err(_) => return,
+            Err(_) => std::process::abort(), // Abort safely rather than risking memory corruption
         };
 
         let new_data = if self.data.is_null() {
             unsafe { alloc(layout) }
         } else {
-            let old_layout = Layout::from_size_align(self.capacity * self.elem_size, 8).unwrap();
-            unsafe { realloc(self.data, old_layout, new_size) }
+            match Layout::from_size_align(self.capacity * self.elem_size, 8) {
+                Ok(old_layout) => unsafe { realloc(self.data, old_layout, new_size) },
+                Err(_) => std::process::abort(), // Abort safely rather than risking memory corruption
+            }
         };
 
         if !new_data.is_null() {
             self.data = new_data;
             self.capacity = new_capacity;
+        } else {
+            std::process::abort(); // OOM should also abort safely
         }
     }
 
@@ -237,9 +241,10 @@ impl MiriList {
 impl Drop for MiriList {
     fn drop(&mut self) {
         if !self.data.is_null() && self.capacity > 0 && self.elem_size > 0 {
-            let layout = Layout::from_size_align(self.capacity * self.elem_size, 8).unwrap();
-            unsafe {
-                dealloc(self.data, layout);
+            if let Ok(layout) = Layout::from_size_align(self.capacity * self.elem_size, 8) {
+                unsafe {
+                    dealloc(self.data, layout);
+                }
             }
         }
     }
