@@ -75,7 +75,7 @@ impl<'a> FunctionTranslator<'a> {
                     .brif(is_zero, free_block, &[], merge_block, &[]);
 
                 builder.switch_to_block(free_block);
-                Self::emit_type_drop(builder, ctx, &place_ty.kind, ptr, header_ptr)?;
+                Self::emit_type_drop(builder, ctx, &place_ty.kind, ptr, header_ptr, type_ctx)?;
                 builder.ins().jump(merge_block, &[]);
 
                 builder.seal_block(dec_block);
@@ -90,7 +90,7 @@ impl<'a> FunctionTranslator<'a> {
                 let place_ty = &type_ctx.local_types[place.local.0];
                 let ptr = Self::read_place(builder, place, locals, type_ctx)?;
                 let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size as i64));
-                Self::emit_type_drop(builder, ctx, &place_ty.kind, ptr, header_ptr)?;
+                Self::emit_type_drop(builder, ctx, &place_ty.kind, ptr, header_ptr, type_ctx)?;
             }
             StatementKind::Assign(place, rvalue) => {
                 let mut value = Self::translate_rvalue(builder, ctx, rvalue, locals, type_ctx)?;

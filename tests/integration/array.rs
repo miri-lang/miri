@@ -196,3 +196,103 @@ let x = a["x"]
         "Array index must be an integer",
     );
 }
+
+// ==================== RC / Aliasing Tests ====================
+
+#[test]
+fn test_array_alias_no_double_free() {
+    // Two variables pointing at the same array should not double-free.
+    // RC is incremented on alias, decremented when each goes out of scope.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn main()
+    var a = [1, 2, 3]
+    var b = a
+    println(f"{b[0]}")
+    "#,
+        "1",
+    );
+}
+
+#[test]
+fn test_array_reassign_frees_old() {
+    // Reassigning a collection variable should free the old value via DecRef.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn main()
+    var a = [1, 2, 3]
+    a = [4, 5, 6]
+    println(f"{a[0]}")
+    "#,
+        "4",
+    );
+}
+
+#[test]
+fn test_array_passed_to_function_no_dangle() {
+    // A collection passed to a function should not dangle after return.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn sum_first(arr [int; 3]) int
+    arr[0] + arr[1] + arr[2]
+
+fn main()
+    let a = [10, 20, 30]
+    let s = sum_first(arr: a)
+    println(f"{s}")
+    "#,
+        "60",
+    );
+}
+
+// ==================== elem_size Tests ====================
+
+#[test]
+fn test_array_of_structs_elem_size() {
+    // Array<Point> where Point is a struct — elements are pointer-sized
+    // because structs are heap-allocated.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+struct Point
+    x int
+    y int
+
+fn main()
+    let p1 = Point(x: 1, y: 2)
+    let p2 = Point(x: 3, y: 4)
+    let arr = [p1, p2]
+    let first = arr[0]
+    println(f"{first.x}")
+    println(f"{first.y}")
+    let second = arr[1]
+    println(f"{second.x}")
+    "#,
+        "1\n2\n3",
+    );
+}
+
+#[test]
+fn test_nested_arrays() {
+    // Nested arrays: inner arrays are pointer-sized elements.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn main()
+    let a = [10, 20, 30]
+    let b = [40, 50, 60]
+    let nested = [a, b]
+    let inner = nested[1]
+    println(f"{inner[2]}")
+    "#,
+        "60",
+    );
+}

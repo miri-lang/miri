@@ -1064,23 +1064,10 @@ pub fn lower_call(
                             let mut elem_size = 8;
                             if let ExpressionKind::Array(elements, _) = &args[0].node {
                                 len_val = elements.len() as i64;
-                                // Simple approximation, type checker handles specifics
-                                if elements.is_empty() {
-                                    elem_size = 8;
-                                } else {
-                                    elem_size = match ctx.type_checker.get_type(elements[0].id) {
-                                        Some(ty) => match &ty.kind {
-                                            TypeKind::Int
-                                            | TypeKind::I64
-                                            | TypeKind::F64
-                                            | TypeKind::Float => 8,
-                                            TypeKind::I32 | TypeKind::F32 => 4,
-                                            TypeKind::I16 => 2,
-                                            TypeKind::I8 | TypeKind::Boolean => 1,
-                                            _ => 8,
-                                        },
-                                        None => 8,
-                                    };
+                                if !elements.is_empty() {
+                                    if let Some(ty) = ctx.type_checker.get_type(elements[0].id) {
+                                        elem_size = compute_elem_size_from_type(&ty.kind);
+                                    }
                                 }
                             }
 
@@ -1469,4 +1456,29 @@ fn create_default_value(ty: &Type, span: &Span) -> Operand {
         ty: ty.clone(),
         literal,
     }))
+}
+
+/// Computes the element size in bytes for a collection element type.
+///
+/// Primitives use their natural size. Managed types (String, collections,
+/// custom types/classes) are pointer-sized since they are heap-allocated.
+fn compute_elem_size_from_type(kind: &TypeKind) -> i64 {
+    match kind {
+        TypeKind::I8 | TypeKind::U8 | TypeKind::Boolean => 1,
+        TypeKind::I16 | TypeKind::U16 => 2,
+        TypeKind::I32 | TypeKind::U32 | TypeKind::F32 => 4,
+        TypeKind::Int | TypeKind::I64 | TypeKind::U64 | TypeKind::Float | TypeKind::F64 => 8,
+        TypeKind::I128 | TypeKind::U128 => 16,
+        // All heap-allocated types are pointer-sized (8 bytes on 64-bit).
+        // This includes String, List, Array, Map, Set, Custom (structs/enums/classes).
+        TypeKind::String
+        | TypeKind::List(_)
+        | TypeKind::Array(_, _)
+        | TypeKind::Map(_, _)
+        | TypeKind::Set(_)
+        | TypeKind::Custom(_, _)
+        | TypeKind::RawPtr => 8,
+        // Default to 8 for unknown/complex types
+        _ => 8,
+    }
 }

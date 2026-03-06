@@ -10,6 +10,10 @@ use std::collections::HashSet;
 use std::fmt;
 use std::rc::Rc;
 
+/// Maximum byte size for a type to qualify as auto-copy.
+/// Types with all primitive/auto-copy fields and total size <= this are auto-copy.
+pub const AUTO_COPY_MAX_SIZE: usize = 128;
+
 /// The body of a function in MIR.
 ///
 /// A `Body` represents the complete control flow graph (CFG) for a single function
@@ -34,6 +38,10 @@ pub struct Body {
     pub execution_model: ExecutionModel,
     /// Backend-specific metadata. None for CPU functions.
     pub backend_metadata: Option<BackendMetadata>,
+    /// Names of custom types that have auto-copy semantics (all fields are
+    /// primitive or other auto-copy types, and total size <= `AUTO_COPY_MAX_SIZE`).
+    /// These types use bitwise copy on assignment and do not need RC.
+    pub auto_copy_types: HashSet<String>,
 }
 
 impl Body {
@@ -48,6 +56,7 @@ impl Body {
             span,
             execution_model,
             backend_metadata: None,
+            auto_copy_types: HashSet::new(),
         }
     }
 
