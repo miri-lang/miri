@@ -89,7 +89,6 @@ pub struct EnumDefinition {
     // Use BTreeMap for deterministic variant order (crucial for discriminants)
     pub variants: BTreeMap<String, Vec<Type>>,
     pub generics: Option<Vec<GenericDefinition>>,
-    pub module: String,
 }
 
 /// Definition of a generic type parameter.

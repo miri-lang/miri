@@ -15,6 +15,7 @@ use std::ptr;
 /// - `align` must be a power of two.
 /// - `size`, when rounded up to `align`, must not overflow `isize::MAX`.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_alloc(size: usize, align: usize) -> *mut u8 {
     let layout = match make_layout(size, align) {
         Some(layout) => layout,
@@ -32,6 +33,7 @@ pub unsafe extern "C" fn miri_alloc(size: usize, align: usize) -> *mut u8 {
 /// - `align` must be a power of two.
 /// - `size`, when rounded up to `align`, must not overflow `isize::MAX`.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_alloc_zeroed(size: usize, align: usize) -> *mut u8 {
     let layout = match make_layout(size, align) {
         Some(layout) => layout,
@@ -51,6 +53,7 @@ pub unsafe extern "C" fn miri_alloc_zeroed(size: usize, align: usize) -> *mut u8
 /// - `old_size` and `align` must match the original allocation parameters.
 /// - `new_size`, when rounded up to `align`, must not overflow `isize::MAX`.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_realloc(
     ptr: *mut u8,
     old_size: usize,
@@ -84,6 +87,7 @@ pub unsafe extern "C" fn miri_realloc(
 /// - `size` and `align` must match the original allocation parameters.
 /// - The pointer must not have been freed already (double-free is UB).
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_free(ptr: *mut u8, size: usize, align: usize) {
     if ptr.is_null() || size == 0 {
         return;
