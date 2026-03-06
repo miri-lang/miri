@@ -119,8 +119,12 @@ fn collect_runtime_info(
             // Walk class bodies to collect required runtimes for linking and imports.
             StatementKind::Class(class_data) => {
                 for class_stmt in &class_data.body {
-                    if let StatementKind::RuntimeFunctionDeclaration(runtime_kind, name, params, return_type) =
-                        &class_stmt.node
+                    if let StatementKind::RuntimeFunctionDeclaration(
+                        runtime_kind,
+                        name,
+                        params,
+                        return_type,
+                    ) = &class_stmt.node
                     {
                         required_runtimes.insert(runtime_kind.clone());
 
@@ -136,9 +140,9 @@ fn collect_runtime_info(
                                 })
                                 .collect();
 
-                            let ret_type = return_type
-                                .as_ref()
-                                .and_then(|rt| resolve_type_name(rt).map(|t| translate_type(&t, ptr_ty)));
+                            let ret_type = return_type.as_ref().and_then(|rt| {
+                                resolve_type_name(rt).map(|t| translate_type(&t, ptr_ty))
+                            });
 
                             imports.push(crate::codegen::cranelift::RuntimeImport {
                                 name: name.clone(),
