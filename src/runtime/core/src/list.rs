@@ -255,6 +255,7 @@ impl Drop for MiriList {
 /// This is used by the compiler to lower `List([1, 2, 3])` constructor calls.
 /// The array's data is copied into the new list; the array is NOT consumed.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_list_new_from_raw(
     array: *mut crate::array::MiriArray,
     _len: usize,
@@ -283,6 +284,7 @@ pub unsafe extern "C" fn miri_rt_list_new_from_raw(
 ///
 /// Allocates `[RC=1][MiriList fields]`.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_list_new(elem_size: usize) -> *mut MiriList {
     let struct_size = std::mem::size_of::<MiriList>();
     let payload = alloc_with_rc(struct_size);
@@ -301,6 +303,7 @@ pub unsafe extern "C" fn miri_rt_list_new(elem_size: usize) -> *mut MiriList {
 ///
 /// Allocates `[RC=1][MiriList fields]` with a pre-allocated data buffer.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_list_with_capacity(
     elem_size: usize,
     capacity: usize,
@@ -323,6 +326,7 @@ pub unsafe extern "C" fn miri_rt_list_with_capacity(
 
 /// Returns the number of elements in the list.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_list_len(ptr: *const MiriList) -> usize {
     if ptr.is_null() {
         return 0;
@@ -332,6 +336,7 @@ pub unsafe extern "C" fn miri_rt_list_len(ptr: *const MiriList) -> usize {
 
 /// Returns the capacity of the list.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_list_capacity(ptr: *const MiriList) -> usize {
     if ptr.is_null() {
         return 0;
@@ -341,6 +346,7 @@ pub unsafe extern "C" fn miri_rt_list_capacity(ptr: *const MiriList) -> usize {
 
 /// Returns true (1) if the list is empty, false (0) otherwise.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_list_is_empty(ptr: *const MiriList) -> u8 {
     if ptr.is_null() {
         return 1;
@@ -366,6 +372,7 @@ pub unsafe extern "C" fn miri_rt_list_push(ptr: *mut MiriList, val: usize) {
 /// Pops the last element from the list.
 /// Returns true (1) if successful, false (0) if the list was empty.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_list_pop(ptr: *mut MiriList) -> u8 {
     if ptr.is_null() {
         return 0;
@@ -381,6 +388,7 @@ pub unsafe extern "C" fn miri_rt_list_pop(ptr: *mut MiriList) -> u8 {
 /// Gets a pointer to the element at the given index.
 /// Returns null if the index is out of bounds.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_list_get(ptr: *const MiriList, index: usize) -> *const u8 {
     if ptr.is_null() {
         return ptr::null();
@@ -390,6 +398,7 @@ pub unsafe extern "C" fn miri_rt_list_get(ptr: *const MiriList, index: usize) ->
 
 /// Gets a mutable pointer to the element at the given index.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_list_get_mut(ptr: *mut MiriList, index: usize) -> *mut u8 {
     if ptr.is_null() {
         return ptr::null_mut();
@@ -400,6 +409,7 @@ pub unsafe extern "C" fn miri_rt_list_get_mut(ptr: *mut MiriList, index: usize) 
 /// Sets the element at the given index.
 /// Returns true (1) if successful, false (0) if the index was out of bounds.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_list_set(
     ptr: *mut MiriList,
     index: usize,
@@ -415,6 +425,7 @@ pub unsafe extern "C" fn miri_rt_list_set(
 /// Inserts an element at the given index.
 /// Returns true (1) if successful, false (0) if the index was out of bounds.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_list_insert(
     ptr: *mut MiriList,
     index: usize,
@@ -430,6 +441,7 @@ pub unsafe extern "C" fn miri_rt_list_insert(
 /// Removes the element at the given index.
 /// Returns true (1) if successful, false (0) if the index was out of bounds.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_list_remove(
     ptr: *mut MiriList,
     index: usize,
@@ -456,6 +468,7 @@ pub unsafe extern "C" fn miri_rt_list_remove(
 
 /// Clears all elements from the list.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_list_clear(ptr: *mut MiriList) {
     if !ptr.is_null() {
         (*ptr).clear();
@@ -464,6 +477,7 @@ pub unsafe extern "C" fn miri_rt_list_clear(ptr: *mut MiriList) {
 
 /// Clones a list.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_list_clone(ptr: *const MiriList) -> *mut MiriList {
     if ptr.is_null() {
         return miri_rt_list_new(0);
@@ -488,6 +502,7 @@ pub unsafe extern "C" fn miri_rt_list_clone(ptr: *const MiriList) -> *mut MiriLi
 /// The pointer must have been returned by `miri_rt_list_new` (i.e., it
 /// points past the RC header).
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_list_free(ptr: *mut MiriList) {
     if ptr.is_null() {
         return;
@@ -505,6 +520,7 @@ pub unsafe extern "C" fn miri_rt_list_free(ptr: *mut MiriList) {
 
 /// Returns the first element pointer, or null if empty.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_list_first(ptr: *const MiriList) -> *const u8 {
     if ptr.is_null() || (*ptr).is_empty() {
         return ptr::null();
@@ -514,6 +530,7 @@ pub unsafe extern "C" fn miri_rt_list_first(ptr: *const MiriList) -> *const u8 {
 
 /// Returns the last element pointer, or null if empty.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_list_last(ptr: *const MiriList) -> *const u8 {
     if ptr.is_null() || (*ptr).is_empty() {
         return ptr::null();
@@ -523,6 +540,7 @@ pub unsafe extern "C" fn miri_rt_list_last(ptr: *const MiriList) -> *const u8 {
 
 /// Reverses the list in place.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_list_reverse(ptr: *mut MiriList) {
     if ptr.is_null() {
         return;
