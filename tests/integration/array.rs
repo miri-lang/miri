@@ -3,10 +3,6 @@
 
 use crate::integration::utils::{assert_compiler_error, assert_runs, assert_runs_with_output};
 
-// =========================================================================
-// Construction
-// =========================================================================
-
 #[test]
 fn test_array_creation() {
     assert_runs("let a = [1, 2, 3]");
@@ -27,15 +23,12 @@ fn test_array_booleans() {
     assert_runs("let a = [true, false, true]");
 }
 
-// =========================================================================
-// Indexing
-// =========================================================================
-
 #[test]
 fn test_array_indexing() {
     assert_runs_with_output(
         r#"
 use system.io
+
 let a = [10, 20, 30]
 print(f"{a[1]}")
     "#,
@@ -48,6 +41,7 @@ fn test_array_first_element() {
     assert_runs_with_output(
         r#"
 use system.io
+
 let a = [1, 2, 3]
 print(f"{a[0]}")
     "#,
@@ -60,6 +54,7 @@ fn test_array_last_element() {
     assert_runs_with_output(
         r#"
 use system.io
+
 let a = [1, 2, 3]
 print(f"{a[2]}")
     "#,
@@ -72,6 +67,7 @@ fn test_array_variable_index() {
     assert_runs_with_output(
         r#"
 use system.io
+
 let i = 1
 let a = [10, 20, 30]
 print(f"{a[i]}")
@@ -85,6 +81,7 @@ fn test_array_index_assignment() {
     assert_runs_with_output(
         r#"
 use system.io
+
 var a = [10, 20, 30]
 a[1] = 99
 print(f"{a[1]}")
@@ -93,15 +90,12 @@ print(f"{a[1]}")
     );
 }
 
-// =========================================================================
-// For-loops
-// =========================================================================
-
 #[test]
 fn test_array_for_loop() {
     assert_runs_with_output(
         r#"
 use system.io
+
 for x in [1, 2, 3]
     println(f"{x}")
     "#,
@@ -114,31 +108,25 @@ fn test_array_for_loop_strings() {
     assert_runs_with_output(
         r#"
 use system.io
+
 for s in ["a", "b"]
-    println(f"{s}")
+    println(s)
     "#,
         "a\nb\n",
     );
 }
-
-// =========================================================================
-// F-string formatting
-// =========================================================================
 
 #[test]
 fn test_array_fstring() {
     assert_runs_with_output(
         r#"
 use system.io
+
 print(f"{[1, 2, 3][0]}")
     "#,
         "1",
     );
 }
-
-// =========================================================================
-// BaseList methods
-// =========================================================================
 
 #[test]
 fn test_array_baselist_methods() {
@@ -146,6 +134,7 @@ fn test_array_baselist_methods() {
         r#"
 use system.io
 use system.collections.array
+
 let a = [10, 20, 30]
 println(f"{a.first() ?? -1}")
 println(f"{a.last() ?? -1}")
@@ -163,6 +152,7 @@ fn test_array_reverse() {
         r#"
 use system.io
 use system.collections.array
+
 let a = [10000000000, 20000000000, 30000000000]
 a.reverse()
 println(f"{a[0]} {a[1]} {a[2]}")

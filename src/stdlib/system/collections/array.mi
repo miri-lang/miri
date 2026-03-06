@@ -16,6 +16,9 @@ use system.ops
 
 public class Array<T, Size> implements Iterable
 
+    runtime "core" fn miri_rt_array_new(count int, elem_size int) Self
+    runtime "core" fn miri_rt_array_free(a Self)
+
     /// Returns the number of elements in the array (always equals Size).
     /// Handled as a built-in operation by the compiler.
     public fn length() int: 0
@@ -23,7 +26,7 @@ public class Array<T, Size> implements Iterable
     /// Returns the element at the given index.
     /// This enables for-loop iteration: `for x in array`.
     /// Handled as a built-in operation by the compiler.
-    public fn element_at(index int) Self: self
+    public fn element_at(index int) T: self[index]
 
     /// Sets the element at the given index.
     public fn set(index int, value T)

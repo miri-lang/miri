@@ -2,6 +2,8 @@ use system.ops
 
 public class List<T> implements Iterable
 
+    runtime "core" fn miri_rt_list_new(elem_size int) Self
+    runtime "core" fn miri_rt_list_free(l Self)
     runtime "core" fn miri_rt_list_len(l Self) int
     runtime "core" fn miri_rt_list_push(l Self, item T)
     runtime "core" fn miri_rt_list_pop(l Self) bool
@@ -17,7 +19,7 @@ public class List<T> implements Iterable
 
     /// Returns the element at the given index.
     /// This enables for-loop iteration: `for x in list`.
-    public fn element_at(index int) Self: self
+    public fn element_at(index int) T: self[index]
 
     /// Appends an element to the end of the list.
     public fn push(item T)
