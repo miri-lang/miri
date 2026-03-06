@@ -10,6 +10,7 @@ use super::{bool_to_ffi, deref_as_str, MiriString};
 /// # Safety
 /// - `ptr` must be a valid pointer to a `MiriString`, or null.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_len(ptr: *const MiriString) -> usize {
     if ptr.is_null() {
         return 0;
@@ -24,6 +25,7 @@ pub unsafe extern "C" fn miri_rt_string_len(ptr: *const MiriString) -> usize {
 /// # Safety
 /// - `ptr` must be a valid pointer to a `MiriString` with valid UTF-8, or null.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_char_count(ptr: *const MiriString) -> usize {
     if ptr.is_null() {
         return 0;
@@ -36,6 +38,7 @@ pub unsafe extern "C" fn miri_rt_string_char_count(ptr: *const MiriString) -> us
 /// # Safety
 /// - `ptr` must be a valid pointer to a `MiriString`, or null.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_is_empty(ptr: *const MiriString) -> u8 {
     if ptr.is_null() {
         return 1;
@@ -50,6 +53,7 @@ pub unsafe extern "C" fn miri_rt_string_is_empty(ptr: *const MiriString) -> u8 {
 /// # Safety
 /// - Both pointers must be valid `MiriString` pointers with valid UTF-8, or null.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_contains(
     haystack: *const MiriString,
     needle: *const MiriString,
@@ -67,6 +71,7 @@ pub unsafe extern "C" fn miri_rt_string_contains(
 /// # Safety
 /// - Both pointers must be valid `MiriString` pointers with valid UTF-8, or null.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_starts_with(
     s: *const MiriString,
     prefix: *const MiriString,
@@ -84,6 +89,7 @@ pub unsafe extern "C" fn miri_rt_string_starts_with(
 /// # Safety
 /// - Both pointers must be valid `MiriString` pointers with valid UTF-8, or null.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_ends_with(
     s: *const MiriString,
     suffix: *const MiriString,
@@ -101,6 +107,7 @@ pub unsafe extern "C" fn miri_rt_string_ends_with(
 /// # Safety
 /// - Both pointers must be valid `MiriString` pointers with valid UTF-8, or null.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_equals(a: *const MiriString, b: *const MiriString) -> u8 {
     let a_str = deref_as_str(a);
     let b_str = deref_as_str(b);
@@ -114,6 +121,7 @@ pub unsafe extern "C" fn miri_rt_string_equals(a: *const MiriString, b: *const M
 /// # Safety
 /// - `ptr` must be a valid pointer to a `MiriString`, or null.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_data(ptr: *const MiriString) -> *const u8 {
     if ptr.is_null() {
         return std::ptr::null();

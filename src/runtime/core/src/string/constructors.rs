@@ -20,6 +20,7 @@ pub extern "C" fn miri_rt_string_new() -> *mut MiriString {
 /// # Safety
 /// - If `data` is non-null, it must point to at least `len` readable bytes.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_from_raw(data: *const u8, len: usize) -> *mut MiriString {
     if data.is_null() || len == 0 {
         return miri_rt_string_new();
@@ -43,6 +44,7 @@ pub unsafe extern "C" fn miri_rt_string_from_raw(data: *const u8, len: usize) ->
 /// - `ptr` must have been returned by a `miri_rt_string_*` constructor, or be null.
 /// - The pointer must not have been freed already (double-free is UB).
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_free(ptr: *mut MiriString) {
     if !ptr.is_null() {
         // SAFETY: `ptr` was created via `Box::into_raw` in a constructor.
@@ -58,6 +60,7 @@ pub unsafe extern "C" fn miri_rt_string_free(ptr: *mut MiriString) {
 /// # Safety
 /// - `ptr` must be a valid pointer to a live `MiriString`, or null.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_clone(ptr: *const MiriString) -> *mut MiriString {
     if ptr.is_null() {
         return miri_rt_string_new();

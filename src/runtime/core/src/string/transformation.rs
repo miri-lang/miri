@@ -14,6 +14,7 @@ use super::{into_raw_ptr, miri_rt_string_new, MiriString};
 /// # Safety
 /// - Both pointers must be valid `MiriString` pointers with valid UTF-8, or null.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_concat(
     left: *const MiriString,
     right: *const MiriString,
@@ -58,6 +59,7 @@ pub unsafe extern "C" fn miri_rt_string_concat(
 /// # Safety
 /// - `ptr` must be a valid `MiriString` pointer with valid UTF-8, or null.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_to_lower(ptr: *const MiriString) -> *mut MiriString {
     transform_str(ptr, |s| s.to_lowercase())
 }
@@ -67,6 +69,7 @@ pub unsafe extern "C" fn miri_rt_string_to_lower(ptr: *const MiriString) -> *mut
 /// # Safety
 /// - `ptr` must be a valid `MiriString` pointer with valid UTF-8, or null.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_to_upper(ptr: *const MiriString) -> *mut MiriString {
     transform_str(ptr, |s| s.to_uppercase())
 }
@@ -76,6 +79,7 @@ pub unsafe extern "C" fn miri_rt_string_to_upper(ptr: *const MiriString) -> *mut
 /// # Safety
 /// - `ptr` must be a valid `MiriString` pointer with valid UTF-8, or null.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_trim(ptr: *const MiriString) -> *mut MiriString {
     transform_str_ref(ptr, str::trim)
 }
@@ -85,6 +89,7 @@ pub unsafe extern "C" fn miri_rt_string_trim(ptr: *const MiriString) -> *mut Mir
 /// # Safety
 /// - `ptr` must be a valid `MiriString` pointer with valid UTF-8, or null.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_trim_start(ptr: *const MiriString) -> *mut MiriString {
     transform_str_ref(ptr, str::trim_start)
 }
@@ -94,6 +99,7 @@ pub unsafe extern "C" fn miri_rt_string_trim_start(ptr: *const MiriString) -> *m
 /// # Safety
 /// - `ptr` must be a valid `MiriString` pointer with valid UTF-8, or null.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_trim_end(ptr: *const MiriString) -> *mut MiriString {
     transform_str_ref(ptr, str::trim_end)
 }
@@ -105,6 +111,7 @@ pub unsafe extern "C" fn miri_rt_string_trim_end(ptr: *const MiriString) -> *mut
 /// # Safety
 /// - All pointers must be valid `MiriString` pointers with valid UTF-8, or null.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_replace(
     s: *const MiriString,
     from: *const MiriString,
@@ -136,6 +143,7 @@ pub unsafe extern "C" fn miri_rt_string_replace(
 /// # Safety
 /// - `s` must be a valid `MiriString` pointer with valid UTF-8, or null.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_substring(
     s: *const MiriString,
     start: usize,
@@ -164,6 +172,7 @@ pub unsafe extern "C" fn miri_rt_string_substring(
 /// # Safety
 /// - `ptr` must be a valid `MiriString` pointer with valid UTF-8, or null.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_char_at(
     ptr: *const MiriString,
     index: usize,
@@ -189,6 +198,7 @@ pub unsafe extern "C" fn miri_rt_string_char_at(
 /// # Safety
 /// - `ptr` must be a valid `MiriString` pointer with valid UTF-8, or null.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_repeat(
     ptr: *const MiriString,
     count: usize,
