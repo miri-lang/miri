@@ -58,9 +58,10 @@ impl MiriArray {
 impl Drop for MiriArray {
     fn drop(&mut self) {
         if !self.data.is_null() && self.elem_count > 0 && self.elem_size > 0 {
-            let layout = Layout::from_size_align(self.byte_len(), 8).unwrap();
-            unsafe {
-                dealloc(self.data, layout);
+            if let Ok(layout) = Layout::from_size_align(self.byte_len(), 8) {
+                unsafe {
+                    dealloc(self.data, layout);
+                }
             }
         }
     }
