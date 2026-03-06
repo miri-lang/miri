@@ -288,17 +288,6 @@ type A, B, C
 }
 
 #[test]
-fn test_protected_type_alias() {
-    // TODO: types should be just private or public. Protected is not needed.
-    type_checker_test(
-        "
-protected type InternalInt is int
-let x InternalInt = 5
-",
-    );
-}
-
-#[test]
 fn test_type_alias_deeply_nested() {
     type_checker_error_test(
         "
