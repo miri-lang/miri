@@ -64,7 +64,7 @@ impl TypeChecker {
     ) {
         // Extract trait name
         let name = match self.extract_type_name(name_expr) {
-            Ok(n) => n,
+            Ok(n) => n.to_string(),
             Err(_) => {
                 self.report_error("Invalid trait name".to_string(), name_expr.span);
                 return;
@@ -83,16 +83,16 @@ impl TypeChecker {
             .map(|gens| self.extract_generic_definitions(gens, context));
 
         // Validate parent traits exist
-        let mut parent_trait_names = Vec::new();
+        let mut parent_trait_names = Vec::with_capacity(parent_traits.len());
         for trait_expr in parent_traits {
             if let Ok(trait_name) = self.extract_type_name(trait_expr) {
-                if !self.global_type_definitions.contains_key(&trait_name) {
+                if !self.global_type_definitions.contains_key(trait_name) {
                     self.report_error(
                         format!("Parent trait '{}' is not defined", trait_name),
                         trait_expr.span,
                     );
                 }
-                parent_trait_names.push(trait_name);
+                parent_trait_names.push(trait_name.to_string());
             }
         }
 

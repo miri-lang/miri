@@ -49,7 +49,7 @@ impl TypeChecker {
         generics: &[Expression],
         context: &mut Context,
     ) -> Vec<GenericDefinition> {
-        let mut result = Vec::new();
+        let mut result = Vec::with_capacity(generics.len());
         for gen_expr in generics {
             if let ExpressionKind::GenericType(name_expr, constraint_expr, kind) = &gen_expr.node {
                 if let Ok(gen_name) = self.extract_type_name(name_expr) {
@@ -57,7 +57,7 @@ impl TypeChecker {
                         .as_ref()
                         .map(|c| self.resolve_type_expression(c, context));
                     result.push(GenericDefinition {
-                        name: gen_name,
+                        name: gen_name.to_string(),
                         constraint,
                         kind: kind.clone(),
                     });
