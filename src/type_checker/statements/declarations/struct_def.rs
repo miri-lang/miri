@@ -63,7 +63,8 @@ impl TypeChecker {
             return;
         };
 
-        let mut generic_defs = Vec::new();
+        let capacity = generics.as_ref().map(|g| g.len()).unwrap_or(0);
+        let mut generic_defs = Vec::with_capacity(capacity);
         context.enter_scope();
         if let Some(gens) = generics {
             self.define_generics(gens, context);
@@ -83,7 +84,7 @@ impl TypeChecker {
             }
         }
 
-        let mut fields_vec = Vec::new();
+        let mut fields_vec = Vec::with_capacity(fields.len());
         for field in fields {
             if let ExpressionKind::StructMember(field_name_expr, field_type_expr) = &field.node {
                 if let ExpressionKind::Identifier(field_name, _) = &field_name_expr.node {

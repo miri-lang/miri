@@ -187,19 +187,19 @@ impl TypeChecker {
     // ==================== Name and Type Extraction ====================
 
     /// Extracts a name from an identifier expression.
-    pub(crate) fn extract_name(&self, expr: &Expression) -> Result<String, String> {
+    pub(crate) fn extract_name<'a>(&self, expr: &'a Expression) -> Result<&'a str, String> {
         match &expr.node {
-            ExpressionKind::Identifier(name, _) => Ok(name.clone()),
+            ExpressionKind::Identifier(name, _) => Ok(name.as_str()),
             _ => Err("Expected identifier".to_string()),
         }
     }
 
     /// Extracts a type name from an expression (identifier or type expression).
-    pub(crate) fn extract_type_name(&self, expr: &Expression) -> Result<String, String> {
+    pub(crate) fn extract_type_name<'a>(&self, expr: &'a Expression) -> Result<&'a str, String> {
         match &expr.node {
-            ExpressionKind::Identifier(name, _) => Ok(name.clone()),
+            ExpressionKind::Identifier(name, _) => Ok(name.as_str()),
             ExpressionKind::Type(ty, _) => match &ty.kind {
-                TypeKind::Custom(name, _) => Ok(name.clone()),
+                TypeKind::Custom(name, _) => Ok(name.as_str()),
                 _ => Err("Expected custom type".to_string()),
             },
             _ => Err("Expected type identifier".to_string()),
