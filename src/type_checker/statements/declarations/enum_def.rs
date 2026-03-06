@@ -70,7 +70,7 @@ impl TypeChecker {
             context.enter_scope();
             self.define_generics(gens, context);
 
-            let mut defs = Vec::new();
+            let mut defs = Vec::with_capacity(gens.len());
             for gen in gens {
                 if let ExpressionKind::GenericType(name_expr, constraint, kind) = &gen.node {
                     if let ExpressionKind::Identifier(n, _) = &name_expr.node {
@@ -92,7 +92,7 @@ impl TypeChecker {
         for variant in variants {
             if let ExpressionKind::EnumValue(variant_name_expr, associated_types) = &variant.node {
                 if let ExpressionKind::Identifier(variant_name, _) = &variant_name_expr.node {
-                    let mut types = Vec::new();
+                    let mut types = Vec::with_capacity(associated_types.len());
                     for ty_expr in associated_types {
                         types.push(self.resolve_type_expression(ty_expr, context));
                     }
