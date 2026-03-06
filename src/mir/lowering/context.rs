@@ -62,10 +62,13 @@ pub struct LoweringContext<'a> {
 
 impl<'a> LoweringContext<'a> {
     pub fn new(
-        body: Body,
+        mut body: Body,
         type_checker: &'a crate::type_checker::TypeChecker,
         is_release: bool,
     ) -> Self {
+        // Pre-compute auto-copy type set from type definitions
+        body.auto_copy_types = Self::compute_auto_copy_types(type_checker);
+
         let mut ctx = Self {
             body,
             variable_map: HashMap::new(),
@@ -250,5 +253,30 @@ impl<'a> LoweringContext<'a> {
     pub fn set_terminator(&mut self, terminator: Terminator) {
         let block = &mut self.body.basic_blocks[self.current_block.0];
         block.terminator = Some(terminator);
+    }
+
+    /// Returns true if the given type has auto-copy semantics (no RC needed).
+    pub fn is_type_auto_copy(&self, ty: &Type) -> bool {
+        crate::type_checker::utils::is_auto_copy(
+            &ty.kind,
+            &self.type_checker.global_type_definitions,
+        )
+    }
+
+    /// Computes the set of custom type names that qualify as auto-copy.
+    fn compute_auto_copy_types(
+        type_checker: &crate::type_checker::TypeChecker,
+    ) -> std::collections::HashSet<String> {
+        let mut auto_copy = std::collections::HashSet::new();
+        for name in type_checker.global_type_definitions.keys() {
+            let kind = crate::ast::types::TypeKind::Custom(name.clone(), None);
+            if crate::type_checker::utils::is_auto_copy(
+                &kind,
+                &type_checker.global_type_definitions,
+            ) {
+                auto_copy.insert(name.clone());
+            }
+        }
+        auto_copy
     }
 }

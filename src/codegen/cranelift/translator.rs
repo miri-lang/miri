@@ -581,7 +581,8 @@ impl<'a> FunctionTranslator<'a> {
     /// All heap types share the same `[RC][payload]` layout, so the RC
     /// increment/decrement logic is uniform. The only type-specific part is
     /// *what* to free when RC hits zero:
-    /// - Arrays/Lists have internal data buffers that their `_free` functions handle.
+    /// - Arrays/Lists call their runtime `_free` functions (which handle internal buffers).
+    /// - Structs/enums with managed fields: DecRef each managed field, then free the block.
     /// - All other types just need the `[RC][payload]` block freed.
     ///
     /// `ptr` points to the payload (past the RC header).
@@ -592,14 +593,174 @@ impl<'a> FunctionTranslator<'a> {
         kind: &TypeKind,
         ptr: Value,
         header_ptr: Value,
+        type_ctx: &TypeCtx,
     ) -> Result<(), String> {
         if Self::is_list_type(kind) {
             Self::call_rt_list_free(builder, ctx, ptr)
         } else if Self::is_collection_type(kind) {
             Self::call_rt_array_free(builder, ctx, ptr)
+        } else if let TypeKind::Custom(name, _) = kind {
+            // Drop specialization: release managed fields before freeing the struct.
+            Self::emit_struct_drop(builder, ctx, name, ptr, type_ctx)?;
+            Self::call_libc_free(builder, ctx, header_ptr)
         } else {
             Self::call_libc_free(builder, ctx, header_ptr)
         }
+    }
+
+    /// Emits DecRef calls for all managed fields of a struct or enum.
+    ///
+    /// For structs, iterates all fields and emits a DecRef sequence for each
+    /// managed (heap-allocated) field. For enums, reads the discriminant and
+    /// conditionally DecRefs the active variant's managed fields.
+    fn emit_struct_drop(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        type_name: &str,
+        payload_ptr: Value,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), String> {
+        let ptr_type = type_ctx.ptr_type;
+
+        let Some(def) = type_ctx.type_definitions.get(type_name) else {
+            return Ok(());
+        };
+
+        match def.clone() {
+            TypeDefinition::Struct(struct_def) => {
+                for (field_idx, (_name, field_ty, _vis)) in struct_def.fields.iter().enumerate() {
+                    if is_field_managed(&field_ty.kind) {
+                        let (offset, _cl_ty) = layout::field_layout(
+                            &TypeKind::Custom(type_name.to_string(), None),
+                            field_idx,
+                            type_ctx.type_definitions,
+                            ptr_type,
+                        );
+                        let field_ptr =
+                            builder
+                                .ins()
+                                .load(ptr_type, MemFlags::new(), payload_ptr, offset);
+                        Self::emit_decref_value(builder, ctx, &field_ty.kind, field_ptr, type_ctx)?;
+                    }
+                }
+            }
+            TypeDefinition::Enum(enum_def) => {
+                // Read discriminant at offset 0
+                let disc = builder
+                    .ins()
+                    .load(ptr_type, MemFlags::new(), payload_ptr, 0);
+                let ptr_size = ptr_type.bytes() as i32;
+
+                // For each variant that has managed fields, emit a conditional DecRef
+                for (variant_idx, (_variant_name, fields)) in enum_def.variants.iter().enumerate() {
+                    let has_managed = fields.iter().any(|ty| is_field_managed(&ty.kind));
+                    if !has_managed {
+                        continue;
+                    }
+
+                    // Check if this variant is active
+                    let variant_val = builder.ins().iconst(ptr_type, variant_idx as i64);
+                    let is_this_variant = builder.ins().icmp(
+                        cranelift_codegen::ir::condcodes::IntCC::Equal,
+                        disc,
+                        variant_val,
+                    );
+
+                    let drop_block = builder.create_block();
+                    let merge_block = builder.create_block();
+                    builder
+                        .ins()
+                        .brif(is_this_variant, drop_block, &[], merge_block, &[]);
+
+                    builder.switch_to_block(drop_block);
+                    for (field_idx, field_ty) in fields.iter().enumerate() {
+                        if is_field_managed(&field_ty.kind) {
+                            let field_offset = ptr_size + (field_idx as i32 * ptr_size);
+                            let field_ptr = builder.ins().load(
+                                ptr_type,
+                                MemFlags::new(),
+                                payload_ptr,
+                                field_offset,
+                            );
+                            Self::emit_decref_value(
+                                builder,
+                                ctx,
+                                &field_ty.kind,
+                                field_ptr,
+                                type_ctx,
+                            )?;
+                        }
+                    }
+                    builder.ins().jump(merge_block, &[]);
+                    builder.seal_block(drop_block);
+                    builder.switch_to_block(merge_block);
+                    builder.seal_block(merge_block);
+                }
+            }
+            TypeDefinition::Class(_)
+            | TypeDefinition::Trait(_)
+            | TypeDefinition::Alias(_)
+            | TypeDefinition::Generic(_) => {}
+        }
+
+        Ok(())
+    }
+
+    /// Emits an inline DecRef sequence for a managed value.
+    ///
+    /// Checks the RC header, decrements it, and if zero calls emit_type_drop
+    /// recursively. This is the same logic as `StatementKind::DecRef` but for
+    /// an arbitrary `Value` (not tied to a MIR local).
+    fn emit_decref_value(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        kind: &TypeKind,
+        ptr: Value,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), String> {
+        let ptr_type = type_ctx.ptr_type;
+        let ptr_size = ptr_type.bytes() as i64;
+
+        let header_ptr = builder.ins().iadd_imm(ptr, -ptr_size);
+        let rc = builder.ins().load(ptr_type, MemFlags::new(), header_ptr, 0);
+
+        // Skip immortal objects (RC < 0)
+        let is_immortal = builder.ins().icmp_imm(
+            cranelift_codegen::ir::condcodes::IntCC::SignedLessThan,
+            rc,
+            0,
+        );
+        let dec_block = builder.create_block();
+        let merge_block = builder.create_block();
+        builder
+            .ins()
+            .brif(is_immortal, merge_block, &[], dec_block, &[]);
+
+        builder.switch_to_block(dec_block);
+        let new_rc = builder.ins().iadd_imm(rc, -1);
+        builder.ins().store(MemFlags::new(), new_rc, header_ptr, 0);
+
+        let zero = builder.ins().iconst(ptr_type, 0);
+        let is_zero =
+            builder
+                .ins()
+                .icmp(cranelift_codegen::ir::condcodes::IntCC::Equal, new_rc, zero);
+
+        let free_block = builder.create_block();
+        builder
+            .ins()
+            .brif(is_zero, free_block, &[], merge_block, &[]);
+
+        builder.switch_to_block(free_block);
+        Self::emit_type_drop(builder, ctx, kind, ptr, header_ptr, type_ctx)?;
+        builder.ins().jump(merge_block, &[]);
+
+        builder.seal_block(dec_block);
+        builder.seal_block(free_block);
+        builder.switch_to_block(merge_block);
+        builder.seal_block(merge_block);
+
+        Ok(())
     }
 
     /// Translates an index access on a collection (Array or List).
@@ -754,4 +915,17 @@ impl<'a> FunctionTranslator<'a> {
         builder.ins().call(local_func, &[ptr]);
         Ok(())
     }
+}
+
+/// Returns true if a field type is managed (heap-allocated, needs DecRef on drop).
+fn is_field_managed(kind: &TypeKind) -> bool {
+    matches!(
+        kind,
+        TypeKind::String
+            | TypeKind::List(_)
+            | TypeKind::Array(_, _)
+            | TypeKind::Map(_, _)
+            | TypeKind::Set(_)
+            | TypeKind::Custom(_, _)
+    )
 }

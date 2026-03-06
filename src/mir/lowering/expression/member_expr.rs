@@ -130,7 +130,7 @@ pub(crate) fn lower_member_expr(
 
             let element_ty = resolve_type(ctx.type_checker, &elements[idx]);
 
-            let operand = if element_ty.is_copy() {
+            let operand = if ctx.is_type_auto_copy(&element_ty) {
                 Operand::Copy(target_place.clone())
             } else {
                 Operand::Move(target_place.clone())

@@ -18,6 +18,181 @@ use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
 use crate::error::type_error::TypeError;
 
+/// Determines whether a type is auto-copy given available type definitions.
+///
+/// A type is auto-copy when:
+/// - It is a primitive (int, float, bool, i8..i128, u8..u128, f32, f64, void)
+/// - It is a struct/enum whose **all** fields are themselves auto-copy, and
+///   the total estimated size is ≤ `AUTO_COPY_MAX_SIZE` (128 bytes)
+/// - Tuples of auto-copy types
+///
+/// Managed types (String, List, Array, Map, Set, classes) are never auto-copy.
+pub fn is_auto_copy(
+    kind: &TypeKind,
+    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+) -> bool {
+    is_auto_copy_inner(
+        kind,
+        type_definitions,
+        &mut std::collections::HashSet::new(),
+    )
+}
+
+/// Recursive helper with a visited set to prevent infinite recursion on cyclic types.
+fn is_auto_copy_inner(
+    kind: &TypeKind,
+    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+    visited: &mut std::collections::HashSet<String>,
+) -> bool {
+    match kind {
+        // Primitives are always auto-copy
+        TypeKind::Int
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::I128
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::U128
+        | TypeKind::Float
+        | TypeKind::F32
+        | TypeKind::F64
+        | TypeKind::Boolean
+        | TypeKind::RawPtr
+        | TypeKind::Void
+        | TypeKind::Error
+        | TypeKind::Identifier => true,
+
+        // Managed heap types are never auto-copy
+        TypeKind::String
+        | TypeKind::List(_)
+        | TypeKind::Array(_, _)
+        | TypeKind::Map(_, _)
+        | TypeKind::Set(_)
+        | TypeKind::Result(_, _)
+        | TypeKind::Future(_)
+        | TypeKind::Function(_)
+        | TypeKind::Meta(_)
+        | TypeKind::Linear(_)
+        | TypeKind::Generic(_, _, _) => false,
+
+        // Tuples: auto-copy if all elements are auto-copy
+        TypeKind::Tuple(elements) => elements.iter().all(|elem_expr| {
+            if let crate::ast::expression::ExpressionKind::Type(ty, _) = &elem_expr.node {
+                is_auto_copy_inner(&ty.kind, type_definitions, visited)
+            } else {
+                // Can't resolve element type — conservative: not auto-copy
+                false
+            }
+        }),
+
+        // Option: inherits from inner type
+        TypeKind::Option(inner) => is_auto_copy_inner(&inner.kind, type_definitions, visited),
+
+        // Custom types: look up the definition
+        TypeKind::Custom(name, _) => {
+            // Prevent infinite recursion
+            if !visited.insert(name.clone()) {
+                return false;
+            }
+
+            match type_definitions.get(name) {
+                Some(TypeDefinition::Struct(struct_def)) => {
+                    // All fields must be auto-copy and total size <= threshold
+                    let all_fields_copy = struct_def.fields.iter().all(|(_, field_ty, _)| {
+                        is_auto_copy_inner(&field_ty.kind, type_definitions, visited)
+                    });
+                    if !all_fields_copy {
+                        return false;
+                    }
+                    estimated_type_size(kind, type_definitions)
+                        <= crate::mir::body::AUTO_COPY_MAX_SIZE
+                }
+                Some(TypeDefinition::Enum(enum_def)) => {
+                    // All variant payloads must be auto-copy
+                    let all_variants_copy = enum_def.variants.values().all(|payload_types| {
+                        payload_types
+                            .iter()
+                            .all(|ty| is_auto_copy_inner(&ty.kind, type_definitions, visited))
+                    });
+                    if !all_variants_copy {
+                        return false;
+                    }
+                    estimated_type_size(kind, type_definitions)
+                        <= crate::mir::body::AUTO_COPY_MAX_SIZE
+                }
+                // Classes, traits, aliases, generics — not auto-copy
+                Some(TypeDefinition::Class(_))
+                | Some(TypeDefinition::Trait(_))
+                | Some(TypeDefinition::Generic(_)) => false,
+                Some(TypeDefinition::Alias(alias_def)) => {
+                    is_auto_copy_inner(&alias_def.template.kind, type_definitions, visited)
+                }
+                None => false,
+            }
+        }
+    }
+}
+
+/// Estimates the byte size of a type for auto-copy threshold checking.
+///
+/// Returns a conservative (possibly over-) estimate. Uses 8 bytes as a
+/// default for pointer-sized/unknown types.
+fn estimated_type_size(
+    kind: &TypeKind,
+    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+) -> usize {
+    match kind {
+        TypeKind::I8 | TypeKind::U8 | TypeKind::Boolean => 1,
+        TypeKind::I16 | TypeKind::U16 => 2,
+        TypeKind::I32 | TypeKind::U32 | TypeKind::F32 => 4,
+        TypeKind::Int
+        | TypeKind::I64
+        | TypeKind::U64
+        | TypeKind::Float
+        | TypeKind::F64
+        | TypeKind::RawPtr => 8,
+        TypeKind::I128 | TypeKind::U128 => 16,
+        TypeKind::Custom(name, _) => match type_definitions.get(name) {
+            Some(TypeDefinition::Struct(struct_def)) => struct_def
+                .fields
+                .iter()
+                .map(|(_, ty, _)| estimated_type_size(&ty.kind, type_definitions))
+                .sum(),
+            Some(TypeDefinition::Enum(enum_def)) => {
+                // discriminant (8) + max payload size
+                let max_payload: usize = enum_def
+                    .variants
+                    .values()
+                    .map(|fields| {
+                        fields
+                            .iter()
+                            .map(|ty| estimated_type_size(&ty.kind, type_definitions))
+                            .sum::<usize>()
+                    })
+                    .max()
+                    .unwrap_or(0);
+                8 + max_payload
+            }
+            _ => 8,
+        },
+        TypeKind::Tuple(elements) => elements
+            .iter()
+            .map(|elem_expr| {
+                if let crate::ast::expression::ExpressionKind::Type(ty, _) = &elem_expr.node {
+                    estimated_type_size(&ty.kind, type_definitions)
+                } else {
+                    8
+                }
+            })
+            .sum(),
+        _ => 8,
+    }
+}
+
 impl TypeChecker {
     // ==================== Error Type Helper ====================
 
