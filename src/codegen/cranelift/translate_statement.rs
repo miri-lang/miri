@@ -25,11 +25,12 @@ impl<'a> FunctionTranslator<'a> {
         let ptr_size = ptr_type.bytes() as i32;
         match &stmt.kind {
             StatementKind::IncRef(place) => {
+                // Uniform RC increment for all heap types.
+                // All heap values use [RC][payload] layout; ptr points past RC.
                 let ptr = Self::read_place(builder, place, locals, type_ctx)?;
                 let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size as i64));
                 let rc = builder.ins().load(ptr_type, MemFlags::new(), header_ptr, 0);
 
-                // Check if immortal (high bit set; negative if signed)
                 let is_immortal = builder.ins().icmp_imm(IntCC::SignedLessThan, rc, 0);
                 let then_block = builder.create_block();
                 let merge_block = builder.create_block();
@@ -47,11 +48,13 @@ impl<'a> FunctionTranslator<'a> {
                 builder.seal_block(merge_block);
             }
             StatementKind::DecRef(place) => {
+                // Uniform RC decrement for all heap types.
+                // When RC reaches zero, call type-appropriate cleanup.
+                let place_ty = &type_ctx.local_types[place.local.0];
                 let ptr = Self::read_place(builder, place, locals, type_ctx)?;
                 let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size as i64));
                 let rc = builder.ins().load(ptr_type, MemFlags::new(), header_ptr, 0);
 
-                // Check if immortal (high bit set; negative if signed)
                 let is_immortal = builder.ins().icmp_imm(IntCC::SignedLessThan, rc, 0);
                 let dec_block = builder.create_block();
                 let merge_block = builder.create_block();
@@ -63,7 +66,6 @@ impl<'a> FunctionTranslator<'a> {
                 let new_rc = builder.ins().iadd_imm(rc, -1);
                 builder.ins().store(MemFlags::new(), new_rc, header_ptr, 0);
 
-                // If rc == 0, free
                 let zero = builder.ins().iconst(ptr_type, 0);
                 let is_zero = builder.ins().icmp(IntCC::Equal, new_rc, zero);
 
@@ -73,7 +75,7 @@ impl<'a> FunctionTranslator<'a> {
                     .brif(is_zero, free_block, &[], merge_block, &[]);
 
                 builder.switch_to_block(free_block);
-                Self::call_libc_free(builder, ctx, header_ptr)?;
+                Self::emit_type_drop(builder, ctx, &place_ty.kind, ptr, header_ptr)?;
                 builder.ins().jump(merge_block, &[]);
 
                 builder.seal_block(dec_block);
@@ -83,9 +85,12 @@ impl<'a> FunctionTranslator<'a> {
                 builder.seal_block(merge_block);
             }
             StatementKind::Dealloc(place) => {
+                // Unconditional cleanup — the caller has already determined
+                // this value needs freeing (e.g., unique owner going out of scope).
+                let place_ty = &type_ctx.local_types[place.local.0];
                 let ptr = Self::read_place(builder, place, locals, type_ctx)?;
                 let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size as i64));
-                Self::call_libc_free(builder, ctx, header_ptr)?;
+                Self::emit_type_drop(builder, ctx, &place_ty.kind, ptr, header_ptr)?;
             }
             StatementKind::Assign(place, rvalue) => {
                 let mut value = Self::translate_rvalue(builder, ctx, rvalue, locals, type_ctx)?;

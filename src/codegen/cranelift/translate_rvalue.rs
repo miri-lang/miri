@@ -81,82 +81,147 @@ impl<'a> FunctionTranslator<'a> {
             }
 
             Rvalue::Aggregate(kind, operands) => {
-                if operands.is_empty() {
-                    return Ok(builder.ins().iconst(ptr_type, 0));
-                }
-
-                // Single-element aggregates can be returned directly UNLESS they need
-                // pointer-based layout (like enums or structs that might be expected as pointers).
-                let needs_pointer_layout = matches!(
-                    kind,
-                    AggregateKind::Struct(_) | AggregateKind::Class(_) | AggregateKind::Enum(_, _)
-                );
-                if operands.len() == 1 && !needs_pointer_layout {
-                    return Self::translate_operand(builder, ctx, &operands[0], locals, type_ctx);
-                }
-
-                // Translate all operands first
-                let translated: Vec<Value> = operands
-                    .iter()
-                    .map(|op| Self::translate_operand(builder, ctx, op, locals, type_ctx))
-                    .collect::<Result<_, _>>()?;
-
-                // Compute field offsets with proper alignment
-                let mut current_offset: u32 = 0;
-                let mut field_offsets = Vec::new();
-                let mut max_align: u32 = 1;
-
-                let is_enum = matches!(kind, AggregateKind::Enum(_, _));
-
-                for &val in &translated {
-                    let ty = builder.func.dfg.value_type(val);
-                    let align = if is_enum { ptr_size as u32 } else { ty.bytes() };
-                    max_align = max_align.max(align);
-
-                    // Align current_offset to this field's alignment
-                    current_offset = (current_offset + align - 1) & !(align - 1);
-                    field_offsets.push(current_offset);
-                    current_offset += if is_enum { ptr_size as u32 } else { ty.bytes() };
-                }
-
-                // Final size must be a multiple of the max alignment
-                let total_size = (current_offset + max_align - 1) & !(max_align - 1);
-
-                // Heap-allocate for now.
-                // For Array/List, we add ptr_size for RC header AND ptr_size for LEN header.
-                // For others, just ptr_size for RC header.
                 let is_collection = matches!(kind, AggregateKind::Array | AggregateKind::List);
-                let header_size = if is_collection {
-                    2 * ptr_size
-                } else {
-                    ptr_size
-                };
-
-                let alloc_size = builder
-                    .ins()
-                    .iconst(ptr_type, (total_size + header_size as u32) as i64);
-                let raw_ptr = Self::call_libc_malloc(builder, ctx, alloc_size)?;
-
-                // Store RC = 1
-                let one = builder.ins().iconst(ptr_type, 1);
-                builder.ins().store(MemFlags::new(), one, raw_ptr, 0);
 
                 if is_collection {
-                    // Store LEN
-                    let len = builder.ins().iconst(ptr_type, operands.len() as i64);
-                    builder.ins().store(MemFlags::new(), len, raw_ptr, ptr_size);
-                }
+                    // Use runtime struct allocation for Array and List.
+                    // Both MiriArray and MiriList are #[repr(C)] structs with:
+                    //   offset 0: data pointer
+                    //   offset ptr_size: element count / length
+                    // The runtime manages the backing memory.
 
-                let payload_ptr = builder.ins().iadd_imm(raw_ptr, header_size as i64);
+                    // Translate all element operands
+                    let translated: Vec<Value> = operands
+                        .iter()
+                        .map(|op| Self::translate_operand(builder, ctx, op, locals, type_ctx))
+                        .collect::<Result<_, _>>()?;
 
-                // Store each field
-                for (i, val) in translated.into_iter().enumerate() {
-                    builder
+                    // Determine element size from the first operand (all are homogeneous)
+                    let elem_size = if translated.is_empty() {
+                        ptr_size as i64
+                    } else {
+                        builder.func.dfg.value_type(translated[0]).bytes() as i64
+                    };
+                    let elem_size_val = builder.ins().iconst(ptr_type, elem_size);
+
+                    match kind {
+                        AggregateKind::Array => {
+                            let count_val = builder.ins().iconst(ptr_type, operands.len() as i64);
+                            let array_ptr =
+                                Self::call_rt_array_new(builder, ctx, count_val, elem_size_val)?;
+
+                            if !translated.is_empty() {
+                                // Read data pointer from MiriArray.data (offset 0)
+                                let data_ptr =
+                                    builder.ins().load(ptr_type, MemFlags::new(), array_ptr, 0);
+
+                                // Store each element directly into the data buffer
+                                for (i, val) in translated.into_iter().enumerate() {
+                                    let offset = (i as i64) * elem_size;
+                                    builder.ins().store(
+                                        MemFlags::new(),
+                                        val,
+                                        data_ptr,
+                                        offset as i32,
+                                    );
+                                }
+                            }
+
+                            Ok(array_ptr)
+                        }
+                        AggregateKind::List => {
+                            let list_ptr = Self::call_rt_list_new(builder, ctx, elem_size_val)?;
+
+                            // Push each element via runtime call
+                            for val in translated {
+                                // Widen or narrow to ptr_type for the FFI call
+                                let val_ty = builder.func.dfg.value_type(val);
+                                let widened = if val_ty.bytes() < ptr_type.bytes() {
+                                    builder.ins().sextend(ptr_type, val)
+                                } else if val_ty.bytes() > ptr_type.bytes() {
+                                    builder.ins().ireduce(ptr_type, val)
+                                } else {
+                                    val
+                                };
+                                Self::call_rt_list_push(builder, ctx, list_ptr, widened)?;
+                            }
+
+                            Ok(list_ptr)
+                        }
+                        _ => unreachable!(),
+                    }
+                } else {
+                    // Non-collection aggregates (Tuple, Struct, Class, Enum, etc.)
+                    if operands.is_empty() {
+                        return Ok(builder.ins().iconst(ptr_type, 0));
+                    }
+
+                    // Single-element aggregates can be returned directly UNLESS they need
+                    // pointer-based layout (like enums or structs expected as pointers).
+                    let needs_pointer_layout = matches!(
+                        kind,
+                        AggregateKind::Struct(_)
+                            | AggregateKind::Class(_)
+                            | AggregateKind::Enum(_, _)
+                    );
+                    if operands.len() == 1 && !needs_pointer_layout {
+                        return Self::translate_operand(
+                            builder,
+                            ctx,
+                            &operands[0],
+                            locals,
+                            type_ctx,
+                        );
+                    }
+
+                    // Translate all operands first
+                    let translated: Vec<Value> = operands
+                        .iter()
+                        .map(|op| Self::translate_operand(builder, ctx, op, locals, type_ctx))
+                        .collect::<Result<_, _>>()?;
+
+                    // Compute field offsets with proper alignment
+                    let mut current_offset: u32 = 0;
+                    let mut field_offsets = Vec::new();
+                    let mut max_align: u32 = 1;
+
+                    let is_enum = matches!(kind, AggregateKind::Enum(_, _));
+
+                    for &val in &translated {
+                        let ty = builder.func.dfg.value_type(val);
+                        let align = if is_enum { ptr_size as u32 } else { ty.bytes() };
+                        max_align = max_align.max(align);
+
+                        current_offset = (current_offset + align - 1) & !(align - 1);
+                        field_offsets.push(current_offset);
+                        current_offset += if is_enum { ptr_size as u32 } else { ty.bytes() };
+                    }
+
+                    let total_size = (current_offset + max_align - 1) & !(max_align - 1);
+
+                    // Heap-allocate with RC header
+                    let alloc_size = builder
                         .ins()
-                        .store(MemFlags::new(), val, payload_ptr, field_offsets[i] as i32);
-                }
+                        .iconst(ptr_type, (total_size + ptr_size as u32) as i64);
+                    let raw_ptr = Self::call_libc_malloc(builder, ctx, alloc_size)?;
 
-                Ok(payload_ptr)
+                    // Store RC = 1
+                    let one = builder.ins().iconst(ptr_type, 1);
+                    builder.ins().store(MemFlags::new(), one, raw_ptr, 0);
+
+                    let payload_ptr = builder.ins().iadd_imm(raw_ptr, ptr_size as i64);
+
+                    for (i, val) in translated.into_iter().enumerate() {
+                        builder.ins().store(
+                            MemFlags::new(),
+                            val,
+                            payload_ptr,
+                            field_offsets[i] as i32,
+                        );
+                    }
+
+                    Ok(payload_ptr)
+                }
             }
 
             Rvalue::Cast(operand, ty) => {
@@ -169,13 +234,8 @@ impl<'a> FunctionTranslator<'a> {
 
             Rvalue::Len(place) => {
                 let ty = type_ctx.local_types[place.local.0];
-                let is_collection = match &ty.kind {
-                    TypeKind::Array(_, _) | TypeKind::List(_) | TypeKind::String => true,
-                    TypeKind::Custom(name, _) if name == "Array" || name == "List" => true,
-                    _ => false,
-                };
-                
-                if is_collection {
+
+                if Self::is_collection_type(&ty.kind) {
                     let ptr = Self::read_place(builder, place, locals, type_ctx)?;
 
                     // Handle null pointer (empty collection)
@@ -189,40 +249,64 @@ impl<'a> FunctionTranslator<'a> {
                     let load_bb = builder.create_block();
                     let merge_bb = builder.create_block();
 
-                    // Use a variable to store the length and merge from both branches
                     let len_var = builder.declare_var(ptr_type);
 
                     builder.ins().brif(is_null, null_bb, &[], load_bb, &[]);
 
-                    // Branch 1: Null pointer, length is 0
                     builder.switch_to_block(null_bb);
                     let zero = builder.ins().iconst(ptr_type, 0);
                     builder.def_var(len_var, zero);
                     builder.ins().jump(merge_bb, &[]);
                     builder.seal_block(null_bb);
 
-                    // Branch 2: Non-null pointer, load length from header
+                    // Both MiriArray and MiriList store length at offset ptr_size
+                    // (MiriArray.elem_count, MiriList.len)
                     builder.switch_to_block(load_bb);
-                    let header_offset = match &ty.kind {
-                        TypeKind::String => ptr_size,
-                        TypeKind::List(_) => ptr_size,
-                        TypeKind::Custom(name, _) if name == "List" => ptr_size,
-                        _ => -ptr_size,
-                    };
-                    let len = builder
-                        .ins()
-                        .load(ptr_type, MemFlags::new(), ptr, header_offset);
+                    let len = builder.ins().load(ptr_type, MemFlags::new(), ptr, ptr_size);
                     builder.def_var(len_var, len);
                     builder.ins().jump(merge_bb, &[]);
                     builder.seal_block(load_bb);
 
-                    // Back to merge block to continue
+                    builder.switch_to_block(merge_bb);
+                    builder.seal_block(merge_bb);
+
+                    Ok(builder.use_var(len_var))
+                } else if matches!(&ty.kind, TypeKind::String) {
+                    let ptr = Self::read_place(builder, place, locals, type_ctx)?;
+
+                    // String uses the MiriString layout: [RC][DataPtr][Len][Cap]
+                    // ptr points past the RC header, so Len is at offset ptr_size*2
+                    // Actually, for strings the pointer past RC header has DataPtr at 0,
+                    // Len at ptr_size, Cap at 2*ptr_size
+                    let is_null = builder.ins().icmp_imm(
+                        cranelift_codegen::ir::condcodes::IntCC::Equal,
+                        ptr,
+                        0,
+                    );
+                    let null_bb = builder.create_block();
+                    let load_bb = builder.create_block();
+                    let merge_bb = builder.create_block();
+                    let len_var = builder.declare_var(ptr_type);
+
+                    builder.ins().brif(is_null, null_bb, &[], load_bb, &[]);
+
+                    builder.switch_to_block(null_bb);
+                    let zero = builder.ins().iconst(ptr_type, 0);
+                    builder.def_var(len_var, zero);
+                    builder.ins().jump(merge_bb, &[]);
+                    builder.seal_block(null_bb);
+
+                    builder.switch_to_block(load_bb);
+                    let len = builder.ins().load(ptr_type, MemFlags::new(), ptr, ptr_size);
+                    builder.def_var(len_var, len);
+                    builder.ins().jump(merge_bb, &[]);
+                    builder.seal_block(load_bb);
+
                     builder.switch_to_block(merge_bb);
                     builder.seal_block(merge_bb);
 
                     Ok(builder.use_var(len_var))
                 } else {
-                    // Non-collection types: return 0 as fallback
                     Ok(builder.ins().iconst(ptr_type, 0))
                 }
             }

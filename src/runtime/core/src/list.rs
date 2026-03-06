@@ -7,6 +7,8 @@
 use std::alloc::{alloc, dealloc, realloc, Layout};
 use std::ptr;
 
+use crate::rc::{alloc_with_rc, free_with_rc};
+
 /// A type-erased dynamic array.
 ///
 /// Stores elements as contiguous bytes. The element size is provided
@@ -249,14 +251,24 @@ impl Drop for MiriList {
 // FFI Functions
 // =============================================================================
 
-/// Creates a new list from a raw memory buffer containing elements.
-/// This is used by the compiler to lower List([1, 2, 3]) literals.
+/// Creates a new list from a MiriArray.
+/// This is used by the compiler to lower `List([1, 2, 3])` constructor calls.
+/// The array's data is copied into the new list; the array is NOT consumed.
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_list_new_from_raw(
-    data: *const u8,
-    len: usize,
-    elem_size: usize,
+    array: *mut crate::array::MiriArray,
+    _len: usize,
+    _elem_size: usize,
 ) -> *mut MiriList {
+    if array.is_null() {
+        // Fallback: use _elem_size if provided, otherwise default to 8
+        let es = if _elem_size > 0 { _elem_size } else { 8 };
+        return miri_rt_list_new(es);
+    }
+    let arr = &*array;
+    let data = arr.data_ptr();
+    let len = arr.len();
+    let elem_size = arr.elem_size();
     if data.is_null() || len == 0 {
         return miri_rt_list_new(elem_size);
     }
@@ -268,20 +280,45 @@ pub unsafe extern "C" fn miri_rt_list_new_from_raw(
 }
 
 /// Creates a new empty list with the given element size.
+///
+/// Allocates `[RC=1][MiriList fields]`.
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_list_new(elem_size: usize) -> *mut MiriList {
-    let list = Box::new(MiriList::new(elem_size));
-    Box::into_raw(list)
+    let struct_size = std::mem::size_of::<MiriList>();
+    let payload = alloc_with_rc(struct_size);
+    if payload.is_null() {
+        return ptr::null_mut();
+    }
+    let list = payload as *mut MiriList;
+    (*list).data = ptr::null_mut();
+    (*list).len = 0;
+    (*list).capacity = 0;
+    (*list).elem_size = elem_size;
+    list
 }
 
 /// Creates a new list with pre-allocated capacity.
+///
+/// Allocates `[RC=1][MiriList fields]` with a pre-allocated data buffer.
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_list_with_capacity(
     elem_size: usize,
     capacity: usize,
 ) -> *mut MiriList {
-    let list = Box::new(MiriList::with_capacity(elem_size, capacity));
-    Box::into_raw(list)
+    let list = miri_rt_list_new(elem_size);
+    if list.is_null() || capacity == 0 || elem_size == 0 {
+        return list;
+    }
+    let layout = match Layout::from_size_align(capacity * elem_size, 8) {
+        Ok(l) => l,
+        Err(_) => return list,
+    };
+    let data = alloc(layout);
+    if !data.is_null() {
+        (*list).data = data;
+        (*list).capacity = capacity;
+    }
+    list
 }
 
 /// Returns the number of elements in the list.
@@ -312,13 +349,18 @@ pub unsafe extern "C" fn miri_rt_list_is_empty(ptr: *const MiriList) -> u8 {
 }
 
 /// Pushes an element to the end of the list.
+///
+/// The value is passed as a pointer-sized integer. The runtime copies
+/// `elem_size` bytes from the address of the parameter on the stack.
+/// This works for all primitive element types (int, float, bool, pointers)
+/// which fit in a single register.
 #[no_mangle]
-pub unsafe extern "C" fn miri_rt_list_push(ptr: *mut MiriList, val: u64) {
+pub unsafe extern "C" fn miri_rt_list_push(ptr: *mut MiriList, val: usize) {
     if ptr.is_null() {
         return;
     }
     let list = &mut *ptr;
-    list.push(&val as *const u64 as *const u8);
+    list.push(&val as *const usize as *const u8);
 }
 
 /// Pops the last element from the list.
@@ -361,13 +403,13 @@ pub unsafe extern "C" fn miri_rt_list_get_mut(ptr: *mut MiriList, index: usize) 
 pub unsafe extern "C" fn miri_rt_list_set(
     ptr: *mut MiriList,
     index: usize,
-    val: u64,
+    val: usize,
 ) -> u8 {
     if ptr.is_null() {
         return 0;
     }
     let list = &mut *ptr;
-    if list.set(index, &val as *const u64 as *const u8) { 1 } else { 0 }
+    if list.set(index, &val as *const usize as *const u8) { 1 } else { 0 }
 }
 
 /// Inserts an element at the given index.
@@ -376,13 +418,13 @@ pub unsafe extern "C" fn miri_rt_list_set(
 pub unsafe extern "C" fn miri_rt_list_insert(
     ptr: *mut MiriList,
     index: usize,
-    val: u64,
+    val: usize,
 ) -> u8 {
     if ptr.is_null() {
         return 0;
     }
     let list = &mut *ptr;
-    if list.insert(index, &val as *const u64 as *const u8) { 1 } else { 0 }
+    if list.insert(index, &val as *const usize as *const u8) { 1 } else { 0 }
 }
 
 /// Removes the element at the given index.
@@ -428,22 +470,37 @@ pub unsafe extern "C" fn miri_rt_list_clone(ptr: *const MiriList) -> *mut MiriLi
     }
 
     let src = &*ptr;
-    let mut new_list = MiriList::with_capacity(src.elem_size, src.len);
-
-    if !src.data.is_null() && src.len > 0 {
-        ptr::copy_nonoverlapping(src.data, new_list.data, src.len * src.elem_size);
-        new_list.len = src.len;
+    let list = miri_rt_list_with_capacity(src.elem_size, src.len);
+    if list.is_null() {
+        return list;
     }
 
-    Box::into_raw(Box::new(new_list))
+    if !src.data.is_null() && src.len > 0 && !(*list).data.is_null() {
+        ptr::copy_nonoverlapping(src.data, (*list).data, src.len * src.elem_size);
+        (*list).len = src.len;
+    }
+
+    list
 }
 
-/// Frees a list.
+/// Frees a list and its backing storage.
+///
+/// The pointer must have been returned by `miri_rt_list_new` (i.e., it
+/// points past the RC header).
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_list_free(ptr: *mut MiriList) {
-    if !ptr.is_null() {
-        let _ = Box::from_raw(ptr);
+    if ptr.is_null() {
+        return;
     }
+    // Free internal data buffer
+    let list = &*ptr;
+    if !list.data.is_null() && list.capacity > 0 && list.elem_size > 0 {
+        let layout = Layout::from_size_align(list.capacity * list.elem_size, 8).unwrap();
+        dealloc(list.data, layout);
+    }
+    // Free the [RC][struct] block
+    let struct_size = std::mem::size_of::<MiriList>();
+    free_with_rc(ptr as *mut u8, struct_size);
 }
 
 /// Returns the first element pointer, or null if empty.
@@ -500,22 +557,24 @@ pub unsafe extern "C" fn miri_rt_list_reverse(ptr: *mut MiriList) {
 mod tests {
     use super::*;
 
+    /// Helper: create a list and push i32 values via the internal API.
+    unsafe fn make_i32_list(values: &[i32]) -> *mut MiriList {
+        let list = miri_rt_list_new(std::mem::size_of::<i32>());
+        for val in values {
+            (*list).push(val as *const i32 as *const u8);
+        }
+        list
+    }
+
     #[test]
     fn test_list_push_pop() {
         unsafe {
-            let list = miri_rt_list_new(std::mem::size_of::<i32>());
-
-            let values = [10i32, 20, 30];
-            for val in &values {
-                miri_rt_list_push(list, val as *const i32 as *const u8);
-            }
-
+            let list = make_i32_list(&[10, 20, 30]);
             assert_eq!(miri_rt_list_len(list), 3);
 
             let mut out: i32 = 0;
-            assert_eq!(miri_rt_list_pop(list, &mut out as *mut i32 as *mut u8), 1);
+            assert!((*list).pop(&mut out as *mut i32 as *mut u8));
             assert_eq!(out, 30);
-
             assert_eq!(miri_rt_list_len(list), 2);
 
             miri_rt_list_free(list);
@@ -525,21 +584,14 @@ mod tests {
     #[test]
     fn test_list_get_set() {
         unsafe {
-            let list = miri_rt_list_new(std::mem::size_of::<i32>());
+            let list = make_i32_list(&[100, 200, 300]);
 
-            let values = [100i32, 200, 300];
-            for val in &values {
-                miri_rt_list_push(list, val as *const i32 as *const u8);
-            }
-
-            // Get element
             let ptr = miri_rt_list_get(list, 1);
             assert!(!ptr.is_null());
             assert_eq!(*(ptr as *const i32), 200);
 
-            // Set element
             let new_val = 999i32;
-            assert_eq!(miri_rt_list_set(list, 1, &new_val as *const i32 as *const u8), 1);
+            assert!((*list).set(1, &new_val as *const i32 as *const u8));
 
             let ptr = miri_rt_list_get(list, 1);
             assert_eq!(*(ptr as *const i32), 999);
@@ -551,16 +603,10 @@ mod tests {
     #[test]
     fn test_list_insert_remove() {
         unsafe {
-            let list = miri_rt_list_new(std::mem::size_of::<i32>());
+            let list = make_i32_list(&[1, 2, 3]);
 
-            let values = [1i32, 2, 3];
-            for val in &values {
-                miri_rt_list_push(list, val as *const i32 as *const u8);
-            }
-
-            // Insert at index 1
             let insert_val = 99i32;
-            assert_eq!(miri_rt_list_insert(list, 1, &insert_val as *const i32 as *const u8), 1);
+            assert!((*list).insert(1, &insert_val as *const i32 as *const u8));
             assert_eq!(miri_rt_list_len(list), 4);
 
             // Verify order: [1, 99, 2, 3]
@@ -571,7 +617,7 @@ mod tests {
 
             // Remove at index 1
             let mut removed: i32 = 0;
-            assert_eq!(miri_rt_list_remove(list, 1, &mut removed as *mut i32 as *mut u8), 1);
+            assert!((*list).remove(1, &mut removed as *mut i32 as *mut u8));
             assert_eq!(removed, 99);
             assert_eq!(miri_rt_list_len(list), 3);
 
@@ -582,13 +628,7 @@ mod tests {
     #[test]
     fn test_list_clone() {
         unsafe {
-            let list = miri_rt_list_new(std::mem::size_of::<i32>());
-
-            let values = [5i32, 10, 15];
-            for val in &values {
-                miri_rt_list_push(list, val as *const i32 as *const u8);
-            }
-
+            let list = make_i32_list(&[5, 10, 15]);
             let cloned = miri_rt_list_clone(list);
 
             assert_eq!(miri_rt_list_len(cloned), 3);
@@ -604,13 +644,7 @@ mod tests {
     #[test]
     fn test_list_reverse() {
         unsafe {
-            let list = miri_rt_list_new(std::mem::size_of::<i32>());
-
-            let values = [1i32, 2, 3, 4, 5];
-            for val in &values {
-                miri_rt_list_push(list, val as *const i32 as *const u8);
-            }
-
+            let list = make_i32_list(&[1, 2, 3, 4, 5]);
             miri_rt_list_reverse(list);
 
             assert_eq!(*(miri_rt_list_get(list, 0) as *const i32), 5);
@@ -618,6 +652,22 @@ mod tests {
             assert_eq!(*(miri_rt_list_get(list, 2) as *const i32), 3);
             assert_eq!(*(miri_rt_list_get(list, 3) as *const i32), 2);
             assert_eq!(*(miri_rt_list_get(list, 4) as *const i32), 1);
+
+            miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_ffi_list_push() {
+        unsafe {
+            let list = miri_rt_list_new(std::mem::size_of::<usize>());
+            // FFI push takes usize values directly
+            miri_rt_list_push(list, 42);
+            miri_rt_list_push(list, 100);
+
+            assert_eq!(miri_rt_list_len(list), 2);
+            assert_eq!(*(miri_rt_list_get(list, 0) as *const usize), 42);
+            assert_eq!(*(miri_rt_list_get(list, 1) as *const usize), 100);
 
             miri_rt_list_free(list);
         }
