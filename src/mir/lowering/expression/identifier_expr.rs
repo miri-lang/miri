@@ -30,9 +30,9 @@ pub(crate) fn lower_identifier_expr(
             });
             Ok(Operand::Copy(d))
         } else {
-            // Check if the type is Copy to determine Move vs Copy semantics
-            let ty = &ctx.body.local_decls[local.0].ty;
-            if ty.is_copy() {
+            // Check if the type is auto-copy to determine Move vs Copy semantics
+            let ty = ctx.body.local_decls[local.0].ty.clone();
+            if ctx.is_type_auto_copy(&ty) {
                 Ok(Operand::Copy(Place::new(local)))
             } else {
                 Ok(Operand::Move(Place::new(local)))

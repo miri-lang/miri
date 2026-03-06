@@ -23,23 +23,15 @@ impl OptimizationPass for Perceus {
     fn run(&mut self, body: &mut Body) -> bool {
         let mut changed = false;
 
-        // Pre-compute which locals are managed to avoid borrow conflicts
-        // between iterating basic_blocks mutably and reading local_decls.
+        // Pre-compute which locals are managed (heap-allocated, need RC) to avoid
+        // borrow conflicts between iterating basic_blocks mutably and reading local_decls.
+        // Auto-copy custom types (structs with only primitive fields, <= 128 bytes)
+        // are excluded — they use bitwise copy and do not need RC.
         let managed_locals: std::collections::HashSet<crate::mir::Local> = body
             .local_decls
             .iter()
             .enumerate()
-            .filter(|(_, decl)| {
-                matches!(
-                    &decl.ty.kind,
-                    TypeKind::String
-                        | TypeKind::List(_)
-                        | TypeKind::Array(_, _)
-                        | TypeKind::Map(_, _)
-                        | TypeKind::Set(_)
-                        | TypeKind::Custom(_, _)
-                )
-            })
+            .filter(|(_, decl)| is_managed_type(&decl.ty.kind, &body.auto_copy_types))
             .map(|(i, _)| crate::mir::Local(i))
             .collect();
 
@@ -95,6 +87,22 @@ impl OptimizationPass for Perceus {
 
     fn name(&self) -> &'static str {
         "Perceus"
+    }
+}
+
+/// Returns true if a type is managed (heap-allocated, needs RC).
+///
+/// Managed types are: String, List, Array, Map, Set, and Custom types that
+/// are NOT in the auto-copy set.
+fn is_managed_type(kind: &TypeKind, auto_copy_types: &std::collections::HashSet<String>) -> bool {
+    match kind {
+        TypeKind::String
+        | TypeKind::List(_)
+        | TypeKind::Array(_, _)
+        | TypeKind::Map(_, _)
+        | TypeKind::Set(_) => true,
+        TypeKind::Custom(name, _) => !auto_copy_types.contains(name),
+        _ => false,
     }
 }
 
