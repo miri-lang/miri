@@ -3,11 +3,16 @@
 //! Unlike `MiriList`, a `MiriArray` has a fixed element count determined at
 //! creation time. The backing buffer is allocated once and never grows.
 //! All elements are zeroed at creation.
+//!
+//! Memory layout (allocated by FFI functions):
+//! `[RC][data|elem_count|elem_size]` — the pointer returned to the compiler
+//! points past the RC header, so field offsets are unchanged.
 
 use std::alloc::{alloc_zeroed, dealloc, Layout};
 use std::ptr;
 
 use crate::list::MiriList;
+use crate::rc::{alloc_with_rc, free_with_rc};
 
 /// A type-erased fixed-size array.
 ///
@@ -25,12 +30,31 @@ pub struct MiriArray {
     elem_size: usize,
 }
 
+const STRUCT_SIZE: usize = std::mem::size_of::<MiriArray>();
+
 impl MiriArray {
     fn byte_len(&self) -> usize {
         self.elem_count * self.elem_size
     }
+
+    /// Returns the raw data pointer.
+    pub fn data_ptr(&self) -> *const u8 {
+        self.data
+    }
+
+    /// Returns the number of elements.
+    pub fn len(&self) -> usize {
+        self.elem_count
+    }
+
+    /// Returns the size of each element in bytes.
+    pub fn elem_size(&self) -> usize {
+        self.elem_size
+    }
 }
 
+// Drop impl is only used by Rust-side unit tests (which create MiriArray
+// via Box::new). FFI allocations use alloc_with_rc and are freed manually.
 impl Drop for MiriArray {
     fn drop(&mut self) {
         if !self.data.is_null() && self.elem_count > 0 && self.elem_size > 0 {
@@ -48,55 +72,59 @@ impl Drop for MiriArray {
 
 /// Creates a new fixed-size array with the given element count and size.
 ///
-/// All elements are zeroed. Returns null if the allocation fails or if
-/// `elem_count` or `elem_size` is zero.
+/// Allocates `[RC=1][MiriArray fields]`. All data elements are zeroed.
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_array_new(
     elem_count: usize,
     elem_size: usize,
 ) -> *mut MiriArray {
-    if elem_count == 0 || elem_size == 0 {
-        return Box::into_raw(Box::new(MiriArray {
-            data: ptr::null_mut(),
-            elem_count: 0,
-            elem_size,
-        }));
+    let payload = alloc_with_rc(STRUCT_SIZE);
+    if payload.is_null() {
+        return ptr::null_mut();
     }
 
-    let total = elem_count * elem_size;
-    let layout = match Layout::from_size_align(total, 8) {
-        Ok(layout) => layout,
-        Err(_) => {
-            return Box::into_raw(Box::new(MiriArray {
-                data: ptr::null_mut(),
-                elem_count: 0,
-                elem_size,
-            }));
-        }
-    };
+    let arr = payload as *mut MiriArray;
 
-    let data = alloc_zeroed(layout);
-    if data.is_null() {
-        return Box::into_raw(Box::new(MiriArray {
-            data: ptr::null_mut(),
-            elem_count: 0,
-            elem_size,
-        }));
+    if elem_count > 0 && elem_size > 0 {
+        let total = elem_count * elem_size;
+        let layout = match Layout::from_size_align(total, 8) {
+            Ok(l) => l,
+            Err(_) => {
+                (*arr).data = ptr::null_mut();
+                (*arr).elem_count = 0;
+                (*arr).elem_size = elem_size;
+                return arr;
+            }
+        };
+        let data = alloc_zeroed(layout);
+        (*arr).data = data;
+        (*arr).elem_count = if data.is_null() { 0 } else { elem_count };
+    } else {
+        (*arr).data = ptr::null_mut();
+        (*arr).elem_count = 0;
     }
+    (*arr).elem_size = elem_size;
 
-    Box::into_raw(Box::new(MiriArray {
-        data,
-        elem_count,
-        elem_size,
-    }))
+    arr
 }
 
 /// Frees the array and its backing storage.
+///
+/// The pointer must have been returned by `miri_rt_array_new` (i.e., it
+/// points past the RC header).
 #[no_mangle]
 pub unsafe extern "C" fn miri_rt_array_free(ptr: *mut MiriArray) {
-    if !ptr.is_null() {
-        let _ = Box::from_raw(ptr);
+    if ptr.is_null() {
+        return;
     }
+    // Free internal data buffer
+    let arr = &*ptr;
+    if !arr.data.is_null() && arr.elem_count > 0 && arr.elem_size > 0 {
+        let layout = Layout::from_size_align(arr.byte_len(), 8).unwrap();
+        dealloc(arr.data, layout);
+    }
+    // Free the [RC][struct] block
+    free_with_rc(ptr as *mut u8, STRUCT_SIZE);
 }
 
 /// Returns the number of elements in the array (fixed at creation).
@@ -377,6 +405,20 @@ mod tests {
             let arr = miri_rt_array_new(0, std::mem::size_of::<i32>());
             assert_eq!(miri_rt_array_len(arr), 0);
             assert!(miri_rt_array_get(arr, 0).is_null());
+            miri_rt_array_free(arr);
+        }
+    }
+
+    #[test]
+    fn test_rc_header_present() {
+        unsafe {
+            let arr = miri_rt_array_new(3, std::mem::size_of::<i32>());
+            assert!(!arr.is_null());
+
+            // The RC should be at ptr - RC_HEADER_SIZE
+            let rc_ptr = (arr as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *const usize;
+            assert_eq!(*rc_ptr, 1, "RC should be 1 after creation");
+
             miri_rt_array_free(arr);
         }
     }

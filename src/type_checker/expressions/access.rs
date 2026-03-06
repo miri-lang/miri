@@ -161,9 +161,17 @@ impl TypeChecker {
                     // Inside the class definition itself, args is None.
                     // We can look up the generic parameter 'T' from the context.
                     if let Some(TypeDefinition::Generic(g)) = context.resolve_type_definition("T") {
-                        return make_type(TypeKind::Generic(g.name.clone(), g.constraint.clone().map(Box::new), g.kind.clone()));
+                        return make_type(TypeKind::Generic(
+                            g.name.clone(),
+                            g.constraint.clone().map(Box::new),
+                            g.kind.clone(),
+                        ));
                     } else {
-                        return make_type(TypeKind::Generic("T".to_string(), None, TypeDeclarationKind::None));
+                        return make_type(TypeKind::Generic(
+                            "T".to_string(),
+                            None,
+                            TypeDeclarationKind::None,
+                        ));
                     }
                 }
                 make_type(TypeKind::Error)
@@ -475,7 +483,7 @@ impl TypeChecker {
                             );
                             return make_type(TypeKind::Error);
                         }
-                        
+
                         if mapping.is_empty() {
                             return field_info.ty.clone();
                         } else {
@@ -529,9 +537,7 @@ impl TypeChecker {
                                 } else {
                                     self.substitute_type(&method_info.return_type, &mapping)
                                 };
-                                Some(Box::new(
-                                    self.create_type_expression(substituted_ret),
-                                ))
+                                Some(Box::new(self.create_type_expression(substituted_ret)))
                             };
 
                         return make_type(TypeKind::Function(Box::new(FunctionTypeData {

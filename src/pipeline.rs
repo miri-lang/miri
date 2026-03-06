@@ -86,6 +86,12 @@ fn collect_runtime_info(
     let mut imports = Vec::new();
     let mut required_runtimes = HashSet::new();
 
+    // Always link the "core" runtime — the codegen emits calls to
+    // miri_rt_array_new / miri_rt_list_new for collection literals,
+    // which bypass the import system and have no corresponding
+    // RuntimeFunctionDeclaration in user code.
+    required_runtimes.insert(RuntimeKind::Core);
+
     let all_stmts = program.body.iter().chain(imported_stmts.iter());
 
     for stmt in all_stmts {
@@ -119,8 +125,12 @@ fn collect_runtime_info(
             // Walk class bodies to collect required runtimes for linking and imports.
             StatementKind::Class(class_data) => {
                 for class_stmt in &class_data.body {
-                    if let StatementKind::RuntimeFunctionDeclaration(runtime_kind, name, params, return_type) =
-                        &class_stmt.node
+                    if let StatementKind::RuntimeFunctionDeclaration(
+                        runtime_kind,
+                        name,
+                        params,
+                        return_type,
+                    ) = &class_stmt.node
                     {
                         required_runtimes.insert(runtime_kind.clone());
 
@@ -136,9 +146,9 @@ fn collect_runtime_info(
                                 })
                                 .collect();
 
-                            let ret_type = return_type
-                                .as_ref()
-                                .and_then(|rt| resolve_type_name(rt).map(|t| translate_type(&t, ptr_ty)));
+                            let ret_type = return_type.as_ref().and_then(|rt| {
+                                resolve_type_name(rt).map(|t| translate_type(&t, ptr_ty))
+                            });
 
                             imports.push(crate::codegen::cranelift::RuntimeImport {
                                 name: name.clone(),

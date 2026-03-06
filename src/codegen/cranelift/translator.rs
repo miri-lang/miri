@@ -7,7 +7,6 @@
 //! which can then be compiled to machine code.
 
 use crate::ast::expression::ExpressionKind;
-use crate::ast::literal::{IntegerLiteral, Literal};
 use crate::ast::types::{Type, TypeKind};
 use crate::codegen::cranelift::layout;
 use crate::codegen::cranelift::types::translate_type;
@@ -57,6 +56,12 @@ pub(crate) struct ModuleCtx<'a> {
     pub(crate) malloc_func_id: Option<cranelift_module::FuncId>,
     /// Cached FuncId for libc free to avoid re-declaring per call site.
     pub(crate) free_func_id: Option<cranelift_module::FuncId>,
+    /// Cached FuncIds for runtime collection functions.
+    pub(crate) rt_array_new_id: Option<cranelift_module::FuncId>,
+    pub(crate) rt_array_free_id: Option<cranelift_module::FuncId>,
+    pub(crate) rt_list_new_id: Option<cranelift_module::FuncId>,
+    pub(crate) rt_list_push_id: Option<cranelift_module::FuncId>,
+    pub(crate) rt_list_free_id: Option<cranelift_module::FuncId>,
 }
 
 /// Context for type information during translation.
@@ -158,6 +163,11 @@ impl<'a> FunctionTranslator<'a> {
                 string_literals,
                 malloc_func_id: None,
                 free_func_id: None,
+                rt_array_new_id: None,
+                rt_array_free_id: None,
+                rt_list_new_id: None,
+                rt_list_push_id: None,
+                rt_list_free_id: None,
             };
             let type_ctx = TypeCtx {
                 local_types: &self.local_types,
@@ -234,7 +244,6 @@ impl<'a> FunctionTranslator<'a> {
         let local_types = type_ctx.local_types;
         let type_definitions = type_ctx.type_definitions;
         let ptr_type = type_ctx.ptr_type;
-        let ptr_size = ptr_type.bytes();
         let var = locals
             .get(&place.local)
             .ok_or_else(|| format!("Unknown local: {:?}", place.local))?;
@@ -257,79 +266,10 @@ impl<'a> FunctionTranslator<'a> {
                         .get(local)
                         .ok_or_else(|| format!("Unknown index local: {:?}", local))?;
                     let idx_val = builder.use_var(*idx_var);
-
-                    // Get element type and its Cranelift representation
                     let base_type = &local_types[place.local.0];
-                    let elem_type = match &base_type.kind {
-                        TypeKind::Array(elem_ty_expr, _) | TypeKind::List(elem_ty_expr) => {
-                            match &elem_ty_expr.node {
-                                ExpressionKind::Type(ty, _) => &ty.kind,
-                                _ => &TypeKind::Int, // Fallback
-                            }
-                        }
-                        TypeKind::Custom(name, args) if name == "Array" || name == "List" => {
-                            if let Some(args) = args {
-                                if let Some(arg) = args.first() {
-                                    match &arg.node {
-                                        ExpressionKind::Type(ty, _) => &ty.kind,
-                                        _ => &TypeKind::Int,
-                                    }
-                                } else {
-                                    &TypeKind::Int
-                                }
-                            } else {
-                                &TypeKind::Int
-                            }
-                        }
-                        _ => &TypeKind::Int, // Fallback
-                    };
-                    let cl_elem_ty =
-                        crate::codegen::cranelift::types::translate_type_kind(elem_type, ptr_type);
-                    let elem_size = cl_elem_ty.bytes() as i32;
-
-                    // Runtime bounds check
-                    let is_list = matches!(&base_type.kind, TypeKind::List(_)) || 
-                                  matches!(&base_type.kind, TypeKind::Custom(name, _) if name == "List");
-                    
-                    let len_val = if is_list {
-                        // For List, length is at offset 8 of the MiriList struct
-                        builder.ins().load(ptr_type, MemFlags::new(), value, 8)
-                    } else if let Some(len) =
-                        Self::array_len_from_type(&base_type.kind, ptr_type)
-                    {
-                        // Use compile-time literal length if available
-                        builder.ins().iconst(ptr_type, len)
-                    } else {
-                        // Read runtime length from the collection header (Array/String)
-                        // Collection: [RC] [LEN] [DATA...]. ptr points to DATA.
-                        // Length is at offset -ptr_size.
-                        builder
-                            .ins()
-                            .load(ptr_type, MemFlags::new(), value, -(ptr_size as i32))
-                    };
-
-                    let oob = builder.ins().icmp(
-                        cranelift_codegen::ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
-                        idx_val,
-                        len_val,
-                    );
-                    builder.ins().trapnz(oob, TrapCode::unwrap_user(1));
-
-                    // Calculate byte offset: index * elem_size
-                    let elem_size_val = builder.ins().iconst(ptr_type, elem_size as i64);
-                    let byte_offset = builder.ins().imul(idx_val, elem_size_val);
-                    
-                    let data_ptr = if is_list {
-                        // For List, elements are at data_ptr which is at offset 0
-                        builder.ins().load(ptr_type, MemFlags::new(), value, 0)
-                    } else {
-                        value
-                    };
-
-                    let elem_addr = builder.ins().iadd(data_ptr, byte_offset);
-                    value = builder
-                        .ins()
-                        .load(cl_elem_ty, MemFlags::new(), elem_addr, 0);
+                    value = Self::translate_collection_index_read(
+                        builder, value, idx_val, base_type, type_ctx,
+                    )?;
                 }
             }
         }
@@ -372,31 +312,6 @@ impl<'a> FunctionTranslator<'a> {
             ))
         }
     }
-    /// Extracts the compile-time array length from a TypeKind, if it is an Array type.
-    ///
-    /// Returns `Some(length)` for `TypeKind::Array(_, size_expr)` where size is a literal,
-    /// or `None` for non-array types or non-literal sizes.
-    fn array_len_from_type(kind: &TypeKind, _ptr_type: cl_types::Type) -> Option<i64> {
-        if let TypeKind::Array(_, size_expr) = kind {
-            if let ExpressionKind::Literal(Literal::Integer(n)) = &size_expr.node {
-                let size = match n {
-                    IntegerLiteral::I8(v) => *v as i64,
-                    IntegerLiteral::I16(v) => *v as i64,
-                    IntegerLiteral::I32(v) => *v as i64,
-                    IntegerLiteral::I64(v) => *v,
-                    IntegerLiteral::I128(v) => *v as i64,
-                    IntegerLiteral::U8(v) => *v as i64,
-                    IntegerLiteral::U16(v) => *v as i64,
-                    IntegerLiteral::U32(v) => *v as i64,
-                    IntegerLiteral::U64(v) => *v as i64,
-                    IntegerLiteral::U128(v) => *v as i64,
-                };
-                return Some(size);
-            }
-        }
-        None
-    }
-
     /// Assign a value to a place.
     pub(crate) fn assign_to_place(
         builder: &mut FunctionBuilder,
@@ -408,7 +323,6 @@ impl<'a> FunctionTranslator<'a> {
         let local_types = type_ctx.local_types;
         let type_definitions = type_ctx.type_definitions;
         let ptr_type = type_ctx.ptr_type;
-        let ptr_size = ptr_type.bytes();
         if place.projection.is_empty() {
             let var = locals
                 .get(&place.local)
@@ -434,81 +348,16 @@ impl<'a> FunctionTranslator<'a> {
                         addr = builder.ins().iadd_imm(addr, offset as i64);
                     }
                     PlaceElem::Index(local) => {
+                        // For intermediate Index projections, we read the indexed element
+                        // (this occurs in nested projections like place[i].field)
                         let idx_var = locals
                             .get(local)
                             .ok_or_else(|| format!("Unknown index local: {:?}", local))?;
                         let idx_val = builder.use_var(*idx_var);
-
-                        // Get element type and its Cranelift representation
                         let base_type = &local_types[place.local.0];
-                        let elem_type = match &base_type.kind {
-                            TypeKind::Array(elem_ty_expr, _) | TypeKind::List(elem_ty_expr) => {
-                                match &elem_ty_expr.node {
-                                    ExpressionKind::Type(ty, _) => &ty.kind,
-                                    _ => &TypeKind::Int, // Fallback
-                                }
-                            }
-                            TypeKind::Custom(name, args) if name == "Array" || name == "List" => {
-                                if let Some(args) = args {
-                                    if let Some(arg) = args.first() {
-                                        match &arg.node {
-                                            ExpressionKind::Type(ty, _) => &ty.kind,
-                                            _ => &TypeKind::Int,
-                                        }
-                                    } else {
-                                        &TypeKind::Int
-                                    }
-                                } else {
-                                    &TypeKind::Int
-                                }
-                            }
-                            _ => &TypeKind::Int, // Fallback
-                        };
-                        let cl_elem_ty = crate::codegen::cranelift::types::translate_type_kind(
-                            elem_type, ptr_type,
-                        );
-                        let elem_size = cl_elem_ty.bytes() as i32;
-
-                        // Runtime bounds check
-                        let is_list = matches!(&base_type.kind, TypeKind::List(_)) || 
-                                      matches!(&base_type.kind, TypeKind::Custom(name, _) if name == "List");
-
-                        let len_val = if is_list {
-                            // For List, length is at offset 8 of the MiriList struct
-                            builder.ins().load(ptr_type, MemFlags::new(), addr, 8)
-                        } else if let Some(len) =
-                            Self::array_len_from_type(&base_type.kind, ptr_type)
-                        {
-                            // Use compile-time literal length if available
-                            builder.ins().iconst(ptr_type, len)
-                        } else {
-                            // Read runtime length from the collection header (Array/String)
-                            // Collection: [RC] [LEN] [DATA...]. ptr points to DATA.
-                            // Length is at offset -ptr_size.
-                            builder
-                                .ins()
-                                .load(ptr_type, MemFlags::new(), addr, -(ptr_size as i32))
-                        };
-
-                        let oob = builder.ins().icmp(
-                            cranelift_codegen::ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
-                            idx_val,
-                            len_val,
-                        );
-                        builder.ins().trapnz(oob, TrapCode::unwrap_user(1));
-
-                        // Calculate byte offset: index * elem_size
-                        let elem_size_val = builder.ins().iconst(ptr_type, elem_size as i64);
-                        let byte_offset = builder.ins().imul(idx_val, elem_size_val);
-                        
-                        let data_ptr = if is_list {
-                            // For List, elements are at data_ptr which is at offset 0
-                            builder.ins().load(ptr_type, MemFlags::new(), addr, 0)
-                        } else {
-                            addr
-                        };
-
-                        addr = builder.ins().iadd(data_ptr, byte_offset);
+                        addr = Self::translate_collection_index_read(
+                            builder, addr, idx_val, base_type, type_ctx,
+                        )?;
                     }
                 }
             }
@@ -532,82 +381,323 @@ impl<'a> FunctionTranslator<'a> {
                         .get(local)
                         .ok_or_else(|| format!("Unknown index local: {:?}", local))?;
                     let idx_val = builder.use_var(*idx_var);
-
-                    // Get element type and its Cranelift representation
                     let base_type = &local_types[place.local.0];
-                    let elem_type = match &base_type.kind {
-                        TypeKind::Array(elem_ty_expr, _) | TypeKind::List(elem_ty_expr) => {
-                            match &elem_ty_expr.node {
-                                ExpressionKind::Type(ty, _) => &ty.kind,
-                                _ => &TypeKind::Int, // Fallback
-                            }
-                        }
-                        TypeKind::Custom(name, args) if name == "Array" || name == "List" => {
-                            if let Some(args) = args {
-                                if let Some(arg) = args.first() {
-                                    match &arg.node {
-                                        ExpressionKind::Type(ty, _) => &ty.kind,
-                                        _ => &TypeKind::Int,
-                                    }
-                                } else {
-                                    &TypeKind::Int
-                                }
-                            } else {
-                                &TypeKind::Int
-                            }
-                        }
-                        _ => &TypeKind::Int, // Fallback
-                    };
-                    let cl_elem_ty =
-                        crate::codegen::cranelift::types::translate_type_kind(elem_type, ptr_type);
-                    let elem_size = cl_elem_ty.bytes() as i32;
-
-                    // Runtime bounds check
-                    let is_list = matches!(&base_type.kind, TypeKind::List(_)) || 
-                                  matches!(&base_type.kind, TypeKind::Custom(name, _) if name == "List");
-
-                    let len_val = if is_list {
-                        // For List, length is at offset 8 of the MiriList struct
-                        builder.ins().load(ptr_type, MemFlags::new(), addr, 8)
-                    } else if let Some(len) =
-                        Self::array_len_from_type(&base_type.kind, ptr_type)
-                    {
-                        // Use compile-time literal length if available
-                        builder.ins().iconst(ptr_type, len)
-                    } else {
-                        // Read runtime length from the collection header (Array/String)
-                        // Collection: [RC] [LEN] [DATA...]. ptr points to DATA.
-                        // Length is at offset -ptr_size.
-                        builder
-                            .ins()
-                            .load(ptr_type, MemFlags::new(), addr, -(ptr_size as i32))
-                    };
-
-                    let oob = builder.ins().icmp(
-                        cranelift_codegen::ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
-                        idx_val,
-                        len_val,
-                    );
-                    builder.ins().trapnz(oob, TrapCode::unwrap_user(1));
-
-                    // Calculate byte offset: index * elem_size
-                    let elem_size_val = builder.ins().iconst(ptr_type, elem_size as i64);
-                    let byte_offset = builder.ins().imul(idx_val, elem_size_val);
-                    
-                    let data_ptr = if is_list {
-                        // For List, elements are at data_ptr which is at offset 0
-                        builder.ins().load(ptr_type, MemFlags::new(), addr, 0)
-                    } else {
-                        addr
-                    };
-
-                    let elem_addr = builder.ins().iadd(data_ptr, byte_offset);
-                    builder.ins().store(MemFlags::new(), value, elem_addr, 0);
+                    Self::translate_collection_index_write(
+                        builder, addr, idx_val, value, base_type, type_ctx,
+                    )?;
                 }
             }
         }
         Ok(())
     }
+    /// Helper to call `miri_rt_array_new(elem_count, elem_size) -> *mut MiriArray`.
+    pub(crate) fn call_rt_array_new(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        elem_count: Value,
+        elem_size: Value,
+    ) -> Result<Value, String> {
+        let ptr_type = builder.func.dfg.value_type(elem_count);
+        let func_id = match ctx.rt_array_new_id {
+            Some(id) => id,
+            None => {
+                let sig = Signature {
+                    params: vec![AbiParam::new(ptr_type), AbiParam::new(ptr_type)],
+                    returns: vec![AbiParam::new(ptr_type)],
+                    call_conv: builder.func.signature.call_conv,
+                };
+                let id = ctx
+                    .module
+                    .declare_function("miri_rt_array_new", Linkage::Import, &sig)
+                    .map_err(|e| format!("Failed to declare miri_rt_array_new: {}", e))?;
+                ctx.rt_array_new_id = Some(id);
+                id
+            }
+        };
+        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+        let call = builder.ins().call(local_func, &[elem_count, elem_size]);
+        Ok(builder.inst_results(call)[0])
+    }
+
+    /// Helper to call `miri_rt_array_free(ptr)`.
+    pub(crate) fn call_rt_array_free(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        ptr: Value,
+    ) -> Result<(), String> {
+        let ptr_type = builder.func.dfg.value_type(ptr);
+        let func_id = match ctx.rt_array_free_id {
+            Some(id) => id,
+            None => {
+                let sig = Signature {
+                    params: vec![AbiParam::new(ptr_type)],
+                    returns: vec![],
+                    call_conv: builder.func.signature.call_conv,
+                };
+                let id = ctx
+                    .module
+                    .declare_function("miri_rt_array_free", Linkage::Import, &sig)
+                    .map_err(|e| format!("Failed to declare miri_rt_array_free: {}", e))?;
+                ctx.rt_array_free_id = Some(id);
+                id
+            }
+        };
+        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+        builder.ins().call(local_func, &[ptr]);
+        Ok(())
+    }
+
+    /// Helper to call `miri_rt_list_new(elem_size) -> *mut MiriList`.
+    pub(crate) fn call_rt_list_new(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        elem_size: Value,
+    ) -> Result<Value, String> {
+        let ptr_type = builder.func.dfg.value_type(elem_size);
+        let func_id = match ctx.rt_list_new_id {
+            Some(id) => id,
+            None => {
+                let sig = Signature {
+                    params: vec![AbiParam::new(ptr_type)],
+                    returns: vec![AbiParam::new(ptr_type)],
+                    call_conv: builder.func.signature.call_conv,
+                };
+                let id = ctx
+                    .module
+                    .declare_function("miri_rt_list_new", Linkage::Import, &sig)
+                    .map_err(|e| format!("Failed to declare miri_rt_list_new: {}", e))?;
+                ctx.rt_list_new_id = Some(id);
+                id
+            }
+        };
+        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+        let call = builder.ins().call(local_func, &[elem_size]);
+        Ok(builder.inst_results(call)[0])
+    }
+
+    /// Helper to call `miri_rt_list_push(ptr, val)`.
+    /// The value is passed as a pointer-sized integer (covers all primitive types).
+    pub(crate) fn call_rt_list_push(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        list_ptr: Value,
+        val: Value,
+    ) -> Result<(), String> {
+        let ptr_type = builder.func.dfg.value_type(list_ptr);
+        let func_id = match ctx.rt_list_push_id {
+            Some(id) => id,
+            None => {
+                let sig = Signature {
+                    params: vec![AbiParam::new(ptr_type), AbiParam::new(ptr_type)],
+                    returns: vec![],
+                    call_conv: builder.func.signature.call_conv,
+                };
+                let id = ctx
+                    .module
+                    .declare_function("miri_rt_list_push", Linkage::Import, &sig)
+                    .map_err(|e| format!("Failed to declare miri_rt_list_push: {}", e))?;
+                ctx.rt_list_push_id = Some(id);
+                id
+            }
+        };
+        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+        builder.ins().call(local_func, &[list_ptr, val]);
+        Ok(())
+    }
+
+    /// Helper to call `miri_rt_list_free(ptr)`.
+    pub(crate) fn call_rt_list_free(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        ptr: Value,
+    ) -> Result<(), String> {
+        let ptr_type = builder.func.dfg.value_type(ptr);
+        let func_id = match ctx.rt_list_free_id {
+            Some(id) => id,
+            None => {
+                let sig = Signature {
+                    params: vec![AbiParam::new(ptr_type)],
+                    returns: vec![],
+                    call_conv: builder.func.signature.call_conv,
+                };
+                let id = ctx
+                    .module
+                    .declare_function("miri_rt_list_free", Linkage::Import, &sig)
+                    .map_err(|e| format!("Failed to declare miri_rt_list_free: {}", e))?;
+                ctx.rt_list_free_id = Some(id);
+                id
+            }
+        };
+        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+        builder.ins().call(local_func, &[ptr]);
+        Ok(())
+    }
+
+    /// Resolves the element TypeKind from a collection type (Array or List).
+    /// Returns the element TypeKind and its Cranelift type.
+    pub(crate) fn resolve_collection_elem_type(
+        base_type: &Type,
+        _ptr_type: cl_types::Type,
+    ) -> &TypeKind {
+        match &base_type.kind {
+            TypeKind::Array(elem_ty_expr, _) | TypeKind::List(elem_ty_expr) => {
+                match &elem_ty_expr.node {
+                    ExpressionKind::Type(ty, _) => &ty.kind,
+                    _ => &TypeKind::Int,
+                }
+            }
+            TypeKind::Custom(name, args) if name == "Array" || name == "List" => {
+                if let Some(args) = args {
+                    if let Some(arg) = args.first() {
+                        match &arg.node {
+                            ExpressionKind::Type(ty, _) => &ty.kind,
+                            _ => &TypeKind::Int,
+                        }
+                    } else {
+                        &TypeKind::Int
+                    }
+                } else {
+                    &TypeKind::Int
+                }
+            }
+            _ => &TypeKind::Int,
+        }
+    }
+
+    /// Returns true if the given type is a List (dynamic collection).
+    pub(crate) fn is_list_type(kind: &TypeKind) -> bool {
+        matches!(kind, TypeKind::List(_))
+            || matches!(kind, TypeKind::Custom(name, _) if name == "List")
+    }
+
+    /// Returns true if the given type is an Array or List collection.
+    pub(crate) fn is_collection_type(kind: &TypeKind) -> bool {
+        matches!(kind, TypeKind::Array(_, _) | TypeKind::List(_))
+            || matches!(kind, TypeKind::Custom(name, _) if name == "Array" || name == "List")
+    }
+
+    /// Emits the type-appropriate cleanup when an object's RC reaches zero.
+    ///
+    /// All heap types share the same `[RC][payload]` layout, so the RC
+    /// increment/decrement logic is uniform. The only type-specific part is
+    /// *what* to free when RC hits zero:
+    /// - Arrays/Lists have internal data buffers that their `_free` functions handle.
+    /// - All other types just need the `[RC][payload]` block freed.
+    ///
+    /// `ptr` points to the payload (past the RC header).
+    /// `header_ptr` points to the RC header (`ptr - ptr_size`).
+    pub(crate) fn emit_type_drop(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        kind: &TypeKind,
+        ptr: Value,
+        header_ptr: Value,
+    ) -> Result<(), String> {
+        if Self::is_list_type(kind) {
+            Self::call_rt_list_free(builder, ctx, ptr)
+        } else if Self::is_collection_type(kind) {
+            Self::call_rt_array_free(builder, ctx, ptr)
+        } else {
+            Self::call_libc_free(builder, ctx, header_ptr)
+        }
+    }
+
+    /// Translates an index access on a collection (Array or List).
+    ///
+    /// Both `MiriArray` and `MiriList` have compatible layout for the first two fields:
+    /// - offset 0: `data: *mut u8` (pointer to element storage)
+    /// - offset ptr_size: `elem_count/len: usize`
+    ///
+    /// This method:
+    /// 1. Reads the data pointer from the struct
+    /// 2. Reads the length for bounds checking
+    /// 3. Emits a trap on out-of-bounds
+    /// 4. Computes the element address: `data + index * elem_size`
+    pub(crate) fn translate_collection_index_read(
+        builder: &mut FunctionBuilder,
+        base_value: Value,
+        idx_val: Value,
+        base_type: &Type,
+        type_ctx: &TypeCtx,
+    ) -> Result<Value, String> {
+        let ptr_type = type_ctx.ptr_type;
+        let ptr_size = ptr_type.bytes() as i32;
+
+        let elem_type_kind = Self::resolve_collection_elem_type(base_type, ptr_type);
+        let cl_elem_ty =
+            crate::codegen::cranelift::types::translate_type_kind(elem_type_kind, ptr_type);
+        let elem_size = cl_elem_ty.bytes() as i64;
+
+        // MiriArray/MiriList layout: { data: *mut u8, len: usize, ... }
+        // Read data pointer from offset 0
+        let data_ptr = builder.ins().load(ptr_type, MemFlags::new(), base_value, 0);
+
+        // Read length from offset ptr_size
+        let len_val = builder
+            .ins()
+            .load(ptr_type, MemFlags::new(), base_value, ptr_size);
+
+        // Runtime bounds check: trap if index >= length
+        let oob = builder.ins().icmp(
+            cranelift_codegen::ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
+            idx_val,
+            len_val,
+        );
+        builder.ins().trapnz(oob, TrapCode::unwrap_user(1));
+
+        // Compute element address: data + index * elem_size
+        let elem_size_val = builder.ins().iconst(ptr_type, elem_size);
+        let byte_offset = builder.ins().imul(idx_val, elem_size_val);
+        let elem_addr = builder.ins().iadd(data_ptr, byte_offset);
+
+        // Load the element
+        Ok(builder
+            .ins()
+            .load(cl_elem_ty, MemFlags::new(), elem_addr, 0))
+    }
+
+    /// Translates an index write on a collection (Array or List).
+    /// Same layout assumptions as `translate_collection_index_read`.
+    pub(crate) fn translate_collection_index_write(
+        builder: &mut FunctionBuilder,
+        base_addr: Value,
+        idx_val: Value,
+        value: Value,
+        base_type: &Type,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), String> {
+        let ptr_type = type_ctx.ptr_type;
+        let ptr_size = ptr_type.bytes() as i32;
+
+        let elem_type_kind = Self::resolve_collection_elem_type(base_type, ptr_type);
+        let cl_elem_ty =
+            crate::codegen::cranelift::types::translate_type_kind(elem_type_kind, ptr_type);
+        let elem_size = cl_elem_ty.bytes() as i64;
+
+        // Read data pointer from offset 0
+        let data_ptr = builder.ins().load(ptr_type, MemFlags::new(), base_addr, 0);
+
+        // Read length from offset ptr_size
+        let len_val = builder
+            .ins()
+            .load(ptr_type, MemFlags::new(), base_addr, ptr_size);
+
+        // Runtime bounds check
+        let oob = builder.ins().icmp(
+            cranelift_codegen::ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
+            idx_val,
+            len_val,
+        );
+        builder.ins().trapnz(oob, TrapCode::unwrap_user(1));
+
+        // Compute element address and store
+        let elem_size_val = builder.ins().iconst(ptr_type, elem_size);
+        let byte_offset = builder.ins().imul(idx_val, elem_size_val);
+        let elem_addr = builder.ins().iadd(data_ptr, byte_offset);
+        builder.ins().store(MemFlags::new(), value, elem_addr, 0);
+        Ok(())
+    }
+
     /// Helper to call libc malloc, caching the FuncId across invocations.
     pub(crate) fn call_libc_malloc(
         builder: &mut FunctionBuilder,
