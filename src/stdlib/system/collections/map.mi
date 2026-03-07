@@ -1,0 +1,46 @@
+use system.ops
+
+public class Map<K, V> implements Iterable
+
+    runtime "core" fn miri_rt_map_new(key_size int, value_size int, key_kind int) Self
+    runtime "core" fn miri_rt_map_free(m Self)
+    runtime "core" fn miri_rt_map_len(m Self) int
+    runtime "core" fn miri_rt_map_is_empty(m Self) bool
+    runtime "core" fn miri_rt_map_set(m Self, key K, value V)
+    runtime "core" fn miri_rt_map_get(m Self, key K) V
+    runtime "core" fn miri_rt_map_contains_key(m Self, key K) bool
+    runtime "core" fn miri_rt_map_remove(m Self, key K) bool
+    runtime "core" fn miri_rt_map_clear(m Self)
+    runtime "core" fn miri_rt_map_key_at(m Self, index int) K
+    runtime "core" fn miri_rt_map_value_at(m Self, index int) V
+
+    /// Returns the number of key-value pairs in the map.
+    public fn length() int: miri_rt_map_len(self)
+
+    /// Returns the key at the given sequential index.
+    /// This enables for-loop iteration: `for k in map` or `for k, v in map`.
+    public fn element_at(index int) K: miri_rt_map_key_at(self, index)
+
+    /// Returns the value at the given sequential index.
+    /// Used internally for `for k, v in map` iteration.
+    public fn value_at(index int) V: miri_rt_map_value_at(self, index)
+
+    /// Sets the value associated with the given key.
+    public fn set(key K, value V)
+        miri_rt_map_set(self, key, value)
+
+    /// Returns the value associated with the given key.
+    public fn get(key K) V: miri_rt_map_get(self, key)
+
+    /// Returns true if the map contains the given key.
+    public fn contains_key(key K) bool: miri_rt_map_contains_key(self, key)
+
+    /// Removes the entry with the given key.
+    public fn remove(key K) bool: miri_rt_map_remove(self, key)
+
+    /// Removes all entries from the map.
+    public fn clear()
+        miri_rt_map_clear(self)
+
+    /// Returns true if the map has no entries.
+    public fn is_empty() bool: miri_rt_map_is_empty(self)

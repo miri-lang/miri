@@ -223,6 +223,50 @@ pub(crate) fn lower_assignment_expr(
         crate::ast::expression::LeftHandSideExpression::Index(index_expr) => {
             // Index assignment: a[i] = x
             if let ExpressionKind::Index(obj, idx) = &index_expr.node {
+                // Intercept map index write: m[key] = value → miri_rt_map_set(m, key, value)
+                if let Some(obj_ty) = ctx.type_checker.get_type(obj.id) {
+                    if matches!(&obj_ty.kind, TypeKind::Map(_, _))
+                        || matches!(&obj_ty.kind, TypeKind::Custom(name, _) if name == "Map")
+                    {
+                        let val = lower_expression(ctx, rhs, None)?;
+                        let obj_op = lower_expression(ctx, obj, None)?;
+                        let key_op = lower_expression(ctx, idx, None)?;
+
+                        let func_op = Operand::Constant(Box::new(crate::mir::Constant {
+                            span: expr.span,
+                            ty: Type::new(TypeKind::Identifier, expr.span),
+                            literal: crate::ast::literal::Literal::Identifier(
+                                "miri_rt_map_set".to_string(),
+                            ),
+                        }));
+
+                        let target_bb = ctx.new_basic_block();
+                        let dummy_dest =
+                            ctx.push_temp(Type::new(TypeKind::Void, expr.span), expr.span);
+
+                        ctx.set_terminator(crate::mir::Terminator::new(
+                            crate::mir::TerminatorKind::Call {
+                                func: func_op,
+                                args: vec![obj_op, key_op, val.clone()],
+                                destination: Place::new(dummy_dest),
+                                target: Some(target_bb),
+                            },
+                            expr.span,
+                        ));
+                        ctx.set_current_block(target_bb);
+
+                        if let Some(d) = dest {
+                            ctx.push_statement(crate::mir::Statement {
+                                kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(val.clone())),
+                                span: expr.span,
+                            });
+                            return Ok(Operand::Copy(d));
+                        } else {
+                            return Ok(val);
+                        }
+                    }
+                }
+
                 let val = lower_expression(ctx, rhs, None)?;
 
                 // Get the object operand

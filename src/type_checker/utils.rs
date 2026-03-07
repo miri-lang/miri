@@ -319,7 +319,9 @@ impl TypeChecker {
             TypeKind::Set(inner) => self
                 .extract_type_from_expression(inner)
                 .unwrap_or_else(|_| Self::error_type()),
-            TypeKind::Map(key, val) => make_type(TypeKind::Tuple(vec![*key.clone(), *val.clone()])),
+            TypeKind::Map(key, _val) => self
+                .extract_type_from_expression(key)
+                .unwrap_or_else(|_| Self::error_type()),
             TypeKind::Custom(name, args) if name == "Array" || name == "List" => {
                 if let Some(args) = args {
                     if !args.is_empty() {
@@ -512,7 +514,7 @@ impl TypeChecker {
         context: &Context,
     ) -> Option<Type> {
         match name {
-            "map" => {
+            "Map" => {
                 if let Some(args) = args {
                     if args.len() == 2 {
                         let k = self.resolve_type_expression(&args[0], context);
