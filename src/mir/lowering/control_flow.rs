@@ -1017,6 +1017,7 @@ pub fn lower_call(
                 TypeKind::List(_) => Some("List".to_string()),
                 TypeKind::Array(_, _) => Some("Array".to_string()),
                 TypeKind::Map(_, _) => Some("Map".to_string()),
+                TypeKind::Set(_) => Some("Set".to_string()),
                 TypeKind::Custom(name, _) => Some(name.clone()),
                 _ => None,
             };

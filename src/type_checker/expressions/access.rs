@@ -345,6 +345,13 @@ impl TypeChecker {
                     ]),
                 )
             }
+            TypeKind::Set(inner_expr) => {
+                let inner_ty = self.resolve_type_expression(inner_expr, context);
+                (
+                    Some("Set".to_string()),
+                    Some(vec![self.create_type_expression(inner_ty)]),
+                )
+            }
             TypeKind::Custom(name, args) => (Some(name.clone()), args.clone()),
             TypeKind::Array(inner_expr, size_expr) => {
                 let inner_ty = self.resolve_type_expression(inner_expr, context);

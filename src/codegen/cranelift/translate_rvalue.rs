@@ -83,7 +83,10 @@ impl<'a> FunctionTranslator<'a> {
             Rvalue::Aggregate(kind, operands) => {
                 let is_collection = matches!(
                     kind,
-                    AggregateKind::Array | AggregateKind::List | AggregateKind::Map
+                    AggregateKind::Array
+                        | AggregateKind::List
+                        | AggregateKind::Map
+                        | AggregateKind::Set
                 );
 
                 if is_collection {
@@ -203,6 +206,16 @@ impl<'a> FunctionTranslator<'a> {
 
                             Ok(map_ptr)
                         }
+                        AggregateKind::Set => {
+                            let set_ptr = Self::call_rt_set_new(builder, ctx, elem_size_val)?;
+
+                            for val in translated {
+                                let widened = Self::widen_to_ptr(builder, val, ptr_type);
+                                Self::call_rt_set_add(builder, ctx, set_ptr, widened)?;
+                            }
+
+                            Ok(set_ptr)
+                        }
                         _ => unreachable!(),
                     }
                 } else {
@@ -314,7 +327,7 @@ impl<'a> FunctionTranslator<'a> {
                     builder.ins().jump(merge_bb, &[]);
                     builder.seal_block(null_bb);
 
-                    // MiriArray.elem_count and MiriList.len are at offset ptr_size.
+                    // MiriArray.elem_count, MiriList.len, MiriSet.len are at offset ptr_size.
                     // MiriMap.len is at offset 3*ptr_size (after states, keys, values).
                     builder.switch_to_block(load_bb);
                     let len_offset = if Self::is_map_type(&ty.kind) {
