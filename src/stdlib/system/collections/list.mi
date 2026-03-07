@@ -12,6 +12,7 @@ public class List<T> implements Iterable
     runtime "core" fn miri_rt_list_remove(l Self, index int) bool
     runtime "core" fn miri_rt_list_clear(l Self)
     runtime "core" fn miri_rt_list_reverse(l Self)
+    runtime "core" fn miri_rt_list_sort(l Self)
     runtime "core" fn miri_rt_list_is_empty(l Self) bool
 
     /// Returns the number of elements in the list.
@@ -59,6 +60,10 @@ public class List<T> implements Iterable
     /// Removes all elements from the list.
     public fn clear()
         miri_rt_list_clear(self)
+
+    /// Sorts the list in ascending order.
+    public fn sort()
+        miri_rt_list_sort(self)
 
     /// Reverses the list in place.
     public fn reverse()

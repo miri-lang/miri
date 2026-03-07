@@ -231,6 +231,247 @@ println(f\"{l.last_index()}\")
     );
 }
 
+// ==================== Sort ====================
+
+#[test]
+fn list_sort() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.list
+
+let l = List([30, 10, 20, 5])
+l.sort()
+println(f\"{l[0]} {l[1]} {l[2]} {l[3]}\")
+",
+        "5 10 20 30",
+    );
+}
+
+#[test]
+fn list_sort_already_sorted() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.list
+
+let l = List([1, 2, 3])
+l.sort()
+println(f\"{l[0]} {l[1]} {l[2]}\")
+",
+        "1 2 3",
+    );
+}
+
+#[test]
+fn list_sort_reverse_order() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.list
+
+let l = List([5, 4, 3, 2, 1])
+l.sort()
+println(f\"{l[0]} {l[1]} {l[2]} {l[3]} {l[4]}\")
+",
+        "1 2 3 4 5",
+    );
+}
+
+// ==================== Additional Method Tests ====================
+
+#[test]
+fn list_get_method() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.list
+
+let l = List([10, 20, 30])
+println(f\"{l.get(0)}\")
+println(f\"{l.get(2)}\")
+",
+        "10\n30",
+    );
+}
+
+#[test]
+fn list_set_method() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.list
+
+let l = List([10, 20, 30])
+l.set(1, 99)
+println(f\"{l[0]} {l[1]} {l[2]}\")
+",
+        "10 99 30",
+    );
+}
+
+#[test]
+fn list_is_empty_false() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.list
+
+let l = List([1])
+println(f\"{l.is_empty()}\")
+",
+        "false",
+    );
+}
+
+#[test]
+fn list_last_index_method() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.list
+
+let l = List([10, 20, 30])
+println(f\"{l.last_index()}\")
+",
+        "2",
+    );
+}
+
+#[test]
+fn list_first_last_on_single_element() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.list
+
+let l = List([42])
+println(f\"{l.first() ?? -1}\")
+println(f\"{l.last() ?? -1}\")
+",
+        "42\n42",
+    );
+}
+
+#[test]
+fn list_contains_false() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.list
+
+let l = List([1, 2, 3])
+println(f\"{l.contains(99)}\")
+",
+        "false",
+    );
+}
+
+#[test]
+fn list_index_of_not_found() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.list
+
+let l = List([1, 2, 3])
+println(f\"{l.index_of(99)}\")
+",
+        "-1",
+    );
+}
+
+#[test]
+fn list_element_at() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.list
+
+let l = List([10, 20, 30])
+println(f\"{l.element_at(1)}\")
+",
+        "20",
+    );
+}
+
+#[test]
+fn list_push_multiple_then_iterate() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.list
+
+let l = List()
+l.push(1)
+l.push(2)
+l.push(3)
+for x in l
+    println(f\"{x}\")
+",
+        "1\n2\n3",
+    );
+}
+
+// ==================== Function Integration Tests ====================
+
+#[test]
+fn list_passed_to_function() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.list
+
+fn sum_list(l [int]) int
+    var total = 0
+    for x in l
+        total += x
+    return total
+
+fn main()
+    let l = List([10, 20, 30])
+    println(f\"{sum_list(l: l)}\")
+",
+        "60",
+    );
+}
+
+#[test]
+fn list_returned_from_function() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.list
+
+fn make_list() [int]
+    List([1, 2, 3])
+
+fn main()
+    let l = make_list()
+    println(f\"{l[0]} {l[1]} {l[2]}\")
+",
+        "1 2 3",
+    );
+}
+
+#[test]
+fn list_in_struct_field() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.list
+
+struct Data
+    items [int]
+
+fn main()
+    let d = Data(items: List([10, 20, 30]))
+    println(f\"{d.items[0]} {d.items[1]} {d.items[2]}\")
+",
+        "10 20 30",
+    );
+}
+
 // ==================== Runtime bounds check ====================
 
 #[test]
