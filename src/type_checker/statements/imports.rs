@@ -69,18 +69,38 @@ impl TypeChecker {
         // Convert "system.io" -> "system/io.mi"
         let relative_path = path_str.replace(".", "/") + ".mi";
 
+        let stdlib_base = PathBuf::from("src/stdlib");
+        let current_dir = std::env::current_dir().unwrap_or_default();
+
         let possible_locations = vec![
-            PathBuf::from("src/stdlib").join(&relative_path),
-            std::env::current_dir()
-                .unwrap_or_default()
-                .join(&relative_path),
+            (stdlib_base.clone(), stdlib_base.join(&relative_path)),
+            (current_dir.clone(), current_dir.join(&relative_path)),
         ];
 
         let mut found_path = None;
-        for loc in possible_locations {
+        for (base, loc) in possible_locations {
+            // Security: Prevent path traversal by ensuring the resolved
+            // path is physically inside the intended base directory.
+            // Using components ensures we catch "foo/../bar" correctly.
+            // But a simpler check is whether it's syntactically within
+            // or we can canonicalize. Since we only append ".replace('.', '/') + .mi"
+            // and identifiers shouldn't have "..", this is defense in depth.
+            // Note: `starts_with` only does syntactic path checking, but since
+            // relative_path doesn't start with `/` and base is absolute/relative,
+            // we should normalize or canonicalize to be perfectly safe, or just
+            // use the standard path sanitization pattern.
+
+            // To properly prevent traversal like `base.join("..").join("etc")`,
+            // we check if canonicalized paths align, or at least if `loc.starts_with`
+            // works on the parsed PathBuf. Since PathBuf::join resolves `..` sometimes
+            // or just concatenates, we should check canonical paths if exists.
             if loc.exists() {
-                found_path = Some(loc);
-                break;
+                if let (Ok(canon_loc), Ok(canon_base)) = (loc.canonicalize(), base.canonicalize()) {
+                    if canon_loc.starts_with(&canon_base) {
+                        found_path = Some(loc);
+                        break;
+                    }
+                }
             }
         }
 
