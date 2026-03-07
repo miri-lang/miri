@@ -196,7 +196,7 @@ impl TypeChecker {
     }
 
     pub(crate) fn infer_tuple(&mut self, elements: &[Expression], context: &mut Context) -> Type {
-        let mut element_types = Vec::new();
+        let mut element_types = Vec::with_capacity(elements.len());
         for element in elements {
             let ty = self.infer_expression(element, context);
             element_types.push(self.create_type_expression(ty));
