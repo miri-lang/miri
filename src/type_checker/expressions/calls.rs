@@ -66,8 +66,8 @@ impl TypeChecker {
         let func_type = self.infer_expression(func, context);
 
         // Process arguments
-        let mut positional_args = Vec::new();
-        let mut named_args = HashMap::new();
+        let mut positional_args = Vec::with_capacity(args.len());
+        let mut named_args = HashMap::with_capacity(args.len());
 
         for arg in args {
             match &arg.node {
