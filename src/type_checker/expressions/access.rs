@@ -682,7 +682,8 @@ impl TypeChecker {
                                 // Constructor function: (args) -> EnumType
 
                                 // Perform substitution if needed
-                                let mut substituted_variant_types = Vec::new();
+                                let mut substituted_variant_types =
+                                    Vec::with_capacity(variant_types.len());
                                 if let Some(generics) = &def.generics {
                                     if let Some(args) = &type_args {
                                         if generics.len() == args.len() {
