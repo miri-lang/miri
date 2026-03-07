@@ -175,7 +175,9 @@ impl TypeChecker {
             ))));
         }
 
-        let mut candidates: Vec<&str> = Vec::new();
+        let capacity =
+            context.scopes.iter().map(|s| s.len()).sum::<usize>() + self.global_scope.len() + 4;
+        let mut candidates: Vec<&str> = Vec::with_capacity(capacity);
         for scope in &context.scopes {
             candidates.extend(scope.keys().map(|s| s.as_str()));
         }
