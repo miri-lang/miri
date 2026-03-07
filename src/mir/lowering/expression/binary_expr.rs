@@ -27,8 +27,6 @@ pub(crate) fn lower_binary_expr(
         let lhs_op = lower_expression(ctx, lhs, None)?;
         let rhs_op = lower_expression(ctx, rhs, None)?;
 
-        // For now, implement as a call to built-in `contains` function
-        // Backend will handle the actual membership test
         let result_ty = Type::new(TypeKind::Boolean, expr.span);
         let (destination, ret_op) = if let Some(d) = dest {
             (d.clone(), Operand::Copy(d))
@@ -37,11 +35,17 @@ pub(crate) fn lower_binary_expr(
             (Place::new(temp), Operand::Copy(Place::new(temp)))
         };
 
-        // Create call to __contains(collection, element) -> bool
+        // Resolve the collection type to pick the right runtime function
+        let fn_name = match ctx.type_checker.get_type(rhs.id).map(|t| &t.kind) {
+            Some(TypeKind::Set(_)) => "miri_rt_set_contains",
+            Some(TypeKind::Map(_, _)) => "miri_rt_map_contains_key",
+            _ => "__contains",
+        };
+
         let contains_fn = Operand::Constant(Box::new(Constant {
             span: expr.span,
             ty: Type::new(TypeKind::Identifier, expr.span),
-            literal: crate::ast::literal::Literal::Identifier("__contains".to_string()),
+            literal: crate::ast::literal::Literal::Identifier(fn_name.to_string()),
         }));
 
         let target_bb = ctx.new_basic_block();

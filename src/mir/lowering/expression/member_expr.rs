@@ -323,6 +323,10 @@ pub(crate) fn lower_member_expr(
     // Zero-arg methods on class types can be accessed as properties.
     let class_name = match &obj_ty.kind {
         TypeKind::String => Some("String".to_string()),
+        TypeKind::List(_) => Some("List".to_string()),
+        TypeKind::Map(_, _) => Some("Map".to_string()),
+        TypeKind::Set(_) => Some("Set".to_string()),
+        TypeKind::Array(_, _) => Some("Array".to_string()),
         TypeKind::Custom(name, _) => Some(name.clone()),
         _ => None,
     };
