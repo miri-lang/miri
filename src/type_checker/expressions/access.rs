@@ -184,6 +184,33 @@ impl TypeChecker {
                 }
                 self.resolve_type_expression(&val_type_expr, context)
             }
+            TypeKind::Custom(name, args) if name == "Map" => {
+                // Inside the Map class definition, self is Custom("Map", None).
+                // The key type is generic K, the value type is generic V.
+                if let Some(args) = args {
+                    if args.len() >= 2 {
+                        let key_type = self.resolve_type_expression(&args[0], context);
+                        if !self.are_compatible(&key_type, &index_type, context) {
+                            self.report_error("Invalid map key type".to_string(), index.span);
+                            return make_type(TypeKind::Error);
+                        }
+                        return self.resolve_type_expression(&args[1], context);
+                    }
+                }
+                // Inside the class body, args is None — resolve generics from context.
+                if let Some(TypeDefinition::Generic(g)) = context.resolve_type_definition("V") {
+                    return make_type(TypeKind::Generic(
+                        g.name.clone(),
+                        g.constraint.clone().map(Box::new),
+                        g.kind.clone(),
+                    ));
+                }
+                make_type(TypeKind::Generic(
+                    "V".to_string(),
+                    None,
+                    TypeDeclarationKind::None,
+                ))
+            }
             TypeKind::Tuple(element_type_exprs) => {
                 // Check if tuple is homogeneous
                 let is_homogeneous = if element_type_exprs.is_empty() {
@@ -305,6 +332,17 @@ impl TypeChecker {
                 (
                     Some("List".to_string()),
                     Some(vec![self.create_type_expression(inner_ty)]),
+                )
+            }
+            TypeKind::Map(key_expr, val_expr) => {
+                let key_ty = self.resolve_type_expression(key_expr, context);
+                let val_ty = self.resolve_type_expression(val_expr, context);
+                (
+                    Some("Map".to_string()),
+                    Some(vec![
+                        self.create_type_expression(key_ty),
+                        self.create_type_expression(val_ty),
+                    ]),
                 )
             }
             TypeKind::Custom(name, args) => (Some(name.clone()), args.clone()),

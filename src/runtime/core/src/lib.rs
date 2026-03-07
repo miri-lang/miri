@@ -14,6 +14,7 @@ pub mod alloc;
 pub mod array;
 pub mod io;
 pub mod list;
+pub mod map;
 pub mod rc;
 pub mod string;
 
@@ -21,4 +22,5 @@ pub use alloc::*;
 pub use array::*;
 pub use io::*;
 pub use list::*;
+pub use map::*;
 pub use string::*;
