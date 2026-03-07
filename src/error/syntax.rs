@@ -352,6 +352,8 @@ impl Reportable for SyntaxError {
 pub fn find_line_info(source: &str, pos: usize) -> (usize, usize, &str) {
     let mut line_start = 0;
     let mut line_num = 1;
+    let pos = pos.min(source.len()); // Clamp pos to avoid out-of-bounds slicing
+
     for (i, c) in source.char_indices() {
         if i >= pos {
             break;
