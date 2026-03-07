@@ -390,3 +390,31 @@ print(f"{result}")
         "10",
     );
 }
+
+// =============================================================================
+// Collections in match arms
+// =============================================================================
+
+#[test]
+fn test_match_collection_in_enum_arm() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+enum Result
+    Ok(List<int>)
+    Err(String)
+
+fn main()
+    let r = Result.Ok(List([1, 2, 3]))
+    
+    let result = match r
+        Result.Ok(l): l.length()
+        Result.Err(e): 0
+        
+    println(f"{result}")
+"#,
+        "3",
+    );
+}

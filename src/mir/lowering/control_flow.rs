@@ -247,13 +247,14 @@ fn lower_for_over_iterable(
         Some(TypeKind::Map(_, _))
     );
     let elem_ty = if let Some(ty) = &iterable_ty {
-        // Extract element type from list/array/map type parameters
+        // Extract element type from list/array/map/set type parameters
         match &ty.kind {
             TypeKind::List(elem_type_expr) => super::resolve_type(ctx.type_checker, elem_type_expr),
             TypeKind::Array(elem_type_expr, _) => {
                 super::resolve_type(ctx.type_checker, elem_type_expr)
             }
             TypeKind::Map(key_type_expr, _) => super::resolve_type(ctx.type_checker, key_type_expr),
+            TypeKind::Set(elem_type_expr) => super::resolve_type(ctx.type_checker, elem_type_expr),
             _ => ty.clone(),
         }
     } else {
@@ -331,6 +332,7 @@ fn lower_for_over_iterable(
         .and_then(|ty| match &ty.kind {
             TypeKind::String => Some("String".to_string()),
             TypeKind::Map(_, _) => Some("Map".to_string()),
+            TypeKind::Set(_) => Some("Set".to_string()),
             TypeKind::Custom(name, _) if name != "Array" && name != "List" => Some(name.clone()),
             _ => None,
         })
@@ -775,10 +777,11 @@ pub fn lower_call(
                         TypeKind::List(_)
                             | TypeKind::Array(_, _)
                             | TypeKind::Map(_, _)
+                            | TypeKind::Set(_)
                             | TypeKind::String
                     ) || matches!(
                         &obj_ty.kind,
-                        TypeKind::Custom(name, _) if name == "Array" || name == "List" || name == "Map"
+                        TypeKind::Custom(name, _) if name == "Array" || name == "List" || name == "Map" || name == "Set"
                     ))
                 {
                     let obj_op = lower_expression(ctx, obj, None)?;

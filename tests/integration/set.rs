@@ -165,6 +165,103 @@ println(f"{s.is_empty()}")
 }
 
 // =========================================================================
+// Iteration
+// =========================================================================
+
+#[test]
+fn test_set_for_loop() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.set
+
+// Order in a Set is not strictly guaranteed by definition,
+// but the current implementation likely preserves insertion order
+// sequentially. Let's sum them to be safe from ordering issues.
+let s = {10, 20, 30}
+var sum = 0
+for x in s
+    sum = sum + x
+println(f"{sum}")
+"#,
+        "60",
+    );
+}
+
+// =========================================================================
+// Function passing / return
+// =========================================================================
+
+#[test]
+fn test_set_passed_to_and_returned_from_function() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.set
+
+fn modify_and_return_set(s Set<int>) Set<int>
+    s.add(99)
+    return s
+
+fn main()
+    let s = {1, 2, 3}
+    let s2 = modify_and_return_set(s)
+    println(f"{s2.length()}")
+    println(f"{s2.contains(99)}")
+    println(f"{s.contains(99)}") // because it's passed by reference
+"#,
+        "4\ntrue\ntrue",
+    );
+}
+
+// =========================================================================
+// RC and Aliasing
+// =========================================================================
+
+#[test]
+fn test_set_alias_no_double_free() {
+    assert_runs(
+        r#"
+use system.collections.set
+let s1 = {1, 2, 3}
+let s2 = s1 // RC increments
+// Both go out of scope, shouldn't double free
+"#,
+    );
+}
+
+#[test]
+fn test_set_reassign_frees_old() {
+    assert_runs(
+        r#"
+use system.collections.set
+var s = {1, 2, 3}
+s = {4, 5} // old set should be freed here
+"#,
+    );
+}
+
+#[test]
+fn test_set_passed_to_function_no_dangle() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.set
+
+fn consume(s Set<int>)
+    // does nothing, reference goes out of scope, RC decremented
+
+fn main()
+    let s = {10, 20, 30}
+    consume(s)
+    // s should still be valid here
+    println(f"{s.length()}")
+"#,
+        "3",
+    );
+}
+
+// =========================================================================
 // Import requirements
 // =========================================================================
 
