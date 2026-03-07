@@ -543,6 +543,47 @@ pub unsafe extern "C" fn miri_rt_list_last(ptr: *const MiriList) -> *const u8 {
     (*ptr).get((*ptr).len() - 1)
 }
 
+/// Sorts the list in ascending order (elements compared as signed 64-bit integers).
+///
+/// Uses insertion sort which is stable and efficient for small lists.
+#[no_mangle]
+#[allow(clippy::missing_safety_doc)]
+pub unsafe extern "C" fn miri_rt_list_sort(ptr: *mut MiriList) {
+    if ptr.is_null() {
+        return;
+    }
+    let list = &mut *ptr;
+    if list.len < 2 || list.data.is_null() {
+        return;
+    }
+
+    let elem_size = list.elem_size;
+    let mut temp = vec![0u8; elem_size];
+
+    for i in 1..list.len {
+        // Copy element[i] to temp
+        let src = list.data.add(i * elem_size);
+        ptr::copy_nonoverlapping(src, temp.as_mut_ptr(), elem_size);
+        let key = read_as_i64(temp.as_ptr(), elem_size);
+
+        let mut j = i;
+        while j > 0 {
+            let prev = list.data.add((j - 1) * elem_size);
+            let prev_val = read_as_i64(prev, elem_size);
+            if prev_val <= key {
+                break;
+            }
+            // Shift element[j-1] to element[j]
+            let dest = list.data.add(j * elem_size);
+            ptr::copy_nonoverlapping(prev, dest, elem_size);
+            j -= 1;
+        }
+        // Place temp at position j
+        let dest = list.data.add(j * elem_size);
+        ptr::copy_nonoverlapping(temp.as_ptr(), dest, elem_size);
+    }
+}
+
 /// Reverses the list in place.
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
@@ -573,6 +614,25 @@ pub unsafe extern "C" fn miri_rt_list_reverse(ptr: *mut MiriList) {
 
         i += 1;
         j -= 1;
+    }
+}
+
+/// Reads raw bytes as a signed 64-bit integer for comparison purposes.
+///
+/// Handles common element sizes (1, 2, 4, 8 bytes) with sign extension.
+/// Other sizes are zero-padded.
+pub(crate) unsafe fn read_as_i64(ptr: *const u8, elem_size: usize) -> i64 {
+    match elem_size {
+        1 => *(ptr as *const i8) as i64,
+        2 => *(ptr as *const i16) as i64,
+        4 => *(ptr as *const i32) as i64,
+        8 => *(ptr as *const i64),
+        _ => {
+            let mut buf = [0u8; 8];
+            let copy_len = elem_size.min(8);
+            ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), copy_len);
+            i64::from_ne_bytes(buf)
+        }
     }
 }
 
@@ -675,6 +735,55 @@ mod tests {
             assert_eq!(*(miri_rt_list_get(list, 2) as *const i32), 3);
             assert_eq!(*(miri_rt_list_get(list, 3) as *const i32), 2);
             assert_eq!(*(miri_rt_list_get(list, 4) as *const i32), 1);
+
+            miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_list_sort() {
+        unsafe {
+            let list = miri_rt_list_new(std::mem::size_of::<usize>());
+            miri_rt_list_push(list, 30usize);
+            miri_rt_list_push(list, 10usize);
+            miri_rt_list_push(list, 20usize);
+            miri_rt_list_push(list, 5usize);
+            miri_rt_list_sort(list);
+
+            assert_eq!(*(miri_rt_list_get(list, 0) as *const usize), 5);
+            assert_eq!(*(miri_rt_list_get(list, 1) as *const usize), 10);
+            assert_eq!(*(miri_rt_list_get(list, 2) as *const usize), 20);
+            assert_eq!(*(miri_rt_list_get(list, 3) as *const usize), 30);
+
+            miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_list_sort_already_sorted() {
+        unsafe {
+            let list = miri_rt_list_new(std::mem::size_of::<usize>());
+            miri_rt_list_push(list, 1usize);
+            miri_rt_list_push(list, 2usize);
+            miri_rt_list_push(list, 3usize);
+            miri_rt_list_sort(list);
+
+            assert_eq!(*(miri_rt_list_get(list, 0) as *const usize), 1);
+            assert_eq!(*(miri_rt_list_get(list, 1) as *const usize), 2);
+            assert_eq!(*(miri_rt_list_get(list, 2) as *const usize), 3);
+
+            miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_list_sort_single_element() {
+        unsafe {
+            let list = miri_rt_list_new(std::mem::size_of::<usize>());
+            miri_rt_list_push(list, 42usize);
+            miri_rt_list_sort(list);
+
+            assert_eq!(*(miri_rt_list_get(list, 0) as *const usize), 42);
 
             miri_rt_list_free(list);
         }

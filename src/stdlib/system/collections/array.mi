@@ -18,6 +18,7 @@ public class Array<T, Size> implements Iterable
 
     runtime "core" fn miri_rt_array_new(count int, elem_size int) Self
     runtime "core" fn miri_rt_array_free(a Self)
+    runtime "core" fn miri_rt_array_sort(a Self)
 
     /// Returns the number of elements in the array (always equals Size).
     /// Handled as a built-in operation by the compiler.
@@ -55,6 +56,10 @@ public class Array<T, Size> implements Iterable
             if self[i] == item: return i
             i += 1
         return -1
+
+    /// Sorts the array in ascending order.
+    public fn sort()
+        miri_rt_array_sort(self)
 
     /// Reverses the array in place.
     public fn reverse()

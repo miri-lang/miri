@@ -232,6 +232,44 @@ pub unsafe extern "C" fn miri_rt_array_clone(ptr: *const MiriArray) -> *mut Miri
     new_arr
 }
 
+/// Sorts the array in ascending order (elements compared as signed 64-bit integers).
+///
+/// Uses insertion sort which is stable and efficient for small arrays.
+#[no_mangle]
+#[allow(clippy::missing_safety_doc)]
+pub unsafe extern "C" fn miri_rt_array_sort(ptr: *mut MiriArray) {
+    if ptr.is_null() {
+        return;
+    }
+    let arr = &*ptr;
+    if arr.elem_count < 2 || arr.data.is_null() {
+        return;
+    }
+
+    let elem_size = arr.elem_size;
+    let mut temp = vec![0u8; elem_size];
+
+    for i in 1..arr.elem_count {
+        let src = arr.data.add(i * elem_size);
+        ptr::copy_nonoverlapping(src, temp.as_mut_ptr(), elem_size);
+        let key = crate::list::read_as_i64(temp.as_ptr(), elem_size);
+
+        let mut j = i;
+        while j > 0 {
+            let prev = arr.data.add((j - 1) * elem_size);
+            let prev_val = crate::list::read_as_i64(prev, elem_size);
+            if prev_val <= key {
+                break;
+            }
+            let dest = arr.data.add(j * elem_size);
+            ptr::copy_nonoverlapping(prev, dest, elem_size);
+            j -= 1;
+        }
+        let dest = arr.data.add(j * elem_size);
+        ptr::copy_nonoverlapping(temp.as_ptr(), dest, elem_size);
+    }
+}
+
 /// Returns a raw pointer to the underlying data buffer.
 ///
 /// The pointer is valid for `elem_count * elem_size` bytes.
@@ -416,6 +454,27 @@ mod tests {
             let arr = miri_rt_array_new(0, std::mem::size_of::<i32>());
             assert_eq!(miri_rt_array_len(arr), 0);
             assert!(miri_rt_array_get(arr, 0).is_null());
+            miri_rt_array_free(arr);
+        }
+    }
+
+    #[test]
+    fn test_array_sort() {
+        unsafe {
+            let arr = miri_rt_array_new(4, std::mem::size_of::<i64>());
+
+            let values = [30i64, 10, 20, 5];
+            for (i, v) in values.iter().enumerate() {
+                miri_rt_array_set(arr, i, v as *const i64 as *const u8);
+            }
+
+            miri_rt_array_sort(arr);
+
+            assert_eq!(*(miri_rt_array_get(arr, 0) as *const i64), 5);
+            assert_eq!(*(miri_rt_array_get(arr, 1) as *const i64), 10);
+            assert_eq!(*(miri_rt_array_get(arr, 2) as *const i64), 20);
+            assert_eq!(*(miri_rt_array_get(arr, 3) as *const i64), 30);
+
             miri_rt_array_free(arr);
         }
     }
