@@ -62,6 +62,14 @@ pub(crate) struct ModuleCtx<'a> {
     pub(crate) rt_list_new_id: Option<cranelift_module::FuncId>,
     pub(crate) rt_list_push_id: Option<cranelift_module::FuncId>,
     pub(crate) rt_list_free_id: Option<cranelift_module::FuncId>,
+    /// Cached FuncIds for runtime map functions.
+    pub(crate) rt_map_new_id: Option<cranelift_module::FuncId>,
+    pub(crate) rt_map_set_id: Option<cranelift_module::FuncId>,
+    pub(crate) rt_map_free_id: Option<cranelift_module::FuncId>,
+    /// Cached FuncIds for runtime set functions.
+    pub(crate) rt_set_new_id: Option<cranelift_module::FuncId>,
+    pub(crate) rt_set_add_id: Option<cranelift_module::FuncId>,
+    pub(crate) rt_set_free_id: Option<cranelift_module::FuncId>,
 }
 
 /// Context for type information during translation.
@@ -168,6 +176,12 @@ impl<'a> FunctionTranslator<'a> {
                 rt_list_new_id: None,
                 rt_list_push_id: None,
                 rt_list_free_id: None,
+                rt_map_new_id: None,
+                rt_map_set_id: None,
+                rt_map_free_id: None,
+                rt_set_new_id: None,
+                rt_set_add_id: None,
+                rt_set_free_id: None,
             };
             let type_ctx = TypeCtx {
                 local_types: &self.local_types,
@@ -533,6 +547,205 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
+    /// Helper to call `miri_rt_map_new(key_size, value_size, key_kind) -> *mut MiriMap`.
+    pub(crate) fn call_rt_map_new(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        key_size: Value,
+        value_size: Value,
+        key_kind: Value,
+    ) -> Result<Value, String> {
+        let ptr_type = builder.func.dfg.value_type(key_size);
+        let func_id = match ctx.rt_map_new_id {
+            Some(id) => id,
+            None => {
+                let sig = Signature {
+                    params: vec![
+                        AbiParam::new(ptr_type),
+                        AbiParam::new(ptr_type),
+                        AbiParam::new(ptr_type),
+                    ],
+                    returns: vec![AbiParam::new(ptr_type)],
+                    call_conv: builder.func.signature.call_conv,
+                };
+                let id = ctx
+                    .module
+                    .declare_function("miri_rt_map_new", Linkage::Import, &sig)
+                    .map_err(|e| format!("Failed to declare miri_rt_map_new: {}", e))?;
+                ctx.rt_map_new_id = Some(id);
+                id
+            }
+        };
+        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+        let call = builder
+            .ins()
+            .call(local_func, &[key_size, value_size, key_kind]);
+        Ok(builder.inst_results(call)[0])
+    }
+
+    /// Helper to call `miri_rt_map_set(ptr, key, value)`.
+    pub(crate) fn call_rt_map_set(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        map_ptr: Value,
+        key: Value,
+        value: Value,
+    ) -> Result<(), String> {
+        let ptr_type = builder.func.dfg.value_type(map_ptr);
+        let func_id = match ctx.rt_map_set_id {
+            Some(id) => id,
+            None => {
+                let sig = Signature {
+                    params: vec![
+                        AbiParam::new(ptr_type),
+                        AbiParam::new(ptr_type),
+                        AbiParam::new(ptr_type),
+                    ],
+                    returns: vec![],
+                    call_conv: builder.func.signature.call_conv,
+                };
+                let id = ctx
+                    .module
+                    .declare_function("miri_rt_map_set", Linkage::Import, &sig)
+                    .map_err(|e| format!("Failed to declare miri_rt_map_set: {}", e))?;
+                ctx.rt_map_set_id = Some(id);
+                id
+            }
+        };
+        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+        builder.ins().call(local_func, &[map_ptr, key, value]);
+        Ok(())
+    }
+
+    /// Helper to call `miri_rt_map_free(ptr)`.
+    pub(crate) fn call_rt_map_free(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        ptr: Value,
+    ) -> Result<(), String> {
+        let ptr_type = builder.func.dfg.value_type(ptr);
+        let func_id = match ctx.rt_map_free_id {
+            Some(id) => id,
+            None => {
+                let sig = Signature {
+                    params: vec![AbiParam::new(ptr_type)],
+                    returns: vec![],
+                    call_conv: builder.func.signature.call_conv,
+                };
+                let id = ctx
+                    .module
+                    .declare_function("miri_rt_map_free", Linkage::Import, &sig)
+                    .map_err(|e| format!("Failed to declare miri_rt_map_free: {}", e))?;
+                ctx.rt_map_free_id = Some(id);
+                id
+            }
+        };
+        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+        builder.ins().call(local_func, &[ptr]);
+        Ok(())
+    }
+
+    /// Helper to call `miri_rt_set_new(elem_size) -> *mut MiriSet`.
+    pub(crate) fn call_rt_set_new(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        elem_size: Value,
+    ) -> Result<Value, String> {
+        let ptr_type = builder.func.dfg.value_type(elem_size);
+        let func_id = match ctx.rt_set_new_id {
+            Some(id) => id,
+            None => {
+                let sig = Signature {
+                    params: vec![AbiParam::new(ptr_type)],
+                    returns: vec![AbiParam::new(ptr_type)],
+                    call_conv: builder.func.signature.call_conv,
+                };
+                let id = ctx
+                    .module
+                    .declare_function("miri_rt_set_new", Linkage::Import, &sig)
+                    .map_err(|e| format!("Failed to declare miri_rt_set_new: {}", e))?;
+                ctx.rt_set_new_id = Some(id);
+                id
+            }
+        };
+        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+        let call = builder.ins().call(local_func, &[elem_size]);
+        Ok(builder.inst_results(call)[0])
+    }
+
+    /// Helper to call `miri_rt_set_add(ptr, elem) -> u8`.
+    pub(crate) fn call_rt_set_add(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        set_ptr: Value,
+        elem: Value,
+    ) -> Result<(), String> {
+        let ptr_type = builder.func.dfg.value_type(set_ptr);
+        let func_id = match ctx.rt_set_add_id {
+            Some(id) => id,
+            None => {
+                let sig = Signature {
+                    params: vec![AbiParam::new(ptr_type), AbiParam::new(ptr_type)],
+                    returns: vec![AbiParam::new(cl_types::I8)],
+                    call_conv: builder.func.signature.call_conv,
+                };
+                let id = ctx
+                    .module
+                    .declare_function("miri_rt_set_add", Linkage::Import, &sig)
+                    .map_err(|e| format!("Failed to declare miri_rt_set_add: {}", e))?;
+                ctx.rt_set_add_id = Some(id);
+                id
+            }
+        };
+        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+        builder.ins().call(local_func, &[set_ptr, elem]);
+        Ok(())
+    }
+
+    /// Helper to call `miri_rt_set_free(ptr)`.
+    pub(crate) fn call_rt_set_free(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        ptr: Value,
+    ) -> Result<(), String> {
+        let ptr_type = builder.func.dfg.value_type(ptr);
+        let func_id = match ctx.rt_set_free_id {
+            Some(id) => id,
+            None => {
+                let sig = Signature {
+                    params: vec![AbiParam::new(ptr_type)],
+                    returns: vec![],
+                    call_conv: builder.func.signature.call_conv,
+                };
+                let id = ctx
+                    .module
+                    .declare_function("miri_rt_set_free", Linkage::Import, &sig)
+                    .map_err(|e| format!("Failed to declare miri_rt_set_free: {}", e))?;
+                ctx.rt_set_free_id = Some(id);
+                id
+            }
+        };
+        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+        builder.ins().call(local_func, &[ptr]);
+        Ok(())
+    }
+
+    /// Widens or narrows a value to pointer type for FFI calls.
+    pub(crate) fn widen_to_ptr(
+        builder: &mut FunctionBuilder,
+        val: Value,
+        ptr_type: cranelift_codegen::ir::Type,
+    ) -> Value {
+        let val_ty = builder.func.dfg.value_type(val);
+        if val_ty.bytes() < ptr_type.bytes() {
+            builder.ins().sextend(ptr_type, val)
+        } else if val_ty.bytes() > ptr_type.bytes() {
+            builder.ins().ireduce(ptr_type, val)
+        } else {
+            val
+        }
+    }
+
     /// Resolves the element TypeKind from a collection type (Array or List).
     /// Returns the element TypeKind and its Cranelift type.
     pub(crate) fn resolve_collection_elem_type(
@@ -570,10 +783,24 @@ impl<'a> FunctionTranslator<'a> {
             || matches!(kind, TypeKind::Custom(name, _) if name == "List")
     }
 
-    /// Returns true if the given type is an Array or List collection.
+    /// Returns true if the given type is an Array, List, Map, or Set collection.
     pub(crate) fn is_collection_type(kind: &TypeKind) -> bool {
-        matches!(kind, TypeKind::Array(_, _) | TypeKind::List(_))
-            || matches!(kind, TypeKind::Custom(name, _) if name == "Array" || name == "List")
+        matches!(
+            kind,
+            TypeKind::Array(_, _) | TypeKind::List(_) | TypeKind::Map(_, _) | TypeKind::Set(_)
+        ) || matches!(kind, TypeKind::Custom(name, _) if name == "Array" || name == "List" || name == "Map" || name == "Set")
+    }
+
+    /// Returns true if the given type is a Map.
+    pub(crate) fn is_map_type(kind: &TypeKind) -> bool {
+        matches!(kind, TypeKind::Map(_, _))
+            || matches!(kind, TypeKind::Custom(name, _) if name == "Map")
+    }
+
+    /// Returns true if the given type is a Set.
+    pub(crate) fn is_set_type(kind: &TypeKind) -> bool {
+        matches!(kind, TypeKind::Set(_))
+            || matches!(kind, TypeKind::Custom(name, _) if name == "Set")
     }
 
     /// Emits the type-appropriate cleanup when an object's RC reaches zero.
@@ -595,7 +822,11 @@ impl<'a> FunctionTranslator<'a> {
         header_ptr: Value,
         type_ctx: &TypeCtx,
     ) -> Result<(), String> {
-        if Self::is_list_type(kind) {
+        if Self::is_map_type(kind) {
+            Self::call_rt_map_free(builder, ctx, ptr)
+        } else if Self::is_set_type(kind) {
+            Self::call_rt_set_free(builder, ctx, ptr)
+        } else if Self::is_list_type(kind) {
             Self::call_rt_list_free(builder, ctx, ptr)
         } else if Self::is_collection_type(kind) {
             Self::call_rt_array_free(builder, ctx, ptr)

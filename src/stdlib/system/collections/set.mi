@@ -1,0 +1,36 @@
+use system.ops
+
+public class Set<T> implements Iterable
+
+    runtime "core" fn miri_rt_set_new(elem_size int) Self
+    runtime "core" fn miri_rt_set_free(s Self)
+    runtime "core" fn miri_rt_set_len(s Self) int
+    runtime "core" fn miri_rt_set_add(s Self, element T) bool
+    runtime "core" fn miri_rt_set_contains(s Self, element T) bool
+    runtime "core" fn miri_rt_set_remove(s Self, element T) bool
+    runtime "core" fn miri_rt_set_clear(s Self)
+    runtime "core" fn miri_rt_set_is_empty(s Self) bool
+    runtime "core" fn miri_rt_set_element_at(s Self, index int) T
+
+    /// Returns the number of unique elements in the set.
+    public fn length() int: miri_rt_set_len(self)
+
+    /// Returns the element at the given sequential index.
+    /// This enables for-loop iteration: `for x in set`.
+    public fn element_at(index int) T: miri_rt_set_element_at(self, index)
+
+    /// Adds an element to the set if not already present.
+    public fn add(element T) bool: miri_rt_set_add(self, element)
+
+    /// Returns true if the set contains the given element.
+    public fn contains(element T) bool: miri_rt_set_contains(self, element)
+
+    /// Removes the given element from the set.
+    public fn remove(element T) bool: miri_rt_set_remove(self, element)
+
+    /// Removes all elements from the set.
+    public fn clear()
+        miri_rt_set_clear(self)
+
+    /// Returns true if the set has no elements.
+    public fn is_empty() bool: miri_rt_set_is_empty(self)
