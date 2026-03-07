@@ -5,6 +5,7 @@ pub mod arithmetic;
 pub mod array;
 pub mod basic;
 pub mod comparisons;
+pub mod complex;
 pub mod constant;
 pub mod control_flow;
 pub mod enums;

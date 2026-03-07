@@ -298,3 +298,28 @@ fn main()
         "test",
     );
 }
+
+#[test]
+fn test_auto_copy_negative_managed_struct_aliasing() {
+    // A struct with a managed field is NOT auto-copy (it's managed/RC'd).
+    // Therefore, assignment creates an alias, and mutating one mutates the other.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+struct ManagedRecord
+    label String
+    count int
+
+fn main()
+    let a = ManagedRecord(label: "shared", count: 10)
+    var b = a // RC increment, NOT bitwise copy!
+
+    b.count = 42
+
+    // Since a and b point to the same managed object, a.count should be 42.
+    println(f"{a.count}")
+    "#,
+        "42",
+    );
+}

@@ -141,6 +141,32 @@ println(f"{has_z}")
 }
 
 #[test]
+fn map_get_method_returns_option() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.map
+
+let m = {"a": 42}
+let val = m.get("a")
+let missing = m.get("b")
+
+let val_str = match val
+    Some(v): f"found {v}"
+    None: "not found"
+
+let missing_str = match missing
+    Some(v): f"found {v}"
+    None: "not found"
+
+println(val_str)
+println(missing_str)
+"#,
+        "found 42\nnot found",
+    );
+}
+
+#[test]
 fn map_remove() {
     assert_runs_with_output(
         r#"
@@ -324,5 +350,67 @@ fn main()
     println(f"{v}")
 "#,
         "42",
+    );
+}
+
+#[test]
+fn map_returned_from_function() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.map
+
+fn make_map() Map<String, int>
+    return {"a": 100}
+
+fn main()
+    let m = make_map()
+    println(f"{m['a']}")
+"#,
+        "100",
+    );
+}
+
+// ==================== RC Aliasing ====================
+
+#[test]
+fn test_map_alias_no_double_free() {
+    assert_runs(
+        r#"
+use system.collections.map
+let m1 = {"a": 1, "b": 2}
+let m2 = m1 // IncRef
+// Both out of scope, shouldn't crash
+"#,
+    );
+}
+
+#[test]
+fn test_map_reassign_frees_old() {
+    assert_runs(
+        r#"
+use system.collections.map
+var m = {"a": 1}
+m = {"b": 2} // frees old
+"#,
+    );
+}
+
+#[test]
+fn test_map_passed_to_function_no_dangle() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.map
+
+fn consume(m Map<String, int>)
+    // goes out of scope
+
+fn main()
+    let m = {"k": 99}
+    consume(m)
+    println(f"{m.length()}")
+"#,
+        "1",
     );
 }
