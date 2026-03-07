@@ -115,15 +115,14 @@ for c in \"hello\"
 
 #[test]
 fn test_for_loop_map() {
-    // Iterating over map yields tuples (key, value)
+    // Iterating over map yields keys
     type_checker_vars_type_test(
         "
 let m = {\"a\": 1}
-for entry in m
-    let k = entry[0]
-    let v = entry[1]
+for k in m
+    let key = k
 ",
-        vec![("k", type_string()), ("v", type_int())],
+        vec![("key", type_string())],
     );
 }
 

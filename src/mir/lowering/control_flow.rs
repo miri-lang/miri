@@ -241,13 +241,19 @@ fn lower_for_over_iterable(
 
     let decl = &decls[0];
     // Infer element type from type checker or default to Int
-    let elem_ty = if let Some(ty) = ctx.type_checker.get_type(iterable.id) {
-        // Extract element type from list/array type parameters
+    let iterable_ty = ctx.type_checker.get_type(iterable.id).cloned();
+    let is_map = matches!(
+        iterable_ty.as_ref().map(|t| &t.kind),
+        Some(TypeKind::Map(_, _))
+    );
+    let elem_ty = if let Some(ty) = &iterable_ty {
+        // Extract element type from list/array/map type parameters
         match &ty.kind {
             TypeKind::List(elem_type_expr) => super::resolve_type(ctx.type_checker, elem_type_expr),
             TypeKind::Array(elem_type_expr, _) => {
                 super::resolve_type(ctx.type_checker, elem_type_expr)
             }
+            TypeKind::Map(key_type_expr, _) => super::resolve_type(ctx.type_checker, key_type_expr),
             _ => ty.clone(),
         }
     } else {
@@ -259,11 +265,21 @@ fn lower_for_over_iterable(
     // However, push_local takes String, and ctx handles the logic.
     let loop_var = ctx.push_local(decl.name.clone(), elem_ty, *span);
 
-    // If there's a second declaration, it's the index variable (for val, idx in ...)
+    // If there's a second declaration:
+    // - For Map: it's the value variable (for k, v in map)
+    // - For others: it's the index variable (for val, idx in list)
     let idx_loop_var = if decls.len() > 1 {
         let idx_decl = &decls[1];
-        let idx_ty = Type::new(TypeKind::Int, *span);
-        Some(ctx.push_local(idx_decl.name.clone(), idx_ty, *span))
+        let var_ty = if is_map {
+            if let Some(TypeKind::Map(_, val_type_expr)) = iterable_ty.as_ref().map(|t| &t.kind) {
+                super::resolve_type(ctx.type_checker, val_type_expr)
+            } else {
+                Type::new(TypeKind::Int, *span)
+            }
+        } else {
+            Type::new(TypeKind::Int, *span)
+        };
+        Some(ctx.push_local(idx_decl.name.clone(), var_ty, *span))
     } else {
         None
     };
@@ -314,6 +330,7 @@ fn lower_for_over_iterable(
         .get_type(iterable.id)
         .and_then(|ty| match &ty.kind {
             TypeKind::String => Some("String".to_string()),
+            TypeKind::Map(_, _) => Some("Map".to_string()),
             TypeKind::Custom(name, _) if name != "Array" && name != "List" => Some(name.clone()),
             _ => None,
         })
@@ -435,15 +452,46 @@ fn lower_for_over_iterable(
         });
     }
 
-    // If there's an index variable, assign it the current index value
+    // If there's a second loop variable, assign it
     if let Some(idx_local) = idx_loop_var {
-        ctx.push_statement(crate::mir::Statement {
-            kind: StatementKind::Assign(
-                Place::new(idx_local),
-                Rvalue::Use(Operand::Copy(Place::new(idx_var))),
-            ),
-            span: *span,
-        });
+        if is_map {
+            // For Map: call Map_value_at(map, idx) to get the value
+            let value_at_symbol = "Map_value_at".to_string();
+            let func_op = Operand::Constant(Box::new(Constant {
+                span: *span,
+                ty: Type::new(TypeKind::Identifier, *span),
+                literal: crate::ast::literal::Literal::Identifier(value_at_symbol),
+            }));
+            let after_val_bb = ctx.new_basic_block();
+            ctx.set_terminator(Terminator::new(
+                TerminatorKind::Call {
+                    func: func_op,
+                    args: {
+                        let mut args = vec![
+                            Operand::Copy(Place::new(list_local)),
+                            Operand::Copy(Place::new(idx_var)),
+                        ];
+                        if let Some(&allocator) = ctx.variable_map.get("allocator") {
+                            args.push(Operand::Copy(Place::new(allocator)));
+                        }
+                        args
+                    },
+                    destination: Place::new(idx_local),
+                    target: Some(after_val_bb),
+                },
+                *span,
+            ));
+            ctx.set_current_block(after_val_bb);
+        } else {
+            // For List/Array/String: assign the loop counter as the index
+            ctx.push_statement(crate::mir::Statement {
+                kind: StatementKind::Assign(
+                    Place::new(idx_local),
+                    Rvalue::Use(Operand::Copy(Place::new(idx_var))),
+                ),
+                span: *span,
+            });
+        }
     }
 
     lower_statement(ctx, body)?;
@@ -724,10 +772,13 @@ pub fn lower_call(
                 if method_name == "length"
                     && (matches!(
                         &obj_ty.kind,
-                        TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::String
+                        TypeKind::List(_)
+                            | TypeKind::Array(_, _)
+                            | TypeKind::Map(_, _)
+                            | TypeKind::String
                     ) || matches!(
                         &obj_ty.kind,
-                        TypeKind::Custom(name, _) if name == "Array" || name == "List"
+                        TypeKind::Custom(name, _) if name == "Array" || name == "List" || name == "Map"
                     ))
                 {
                     let obj_op = lower_expression(ctx, obj, None)?;
@@ -965,6 +1016,7 @@ pub fn lower_call(
                 TypeKind::String => Some("String".to_string()),
                 TypeKind::List(_) => Some("List".to_string()),
                 TypeKind::Array(_, _) => Some("Array".to_string()),
+                TypeKind::Map(_, _) => Some("Map".to_string()),
                 TypeKind::Custom(name, _) => Some(name.clone()),
                 _ => None,
             };

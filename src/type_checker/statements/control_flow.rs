@@ -192,7 +192,7 @@ impl TypeChecker {
         context.enter_scope();
         context.enter_loop();
 
-        self.bind_loop_variables(decls, &element_type, iterable.span, context);
+        self.bind_loop_variables(decls, &element_type, &iterable_type, iterable.span, context);
 
         self.check_statement(body, context);
 
@@ -212,6 +212,7 @@ impl TypeChecker {
         &mut self,
         decls: &[VariableDeclaration],
         element_type: &Type,
+        iterable_type: &Type,
         span: Span,
         context: &mut Context,
     ) {
@@ -298,6 +299,46 @@ impl TypeChecker {
                         span,
                     );
                 }
+            } else if matches!(&iterable_type.kind, TypeKind::Map(_, _)) {
+                // For Map iterables, `for k, v in map` means: k = key, v = value.
+                let val_type = if let TypeKind::Map(_, val_expr) = &iterable_type.kind {
+                    self.extract_type_from_expression(val_expr)
+                        .unwrap_or_else(|_| make_type(TypeKind::Error))
+                } else {
+                    make_type(TypeKind::Error)
+                };
+
+                let is_mutable_0 = match decls[0].declaration_type {
+                    VariableDeclarationType::Mutable => true,
+                    VariableDeclarationType::Immutable | VariableDeclarationType::Constant => false,
+                };
+                let is_mutable_1 = match decls[1].declaration_type {
+                    VariableDeclarationType::Mutable => true,
+                    VariableDeclarationType::Immutable | VariableDeclarationType::Constant => false,
+                };
+
+                context.define(
+                    decls[0].name.clone(),
+                    SymbolInfo::new(
+                        element_type.clone(),
+                        is_mutable_0,
+                        false,
+                        MemberVisibility::Public,
+                        self.current_module.clone(),
+                        None,
+                    ),
+                );
+                context.define(
+                    decls[1].name.clone(),
+                    SymbolInfo::new(
+                        val_type,
+                        is_mutable_1,
+                        false,
+                        MemberVisibility::Public,
+                        self.current_module.clone(),
+                        None,
+                    ),
+                );
             } else {
                 // For non-tuple iterables (List, Array, String), the pattern
                 // `for x, idx in list` means: x = element, idx = loop index (int).

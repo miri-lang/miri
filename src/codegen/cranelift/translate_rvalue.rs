@@ -81,7 +81,10 @@ impl<'a> FunctionTranslator<'a> {
             }
 
             Rvalue::Aggregate(kind, operands) => {
-                let is_collection = matches!(kind, AggregateKind::Array | AggregateKind::List);
+                let is_collection = matches!(
+                    kind,
+                    AggregateKind::Array | AggregateKind::List | AggregateKind::Map
+                );
 
                 if is_collection {
                     // Use runtime struct allocation for Array and List.
@@ -147,6 +150,58 @@ impl<'a> FunctionTranslator<'a> {
                             }
 
                             Ok(list_ptr)
+                        }
+                        AggregateKind::Map => {
+                            // Map operands alternate: key1, val1, key2, val2, ...
+                            // Determine key and value sizes from the first pair
+                            let key_size = if translated.len() >= 2 {
+                                builder.func.dfg.value_type(translated[0]).bytes() as i64
+                            } else {
+                                ptr_size as i64
+                            };
+                            let value_size = if translated.len() >= 2 {
+                                builder.func.dfg.value_type(translated[1]).bytes() as i64
+                            } else {
+                                ptr_size as i64
+                            };
+                            // Determine key_kind: 1 for string keys, 0 for value keys.
+                            // Map literal keys are always constants, so we check the first key's type.
+                            let key_kind = if !operands.is_empty() {
+                                if let Operand::Constant(c) = &operands[0] {
+                                    if matches!(c.ty.kind, TypeKind::String) {
+                                        1i64
+                                    } else {
+                                        0i64
+                                    }
+                                } else {
+                                    0i64
+                                }
+                            } else {
+                                0i64
+                            };
+
+                            let key_size_val = builder.ins().iconst(ptr_type, key_size);
+                            let value_size_val = builder.ins().iconst(ptr_type, value_size);
+                            let key_kind_val = builder.ins().iconst(ptr_type, key_kind);
+
+                            let map_ptr = Self::call_rt_map_new(
+                                builder,
+                                ctx,
+                                key_size_val,
+                                value_size_val,
+                                key_kind_val,
+                            )?;
+
+                            // Insert each key-value pair
+                            for chunk in translated.chunks(2) {
+                                if chunk.len() == 2 {
+                                    let key_val = Self::widen_to_ptr(builder, chunk[0], ptr_type);
+                                    let val_val = Self::widen_to_ptr(builder, chunk[1], ptr_type);
+                                    Self::call_rt_map_set(builder, ctx, map_ptr, key_val, val_val)?;
+                                }
+                            }
+
+                            Ok(map_ptr)
                         }
                         _ => unreachable!(),
                     }
@@ -259,10 +314,17 @@ impl<'a> FunctionTranslator<'a> {
                     builder.ins().jump(merge_bb, &[]);
                     builder.seal_block(null_bb);
 
-                    // Both MiriArray and MiriList store length at offset ptr_size
-                    // (MiriArray.elem_count, MiriList.len)
+                    // MiriArray.elem_count and MiriList.len are at offset ptr_size.
+                    // MiriMap.len is at offset 3*ptr_size (after states, keys, values).
                     builder.switch_to_block(load_bb);
-                    let len = builder.ins().load(ptr_type, MemFlags::new(), ptr, ptr_size);
+                    let len_offset = if Self::is_map_type(&ty.kind) {
+                        ptr_size * 3
+                    } else {
+                        ptr_size
+                    };
+                    let len = builder
+                        .ins()
+                        .load(ptr_type, MemFlags::new(), ptr, len_offset);
                     builder.def_var(len_var, len);
                     builder.ins().jump(merge_bb, &[]);
                     builder.seal_block(load_bb);
