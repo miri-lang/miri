@@ -257,7 +257,7 @@ impl TypeChecker {
                             }
                         }
 
-                        let mut new_params = Vec::new();
+                        let mut new_params = Vec::with_capacity(func_params.len());
                         for p in func_params {
                             let p_type = self
                                 .extract_type_from_expression(&p.typ)
