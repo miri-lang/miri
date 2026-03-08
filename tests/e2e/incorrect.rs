@@ -84,3 +84,51 @@ fn example_08_return_type_mismatch() {
         &["Invalid return type: expected int, got String"],
     );
 }
+
+#[test]
+fn example_09_maps_incorrect() {
+    assert_example_error(
+        include_str!("../examples/incorrect/09_maps_incorrect.mi"),
+        &["Invalid map key type"],
+    );
+}
+
+#[test]
+fn example_10_sets_incorrect() {
+    assert_example_error(
+        include_str!("../examples/incorrect/10_sets_incorrect.mi"),
+        &["Type Set(int) is not indexable"],
+    );
+}
+
+#[test]
+fn example_11_lists_incorrect() {
+    assert_example_error(
+        include_str!("../examples/incorrect/11_lists_incorrect.mi"),
+        &["List index must be an integer"],
+    );
+}
+
+#[test]
+fn example_12_arrays_incorrect() {
+    assert_example_error(
+        include_str!("../examples/incorrect/12_arrays_incorrect.mi"),
+        &["Array elements must have the same type"],
+    );
+}
+
+#[test]
+fn example_13_type_aliases_incorrect() {
+    assert_example_error(
+        include_str!("../examples/incorrect/13_type_aliases_incorrect.mi"),
+        &["Type mismatch for variable 'x': expected int, got String"],
+    );
+}
+
+#[test]
+fn example_14_option_types_incorrect() {
+    assert_example_error(
+        include_str!("../examples/incorrect/14_option_types_incorrect.mi"),
+        &["Invalid types for arithmetic operation"],
+    );
+}
