@@ -8,6 +8,7 @@ description = "Core runtime for the Miri programming language"
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
+libc = "0.2"
 
 [features]
 default = []

@@ -564,6 +564,16 @@ impl Pipeline {
             ));
         }
 
+        // Run Perceus RC insertion pass on all function bodies.
+        // Perceus inserts IncRef/DecRef for owned managed locals (collections).
+        // Function parameters are excluded (borrowed, caller owns RC).
+        {
+            let mut perceus = mir::optimization::perceus::Perceus;
+            for (_name, body) in &mut bodies {
+                mir::optimization::OptimizationPass::run(&mut perceus, body);
+            }
+        }
+
         Ok(bodies)
     }
 
