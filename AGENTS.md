@@ -25,6 +25,7 @@ Miri is a modern, statically-typed, GPU-first programming language built in Rust
 - **No Abbreviations:** Do not use `ctx`, `mgr`, `util`, `cfg` unless they are standard domain terms (like `lhs`, `rhs`). Use the domain language.
 - **Safety:** **NEVER** use `unwrap()` or `expect()` in library code. Always propagate via `Result<T, E>`. Use rich, typed errors with `Span`/location data.
 - **Exhaustive Matching:** List all enum variants in core logic `match` blocks. Do not use wildcard `_` to ensure future compiler updates intentionally break builds if variants are added.
+- **Standard Library:** Do not hardcode any standard library class names in any module. Do not create specialized implementations for standard library types. They should be compiled as any other code.
 
 ## 3. Documentation
 - **Doc Comments (`///`):** Every `pub` item must explain its **intent**, parameters, returns, errors, and **invariants**.
@@ -36,6 +37,7 @@ Testing is **never** optional. When you add functionality, you **must** add comp
 - **Assertions:** Do NOT use standard `assert_eq!` directly in integration tests. Rely on utility wrappers located in the test module's `utils.rs` (e.g., `assert_runs`, `assert_runs_with_output`, `assert_operation_outputs`). Create or reuse existing utilities.
 - **Input Content:** Ensure test inputs utilize actual Miri source code strings.
 - **Scope:** Include boundary checks, invalid inputs (negative tests), and real user flows. Tests must be fully deterministic.
+- **Miri Language Syntax:** When writing Miri language code in tests or examples, use `var` for mutable variables (not `let mut`), and always check FFI function signatures for allocator parameters before writing calls.
 
 ## 5. Verification
 Before proposing or completing a change, you must verify your work by running:

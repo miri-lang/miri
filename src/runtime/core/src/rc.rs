@@ -6,12 +6,45 @@
 //!
 //! This module provides helpers for allocation and deallocation with
 //! this layout, so every heap type uses the same convention.
+//!
+//! When the `MIRI_LEAK_CHECK` environment variable is set to `1`, a global
+//! allocation counter tracks alloc/free pairs and reports leaks at exit.
 
 use std::alloc::{alloc_zeroed, dealloc, Layout};
+use std::sync::atomic::{AtomicIsize, Ordering};
 
 /// Size of the reference count header, in bytes.
 /// Matches `ptr_type.bytes()` in the Cranelift codegen.
 pub const RC_HEADER_SIZE: usize = std::mem::size_of::<usize>();
+
+/// Global counter: incremented on alloc, decremented on free.
+/// A non-zero value at exit indicates a memory leak (positive) or double-free (negative).
+static RC_ALLOC_BALANCE: AtomicIsize = AtomicIsize::new(0);
+
+/// Registers an `atexit` handler that checks the allocation balance.
+/// Called once on first allocation. Prints a diagnostic to stderr if
+/// any RC-tracked allocations were not freed.
+fn ensure_leak_check_registered() {
+    use std::sync::Once;
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        // Only register the atexit handler when MIRI_LEAK_CHECK=1
+        if std::env::var("MIRI_LEAK_CHECK").as_deref() == Ok("1") {
+            unsafe {
+                libc::atexit(leak_check_at_exit);
+            }
+        }
+    });
+}
+
+/// Called at process exit to report any leaked allocations.
+extern "C" fn leak_check_at_exit() {
+    let balance = RC_ALLOC_BALANCE.load(Ordering::SeqCst);
+    if balance != 0 {
+        eprintln!("MIRI_LEAK_CHECK: leaked {balance} RC allocation(s)");
+        std::process::exit(99);
+    }
+}
 
 /// Allocates `[RC=1][payload]` and returns a pointer to the payload.
 ///
@@ -20,6 +53,8 @@ pub const RC_HEADER_SIZE: usize = std::mem::size_of::<usize>();
 ///
 /// Returns null if allocation fails.
 pub unsafe fn alloc_with_rc(payload_size: usize) -> *mut u8 {
+    ensure_leak_check_registered();
+
     let total_size = RC_HEADER_SIZE + payload_size;
     let layout = match Layout::from_size_align(total_size, 8) {
         Ok(l) => l,
@@ -33,6 +68,8 @@ pub unsafe fn alloc_with_rc(payload_size: usize) -> *mut u8 {
 
     // Set RC = 1
     *(base as *mut usize) = 1;
+
+    RC_ALLOC_BALANCE.fetch_add(1, Ordering::SeqCst);
 
     // Return pointer past RC header (to the payload)
     base.add(RC_HEADER_SIZE)
@@ -50,4 +87,6 @@ pub unsafe fn free_with_rc(payload_ptr: *mut u8, payload_size: usize) {
     let total_size = RC_HEADER_SIZE + payload_size;
     let layout = Layout::from_size_align(total_size, 8).unwrap();
     dealloc(base, layout);
+
+    RC_ALLOC_BALANCE.fetch_sub(1, Ordering::SeqCst);
 }

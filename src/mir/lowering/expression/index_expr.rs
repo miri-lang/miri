@@ -75,7 +75,11 @@ pub(crate) fn lower_index_expr(
     }
 }
 
-/// Lowers `map[key]` to a `miri_rt_map_get(map, key)` runtime call.
+/// Lowers `map[key]` to a `miri_rt_map_get_checked(map, key)` runtime call.
+///
+/// Uses the checked variant that aborts on missing key, consistent with
+/// array out-of-bounds behavior. For safe access, use `m.get(key)` which
+/// returns `V?`.
 fn lower_map_index_read(
     ctx: &mut LoweringContext,
     expr: &Expression,
@@ -89,7 +93,7 @@ fn lower_map_index_read(
     let func_op = Operand::Constant(Box::new(Constant {
         span: expr.span,
         ty: Type::new(TypeKind::Identifier, expr.span),
-        literal: crate::ast::literal::Literal::Identifier("miri_rt_map_get".to_string()),
+        literal: crate::ast::literal::Literal::Identifier("miri_rt_map_get_checked".to_string()),
     }));
 
     let result_ty = if let Some(t) = ctx.type_checker.get_type(expr.id) {

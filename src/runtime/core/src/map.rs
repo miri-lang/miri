@@ -425,6 +425,29 @@ pub unsafe extern "C" fn miri_rt_map_get(
     *(result as *const usize)
 }
 
+/// Gets the value for a key, aborting if the key is not found.
+///
+/// Used for direct map indexing (`m[key]`). For safe access, use `m.get(key)`
+/// which returns an Option.
+#[no_mangle]
+#[allow(clippy::missing_safety_doc)]
+pub unsafe extern "C" fn miri_rt_map_get_checked(
+    ptr: *const MiriMap,
+    key: usize,
+) -> usize {
+    if ptr.is_null() {
+        eprintln!("Runtime error: map index on null map");
+        std::process::abort();
+    }
+    let map = &*ptr;
+    let result = map.get(&key as *const usize as *const u8);
+    if result.is_null() {
+        eprintln!("Runtime error: map key not found");
+        std::process::abort();
+    }
+    *(result as *const usize)
+}
+
 /// Returns true (1) if the map contains the given key.
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
