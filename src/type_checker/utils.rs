@@ -27,9 +27,9 @@ use crate::error::type_error::TypeError;
 /// - Tuples of auto-copy types
 ///
 /// Managed types (String, List, Array, Map, Set, classes) are never auto-copy.
-pub fn is_auto_copy(
-    kind: &TypeKind,
-    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+pub fn is_auto_copy<'a>(
+    kind: &'a TypeKind,
+    type_definitions: &'a std::collections::HashMap<String, TypeDefinition>,
 ) -> bool {
     is_auto_copy_inner(
         kind,
@@ -39,10 +39,10 @@ pub fn is_auto_copy(
 }
 
 /// Recursive helper with a visited set to prevent infinite recursion on cyclic types.
-fn is_auto_copy_inner(
-    kind: &TypeKind,
-    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
-    visited: &mut std::collections::HashSet<String>,
+fn is_auto_copy_inner<'a>(
+    kind: &'a TypeKind,
+    type_definitions: &'a std::collections::HashMap<String, TypeDefinition>,
+    visited: &mut std::collections::HashSet<&'a str>,
 ) -> bool {
     match kind {
         // Primitives are always auto-copy
@@ -95,7 +95,7 @@ fn is_auto_copy_inner(
         // Custom types: look up the definition
         TypeKind::Custom(name, _) => {
             // Prevent infinite recursion
-            if !visited.insert(name.clone()) {
+            if !visited.insert(name.as_str()) {
                 return false;
             }
 
