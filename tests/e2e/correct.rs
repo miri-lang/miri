@@ -197,3 +197,51 @@ fn example_22_float_ops() {
         "7.5\ntrue\nfalse\nx is 1.5",
     );
 }
+
+#[test]
+fn example_23_maps() {
+    assert_example_output(
+        include_str!("../examples/correct/23_maps.mi"),
+        "Capital of Japan is Tokyo\nWe know the capital of France!\nWe have 3 capitals stored.\nRemoved one. Now we have 2 capitals.",
+    );
+}
+
+#[test]
+fn example_24_sets() {
+    assert_example_output(
+        include_str!("../examples/correct/24_sets.mi"),
+        "Set has 5 elements\nSet contains 5\nSet does not contain 3",
+    );
+}
+
+#[test]
+fn example_25_lists() {
+    assert_example_output(
+        include_str!("../examples/correct/25_lists.mi"),
+        "List size: 3\nFirst: 30, Second: 20, Third: 10\nSum is 60",
+    );
+}
+
+#[test]
+fn example_26_arrays() {
+    assert_example_output(
+        include_str!("../examples/correct/26_arrays.mi"),
+        "Initial array length: 5\nFirst element: 50\nSorted array:\n10\n20\n30\n40\n50\nModified first element to 99",
+    );
+}
+
+#[test]
+fn example_27_type_aliases() {
+    assert_example_output(
+        include_str!("../examples/correct/27_type_aliases.mi"),
+        "City: Metropolis\nCoords: 40, -74\nPopulation: 5000000",
+    );
+}
+
+#[test]
+fn example_28_option_types() {
+    assert_example_output(
+        include_str!("../examples/correct/28_option_types.mi"),
+        "Found person: Alice\nWelcome, Guest",
+    );
+}
