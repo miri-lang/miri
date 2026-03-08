@@ -1,0 +1,19 @@
+use system.io
+use system.collections.map
+
+fn main()
+    var capitals = {"France": "Paris", "Japan": "Tokyo"}
+    capitals["Italy"] = "Rome"
+    
+    println(f"Capital of Japan is {capitals['Japan']}")
+    
+    if capitals.contains_key("France")
+        println("We know the capital of France!")
+        
+    var count = 0
+    for k, v in capitals
+        count = count + 1
+        
+    println(f"We have {count} capitals stored.")
+    capitals.remove("Japan")
+    println(f"Removed one. Now we have {capitals.length()} capitals.")
