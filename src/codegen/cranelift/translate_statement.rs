@@ -28,12 +28,20 @@ impl<'a> FunctionTranslator<'a> {
                 // Uniform RC increment for all heap types.
                 // All heap values use [RC][payload] layout; ptr points past RC.
                 let ptr = Self::read_place(builder, place, locals, type_ctx)?;
+
+                // Guard: skip if pointer is null (uninitialized local)
+                let null = builder.ins().iconst(ptr_type, 0);
+                let is_null = builder.ins().icmp(IntCC::Equal, ptr, null);
+                let rc_block = builder.create_block();
+                let merge_block = builder.create_block();
+                builder.ins().brif(is_null, merge_block, &[], rc_block, &[]);
+
+                builder.switch_to_block(rc_block);
                 let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size as i64));
                 let rc = builder.ins().load(ptr_type, MemFlags::new(), header_ptr, 0);
 
                 let is_immortal = builder.ins().icmp_imm(IntCC::SignedLessThan, rc, 0);
                 let then_block = builder.create_block();
-                let merge_block = builder.create_block();
                 builder
                     .ins()
                     .brif(is_immortal, merge_block, &[], then_block, &[]);
@@ -43,6 +51,7 @@ impl<'a> FunctionTranslator<'a> {
                 builder.ins().store(MemFlags::new(), new_rc, header_ptr, 0);
                 builder.ins().jump(merge_block, &[]);
 
+                builder.seal_block(rc_block);
                 builder.seal_block(then_block);
                 builder.switch_to_block(merge_block);
                 builder.seal_block(merge_block);
@@ -52,12 +61,20 @@ impl<'a> FunctionTranslator<'a> {
                 // When RC reaches zero, call type-appropriate cleanup.
                 let place_ty = &type_ctx.local_types[place.local.0];
                 let ptr = Self::read_place(builder, place, locals, type_ctx)?;
+
+                // Guard: skip if pointer is null (uninitialized local)
+                let null = builder.ins().iconst(ptr_type, 0);
+                let is_null = builder.ins().icmp(IntCC::Equal, ptr, null);
+                let rc_block = builder.create_block();
+                let merge_block = builder.create_block();
+                builder.ins().brif(is_null, merge_block, &[], rc_block, &[]);
+
+                builder.switch_to_block(rc_block);
                 let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size as i64));
                 let rc = builder.ins().load(ptr_type, MemFlags::new(), header_ptr, 0);
 
                 let is_immortal = builder.ins().icmp_imm(IntCC::SignedLessThan, rc, 0);
                 let dec_block = builder.create_block();
-                let merge_block = builder.create_block();
                 builder
                     .ins()
                     .brif(is_immortal, merge_block, &[], dec_block, &[]);
@@ -78,6 +95,7 @@ impl<'a> FunctionTranslator<'a> {
                 Self::emit_type_drop(builder, ctx, &place_ty.kind, ptr, header_ptr, type_ctx)?;
                 builder.ins().jump(merge_block, &[]);
 
+                builder.seal_block(rc_block);
                 builder.seal_block(dec_block);
                 builder.seal_block(free_block);
 

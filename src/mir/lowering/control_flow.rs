@@ -1115,6 +1115,12 @@ pub fn lower_call(
                         if args.len() == 1 {
                             let array_op = lower_expression(ctx, &args[0], None)?;
 
+                            // Track the temp array local so we can emit StorageDead after the call
+                            let temp_array_local = match &array_op {
+                                Operand::Copy(p) | Operand::Move(p) => Some(p.clone()),
+                                _ => None,
+                            };
+
                             // Determine array length and element size
                             let mut len_val = 0;
                             let mut elem_size = 8;
@@ -1160,6 +1166,25 @@ pub fn lower_call(
                                 },
                                 *span,
                             ));
+
+                            // The temp array was consumed by miri_rt_list_new_from_raw
+                            // (data copied). Emit StorageDead so Perceus inserts DecRef.
+                            ctx.set_current_block(target_bb);
+                            if let Some(arr_place) = temp_array_local {
+                                ctx.push_statement(crate::mir::Statement {
+                                    kind: StatementKind::StorageDead(arr_place),
+                                    span: *span,
+                                });
+                            }
+
+                            // Need a new target block since we added statements to the original
+                            let final_bb = ctx.new_basic_block();
+                            ctx.set_terminator(Terminator::new(
+                                TerminatorKind::Goto { target: final_bb },
+                                *span,
+                            ));
+                            ctx.set_current_block(final_bb);
+                            return Ok(result_op);
                         } else {
                             // Assuming element size is 8 for simplicity, or 0 if it doesn't matter yet
                             let size_op = Operand::Constant(Box::new(Constant {
