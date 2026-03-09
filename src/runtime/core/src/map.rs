@@ -220,7 +220,8 @@ impl MiriMap {
         let Some((new_states, new_keys, new_values)) =
             Self::alloc_tables(new_capacity, self.key_size, self.value_size)
         else {
-            return;
+            // OOM during resize — abort to prevent data corruption
+            std::process::abort();
         };
 
         // Rehash existing entries
@@ -263,6 +264,7 @@ impl MiriMap {
     }
 
     /// Sets a key-value pair, growing the table if necessary.
+    #[allow(clippy::missing_safety_doc)]
     pub unsafe fn set(&mut self, key: *const u8, value: *const u8) {
         // Check if we need to grow (before insertion to ensure capacity)
         let need_grow = self.capacity == 0
@@ -274,6 +276,7 @@ impl MiriMap {
     }
 
     /// Gets a pointer to the value for a key, or null if not found.
+    #[allow(clippy::missing_safety_doc)]
     pub unsafe fn get(&self, key: *const u8) -> *const u8 {
         if self.capacity == 0 || self.len == 0 {
             return ptr::null();
@@ -287,6 +290,7 @@ impl MiriMap {
     }
 
     /// Removes a key-value pair. Returns true if the key was found and removed.
+    #[allow(clippy::missing_safety_doc)]
     pub unsafe fn remove(&mut self, key: *const u8) -> bool {
         if self.capacity == 0 || self.len == 0 {
             return false;
@@ -302,6 +306,7 @@ impl MiriMap {
     }
 
     /// Returns true if the map contains the given key.
+    #[allow(clippy::missing_safety_doc)]
     pub unsafe fn contains_key(&self, key: *const u8) -> bool {
         if self.capacity == 0 || self.len == 0 {
             return false;
@@ -389,6 +394,7 @@ pub unsafe extern "C" fn miri_rt_map_is_empty(ptr: *const MiriMap) -> u8 {
 /// Both key and value are passed as pointer-sized integers. The runtime copies
 /// `key_size`/`value_size` bytes from the address of each parameter on the stack.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_map_set(
     ptr: *mut MiriMap,
     key: usize,
@@ -741,6 +747,255 @@ mod tests {
 
             let rc_ptr = (map as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *const usize;
             assert_eq!(*rc_ptr, 1, "RC should be 1 after creation");
+
+            miri_rt_map_free(map);
+        }
+    }
+
+    #[test]
+    fn test_map_null_safety() {
+        unsafe {
+            assert_eq!(miri_rt_map_len(std::ptr::null()), 0);
+            assert_eq!(miri_rt_map_is_empty(std::ptr::null()), 1);
+            miri_rt_map_set(std::ptr::null_mut(), 1, 2); // must not crash
+            assert_eq!(miri_rt_map_get(std::ptr::null(), 1), 0);
+            assert_eq!(miri_rt_map_contains_key(std::ptr::null(), 1), 0);
+            assert_eq!(miri_rt_map_remove(std::ptr::null_mut(), 1), 0);
+            miri_rt_map_clear(std::ptr::null_mut()); // must not crash
+            assert_eq!(miri_rt_map_key_at(std::ptr::null(), 0), 0);
+            assert_eq!(miri_rt_map_value_at(std::ptr::null(), 0), 0);
+            miri_rt_map_free(std::ptr::null_mut()); // must not crash
+        }
+    }
+
+    #[test]
+    fn test_map_empty_operations() {
+        unsafe {
+            let map = miri_rt_map_new(8, 8, 0);
+
+            assert_eq!(miri_rt_map_is_empty(map), 1);
+            assert_eq!(miri_rt_map_get(map, 42), 0);
+            assert_eq!(miri_rt_map_contains_key(map, 42), 0);
+            assert_eq!(miri_rt_map_remove(map, 42), 0);
+            assert_eq!(miri_rt_map_key_at(map, 0), 0);
+            assert_eq!(miri_rt_map_value_at(map, 0), 0);
+
+            miri_rt_map_free(map);
+        }
+    }
+
+    #[test]
+    fn test_map_heavy_remove_reinsert() {
+        unsafe {
+            let map = miri_rt_map_new(8, 8, 0);
+
+            // Insert 50 entries
+            for i in 0..50usize {
+                miri_rt_map_set(map, i, i * 100);
+            }
+            assert_eq!(miri_rt_map_len(map), 50);
+
+            // Remove even keys
+            for i in (0..50usize).step_by(2) {
+                assert_eq!(miri_rt_map_remove(map, i), 1);
+            }
+            assert_eq!(miri_rt_map_len(map), 25);
+
+            // Verify odd keys still accessible with correct values
+            for i in 0..50usize {
+                if i % 2 == 0 {
+                    assert_eq!(miri_rt_map_get(map, i), 0);
+                    assert_eq!(miri_rt_map_contains_key(map, i), 0);
+                } else {
+                    assert_eq!(miri_rt_map_get(map, i), i * 100);
+                    assert_eq!(miri_rt_map_contains_key(map, i), 1);
+                }
+            }
+
+            // Re-insert even keys with new values
+            for i in (0..50usize).step_by(2) {
+                miri_rt_map_set(map, i, i * 200);
+            }
+            assert_eq!(miri_rt_map_len(map), 50);
+
+            // Verify all entries
+            for i in 0..50usize {
+                if i % 2 == 0 {
+                    assert_eq!(miri_rt_map_get(map, i), i * 200);
+                } else {
+                    assert_eq!(miri_rt_map_get(map, i), i * 100);
+                }
+            }
+
+            miri_rt_map_free(map);
+        }
+    }
+
+    #[test]
+    fn test_map_clear_then_reuse() {
+        unsafe {
+            let map = miri_rt_map_new(8, 8, 0);
+
+            for i in 0..10usize {
+                miri_rt_map_set(map, i, i);
+            }
+            miri_rt_map_clear(map);
+
+            // Can insert again after clear
+            for i in 100..110usize {
+                miri_rt_map_set(map, i, i);
+            }
+            assert_eq!(miri_rt_map_len(map), 10);
+
+            // Old keys gone, new keys present
+            assert_eq!(miri_rt_map_contains_key(map, 0), 0);
+            assert_eq!(miri_rt_map_contains_key(map, 100), 1);
+            assert_eq!(miri_rt_map_get(map, 100), 100);
+
+            miri_rt_map_free(map);
+        }
+    }
+
+    #[test]
+    fn test_map_single_entry() {
+        unsafe {
+            let map = miri_rt_map_new(8, 8, 0);
+
+            miri_rt_map_set(map, 42, 100);
+            assert_eq!(miri_rt_map_len(map), 1);
+            assert_eq!(miri_rt_map_is_empty(map), 0);
+            assert_eq!(miri_rt_map_get(map, 42), 100);
+            assert_eq!(miri_rt_map_contains_key(map, 42), 1);
+            assert_eq!(miri_rt_map_key_at(map, 0), 42);
+            assert_eq!(miri_rt_map_value_at(map, 0), 100);
+
+            miri_rt_map_remove(map, 42);
+            assert_eq!(miri_rt_map_len(map), 0);
+            assert_eq!(miri_rt_map_is_empty(map), 1);
+
+            miri_rt_map_free(map);
+        }
+    }
+
+    #[test]
+    fn test_map_overwrite_multiple_times() {
+        unsafe {
+            let map = miri_rt_map_new(8, 8, 0);
+
+            miri_rt_map_set(map, 1, 100);
+            miri_rt_map_set(map, 1, 200);
+            miri_rt_map_set(map, 1, 300);
+            assert_eq!(miri_rt_map_len(map), 1);
+            assert_eq!(miri_rt_map_get(map, 1), 300);
+
+            miri_rt_map_free(map);
+        }
+    }
+
+    #[test]
+    fn test_map_zero_value() {
+        unsafe {
+            let map = miri_rt_map_new(8, 8, 0);
+
+            // Store zero as a value — should be distinguishable from "not found"
+            // (both return 0 from miri_rt_map_get, but contains_key differentiates)
+            miri_rt_map_set(map, 42, 0);
+            assert_eq!(miri_rt_map_get(map, 42), 0);
+            assert_eq!(miri_rt_map_contains_key(map, 42), 1);
+            assert_eq!(miri_rt_map_contains_key(map, 99), 0);
+
+            miri_rt_map_free(map);
+        }
+    }
+
+    #[test]
+    fn test_map_iteration_after_removal() {
+        unsafe {
+            let map = miri_rt_map_new(8, 8, 0);
+
+            miri_rt_map_set(map, 10, 100);
+            miri_rt_map_set(map, 20, 200);
+            miri_rt_map_set(map, 30, 300);
+
+            miri_rt_map_remove(map, 20);
+
+            // Iterate remaining entries
+            let mut keys = Vec::new();
+            let mut values = Vec::new();
+            for i in 0..miri_rt_map_len(map) {
+                keys.push(miri_rt_map_key_at(map, i));
+                values.push(miri_rt_map_value_at(map, i));
+            }
+            keys.sort();
+            values.sort();
+
+            assert_eq!(keys, vec![10, 30]);
+            assert_eq!(values, vec![100, 300]);
+
+            miri_rt_map_free(map);
+        }
+    }
+
+    #[test]
+    fn test_map_string_keys() {
+        unsafe {
+            let map = miri_rt_map_new(
+                std::mem::size_of::<*const MiriString>(),
+                std::mem::size_of::<usize>(),
+                1, // string key kind
+            );
+
+            let key1 = Box::into_raw(Box::new(MiriString::from_str("hello")));
+            let key2 = Box::into_raw(Box::new(MiriString::from_str("world")));
+            let key1_dup = Box::into_raw(Box::new(MiriString::from_str("hello")));
+
+            // Insert with string keys
+            (*map).set(
+                &key1 as *const *mut MiriString as *const u8,
+                &100usize as *const usize as *const u8,
+            );
+            (*map).set(
+                &key2 as *const *mut MiriString as *const u8,
+                &200usize as *const usize as *const u8,
+            );
+            assert_eq!((*map).len, 2);
+
+            // Look up with a duplicate key (same content, different pointer)
+            let result = (*map).get(&key1_dup as *const *mut MiriString as *const u8);
+            assert!(!result.is_null());
+            assert_eq!(*(result as *const usize), 100);
+
+            // Overwrite with duplicate key
+            (*map).set(
+                &key1_dup as *const *mut MiriString as *const u8,
+                &999usize as *const usize as *const u8,
+            );
+            assert_eq!((*map).len, 2); // still 2 entries
+
+            let result = (*map).get(&key1 as *const *mut MiriString as *const u8);
+            assert_eq!(*(result as *const usize), 999);
+
+            // Clean up
+            let _ = Box::from_raw(key1);
+            let _ = Box::from_raw(key2);
+            let _ = Box::from_raw(key1_dup);
+            miri_rt_map_free(map);
+        }
+    }
+
+    #[test]
+    fn test_map_growth_stress() {
+        unsafe {
+            let map = miri_rt_map_new(8, 8, 0);
+
+            for i in 0..200usize {
+                miri_rt_map_set(map, i, i * 10);
+            }
+            assert_eq!(miri_rt_map_len(map), 200);
+
+            for i in 0..200usize {
+                assert_eq!(miri_rt_map_get(map, i), i * 10);
+            }
 
             miri_rt_map_free(map);
         }
