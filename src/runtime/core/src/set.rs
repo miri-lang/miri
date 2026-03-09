@@ -116,8 +116,8 @@ impl MiriSet {
     }
 
     unsafe fn alloc_tables(&mut self, capacity: usize) {
-        let states_layout = Layout::from_size_align(capacity, 1).unwrap();
-        let data_layout = Layout::from_size_align(capacity * self.elem_size, 8).unwrap();
+        let states_layout = Layout::from_size_align(capacity, 1).unwrap_or_else(|_| std::process::abort());
+        let data_layout = Layout::from_size_align(capacity * self.elem_size, 8).unwrap_or_else(|_| std::process::abort());
         self.states = alloc_zeroed(states_layout);
         self.data = alloc_zeroed(data_layout);
         self.capacity = capacity;
@@ -152,11 +152,11 @@ impl MiriSet {
         elem_size: usize,
     ) {
         if !states.is_null() && capacity > 0 {
-            let states_layout = Layout::from_size_align(capacity, 1).unwrap();
+            let states_layout = Layout::from_size_align(capacity, 1).unwrap_or_else(|_| std::process::abort());
             dealloc(states, states_layout);
         }
         if !data.is_null() && capacity > 0 && elem_size > 0 {
-            let data_layout = Layout::from_size_align(capacity * elem_size, 8).unwrap();
+            let data_layout = Layout::from_size_align(capacity * elem_size, 8).unwrap_or_else(|_| std::process::abort());
             dealloc(data, data_layout);
         }
     }
