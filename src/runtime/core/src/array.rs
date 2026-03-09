@@ -123,7 +123,7 @@ pub unsafe extern "C" fn miri_rt_array_free(ptr: *mut MiriArray) {
     // Free internal data buffer
     let arr = &*ptr;
     if !arr.data.is_null() && arr.elem_count > 0 && arr.elem_size > 0 {
-        let layout = Layout::from_size_align(arr.byte_len(), 8).unwrap();
+        let layout = Layout::from_size_align(arr.byte_len(), 8).unwrap_or_else(|_| std::process::abort());
         dealloc(arr.data, layout);
     }
     // Free the [RC][struct] block
