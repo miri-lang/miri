@@ -84,9 +84,102 @@ impl TypeChecker {
                     }
                 }
 
+                // Compile-time bounds check for slicing with constant range bounds
+                let check_slice_bounds = |tc: &mut TypeChecker,
+                                          array_size: Option<i128>,
+                                          index: &Expression,
+                                          span: Span| {
+                    if let ExpressionKind::Range(start, end, _range_type) = &index.node {
+                        if let Some(size) = array_size {
+                            if let Some(start_val) =
+                                Self::try_eval_const_int_with_context(start, context)
+                            {
+                                if start_val < 0 {
+                                    tc.report_error(
+                                        "Slice start index must be a non-negative integer"
+                                            .to_string(),
+                                        start.span,
+                                    );
+                                } else if start_val > size {
+                                    tc.report_error(
+                                        format!(
+                                            "Slice start index out of bounds: index {} but array has {} elements",
+                                            start_val, size
+                                        ),
+                                        start.span,
+                                    );
+                                }
+                            }
+                            if let Some(end_expr) = end {
+                                if let Some(end_val) =
+                                    Self::try_eval_const_int_with_context(end_expr, context)
+                                {
+                                    if end_val < 0 {
+                                        tc.report_error(
+                                            "Slice end index must be a non-negative integer"
+                                                .to_string(),
+                                            end_expr.span,
+                                        );
+                                    } else if end_val > size {
+                                        tc.report_error(
+                                            format!(
+                                                "Slice end index out of bounds: index {} but array has {} elements",
+                                                end_val, size
+                                            ),
+                                            end_expr.span,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+
+                        // Check start <= end when both are constant
+                        if let Some(end_expr) = end {
+                            if let (Some(s), Some(e)) = (
+                                Self::try_eval_const_int_with_context(start, context),
+                                Self::try_eval_const_int_with_context(end_expr, context),
+                            ) {
+                                if s > e {
+                                    tc.report_error(
+                                        format!(
+                                            "Slice start index ({}) is greater than end index ({})",
+                                            s, e
+                                        ),
+                                        span,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                };
+
                 match obj_type.kind {
                     TypeKind::String => return make_type(TypeKind::String),
                     TypeKind::List(inner) => return make_type(TypeKind::List(inner)),
+                    TypeKind::Array(inner, size_expr) => {
+                        let array_size = Self::try_eval_const_int(&size_expr);
+                        check_slice_bounds(self, array_size, index, span);
+                        // Compute slice size from range bounds
+                        if let ExpressionKind::Range(start, end, range_type) = &index.node {
+                            let start_val = Self::try_eval_const_int_with_context(start, context);
+                            let end_val = end
+                                .as_ref()
+                                .and_then(|e| Self::try_eval_const_int_with_context(e, context));
+                            if let (Some(s), Some(e)) = (start_val, end_val) {
+                                let slice_size = match range_type {
+                                    RangeExpressionType::Exclusive => e - s,
+                                    RangeExpressionType::Inclusive => e - s + 1,
+                                    _ => e - s,
+                                };
+                                let size = Box::new(crate::ast::factory::int_literal_expression(
+                                    slice_size,
+                                ));
+                                return make_type(TypeKind::Array(inner, size));
+                            }
+                        }
+                        // Fallback: unknown slice size, return original
+                        return make_type(TypeKind::Array(inner, size_expr));
+                    }
                     TypeKind::Tuple(elements) => {
                         if elements.is_empty() {
                             return make_type(TypeKind::List(Box::new(
@@ -122,11 +215,18 @@ impl TypeChecker {
                     self.report_error("Array index must be an integer".to_string(), index.span);
                     return make_type(TypeKind::Error);
                 }
-                // Compile-time bounds check for literal indices
-                if let ExpressionKind::Literal(Literal::Integer(idx_val)) = &index.node {
-                    let idx = idx_val.to_usize();
-                    if let ExpressionKind::Literal(Literal::Integer(size_val)) = &size_expr.node {
-                        let size = size_val.to_usize();
+                // Compile-time bounds check using constant evaluation
+                if let Some(idx_val) = Self::try_eval_const_int_with_context(index, context) {
+                    if idx_val < 0 {
+                        self.report_error(
+                            "Array index must be a non-negative integer".to_string(),
+                            index.span,
+                        );
+                        return make_type(TypeKind::Error);
+                    }
+                    if let Some(size_val) = Self::try_eval_const_int(&size_expr) {
+                        let idx = idx_val as usize;
+                        let size = size_val as usize;
                         if idx >= size {
                             self.report_error(
                                 format!(
@@ -651,6 +751,34 @@ impl TypeChecker {
             } else if let Some(TypeDefinition::Enum(_)) = def_opt {
                 // Could be an enum instance, but enums don't have fields yet (unless methods are added later)
                 self.report_error(format!("Type '{}' does not have members", name), span);
+                return make_type(TypeKind::Error);
+            } else if def_opt.is_none() {
+                let module_to_import = match name.as_str() {
+                    "Array" => Some("system.collections.array"),
+                    "List" => Some("system.collections.list"),
+                    "Map" => Some("system.collections.map"),
+                    "Set" => Some("system.collections.set"),
+                    _ => None,
+                };
+
+                if let Some(module) = module_to_import {
+                    self.report_error_with_help(
+                        format!("Type '{}' does not have members", obj_type),
+                        span,
+                        format!("Consider importing '{}' to use {} methods", module, name),
+                    );
+                } else if name == "String" {
+                    if prop_name == "length" {
+                        return make_type(TypeKind::Int);
+                    } else {
+                        self.report_error(
+                            format!("Type 'String' has no field '{}'", prop_name),
+                            span,
+                        );
+                    }
+                } else {
+                    self.report_error(format!("Type '{}' does not have members", obj_type), span);
+                }
                 return make_type(TypeKind::Error);
             }
         }

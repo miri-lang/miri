@@ -189,6 +189,7 @@ impl fmt::Display for ExpressionKind {
             ExpressionKind::Type(t, _) => write!(f, "{}", t),
             ExpressionKind::Identifier(name, _) => write!(f, "{}", name),
             ExpressionKind::GenericType(name, _, _) => write!(f, "{}", name.node),
+            ExpressionKind::Literal(literal) => write!(f, "{}", literal),
             _ => write!(f, "{:?}", self),
         }
     }

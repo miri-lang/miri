@@ -451,6 +451,19 @@ impl TypeChecker {
                 let resolved_inner = self.resolve_type_expression(&inner_expr, context);
                 make_type(TypeKind::Option(Box::new(resolved_inner)))
             }
+            TypeKind::Array(inner, size) => {
+                let resolved_inner = self.resolve_type_expression(&inner, context);
+                // Fold constant size expressions (e.g., `1 + 2` → `3`)
+                let folded_size = if let Some(val) = Self::try_eval_const_int(&size) {
+                    Box::new(crate::ast::factory::int_literal_expression(val))
+                } else {
+                    size
+                };
+                make_type(TypeKind::Array(
+                    Box::new(self.create_type_expression(resolved_inner)),
+                    folded_size,
+                ))
+            }
             TypeKind::Custom(name, args) => self.resolve_custom_type(&name, args, expr, context),
             _ => make_type(t.kind),
         }
@@ -769,6 +782,73 @@ impl TypeChecker {
             }
             ExpressionKind::Index(obj, _) => self.is_mutable_expression(obj, context),
             _ => false,
+        }
+    }
+
+    // ==================== Constant Evaluation ====================
+
+    /// Tries to evaluate a constant integer expression at compile time.
+    ///
+    /// Supports integer literals, unary negate/plus, and binary arithmetic
+    /// operations on constant sub-expressions. Does not resolve identifiers.
+    pub(crate) fn try_eval_const_int(expr: &Expression) -> Option<i128> {
+        Self::eval_const_int_inner(expr, None)
+    }
+
+    /// Tries to evaluate a constant integer expression at compile time,
+    /// with context for resolving constant identifiers.
+    pub(crate) fn try_eval_const_int_with_context(
+        expr: &Expression,
+        context: &Context,
+    ) -> Option<i128> {
+        Self::eval_const_int_inner(expr, Some(context))
+    }
+
+    fn eval_const_int_inner(expr: &Expression, context: Option<&Context>) -> Option<i128> {
+        match &expr.node {
+            ExpressionKind::Literal(Literal::Integer(val)) => Some(val.to_i128()),
+            ExpressionKind::Identifier(name, _) => {
+                let ctx = context?;
+                let info = ctx.resolve_info(name)?;
+                if !info.is_constant {
+                    return None;
+                }
+                match &info.value {
+                    Some(Literal::Integer(val)) => Some(val.to_i128()),
+                    _ => None,
+                }
+            }
+            ExpressionKind::Unary(UnaryOp::Negate, inner) => {
+                Self::eval_const_int_inner(inner, context).map(|v| -v)
+            }
+            ExpressionKind::Unary(UnaryOp::Plus, inner) => {
+                Self::eval_const_int_inner(inner, context)
+            }
+            ExpressionKind::Binary(left, op, right) => {
+                let l = Self::eval_const_int_inner(left, context)?;
+                let r = Self::eval_const_int_inner(right, context)?;
+                match op {
+                    BinaryOp::Add => l.checked_add(r),
+                    BinaryOp::Sub => l.checked_sub(r),
+                    BinaryOp::Mul => l.checked_mul(r),
+                    BinaryOp::Div => {
+                        if r == 0 {
+                            None
+                        } else {
+                            l.checked_div(r)
+                        }
+                    }
+                    BinaryOp::Mod => {
+                        if r == 0 {
+                            None
+                        } else {
+                            l.checked_rem(r)
+                        }
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
         }
     }
 

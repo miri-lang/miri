@@ -97,6 +97,16 @@ impl TypeChecker {
             };
             let is_constant = matches!(decl.declaration_type, VariableDeclarationType::Constant);
 
+            // Extract compile-time constant value for constants with integer initializers
+            let const_value = if is_constant {
+                decl.initializer.as_ref().and_then(|init| {
+                    Self::try_eval_const_int_with_context(init, context)
+                        .map(|v| Literal::Integer(crate::ast::literal::IntegerLiteral::I128(v)))
+                })
+            } else {
+                None
+            };
+
             self.check_shadowing(&decl.name, is_mutable, is_constant, context, span);
 
             if context.scopes.len() == 1 {
@@ -108,7 +118,7 @@ impl TypeChecker {
                         is_constant,
                         visibility.clone(),
                         self.current_module.clone(),
-                        None,
+                        const_value.clone(),
                     ),
                 );
             }
@@ -121,7 +131,7 @@ impl TypeChecker {
                     is_constant,
                     visibility.clone(),
                     self.current_module.clone(),
-                    None,
+                    const_value,
                 ),
             );
         }
