@@ -188,7 +188,7 @@ impl TypeChecker {
                 return_type
             }
             TypeKind::Meta(inner_type) => {
-                if let TypeKind::Custom(name, _) = &inner_type.kind {
+                if let TypeKind::Custom(name, type_args) = &inner_type.kind {
                     let type_def = context
                         .resolve_type_definition(name)
                         .cloned()
@@ -212,6 +212,25 @@ impl TypeChecker {
                         // This produces a built-in List type so the existing codegen
                         // infrastructure for indexing, for-loops, and bounds checking works.
                         if name == "List" {
+                            // Check explicit template args
+                            if let Some(args) = type_args {
+                                if args.len() == 1 {
+                                    let elem_type = self.resolve_type_expression(&args[0], context);
+                                    return make_type(TypeKind::List(Box::new(
+                                        self.create_type_expression(elem_type),
+                                    )));
+                                } else {
+                                    self.report_error(
+                                        format!(
+                                            "Class 'List<T>' expects 1 generic arguments, got {}",
+                                            args.len()
+                                        ),
+                                        span,
+                                    );
+                                    return make_type(TypeKind::Error);
+                                }
+                            }
+
                             // Infer element type from the argument (expected to be an array)
                             if let Some((_, arg_type)) = positional_args.first() {
                                 let elem_type = match &arg_type.kind {
@@ -224,15 +243,48 @@ impl TypeChecker {
                                     self.create_type_expression(elem_type),
                                 )));
                             }
-                            // Empty List() or no args: return List<Error> to allow inference/any type
-                            return make_type(TypeKind::List(Box::new(
-                                self.create_type_expression(make_type(TypeKind::Error)),
-                            )));
+
+                            self.report_error(
+                                "Cannot instantiate generic class 'List<T>' without explicit type arguments".to_string(),
+                                span,
+                            );
+                            return make_type(TypeKind::Error);
+                        }
+
+                        // Validate generic constraints for class
+                        if let Some(generics) = &def.generics {
+                            let generic_names: Vec<String> =
+                                generics.iter().map(|g| g.name.clone()).collect();
+                            let signature = format!("{}<{}>", name, generic_names.join(", "));
+
+                            if let Some(args) = type_args {
+                                if generics.len() != args.len() {
+                                    self.report_error(
+                                        format!(
+                                            "Class '{}' expects {} generic arguments, got {}",
+                                            signature,
+                                            generics.len(),
+                                            args.len()
+                                        ),
+                                        span,
+                                    );
+                                }
+                            } else {
+                                self.report_error(
+                                    format!("Cannot instantiate generic class '{}' without explicit type arguments", signature),
+                                    span,
+                                );
+                            }
+                        } else if type_args.is_some() {
+                            self.report_error(
+                                format!("Class '{}' does not take generic arguments", name),
+                                span,
+                            );
                         }
 
                         // Class constructors are handled via init method
                         // For now, just return the class type
-                        return make_type(TypeKind::Custom(name.clone(), None));
+                        return make_type(TypeKind::Custom(name.clone(), type_args.clone()));
                     }
 
                     if let Some(TypeDefinition::Struct(def)) = type_def {

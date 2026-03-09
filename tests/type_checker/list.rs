@@ -236,19 +236,19 @@ l[0] = 4
 }
 
 #[test]
-fn test_list_slicing() {
-    type_checker_error_test("[1, 2, 3][0..1]", "is not sliceable");
-    type_checker_error_test("[1, 2, 3][0..=1]", "is not sliceable");
+fn test_array_slicing_with_range() {
+    // Array slicing with range literals should type-check successfully
+    type_checker_test("[1, 2, 3][0..1]");
+    type_checker_test("[1, 2, 3][0..=1]");
 }
 
 #[test]
-fn test_list_slicing_variable() {
-    type_checker_error_test(
+fn test_array_slicing_with_range_variable() {
+    type_checker_test(
         "
 let r = 0..1
 [1, 2, 3][r]
 ",
-        "is not sliceable",
     );
 }
 
@@ -338,5 +338,51 @@ for row in matrix
     for cell in row
         let x = cell
 ",
+    );
+}
+
+#[test]
+fn test_list_index_out_of_bounds_literal() {
+    type_checker_error_test(
+        "
+let l = [1, 2, 3]
+let x = l[5]
+",
+        "Array index out of bounds: index 5 but array has 3 elements",
+    );
+}
+
+#[test]
+fn test_list_index_constant_expression_oob() {
+    type_checker_error_test(
+        "
+let l = [1, 2, 3]
+let x = l[1 + 5]
+",
+        "Array index out of bounds",
+    );
+}
+
+#[test]
+fn test_list_of_structs() {
+    type_checker_test(
+        "
+struct Point
+    x int
+    y int
+let points = [Point(1, 1), Point(2, 2)]
+let p = points[0]
+",
+    );
+}
+
+#[test]
+fn test_list_index_empty_error() {
+    type_checker_error_test(
+        "
+let l = []
+let x = l[0]
+",
+        "Array index out of bounds: index 0 but array has 0 elements",
     );
 }

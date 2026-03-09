@@ -186,7 +186,7 @@ impl TypeChecker {
         }
     }
 
-    /// Checks collection type compatibility (List, Set, Map).
+    /// Checks collection type compatibility (List, Set, Map, Array).
     fn check_collection_compatibility(
         &self,
         t1: &Type,
@@ -194,6 +194,20 @@ impl TypeChecker {
         context: &Context,
     ) -> Option<bool> {
         match (&t1.kind, &t2.kind) {
+            (TypeKind::Array(inner1, size1), TypeKind::Array(inner2, size2)) => {
+                // Compare inner types
+                if !self.check_inner_type_compatible(inner1, inner2, context) {
+                    return Some(false);
+                }
+                // Compare sizes using constant evaluation
+                match (
+                    Self::try_eval_const_int(size1),
+                    Self::try_eval_const_int(size2),
+                ) {
+                    (Some(s1), Some(s2)) => Some(s1 == s2),
+                    _ => Some(size1 == size2), // fallback to structural equality
+                }
+            }
             (TypeKind::List(inner1), TypeKind::List(inner2)) => {
                 Some(self.check_inner_type_compatible(inner1, inner2, context))
             }

@@ -45,7 +45,7 @@ fn test_list_literal() {
         "fn main(): let l = [1, 2, 3]",
         r#"
             let _0: void;
-            let _1: Array(int, Literal(Integer(I8(3)))); // l
+            let _1: Array(int, 3); // l
 
             bb0: {
                 StorageLive(_1);
