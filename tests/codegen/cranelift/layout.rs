@@ -6,7 +6,10 @@ use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::types::{Type, TypeKind};
 use miri::codegen::cranelift::layout::{aggregate_size, field_layout};
 use miri::error::syntax::Span;
-use miri::type_checker::context::{StructDefinition, TypeDefinition};
+use miri::type_checker::context::{
+    AliasDefinition, ClassDefinition, EnumDefinition, GenericDefinition, StructDefinition,
+    TraitDefinition, TypeDefinition,
+};
 use std::collections::{BTreeMap, HashMap};
 
 fn ptr_ty() -> types::Type {
@@ -25,38 +28,40 @@ fn create_type_expr(kind: TypeKind) -> Expression {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// Tuple layout
+// ═══════════════════════════════════════════════════════════════════════
+
 #[test]
-fn test_field_layout_tuple() {
+fn test_tuple_field_layout_with_padding() {
     let type_defs = HashMap::new();
     let ptr = ptr_ty();
 
+    // (I8, I32, I64) — requires alignment padding
     let tuple_kind = TypeKind::Tuple(vec![
         create_type_expr(TypeKind::I8),
         create_type_expr(TypeKind::I32),
         create_type_expr(TypeKind::I64),
     ]);
 
-    // Field 0: I8
-    // Offset should be 0, type I8
+    // Field 0: I8 at offset 0
     let (offset, ty) = field_layout(&tuple_kind, 0, &type_defs, ptr);
     assert_eq!(offset, 0);
     assert_eq!(ty, types::I8);
 
-    // Field 1: I32
-    // Alignment is 4, so offset after I8 (1 byte) is padded to 4.
+    // Field 1: I32, alignment 4 → offset 1 padded to 4
     let (offset, ty) = field_layout(&tuple_kind, 1, &type_defs, ptr);
     assert_eq!(offset, 4);
     assert_eq!(ty, types::I32);
 
-    // Field 2: I64
-    // Alignment is 8. After I32 (offset 4+4=8), it's already aligned to 8.
+    // Field 2: I64, alignment 8 → offset 4+4=8, already aligned
     let (offset, ty) = field_layout(&tuple_kind, 2, &type_defs, ptr);
     assert_eq!(offset, 8);
     assert_eq!(ty, types::I64);
 }
 
 #[test]
-fn test_aggregate_size_tuple() {
+fn test_tuple_aggregate_size_with_padding() {
     let type_defs = HashMap::new();
     let ptr = ptr_ty();
 
@@ -66,106 +71,440 @@ fn test_aggregate_size_tuple() {
         create_type_expr(TypeKind::I64),
     ]);
 
-    // Offsets: I8 at 0, I32 at 4, I64 at 8.
-    // Total physical size before final alignment = 8 + 8 = 16.
-    // Max alignment is 8.
-    // Final size = 16.
-    let size = aggregate_size(&tuple_kind, &type_defs, ptr);
-    assert_eq!(size, 16);
+    // Layout: I8@0, I32@4, I64@8 → end=16, max_align=8 → final=16
+    assert_eq!(aggregate_size(&tuple_kind, &type_defs, ptr), 16);
 }
 
 #[test]
-fn test_field_layout_struct() {
+fn test_tuple_single_field() {
+    let type_defs = HashMap::new();
+    let ptr = ptr_ty();
+
+    let tuple_kind = TypeKind::Tuple(vec![create_type_expr(TypeKind::I32)]);
+
+    let (offset, ty) = field_layout(&tuple_kind, 0, &type_defs, ptr);
+    assert_eq!(offset, 0);
+    assert_eq!(ty, types::I32);
+
+    // Size: I32 (4 bytes), max_align = max(8, 4) = 8 → align_to(4, 8) = 8
+    assert_eq!(aggregate_size(&tuple_kind, &type_defs, ptr), 8);
+}
+
+#[test]
+fn test_tuple_empty() {
+    let type_defs = HashMap::new();
+    let ptr = ptr_ty();
+
+    let tuple_kind = TypeKind::Tuple(vec![]);
+
+    // Empty tuple: total=0, max_align=ptr_size(8) → align_to(0, 8) = 0
+    // Note: align_to(0, 8) = 0, so empty tuple has size 0.
+    // This is because 0 is already aligned to any alignment.
+    assert_eq!(aggregate_size(&tuple_kind, &type_defs, ptr), 0);
+}
+
+#[test]
+fn test_tuple_no_padding_needed() {
+    let type_defs = HashMap::new();
+    let ptr = ptr_ty();
+
+    // (I32, I32) — both 4-byte aligned, no padding gaps
+    let tuple_kind = TypeKind::Tuple(vec![
+        create_type_expr(TypeKind::I32),
+        create_type_expr(TypeKind::I32),
+    ]);
+
+    let (offset0, _) = field_layout(&tuple_kind, 0, &type_defs, ptr);
+    let (offset1, _) = field_layout(&tuple_kind, 1, &type_defs, ptr);
+    assert_eq!(offset0, 0);
+    assert_eq!(offset1, 4);
+
+    // Total = 8, max_align = max(8, 4) = 8 → align_to(8, 8) = 8
+    assert_eq!(aggregate_size(&tuple_kind, &type_defs, ptr), 8);
+}
+
+#[test]
+fn test_tuple_with_pointer_sized_elements() {
+    let type_defs = HashMap::new();
+    let ptr = ptr_ty();
+
+    // (String, I32, String) — String is ptr-sized (8 bytes on 64-bit)
+    let tuple_kind = TypeKind::Tuple(vec![
+        create_type_expr(TypeKind::String),
+        create_type_expr(TypeKind::I32),
+        create_type_expr(TypeKind::String),
+    ]);
+
+    // String@0 (8 bytes), I32@8 (4 bytes, align=4, 8 is ok), String@16 (align=8, 12→16)
+    let (offset0, ty0) = field_layout(&tuple_kind, 0, &type_defs, ptr);
+    assert_eq!(offset0, 0);
+    assert_eq!(ty0, ptr);
+
+    let (offset1, ty1) = field_layout(&tuple_kind, 1, &type_defs, ptr);
+    assert_eq!(offset1, 8);
+    assert_eq!(ty1, types::I32);
+
+    let (offset2, ty2) = field_layout(&tuple_kind, 2, &type_defs, ptr);
+    assert_eq!(offset2, 16);
+    assert_eq!(ty2, ptr);
+
+    // Total = 16 + 8 = 24, max_align = 8 → 24
+    assert_eq!(aggregate_size(&tuple_kind, &type_defs, ptr), 24);
+}
+
+#[test]
+fn test_tuple_with_i128() {
+    let type_defs = HashMap::new();
+    let ptr = ptr_ty();
+
+    // (I8, I128) — I128 has 16-byte alignment
+    let tuple_kind = TypeKind::Tuple(vec![
+        create_type_expr(TypeKind::I8),
+        create_type_expr(TypeKind::I128),
+    ]);
+
+    let (offset0, _) = field_layout(&tuple_kind, 0, &type_defs, ptr);
+    assert_eq!(offset0, 0);
+
+    // I128 alignment is 16 → offset 1 padded to 16
+    let (offset1, ty1) = field_layout(&tuple_kind, 1, &type_defs, ptr);
+    assert_eq!(offset1, 16);
+    assert_eq!(ty1, types::I128);
+
+    // Total = 16 + 16 = 32, max_align = 16 → 32
+    assert_eq!(aggregate_size(&tuple_kind, &type_defs, ptr), 32);
+}
+
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    should_panic(expected = "tuple field index 2 out of range")
+)]
+fn test_tuple_out_of_range_field_idx() {
+    let type_defs = HashMap::new();
+    let ptr = ptr_ty();
+
+    let tuple_kind = TypeKind::Tuple(vec![
+        create_type_expr(TypeKind::I8),
+        create_type_expr(TypeKind::I32),
+    ]);
+
+    // Field index 2 is out of range — panics in debug, falls through in release
+    let _ = field_layout(&tuple_kind, 2, &type_defs, ptr);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Struct layout
+// ═══════════════════════════════════════════════════════════════════════
+
+fn make_struct(fields: Vec<(&str, TypeKind)>) -> StructDefinition {
+    StructDefinition {
+        fields: fields
+            .into_iter()
+            .map(|(name, kind)| {
+                (
+                    name.to_string(),
+                    t(kind),
+                    miri::ast::MemberVisibility::Public,
+                )
+            })
+            .collect(),
+        generics: None,
+        module: String::new(),
+    }
+}
+
+#[test]
+fn test_struct_field_layout_with_padding() {
     let mut type_defs = HashMap::new();
     let ptr = ptr_ty();
 
-    let struct_def = StructDefinition {
-        fields: vec![
-            (
-                "a".to_string(),
-                t(TypeKind::I16),
-                miri::ast::MemberVisibility::Public,
-            ),
-            (
-                "b".to_string(),
-                t(TypeKind::F64),
-                miri::ast::MemberVisibility::Public,
-            ),
-            (
-                "c".to_string(),
-                t(TypeKind::I64),
-                miri::ast::MemberVisibility::Public,
-            ),
-        ],
-        generics: None,
-        module: String::new(),
-    };
+    let struct_def = make_struct(vec![
+        ("a", TypeKind::I16),
+        ("b", TypeKind::F64),
+        ("c", TypeKind::I64),
+    ]);
     type_defs.insert("MyStruct".to_string(), TypeDefinition::Struct(struct_def));
 
     let custom_kind = TypeKind::Custom("MyStruct".to_string(), None);
 
-    // Field 0: I16 (offset 0)
+    // Field 0: I16 at offset 0
     let (offset, ty) = field_layout(&custom_kind, 0, &type_defs, ptr);
     assert_eq!(offset, 0);
     assert_eq!(ty, types::I16);
 
-    // Field 1: F64 (aligned to 8, offset 2 -> 8)
+    // Field 1: F64, align=8, offset 2 → 8
     let (offset, ty) = field_layout(&custom_kind, 1, &type_defs, ptr);
     assert_eq!(offset, 8);
     assert_eq!(ty, types::F64);
 
-    // Field 2: I64 (aligned to 8, offset 8+8=16 -> 16)
+    // Field 2: I64, align=8, offset 16 → 16
     let (offset, ty) = field_layout(&custom_kind, 2, &type_defs, ptr);
     assert_eq!(offset, 16);
     assert_eq!(ty, types::I64);
 }
 
 #[test]
-fn test_aggregate_size_struct() {
+fn test_struct_aggregate_size() {
     let mut type_defs = HashMap::new();
     let ptr = ptr_ty();
 
-    let struct_def = StructDefinition {
-        fields: vec![
-            (
-                "a".to_string(),
-                t(TypeKind::I16),
-                miri::ast::MemberVisibility::Public,
-            ),
-            (
-                "b".to_string(),
-                t(TypeKind::F64),
-                miri::ast::MemberVisibility::Public,
-            ),
-            (
-                "c".to_string(),
-                t(TypeKind::I64),
-                miri::ast::MemberVisibility::Public,
-            ),
-        ],
-        generics: None,
-        module: String::new(),
-    };
+    let struct_def = make_struct(vec![
+        ("a", TypeKind::I16),
+        ("b", TypeKind::F64),
+        ("c", TypeKind::I64),
+    ]);
     type_defs.insert("MyStruct".to_string(), TypeDefinition::Struct(struct_def));
 
     let custom_kind = TypeKind::Custom("MyStruct".to_string(), None);
-
-    // Sizes: I16 (2), F64 (8), I64 (8)
-    // Max align: 8.
-    // Layout: 0..2 (I16), 8..16 (F64), 16..24 (I64).
-    // Final size = 24.
-    let size = aggregate_size(&custom_kind, &type_defs, ptr);
-    assert_eq!(size, 24);
+    // I16@0, F64@8, I64@16 → total=24, max_align=8 → 24
+    assert_eq!(aggregate_size(&custom_kind, &type_defs, ptr), 24);
 }
 
 #[test]
-fn test_aggregate_size_class_and_trait() {
+fn test_struct_empty() {
+    let mut type_defs = HashMap::new();
+    let ptr = ptr_ty();
+
+    let struct_def = make_struct(vec![]);
+    type_defs.insert("Empty".to_string(), TypeDefinition::Struct(struct_def));
+
+    let custom_kind = TypeKind::Custom("Empty".to_string(), None);
+    // Empty struct: total=0, max_align=ptr_size(8) → align_to(0, 8) = 0
+    assert_eq!(aggregate_size(&custom_kind, &type_defs, ptr), 0);
+}
+
+#[test]
+fn test_struct_single_field() {
+    let mut type_defs = HashMap::new();
+    let ptr = ptr_ty();
+
+    let struct_def = make_struct(vec![("x", TypeKind::I32)]);
+    type_defs.insert("Single".to_string(), TypeDefinition::Struct(struct_def));
+
+    let custom_kind = TypeKind::Custom("Single".to_string(), None);
+
+    let (offset, ty) = field_layout(&custom_kind, 0, &type_defs, ptr);
+    assert_eq!(offset, 0);
+    assert_eq!(ty, types::I32);
+
+    // Size: 4, max_align=max(8,4)=8, align_to(4,8) = 8
+    assert_eq!(aggregate_size(&custom_kind, &type_defs, ptr), 8);
+}
+
+#[test]
+fn test_struct_uniform_fields_no_padding() {
+    let mut type_defs = HashMap::new();
+    let ptr = ptr_ty();
+
+    let struct_def = make_struct(vec![
+        ("a", TypeKind::I64),
+        ("b", TypeKind::I64),
+        ("c", TypeKind::I64),
+    ]);
+    type_defs.insert("Uniform".to_string(), TypeDefinition::Struct(struct_def));
+
+    let custom_kind = TypeKind::Custom("Uniform".to_string(), None);
+
+    let (o0, _) = field_layout(&custom_kind, 0, &type_defs, ptr);
+    let (o1, _) = field_layout(&custom_kind, 1, &type_defs, ptr);
+    let (o2, _) = field_layout(&custom_kind, 2, &type_defs, ptr);
+    assert_eq!(o0, 0);
+    assert_eq!(o1, 8);
+    assert_eq!(o2, 16);
+
+    assert_eq!(aggregate_size(&custom_kind, &type_defs, ptr), 24);
+}
+
+#[test]
+fn test_struct_worst_case_padding() {
+    let mut type_defs = HashMap::new();
+    let ptr = ptr_ty();
+
+    // (I8, I64, I8, I64) — maximizes padding waste
+    let struct_def = make_struct(vec![
+        ("a", TypeKind::I8),
+        ("b", TypeKind::I64),
+        ("c", TypeKind::I8),
+        ("d", TypeKind::I64),
+    ]);
+    type_defs.insert("Padded".to_string(), TypeDefinition::Struct(struct_def));
+
+    let custom_kind = TypeKind::Custom("Padded".to_string(), None);
+
+    // I8@0, I64@8, I8@16, I64@24
+    let (o0, _) = field_layout(&custom_kind, 0, &type_defs, ptr);
+    let (o1, _) = field_layout(&custom_kind, 1, &type_defs, ptr);
+    let (o2, _) = field_layout(&custom_kind, 2, &type_defs, ptr);
+    let (o3, _) = field_layout(&custom_kind, 3, &type_defs, ptr);
+    assert_eq!(o0, 0);
+    assert_eq!(o1, 8);
+    assert_eq!(o2, 16);
+    assert_eq!(o3, 24);
+
+    // Total = 24 + 8 = 32, max_align = 8 → 32
+    assert_eq!(aggregate_size(&custom_kind, &type_defs, ptr), 32);
+}
+
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    should_panic(expected = "struct 'S' field index 1 out of range")
+)]
+fn test_struct_out_of_range_field_idx() {
+    let mut type_defs = HashMap::new();
+    let ptr = ptr_ty();
+
+    let struct_def = make_struct(vec![("x", TypeKind::I32)]);
+    type_defs.insert("S".to_string(), TypeDefinition::Struct(struct_def));
+
+    let custom_kind = TypeKind::Custom("S".to_string(), None);
+
+    // Field index 1 is out of range — panics in debug, falls through in release
+    let _ = field_layout(&custom_kind, 1, &type_defs, ptr);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Enum layout
+// ═══════════════════════════════════════════════════════════════════════
+
+fn make_enum(variants: Vec<(&str, Vec<TypeKind>)>) -> EnumDefinition {
+    let mut map = BTreeMap::new();
+    for (name, types) in variants {
+        map.insert(name.to_string(), types.into_iter().map(t).collect());
+    }
+    EnumDefinition {
+        variants: map,
+        generics: None,
+    }
+}
+
+#[test]
+fn test_enum_with_payload() {
+    let mut type_defs = HashMap::new();
+    let ptr = ptr_ty();
+
+    let enum_def = make_enum(vec![
+        ("None", vec![]),
+        ("Some", vec![TypeKind::I32, TypeKind::I32]),
+    ]);
+    type_defs.insert("MyEnum".to_string(), TypeDefinition::Enum(enum_def));
+
+    let enum_kind = TypeKind::Custom("MyEnum".to_string(), None);
+
+    // Discriminant + 2 payload fields = 3 * ptr_size
+    assert_eq!(aggregate_size(&enum_kind, &type_defs, ptr), 3 * ptr.bytes());
+
+    // Field 0: discriminant at offset 0
+    assert_eq!(field_layout(&enum_kind, 0, &type_defs, ptr).0, 0);
+
+    // Field 1: first payload at offset ptr_size
+    assert_eq!(
+        field_layout(&enum_kind, 1, &type_defs, ptr).0,
+        ptr.bytes() as i32
+    );
+
+    // Field 2: second payload at offset 2 * ptr_size
+    assert_eq!(
+        field_layout(&enum_kind, 2, &type_defs, ptr).0,
+        2 * (ptr.bytes() as i32)
+    );
+}
+
+#[test]
+fn test_enum_all_unit_variants() {
+    let mut type_defs = HashMap::new();
+    let ptr = ptr_ty();
+
+    let enum_def = make_enum(vec![("A", vec![]), ("B", vec![]), ("C", vec![])]);
+    type_defs.insert("Color".to_string(), TypeDefinition::Enum(enum_def));
+
+    let enum_kind = TypeKind::Custom("Color".to_string(), None);
+
+    // All unit variants: discriminant only, no payload → ptr_size + 0
+    assert_eq!(aggregate_size(&enum_kind, &type_defs, ptr), ptr.bytes());
+
+    // Discriminant at offset 0
+    let (offset, ty) = field_layout(&enum_kind, 0, &type_defs, ptr);
+    assert_eq!(offset, 0);
+    assert_eq!(ty, ptr);
+}
+
+#[test]
+fn test_enum_single_variant() {
+    let mut type_defs = HashMap::new();
+    let ptr = ptr_ty();
+
+    let enum_def = make_enum(vec![("Only", vec![TypeKind::I64])]);
+    type_defs.insert("Single".to_string(), TypeDefinition::Enum(enum_def));
+
+    let enum_kind = TypeKind::Custom("Single".to_string(), None);
+
+    // Discriminant + 1 field = 2 * ptr_size
+    assert_eq!(aggregate_size(&enum_kind, &type_defs, ptr), 2 * ptr.bytes());
+}
+
+#[test]
+fn test_enum_max_payload_wins() {
+    let mut type_defs = HashMap::new();
+    let ptr = ptr_ty();
+
+    let enum_def = make_enum(vec![
+        ("Small", vec![TypeKind::I32]),
+        ("Big", vec![TypeKind::I32, TypeKind::I64, TypeKind::I32]),
+    ]);
+    type_defs.insert("Mixed".to_string(), TypeDefinition::Enum(enum_def));
+
+    let enum_kind = TypeKind::Custom("Mixed".to_string(), None);
+
+    // Max payload is Big with 3 fields → 3 * ptr_size
+    // Total = ptr_size (discriminant) + 3 * ptr_size = 4 * ptr_size
+    assert_eq!(aggregate_size(&enum_kind, &type_defs, ptr), 4 * ptr.bytes());
+}
+
+#[test]
+fn test_enum_discriminant_is_pointer_type() {
+    let mut type_defs = HashMap::new();
+    let ptr = ptr_ty();
+
+    let enum_def = make_enum(vec![("A", vec![])]);
+    type_defs.insert("E".to_string(), TypeDefinition::Enum(enum_def));
+
+    let enum_kind = TypeKind::Custom("E".to_string(), None);
+
+    let (_, disc_ty) = field_layout(&enum_kind, 0, &type_defs, ptr);
+    assert_eq!(disc_ty, ptr, "Discriminant should be pointer-typed");
+}
+
+#[test]
+fn test_enum_payload_fields_are_pointer_typed() {
+    let mut type_defs = HashMap::new();
+    let ptr = ptr_ty();
+
+    let enum_def = make_enum(vec![("Val", vec![TypeKind::I8, TypeKind::Boolean])]);
+    type_defs.insert("E".to_string(), TypeDefinition::Enum(enum_def));
+
+    let enum_kind = TypeKind::Custom("E".to_string(), None);
+
+    // Even though the actual types are I8 and Boolean, enum payload uses ptr-sized slots
+    let (_, ty1) = field_layout(&enum_kind, 1, &type_defs, ptr);
+    let (_, ty2) = field_layout(&enum_kind, 2, &type_defs, ptr);
+    assert_eq!(ty1, ptr);
+    assert_eq!(ty2, ptr);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Class and Trait layout
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_class_is_pointer_sized() {
     let mut type_defs = HashMap::new();
     let ptr = ptr_ty();
 
     type_defs.insert(
         "MyClass".to_string(),
-        TypeDefinition::Class(miri::type_checker::context::ClassDefinition {
+        TypeDefinition::Class(ClassDefinition {
             name: "MyClass".to_string(),
             generics: None,
             base_class: None,
@@ -177,9 +516,50 @@ fn test_aggregate_size_class_and_trait() {
         }),
     );
 
+    let kind = TypeKind::Custom("MyClass".to_string(), None);
+    assert_eq!(aggregate_size(&kind, &type_defs, ptr), ptr.bytes());
+}
+
+#[test]
+fn test_class_field_layout_uses_pointer_slots() {
+    let mut type_defs = HashMap::new();
+    let ptr = ptr_ty();
+
+    type_defs.insert(
+        "C".to_string(),
+        TypeDefinition::Class(ClassDefinition {
+            name: "C".to_string(),
+            generics: None,
+            base_class: None,
+            traits: vec![],
+            fields: BTreeMap::new(),
+            methods: BTreeMap::new(),
+            module: String::new(),
+            is_abstract: false,
+        }),
+    );
+
+    let kind = TypeKind::Custom("C".to_string(), None);
+
+    let (o0, t0) = field_layout(&kind, 0, &type_defs, ptr);
+    let (o1, t1) = field_layout(&kind, 1, &type_defs, ptr);
+    let (o2, t2) = field_layout(&kind, 2, &type_defs, ptr);
+    assert_eq!(o0, 0);
+    assert_eq!(o1, ptr.bytes() as i32);
+    assert_eq!(o2, 2 * ptr.bytes() as i32);
+    assert_eq!(t0, ptr);
+    assert_eq!(t1, ptr);
+    assert_eq!(t2, ptr);
+}
+
+#[test]
+fn test_trait_is_pointer_sized() {
+    let mut type_defs = HashMap::new();
+    let ptr = ptr_ty();
+
     type_defs.insert(
         "MyTrait".to_string(),
-        TypeDefinition::Trait(miri::type_checker::context::TraitDefinition {
+        TypeDefinition::Trait(TraitDefinition {
             name: "MyTrait".to_string(),
             generics: None,
             parent_traits: vec![],
@@ -188,52 +568,214 @@ fn test_aggregate_size_class_and_trait() {
         }),
     );
 
-    let class_kind = TypeKind::Custom("MyClass".to_string(), None);
-    let trait_kind = TypeKind::Custom("MyTrait".to_string(), None);
-
-    // Classes and Traits are represented as pointers locally (ptr_size)
-    assert_eq!(aggregate_size(&class_kind, &type_defs, ptr), ptr.bytes());
-    assert_eq!(field_layout(&class_kind, 0, &type_defs, ptr).0, 0);
-
-    assert_eq!(aggregate_size(&trait_kind, &type_defs, ptr), ptr.bytes());
+    let kind = TypeKind::Custom("MyTrait".to_string(), None);
+    assert_eq!(aggregate_size(&kind, &type_defs, ptr), ptr.bytes());
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// Generic and Alias TypeDefinition
+// ═══════════════════════════════════════════════════════════════════════
+
 #[test]
-fn test_aggregate_size_enum() {
+fn test_generic_typedef_is_pointer_sized() {
     let mut type_defs = HashMap::new();
     let ptr = ptr_ty();
 
-    let mut variants = BTreeMap::new();
-    variants.insert("None".to_string(), vec![]);
-    // 2 fields means payload size is 2 * ptr_size (enum payloads use pointer-sized fields locally)
-    variants.insert("Some".to_string(), vec![t(TypeKind::I32), t(TypeKind::I32)]);
-
     type_defs.insert(
-        "MyEnum".to_string(),
-        TypeDefinition::Enum(miri::type_checker::context::EnumDefinition {
-            variants,
+        "T".to_string(),
+        TypeDefinition::Generic(GenericDefinition {
+            name: "T".to_string(),
+            constraint: None,
+            kind: miri::ast::types::TypeDeclarationKind::None,
+        }),
+    );
+
+    let kind = TypeKind::Custom("T".to_string(), None);
+    assert_eq!(aggregate_size(&kind, &type_defs, ptr), ptr.bytes());
+
+    let (offset, ty) = field_layout(&kind, 0, &type_defs, ptr);
+    assert_eq!(offset, 0);
+    assert_eq!(ty, ptr);
+}
+
+#[test]
+fn test_alias_to_primitive_resolves() {
+    let mut type_defs = HashMap::new();
+    let ptr = ptr_ty();
+
+    // Alias to a primitive type — should resolve through to the primitive's layout
+    type_defs.insert(
+        "MyAlias".to_string(),
+        TypeDefinition::Alias(AliasDefinition {
+            template: t(TypeKind::I32),
             generics: None,
         }),
     );
 
-    let enum_kind = TypeKind::Custom("MyEnum".to_string(), None);
+    let kind = TypeKind::Custom("MyAlias".to_string(), None);
+    // I32 is not an aggregate, so aggregate_size falls through to the wildcard → ptr_size
+    assert_eq!(aggregate_size(&kind, &type_defs, ptr), ptr.bytes());
+}
 
-    // Enum layout: Discriminant (ptr_size) + max payload (2 * ptr_size) = 3 * ptr_size
-    let expected_size = 3 * ptr.bytes();
-    assert_eq!(aggregate_size(&enum_kind, &type_defs, ptr), expected_size);
+#[test]
+fn test_alias_to_struct_resolves_layout() {
+    let mut type_defs = HashMap::new();
+    let ptr = ptr_ty();
 
-    // Field 0: discriminant (offset 0)
-    assert_eq!(field_layout(&enum_kind, 0, &type_defs, ptr).0, 0);
+    // Register a struct
+    let struct_def = make_struct(vec![("x", TypeKind::I64), ("y", TypeKind::I64)]);
+    type_defs.insert("Point".to_string(), TypeDefinition::Struct(struct_def));
 
-    // Field 1: payload field 1 (offset ptr_size)
-    assert_eq!(
-        field_layout(&enum_kind, 1, &type_defs, ptr).0,
-        ptr.bytes() as i32
+    // Register an alias that resolves to the struct
+    type_defs.insert(
+        "Pos".to_string(),
+        TypeDefinition::Alias(AliasDefinition {
+            template: t(TypeKind::Custom("Point".to_string(), None)),
+            generics: None,
+        }),
     );
 
-    // Field 2: payload field 2 (offset ptr_size + ptr_size)
+    let alias_kind = TypeKind::Custom("Pos".to_string(), None);
+    let direct_kind = TypeKind::Custom("Point".to_string(), None);
+
+    // Alias should resolve to the same layout as the struct
     assert_eq!(
-        field_layout(&enum_kind, 2, &type_defs, ptr).0,
-        2 * (ptr.bytes() as i32)
+        aggregate_size(&alias_kind, &type_defs, ptr),
+        aggregate_size(&direct_kind, &type_defs, ptr)
     );
+
+    // Field layout should match too
+    let (alias_o0, alias_t0) = field_layout(&alias_kind, 0, &type_defs, ptr);
+    let (direct_o0, direct_t0) = field_layout(&direct_kind, 0, &type_defs, ptr);
+    assert_eq!(alias_o0, direct_o0);
+    assert_eq!(alias_t0, direct_t0);
+
+    let (alias_o1, alias_t1) = field_layout(&alias_kind, 1, &type_defs, ptr);
+    let (direct_o1, direct_t1) = field_layout(&direct_kind, 1, &type_defs, ptr);
+    assert_eq!(alias_o1, direct_o1);
+    assert_eq!(alias_t1, direct_t1);
+}
+
+#[test]
+fn test_alias_to_tuple_resolves_layout() {
+    let mut type_defs = HashMap::new();
+    let ptr = ptr_ty();
+
+    // Alias that resolves to a tuple type
+    let tuple_type = TypeKind::Tuple(vec![
+        create_type_expr(TypeKind::I32),
+        create_type_expr(TypeKind::I64),
+    ]);
+    type_defs.insert(
+        "Pair".to_string(),
+        TypeDefinition::Alias(AliasDefinition {
+            template: t(tuple_type.clone()),
+            generics: None,
+        }),
+    );
+
+    let alias_kind = TypeKind::Custom("Pair".to_string(), None);
+
+    // Should resolve through to tuple layout
+    assert_eq!(
+        aggregate_size(&alias_kind, &type_defs, ptr),
+        aggregate_size(&tuple_type, &type_defs, ptr)
+    );
+
+    let (alias_o0, alias_t0) = field_layout(&alias_kind, 0, &type_defs, ptr);
+    let (direct_o0, direct_t0) = field_layout(&tuple_type, 0, &type_defs, ptr);
+    assert_eq!(alias_o0, direct_o0);
+    assert_eq!(alias_t0, direct_t0);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Missing type definition (fallback behavior)
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_unknown_custom_type_fallback() {
+    let type_defs = HashMap::new(); // empty — type not registered
+    let ptr = ptr_ty();
+
+    let kind = TypeKind::Custom("NonExistent".to_string(), None);
+
+    // Falls back to pointer-sized
+    assert_eq!(aggregate_size(&kind, &type_defs, ptr), ptr.bytes());
+
+    let (offset, ty) = field_layout(&kind, 0, &type_defs, ptr);
+    assert_eq!(offset, 0);
+    assert_eq!(ty, ptr);
+
+    let (offset1, _) = field_layout(&kind, 1, &type_defs, ptr);
+    assert_eq!(offset1, ptr.bytes() as i32);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Non-aggregate types (wildcard arm in field_layout)
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_non_aggregate_types_use_pointer_slots() {
+    let type_defs = HashMap::new();
+    let ptr = ptr_ty();
+
+    // Primitive types hitting the wildcard arm
+    let (o0, t0) = field_layout(&TypeKind::I32, 0, &type_defs, ptr);
+    assert_eq!(o0, 0);
+    assert_eq!(t0, ptr);
+
+    let (o1, t1) = field_layout(&TypeKind::I32, 1, &type_defs, ptr);
+    assert_eq!(o1, ptr.bytes() as i32);
+    assert_eq!(t1, ptr);
+
+    // String type
+    let (o0, _) = field_layout(&TypeKind::String, 0, &type_defs, ptr);
+    assert_eq!(o0, 0);
+
+    // Collection types also hit the wildcard
+    let list_kind = TypeKind::List(Box::new(create_type_expr(TypeKind::I32)));
+    assert_eq!(aggregate_size(&list_kind, &type_defs, ptr), ptr.bytes());
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// 32-bit pointer width
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_layout_with_32bit_pointers() {
+    let type_defs = HashMap::new();
+    let ptr32 = types::I32;
+
+    // Tuple (I8, I32) with 32-bit pointers
+    let tuple_kind = TypeKind::Tuple(vec![
+        create_type_expr(TypeKind::I8),
+        create_type_expr(TypeKind::I32),
+    ]);
+
+    let (o0, _) = field_layout(&tuple_kind, 0, &type_defs, ptr32);
+    let (o1, _) = field_layout(&tuple_kind, 1, &type_defs, ptr32);
+    assert_eq!(o0, 0);
+    assert_eq!(o1, 4); // I32 alignment = 4
+
+    // Size: I8@0 + I32@4 = 8, max_align = max(4, 1, 4) = 4, align_to(8, 4) = 8
+    assert_eq!(aggregate_size(&tuple_kind, &type_defs, ptr32), 8);
+}
+
+#[test]
+fn test_enum_layout_with_32bit_pointers() {
+    let mut type_defs = HashMap::new();
+    let ptr32 = types::I32;
+
+    let enum_def = make_enum(vec![("None", vec![]), ("Some", vec![TypeKind::I32])]);
+    type_defs.insert("Opt".to_string(), TypeDefinition::Enum(enum_def));
+
+    let kind = TypeKind::Custom("Opt".to_string(), None);
+
+    // 32-bit: discriminant (4) + 1 field (4) = 8
+    assert_eq!(aggregate_size(&kind, &type_defs, ptr32), 8);
+
+    let (disc_off, _) = field_layout(&kind, 0, &type_defs, ptr32);
+    let (payload_off, _) = field_layout(&kind, 1, &type_defs, ptr32);
+    assert_eq!(disc_off, 0);
+    assert_eq!(payload_off, 4);
 }
