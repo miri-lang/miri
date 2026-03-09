@@ -515,7 +515,7 @@ pub unsafe extern "C" fn miri_rt_list_free(ptr: *mut MiriList) {
     // Free internal data buffer
     let list = &*ptr;
     if !list.data.is_null() && list.capacity > 0 && list.elem_size > 0 {
-        let layout = Layout::from_size_align(list.capacity * list.elem_size, 8).unwrap();
+        let layout = Layout::from_size_align(list.capacity * list.elem_size, 8).unwrap_or_else(|_| std::process::abort());
         dealloc(list.data, layout);
     }
     // Free the [RC][struct] block
