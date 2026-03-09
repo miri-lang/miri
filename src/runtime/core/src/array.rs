@@ -34,7 +34,9 @@ const STRUCT_SIZE: usize = std::mem::size_of::<MiriArray>();
 
 impl MiriArray {
     fn byte_len(&self) -> usize {
-        self.elem_count * self.elem_size
+        self.elem_count
+            .checked_mul(self.elem_size)
+            .unwrap_or_else(|| std::process::abort())
     }
 
     /// Returns the raw data pointer.
@@ -45,6 +47,11 @@ impl MiriArray {
     /// Returns the number of elements.
     pub fn len(&self) -> usize {
         self.elem_count
+    }
+
+    /// Returns `true` if the array contains no elements.
+    pub fn is_empty(&self) -> bool {
+        self.elem_count == 0
     }
 
     /// Returns the size of each element in bytes.
@@ -88,7 +95,15 @@ pub unsafe extern "C" fn miri_rt_array_new(
     let arr = payload as *mut MiriArray;
 
     if elem_count > 0 && elem_size > 0 {
-        let total = elem_count * elem_size;
+        let total = match elem_count.checked_mul(elem_size) {
+            Some(t) => t,
+            None => {
+                (*arr).data = ptr::null_mut();
+                (*arr).elem_count = 0;
+                (*arr).elem_size = elem_size;
+                return arr;
+            }
+        };
         let layout = match Layout::from_size_align(total, 8) {
             Ok(l) => l,
             Err(_) => {
@@ -485,11 +500,194 @@ mod tests {
             let arr = miri_rt_array_new(3, std::mem::size_of::<i32>());
             assert!(!arr.is_null());
 
-            // The RC should be at ptr - RC_HEADER_SIZE
             let rc_ptr = (arr as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *const usize;
             assert_eq!(*rc_ptr, 1, "RC should be 1 after creation");
 
             miri_rt_array_free(arr);
+        }
+    }
+
+    #[test]
+    fn test_array_null_safety() {
+        unsafe {
+            assert_eq!(miri_rt_array_len(std::ptr::null()), 0);
+            assert!(miri_rt_array_get(std::ptr::null(), 0).is_null());
+            assert!(miri_rt_array_get_mut(std::ptr::null_mut(), 0).is_null());
+            assert_eq!(miri_rt_array_set(std::ptr::null_mut(), 0, std::ptr::null()), 0);
+            miri_rt_array_fill(std::ptr::null_mut(), std::ptr::null()); // must not crash
+            assert!(miri_rt_array_data(std::ptr::null()).is_null());
+            miri_rt_array_sort(std::ptr::null_mut()); // must not crash
+            miri_rt_array_free(std::ptr::null_mut()); // must not crash
+        }
+    }
+
+    #[test]
+    fn test_array_set_null_elem() {
+        unsafe {
+            let arr = miri_rt_array_new(3, std::mem::size_of::<i32>());
+            assert_eq!(miri_rt_array_set(arr, 0, std::ptr::null()), 0);
+            miri_rt_array_free(arr);
+        }
+    }
+
+    #[test]
+    fn test_array_sort_negative_values() {
+        unsafe {
+            let arr = miri_rt_array_new(5, std::mem::size_of::<i64>());
+            let values = [-10i64, 5, -3, 0, 7];
+            for (i, v) in values.iter().enumerate() {
+                miri_rt_array_set(arr, i, v as *const i64 as *const u8);
+            }
+
+            miri_rt_array_sort(arr);
+
+            assert_eq!(*(miri_rt_array_get(arr, 0) as *const i64), -10);
+            assert_eq!(*(miri_rt_array_get(arr, 1) as *const i64), -3);
+            assert_eq!(*(miri_rt_array_get(arr, 2) as *const i64), 0);
+            assert_eq!(*(miri_rt_array_get(arr, 3) as *const i64), 5);
+            assert_eq!(*(miri_rt_array_get(arr, 4) as *const i64), 7);
+
+            miri_rt_array_free(arr);
+        }
+    }
+
+    #[test]
+    fn test_array_sort_duplicates() {
+        unsafe {
+            let arr = miri_rt_array_new(5, std::mem::size_of::<i64>());
+            let values = [3i64, 1, 3, 2, 1];
+            for (i, v) in values.iter().enumerate() {
+                miri_rt_array_set(arr, i, v as *const i64 as *const u8);
+            }
+
+            miri_rt_array_sort(arr);
+
+            assert_eq!(*(miri_rt_array_get(arr, 0) as *const i64), 1);
+            assert_eq!(*(miri_rt_array_get(arr, 1) as *const i64), 1);
+            assert_eq!(*(miri_rt_array_get(arr, 2) as *const i64), 2);
+            assert_eq!(*(miri_rt_array_get(arr, 3) as *const i64), 3);
+            assert_eq!(*(miri_rt_array_get(arr, 4) as *const i64), 3);
+
+            miri_rt_array_free(arr);
+        }
+    }
+
+    #[test]
+    fn test_array_sort_reverse_sorted() {
+        unsafe {
+            let arr = miri_rt_array_new(4, std::mem::size_of::<i64>());
+            let values = [4i64, 3, 2, 1];
+            for (i, v) in values.iter().enumerate() {
+                miri_rt_array_set(arr, i, v as *const i64 as *const u8);
+            }
+
+            miri_rt_array_sort(arr);
+
+            for i in 0..4 {
+                assert_eq!(*(miri_rt_array_get(arr, i) as *const i64), (i + 1) as i64);
+            }
+
+            miri_rt_array_free(arr);
+        }
+    }
+
+    #[test]
+    fn test_array_sort_single_element() {
+        unsafe {
+            let arr = miri_rt_array_new(1, std::mem::size_of::<i64>());
+            let val = 42i64;
+            miri_rt_array_set(arr, 0, &val as *const i64 as *const u8);
+            miri_rt_array_sort(arr); // must not crash
+            assert_eq!(*(miri_rt_array_get(arr, 0) as *const i64), 42);
+            miri_rt_array_free(arr);
+        }
+    }
+
+    #[test]
+    fn test_array_sort_empty() {
+        unsafe {
+            let arr = miri_rt_array_new(0, std::mem::size_of::<i64>());
+            miri_rt_array_sort(arr); // must not crash
+            miri_rt_array_free(arr);
+        }
+    }
+
+    #[test]
+    fn test_array_clone_empty() {
+        unsafe {
+            let arr = miri_rt_array_new(0, std::mem::size_of::<i32>());
+            let cloned = miri_rt_array_clone(arr);
+            assert_eq!(miri_rt_array_len(cloned), 0);
+            miri_rt_array_free(arr);
+            miri_rt_array_free(cloned);
+        }
+    }
+
+    #[test]
+    fn test_array_clone_null() {
+        unsafe {
+            let cloned = miri_rt_array_clone(std::ptr::null());
+            assert!(!cloned.is_null());
+            assert_eq!(miri_rt_array_len(cloned), 0);
+            miri_rt_array_free(cloned);
+        }
+    }
+
+    #[test]
+    fn test_array_get_mut() {
+        unsafe {
+            let arr = miri_rt_array_new(3, std::mem::size_of::<i32>());
+            let val = 77i32;
+            miri_rt_array_set(arr, 1, &val as *const i32 as *const u8);
+
+            let p = miri_rt_array_get_mut(arr, 1);
+            assert!(!p.is_null());
+            assert_eq!(*(p as *const i32), 77);
+
+            // Write through mutable pointer
+            *(p as *mut i32) = 88;
+            assert_eq!(*(miri_rt_array_get(arr, 1) as *const i32), 88);
+
+            // Out of bounds
+            assert!(miri_rt_array_get_mut(arr, 3).is_null());
+
+            miri_rt_array_free(arr);
+        }
+    }
+
+    #[test]
+    fn test_array_fill_all_elements() {
+        unsafe {
+            let arr = miri_rt_array_new(100, std::mem::size_of::<i64>());
+            let val = 42i64;
+            miri_rt_array_fill(arr, &val as *const i64 as *const u8);
+
+            for i in 0..100 {
+                assert_eq!(*(miri_rt_array_get(arr, i) as *const i64), 42);
+            }
+
+            miri_rt_array_free(arr);
+        }
+    }
+
+    #[test]
+    fn test_array_to_list_empty() {
+        unsafe {
+            let arr = miri_rt_array_new(0, std::mem::size_of::<i32>());
+            let list = miri_rt_array_to_list(arr);
+            assert_eq!(crate::miri_rt_list_len(list), 0);
+            crate::miri_rt_list_free(list);
+            miri_rt_array_free(arr);
+        }
+    }
+
+    #[test]
+    fn test_array_to_list_null() {
+        unsafe {
+            let list = miri_rt_array_to_list(std::ptr::null());
+            assert!(!list.is_null());
+            assert_eq!(crate::miri_rt_list_len(list), 0);
+            crate::miri_rt_list_free(list);
         }
     }
 }

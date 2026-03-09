@@ -77,23 +77,38 @@ impl MiriSet {
         None
     }
 
-    /// Finds a slot for insertion (returns first empty or tombstone slot).
+    /// Finds a slot for insertion.
+    ///
+    /// Continues probing past tombstones to check for existing duplicates
+    /// further in the probe chain. Returns the first available slot
+    /// (tombstone or empty) only after confirming no duplicate exists.
     unsafe fn find_insert_slot(&self, elem: *const u8) -> usize {
         let hash = fnv1a(elem, self.elem_size);
         let mut idx = (hash as usize) % self.capacity;
-        loop {
+        let mut first_tombstone: Option<usize> = None;
+        for _ in 0..self.capacity {
             let state = *self.states.add(idx);
-            if state == SLOT_EMPTY || state == SLOT_TOMBSTONE {
-                return idx;
-            }
-            if state == SLOT_OCCUPIED {
-                let slot_data = self.data.add(idx * self.elem_size);
-                if Self::bytes_equal(slot_data, elem, self.elem_size) {
-                    return idx; // duplicate
+            match state {
+                SLOT_EMPTY => {
+                    return first_tombstone.unwrap_or(idx);
                 }
+                SLOT_OCCUPIED => {
+                    let slot_data = self.data.add(idx * self.elem_size);
+                    if Self::bytes_equal(slot_data, elem, self.elem_size) {
+                        return idx; // duplicate found
+                    }
+                }
+                SLOT_TOMBSTONE => {
+                    if first_tombstone.is_none() {
+                        first_tombstone = Some(idx);
+                    }
+                }
+                _ => {}
             }
             idx = (idx + 1) % self.capacity;
         }
+        // Table is full (shouldn't happen with proper load factor)
+        first_tombstone.unwrap_or(0)
     }
 
     fn bytes_equal(a: *const u8, b: *const u8, len: usize) -> bool {
@@ -117,7 +132,10 @@ impl MiriSet {
 
     unsafe fn alloc_tables(&mut self, capacity: usize) {
         let states_layout = Layout::from_size_align(capacity, 1).unwrap_or_else(|_| std::process::abort());
-        let data_layout = Layout::from_size_align(capacity * self.elem_size, 8).unwrap_or_else(|_| std::process::abort());
+        let data_size = capacity
+            .checked_mul(self.elem_size)
+            .unwrap_or_else(|| std::process::abort());
+        let data_layout = Layout::from_size_align(data_size, 8).unwrap_or_else(|_| std::process::abort());
         self.states = alloc_zeroed(states_layout);
         self.data = alloc_zeroed(data_layout);
         self.capacity = capacity;
@@ -468,6 +486,160 @@ mod tests {
 
             let rc_ptr = (set as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *const usize;
             assert_eq!(*rc_ptr, 1, "RC should be 1 after creation");
+
+            miri_rt_set_free(set);
+        }
+    }
+
+    /// Regression test for tombstone probe-chain bug:
+    /// After removing an element, re-adding a colliding element must not
+    /// create a duplicate.
+    #[test]
+    fn test_set_remove_then_readd_no_duplicate() {
+        unsafe {
+            let set = miri_rt_set_new(8);
+
+            // Insert values that may collide in the hash table
+            for i in 0..6usize {
+                miri_rt_set_add(set, i);
+            }
+            assert_eq!(miri_rt_set_len(set), 6);
+
+            // Remove some elements (creates tombstones)
+            miri_rt_set_remove(set, 1);
+            miri_rt_set_remove(set, 3);
+            assert_eq!(miri_rt_set_len(set), 4);
+
+            // Re-add a value that still exists — must be a no-op
+            assert_eq!(miri_rt_set_add(set, 2), 0); // duplicate
+            assert_eq!(miri_rt_set_len(set), 4);
+
+            // Re-add removed values — should work
+            assert_eq!(miri_rt_set_add(set, 1), 1);
+            assert_eq!(miri_rt_set_add(set, 3), 1);
+            assert_eq!(miri_rt_set_len(set), 6);
+
+            // Adding them again must be a no-op
+            assert_eq!(miri_rt_set_add(set, 1), 0);
+            assert_eq!(miri_rt_set_add(set, 3), 0);
+            assert_eq!(miri_rt_set_len(set), 6);
+
+            // All values must be present
+            for i in 0..6usize {
+                assert_eq!(miri_rt_set_contains(set, i), 1, "missing element {i}");
+            }
+
+            miri_rt_set_free(set);
+        }
+    }
+
+    #[test]
+    fn test_set_heavy_remove_readd_cycle() {
+        unsafe {
+            let set = miri_rt_set_new(8);
+
+            // Insert 50 elements
+            for i in 0..50usize {
+                miri_rt_set_add(set, i);
+            }
+            assert_eq!(miri_rt_set_len(set), 50);
+
+            // Remove even numbers
+            for i in (0..50usize).step_by(2) {
+                miri_rt_set_remove(set, i);
+            }
+            assert_eq!(miri_rt_set_len(set), 25);
+
+            // Verify odd numbers still present, even numbers gone
+            for i in 0..50usize {
+                if i % 2 == 0 {
+                    assert_eq!(miri_rt_set_contains(set, i), 0);
+                } else {
+                    assert_eq!(miri_rt_set_contains(set, i), 1);
+                }
+            }
+
+            // Re-add even numbers
+            for i in (0..50usize).step_by(2) {
+                assert_eq!(miri_rt_set_add(set, i), 1);
+            }
+            assert_eq!(miri_rt_set_len(set), 50);
+
+            // All should be present
+            for i in 0..50usize {
+                assert_eq!(miri_rt_set_contains(set, i), 1);
+            }
+
+            miri_rt_set_free(set);
+        }
+    }
+
+    #[test]
+    fn test_set_null_safety() {
+        unsafe {
+            assert_eq!(miri_rt_set_len(std::ptr::null()), 0);
+            assert_eq!(miri_rt_set_is_empty(std::ptr::null()), 1);
+            assert_eq!(miri_rt_set_add(std::ptr::null_mut(), 42), 0);
+            assert_eq!(miri_rt_set_contains(std::ptr::null(), 42), 0);
+            assert_eq!(miri_rt_set_remove(std::ptr::null_mut(), 42), 0);
+            assert_eq!(miri_rt_set_element_at(std::ptr::null(), 0), 0);
+            miri_rt_set_clear(std::ptr::null_mut()); // must not crash
+            miri_rt_set_free(std::ptr::null_mut()); // must not crash
+        }
+    }
+
+    #[test]
+    fn test_set_element_at_out_of_bounds() {
+        unsafe {
+            let set = miri_rt_set_new(8);
+            miri_rt_set_add(set, 42);
+
+            assert_eq!(miri_rt_set_element_at(set, 0), 42);
+            assert_eq!(miri_rt_set_element_at(set, 1), 0); // out of bounds
+            assert_eq!(miri_rt_set_element_at(set, 100), 0);
+
+            miri_rt_set_free(set);
+        }
+    }
+
+    #[test]
+    fn test_set_clear_then_reuse() {
+        unsafe {
+            let set = miri_rt_set_new(8);
+
+            for i in 0..10usize {
+                miri_rt_set_add(set, i);
+            }
+            miri_rt_set_clear(set);
+
+            // Should be able to add elements again
+            for i in 100..110usize {
+                miri_rt_set_add(set, i);
+            }
+            assert_eq!(miri_rt_set_len(set), 10);
+
+            // Old elements gone, new ones present
+            assert_eq!(miri_rt_set_contains(set, 0), 0);
+            assert_eq!(miri_rt_set_contains(set, 100), 1);
+
+            miri_rt_set_free(set);
+        }
+    }
+
+    #[test]
+    fn test_set_single_element() {
+        unsafe {
+            let set = miri_rt_set_new(8);
+
+            miri_rt_set_add(set, 99);
+            assert_eq!(miri_rt_set_len(set), 1);
+            assert_eq!(miri_rt_set_is_empty(set), 0);
+            assert_eq!(miri_rt_set_contains(set, 99), 1);
+            assert_eq!(miri_rt_set_element_at(set, 0), 99);
+
+            miri_rt_set_remove(set, 99);
+            assert_eq!(miri_rt_set_len(set), 0);
+            assert_eq!(miri_rt_set_is_empty(set), 1);
 
             miri_rt_set_free(set);
         }
