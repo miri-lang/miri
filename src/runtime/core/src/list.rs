@@ -91,10 +91,12 @@ impl MiriList {
         let new_capacity = std::cmp::max(self.capacity.saturating_mul(2), required);
         let new_capacity = std::cmp::max(new_capacity, 4); // Minimum capacity
 
-        let new_size = new_capacity * self.elem_size;
+        let new_size = new_capacity
+            .checked_mul(self.elem_size)
+            .unwrap_or_else(|| std::process::abort());
         let layout = match Layout::from_size_align(new_size, 8) {
             Ok(layout) => layout,
-            Err(_) => std::process::abort(), // Abort safely rather than risking memory corruption
+            Err(_) => std::process::abort(),
         };
 
         let new_data = if self.data.is_null() {
@@ -366,6 +368,7 @@ pub unsafe extern "C" fn miri_rt_list_is_empty(ptr: *const MiriList) -> u8 {
 /// This works for all primitive element types (int, float, bool, pointers)
 /// which fit in a single register.
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_list_push(ptr: *mut MiriList, val: usize) {
     if ptr.is_null() {
         return;
@@ -793,13 +796,411 @@ mod tests {
     fn test_ffi_list_push() {
         unsafe {
             let list = miri_rt_list_new(std::mem::size_of::<usize>());
-            // FFI push takes usize values directly
             miri_rt_list_push(list, 42);
             miri_rt_list_push(list, 100);
 
             assert_eq!(miri_rt_list_len(list), 2);
             assert_eq!(*(miri_rt_list_get(list, 0) as *const usize), 42);
             assert_eq!(*(miri_rt_list_get(list, 1) as *const usize), 100);
+
+            miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_list_null_safety() {
+        unsafe {
+            assert_eq!(miri_rt_list_len(std::ptr::null()), 0);
+            assert_eq!(miri_rt_list_capacity(std::ptr::null()), 0);
+            assert_eq!(miri_rt_list_is_empty(std::ptr::null()), 1);
+            miri_rt_list_push(std::ptr::null_mut(), 42); // must not crash
+            assert_eq!(miri_rt_list_pop(std::ptr::null_mut()), 0);
+            assert!(miri_rt_list_get(std::ptr::null(), 0).is_null());
+            assert!(miri_rt_list_get_mut(std::ptr::null_mut(), 0).is_null());
+            assert_eq!(miri_rt_list_set(std::ptr::null_mut(), 0, 42), 0);
+            assert_eq!(miri_rt_list_insert(std::ptr::null_mut(), 0, 42), 0);
+            assert_eq!(miri_rt_list_remove(std::ptr::null_mut(), 0), 0);
+            miri_rt_list_clear(std::ptr::null_mut()); // must not crash
+            assert!(miri_rt_list_first(std::ptr::null()).is_null());
+            assert!(miri_rt_list_last(std::ptr::null()).is_null());
+            miri_rt_list_sort(std::ptr::null_mut()); // must not crash
+            miri_rt_list_reverse(std::ptr::null_mut()); // must not crash
+            miri_rt_list_free(std::ptr::null_mut()); // must not crash
+        }
+    }
+
+    #[test]
+    fn test_list_empty_operations() {
+        unsafe {
+            let list = miri_rt_list_new(std::mem::size_of::<i32>());
+
+            assert_eq!(miri_rt_list_is_empty(list), 1);
+            assert_eq!(miri_rt_list_pop(list), 0);
+            assert!(miri_rt_list_first(list).is_null());
+            assert!(miri_rt_list_last(list).is_null());
+            assert!(miri_rt_list_get(list, 0).is_null());
+            assert_eq!(miri_rt_list_set(list, 0, 42), 0);
+            assert_eq!(miri_rt_list_remove(list, 0), 0);
+
+            miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_list_insert_at_beginning() {
+        unsafe {
+            let list = make_i32_list(&[2, 3, 4]);
+
+            let val = 1i32;
+            assert!((*list).insert(0, &val as *const i32 as *const u8));
+            assert_eq!(miri_rt_list_len(list), 4);
+            assert_eq!(*(miri_rt_list_get(list, 0) as *const i32), 1);
+            assert_eq!(*(miri_rt_list_get(list, 1) as *const i32), 2);
+
+            miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_list_insert_at_end() {
+        unsafe {
+            let list = make_i32_list(&[1, 2, 3]);
+
+            let val = 4i32;
+            assert!((*list).insert(3, &val as *const i32 as *const u8));
+            assert_eq!(miri_rt_list_len(list), 4);
+            assert_eq!(*(miri_rt_list_get(list, 3) as *const i32), 4);
+
+            miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_list_insert_out_of_bounds() {
+        unsafe {
+            let list = make_i32_list(&[1, 2]);
+
+            let val = 99i32;
+            assert!(!(*list).insert(5, &val as *const i32 as *const u8));
+            assert_eq!(miri_rt_list_len(list), 2); // unchanged
+
+            miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_list_remove_first() {
+        unsafe {
+            let list = make_i32_list(&[10, 20, 30]);
+
+            let mut removed: i32 = 0;
+            assert!((*list).remove(0, &mut removed as *mut i32 as *mut u8));
+            assert_eq!(removed, 10);
+            assert_eq!(miri_rt_list_len(list), 2);
+            assert_eq!(*(miri_rt_list_get(list, 0) as *const i32), 20);
+
+            miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_list_remove_last() {
+        unsafe {
+            let list = make_i32_list(&[10, 20, 30]);
+
+            let mut removed: i32 = 0;
+            assert!((*list).remove(2, &mut removed as *mut i32 as *mut u8));
+            assert_eq!(removed, 30);
+            assert_eq!(miri_rt_list_len(list), 2);
+
+            miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_list_remove_out_of_bounds() {
+        unsafe {
+            let list = make_i32_list(&[1, 2]);
+
+            let mut removed: i32 = 0;
+            assert!(!(*list).remove(5, &mut removed as *mut i32 as *mut u8));
+            assert_eq!(miri_rt_list_len(list), 2); // unchanged
+
+            miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_list_first_last() {
+        unsafe {
+            let list = make_i32_list(&[10, 20, 30]);
+
+            assert_eq!(*(miri_rt_list_first(list) as *const i32), 10);
+            assert_eq!(*(miri_rt_list_last(list) as *const i32), 30);
+
+            miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_list_first_last_single() {
+        unsafe {
+            let list = make_i32_list(&[42]);
+
+            assert_eq!(*(miri_rt_list_first(list) as *const i32), 42);
+            assert_eq!(*(miri_rt_list_last(list) as *const i32), 42);
+
+            miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_list_sort_negative_values() {
+        unsafe {
+            let list = miri_rt_list_new(std::mem::size_of::<usize>());
+            // Use i64 values cast through usize FFI interface
+            miri_rt_list_push(list, (-5i64) as usize);
+            miri_rt_list_push(list, 3usize);
+            miri_rt_list_push(list, (-1i64) as usize);
+            miri_rt_list_push(list, 0usize);
+
+            miri_rt_list_sort(list);
+
+            assert_eq!(*(miri_rt_list_get(list, 0) as *const i64), -5);
+            assert_eq!(*(miri_rt_list_get(list, 1) as *const i64), -1);
+            assert_eq!(*(miri_rt_list_get(list, 2) as *const i64), 0);
+            assert_eq!(*(miri_rt_list_get(list, 3) as *const i64), 3);
+
+            miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_list_sort_duplicates() {
+        unsafe {
+            let list = miri_rt_list_new(std::mem::size_of::<usize>());
+            miri_rt_list_push(list, 3usize);
+            miri_rt_list_push(list, 1usize);
+            miri_rt_list_push(list, 3usize);
+            miri_rt_list_push(list, 2usize);
+            miri_rt_list_push(list, 1usize);
+            miri_rt_list_sort(list);
+
+            assert_eq!(*(miri_rt_list_get(list, 0) as *const usize), 1);
+            assert_eq!(*(miri_rt_list_get(list, 1) as *const usize), 1);
+            assert_eq!(*(miri_rt_list_get(list, 2) as *const usize), 2);
+            assert_eq!(*(miri_rt_list_get(list, 3) as *const usize), 3);
+            assert_eq!(*(miri_rt_list_get(list, 4) as *const usize), 3);
+
+            miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_list_sort_empty() {
+        unsafe {
+            let list = miri_rt_list_new(std::mem::size_of::<usize>());
+            miri_rt_list_sort(list); // must not crash
+            assert_eq!(miri_rt_list_len(list), 0);
+            miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_list_reverse_even_count() {
+        unsafe {
+            let list = make_i32_list(&[1, 2, 3, 4]);
+            miri_rt_list_reverse(list);
+
+            assert_eq!(*(miri_rt_list_get(list, 0) as *const i32), 4);
+            assert_eq!(*(miri_rt_list_get(list, 1) as *const i32), 3);
+            assert_eq!(*(miri_rt_list_get(list, 2) as *const i32), 2);
+            assert_eq!(*(miri_rt_list_get(list, 3) as *const i32), 1);
+
+            miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_list_reverse_single() {
+        unsafe {
+            let list = make_i32_list(&[42]);
+            miri_rt_list_reverse(list); // must not crash
+            assert_eq!(*(miri_rt_list_get(list, 0) as *const i32), 42);
+            miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_list_reverse_empty() {
+        unsafe {
+            let list = miri_rt_list_new(std::mem::size_of::<i32>());
+            miri_rt_list_reverse(list); // must not crash
+            assert_eq!(miri_rt_list_len(list), 0);
+            miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_list_clone_empty() {
+        unsafe {
+            let list = miri_rt_list_new(std::mem::size_of::<i32>());
+            let cloned = miri_rt_list_clone(list);
+            assert_eq!(miri_rt_list_len(cloned), 0);
+            miri_rt_list_free(list);
+            miri_rt_list_free(cloned);
+        }
+    }
+
+    #[test]
+    fn test_list_clone_null() {
+        unsafe {
+            let cloned = miri_rt_list_clone(std::ptr::null());
+            assert!(!cloned.is_null());
+            assert_eq!(miri_rt_list_len(cloned), 0);
+            miri_rt_list_free(cloned);
+        }
+    }
+
+    #[test]
+    fn test_list_clone_independence() {
+        unsafe {
+            let list = make_i32_list(&[1, 2, 3]);
+            let cloned = miri_rt_list_clone(list);
+
+            // Modify original
+            let val = 99i32;
+            (*list).set(0, &val as *const i32 as *const u8);
+
+            // Clone unaffected
+            assert_eq!(*(miri_rt_list_get(cloned, 0) as *const i32), 1);
+
+            miri_rt_list_free(list);
+            miri_rt_list_free(cloned);
+        }
+    }
+
+    #[test]
+    fn test_list_with_capacity() {
+        unsafe {
+            let list = miri_rt_list_with_capacity(std::mem::size_of::<usize>(), 10);
+            assert!(!list.is_null());
+            assert_eq!(miri_rt_list_len(list), 0);
+            assert!(miri_rt_list_capacity(list) >= 10);
+
+            // Push should work without reallocation
+            for i in 0..10usize {
+                miri_rt_list_push(list, i);
+            }
+            assert_eq!(miri_rt_list_len(list), 10);
+
+            miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_list_clear() {
+        unsafe {
+            let list = make_i32_list(&[1, 2, 3]);
+            miri_rt_list_clear(list);
+            assert_eq!(miri_rt_list_len(list), 0);
+            assert_eq!(miri_rt_list_is_empty(list), 1);
+
+            // Can push again after clear
+            let val = 99i32;
+            (*list).push(&val as *const i32 as *const u8);
+            assert_eq!(miri_rt_list_len(list), 1);
+            assert_eq!(*(miri_rt_list_get(list, 0) as *const i32), 99);
+
+            miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_list_growth_stress() {
+        unsafe {
+            let list = miri_rt_list_new(std::mem::size_of::<usize>());
+
+            // Push many elements to trigger multiple reallocations
+            for i in 0..1000usize {
+                miri_rt_list_push(list, i);
+            }
+            assert_eq!(miri_rt_list_len(list), 1000);
+
+            // Verify all values
+            for i in 0..1000usize {
+                assert_eq!(*(miri_rt_list_get(list, i) as *const usize), i);
+            }
+
+            miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_list_ffi_remove() {
+        unsafe {
+            let list = miri_rt_list_new(std::mem::size_of::<usize>());
+            miri_rt_list_push(list, 10usize);
+            miri_rt_list_push(list, 20usize);
+            miri_rt_list_push(list, 30usize);
+
+            assert_eq!(miri_rt_list_remove(list, 1), 1);
+            assert_eq!(miri_rt_list_len(list), 2);
+            assert_eq!(*(miri_rt_list_get(list, 0) as *const usize), 10);
+            assert_eq!(*(miri_rt_list_get(list, 1) as *const usize), 30);
+
+            // Out of bounds
+            assert_eq!(miri_rt_list_remove(list, 5), 0);
+
+            miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_list_ffi_insert() {
+        unsafe {
+            let list = miri_rt_list_new(std::mem::size_of::<usize>());
+            miri_rt_list_push(list, 1usize);
+            miri_rt_list_push(list, 3usize);
+
+            assert_eq!(miri_rt_list_insert(list, 1, 2usize), 1);
+            assert_eq!(miri_rt_list_len(list), 3);
+            assert_eq!(*(miri_rt_list_get(list, 0) as *const usize), 1);
+            assert_eq!(*(miri_rt_list_get(list, 1) as *const usize), 2);
+            assert_eq!(*(miri_rt_list_get(list, 2) as *const usize), 3);
+
+            // Out of bounds
+            assert_eq!(miri_rt_list_insert(list, 10, 99usize), 0);
+
+            miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_list_ffi_set() {
+        unsafe {
+            let list = miri_rt_list_new(std::mem::size_of::<usize>());
+            miri_rt_list_push(list, 1usize);
+            miri_rt_list_push(list, 2usize);
+
+            assert_eq!(miri_rt_list_set(list, 0, 99usize), 1);
+            assert_eq!(*(miri_rt_list_get(list, 0) as *const usize), 99);
+
+            // Out of bounds
+            assert_eq!(miri_rt_list_set(list, 5, 99usize), 0);
+
+            miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_list_rc_header() {
+        unsafe {
+            let list = miri_rt_list_new(std::mem::size_of::<i32>());
+            assert!(!list.is_null());
+
+            let rc_ptr = (list as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *const usize;
+            assert_eq!(*rc_ptr, 1, "RC should be 1 after creation");
 
             miri_rt_list_free(list);
         }

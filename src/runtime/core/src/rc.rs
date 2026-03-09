@@ -52,6 +52,9 @@ extern "C" fn leak_check_at_exit() {
 /// returned pointer. To free, use [`free_with_rc`].
 ///
 /// Returns null if allocation fails.
+///
+/// # Safety
+/// Caller must ensure `payload_size` is correct for the type being allocated.
 pub unsafe fn alloc_with_rc(payload_size: usize) -> *mut u8 {
     ensure_leak_check_registered();
 
@@ -79,6 +82,10 @@ pub unsafe fn alloc_with_rc(payload_size: usize) -> *mut u8 {
 ///
 /// The caller must have already cleaned up any resources owned by
 /// the payload (e.g., freeing a data buffer inside a MiriArray).
+///
+/// # Safety
+/// - `payload_ptr` must have been returned by [`alloc_with_rc`], or be null.
+/// - `payload_size` must match the size used in the corresponding `alloc_with_rc` call.
 pub unsafe fn free_with_rc(payload_ptr: *mut u8, payload_size: usize) {
     if payload_ptr.is_null() {
         return;
