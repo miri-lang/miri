@@ -48,6 +48,12 @@ pub fn field_layout(
     let ptr_size = ptr_ty.bytes() as i32;
     match local_type {
         TypeKind::Tuple(element_exprs) => {
+            debug_assert!(
+                field_idx < element_exprs.len(),
+                "field_layout: tuple field index {} out of range (len {})",
+                field_idx,
+                element_exprs.len()
+            );
             let mut offset: i32 = 0;
             for (i, elem_expr) in element_exprs.iter().enumerate() {
                 let cl_ty = type_from_expression(elem_expr, ptr_ty);
@@ -58,13 +64,20 @@ pub fn field_layout(
                 }
                 offset += cl_ty.bytes() as i32;
             }
-            // Fallback if field_idx is out of range
+            // Unreachable if debug_assert passed; fallback for release builds
             (offset, ptr_ty)
         }
         TypeKind::Custom(name, _) => {
             if let Some(def) = type_definitions.get(name) {
                 match def {
                     TypeDefinition::Struct(struct_def) => {
+                        debug_assert!(
+                            field_idx < struct_def.fields.len(),
+                            "field_layout: struct '{}' field index {} out of range (len {})",
+                            name,
+                            field_idx,
+                            struct_def.fields.len()
+                        );
                         let mut offset: i32 = 0;
                         for (i, (_field_name, field_ty, _vis)) in
                             struct_def.fields.iter().enumerate()
@@ -77,6 +90,7 @@ pub fn field_layout(
                             }
                             offset += cl_ty.bytes() as i32;
                         }
+                        // Unreachable if debug_assert passed; fallback for release builds
                         (offset, ptr_ty)
                     }
                     TypeDefinition::Enum(_) => {
@@ -90,9 +104,17 @@ pub fn field_layout(
                             (payload_offset, ptr_ty)
                         }
                     }
-                    // Generic, Alias, Class, Trait — assume pointer-sized fields
+                    TypeDefinition::Alias(alias_def) => {
+                        // Resolve through the alias to the underlying type's layout
+                        field_layout(
+                            &alias_def.template.kind,
+                            field_idx,
+                            type_definitions,
+                            ptr_ty,
+                        )
+                    }
+                    // Generic, Class, Trait — assume pointer-sized fields
                     TypeDefinition::Generic(_)
-                    | TypeDefinition::Alias(_)
                     | TypeDefinition::Class(_)
                     | TypeDefinition::Trait(_) => ((field_idx as i32) * ptr_size, ptr_ty),
                 }
@@ -157,9 +179,12 @@ pub fn aggregate_size(
                             .unwrap_or(0);
                         ptr_size + max_payload
                     }
-                    // Generic, Alias, Class, Trait — pointer-sized
+                    TypeDefinition::Alias(alias_def) => {
+                        // Resolve through the alias to the underlying type's layout
+                        aggregate_size(&alias_def.template.kind, type_definitions, ptr_ty)
+                    }
+                    // Generic, Class, Trait — pointer-sized
                     TypeDefinition::Generic(_)
-                    | TypeDefinition::Alias(_)
                     | TypeDefinition::Class(_)
                     | TypeDefinition::Trait(_) => ptr_size,
                 }
