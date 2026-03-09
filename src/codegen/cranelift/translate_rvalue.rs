@@ -28,25 +28,42 @@ impl<'a> FunctionTranslator<'a> {
                 let size = Self::translate_operand(builder, ctx, size_op, locals, type_ctx)?;
                 let align = Self::translate_operand(builder, ctx, align_op, locals, type_ctx)?;
 
-                // For now, we use libc malloc which doesn't take alignment directly.
-                // We'd need aligned_alloc for full support.
-                // However, we MUST still ensure the RC header doesn't break alignment.
-                // We'll over-allocate and align the payload.
-
-                // Header is ptr_size
+                // Layout: [padding][malloc_ptr][RC][payload...]
+                //
+                // We over-allocate so the payload can be aligned. The RC header
+                // lives at (payload - ptr_size), and the real malloc pointer is
+                // stored at (payload - 2*ptr_size). This lets free() recover the
+                // original pointer even when alignment shifts the payload.
+                let header_overhead = builder.ins().iconst(ptr_type, 2 * ptr_size as i64);
                 let total_size = builder.ins().iadd(size, align);
-                let total_size = builder.ins().iadd_imm(total_size, ptr_size as i64);
+                let total_size = builder.ins().iadd(total_size, header_overhead);
 
                 let raw_ptr = Self::call_libc_malloc(builder, ctx, total_size)?;
 
-                // Payload starts at align_to(raw_ptr + ptr_size, align)
-                let payload_base = builder.ins().iadd_imm(raw_ptr, ptr_size as i64);
+                // Null-check: trap on OOM
+                let null = builder.ins().iconst(ptr_type, 0);
+                let is_null = builder.ins().icmp(
+                    cranelift_codegen::ir::condcodes::IntCC::Equal,
+                    raw_ptr,
+                    null,
+                );
+                let trap_code = TrapCode::user(2).expect("valid user trap code");
+                builder.ins().trapnz(is_null, trap_code);
+
+                // Payload starts at align_to(raw_ptr + 2*ptr_size, align)
+                let payload_base = builder.ins().iadd(raw_ptr, header_overhead);
                 let mask = builder.ins().ineg(align);
                 let align_minus_1 = builder.ins().iadd_imm(align, -1);
                 let bumped = builder.ins().iadd(payload_base, align_minus_1);
                 let ptr = builder.ins().band(bumped, mask);
 
-                // RC header lives at (ptr - ptr_size)
+                // Store the real malloc pointer at (ptr - 2*ptr_size)
+                let malloc_slot = builder.ins().iadd_imm(ptr, -(2 * ptr_size as i64));
+                builder
+                    .ins()
+                    .store(MemFlags::new(), raw_ptr, malloc_slot, 0);
+
+                // RC header lives at (ptr - ptr_size), initialize to 1
                 let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size as i64));
                 let one = builder.ins().iconst(ptr_type, 1);
                 builder.ins().store(MemFlags::new(), one, header_ptr, 0);
@@ -60,7 +77,11 @@ impl<'a> FunctionTranslator<'a> {
             Rvalue::BinaryOp(op, lhs, rhs) => {
                 let lhs_val = Self::translate_operand(builder, ctx, lhs, locals, type_ctx)?;
                 let rhs_val = Self::translate_operand(builder, ctx, rhs, locals, type_ctx)?;
-                Self::translate_binop(builder, *op, lhs_val, rhs_val)
+                // Determine signedness from the operand types so we can
+                // select unsigned comparison/shift/division when appropriate.
+                let is_unsigned = Self::operand_is_unsigned(lhs, type_ctx)
+                    || Self::operand_is_unsigned(rhs, type_ctx);
+                Self::translate_binop(builder, ctx, *op, lhs_val, rhs_val, is_unsigned)
             }
 
             Rvalue::UnaryOp(op, operand) => {
@@ -267,17 +288,32 @@ impl<'a> FunctionTranslator<'a> {
 
                     let total_size = (current_offset + max_align - 1) & !(max_align - 1);
 
-                    // Heap-allocate with RC header
+                    // Heap-allocate with [malloc_ptr][RC][payload] header.
+                    // malloc_ptr is stored so free() can recover the original pointer.
+                    let header_size = 2 * ptr_size as u32;
                     let alloc_size = builder
                         .ins()
-                        .iconst(ptr_type, (total_size + ptr_size as u32) as i64);
+                        .iconst(ptr_type, (total_size + header_size) as i64);
                     let raw_ptr = Self::call_libc_malloc(builder, ctx, alloc_size)?;
 
-                    // Store RC = 1
-                    let one = builder.ins().iconst(ptr_type, 1);
-                    builder.ins().store(MemFlags::new(), one, raw_ptr, 0);
+                    // Null-check: trap on OOM
+                    let null = builder.ins().iconst(ptr_type, 0);
+                    let is_null = builder.ins().icmp(
+                        cranelift_codegen::ir::condcodes::IntCC::Equal,
+                        raw_ptr,
+                        null,
+                    );
+                    let trap_code = TrapCode::user(2).expect("valid user trap code");
+                    builder.ins().trapnz(is_null, trap_code);
 
-                    let payload_ptr = builder.ins().iadd_imm(raw_ptr, ptr_size as i64);
+                    // Store real malloc pointer at offset 0
+                    builder.ins().store(MemFlags::new(), raw_ptr, raw_ptr, 0);
+
+                    // Store RC = 1 at offset ptr_size
+                    let one = builder.ins().iconst(ptr_type, 1);
+                    builder.ins().store(MemFlags::new(), one, raw_ptr, ptr_size);
+
+                    let payload_ptr = builder.ins().iadd_imm(raw_ptr, header_size as i64);
 
                     for (i, val) in translated.into_iter().enumerate() {
                         builder.ins().store(
@@ -296,68 +332,34 @@ impl<'a> FunctionTranslator<'a> {
                 let value = Self::translate_operand(builder, ctx, operand, locals, type_ctx)?;
                 let dest_ty = translate_type(ty, ptr_type);
                 let src_ty = builder.func.dfg.value_type(value);
+                let is_unsigned = Self::is_unsigned_type_kind(&ty.kind);
 
-                Self::cast_value(builder, value, src_ty, dest_ty)
+                Self::cast_value_with_sign(builder, value, src_ty, dest_ty, is_unsigned)
             }
 
             Rvalue::Len(place) => {
                 let ty = type_ctx.local_types[place.local.0];
 
-                if Self::is_collection_type(&ty.kind) {
-                    let ptr = Self::read_place(builder, place, locals, type_ctx)?;
-
-                    // Handle null pointer (empty collection)
-                    let is_null = builder.ins().icmp_imm(
-                        cranelift_codegen::ir::condcodes::IntCC::Equal,
-                        ptr,
-                        0,
-                    );
-
-                    let null_bb = builder.create_block();
-                    let load_bb = builder.create_block();
-                    let merge_bb = builder.create_block();
-
-                    let len_var = builder.declare_var(ptr_type);
-
-                    builder.ins().brif(is_null, null_bb, &[], load_bb, &[]);
-
-                    builder.switch_to_block(null_bb);
-                    let zero = builder.ins().iconst(ptr_type, 0);
-                    builder.def_var(len_var, zero);
-                    builder.ins().jump(merge_bb, &[]);
-                    builder.seal_block(null_bb);
-
-                    // MiriArray.elem_count, MiriList.len, MiriSet.len are at offset ptr_size.
-                    // MiriMap.len is at offset 3*ptr_size (after states, keys, values).
-                    builder.switch_to_block(load_bb);
-                    let len_offset = if Self::is_map_type(&ty.kind) {
+                let len_offset = if Self::is_collection_type(&ty.kind) {
+                    // MiriArray.elem_count, MiriList.len, MiriSet.len at offset ptr_size.
+                    // MiriMap.len at offset 3*ptr_size (after states, keys, values).
+                    Some(if Self::is_map_type(&ty.kind) {
                         ptr_size * 3
                     } else {
                         ptr_size
-                    };
-                    let len = builder
-                        .ins()
-                        .load(ptr_type, MemFlags::new(), ptr, len_offset);
-                    builder.def_var(len_var, len);
-                    builder.ins().jump(merge_bb, &[]);
-                    builder.seal_block(load_bb);
-
-                    builder.switch_to_block(merge_bb);
-                    builder.seal_block(merge_bb);
-
-                    Ok(builder.use_var(len_var))
+                    })
                 } else if matches!(&ty.kind, TypeKind::String) {
+                    // MiriString layout past RC: [DataPtr][Len][Cap]
+                    Some(ptr_size)
+                } else {
+                    None
+                };
+
+                if let Some(offset) = len_offset {
                     let ptr = Self::read_place(builder, place, locals, type_ctx)?;
 
-                    // String uses the MiriString layout: [RC][DataPtr][Len][Cap]
-                    // ptr points past the RC header, so Len is at offset ptr_size*2
-                    // Actually, for strings the pointer past RC header has DataPtr at 0,
-                    // Len at ptr_size, Cap at 2*ptr_size
-                    let is_null = builder.ins().icmp_imm(
-                        cranelift_codegen::ir::condcodes::IntCC::Equal,
-                        ptr,
-                        0,
-                    );
+                    // Handle null pointer (empty/uninitialized)
+                    let is_null = builder.ins().icmp_imm(IntCC::Equal, ptr, 0);
                     let null_bb = builder.create_block();
                     let load_bb = builder.create_block();
                     let merge_bb = builder.create_block();
@@ -372,7 +374,7 @@ impl<'a> FunctionTranslator<'a> {
                     builder.seal_block(null_bb);
 
                     builder.switch_to_block(load_bb);
-                    let len = builder.ins().load(ptr_type, MemFlags::new(), ptr, ptr_size);
+                    let len = builder.ins().load(ptr_type, MemFlags::new(), ptr, offset);
                     builder.def_var(len_var, len);
                     builder.ins().jump(merge_bb, &[]);
                     builder.seal_block(load_bb);
@@ -427,19 +429,37 @@ impl<'a> FunctionTranslator<'a> {
 
         match &constant.literal {
             Literal::Integer(int_lit) => {
-                let val = match int_lit {
-                    IntegerLiteral::I8(v) => *v as i64,
-                    IntegerLiteral::I16(v) => *v as i64,
-                    IntegerLiteral::I32(v) => *v as i64,
-                    IntegerLiteral::I64(v) => *v,
-                    IntegerLiteral::I128(v) => *v as i64,
-                    IntegerLiteral::U8(v) => *v as i64,
-                    IntegerLiteral::U16(v) => *v as i64,
-                    IntegerLiteral::U32(v) => *v as i64,
-                    IntegerLiteral::U64(v) => *v as i64,
-                    IntegerLiteral::U128(v) => *v as i64,
-                };
-                Ok(builder.ins().iconst(cl_type, val))
+                match int_lit {
+                    IntegerLiteral::I128(v) => {
+                        // i128 must be built from two 64-bit halves to avoid truncation
+                        let lo = (*v as u128 & 0xFFFF_FFFF_FFFF_FFFF) as i64;
+                        let hi = ((*v as u128) >> 64) as i64;
+                        let lo_val = builder.ins().iconst(cl_types::I64, lo);
+                        let hi_val = builder.ins().iconst(cl_types::I64, hi);
+                        Ok(builder.ins().iconcat(lo_val, hi_val))
+                    }
+                    IntegerLiteral::U128(v) => {
+                        let lo = (*v & 0xFFFF_FFFF_FFFF_FFFF) as i64;
+                        let hi = (*v >> 64) as i64;
+                        let lo_val = builder.ins().iconst(cl_types::I64, lo);
+                        let hi_val = builder.ins().iconst(cl_types::I64, hi);
+                        Ok(builder.ins().iconcat(lo_val, hi_val))
+                    }
+                    _ => {
+                        let val = match int_lit {
+                            IntegerLiteral::I8(v) => *v as i64,
+                            IntegerLiteral::I16(v) => *v as i64,
+                            IntegerLiteral::I32(v) => *v as i64,
+                            IntegerLiteral::I64(v) => *v,
+                            IntegerLiteral::U8(v) => *v as i64,
+                            IntegerLiteral::U16(v) => *v as i64,
+                            IntegerLiteral::U32(v) => *v as i64,
+                            IntegerLiteral::U64(v) => *v as i64,
+                            IntegerLiteral::I128(_) | IntegerLiteral::U128(_) => unreachable!(),
+                        };
+                        Ok(builder.ins().iconst(cl_type, val))
+                    }
+                }
             }
 
             Literal::Float(float_lit) => {
@@ -497,30 +517,40 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
     /// Translate a binary operation.
+    ///
+    /// `is_unsigned` indicates whether the operands are unsigned integer types.
+    /// This affects comparison direction, division, shift, and widening behavior.
     pub(crate) fn translate_binop(
         builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
         op: BinOp,
         lhs: Value,
         rhs: Value,
+        is_unsigned: bool,
     ) -> Result<Value, String> {
         let lhs_ty = builder.func.dfg.value_type(lhs);
         let rhs_ty = builder.func.dfg.value_type(rhs);
 
         // Ensure both operands have the same type by widening the smaller one.
-        // Float operands are promoted (fpromote); integer operands are sign-extended
-        // (sextend) because Miri's integer types default to signed semantics.
         let (lhs, rhs, ty) = if lhs_ty != rhs_ty && !lhs_ty.is_float() && !rhs_ty.is_float() {
-            // Integer widths differ — sign-extend the narrower operand.
+            // Integer widths differ — extend the narrower operand.
             if lhs_ty.bits() > rhs_ty.bits() {
-                let rhs = builder.ins().sextend(lhs_ty, rhs);
+                let rhs = if is_unsigned {
+                    builder.ins().uextend(lhs_ty, rhs)
+                } else {
+                    builder.ins().sextend(lhs_ty, rhs)
+                };
                 (lhs, rhs, lhs_ty)
             } else {
-                let lhs = builder.ins().sextend(rhs_ty, lhs);
+                let lhs = if is_unsigned {
+                    builder.ins().uextend(rhs_ty, lhs)
+                } else {
+                    builder.ins().sextend(rhs_ty, lhs)
+                };
                 (lhs, rhs, rhs_ty)
             }
         } else if lhs_ty != rhs_ty && lhs_ty.is_float() && rhs_ty.is_float() {
-            // Float widths differ (e.g. F32 literal used in an F64 expression) —
-            // promote the narrower float to the wider one.
+            // Float widths differ — promote the narrower float.
             if lhs_ty.bits() > rhs_ty.bits() {
                 let rhs = builder.ins().fpromote(lhs_ty, rhs);
                 (lhs, rhs, lhs_ty)
@@ -559,26 +589,51 @@ impl<'a> FunctionTranslator<'a> {
                 if is_float {
                     builder.ins().fdiv(lhs, rhs)
                 } else {
-                    // Check for division by zero
                     builder.ins().trapz(rhs, TrapCode::INTEGER_DIVISION_BY_ZERO);
-                    // Signed division
-                    builder.ins().sdiv(lhs, rhs)
+                    if is_unsigned {
+                        builder.ins().udiv(lhs, rhs)
+                    } else {
+                        builder.ins().sdiv(lhs, rhs)
+                    }
                 }
             }
             BinOp::Rem => {
                 if is_float {
-                    return Err("Floating point remainder not directly supported".to_string());
+                    // Float remainder via libcall to fmod/fmodf
+                    let func_name = if ty == cl_types::F32 { "fmodf" } else { "fmod" };
+                    let mut sig =
+                        cranelift_codegen::ir::Signature::new(builder.func.signature.call_conv);
+                    sig.params.push(cranelift_codegen::ir::AbiParam::new(ty));
+                    sig.params.push(cranelift_codegen::ir::AbiParam::new(ty));
+                    sig.returns.push(cranelift_codegen::ir::AbiParam::new(ty));
+
+                    let func_id = ctx
+                        .module
+                        .declare_function(func_name, Linkage::Import, &sig)
+                        .map_err(|e| format!("Failed to declare {}: {}", func_name, e))?;
+                    let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+                    let call = builder.ins().call(local_func, &[lhs, rhs]);
+                    builder.inst_results(call)[0]
                 } else {
-                    // Check for division by zero
                     builder.ins().trapz(rhs, TrapCode::INTEGER_DIVISION_BY_ZERO);
-                    builder.ins().srem(lhs, rhs)
+                    if is_unsigned {
+                        builder.ins().urem(lhs, rhs)
+                    } else {
+                        builder.ins().srem(lhs, rhs)
+                    }
                 }
             }
             BinOp::BitAnd => builder.ins().band(lhs, rhs),
             BinOp::BitOr => builder.ins().bor(lhs, rhs),
             BinOp::BitXor => builder.ins().bxor(lhs, rhs),
             BinOp::Shl => builder.ins().ishl(lhs, rhs),
-            BinOp::Shr => builder.ins().sshr(lhs, rhs),
+            BinOp::Shr => {
+                if is_unsigned {
+                    builder.ins().ushr(lhs, rhs)
+                } else {
+                    builder.ins().sshr(lhs, rhs)
+                }
+            }
 
             // Comparison operations return I8 (bool)
             BinOp::Eq => {
@@ -598,6 +653,8 @@ impl<'a> FunctionTranslator<'a> {
             BinOp::Lt => {
                 if is_float {
                     builder.ins().fcmp(FloatCC::LessThan, lhs, rhs)
+                } else if is_unsigned {
+                    builder.ins().icmp(IntCC::UnsignedLessThan, lhs, rhs)
                 } else {
                     builder.ins().icmp(IntCC::SignedLessThan, lhs, rhs)
                 }
@@ -605,6 +662,8 @@ impl<'a> FunctionTranslator<'a> {
             BinOp::Le => {
                 if is_float {
                     builder.ins().fcmp(FloatCC::LessThanOrEqual, lhs, rhs)
+                } else if is_unsigned {
+                    builder.ins().icmp(IntCC::UnsignedLessThanOrEqual, lhs, rhs)
                 } else {
                     builder.ins().icmp(IntCC::SignedLessThanOrEqual, lhs, rhs)
                 }
@@ -612,6 +671,8 @@ impl<'a> FunctionTranslator<'a> {
             BinOp::Gt => {
                 if is_float {
                     builder.ins().fcmp(FloatCC::GreaterThan, lhs, rhs)
+                } else if is_unsigned {
+                    builder.ins().icmp(IntCC::UnsignedGreaterThan, lhs, rhs)
                 } else {
                     builder.ins().icmp(IntCC::SignedGreaterThan, lhs, rhs)
                 }
@@ -619,6 +680,10 @@ impl<'a> FunctionTranslator<'a> {
             BinOp::Ge => {
                 if is_float {
                     builder.ins().fcmp(FloatCC::GreaterThanOrEqual, lhs, rhs)
+                } else if is_unsigned {
+                    builder
+                        .ins()
+                        .icmp(IntCC::UnsignedGreaterThanOrEqual, lhs, rhs)
                 } else {
                     builder
                         .ins()
@@ -633,6 +698,20 @@ impl<'a> FunctionTranslator<'a> {
 
         Ok(result)
     }
+    /// Returns true if the operand has an unsigned integer type.
+    fn operand_is_unsigned(operand: &Operand, type_ctx: &TypeCtx) -> bool {
+        let kind = match operand {
+            Operand::Copy(place) | Operand::Move(place) => {
+                &type_ctx.local_types[place.local.0].kind
+            }
+            Operand::Constant(c) => &c.ty.kind,
+        };
+        matches!(
+            kind,
+            TypeKind::U8 | TypeKind::U16 | TypeKind::U32 | TypeKind::U64 | TypeKind::U128
+        )
+    }
+
     /// Translate a unary operation.
     pub(crate) fn translate_unop(
         builder: &mut FunctionBuilder,
