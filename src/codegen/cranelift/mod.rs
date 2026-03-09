@@ -204,32 +204,31 @@ impl Backend for CraneliftBackend {
         bodies: &[(&str, &Body)],
         options: &Self::Options,
     ) -> Result<CompiledArtifact, Self::Error> {
-        // Create module settings based on options
-        let mut settings_builder = settings::builder();
-
-        let opt_level_str = match options.opt_level {
-            OptLevel::None => "none",
-            OptLevel::Speed => "speed",
-            OptLevel::SpeedAndSize => "speed_and_size",
-        };
-
-        settings_builder
-            .set("opt_level", opt_level_str)
-            .map_err(|e| CodegenError::Module(e.to_string()))?;
-
-        if options.pic {
+        // Reuse the existing ISA when options match defaults (avoids ISA rebuild).
+        let is_default = options.opt_level == OptLevel::None && options.pic;
+        let isa = if is_default {
+            self.isa.clone()
+        } else {
+            let mut settings_builder = settings::builder();
+            let opt_level_str = match options.opt_level {
+                OptLevel::None => "none",
+                OptLevel::Speed => "speed",
+                OptLevel::SpeedAndSize => "speed_and_size",
+            };
             settings_builder
-                .set("is_pic", "true")
+                .set("opt_level", opt_level_str)
                 .map_err(|e| CodegenError::Module(e.to_string()))?;
-        }
-
-        let flags = settings::Flags::new(settings_builder);
-
-        // Rebuild ISA with new flags
-        let isa = cranelift_codegen::isa::lookup(self.isa.triple().clone())
-            .map_err(|e| CodegenError::TargetIsa(e.to_string()))?
-            .finish(flags)
-            .map_err(|e| CodegenError::TargetIsa(e.to_string()))?;
+            if options.pic {
+                settings_builder
+                    .set("is_pic", "true")
+                    .map_err(|e| CodegenError::Module(e.to_string()))?;
+            }
+            let flags = settings::Flags::new(settings_builder);
+            cranelift_codegen::isa::lookup(self.isa.triple().clone())
+                .map_err(|e| CodegenError::TargetIsa(e.to_string()))?
+                .finish(flags)
+                .map_err(|e| CodegenError::TargetIsa(e.to_string()))?
+        };
 
         // Create object module
         let object_builder = ObjectBuilder::new(

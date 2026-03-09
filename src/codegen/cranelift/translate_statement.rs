@@ -105,21 +105,44 @@ impl<'a> FunctionTranslator<'a> {
             StatementKind::Dealloc(place) => {
                 // Unconditional cleanup — the caller has already determined
                 // this value needs freeing (e.g., unique owner going out of scope).
+                // Guard against null (uninitialized locals).
                 let place_ty = &type_ctx.local_types[place.local.0];
                 let ptr = Self::read_place(builder, place, locals, type_ctx)?;
+
+                let null = builder.ins().iconst(ptr_type, 0);
+                let is_null = builder.ins().icmp(IntCC::Equal, ptr, null);
+                let dealloc_block = builder.create_block();
+                let merge_block = builder.create_block();
+                builder
+                    .ins()
+                    .brif(is_null, merge_block, &[], dealloc_block, &[]);
+
+                builder.switch_to_block(dealloc_block);
                 let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size as i64));
                 Self::emit_type_drop(builder, ctx, &place_ty.kind, ptr, header_ptr, type_ctx)?;
+                builder.ins().jump(merge_block, &[]);
+
+                builder.seal_block(dealloc_block);
+                builder.switch_to_block(merge_block);
+                builder.seal_block(merge_block);
             }
             StatementKind::Assign(place, rvalue) => {
                 let mut value = Self::translate_rvalue(builder, ctx, rvalue, locals, type_ctx)?;
 
-                // Handle implicit casts (e.g. float -> f32, i8 -> i32)
+                // Handle implicit casts (e.g. float -> f32, u8 -> u32)
                 let dest_ty = &type_ctx.local_types[place.local.0];
                 let dest_cl_ty = translate_type(dest_ty, ptr_type);
                 let val_ty = builder.func.dfg.value_type(value);
 
                 if dest_cl_ty != val_ty {
-                    value = Self::cast_value(builder, value, val_ty, dest_cl_ty)?;
+                    let is_unsigned = Self::is_unsigned_type_kind(&dest_ty.kind);
+                    value = Self::cast_value_with_sign(
+                        builder,
+                        value,
+                        val_ty,
+                        dest_cl_ty,
+                        is_unsigned,
+                    )?;
                 }
 
                 Self::assign_to_place(builder, place, value, locals, type_ctx)?;

@@ -161,33 +161,34 @@ impl<'a> FunctionTranslator<'a> {
             }
         }
 
+        // Create contexts once — cached FuncIds persist across all blocks.
+        let mut module_ctx = ModuleCtx {
+            module,
+            string_literals,
+            malloc_func_id: None,
+            free_func_id: None,
+            rt_array_new_id: None,
+            rt_array_free_id: None,
+            rt_list_new_id: None,
+            rt_list_push_id: None,
+            rt_list_free_id: None,
+            rt_map_new_id: None,
+            rt_map_set_id: None,
+            rt_map_free_id: None,
+            rt_set_new_id: None,
+            rt_set_add_id: None,
+            rt_set_free_id: None,
+        };
+        let type_ctx = TypeCtx {
+            local_types: &self.local_types,
+            type_definitions: self.type_definitions,
+            ptr_type: self.ptr_type,
+        };
+
         // Translate each basic block
         for (idx, block_data) in body.basic_blocks.iter().enumerate() {
             let block = blocks[&BasicBlock(idx)];
             builder.switch_to_block(block);
-
-            let mut module_ctx = ModuleCtx {
-                module,
-                string_literals,
-                malloc_func_id: None,
-                free_func_id: None,
-                rt_array_new_id: None,
-                rt_array_free_id: None,
-                rt_list_new_id: None,
-                rt_list_push_id: None,
-                rt_list_free_id: None,
-                rt_map_new_id: None,
-                rt_map_set_id: None,
-                rt_map_free_id: None,
-                rt_set_new_id: None,
-                rt_set_add_id: None,
-                rt_set_free_id: None,
-            };
-            let type_ctx = TypeCtx {
-                local_types: &self.local_types,
-                type_definitions: self.type_definitions,
-                ptr_type: self.ptr_type,
-            };
 
             // Translate all statements
             for stmt in &block_data.statements {
@@ -290,12 +291,16 @@ impl<'a> FunctionTranslator<'a> {
 
         Ok(value)
     }
-    /// Cast a value to instances of another type.
-    pub(crate) fn cast_value(
+    /// Cast a value between Cranelift types.
+    ///
+    /// When `is_unsigned` is true, integer widening uses zero-extension
+    /// and float-to-int uses unsigned saturation. Defaults to signed.
+    pub(crate) fn cast_value_with_sign(
         builder: &mut FunctionBuilder,
         value: Value,
         from_ty: cranelift_codegen::ir::Type,
         to_ty: cranelift_codegen::ir::Type,
+        is_unsigned: bool,
     ) -> Result<Value, String> {
         if from_ty == to_ty {
             return Ok(value);
@@ -310,15 +315,24 @@ impl<'a> FunctionTranslator<'a> {
         } else if from_ty.is_int() && to_ty.is_int() {
             if from_ty.bytes() > to_ty.bytes() {
                 Ok(builder.ins().ireduce(to_ty, value))
+            } else if is_unsigned {
+                Ok(builder.ins().uextend(to_ty, value))
             } else {
                 Ok(builder.ins().sextend(to_ty, value))
             }
         } else if from_ty.is_float() && to_ty.is_int() {
-            // Float to integer conversion (signed)
-            Ok(builder.ins().fcvt_to_sint(to_ty, value))
+            // Saturating float-to-int avoids trapping on NaN/overflow
+            if is_unsigned {
+                Ok(builder.ins().fcvt_to_uint_sat(to_ty, value))
+            } else {
+                Ok(builder.ins().fcvt_to_sint_sat(to_ty, value))
+            }
         } else if from_ty.is_int() && to_ty.is_float() {
-            // Integer to float conversion (signed)
-            Ok(builder.ins().fcvt_from_sint(to_ty, value))
+            if is_unsigned {
+                Ok(builder.ins().fcvt_from_uint(to_ty, value))
+            } else {
+                Ok(builder.ins().fcvt_from_sint(to_ty, value))
+            }
         } else {
             Err(format!(
                 "Unsupported implicit cast from {} to {}",
@@ -404,150 +418,132 @@ impl<'a> FunctionTranslator<'a> {
         }
         Ok(())
     }
-    /// Helper to call `miri_rt_array_new(elem_count, elem_size) -> *mut MiriArray`.
+    /// Declare-and-cache a runtime function, then call it.
+    ///
+    /// `cache` is one of the `Option<FuncId>` fields on `ModuleCtx`, passed
+    /// separately to avoid double-borrowing `ctx`.
+    fn call_cached_func(
+        builder: &mut FunctionBuilder,
+        module: &mut ObjectModule,
+        cache: &mut Option<cranelift_module::FuncId>,
+        name: &str,
+        param_types: &[cranelift_codegen::ir::Type],
+        return_types: &[cranelift_codegen::ir::Type],
+        args: &[Value],
+    ) -> Result<cranelift_codegen::ir::Inst, String> {
+        let func_id = match *cache {
+            Some(id) => id,
+            None => {
+                let sig = Signature {
+                    params: param_types.iter().map(|&t| AbiParam::new(t)).collect(),
+                    returns: return_types.iter().map(|&t| AbiParam::new(t)).collect(),
+                    call_conv: builder.func.signature.call_conv,
+                };
+                let id = module
+                    .declare_function(name, Linkage::Import, &sig)
+                    .map_err(|e| format!("Failed to declare {}: {}", name, e))?;
+                *cache = Some(id);
+                id
+            }
+        };
+        let local_func = module.declare_func_in_func(func_id, builder.func);
+        Ok(builder.ins().call(local_func, args))
+    }
+
+    // ── Runtime collection helpers ──────────────────────────────────────
+
     pub(crate) fn call_rt_array_new(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         elem_count: Value,
         elem_size: Value,
     ) -> Result<Value, String> {
-        let ptr_type = builder.func.dfg.value_type(elem_count);
-        let func_id = match ctx.rt_array_new_id {
-            Some(id) => id,
-            None => {
-                let sig = Signature {
-                    params: vec![AbiParam::new(ptr_type), AbiParam::new(ptr_type)],
-                    returns: vec![AbiParam::new(ptr_type)],
-                    call_conv: builder.func.signature.call_conv,
-                };
-                let id = ctx
-                    .module
-                    .declare_function("miri_rt_array_new", Linkage::Import, &sig)
-                    .map_err(|e| format!("Failed to declare miri_rt_array_new: {}", e))?;
-                ctx.rt_array_new_id = Some(id);
-                id
-            }
-        };
-        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
-        let call = builder.ins().call(local_func, &[elem_count, elem_size]);
-        Ok(builder.inst_results(call)[0])
+        let pt = builder.func.dfg.value_type(elem_count);
+        let inst = Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.rt_array_new_id,
+            "miri_rt_array_new",
+            &[pt, pt],
+            &[pt],
+            &[elem_count, elem_size],
+        )?;
+        Ok(builder.inst_results(inst)[0])
     }
 
-    /// Helper to call `miri_rt_array_free(ptr)`.
     pub(crate) fn call_rt_array_free(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         ptr: Value,
     ) -> Result<(), String> {
-        let ptr_type = builder.func.dfg.value_type(ptr);
-        let func_id = match ctx.rt_array_free_id {
-            Some(id) => id,
-            None => {
-                let sig = Signature {
-                    params: vec![AbiParam::new(ptr_type)],
-                    returns: vec![],
-                    call_conv: builder.func.signature.call_conv,
-                };
-                let id = ctx
-                    .module
-                    .declare_function("miri_rt_array_free", Linkage::Import, &sig)
-                    .map_err(|e| format!("Failed to declare miri_rt_array_free: {}", e))?;
-                ctx.rt_array_free_id = Some(id);
-                id
-            }
-        };
-        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
-        builder.ins().call(local_func, &[ptr]);
+        let pt = builder.func.dfg.value_type(ptr);
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.rt_array_free_id,
+            "miri_rt_array_free",
+            &[pt],
+            &[],
+            &[ptr],
+        )?;
         Ok(())
     }
 
-    /// Helper to call `miri_rt_list_new(elem_size) -> *mut MiriList`.
     pub(crate) fn call_rt_list_new(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         elem_size: Value,
     ) -> Result<Value, String> {
-        let ptr_type = builder.func.dfg.value_type(elem_size);
-        let func_id = match ctx.rt_list_new_id {
-            Some(id) => id,
-            None => {
-                let sig = Signature {
-                    params: vec![AbiParam::new(ptr_type)],
-                    returns: vec![AbiParam::new(ptr_type)],
-                    call_conv: builder.func.signature.call_conv,
-                };
-                let id = ctx
-                    .module
-                    .declare_function("miri_rt_list_new", Linkage::Import, &sig)
-                    .map_err(|e| format!("Failed to declare miri_rt_list_new: {}", e))?;
-                ctx.rt_list_new_id = Some(id);
-                id
-            }
-        };
-        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
-        let call = builder.ins().call(local_func, &[elem_size]);
-        Ok(builder.inst_results(call)[0])
+        let pt = builder.func.dfg.value_type(elem_size);
+        let inst = Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.rt_list_new_id,
+            "miri_rt_list_new",
+            &[pt],
+            &[pt],
+            &[elem_size],
+        )?;
+        Ok(builder.inst_results(inst)[0])
     }
 
-    /// Helper to call `miri_rt_list_push(ptr, val)`.
-    /// The value is passed as a pointer-sized integer (covers all primitive types).
     pub(crate) fn call_rt_list_push(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         list_ptr: Value,
         val: Value,
     ) -> Result<(), String> {
-        let ptr_type = builder.func.dfg.value_type(list_ptr);
-        let func_id = match ctx.rt_list_push_id {
-            Some(id) => id,
-            None => {
-                let sig = Signature {
-                    params: vec![AbiParam::new(ptr_type), AbiParam::new(ptr_type)],
-                    returns: vec![],
-                    call_conv: builder.func.signature.call_conv,
-                };
-                let id = ctx
-                    .module
-                    .declare_function("miri_rt_list_push", Linkage::Import, &sig)
-                    .map_err(|e| format!("Failed to declare miri_rt_list_push: {}", e))?;
-                ctx.rt_list_push_id = Some(id);
-                id
-            }
-        };
-        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
-        builder.ins().call(local_func, &[list_ptr, val]);
+        let pt = builder.func.dfg.value_type(list_ptr);
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.rt_list_push_id,
+            "miri_rt_list_push",
+            &[pt, pt],
+            &[],
+            &[list_ptr, val],
+        )?;
         Ok(())
     }
 
-    /// Helper to call `miri_rt_list_free(ptr)`.
     pub(crate) fn call_rt_list_free(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         ptr: Value,
     ) -> Result<(), String> {
-        let ptr_type = builder.func.dfg.value_type(ptr);
-        let func_id = match ctx.rt_list_free_id {
-            Some(id) => id,
-            None => {
-                let sig = Signature {
-                    params: vec![AbiParam::new(ptr_type)],
-                    returns: vec![],
-                    call_conv: builder.func.signature.call_conv,
-                };
-                let id = ctx
-                    .module
-                    .declare_function("miri_rt_list_free", Linkage::Import, &sig)
-                    .map_err(|e| format!("Failed to declare miri_rt_list_free: {}", e))?;
-                ctx.rt_list_free_id = Some(id);
-                id
-            }
-        };
-        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
-        builder.ins().call(local_func, &[ptr]);
+        let pt = builder.func.dfg.value_type(ptr);
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.rt_list_free_id,
+            "miri_rt_list_free",
+            &[pt],
+            &[],
+            &[ptr],
+        )?;
         Ok(())
     }
 
-    /// Helper to call `miri_rt_map_new(key_size, value_size, key_kind) -> *mut MiriMap`.
     pub(crate) fn call_rt_map_new(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -555,35 +551,19 @@ impl<'a> FunctionTranslator<'a> {
         value_size: Value,
         key_kind: Value,
     ) -> Result<Value, String> {
-        let ptr_type = builder.func.dfg.value_type(key_size);
-        let func_id = match ctx.rt_map_new_id {
-            Some(id) => id,
-            None => {
-                let sig = Signature {
-                    params: vec![
-                        AbiParam::new(ptr_type),
-                        AbiParam::new(ptr_type),
-                        AbiParam::new(ptr_type),
-                    ],
-                    returns: vec![AbiParam::new(ptr_type)],
-                    call_conv: builder.func.signature.call_conv,
-                };
-                let id = ctx
-                    .module
-                    .declare_function("miri_rt_map_new", Linkage::Import, &sig)
-                    .map_err(|e| format!("Failed to declare miri_rt_map_new: {}", e))?;
-                ctx.rt_map_new_id = Some(id);
-                id
-            }
-        };
-        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
-        let call = builder
-            .ins()
-            .call(local_func, &[key_size, value_size, key_kind]);
-        Ok(builder.inst_results(call)[0])
+        let pt = builder.func.dfg.value_type(key_size);
+        let inst = Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.rt_map_new_id,
+            "miri_rt_map_new",
+            &[pt, pt, pt],
+            &[pt],
+            &[key_size, value_size, key_kind],
+        )?;
+        Ok(builder.inst_results(inst)[0])
     }
 
-    /// Helper to call `miri_rt_map_set(ptr, key, value)`.
     pub(crate) fn call_rt_map_set(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -591,142 +571,89 @@ impl<'a> FunctionTranslator<'a> {
         key: Value,
         value: Value,
     ) -> Result<(), String> {
-        let ptr_type = builder.func.dfg.value_type(map_ptr);
-        let func_id = match ctx.rt_map_set_id {
-            Some(id) => id,
-            None => {
-                let sig = Signature {
-                    params: vec![
-                        AbiParam::new(ptr_type),
-                        AbiParam::new(ptr_type),
-                        AbiParam::new(ptr_type),
-                    ],
-                    returns: vec![],
-                    call_conv: builder.func.signature.call_conv,
-                };
-                let id = ctx
-                    .module
-                    .declare_function("miri_rt_map_set", Linkage::Import, &sig)
-                    .map_err(|e| format!("Failed to declare miri_rt_map_set: {}", e))?;
-                ctx.rt_map_set_id = Some(id);
-                id
-            }
-        };
-        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
-        builder.ins().call(local_func, &[map_ptr, key, value]);
+        let pt = builder.func.dfg.value_type(map_ptr);
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.rt_map_set_id,
+            "miri_rt_map_set",
+            &[pt, pt, pt],
+            &[],
+            &[map_ptr, key, value],
+        )?;
         Ok(())
     }
 
-    /// Helper to call `miri_rt_map_free(ptr)`.
     pub(crate) fn call_rt_map_free(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         ptr: Value,
     ) -> Result<(), String> {
-        let ptr_type = builder.func.dfg.value_type(ptr);
-        let func_id = match ctx.rt_map_free_id {
-            Some(id) => id,
-            None => {
-                let sig = Signature {
-                    params: vec![AbiParam::new(ptr_type)],
-                    returns: vec![],
-                    call_conv: builder.func.signature.call_conv,
-                };
-                let id = ctx
-                    .module
-                    .declare_function("miri_rt_map_free", Linkage::Import, &sig)
-                    .map_err(|e| format!("Failed to declare miri_rt_map_free: {}", e))?;
-                ctx.rt_map_free_id = Some(id);
-                id
-            }
-        };
-        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
-        builder.ins().call(local_func, &[ptr]);
+        let pt = builder.func.dfg.value_type(ptr);
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.rt_map_free_id,
+            "miri_rt_map_free",
+            &[pt],
+            &[],
+            &[ptr],
+        )?;
         Ok(())
     }
 
-    /// Helper to call `miri_rt_set_new(elem_size) -> *mut MiriSet`.
     pub(crate) fn call_rt_set_new(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         elem_size: Value,
     ) -> Result<Value, String> {
-        let ptr_type = builder.func.dfg.value_type(elem_size);
-        let func_id = match ctx.rt_set_new_id {
-            Some(id) => id,
-            None => {
-                let sig = Signature {
-                    params: vec![AbiParam::new(ptr_type)],
-                    returns: vec![AbiParam::new(ptr_type)],
-                    call_conv: builder.func.signature.call_conv,
-                };
-                let id = ctx
-                    .module
-                    .declare_function("miri_rt_set_new", Linkage::Import, &sig)
-                    .map_err(|e| format!("Failed to declare miri_rt_set_new: {}", e))?;
-                ctx.rt_set_new_id = Some(id);
-                id
-            }
-        };
-        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
-        let call = builder.ins().call(local_func, &[elem_size]);
-        Ok(builder.inst_results(call)[0])
+        let pt = builder.func.dfg.value_type(elem_size);
+        let inst = Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.rt_set_new_id,
+            "miri_rt_set_new",
+            &[pt],
+            &[pt],
+            &[elem_size],
+        )?;
+        Ok(builder.inst_results(inst)[0])
     }
 
-    /// Helper to call `miri_rt_set_add(ptr, elem) -> u8`.
     pub(crate) fn call_rt_set_add(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         set_ptr: Value,
         elem: Value,
     ) -> Result<(), String> {
-        let ptr_type = builder.func.dfg.value_type(set_ptr);
-        let func_id = match ctx.rt_set_add_id {
-            Some(id) => id,
-            None => {
-                let sig = Signature {
-                    params: vec![AbiParam::new(ptr_type), AbiParam::new(ptr_type)],
-                    returns: vec![AbiParam::new(cl_types::I8)],
-                    call_conv: builder.func.signature.call_conv,
-                };
-                let id = ctx
-                    .module
-                    .declare_function("miri_rt_set_add", Linkage::Import, &sig)
-                    .map_err(|e| format!("Failed to declare miri_rt_set_add: {}", e))?;
-                ctx.rt_set_add_id = Some(id);
-                id
-            }
-        };
-        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
-        builder.ins().call(local_func, &[set_ptr, elem]);
+        let pt = builder.func.dfg.value_type(set_ptr);
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.rt_set_add_id,
+            "miri_rt_set_add",
+            &[pt, pt],
+            &[cl_types::I8],
+            &[set_ptr, elem],
+        )?;
         Ok(())
     }
 
-    /// Helper to call `miri_rt_set_free(ptr)`.
     pub(crate) fn call_rt_set_free(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         ptr: Value,
     ) -> Result<(), String> {
-        let ptr_type = builder.func.dfg.value_type(ptr);
-        let func_id = match ctx.rt_set_free_id {
-            Some(id) => id,
-            None => {
-                let sig = Signature {
-                    params: vec![AbiParam::new(ptr_type)],
-                    returns: vec![],
-                    call_conv: builder.func.signature.call_conv,
-                };
-                let id = ctx
-                    .module
-                    .declare_function("miri_rt_set_free", Linkage::Import, &sig)
-                    .map_err(|e| format!("Failed to declare miri_rt_set_free: {}", e))?;
-                ctx.rt_set_free_id = Some(id);
-                id
-            }
-        };
-        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
-        builder.ins().call(local_func, &[ptr]);
+        let pt = builder.func.dfg.value_type(ptr);
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.rt_set_free_id,
+            "miri_rt_set_free",
+            &[pt],
+            &[],
+            &[ptr],
+        )?;
         Ok(())
     }
 
@@ -783,6 +710,14 @@ impl<'a> FunctionTranslator<'a> {
             || matches!(kind, TypeKind::Custom(name, _) if name == "List")
     }
 
+    /// Returns true if the type kind is an unsigned integer.
+    pub(crate) fn is_unsigned_type_kind(kind: &TypeKind) -> bool {
+        matches!(
+            kind,
+            TypeKind::U8 | TypeKind::U16 | TypeKind::U32 | TypeKind::U64 | TypeKind::U128
+        )
+    }
+
     /// Returns true if the given type is an Array, List, Map, or Set collection.
     pub(crate) fn is_collection_type(kind: &TypeKind) -> bool {
         matches!(
@@ -822,6 +757,11 @@ impl<'a> FunctionTranslator<'a> {
         header_ptr: Value,
         type_ctx: &TypeCtx,
     ) -> Result<(), String> {
+        // Resolve type aliases before dispatching so that e.g.
+        // `type IntArray is [int; 2]` correctly frees via rt_array_free.
+        let resolved = Self::resolve_alias(kind, type_ctx.type_definitions);
+        let kind = resolved.unwrap_or(kind);
+
         if Self::is_map_type(kind) {
             Self::call_rt_map_free(builder, ctx, ptr)
         } else if Self::is_set_type(kind) {
@@ -836,6 +776,25 @@ impl<'a> FunctionTranslator<'a> {
             Self::call_libc_free(builder, ctx, header_ptr)
         } else {
             Self::call_libc_free(builder, ctx, header_ptr)
+        }
+    }
+
+    /// Resolves a type alias to its underlying type kind.
+    /// Returns `Some(resolved_kind)` if the type is an alias, `None` otherwise.
+    fn resolve_alias<'b>(
+        kind: &TypeKind,
+        type_definitions: &'b HashMap<String, TypeDefinition>,
+    ) -> Option<&'b TypeKind> {
+        if let TypeKind::Custom(name, _) = kind {
+            if let Some(TypeDefinition::Alias(alias_def)) = type_definitions.get(name) {
+                // Recurse to handle chained aliases (A -> B -> [int])
+                let inner = &alias_def.template.kind;
+                Self::resolve_alias(inner, type_definitions).or(Some(inner))
+            } else {
+                None
+            }
+        } else {
+            None
         }
     }
 
@@ -857,22 +816,30 @@ impl<'a> FunctionTranslator<'a> {
             return Ok(());
         };
 
-        match def.clone() {
+        match def {
             TypeDefinition::Struct(struct_def) => {
-                for (field_idx, (_name, field_ty, _vis)) in struct_def.fields.iter().enumerate() {
-                    if is_field_managed(&field_ty.kind) {
-                        let (offset, _cl_ty) = layout::field_layout(
-                            &TypeKind::Custom(type_name.to_string(), None),
-                            field_idx,
-                            type_ctx.type_definitions,
-                            ptr_type,
-                        );
-                        let field_ptr =
-                            builder
-                                .ins()
-                                .load(ptr_type, MemFlags::new(), payload_ptr, offset);
-                        Self::emit_decref_value(builder, ctx, &field_ty.kind, field_ptr, type_ctx)?;
-                    }
+                // Collect field info upfront to avoid borrowing type_ctx across builder calls.
+                let managed_fields: Vec<(usize, TypeKind)> = struct_def
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (_, ty, _))| is_field_managed(&ty.kind))
+                    .map(|(idx, (_, ty, _))| (idx, ty.kind.clone()))
+                    .collect();
+
+                let custom_kind = TypeKind::Custom(type_name.to_string(), None);
+                for (field_idx, field_kind) in &managed_fields {
+                    let (offset, _cl_ty) = layout::field_layout(
+                        &custom_kind,
+                        *field_idx,
+                        type_ctx.type_definitions,
+                        ptr_type,
+                    );
+                    let field_ptr =
+                        builder
+                            .ins()
+                            .load(ptr_type, MemFlags::new(), payload_ptr, offset);
+                    Self::emit_decref_value(builder, ctx, field_kind, field_ptr, type_ctx)?;
                 }
             }
             TypeDefinition::Enum(enum_def) => {
@@ -882,15 +849,28 @@ impl<'a> FunctionTranslator<'a> {
                     .load(ptr_type, MemFlags::new(), payload_ptr, 0);
                 let ptr_size = ptr_type.bytes() as i32;
 
-                // For each variant that has managed fields, emit a conditional DecRef
-                for (variant_idx, (_variant_name, fields)) in enum_def.variants.iter().enumerate() {
-                    let has_managed = fields.iter().any(|ty| is_field_managed(&ty.kind));
-                    if !has_managed {
-                        continue;
-                    }
+                // Collect variant info to avoid borrow conflicts.
+                let variants_with_managed: Vec<(usize, Vec<(usize, TypeKind)>)> = enum_def
+                    .variants
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(vi, (_name, fields))| {
+                        let managed: Vec<(usize, TypeKind)> = fields
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, ty)| is_field_managed(&ty.kind))
+                            .map(|(fi, ty)| (fi, ty.kind.clone()))
+                            .collect();
+                        if managed.is_empty() {
+                            None
+                        } else {
+                            Some((vi, managed))
+                        }
+                    })
+                    .collect();
 
-                    // Check if this variant is active
-                    let variant_val = builder.ins().iconst(ptr_type, variant_idx as i64);
+                for (variant_idx, managed_fields) in &variants_with_managed {
+                    let variant_val = builder.ins().iconst(ptr_type, *variant_idx as i64);
                     let is_this_variant = builder.ins().icmp(
                         cranelift_codegen::ir::condcodes::IntCC::Equal,
                         disc,
@@ -904,23 +884,15 @@ impl<'a> FunctionTranslator<'a> {
                         .brif(is_this_variant, drop_block, &[], merge_block, &[]);
 
                     builder.switch_to_block(drop_block);
-                    for (field_idx, field_ty) in fields.iter().enumerate() {
-                        if is_field_managed(&field_ty.kind) {
-                            let field_offset = ptr_size + (field_idx as i32 * ptr_size);
-                            let field_ptr = builder.ins().load(
-                                ptr_type,
-                                MemFlags::new(),
-                                payload_ptr,
-                                field_offset,
-                            );
-                            Self::emit_decref_value(
-                                builder,
-                                ctx,
-                                &field_ty.kind,
-                                field_ptr,
-                                type_ctx,
-                            )?;
-                        }
+                    for (field_idx, field_kind) in managed_fields {
+                        let field_offset = ptr_size + (*field_idx as i32 * ptr_size);
+                        let field_ptr = builder.ins().load(
+                            ptr_type,
+                            MemFlags::new(),
+                            payload_ptr,
+                            field_offset,
+                        );
+                        Self::emit_decref_value(builder, ctx, field_kind, field_ptr, type_ctx)?;
                     }
                     builder.ins().jump(merge_block, &[]);
                     builder.seal_block(drop_block);
@@ -1096,54 +1068,47 @@ impl<'a> FunctionTranslator<'a> {
         ctx: &mut ModuleCtx,
         size: Value,
     ) -> Result<Value, String> {
-        let ptr_type = builder.func.dfg.value_type(size);
-        let func_id = match ctx.malloc_func_id {
-            Some(id) => id,
-            None => {
-                let sig = Signature {
-                    params: vec![AbiParam::new(ptr_type)],
-                    returns: vec![AbiParam::new(ptr_type)],
-                    call_conv: builder.func.signature.call_conv,
-                };
-                let id = ctx
-                    .module
-                    .declare_function("malloc", Linkage::Import, &sig)
-                    .map_err(|e| format!("Failed to declare malloc: {}", e))?;
-                ctx.malloc_func_id = Some(id);
-                id
-            }
-        };
-
-        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
-        let call = builder.ins().call(local_func, &[size]);
-        Ok(builder.inst_results(call)[0])
+        let pt = builder.func.dfg.value_type(size);
+        let inst = Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.malloc_func_id,
+            "malloc",
+            &[pt],
+            &[pt],
+            &[size],
+        )?;
+        Ok(builder.inst_results(inst)[0])
     }
+
     /// Helper to call libc free, caching the FuncId across invocations.
+    ///
+    /// `header_ptr` points to the RC header (payload - ptr_size). The real
+    /// malloc pointer is stored at (header_ptr - ptr_size) by `Rvalue::Allocate`,
+    /// and is loaded here so that `free()` receives the original allocation.
     pub(crate) fn call_libc_free(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
-        ptr: Value,
+        header_ptr: Value,
     ) -> Result<(), String> {
-        let ptr_type = builder.func.dfg.value_type(ptr);
-        let func_id = match ctx.free_func_id {
-            Some(id) => id,
-            None => {
-                let sig = Signature {
-                    params: vec![AbiParam::new(ptr_type)],
-                    returns: vec![],
-                    call_conv: builder.func.signature.call_conv,
-                };
-                let id = ctx
-                    .module
-                    .declare_function("free", Linkage::Import, &sig)
-                    .map_err(|e| format!("Failed to declare free: {}", e))?;
-                ctx.free_func_id = Some(id);
-                id
-            }
-        };
+        let ptr_type = builder.func.dfg.value_type(header_ptr);
+        let ptr_size = ptr_type.bytes() as i64;
 
-        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
-        builder.ins().call(local_func, &[ptr]);
+        // The real malloc pointer is stored at (header_ptr - ptr_size).
+        let malloc_ptr_slot = builder.ins().iadd_imm(header_ptr, -ptr_size);
+        let real_ptr = builder
+            .ins()
+            .load(ptr_type, MemFlags::new(), malloc_ptr_slot, 0);
+
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.free_func_id,
+            "free",
+            &[ptr_type],
+            &[],
+            &[real_ptr],
+        )?;
         Ok(())
     }
 }
