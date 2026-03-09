@@ -83,10 +83,7 @@ impl Drop for MiriArray {
 /// Allocates `[RC=1][MiriArray fields]`. All data elements are zeroed.
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_array_new(
-    elem_count: usize,
-    elem_size: usize,
-) -> *mut MiriArray {
+pub unsafe extern "C" fn miri_rt_array_new(elem_count: usize, elem_size: usize) -> *mut MiriArray {
     let payload = alloc_with_rc(STRUCT_SIZE);
     if payload.is_null() {
         return ptr::null_mut();
@@ -138,7 +135,8 @@ pub unsafe extern "C" fn miri_rt_array_free(ptr: *mut MiriArray) {
     // Free internal data buffer
     let arr = &*ptr;
     if !arr.data.is_null() && arr.elem_count > 0 && arr.elem_size > 0 {
-        let layout = Layout::from_size_align(arr.byte_len(), 8).unwrap_or_else(|_| std::process::abort());
+        let layout =
+            Layout::from_size_align(arr.byte_len(), 8).unwrap_or_else(|_| std::process::abort());
         dealloc(arr.data, layout);
     }
     // Free the [RC][struct] block
@@ -160,10 +158,7 @@ pub unsafe extern "C" fn miri_rt_array_len(ptr: *const MiriArray) -> usize {
 /// Returns null if the index is out of bounds.
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_array_get(
-    ptr: *const MiriArray,
-    index: usize,
-) -> *const u8 {
+pub unsafe extern "C" fn miri_rt_array_get(ptr: *const MiriArray, index: usize) -> *const u8 {
     if ptr.is_null() {
         return ptr::null();
     }
@@ -179,10 +174,7 @@ pub unsafe extern "C" fn miri_rt_array_get(
 /// Returns null if the index is out of bounds.
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_array_get_mut(
-    ptr: *mut MiriArray,
-    index: usize,
-) -> *mut u8 {
+pub unsafe extern "C" fn miri_rt_array_get_mut(ptr: *mut MiriArray, index: usize) -> *mut u8 {
     if ptr.is_null() {
         return ptr::null_mut();
     }
@@ -349,7 +341,10 @@ mod tests {
             let arr = miri_rt_array_new(3, std::mem::size_of::<i32>());
 
             let val = 42i32;
-            assert_eq!(miri_rt_array_set(arr, 1, &val as *const i32 as *const u8), 1);
+            assert_eq!(
+                miri_rt_array_set(arr, 1, &val as *const i32 as *const u8),
+                1
+            );
 
             let p = miri_rt_array_get(arr, 1);
             assert_eq!(*(p as *const i32), 42);
@@ -373,7 +368,10 @@ mod tests {
 
             // Out of bounds set returns 0
             let val = 1i32;
-            assert_eq!(miri_rt_array_set(arr, 3, &val as *const i32 as *const u8), 0);
+            assert_eq!(
+                miri_rt_array_set(arr, 3, &val as *const i32 as *const u8),
+                0
+            );
 
             miri_rt_array_free(arr);
         }
@@ -513,7 +511,10 @@ mod tests {
             assert_eq!(miri_rt_array_len(std::ptr::null()), 0);
             assert!(miri_rt_array_get(std::ptr::null(), 0).is_null());
             assert!(miri_rt_array_get_mut(std::ptr::null_mut(), 0).is_null());
-            assert_eq!(miri_rt_array_set(std::ptr::null_mut(), 0, std::ptr::null()), 0);
+            assert_eq!(
+                miri_rt_array_set(std::ptr::null_mut(), 0, std::ptr::null()),
+                0
+            );
             miri_rt_array_fill(std::ptr::null_mut(), std::ptr::null()); // must not crash
             assert!(miri_rt_array_data(std::ptr::null()).is_null());
             miri_rt_array_sort(std::ptr::null_mut()); // must not crash

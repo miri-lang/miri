@@ -156,7 +156,11 @@ impl MiriMap {
     }
 
     /// Allocates the internal arrays for a given capacity.
-    unsafe fn alloc_tables(capacity: usize, key_size: usize, value_size: usize) -> Option<(*mut u8, *mut u8, *mut u8)> {
+    unsafe fn alloc_tables(
+        capacity: usize,
+        key_size: usize,
+        value_size: usize,
+    ) -> Option<(*mut u8, *mut u8, *mut u8)> {
         if capacity == 0 || key_size == 0 {
             return None;
         }
@@ -186,8 +190,14 @@ impl MiriMap {
     }
 
     /// Frees the internal arrays.
-    unsafe fn free_tables(states: *mut u8, keys: *mut u8, values: *mut u8,
-                          capacity: usize, key_size: usize, value_size: usize) {
+    unsafe fn free_tables(
+        states: *mut u8,
+        keys: *mut u8,
+        values: *mut u8,
+        capacity: usize,
+        key_size: usize,
+        value_size: usize,
+    ) {
         if capacity == 0 {
             return;
         }
@@ -244,7 +254,14 @@ impl MiriMap {
             }
         }
 
-        Self::free_tables(old_states, old_keys, old_values, old_capacity, self.key_size, self.value_size);
+        Self::free_tables(
+            old_states,
+            old_keys,
+            old_values,
+            old_capacity,
+            self.key_size,
+            self.value_size,
+        );
     }
 
     /// Inserts a key-value pair without checking load factor.
@@ -330,8 +347,12 @@ impl Drop for MiriMap {
     fn drop(&mut self) {
         unsafe {
             Self::free_tables(
-                self.states, self.keys, self.values,
-                self.capacity, self.key_size, self.value_size,
+                self.states,
+                self.keys,
+                self.values,
+                self.capacity,
+                self.key_size,
+                self.value_size,
             );
         }
     }
@@ -386,7 +407,11 @@ pub unsafe extern "C" fn miri_rt_map_is_empty(ptr: *const MiriMap) -> u8 {
     if ptr.is_null() {
         return 1;
     }
-    if (*ptr).len == 0 { 1 } else { 0 }
+    if (*ptr).len == 0 {
+        1
+    } else {
+        0
+    }
 }
 
 /// Sets a key-value pair in the map.
@@ -395,11 +420,7 @@ pub unsafe extern "C" fn miri_rt_map_is_empty(ptr: *const MiriMap) -> u8 {
 /// `key_size`/`value_size` bytes from the address of each parameter on the stack.
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_map_set(
-    ptr: *mut MiriMap,
-    key: usize,
-    value: usize,
-) {
+pub unsafe extern "C" fn miri_rt_map_set(ptr: *mut MiriMap, key: usize, value: usize) {
     if ptr.is_null() {
         return;
     }
@@ -415,10 +436,7 @@ pub unsafe extern "C" fn miri_rt_map_set(
 /// Returns 0 if the key is not found.
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_map_get(
-    ptr: *const MiriMap,
-    key: usize,
-) -> usize {
+pub unsafe extern "C" fn miri_rt_map_get(ptr: *const MiriMap, key: usize) -> usize {
     if ptr.is_null() {
         return 0;
     }
@@ -437,10 +455,7 @@ pub unsafe extern "C" fn miri_rt_map_get(
 /// which returns an Option.
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_map_get_checked(
-    ptr: *const MiriMap,
-    key: usize,
-) -> usize {
+pub unsafe extern "C" fn miri_rt_map_get_checked(ptr: *const MiriMap, key: usize) -> usize {
     if ptr.is_null() {
         eprintln!("Runtime error: map index on null map");
         std::process::abort();
@@ -457,15 +472,16 @@ pub unsafe extern "C" fn miri_rt_map_get_checked(
 /// Returns true (1) if the map contains the given key.
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_map_contains_key(
-    ptr: *const MiriMap,
-    key: usize,
-) -> u8 {
+pub unsafe extern "C" fn miri_rt_map_contains_key(ptr: *const MiriMap, key: usize) -> u8 {
     if ptr.is_null() {
         return 0;
     }
     let map = &*ptr;
-    if map.contains_key(&key as *const usize as *const u8) { 1 } else { 0 }
+    if map.contains_key(&key as *const usize as *const u8) {
+        1
+    } else {
+        0
+    }
 }
 
 /// Removes the entry with the given key.
@@ -473,15 +489,16 @@ pub unsafe extern "C" fn miri_rt_map_contains_key(
 /// Returns true (1) if the key was found and removed, false (0) otherwise.
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_map_remove(
-    ptr: *mut MiriMap,
-    key: usize,
-) -> u8 {
+pub unsafe extern "C" fn miri_rt_map_remove(ptr: *mut MiriMap, key: usize) -> u8 {
     if ptr.is_null() {
         return 0;
     }
     let map = &mut *ptr;
-    if map.remove(&key as *const usize as *const u8) { 1 } else { 0 }
+    if map.remove(&key as *const usize as *const u8) {
+        1
+    } else {
+        0
+    }
 }
 
 /// Clears all entries from the map.
@@ -499,10 +516,7 @@ pub unsafe extern "C" fn miri_rt_map_clear(ptr: *mut MiriMap) {
 /// Returns 0 if the index is out of bounds.
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_map_key_at(
-    ptr: *const MiriMap,
-    nth: usize,
-) -> usize {
+pub unsafe extern "C" fn miri_rt_map_key_at(ptr: *const MiriMap, nth: usize) -> usize {
     if ptr.is_null() {
         return 0;
     }
@@ -526,10 +540,7 @@ pub unsafe extern "C" fn miri_rt_map_key_at(
 /// Returns 0 if the index is out of bounds.
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_map_value_at(
-    ptr: *const MiriMap,
-    nth: usize,
-) -> usize {
+pub unsafe extern "C" fn miri_rt_map_value_at(ptr: *const MiriMap, nth: usize) -> usize {
     if ptr.is_null() {
         return 0;
     }
@@ -559,8 +570,12 @@ pub unsafe extern "C" fn miri_rt_map_free(ptr: *mut MiriMap) {
     // Free internal tables
     let map = &*ptr;
     MiriMap::free_tables(
-        map.states, map.keys, map.values,
-        map.capacity, map.key_size, map.value_size,
+        map.states,
+        map.keys,
+        map.values,
+        map.capacity,
+        map.key_size,
+        map.value_size,
     );
     // Free the [RC][struct] block
     free_with_rc(ptr as *mut u8, STRUCT_SIZE);

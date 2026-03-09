@@ -91,11 +91,7 @@ fn test_alloc_various_alignments() {
         for align in [1, 2, 4, 8, 16, 32, 64] {
             let ptr = miri_alloc(128, align);
             assert!(!ptr.is_null(), "alloc with align {align} failed");
-            assert_eq!(
-                (ptr as usize) % align,
-                0,
-                "pointer not aligned to {align}"
-            );
+            assert_eq!((ptr as usize) % align, 0, "pointer not aligned to {align}");
             miri_free(ptr, 128, align);
         }
     }
