@@ -131,11 +131,13 @@ impl MiriSet {
     }
 
     unsafe fn alloc_tables(&mut self, capacity: usize) {
-        let states_layout = Layout::from_size_align(capacity, 1).unwrap_or_else(|_| std::process::abort());
+        let states_layout =
+            Layout::from_size_align(capacity, 1).unwrap_or_else(|_| std::process::abort());
         let data_size = capacity
             .checked_mul(self.elem_size)
             .unwrap_or_else(|| std::process::abort());
-        let data_layout = Layout::from_size_align(data_size, 8).unwrap_or_else(|_| std::process::abort());
+        let data_layout =
+            Layout::from_size_align(data_size, 8).unwrap_or_else(|_| std::process::abort());
         self.states = alloc_zeroed(states_layout);
         self.data = alloc_zeroed(data_layout);
         self.capacity = capacity;
@@ -154,7 +156,11 @@ impl MiriSet {
             if *old_states.add(i) == SLOT_OCCUPIED {
                 let elem = old_data.add(i * self.elem_size);
                 let slot = self.find_insert_slot(elem);
-                ptr::copy_nonoverlapping(elem, self.data.add(slot * self.elem_size), self.elem_size);
+                ptr::copy_nonoverlapping(
+                    elem,
+                    self.data.add(slot * self.elem_size),
+                    self.elem_size,
+                );
                 *self.states.add(slot) = SLOT_OCCUPIED;
                 self.len += 1;
             }
@@ -163,18 +169,15 @@ impl MiriSet {
         Self::free_tables(old_states, old_data, old_capacity, self.elem_size);
     }
 
-    unsafe fn free_tables(
-        states: *mut u8,
-        data: *mut u8,
-        capacity: usize,
-        elem_size: usize,
-    ) {
+    unsafe fn free_tables(states: *mut u8, data: *mut u8, capacity: usize, elem_size: usize) {
         if !states.is_null() && capacity > 0 {
-            let states_layout = Layout::from_size_align(capacity, 1).unwrap_or_else(|_| std::process::abort());
+            let states_layout =
+                Layout::from_size_align(capacity, 1).unwrap_or_else(|_| std::process::abort());
             dealloc(states, states_layout);
         }
         if !data.is_null() && capacity > 0 && elem_size > 0 {
-            let data_layout = Layout::from_size_align(capacity * elem_size, 8).unwrap_or_else(|_| std::process::abort());
+            let data_layout = Layout::from_size_align(capacity * elem_size, 8)
+                .unwrap_or_else(|_| std::process::abort());
             dealloc(data, data_layout);
         }
     }
@@ -246,7 +249,11 @@ pub unsafe extern "C" fn miri_rt_set_is_empty(ptr: *const MiriSet) -> u8 {
     if ptr.is_null() {
         return 1;
     }
-    if (*ptr).len == 0 { 1 } else { 0 }
+    if (*ptr).len == 0 {
+        1
+    } else {
+        0
+    }
 }
 
 /// Adds an element to the set.

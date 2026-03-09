@@ -358,7 +358,11 @@ pub unsafe extern "C" fn miri_rt_list_is_empty(ptr: *const MiriList) -> u8 {
     if ptr.is_null() {
         return 1;
     }
-    if (*ptr).is_empty() { 1 } else { 0 }
+    if (*ptr).is_empty() {
+        1
+    } else {
+        0
+    }
 }
 
 /// Pushes an element to the end of the list.
@@ -418,42 +422,39 @@ pub unsafe extern "C" fn miri_rt_list_get_mut(ptr: *mut MiriList, index: usize) 
 /// Returns true (1) if successful, false (0) if the index was out of bounds.
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_list_set(
-    ptr: *mut MiriList,
-    index: usize,
-    val: usize,
-) -> u8 {
+pub unsafe extern "C" fn miri_rt_list_set(ptr: *mut MiriList, index: usize, val: usize) -> u8 {
     if ptr.is_null() {
         return 0;
     }
     let list = &mut *ptr;
-    if list.set(index, &val as *const usize as *const u8) { 1 } else { 0 }
+    if list.set(index, &val as *const usize as *const u8) {
+        1
+    } else {
+        0
+    }
 }
 
 /// Inserts an element at the given index.
 /// Returns true (1) if successful, false (0) if the index was out of bounds.
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_list_insert(
-    ptr: *mut MiriList,
-    index: usize,
-    val: usize,
-) -> u8 {
+pub unsafe extern "C" fn miri_rt_list_insert(ptr: *mut MiriList, index: usize, val: usize) -> u8 {
     if ptr.is_null() {
         return 0;
     }
     let list = &mut *ptr;
-    if list.insert(index, &val as *const usize as *const u8) { 1 } else { 0 }
+    if list.insert(index, &val as *const usize as *const u8) {
+        1
+    } else {
+        0
+    }
 }
 
 /// Removes the element at the given index.
 /// Returns true (1) if successful, false (0) if the index was out of bounds.
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_list_remove(
-    ptr: *mut MiriList,
-    index: usize,
-) -> u8 {
+pub unsafe extern "C" fn miri_rt_list_remove(ptr: *mut MiriList, index: usize) -> u8 {
     if ptr.is_null() {
         return 0;
     }
@@ -518,7 +519,8 @@ pub unsafe extern "C" fn miri_rt_list_free(ptr: *mut MiriList) {
     // Free internal data buffer
     let list = &*ptr;
     if !list.data.is_null() && list.capacity > 0 && list.elem_size > 0 {
-        let layout = Layout::from_size_align(list.capacity * list.elem_size, 8).unwrap_or_else(|_| std::process::abort());
+        let layout = Layout::from_size_align(list.capacity * list.elem_size, 8)
+            .unwrap_or_else(|_| std::process::abort());
         dealloc(list.data, layout);
     }
     // Free the [RC][struct] block
