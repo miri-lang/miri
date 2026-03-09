@@ -40,11 +40,11 @@ Testing is **never** optional. When you add functionality, you **must** add comp
 - **Miri Language Syntax:** When writing Miri language code in tests or examples, use `var` for mutable variables (not `let mut`), and always check FFI function signatures for allocator parameters before writing calls.
 
 ## 5. Verification
-Before proposing or completing a change, you must verify your work by running:
-1. **Formatting:** `cargo fmt` (Must yield zero diffs).
-2. **Checking:** `cargo check` to ensure the core code compiles.
-3. **Linting:** `cargo clippy -- -D warnings` and fix ALL warnings.
-4. **Testing:** Run feature-scoped tests first (e.g., `cargo test tests::type_checker::...`), then run the entire suite (`cargo test`) to ensure zero regressions.
+Before proposing or completing a change, you must verify your work by running the appropriate `make` commands to ensure both Miri and its runtimes are validated:
+1. **Formatting:** `make format` (Must yield zero diffs). **LLM agents MUST run `make format` after all code changes.**
+2. **Linting:** `make lint` to run formatting and clippy checks. Fix ALL warnings.
+3. **Building:** `make build` to ensure the core code and runtimes compile.
+4. **Testing:** Run feature-scoped tests first (e.g., `cargo test tests::type_checker::...`), then run the entire suite (`make test`) to ensure zero regressions.
 
 ## 6. Workflow
 - When fixing Rust code, never use broad sed commands to apply changes. Always use targeted Edit tool operations on specific lines to avoid breaking valid code.
