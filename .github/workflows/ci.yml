@@ -51,22 +51,14 @@ jobs:
           clang-21 --version
           llvm-config-21 --version
 
-      - name: Check formatting
-        run: cargo fmt -- --check
+      - name: Run linting (fmt & clippy)
+        run: make lint
 
-      - name: Run clippy
-        run: cargo clippy -- -D warnings
+      - name: Build project (debug)
+        run: make build
 
-      - name: Build project
-        run: cargo build
-
-      - name: Build runtime core
-        working-directory: ./src/runtime/core
-        run: cargo build --release
-
-      - name: Run core runtime tests
-        working-directory: ./src/runtime/core
-        run: cargo test
+      - name: Build project (release)
+        run: make release
 
       - name: Run tests
-        run: cargo test
+        run: make test
