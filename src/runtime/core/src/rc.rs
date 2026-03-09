@@ -85,7 +85,7 @@ pub unsafe fn free_with_rc(payload_ptr: *mut u8, payload_size: usize) {
     }
     let base = payload_ptr.sub(RC_HEADER_SIZE);
     let total_size = RC_HEADER_SIZE + payload_size;
-    let layout = Layout::from_size_align(total_size, 8).unwrap();
+    let layout = Layout::from_size_align(total_size, 8).unwrap_or_else(|_| std::process::abort());
     dealloc(base, layout);
 
     RC_ALLOC_BALANCE.fetch_sub(1, Ordering::SeqCst);
