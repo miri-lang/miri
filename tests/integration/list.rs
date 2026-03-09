@@ -135,7 +135,7 @@ fn list_push_pop() {
 use system.io
 use system.collections.list
 
-let l = List()
+let l = List<int>()
 l.push(10)
 l.push(20)
 println(f\"{l.length()}\")
@@ -402,7 +402,7 @@ fn list_push_multiple_then_iterate() {
 use system.io
 use system.collections.list
 
-let l = List()
+let l = List<int>()
 l.push(1)
 l.push(2)
 l.push(3)
