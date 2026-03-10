@@ -273,10 +273,12 @@ impl<'source> Lexer<'source> {
         if !found_comment && !found_newline {
             // Handle indentation changes
             // SAFETY: indent_stack is initialized with [0] and never empty
-            let last_indent = *self
-                .indent_stack
-                .last()
-                .expect("Indent stack should not be empty");
+            let last_indent = *self.indent_stack.last().ok_or_else(|| {
+                SyntaxError::new(
+                    SyntaxErrorKind::IndentationMismatch,
+                    Span::new(token_end, token_end),
+                )
+            })?;
 
             if indent_len > last_indent {
                 // If we are not inside parentheses or brackets, treat as an indentation increase

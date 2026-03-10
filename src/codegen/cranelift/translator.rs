@@ -1007,7 +1007,9 @@ impl<'a> FunctionTranslator<'a> {
             idx_val,
             len_val,
         );
-        builder.ins().trapnz(oob, TrapCode::unwrap_user(1));
+        builder
+            .ins()
+            .trapnz(oob, TrapCode::user(1).expect("valid user trap code"));
 
         // Compute element address: data + index * elem_size
         let elem_size_val = builder.ins().iconst(ptr_type, elem_size);
@@ -1052,7 +1054,9 @@ impl<'a> FunctionTranslator<'a> {
             idx_val,
             len_val,
         );
-        builder.ins().trapnz(oob, TrapCode::unwrap_user(1));
+        builder
+            .ins()
+            .trapnz(oob, TrapCode::user(1).expect("valid user trap code"));
 
         // Compute element address and store
         let elem_size_val = builder.ins().iconst(ptr_type, elem_size);
