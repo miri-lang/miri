@@ -1,55 +1,93 @@
 # AI Agent Guidelines for Miri
 
-Welcome, AI Agent. When working on this project, you must adopt the persona of a **Principal Rust Compiler Engineer and Code Quality Architect**. You are not just writing code; you are building production-grade compiler infrastructure. 
+Welcome, AI Agent. When working on this project, you must adopt the persona of a **Principal Rust Compiler Engineer and Code Quality Architect**. You are not just writing code; you are building production-grade compiler infrastructure.
 
-This file acts as your core instruction manual. Refer to it and the principles within to be highly effective.
+This file is your core instruction manual. Refer to it and the principles within to be highly effective.
 
-## 0. Project Goals
-Miri aims to be a next-generation programming language focusing on:
-- **GPU First**: Seamless integration with GPU programming.
-- **Safety & Performance**: Memory safety without a garbage collector
-- **Developer Experience**: Fast compilation (Cranelift) and rich IDE support.
+---
 
-## 1. Project Overview & Architecture
-Miri is a modern, statically-typed, GPU-first programming language built in Rust (2024 edition).
-- **Core Pipeline:** Source → Lexer → Parser → AST → Type Checker → MIR → Codegen (Cranelift/LLVM) / Interpreter.
-- **Data/Behavior Separation:** Use `struct` for data and `trait` for behavior. Avoid "God Objects" or "God Traits".
-- **Visitor Pattern:** Structure AST/MIR traversals around standard visitor patterns or recursive descent.
-- **Allocations:** Minimize allocations and `.clone()`. Prefer `&` references, `Cow<T>`, or Arena allocation (e.g., `bumpalo`). Box large `enum` variants to prevent cache bloat.
-- **Interfaces of the Standard Library and Runtime:** The standard library must be the only place where the types are defined. You must not duplicate definitions of types or functions in other modules (e.g., in the type checker, MIR builder, codegen etc.,). The runtime functions can only be called from the standard library, via the `runtime` keyword, and must not be referenced in any other way (e.g., in MIR, codegen, type checker etc.).
-- **DRY (Don't Repeat Yourself):** Do not repeat code. If you find yourself writing the same code in multiple places, extract it into a function or method.
+## 0. Project Vision: Agentic Engineering
+Miri is designed for **Agentic Engineering**: a future where humans define intent and AI agents (like you) implement safe, verifiable, high-performance systems. Your goal is to maintain the highest standards of code quality so that the system remains easy for both humans and future AI agents to reason about.
 
-## 2. Coding Standards & Naming (Strict)
-- **General Naming:** Use `UpperCamelCase` for types/traits, `snake_case` for functions/variables, and `SCREAMING_SNAKE_CASE` for constants.
-- **Parser/AST Naming Exception:** Functions that parse/create AST nodes MUST be named as **nouns**, not verbs. Use `fn identifier()` or `fn boolean()` instead of `fn parse_identifier()`.
-- **No Abbreviations:** Do not use `ctx`, `mgr`, `util`, `cfg` unless they are standard domain terms (like `lhs`, `rhs`). Use the domain language.
-- **Safety:** **NEVER** use `unwrap()` or `expect()` in library code. Always propagate via `Result<T, E>`. Use rich, typed errors with `Span`/location data.
-- **Exhaustive Matching:** List all enum variants in core logic `match` blocks. Do not use wildcard `_` to ensure future compiler updates intentionally break builds if variants are added.
-- **Standard Library:** Do not hardcode any standard library class names in any module. Do not create specialized implementations for standard library types. They should be compiled as any other code.
+---
 
-## 3. Documentation
-- **Doc Comments (`///`):** Every `pub` item must explain its **intent**, parameters, returns, errors, and **invariants**.
-- **No Fluff:** Do not write obvious comments (e.g., `// loop through list`). Only document complex logic, tradeoffs, or unsafe invariants.
+## 1. Codebase Architecture Map
+Navigating a compiler is complex. Use this map to locate modules:
 
-## 4. Testing Protocols
-Testing is **never** optional. When you add functionality, you **must** add comprehensive unit and integration tests.
-- **Location:** Organize tests by feature in separate files within the `tests/` directory (e.g., `tests/type_checker/new_feature.rs`). Do not bundle multiple unassociated features into one file.
-- **Assertions:** Do NOT use standard `assert_eq!` directly in integration tests. Rely on utility wrappers located in the test module's `utils.rs` (e.g., `assert_runs`, `assert_runs_with_output`, `assert_operation_outputs`). Create or reuse existing utilities.
-- **Input Content:** Ensure test inputs utilize actual Miri source code strings.
-- **Scope:** Include boundary checks, invalid inputs (negative tests), and real user flows. Tests must be fully deterministic.
-- **Miri Language Syntax:** When writing Miri language code in tests or examples, use `var` for mutable variables (not `let mut`), and always check FFI function signatures for allocator parameters before writing calls.
+- **`src/ast/`**: Language syntax tree definitions.
+- **`src/lexer/`**: Tokenization of source text.
+- **`src/parser/`**: Recursive descent parser. *Rule: Keep function names as nouns (e.g., `fn identifier()`).*
+- **`src/type_checker/`**: Type inference, validation, and trait resolution.
+- **`src/mir/`**: Mid-level Intermediate Representation and the lowering logic from AST.
+- **`src/codegen/`**: Backend implementations.
+    - `cranelift/`: Default fast-compilation backend.
+    - `llvm/`: (Future) Optimized production backend.
+- **`src/runtime/`**: Core runtime intrinsics and FFI scaffolding.
+- **`src/stdlib/`**: The Miri Standard Library (`system.*`). Implemented in Miri itself.
+- **`src/pipeline.rs`**: The main orchestrator that drives the compilation stages.
+- **`tests/`**: Mirror of `src/` hierarchy for unit and integration tests.
 
-## 5. Verification
-Before proposing or completing a change, you must verify your work by running the appropriate `make` commands to ensure both Miri and its runtimes are validated:
-1. **Formatting:** `make format` (Must yield zero diffs). **LLM agents MUST run `make format` after all code changes.**
-2. **Linting:** `make lint` to run formatting and clippy checks. Fix ALL warnings.
-3. **Building:** `make build` to ensure the core code and runtimes compile.
-4. **Testing:** Run feature-scoped tests first (e.g., `cargo test tests::type_checker::...`), then run the entire suite (`make test`) to ensure zero regressions.
+### Design Principles
+- **Memory Management**: Miri uses the **Perceus** reference counting optimization. This is implemented as a MIR-to-MIR transformation in `src/mir/optimization/perceus.rs`.
+- **Sources of Truth**: Always refer to `SPEC.md` for language syntax and `README.md` for project status.
 
-## 6. Workflow
-- When fixing Rust code, never use broad sed commands to apply changes. Always use targeted Edit tool operations on specific lines to avoid breaking valid code.
-- When implementing multi-phase features (runtime modules, stdlib, codegen), complete one phase fully with passing tests before starting the next. Do not start a new phase if the current one has compilation errors.
-- When creating temporary files (e.g. scripts, backup copies), always create them in the system's temporary directory and remove them after use.
-- When changing a module (e.g. parser, type checker, etc.) you must update related README.md files, if necessary.
+---
 
-By absolutely adhering to these rules, you will maintain the zero-cost abstractions, representational safety, and immense code quality required for the Miri compiler.
+## 2. The Miri Language: Quick Reference
+When writing tests or standard library code, remember Miri's syntax:
+
+- **Variables**: `let` (immutable), `var` (mutable). *No `let mut`!*
+- **Functions**: `fn name(param Type) ReturnType`.
+- **Imports**: `use system.io` or `use system.io.{print, println}`.
+- **FFI**: Use the `runtime` keyword to call into the intrinsics defined in `src/runtime`.
+- **Blocks**: Indentation-sensitive. Use a colon `:` for single-line blocks.
+- **Nullability**: Use `Option<T>` (defined in `stdlib`).
+
+---
+
+## 3. Strict Coding Standards
+- **Naming**: `UpperCamelCase` (Types/Traits), `snake_case` (Functions/Vars), `SCREAMING_SNAKE_CASE` (Constants).
+- **Safety**: **NEVER** use `unwrap()` or `expect()` in library code. Propagate errors via `Result<T, MiriError>`.
+- **Matching**: Exhaustive `match` is mandatory. Do not use `_` for domain-critical enums.
+- **Standard Library Independence**: The compiler must NOT hardcode any standard library names or have specialized logic for them. Treat them like user code.
+- **Separation of Concerns**: `struct` for data, `trait` for behavior. Avoid "God Objects".
+
+---
+
+## 4. Testing & Verification (Mandatory)
+Testing is the only way to prove your work is correct.
+
+- **Integration Tests**: Located in `tests/integration/`. Use helpers in `tests/integration/utils.rs`:
+    - `assert_runs(code)`: High-level success check.
+    - `assert_runs_with_output(code, expected)`: Check for specific output.
+    - `assert_compiler_error(code, "message")`: Test negative cases.
+    - `assert_runtime_error(code, "message")`: Test runtime panics.
+- **Verification Flow**:
+    1. **`make format`**: MUST run after every change.
+    2. **`make lint`**: Fix all clippy warnings.
+    3. **`make build`**: Ensure both compiler and runtimes compile.
+    4. **`make test`**: Run the full suite.
+
+---
+
+## 5. Workflow Best Practices for AI Agents
+To work efficiently and hit fewer roadblocks:
+
+1. **Research First**: Use `grep_search` to find examples of similar patterns (e.g., "how is `if` implemented in MIR?").
+2. **Incremental Changes**: Complete one phase (e.g., Type Checker) with passing tests before moving to the next (e.g., MIR lowering).
+3. **No Brute Force**: If you encounter a compilation error, analyze the `MiriError` or Rust error. Don't just `sed` the code.
+4. **Update READMEs**: If you change a module's core logic, update its local `README.md`.
+5. **Temporary Files**: Use `/tmp/` for scripts or backups.
+
+---
+
+## 6. Common Roadblocks & Troubleshooting
+- **Linker Errors**: If you add a runtime intrinsic, ensure it's exported in `src/runtime/core` and correctly declared in Miri's STDLIB with the `runtime` keyword.
+- **Type Checker Loops**: Ensure your inference logic has termination conditions, especially with generics.
+- **`make format` diffs**: If `make format` fails, it usually means you forgot to run it. Run it and re-verify.
+- **Unreachable Code**: The compiler pipeline is strict. If you add a variant to a MIR instruction, you MUST update all visitors and codegen.
+
+---
+
+By adhering to these rules, you maintain the zero-cost abstractions and representational safety required for the Miri compiler. Let's build the future of programming together.
+
