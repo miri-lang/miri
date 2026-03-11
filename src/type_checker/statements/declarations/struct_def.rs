@@ -63,6 +63,19 @@ impl TypeChecker {
             return;
         };
 
+        // Check for duplicate type definitions
+        if let Some(existing) = self.global_type_definitions.get(&name) {
+            let is_placeholder = match existing {
+                TypeDefinition::Struct(def) => def.fields.is_empty(),
+                _ => false,
+            };
+
+            if !is_placeholder {
+                self.report_error(format!("Type '{}' is already defined", name), name_expr.span);
+                return;
+            }
+        }
+
         let capacity = generics.as_ref().map(|g| g.len()).unwrap_or(0);
         let mut generic_defs = Vec::with_capacity(capacity);
         context.enter_scope();

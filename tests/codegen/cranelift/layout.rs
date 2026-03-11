@@ -4,12 +4,15 @@
 use cranelift_codegen::ir::types;
 use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::types::{Type, TypeKind};
+use miri::ast::MemberVisibility;
 use miri::codegen::cranelift::layout::{aggregate_size, field_layout};
+
 use miri::error::syntax::Span;
 use miri::type_checker::context::{
-    AliasDefinition, ClassDefinition, EnumDefinition, GenericDefinition, StructDefinition,
-    TraitDefinition, TypeDefinition,
+    AliasDefinition, ClassDefinition, EnumDefinition, FieldInfo, GenericDefinition, MethodInfo,
+    StructDefinition, TraitDefinition, TypeDefinition,
 };
+
 use std::collections::{BTreeMap, HashMap};
 
 fn ptr_ty() -> types::Type {
@@ -44,19 +47,20 @@ fn test_tuple_field_layout_with_padding() {
         create_type_expr(TypeKind::I64),
     ]);
 
-    // Field 0: I8 at offset 0
+    // Fields start after the count header (ptr_size = 8 bytes)
+    // Field 0: I8 at offset 8
     let (offset, ty) = field_layout(&tuple_kind, 0, &type_defs, ptr);
-    assert_eq!(offset, 0);
+    assert_eq!(offset, 8);
     assert_eq!(ty, types::I8);
 
-    // Field 1: I32, alignment 4 → offset 1 padded to 4
+    // Field 1: I32, alignment 4 → offset 9 padded to 12
     let (offset, ty) = field_layout(&tuple_kind, 1, &type_defs, ptr);
-    assert_eq!(offset, 4);
+    assert_eq!(offset, 12);
     assert_eq!(ty, types::I32);
 
-    // Field 2: I64, alignment 8 → offset 4+4=8, already aligned
+    // Field 2: I64, alignment 8 → offset 12+4=16, already aligned
     let (offset, ty) = field_layout(&tuple_kind, 2, &type_defs, ptr);
-    assert_eq!(offset, 8);
+    assert_eq!(offset, 16);
     assert_eq!(ty, types::I64);
 }
 
@@ -71,8 +75,8 @@ fn test_tuple_aggregate_size_with_padding() {
         create_type_expr(TypeKind::I64),
     ]);
 
-    // Layout: I8@0, I32@4, I64@8 → end=16, max_align=8 → final=16
-    assert_eq!(aggregate_size(&tuple_kind, &type_defs, ptr), 16);
+    // Layout: count@0, I8@8, I32@12, I64@16 → end=24, max_align=8 → final=24
+    assert_eq!(aggregate_size(&tuple_kind, &type_defs, ptr), 24);
 }
 
 #[test]
@@ -82,12 +86,13 @@ fn test_tuple_single_field() {
 
     let tuple_kind = TypeKind::Tuple(vec![create_type_expr(TypeKind::I32)]);
 
+    // Field 0 starts after count header (8 bytes)
     let (offset, ty) = field_layout(&tuple_kind, 0, &type_defs, ptr);
-    assert_eq!(offset, 0);
+    assert_eq!(offset, 8);
     assert_eq!(ty, types::I32);
 
-    // Size: I32 (4 bytes), max_align = max(8, 4) = 8 → align_to(4, 8) = 8
-    assert_eq!(aggregate_size(&tuple_kind, &type_defs, ptr), 8);
+    // Size: count@0 (8 bytes) + I32@8 (4 bytes) = 12, max_align=8 → align_to(12, 8) = 16
+    assert_eq!(aggregate_size(&tuple_kind, &type_defs, ptr), 16);
 }
 
 #[test]
@@ -97,10 +102,8 @@ fn test_tuple_empty() {
 
     let tuple_kind = TypeKind::Tuple(vec![]);
 
-    // Empty tuple: total=0, max_align=ptr_size(8) → align_to(0, 8) = 0
-    // Note: align_to(0, 8) = 0, so empty tuple has size 0.
-    // This is because 0 is already aligned to any alignment.
-    assert_eq!(aggregate_size(&tuple_kind, &type_defs, ptr), 0);
+    // Empty tuple: total=ptr_size(8) (count header only), max_align=8 → 8
+    assert_eq!(aggregate_size(&tuple_kind, &type_defs, ptr), 8);
 }
 
 #[test]
@@ -114,13 +117,14 @@ fn test_tuple_no_padding_needed() {
         create_type_expr(TypeKind::I32),
     ]);
 
+    // Fields start after count header (8 bytes)
     let (offset0, _) = field_layout(&tuple_kind, 0, &type_defs, ptr);
     let (offset1, _) = field_layout(&tuple_kind, 1, &type_defs, ptr);
-    assert_eq!(offset0, 0);
-    assert_eq!(offset1, 4);
+    assert_eq!(offset0, 8);
+    assert_eq!(offset1, 12);
 
-    // Total = 8, max_align = max(8, 4) = 8 → align_to(8, 8) = 8
-    assert_eq!(aggregate_size(&tuple_kind, &type_defs, ptr), 8);
+    // Total = count@0 (8) + I32@8 (4) + I32@12 (4) = 16, max_align=8 → 16
+    assert_eq!(aggregate_size(&tuple_kind, &type_defs, ptr), 16);
 }
 
 #[test]
@@ -135,21 +139,22 @@ fn test_tuple_with_pointer_sized_elements() {
         create_type_expr(TypeKind::String),
     ]);
 
-    // String@0 (8 bytes), I32@8 (4 bytes, align=4, 8 is ok), String@16 (align=8, 12→16)
+    // Fields start after count header (8 bytes)
+    // String@8 (8 bytes), I32@16 (4 bytes, align=4, 16 is ok), String@24 (align=8, 20→24)
     let (offset0, ty0) = field_layout(&tuple_kind, 0, &type_defs, ptr);
-    assert_eq!(offset0, 0);
+    assert_eq!(offset0, 8);
     assert_eq!(ty0, ptr);
 
     let (offset1, ty1) = field_layout(&tuple_kind, 1, &type_defs, ptr);
-    assert_eq!(offset1, 8);
+    assert_eq!(offset1, 16);
     assert_eq!(ty1, types::I32);
 
     let (offset2, ty2) = field_layout(&tuple_kind, 2, &type_defs, ptr);
-    assert_eq!(offset2, 16);
+    assert_eq!(offset2, 24);
     assert_eq!(ty2, ptr);
 
-    // Total = 16 + 8 = 24, max_align = 8 → 24
-    assert_eq!(aggregate_size(&tuple_kind, &type_defs, ptr), 24);
+    // Total = count@0 (8) + String@8 (8) + I32@16 (4) + String@24 (8) = 32, max_align=8 → 32
+    assert_eq!(aggregate_size(&tuple_kind, &type_defs, ptr), 32);
 }
 
 #[test]
@@ -163,15 +168,16 @@ fn test_tuple_with_i128() {
         create_type_expr(TypeKind::I128),
     ]);
 
+    // Fields start after count header (8 bytes)
     let (offset0, _) = field_layout(&tuple_kind, 0, &type_defs, ptr);
-    assert_eq!(offset0, 0);
+    assert_eq!(offset0, 8);
 
-    // I128 alignment is 16 → offset 1 padded to 16
+    // I128 alignment is 16 → offset 9 padded to 16
     let (offset1, ty1) = field_layout(&tuple_kind, 1, &type_defs, ptr);
     assert_eq!(offset1, 16);
     assert_eq!(ty1, types::I128);
 
-    // Total = 16 + 16 = 32, max_align = 16 → 32
+    // Total = count@0 (8) + I8@8 (1) + I128@16 (16) = 32, max_align=16 → 32
     assert_eq!(aggregate_size(&tuple_kind, &type_defs, ptr), 32);
 }
 
@@ -509,7 +515,7 @@ fn test_class_is_pointer_sized() {
             generics: None,
             base_class: None,
             traits: vec![],
-            fields: BTreeMap::new(),
+            fields: Vec::new(),
             methods: BTreeMap::new(),
             module: String::new(),
             is_abstract: false,
@@ -532,21 +538,27 @@ fn test_class_field_layout_uses_pointer_slots() {
             generics: None,
             base_class: None,
             traits: vec![],
-            fields: BTreeMap::new(),
+            fields: vec![
+                ("f0".to_string(), FieldInfo { ty: t(TypeKind::I64), mutable: false, visibility: MemberVisibility::Public }),
+                ("f1".to_string(), FieldInfo { ty: t(TypeKind::I64), mutable: false, visibility: MemberVisibility::Public }),
+                ("f2".to_string(), FieldInfo { ty: t(TypeKind::I64), mutable: false, visibility: MemberVisibility::Public }),
+            ],
             methods: BTreeMap::new(),
             module: String::new(),
             is_abstract: false,
         }),
     );
 
+
     let kind = TypeKind::Custom("C".to_string(), None);
 
     let (o0, t0) = field_layout(&kind, 0, &type_defs, ptr);
     let (o1, t1) = field_layout(&kind, 1, &type_defs, ptr);
     let (o2, t2) = field_layout(&kind, 2, &type_defs, ptr);
-    assert_eq!(o0, 0);
-    assert_eq!(o1, ptr.bytes() as i32);
-    assert_eq!(o2, 2 * ptr.bytes() as i32);
+    assert_eq!(o0, 2 * ptr.bytes() as i32);
+    assert_eq!(o1, 2 * ptr.bytes() as i32 + ptr.bytes() as i32);
+    assert_eq!(o2, 2 * ptr.bytes() as i32 + 2 * ptr.bytes() as i32);
+
     assert_eq!(t0, ptr);
     assert_eq!(t1, ptr);
     assert_eq!(t2, ptr);
@@ -752,13 +764,14 @@ fn test_layout_with_32bit_pointers() {
         create_type_expr(TypeKind::I32),
     ]);
 
+    // Fields start after count header (ptr_size = 4 bytes for 32-bit)
     let (o0, _) = field_layout(&tuple_kind, 0, &type_defs, ptr32);
     let (o1, _) = field_layout(&tuple_kind, 1, &type_defs, ptr32);
-    assert_eq!(o0, 0);
-    assert_eq!(o1, 4); // I32 alignment = 4
+    assert_eq!(o0, 4);
+    assert_eq!(o1, 8); // I32 alignment = 4, offset 5 → 8
 
-    // Size: I8@0 + I32@4 = 8, max_align = max(4, 1, 4) = 4, align_to(8, 4) = 8
-    assert_eq!(aggregate_size(&tuple_kind, &type_defs, ptr32), 8);
+    // Size: count@0 (4) + I8@4 (1) + I32@8 (4) = 12, max_align=max(4,1,4)=4, align_to(12,4)=12
+    assert_eq!(aggregate_size(&tuple_kind, &type_defs, ptr32), 12);
 }
 
 #[test]

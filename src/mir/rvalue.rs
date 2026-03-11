@@ -34,6 +34,8 @@ pub enum AggregateKind {
     /// Uses `Rc<str>` to avoid repeated string cloning during lowering.
     /// First operand is the discriminant, followed by associated values.
     Enum(Rc<str>, Rc<str>),
+    /// An Option value, `Some(val)`. It is heap-allocated for correct representation.
+    Option,
 }
 
 /// Right-hand value: the result of a computation.
@@ -147,6 +149,16 @@ impl fmt::Display for Rvalue {
                 }
                 AggregateKind::Enum(type_name, variant_name) => {
                     write!(f, "{}.{}(", type_name, variant_name)?;
+                    for (i, op) in ops.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", op)?;
+                    }
+                    write!(f, ")")
+                }
+                AggregateKind::Option => {
+                    write!(f, "Some(")?;
                     for (i, op) in ops.iter().enumerate() {
                         if i > 0 {
                             write!(f, ", ")?;

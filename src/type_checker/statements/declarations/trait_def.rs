@@ -72,9 +72,16 @@ impl TypeChecker {
         };
 
         // Check for duplicate type definitions
-        if self.global_type_definitions.contains_key(&name) {
-            self.report_error(format!("Type '{}' is already defined", name), span);
-            return;
+        if let Some(existing) = self.global_type_definitions.get(&name) {
+            let is_placeholder = match existing {
+                TypeDefinition::Trait(def) => def.methods.is_empty(),
+                _ => false,
+            };
+
+            if !is_placeholder {
+                self.report_error(format!("Type '{}' is already defined", name), span);
+                return;
+            }
         }
 
         // Process generics

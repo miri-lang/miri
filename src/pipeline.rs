@@ -643,14 +643,23 @@ fn runtime_library_dir(runtime: &RuntimeKind) -> Result<PathBuf, CompilerError> 
     if let Ok(exe) = std::env::current_exe() {
         let mut search = exe.as_path();
         while let Some(parent) = search.parent() {
-            let candidate = parent
+            let release_candidate = parent
                 .join("src")
                 .join("runtime")
                 .join(runtime.name())
                 .join("target")
                 .join("release");
-            if candidate.exists() {
-                return Ok(candidate);
+            if release_candidate.exists() {
+                return Ok(release_candidate);
+            }
+            let debug_candidate = parent
+                .join("src")
+                .join("runtime")
+                .join(runtime.name())
+                .join("target")
+                .join("debug");
+            if debug_candidate.exists() {
+                return Ok(debug_candidate);
             }
             search = parent;
         }

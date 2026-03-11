@@ -54,7 +54,9 @@ pub fn field_layout(
                 field_idx,
                 element_exprs.len()
             );
-            let mut offset: i32 = 0;
+            // Tuple layout: [elem_count: ptr_size][field0][field1]...
+            // Fields start after the count header.
+            let mut offset: i32 = ptr_size;
             for (i, elem_expr) in element_exprs.iter().enumerate() {
                 let cl_ty = type_from_expression(elem_expr, ptr_ty);
                 let alignment = type_alignment(cl_ty);
@@ -113,10 +115,23 @@ pub fn field_layout(
                             ptr_ty,
                         )
                     }
-                    // Generic, Class, Trait — assume pointer-sized fields
-                    TypeDefinition::Generic(_)
-                    | TypeDefinition::Class(_)
-                    | TypeDefinition::Trait(_) => ((field_idx as i32) * ptr_size, ptr_ty),
+                    TypeDefinition::Generic(_) => ((field_idx as i32) * ptr_size, ptr_ty),
+                    TypeDefinition::Class(class_def) => {
+                        // Class layout: [header: 16 bytes (malloc_ptr + RC)][field0][field1]...
+                        // Fields are stored in declaration order (Vec).
+                        let mut offset: i32 = 2 * ptr_size; // Header overhead
+                        for (i, (_field_name, field_info)) in class_def.fields.iter().enumerate() {
+                            let cl_ty = translate_type_kind(&field_info.ty.kind, ptr_ty);
+                            let alignment = type_alignment(cl_ty);
+                            offset = align_to(offset, alignment);
+                            if i == field_idx {
+                                return (offset, cl_ty);
+                            }
+                            offset += cl_ty.bytes() as i32;
+                        }
+                        (offset, ptr_ty)
+                    }
+                    TypeDefinition::Trait(_) => ((field_idx as i32) * ptr_size, ptr_ty),
                 }
             } else {
                 // Type not found — assume pointer-sized fields
@@ -143,7 +158,8 @@ pub fn aggregate_size(
 
     match local_type {
         TypeKind::Tuple(element_exprs) => {
-            let mut total: i32 = 0;
+            // Start after the count header (ptr_size bytes at offset 0)
+            let mut total: i32 = ptr_size as i32;
             for elem_expr in element_exprs {
                 let cl_ty = type_from_expression(elem_expr, ptr_ty);
                 let alignment = type_alignment(cl_ty);

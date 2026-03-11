@@ -322,7 +322,22 @@ impl TypeChecker {
             TypeKind::Map(key, _val) => self
                 .extract_type_from_expression(key)
                 .unwrap_or_else(|_| Self::error_type()),
-            TypeKind::Custom(name, args) if name == "Array" || name == "List" => {
+            TypeKind::Tuple(element_type_exprs) => {
+                // For homogeneous tuples, return the element type
+                if element_type_exprs.is_empty() {
+                    Self::error_type()
+                } else {
+                    self.extract_type_from_expression(&element_type_exprs[0])
+                        .unwrap_or_else(|_| Self::error_type())
+                }
+            }
+            TypeKind::Custom(name, args)
+                if name == "Array"
+                    || name == "List"
+                    || name == "Set"
+                    || name == "Map"
+                    || name == "Tuple" =>
+            {
                 if let Some(args) = args {
                     if !args.is_empty() {
                         return self
@@ -769,7 +784,7 @@ impl TypeChecker {
                                 self.global_type_definitions.get(class_name)
                             {
                                 if let ExpressionKind::Identifier(field_name, _) = &prop.node {
-                                    if let Some(field_info) = def.fields.get(field_name) {
+                                    if let Some((_, field_info)) = def.fields.iter().find(|(n, _)| n == field_name) {
                                         return field_info.mutable;
                                     }
                                 }
@@ -847,6 +862,22 @@ impl TypeChecker {
                     }
                     _ => None,
                 }
+            }
+            ExpressionKind::Call(callee, args) => {
+                if args.is_empty() {
+                    if let ExpressionKind::Identifier(name, _) = &callee.node {
+                        if let Some(ctx) = context {
+                            if let Some(info) = ctx.resolve_info(name) {
+                                if info.is_constant {
+                                    if let Some(Literal::Integer(val)) = &info.value {
+                                        return Some(val.to_i128());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                None
             }
             _ => None,
         }

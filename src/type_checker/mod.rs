@@ -21,12 +21,13 @@
 //! - [`operators`] - Binary and unary operator type validation
 //! - [`utils`] - Type predicates, visibility, and error reporting
 
+use crate::ast::factory::make_type;
 use crate::ast::types::Type;
 use crate::ast::*;
 use crate::error::diagnostic::Diagnostic;
 use crate::error::syntax::Span;
 use crate::error::type_error::TypeError;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 mod builtins;
 mod compatibility;
@@ -139,6 +140,20 @@ impl TypeChecker {
     /// Main entry point for type checking a program.
     pub fn check(&mut self, program: &Program) -> Result<(), Vec<TypeError>> {
         let mut context = Context::new();
+
+        // Pass 1: Collect all top-level declarations to support forward references.
+        // This registers function signatures and type definitions (structs, enums, classes, traits).
+        for statement in &program.body {
+            if let StatementKind::Block(stmts) = &statement.node {
+                for stmt in stmts {
+                    self.collect_declaration(stmt, &mut context);
+                }
+            } else {
+                self.collect_declaration(statement, &mut context);
+            }
+        }
+
+        // Pass 2: Check all statement bodies now that all symbols are registered.
         for statement in &program.body {
             // Flatten top-level blocks to ensure variables are declared in the global scope
             // This handles cases where the entire program is indented (e.g. in tests)
@@ -155,6 +170,125 @@ impl TypeChecker {
             Ok(())
         } else {
             Err(self.errors.clone())
+        }
+    }
+
+    /// Preliminary pass to register declarations without checking their bodies.
+    fn collect_declaration(&mut self, statement: &Statement, context: &mut Context) {
+        match &statement.node {
+            StatementKind::FunctionDeclaration(decl) => {
+                let func_type = make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                    generics: decl.generics.clone(),
+                    params: decl.params.to_vec(),
+                    return_type: decl.return_type.clone(),
+                })));
+
+                if context.scopes.len() == 1 {
+                    self.global_scope.insert(
+                        decl.name.clone(),
+                        SymbolInfo::new(
+                            func_type.clone(),
+                            false,
+                            false,
+                            decl.properties.visibility.clone(),
+                            self.current_module.clone(),
+                            None,
+                        ),
+                    );
+                }
+
+                context.define(
+                    decl.name.clone(),
+                    SymbolInfo::new(
+                        func_type,
+                        false,
+                        false,
+                        decl.properties.visibility.clone(),
+                        self.current_module.clone(),
+                        None,
+                    ),
+                );
+            }
+            StatementKind::Class(class_data) => {
+                // Register class name in global_type_definitions to allow references
+                // during function signature resolution.
+                if let Ok(name) = self.extract_type_name(&class_data.name) {
+                    if !self.global_type_definitions.contains_key(name) {
+                        // Extract generics before insertion to avoid borrow checker error
+                        let generics = class_data.generics.as_ref().map(|gens| self.extract_generic_definitions(gens, context));
+                        
+                        // Initial registration as an empty class to resolve basic type identity.
+                        // The full class check will happen later in check_statement.
+                        self.global_type_definitions.insert(
+                            name.to_string(),
+                            TypeDefinition::Class(context::ClassDefinition {
+                                name: name.to_string(),
+                                generics,
+                                base_class: None,
+                                traits: vec![],
+                                fields: Vec::new(),
+                                methods: BTreeMap::new(),
+                                module: self.current_module.clone(),
+                                is_abstract: class_data.is_abstract,
+                            }),
+                        );
+                    }
+                }
+            }
+            StatementKind::Struct(name_expr, generics_expr, _, _) => {
+                if let Ok(name) = self.extract_type_name(name_expr) {
+                    if !self.global_type_definitions.contains_key(name) {
+                        let generics = generics_expr.as_ref().map(|gens| self.extract_generic_definitions(gens, context));
+                        
+                        self.global_type_definitions.insert(
+                            name.to_string(),
+                            TypeDefinition::Struct(context::StructDefinition {
+                                fields: vec![],
+                                generics,
+                                module: self.current_module.clone(),
+                            }),
+                        );
+                    }
+                }
+            }
+            StatementKind::Enum(name_expr, generics_expr, _, _) => {
+                if let Ok(name) = self.extract_type_name(name_expr) {
+                    if !self.global_type_definitions.contains_key(name) {
+                        let generics = generics_expr.as_ref().map(|gens| self.extract_generic_definitions(gens, context));
+
+                        self.global_type_definitions.insert(
+                            name.to_string(),
+                            TypeDefinition::Enum(context::EnumDefinition {
+                                variants: BTreeMap::new(),
+                                generics,
+                            }),
+                        );
+                    }
+                }
+            }
+            StatementKind::Trait(name_expr, generics_expr, _, _, _) => {
+                if let Ok(name) = self.extract_type_name(name_expr) {
+                    if !self.global_type_definitions.contains_key(name) {
+                        let generics = generics_expr.as_ref().map(|gens| self.extract_generic_definitions(gens, context));
+
+                        self.global_type_definitions.insert(
+                            name.to_string(),
+                            TypeDefinition::Trait(context::TraitDefinition {
+                                name: name.to_string(),
+                                generics,
+                                parent_traits: vec![],
+                                methods: BTreeMap::new(),
+                                module: self.current_module.clone(),
+                            }),
+                        );
+                    }
+                }
+            }
+            StatementKind::Use(path_expr, alias) => {
+                // Load imported modules early so their types are available
+                self.check_use(path_expr, alias, context);
+            }
+            _ => {}
         }
     }
 }

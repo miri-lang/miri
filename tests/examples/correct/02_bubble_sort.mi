@@ -1,0 +1,36 @@
+// SPDX-License-Identifier: Apache-2.0
+// Bubble Sort algorithm implementation and performance test.
+use system.io
+use system.time
+use system.collections.array
+
+fn bubble_sort(arr Array<int, 10>)
+    var a = arr
+    var n = a.length()
+    var i = 0
+    while i < n
+        var j = 0
+        while j < n - i - 1
+            if a[j] > a[j + 1]
+                let temp = a[j]
+                a[j] = a[j + 1]
+                a[j + 1] = temp
+            j += 1
+        i += 1
+
+fn main()
+    var data = [64, 34, 25, 12, 22, 11, 90, 5, 45, 1]
+    
+    print("Unsorted array: ")
+    for x in data: print(f"{x} ")
+    println()
+    
+    let start = nanotime()
+    bubble_sort(data)
+    let end = nanotime()
+    
+    print("Sorted array:   ")
+    for x in data: print(f"{x} ")
+    println()
+    
+    println(f"Time taken: {end - start} ns")

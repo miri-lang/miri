@@ -1,0 +1,57 @@
+// SPDX-License-Identifier: Apache-2.0
+// Linked List Reversal implementation (using flat lists for stability).
+use system.io
+use system.time
+use system.collections.list
+
+// In Miri, we simulate a linked list using indices:
+// values[i] is the data
+// nexts[i] is the index of the next node (-1 for None)
+
+fn reverse_list(nexts List<int>, head int) int
+    var prev = -1
+    var current = head
+    
+    while current != -1
+        let next_node = nexts.element_at(current)
+        nexts.set(current, prev)
+        prev = current
+        current = next_node
+    
+    return prev
+
+fn print_list(values List<int>, nexts List<int>, head int)
+    var current = head
+    while current != -1
+        print(f"{values.element_at(current)} -> ")
+        current = nexts.element_at(current)
+    println("None")
+
+fn main()
+    var values = List<int>()
+    var nexts = List<int>()
+    
+    // Create list: 10 -> 20 -> 30 -> 40 -> 50
+    values.push(10)
+    nexts.push(1)
+    values.push(20)
+    nexts.push(2)
+    values.push(30)
+    nexts.push(3)
+    values.push(40)
+    nexts.push(4)
+    values.push(50)
+    nexts.push(-1)
+    
+    let head = 0
+    println("Original list:")
+    print_list(values, nexts, head)
+    
+    let start = nanotime()
+    let new_head = reverse_list(nexts, head)
+    let end = nanotime()
+    
+    println("Reversed list:")
+    print_list(values, nexts, new_head)
+    
+    println(f"Time taken: {end - start} ns")
