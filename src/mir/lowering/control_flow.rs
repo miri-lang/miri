@@ -1449,7 +1449,7 @@ fn lower_struct_constructor(
         let op = if op_ty.kind != field_ty.kind {
             let temp = ctx.push_temp(field_ty.clone(), *span);
             ctx.push_statement(crate::mir::Statement {
-                kind: StatementKind::Assign(Place::new(temp), coerce_rvalue(op, &op_ty, &field_ty)),
+                kind: StatementKind::Assign(Place::new(temp), coerce_rvalue(op, &op_ty, field_ty)),
                 span: *span,
             });
             Operand::Copy(Place::new(temp))
