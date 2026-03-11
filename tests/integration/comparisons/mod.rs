@@ -3,7 +3,6 @@
 
 pub use crate::integration::utils;
 
-
 pub mod float;
 pub mod integer;
 pub mod logical;

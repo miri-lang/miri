@@ -3,7 +3,6 @@
 
 pub use crate::integration::utils;
 
-
 pub mod declaration;
 pub mod mutability;
 pub mod nullable;

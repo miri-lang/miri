@@ -637,7 +637,9 @@ impl TypeChecker {
                     }
 
                     // Check fields in current class
-                    if let Some((_, field_info)) = search_class_def.fields.iter().find(|(n, _)| n == prop_name) {
+                    if let Some((_, field_info)) =
+                        search_class_def.fields.iter().find(|(n, _)| n == prop_name)
+                    {
                         // Check visibility for class field
                         if !self.check_member_visibility(
                             &field_info.visibility,

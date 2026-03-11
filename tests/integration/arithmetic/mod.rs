@@ -3,7 +3,6 @@
 
 pub use crate::integration::utils;
 
-
 pub mod binary;
 pub mod errors;
 pub mod precedence;
