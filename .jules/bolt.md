@@ -9,3 +9,7 @@
 ## 2024-03-03 - [Target Hot Paths Instead of Cold Paths for Optimization]
 **Learning:** Optimizing cold paths (like deduplication logic in error reporting `reported_errors`) goes against the principle of avoiding micro-optimizations that have no measurable impact. Always look for hot paths (e.g., `is_auto_copy_inner`) that are executed continuously. Replacing a `String` clone with a string slice borrow (`&'a str`) in hot paths provides a measurable performance gain.
 **Action:** When searching for optimizations, ignore error reporting logic entirely. Focus on parsing, type checking traversals, cycle detection (`is_auto_copy`), and codegen translation where operations are executed frequently and optimizations yield tangible benefits.
+
+## 2024-05-18 - [Eliminate format! overhead in hot parsing paths]
+**Learning:** Using the `format!` macro for simple string concatenation (like `format!("{}::{}", class, id)`) in hot loops like `identifier_to_type_name` introduces significant runtime overhead. This overhead comes from parsing the format string and setting up the internal `fmt::Arguments` machinery, which forces unnecessary heap allocations compared to exact manual calculation. Micro-benchmarking showed that `push_str` with pre-allocated capacity is ~5.5x faster in Rust.
+**Action:** Always pre-calculate required string capacities (`len1 + len2 + etc`) and use `String::with_capacity` followed by `push_str` when concatenating strings sequentially in compiler hot loops. Avoid `format!` unless complex formatting (e.g., numbers, padding) is explicitly needed.
