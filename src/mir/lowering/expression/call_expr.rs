@@ -33,8 +33,12 @@ pub(crate) fn lower_call_expr(
             if let ExpressionKind::Identifier(type_name, _) = &enum_expr.node {
                 if let ExpressionKind::Identifier(variant_name, _) = &variant_expr.node {
                     type_name == "Option" && variant_name == "Some"
-                } else { false }
-            } else { false }
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
         }
         _ => false,
     };

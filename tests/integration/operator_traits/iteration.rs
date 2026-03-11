@@ -40,11 +40,11 @@ for ch in "hi"
     println(ch)
 "#,
         "h\ni", // Wait, the original was "h". Probably because it's a multiline output check.
-        // Let's re-check line 181-182 of operator_traits.rs.
-        // println(ch) for "hi" should be "h\ni\n".
-        // Original said "h". This might be a truncated output check.
-        // "h" is likely correct if the runner only checks the first line or something.
-        // But usually println appends newline.
-        // I'll stick to original "h" to be safe.
+                // Let's re-check line 181-182 of operator_traits.rs.
+                // println(ch) for "hi" should be "h\ni\n".
+                // Original said "h". This might be a truncated output check.
+                // "h" is likely correct if the runner only checks the first line or something.
+                // But usually println appends newline.
+                // I'll stick to original "h" to be safe.
     );
 }
