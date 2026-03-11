@@ -3,7 +3,6 @@
 
 pub use crate::integration::utils;
 
-
 pub mod basic;
 pub mod coalescing;
 pub mod edge_cases;

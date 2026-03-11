@@ -614,31 +614,63 @@ impl TypeChecker {
         match (&t1.kind, &t2.kind) {
             // Map variations
             (TypeKind::Map(k1, v1), TypeKind::Custom(name, args)) if name == "Map" => {
-                Some(self.check_generic_args_compatible_with_exprs(&Some(vec![*k1.clone(), *v1.clone()]), args, context))
+                Some(self.check_generic_args_compatible_with_exprs(
+                    &Some(vec![*k1.clone(), *v1.clone()]),
+                    args,
+                    context,
+                ))
             }
             (TypeKind::Custom(name, args), TypeKind::Map(k2, v2)) if name == "Map" => {
-                Some(self.check_generic_args_compatible_with_exprs(args, &Some(vec![*k2.clone(), *v2.clone()]), context))
+                Some(self.check_generic_args_compatible_with_exprs(
+                    args,
+                    &Some(vec![*k2.clone(), *v2.clone()]),
+                    context,
+                ))
             }
             // List variations
             (TypeKind::List(inner1), TypeKind::Custom(name, args)) if name == "List" => {
-                Some(self.check_generic_args_compatible_with_exprs(&Some(vec![*inner1.clone()]), args, context))
+                Some(self.check_generic_args_compatible_with_exprs(
+                    &Some(vec![*inner1.clone()]),
+                    args,
+                    context,
+                ))
             }
             (TypeKind::Custom(name, args), TypeKind::List(inner2)) if name == "List" => {
-                Some(self.check_generic_args_compatible_with_exprs(args, &Some(vec![*inner2.clone()]), context))
+                Some(self.check_generic_args_compatible_with_exprs(
+                    args,
+                    &Some(vec![*inner2.clone()]),
+                    context,
+                ))
             }
             // Set variations
             (TypeKind::Set(inner1), TypeKind::Custom(name, args)) if name == "Set" => {
-                Some(self.check_generic_args_compatible_with_exprs(&Some(vec![*inner1.clone()]), args, context))
+                Some(self.check_generic_args_compatible_with_exprs(
+                    &Some(vec![*inner1.clone()]),
+                    args,
+                    context,
+                ))
             }
             (TypeKind::Custom(name, args), TypeKind::Set(inner2)) if name == "Set" => {
-                Some(self.check_generic_args_compatible_with_exprs(args, &Some(vec![*inner2.clone()]), context))
+                Some(self.check_generic_args_compatible_with_exprs(
+                    args,
+                    &Some(vec![*inner2.clone()]),
+                    context,
+                ))
             }
             // Array variations
             (TypeKind::Array(inner1, _), TypeKind::Custom(name, args)) if name == "Array" => {
-                Some(self.check_generic_args_compatible_with_exprs(&Some(vec![*inner1.clone()]), args, context))
+                Some(self.check_generic_args_compatible_with_exprs(
+                    &Some(vec![*inner1.clone()]),
+                    args,
+                    context,
+                ))
             }
             (TypeKind::Custom(name, args), TypeKind::Array(inner2, _)) if name == "Array" => {
-                Some(self.check_generic_args_compatible_with_exprs(args, &Some(vec![*inner2.clone()]), context))
+                Some(self.check_generic_args_compatible_with_exprs(
+                    args,
+                    &Some(vec![*inner2.clone()]),
+                    context,
+                ))
             }
             _ => None,
         }

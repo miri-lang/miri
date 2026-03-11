@@ -72,7 +72,10 @@ impl TypeChecker {
             };
 
             if !is_placeholder {
-                self.report_error(format!("Type '{}' is already defined", name), name_expr.span);
+                self.report_error(
+                    format!("Type '{}' is already defined", name),
+                    name_expr.span,
+                );
                 return;
             }
         }

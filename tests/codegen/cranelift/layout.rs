@@ -9,7 +9,7 @@ use miri::codegen::cranelift::layout::{aggregate_size, field_layout};
 
 use miri::error::syntax::Span;
 use miri::type_checker::context::{
-    AliasDefinition, ClassDefinition, EnumDefinition, FieldInfo, GenericDefinition, MethodInfo,
+    AliasDefinition, ClassDefinition, EnumDefinition, FieldInfo, GenericDefinition,
     StructDefinition, TraitDefinition, TypeDefinition,
 };
 
@@ -539,16 +539,36 @@ fn test_class_field_layout_uses_pointer_slots() {
             base_class: None,
             traits: vec![],
             fields: vec![
-                ("f0".to_string(), FieldInfo { ty: t(TypeKind::I64), mutable: false, visibility: MemberVisibility::Public }),
-                ("f1".to_string(), FieldInfo { ty: t(TypeKind::I64), mutable: false, visibility: MemberVisibility::Public }),
-                ("f2".to_string(), FieldInfo { ty: t(TypeKind::I64), mutable: false, visibility: MemberVisibility::Public }),
+                (
+                    "f0".to_string(),
+                    FieldInfo {
+                        ty: t(TypeKind::I64),
+                        mutable: false,
+                        visibility: MemberVisibility::Public,
+                    },
+                ),
+                (
+                    "f1".to_string(),
+                    FieldInfo {
+                        ty: t(TypeKind::I64),
+                        mutable: false,
+                        visibility: MemberVisibility::Public,
+                    },
+                ),
+                (
+                    "f2".to_string(),
+                    FieldInfo {
+                        ty: t(TypeKind::I64),
+                        mutable: false,
+                        visibility: MemberVisibility::Public,
+                    },
+                ),
             ],
             methods: BTreeMap::new(),
             module: String::new(),
             is_abstract: false,
         }),
     );
-
 
     let kind = TypeKind::Custom("C".to_string(), None);
 

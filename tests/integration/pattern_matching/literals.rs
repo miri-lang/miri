@@ -70,9 +70,9 @@ fn main()
     println(f"{sign(3)}")
 "#,
         "-1\n0\n1", // Wait, my previous output check was wrong in sign(-5)
-        // Original file had: sign(-5) -> -1, sign(0) -> 0, sign(3) -> 1.
-        // Wait, line 216 says "println(f"{sign(-5)}")", line 220 says "1".
-        // That's likely a bug in the test itself or my reading.
-        // let's re-read line 210-221 of pattern_matching.rs
+                    // Original file had: sign(-5) -> -1, sign(0) -> 0, sign(3) -> 1.
+                    // Wait, line 216 says "println(f"{sign(-5)}")", line 220 says "1".
+                    // That's likely a bug in the test itself or my reading.
+                    // let's re-read line 210-221 of pattern_matching.rs
     );
 }

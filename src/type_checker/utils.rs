@@ -784,7 +784,9 @@ impl TypeChecker {
                                 self.global_type_definitions.get(class_name)
                             {
                                 if let ExpressionKind::Identifier(field_name, _) = &prop.node {
-                                    if let Some((_, field_info)) = def.fields.iter().find(|(n, _)| n == field_name) {
+                                    if let Some((_, field_info)) =
+                                        def.fields.iter().find(|(n, _)| n == field_name)
+                                    {
                                         return field_info.mutable;
                                     }
                                 }

@@ -215,8 +215,11 @@ impl TypeChecker {
                 if let Ok(name) = self.extract_type_name(&class_data.name) {
                     if !self.global_type_definitions.contains_key(name) {
                         // Extract generics before insertion to avoid borrow checker error
-                        let generics = class_data.generics.as_ref().map(|gens| self.extract_generic_definitions(gens, context));
-                        
+                        let generics = class_data
+                            .generics
+                            .as_ref()
+                            .map(|gens| self.extract_generic_definitions(gens, context));
+
                         // Initial registration as an empty class to resolve basic type identity.
                         // The full class check will happen later in check_statement.
                         self.global_type_definitions.insert(
@@ -238,8 +241,10 @@ impl TypeChecker {
             StatementKind::Struct(name_expr, generics_expr, _, _) => {
                 if let Ok(name) = self.extract_type_name(name_expr) {
                     if !self.global_type_definitions.contains_key(name) {
-                        let generics = generics_expr.as_ref().map(|gens| self.extract_generic_definitions(gens, context));
-                        
+                        let generics = generics_expr
+                            .as_ref()
+                            .map(|gens| self.extract_generic_definitions(gens, context));
+
                         self.global_type_definitions.insert(
                             name.to_string(),
                             TypeDefinition::Struct(context::StructDefinition {
@@ -254,7 +259,9 @@ impl TypeChecker {
             StatementKind::Enum(name_expr, generics_expr, _, _) => {
                 if let Ok(name) = self.extract_type_name(name_expr) {
                     if !self.global_type_definitions.contains_key(name) {
-                        let generics = generics_expr.as_ref().map(|gens| self.extract_generic_definitions(gens, context));
+                        let generics = generics_expr
+                            .as_ref()
+                            .map(|gens| self.extract_generic_definitions(gens, context));
 
                         self.global_type_definitions.insert(
                             name.to_string(),
@@ -269,7 +276,9 @@ impl TypeChecker {
             StatementKind::Trait(name_expr, generics_expr, _, _, _) => {
                 if let Ok(name) = self.extract_type_name(name_expr) {
                     if !self.global_type_definitions.contains_key(name) {
-                        let generics = generics_expr.as_ref().map(|gens| self.extract_generic_definitions(gens, context));
+                        let generics = generics_expr
+                            .as_ref()
+                            .map(|gens| self.extract_generic_definitions(gens, context));
 
                         self.global_type_definitions.insert(
                             name.to_string(),

@@ -789,8 +789,12 @@ impl<'a> FunctionTranslator<'a> {
             // Drop specialization: DecRef the inner value if it's managed, then free the Option space.
             if is_field_managed(&inner.kind) {
                 let ptr_type = type_ctx.ptr_type;
-                let cl_inner_ty = crate::codegen::cranelift::types::translate_type_kind(&inner.kind, ptr_type);
-                let inner_ptr = builder.ins().load(cl_inner_ty, cranelift_codegen::ir::MemFlags::new(), ptr, 0);
+                let cl_inner_ty =
+                    crate::codegen::cranelift::types::translate_type_kind(&inner.kind, ptr_type);
+                let inner_ptr =
+                    builder
+                        .ins()
+                        .load(cl_inner_ty, cranelift_codegen::ir::MemFlags::new(), ptr, 0);
                 Self::emit_decref_value(builder, ctx, &inner.kind, inner_ptr, type_ctx)?;
             }
             Self::call_libc_free(builder, ctx, header_ptr)
@@ -950,7 +954,9 @@ impl<'a> FunctionTranslator<'a> {
 
         // Guard: skip if pointer is null
         let null = builder.ins().iconst(ptr_type, 0);
-        let is_null = builder.ins().icmp(cranelift_codegen::ir::condcodes::IntCC::Equal, ptr, null);
+        let is_null = builder
+            .ins()
+            .icmp(cranelift_codegen::ir::condcodes::IntCC::Equal, ptr, null);
         let rc_block = builder.create_block();
         let merge_block = builder.create_block();
         builder.ins().brif(is_null, merge_block, &[], rc_block, &[]);
@@ -958,7 +964,12 @@ impl<'a> FunctionTranslator<'a> {
         builder.switch_to_block(rc_block);
 
         let header_ptr = builder.ins().iadd_imm(ptr, -ptr_size);
-        let rc = builder.ins().load(ptr_type, cranelift_codegen::ir::MemFlags::new(), header_ptr, 0);
+        let rc = builder.ins().load(
+            ptr_type,
+            cranelift_codegen::ir::MemFlags::new(),
+            header_ptr,
+            0,
+        );
 
         // Skip immortal objects (RC < 0)
         let is_immortal = builder.ins().icmp_imm(
@@ -973,7 +984,12 @@ impl<'a> FunctionTranslator<'a> {
 
         builder.switch_to_block(dec_block);
         let new_rc = builder.ins().iadd_imm(rc, -1);
-        builder.ins().store(cranelift_codegen::ir::MemFlags::new(), new_rc, header_ptr, 0);
+        builder.ins().store(
+            cranelift_codegen::ir::MemFlags::new(),
+            new_rc,
+            header_ptr,
+            0,
+        );
 
         let zero = builder.ins().iconst(ptr_type, 0);
         let is_zero =
