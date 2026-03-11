@@ -248,7 +248,9 @@ impl TypeChecker {
                 }
                 self.resolve_type_expression(&inner_type_expr, context)
             }
-            TypeKind::Custom(name, args) if name == "Array" || name == "List" => {
+            TypeKind::Custom(name, args)
+                if name == "Array" || name == "List" || name == "Tuple" =>
+            {
                 if !matches!(index_type.kind, TypeKind::Int) {
                     self.report_error(format!("{} index must be an integer", name), index.span);
                     return make_type(TypeKind::Error);
@@ -452,6 +454,29 @@ impl TypeChecker {
                     Some(vec![self.create_type_expression(inner_ty)]),
                 )
             }
+            TypeKind::Tuple(element_type_exprs) => {
+                // For homogeneous tuples, resolve to "Tuple" class with element type
+                if !element_type_exprs.is_empty() {
+                    let resolved_types: Vec<Type> = element_type_exprs
+                        .iter()
+                        .map(|t| self.resolve_type_expression(t, context))
+                        .collect();
+                    let first_type = &resolved_types[0];
+                    let is_homogeneous = resolved_types
+                        .iter()
+                        .all(|t| self.are_compatible(t, first_type, context));
+                    if is_homogeneous {
+                        (
+                            Some("Tuple".to_string()),
+                            Some(vec![self.create_type_expression(first_type.clone())]),
+                        )
+                    } else {
+                        (None, None)
+                    }
+                } else {
+                    (None, None)
+                }
+            }
             TypeKind::Custom(name, args) => (Some(name.clone()), args.clone()),
             TypeKind::Array(inner_expr, size_expr) => {
                 let inner_ty = self.resolve_type_expression(inner_expr, context);
@@ -612,7 +637,7 @@ impl TypeChecker {
                     }
 
                     // Check fields in current class
-                    if let Some(field_info) = search_class_def.fields.get(prop_name) {
+                    if let Some((_, field_info)) = search_class_def.fields.iter().find(|(n, _)| n == prop_name) {
                         // Check visibility for class field
                         if !self.check_member_visibility(
                             &field_info.visibility,
@@ -723,7 +748,7 @@ impl TypeChecker {
                         });
 
                     if let Some(TypeDefinition::Class(collect_def)) = collect_def_opt {
-                        candidates.extend(collect_def.fields.keys().cloned());
+                        candidates.extend(collect_def.fields.iter().map(|(n, _)| n.clone()));
                         candidates.extend(collect_def.methods.keys().cloned());
 
                         if let Some(base_name) = &collect_def.base_class {
