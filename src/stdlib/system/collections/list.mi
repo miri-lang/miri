@@ -76,10 +76,14 @@ public class List<T> implements Iterable
     public fn last_index() int: self.length() - 1
 
     /// Returns the first element of the list, or None if empty.
-    public fn first() T?: self[0] if self.length() > 0 else None
+    public fn first() T?
+        if self.length() > 0: return self[0]
+        return None
 
     /// Returns the last element of the list, or None if empty.
-    public fn last() T?: self[self.length() - 1] if self.length() > 0 else None
+    public fn last() T?
+        if self.length() > 0: return self[self.length() - 1]
+        return None
 
     /// Returns true if the list contains the given item.
     public fn contains(item T) bool

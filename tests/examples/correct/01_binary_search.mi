@@ -1,0 +1,29 @@
+// SPDX-License-Identifier: Apache-2.0
+// Binary Search algorithm implementation and performance test.
+use system.io
+use system.time
+use system.collections.array
+
+fn binary_search(arr Array<int, 10>, target int) int
+    var low = 0
+    var high = arr.length() - 1
+    
+    while low <= high
+        let mid = (low + high) / 2
+        if arr[mid] == target: return mid
+        if arr[mid] < target: low = mid + 1
+        else: high = mid - 1
+    
+    return -1
+
+fn main()
+    let data = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+    let start = nanotime()
+    let result = binary_search(data, 70)
+    let end = nanotime()
+    
+    println(f"Binary Search result for 70: {result}")
+    println(f"Time taken: {end - start} ns")
+    
+    let result_missing = binary_search(data, 25)
+    println(f"Binary Search result for 25: {result_missing}")

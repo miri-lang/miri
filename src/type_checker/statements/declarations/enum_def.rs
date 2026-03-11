@@ -64,6 +64,19 @@ impl TypeChecker {
             return;
         };
 
+        // Check for duplicate type definitions
+        if let Some(existing) = self.global_type_definitions.get(&name) {
+            let is_placeholder = match existing {
+                TypeDefinition::Enum(def) => def.variants.is_empty(),
+                _ => false,
+            };
+
+            if !is_placeholder {
+                self.report_error(format!("Type '{}' is already defined", name), name_expr.span);
+                return;
+            }
+        }
+
         // Handle generics
         let mut generic_defs = None;
         if let Some(gens) = generics {

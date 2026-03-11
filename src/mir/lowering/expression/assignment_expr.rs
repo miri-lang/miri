@@ -10,7 +10,7 @@ use crate::mir::{BinOp, Operand, Place, PlaceElem, Rvalue, StatementKind as MirS
 
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::lower_expression;
-use crate::mir::lowering::helpers::{ensure_place, resolve_type};
+use crate::mir::lowering::helpers::{coerce_rvalue, ensure_place, resolve_type};
 
 pub(crate) fn lower_assignment_expr(
     ctx: &mut LoweringContext,
@@ -29,10 +29,10 @@ pub(crate) fn lower_assignment_expr(
                     match op {
                         crate::ast::operator::AssignmentOp::Assign => {
                             let lhs_ty = ctx.body.local_decls[local.0].ty.clone();
-                            let rhs_ty = val.ty(&ctx.body);
+                            let rhs_ty = val.ty(&ctx.body).clone();
 
                             let rvalue = if rhs_ty.kind != lhs_ty.kind {
-                                Rvalue::Cast(Box::new(val.clone()), lhs_ty)
+                                coerce_rvalue(val.clone(), &rhs_ty, &lhs_ty)
                             } else {
                                 Rvalue::Use(val.clone())
                             };

@@ -246,6 +246,8 @@ impl TypeChecker {
         context.in_function = true;
         context.in_async_function = properties.is_async;
 
+        let mut const_value: Option<Literal> = None;
+
         // Only check function body if it exists (abstract functions have no body)
         if let Some(body) = body {
             match &body.node {
@@ -314,11 +316,41 @@ impl TypeChecker {
                 }
             }
 
+            if let StatementKind::Expression(expr) = &body.node {
+                if let ExpressionKind::Literal(lit) = &expr.node {
+                    const_value = Some(lit.clone());
+                }
+            } else if let StatementKind::Block(stmts) = &body.node {
+                if stmts.len() == 1 {
+                    if let StatementKind::Expression(expr) = &stmts[0].node {
+                        if let ExpressionKind::Literal(lit) = &expr.node {
+                            const_value = Some(lit.clone());
+                        }
+                    }
+                }
+            }
+
             if !matches!(return_type.kind, TypeKind::Void) {
                 let status = check_returns(body);
                 if status == ReturnStatus::None {
                     self.report_error("Missing return statement".to_string(), body.span);
                 }
+            }
+        }
+
+        // If a constant value was found, update the symbol information
+        if const_value.is_some() {
+            if let Some(info) = self.global_scope.get_mut(name) {
+                info.value = const_value.clone();
+                info.is_constant = true;
+            }
+            if let Some(info) = context
+                .scopes
+                .first_mut()
+                .and_then(|scope| scope.get_mut(name))
+            {
+                info.value = const_value;
+                info.is_constant = true;
             }
         }
 

@@ -5,7 +5,7 @@ use crate::ast::statement::VariableDeclaration;
 use crate::error::syntax::Span;
 use crate::mir::{Place, Rvalue, StatementKind as MirStatementKind, StorageClass};
 
-use super::{lower_expression, resolve_type, LoweringContext};
+use super::{helpers::coerce_rvalue, lower_expression, resolve_type, LoweringContext};
 use crate::error::lowering::LoweringError;
 
 pub fn lower_variable(
@@ -63,12 +63,11 @@ pub fn lower_variable(
                 } else {
                     // Fallback: create temp/use result, then cast/assign
                     let op = lower_expression(ctx, init_expr, None)?;
-                    let op_ty = op.ty(&ctx.body);
+                    let op_ty = op.ty(&ctx.body).clone();
 
                     let rvalue = if op_ty.kind != var_ty_kind {
-                        // Need to get the full type for Cast - get from local_decls
                         let target_ty = ctx.body.local_decls[local.0].ty.clone();
-                        Rvalue::Cast(Box::new(op), target_ty)
+                        coerce_rvalue(op, &op_ty, &target_ty)
                     } else {
                         Rvalue::Use(op)
                     };

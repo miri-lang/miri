@@ -1,0 +1,72 @@
+// SPDX-License-Identifier: Apache-2.0
+// Graph BFS traversal implementation (CSR Flat List based).
+use system.io
+use system.time
+use system.collections.list
+use system.collections.set
+
+// BFS algorithm for graph
+fn bfs(neighbors List<int>, offsets List<int>, sizes List<int>, start int)
+    var q = List<int>()
+    var visited = List<int>()
+    
+    q.push(start)
+    visited.push(start)
+    
+    var head = 0
+    while head < q.length()
+        var current = q.element_at(head)
+        head += 1
+        print(f"{current} ")
+        
+        let offset = offsets.element_at(current)
+        let size = sizes.element_at(current)
+        
+        var i = 0
+        while i < size
+            let neighbor = neighbors.element_at(offset + i)
+            if not visited.contains(neighbor)
+                visited.push(neighbor)
+                q.push(neighbor)
+            i += 1
+
+fn main()
+    // Graph representation (CSR):
+    // 0 -> [1, 2]
+    // 1 -> [2]
+    // 2 -> [0, 3]
+    // 3 -> [3]
+    
+    var neighbors = List<int>()
+    var offsets = List<int>()
+    var sizes = List<int>()
+    
+    // Node 0
+    offsets.push(neighbors.length())
+    neighbors.push(1)
+    neighbors.push(2)
+    sizes.push(2)
+    
+    // Node 1
+    offsets.push(neighbors.length())
+    neighbors.push(2)
+    sizes.push(1)
+    
+    // Node 2
+    offsets.push(neighbors.length())
+    neighbors.push(0)
+    neighbors.push(3)
+    sizes.push(2)
+    
+    // Node 3
+    offsets.push(neighbors.length())
+    neighbors.push(3)
+    sizes.push(1)
+    
+    print("BFS from node 2: ")
+    var start = nanotime()
+    bfs(neighbors, offsets, sizes, 2)
+    var end = nanotime()
+    println()
+    
+    println(f"Time taken: {end - start} ns")
