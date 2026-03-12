@@ -259,8 +259,12 @@ impl<'a> FunctionTranslator<'a> {
                 let mut sig = Signature::new(builder.func.signature.call_conv);
                 let mut arg_values = Vec::new();
 
+                let is_runtime_fcall = func_name.starts_with("miri_rt_");
                 for arg in args {
-                    let val = Self::translate_operand(builder, ctx, arg, locals, type_ctx)?;
+                    let mut val = Self::translate_operand(builder, ctx, arg, locals, type_ctx)?;
+                    if is_runtime_fcall {
+                        val = Self::widen_to_ptr(builder, val, ptr_type);
+                    }
                     arg_values.push(val);
                     sig.params
                         .push(AbiParam::new(builder.func.dfg.value_type(val)));

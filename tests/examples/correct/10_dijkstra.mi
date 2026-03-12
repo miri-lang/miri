@@ -88,7 +88,7 @@ fn main()
     // Node 3
     offsets.push(neighbors.length())
     sizes.push(0)
-    
+
     println("Dijkstra's from node 0:")
     let start = nanotime()
     let distances = dijkstra(neighbors, weights, offsets, sizes, 0, 4)

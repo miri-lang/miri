@@ -105,6 +105,17 @@ impl TypeChecker {
             if let ExpressionKind::StructMember(field_name_expr, field_type_expr) = &field.node {
                 if let ExpressionKind::Identifier(field_name, _) = &field_name_expr.node {
                     let field_type = self.resolve_type_expression(field_type_expr, context);
+
+                    // Check for immediate recursion (infinite size)
+                    if let TypeKind::Custom(ref type_name, _) = field_type.kind {
+                        if type_name == &name {
+                            self.report_error(
+                                format!("Recursive struct '{}' has infinite size", name),
+                                field_type_expr.span,
+                            );
+                        }
+                    }
+
                     fields_vec.push((field_name.clone(), field_type, MemberVisibility::Public));
                 } else {
                     self.report_error(

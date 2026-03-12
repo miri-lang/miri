@@ -5,6 +5,7 @@ use crate::codegen::cranelift::layout::field_layout;
 use crate::codegen::cranelift::translator::{FunctionTranslator, ModuleCtx, TypeCtx};
 use crate::codegen::cranelift::types::translate_type;
 use crate::mir::{AggregateKind, BinOp, Constant, Local, Operand, Rvalue, UnOp};
+use crate::type_checker::context::TypeDefinition;
 use cranelift_codegen::ir::{
     condcodes::{FloatCC, IntCC},
     types as cl_types, InstBuilder, MemFlags, StackSlotData, StackSlotKind, TrapCode, Value,
@@ -99,6 +100,24 @@ impl<'a> FunctionTranslator<'a> {
                         } else {
                             Ok(result)
                         };
+                    } else if let TypeKind::Custom(name, _) = lhs_kind {
+                        if let Some(TypeDefinition::Struct(_)) = type_ctx.type_definitions.get(name)
+                        {
+                            let lhs_val =
+                                Self::translate_operand(builder, ctx, lhs, locals, type_ctx)?;
+                            let rhs_val =
+                                Self::translate_operand(builder, ctx, rhs, locals, type_ctx)?;
+                            let result = Self::translate_struct_equality(
+                                builder, ctx, lhs_val, rhs_val, name, type_ctx,
+                            )?;
+                            return if *op == BinOp::Ne {
+                                // Negate the equality result
+                                let one = builder.ins().iconst(cranelift_codegen::ir::types::I8, 1);
+                                Ok(builder.ins().bxor(result, one))
+                            } else {
+                                Ok(result)
+                            };
+                        }
                     }
                 }
 
@@ -790,6 +809,46 @@ impl<'a> FunctionTranslator<'a> {
 
         for i in 0..element_exprs.len() {
             let (offset, cl_ty) = field_layout(&tuple_type, i, type_ctx.type_definitions, ptr_type);
+
+            let lhs_field = builder.ins().load(cl_ty, MemFlags::new(), lhs_ptr, offset);
+            let rhs_field = builder.ins().load(cl_ty, MemFlags::new(), rhs_ptr, offset);
+
+            let field_eq = if cl_ty.is_float() {
+                builder.ins().fcmp(FloatCC::Equal, lhs_field, rhs_field)
+            } else {
+                builder.ins().icmp(IntCC::Equal, lhs_field, rhs_field)
+            };
+
+            result = builder.ins().band(result, field_eq);
+        }
+
+        Ok(result)
+    }
+
+    /// Generate structural equality comparison for two structs.
+    /// Compares each field and ANDs the results together.
+    fn translate_struct_equality(
+        builder: &mut FunctionBuilder,
+        _ctx: &mut ModuleCtx,
+        lhs_ptr: Value,
+        rhs_ptr: Value,
+        struct_name: &str,
+        type_ctx: &TypeCtx,
+    ) -> Result<Value, String> {
+        let ptr_type = type_ctx.ptr_type;
+        let struct_type = TypeKind::Custom(struct_name.to_string(), None);
+
+        let struct_def = match type_ctx.type_definitions.get(struct_name) {
+            Some(TypeDefinition::Struct(d)) => d,
+            _ => return Err(format!("Unknown struct: {}", struct_name)),
+        };
+
+        // Start with true (all fields equal so far)
+        let mut result = builder.ins().iconst(cranelift_codegen::ir::types::I8, 1);
+
+        for i in 0..struct_def.fields.len() {
+            let (offset, cl_ty) =
+                field_layout(&struct_type, i, type_ctx.type_definitions, ptr_type);
 
             let lhs_field = builder.ins().load(cl_ty, MemFlags::new(), lhs_ptr, offset);
             let rhs_field = builder.ins().load(cl_ty, MemFlags::new(), rhs_ptr, offset);
