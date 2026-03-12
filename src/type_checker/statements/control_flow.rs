@@ -299,13 +299,18 @@ impl TypeChecker {
                         span,
                     );
                 }
-            } else if matches!(&iterable_type.kind, TypeKind::Map(_, _)) {
+            } else if matches!(&iterable_type.kind, TypeKind::Map(_, _))
+                || matches!(&iterable_type.kind, TypeKind::Custom(name, _) if name == "Map")
+            {
                 // For Map iterables, `for k, v in map` means: k = key, v = value.
-                let val_type = if let TypeKind::Map(_, val_expr) = &iterable_type.kind {
-                    self.extract_type_from_expression(val_expr)
-                        .unwrap_or_else(|_| make_type(TypeKind::Error))
-                } else {
-                    make_type(TypeKind::Error)
+                let val_type = match &iterable_type.kind {
+                    TypeKind::Map(_, val_expr) => self
+                        .extract_type_from_expression(val_expr)
+                        .unwrap_or_else(|_| make_type(TypeKind::Error)),
+                    TypeKind::Custom(name, Some(args)) if name == "Map" && args.len() == 2 => self
+                        .extract_type_from_expression(&args[1])
+                        .unwrap_or_else(|_| make_type(TypeKind::Error)),
+                    _ => make_type(TypeKind::Error),
                 };
 
                 let is_mutable_0 = match decls[0].declaration_type {

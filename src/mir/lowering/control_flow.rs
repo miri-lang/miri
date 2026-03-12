@@ -12,7 +12,7 @@ use crate::mir::{
     Terminator, TerminatorKind,
 };
 
-use super::{lower_expression, lower_statement, LoweringContext};
+use super::{helpers::coerce_rvalue, lower_expression, lower_statement, LoweringContext};
 use crate::error::lowering::LoweringError;
 use crate::type_checker::context::{ClassDefinition, StructDefinition, TypeDefinition};
 
@@ -242,10 +242,11 @@ fn lower_for_over_iterable(
     let decl = &decls[0];
     // Infer element type from type checker or default to Int
     let iterable_ty = ctx.type_checker.get_type(iterable.id).cloned();
-    let is_map = matches!(
-        iterable_ty.as_ref().map(|t| &t.kind),
-        Some(TypeKind::Map(_, _))
-    );
+    let is_map = match iterable_ty.as_ref().map(|t| &t.kind) {
+        Some(TypeKind::Map(_, _)) => true,
+        Some(TypeKind::Custom(name, _)) if name == "Map" => true,
+        _ => false,
+    };
     let elem_ty = if let Some(ty) = &iterable_ty {
         // Extract element type from list/array/map/set type parameters
         match &ty.kind {
@@ -255,6 +256,19 @@ fn lower_for_over_iterable(
             }
             TypeKind::Map(key_type_expr, _) => super::resolve_type(ctx.type_checker, key_type_expr),
             TypeKind::Set(elem_type_expr) => super::resolve_type(ctx.type_checker, elem_type_expr),
+            TypeKind::Tuple(elem_type_exprs) if !elem_type_exprs.is_empty() => {
+                super::resolve_type(ctx.type_checker, &elem_type_exprs[0])
+            }
+            TypeKind::Custom(name, Some(args))
+                if (name == "Array"
+                    || name == "List"
+                    || name == "Set"
+                    || name == "Map"
+                    || name == "Tuple")
+                    && !args.is_empty() =>
+            {
+                super::resolve_type(ctx.type_checker, &args[0])
+            }
             _ => ty.clone(),
         }
     } else {
@@ -272,10 +286,14 @@ fn lower_for_over_iterable(
     let idx_loop_var = if decls.len() > 1 {
         let idx_decl = &decls[1];
         let var_ty = if is_map {
-            if let Some(TypeKind::Map(_, val_type_expr)) = iterable_ty.as_ref().map(|t| &t.kind) {
-                super::resolve_type(ctx.type_checker, val_type_expr)
-            } else {
-                Type::new(TypeKind::Int, *span)
+            match iterable_ty.as_ref().map(|t| &t.kind) {
+                Some(TypeKind::Map(_, val_type_expr)) => {
+                    super::resolve_type(ctx.type_checker, val_type_expr)
+                }
+                Some(TypeKind::Custom(name, Some(args))) if name == "Map" && args.len() == 2 => {
+                    super::resolve_type(ctx.type_checker, &args[1])
+                }
+                _ => Type::new(TypeKind::Int, *span),
             }
         } else {
             Type::new(TypeKind::Int, *span)
@@ -333,7 +351,7 @@ fn lower_for_over_iterable(
             TypeKind::String => Some("String".to_string()),
             TypeKind::Map(_, _) => Some("Map".to_string()),
             TypeKind::Set(_) => Some("Set".to_string()),
-            TypeKind::Custom(name, _) if name != "Array" && name != "List" => Some(name.clone()),
+            TypeKind::Custom(name, _) if name != "Array" && name != "List" && name != "Tuple" => Some(name.clone()),
             _ => None,
         })
         .filter(|name| {
@@ -774,14 +792,15 @@ pub fn lower_call(
                 if method_name == "length"
                     && (matches!(
                         &obj_ty.kind,
-                        TypeKind::List(_)
+                        TypeKind::Tuple(_)
+                            | TypeKind::List(_)
                             | TypeKind::Array(_, _)
                             | TypeKind::Map(_, _)
                             | TypeKind::Set(_)
                             | TypeKind::String
                     ) || matches!(
                         &obj_ty.kind,
-                        TypeKind::Custom(name, _) if name == "Array" || name == "List" || name == "Map" || name == "Set"
+                        TypeKind::Custom(name, _) if name == "Array" || name == "List" || name == "Map" || name == "Set" || name == "Tuple"
                     ))
                 {
                     let obj_op = lower_expression(ctx, obj, None)?;
@@ -813,11 +832,13 @@ pub fn lower_call(
                 }
 
                 if (method_name == "element_at" || method_name == "get")
-                    && (matches!(&obj_ty.kind, TypeKind::List(_) | TypeKind::Array(_, _))
-                        || matches!(
-                            &obj_ty.kind,
-                            TypeKind::Custom(name, _) if name == "Array" || name == "List"
-                        ))
+                    && (matches!(
+                        &obj_ty.kind,
+                        TypeKind::Tuple(_) | TypeKind::List(_) | TypeKind::Array(_, _)
+                    ) || matches!(
+                        &obj_ty.kind,
+                        TypeKind::Custom(name, _) if name == "Array" || name == "List" || name == "Tuple"
+                    ))
                     && args.len() == 1
                 {
                     let obj_op = lower_expression(ctx, obj, None)?;
@@ -1021,6 +1042,7 @@ pub fn lower_call(
                 TypeKind::Array(_, _) => Some("Array".to_string()),
                 TypeKind::Map(_, _) => Some("Map".to_string()),
                 TypeKind::Set(_) => Some("Set".to_string()),
+                TypeKind::Tuple(_) => Some("Tuple".to_string()),
                 TypeKind::Custom(name, _) => Some(name.clone()),
                 _ => None,
             };
@@ -1216,6 +1238,44 @@ pub fn lower_call(
                         return Ok(result_op);
                     }
 
+                    if type_name == "Map" || type_name == "Set" {
+                        let return_ty =
+                            if let Some(call_ty) = ctx.type_checker.get_type(call_expr_id) {
+                                call_ty.clone()
+                            } else if type_name == "Map" {
+                                crate::ast::factory::type_map(
+                                    crate::ast::factory::type_void(),
+                                    crate::ast::factory::type_void(),
+                                )
+                            } else {
+                                crate::ast::factory::type_set(crate::ast::factory::type_void())
+                            };
+
+                        let (destination, result_op) = if let Some(d) = dest {
+                            (d.clone(), Operand::Copy(d))
+                        } else {
+                            let temp = ctx.push_temp(return_ty, *span);
+                            let p = Place::new(temp);
+                            (p.clone(), Operand::Copy(p))
+                        };
+
+                        let aggregate_kind = if type_name == "Map" {
+                            AggregateKind::Map
+                        } else {
+                            AggregateKind::Set
+                        };
+
+                        ctx.push_statement(crate::mir::Statement {
+                            kind: StatementKind::Assign(
+                                destination,
+                                Rvalue::Aggregate(aggregate_kind, vec![]),
+                            ),
+                            span: *span,
+                        });
+
+                        return Ok(result_op);
+                    }
+
                     // This is a class constructor - emit Aggregate instead of Call
                     return lower_class_constructor(ctx, span, type_name, def, args, dest);
                 }
@@ -1245,13 +1305,13 @@ pub fn lower_call(
             if i < params.len() {
                 let target_ty = super::resolve_type(ctx.type_checker, &params[i].typ);
 
-                let op_ty = op.ty(&ctx.body);
+                let op_ty = op.ty(&ctx.body).clone();
                 if op_ty.kind != target_ty.kind {
                     let temp = ctx.push_temp(target_ty.clone(), arg.span);
                     ctx.push_statement(crate::mir::Statement {
                         kind: StatementKind::Assign(
                             Place::new(temp),
-                            Rvalue::Cast(Box::new(op), target_ty.clone()),
+                            coerce_rvalue(op, &op_ty, &target_ty),
                         ),
                         span: arg.span,
                     });
@@ -1385,14 +1445,11 @@ fn lower_struct_constructor(
         };
 
         // Cast if types don't match
-        let op_ty = op.ty(&ctx.body);
+        let op_ty = op.ty(&ctx.body).clone();
         let op = if op_ty.kind != field_ty.kind {
             let temp = ctx.push_temp(field_ty.clone(), *span);
             ctx.push_statement(crate::mir::Statement {
-                kind: StatementKind::Assign(
-                    Place::new(temp),
-                    Rvalue::Cast(Box::new(op), field_ty.clone()),
-                ),
+                kind: StatementKind::Assign(Place::new(temp), coerce_rvalue(op, &op_ty, field_ty)),
                 span: *span,
             });
             Operand::Copy(Place::new(temp))
@@ -1452,7 +1509,7 @@ fn lower_class_constructor(
         }
     }
 
-    // Build operands in field declaration order (BTreeMap is sorted)
+    // Build operands in field declaration order
     let mut operands = Vec::with_capacity(def.fields.len());
     let mut pos_iter = positional_args.into_iter();
 
@@ -1470,13 +1527,13 @@ fn lower_class_constructor(
         };
 
         // Cast if types don't match
-        let op_ty = op.ty(&ctx.body);
+        let op_ty = op.ty(&ctx.body).clone();
         let op = if op_ty.kind != field_info.ty.kind {
             let temp = ctx.push_temp(field_info.ty.clone(), *span);
             ctx.push_statement(crate::mir::Statement {
                 kind: StatementKind::Assign(
                     Place::new(temp),
-                    Rvalue::Cast(Box::new(op), field_info.ty.clone()),
+                    coerce_rvalue(op, &op_ty, &field_info.ty),
                 ),
                 span: *span,
             });

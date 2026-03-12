@@ -11,3 +11,8 @@
 **Vulnerability:** `unwrap()` inside `Drop` implementations in core runtime types (`MiriList`, `MiriArray`).
 **Learning:** `unwrap()` in `Drop` is particularly dangerous. If the `unwrap()` panics during unwinding from another panic, it causes an immediate abort of the process (double panic). For memory allocations, an invalid layout can panic the program instead of failing gracefully.
 **Prevention:** Avoid panicking (`unwrap`, `expect`) inside `Drop` handlers. Gracefully swallow errors if there is no way to propagate them, especially since `Drop` cannot return a `Result`.
+
+## 2024-05-26 - [Path Traversal in Module Imports]
+**Vulnerability:** The type checker allowed arbitrary import paths like `system.io...` that would be transformed into `system/io/...mi` which might resolve paths outside the project source tree or standard library.
+**Learning:** Checking path containment with `canonicalize` only works for paths that actually exist on disk at the moment of the check. It does not stop a path traversal attempt if the constructed string itself is malformed but unresolvable.
+**Prevention:** Explicitly sanitize user-provided strings before constructing `PathBuf` from them to avoid strings like `..`, `/`, or `\`.

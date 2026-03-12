@@ -1,0 +1,102 @@
+// SPDX-License-Identifier: Apache-2.0
+// Dijkstra's Shortest Path algorithm (Flat List based).
+use system.io
+use system.time
+use system.collections.list
+
+fn dijkstra(neighbors List<int>, weights List<int>, offsets List<int>, sizes List<int>, start int, num_nodes int) List<int>
+    var dist = List<int>()
+    var visited = List<bool>()
+    
+    var i = 0
+    while i < num_nodes
+        dist.push(2147483647) // Infinity
+        visited.push(false)
+        i += 1
+    
+    dist.set(start, 0)
+    
+    var count = 0
+    while count < num_nodes
+        // Find min distance node among unvisited
+        var u = -1
+        var min_dist = 2147483647
+        
+        var v = 0
+        while v < num_nodes
+            if not visited.element_at(v) and dist.element_at(v) <= min_dist
+                min_dist = dist.element_at(v)
+                u = v
+            v += 1
+        
+        if u == -1: break
+        
+        visited.set(u, true)
+        
+        // Update neighbors
+        let offset = offsets.element_at(u)
+        let size = sizes.element_at(u)
+        
+        var j = 0
+        while j < size
+            let neighbor = neighbors.element_at(offset + j)
+            let weight = weights.element_at(offset + j)
+            let new_dist = dist.element_at(u) + weight
+            
+            if new_dist < dist.element_at(neighbor)
+                dist.set(neighbor, new_dist)
+            j += 1
+        
+        count += 1
+        
+    return dist
+
+fn main()
+    // Graph representation (CSR):
+    // 0 -> (1, 4), (2, 1)
+    // 1 -> (3, 1)
+    // 2 -> (1, 2), (3, 5)
+    // 3 -> None
+    
+    var neighbors = List<int>()
+    var weights = List<int>()
+    var offsets = List<int>()
+    var sizes = List<int>()
+    
+    // Node 0
+    offsets.push(neighbors.length())
+    neighbors.push(1)
+    weights.push(4)
+    neighbors.push(2)
+    weights.push(1)
+    sizes.push(2)
+    
+    // Node 1
+    offsets.push(neighbors.length())
+    neighbors.push(3)
+    weights.push(1)
+    sizes.push(1)
+    
+    // Node 2
+    offsets.push(neighbors.length())
+    neighbors.push(1)
+    weights.push(2)
+    neighbors.push(3)
+    weights.push(5)
+    sizes.push(2)
+    
+    // Node 3
+    offsets.push(neighbors.length())
+    sizes.push(0)
+
+    println("Dijkstra's from node 0:")
+    let start = nanotime()
+    let distances = dijkstra(neighbors, weights, offsets, sizes, 0, 4)
+    let end = nanotime()
+    
+    var i = 0
+    while i < distances.length()
+        println(f"Node {i}: {distances.element_at(i)}")
+        i += 1
+    
+    println(f"Time taken: {end - start} ns")

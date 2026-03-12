@@ -59,6 +59,7 @@ pub(crate) struct ModuleCtx<'a> {
     /// Cached FuncIds for runtime collection functions.
     pub(crate) rt_array_new_id: Option<cranelift_module::FuncId>,
     pub(crate) rt_array_free_id: Option<cranelift_module::FuncId>,
+    pub(crate) rt_array_panic_oob_id: Option<cranelift_module::FuncId>,
     pub(crate) rt_list_new_id: Option<cranelift_module::FuncId>,
     pub(crate) rt_list_push_id: Option<cranelift_module::FuncId>,
     pub(crate) rt_list_free_id: Option<cranelift_module::FuncId>,
@@ -169,6 +170,7 @@ impl<'a> FunctionTranslator<'a> {
             free_func_id: None,
             rt_array_new_id: None,
             rt_array_free_id: None,
+            rt_array_panic_oob_id: None,
             rt_list_new_id: None,
             rt_list_push_id: None,
             rt_list_free_id: None,
@@ -252,6 +254,7 @@ impl<'a> FunctionTranslator<'a> {
     /// Read a value from a place.
     pub(crate) fn read_place(
         builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
         place: &Place,
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
@@ -283,7 +286,7 @@ impl<'a> FunctionTranslator<'a> {
                     let idx_val = builder.use_var(*idx_var);
                     let base_type = &local_types[place.local.0];
                     value = Self::translate_collection_index_read(
-                        builder, value, idx_val, base_type, type_ctx,
+                        builder, ctx, value, idx_val, base_type, type_ctx,
                     )?;
                 }
             }
@@ -343,6 +346,7 @@ impl<'a> FunctionTranslator<'a> {
     /// Assign a value to a place.
     pub(crate) fn assign_to_place(
         builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
         place: &Place,
         value: Value,
         locals: &HashMap<Local, Variable>,
@@ -384,7 +388,7 @@ impl<'a> FunctionTranslator<'a> {
                         let idx_val = builder.use_var(*idx_var);
                         let base_type = &local_types[place.local.0];
                         addr = Self::translate_collection_index_read(
-                            builder, addr, idx_val, base_type, type_ctx,
+                            builder, ctx, addr, idx_val, base_type, type_ctx,
                         )?;
                     }
                 }
@@ -411,7 +415,7 @@ impl<'a> FunctionTranslator<'a> {
                     let idx_val = builder.use_var(*idx_var);
                     let base_type = &local_types[place.local.0];
                     Self::translate_collection_index_write(
-                        builder, addr, idx_val, value, base_type, type_ctx,
+                        builder, ctx, addr, idx_val, value, base_type, type_ctx,
                     )?;
                 }
             }
@@ -700,6 +704,17 @@ impl<'a> FunctionTranslator<'a> {
                     &TypeKind::Int
                 }
             }
+            TypeKind::Tuple(elems) => {
+                // For homogeneous tuples, return the element type from the first element
+                if let Some(first) = elems.first() {
+                    match &first.node {
+                        ExpressionKind::Type(ty, _) => &ty.kind,
+                        _ => &TypeKind::Int,
+                    }
+                } else {
+                    &TypeKind::Int
+                }
+            }
             _ => &TypeKind::Int,
         }
     }
@@ -770,6 +785,19 @@ impl<'a> FunctionTranslator<'a> {
             Self::call_rt_list_free(builder, ctx, ptr)
         } else if Self::is_collection_type(kind) {
             Self::call_rt_array_free(builder, ctx, ptr)
+        } else if let TypeKind::Option(inner) = kind {
+            // Drop specialization: DecRef the inner value if it's managed, then free the Option space.
+            if is_field_managed(&inner.kind) {
+                let ptr_type = type_ctx.ptr_type;
+                let cl_inner_ty =
+                    crate::codegen::cranelift::types::translate_type_kind(&inner.kind, ptr_type);
+                let inner_ptr =
+                    builder
+                        .ins()
+                        .load(cl_inner_ty, cranelift_codegen::ir::MemFlags::new(), ptr, 0);
+                Self::emit_decref_value(builder, ctx, &inner.kind, inner_ptr, type_ctx)?;
+            }
+            Self::call_libc_free(builder, ctx, header_ptr)
         } else if let TypeKind::Custom(name, _) = kind {
             // Drop specialization: release managed fields before freeing the struct.
             Self::emit_struct_drop(builder, ctx, name, ptr, type_ctx)?;
@@ -924,8 +952,24 @@ impl<'a> FunctionTranslator<'a> {
         let ptr_type = type_ctx.ptr_type;
         let ptr_size = ptr_type.bytes() as i64;
 
+        // Guard: skip if pointer is null
+        let null = builder.ins().iconst(ptr_type, 0);
+        let is_null = builder
+            .ins()
+            .icmp(cranelift_codegen::ir::condcodes::IntCC::Equal, ptr, null);
+        let rc_block = builder.create_block();
+        let merge_block = builder.create_block();
+        builder.ins().brif(is_null, merge_block, &[], rc_block, &[]);
+
+        builder.switch_to_block(rc_block);
+
         let header_ptr = builder.ins().iadd_imm(ptr, -ptr_size);
-        let rc = builder.ins().load(ptr_type, MemFlags::new(), header_ptr, 0);
+        let rc = builder.ins().load(
+            ptr_type,
+            cranelift_codegen::ir::MemFlags::new(),
+            header_ptr,
+            0,
+        );
 
         // Skip immortal objects (RC < 0)
         let is_immortal = builder.ins().icmp_imm(
@@ -934,14 +978,18 @@ impl<'a> FunctionTranslator<'a> {
             0,
         );
         let dec_block = builder.create_block();
-        let merge_block = builder.create_block();
         builder
             .ins()
             .brif(is_immortal, merge_block, &[], dec_block, &[]);
 
         builder.switch_to_block(dec_block);
         let new_rc = builder.ins().iadd_imm(rc, -1);
-        builder.ins().store(MemFlags::new(), new_rc, header_ptr, 0);
+        builder.ins().store(
+            cranelift_codegen::ir::MemFlags::new(),
+            new_rc,
+            header_ptr,
+            0,
+        );
 
         let zero = builder.ins().iconst(ptr_type, 0);
         let is_zero =
@@ -958,11 +1006,31 @@ impl<'a> FunctionTranslator<'a> {
         Self::emit_type_drop(builder, ctx, kind, ptr, header_ptr, type_ctx)?;
         builder.ins().jump(merge_block, &[]);
 
+        builder.seal_block(rc_block);
         builder.seal_block(dec_block);
         builder.seal_block(free_block);
         builder.switch_to_block(merge_block);
         builder.seal_block(merge_block);
 
+        Ok(())
+    }
+
+    pub(crate) fn call_rt_array_panic_oob(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        index: Value,
+        len: Value,
+    ) -> Result<(), String> {
+        let pt = builder.func.dfg.value_type(index);
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.rt_array_panic_oob_id,
+            "miri_rt_array_panic_oob",
+            &[pt, pt],
+            &[],
+            &[index, len],
+        )?;
         Ok(())
     }
 
@@ -979,6 +1047,7 @@ impl<'a> FunctionTranslator<'a> {
     /// 4. Computes the element address: `data + index * elem_size`
     pub(crate) fn translate_collection_index_read(
         builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
         base_value: Value,
         idx_val: Value,
         base_type: &Type,
@@ -986,6 +1055,53 @@ impl<'a> FunctionTranslator<'a> {
     ) -> Result<Value, String> {
         let ptr_type = type_ctx.ptr_type;
         let ptr_size = ptr_type.bytes() as i32;
+
+        // Tuples: layout is [count][field0][field1]... at payload_ptr.
+        // Fields start at offset ptr_size (after count).
+        // For homogeneous tuples, element_at(i) = base + ptr_size + i * elem_size.
+        // Also handle Custom("Tuple", ...) from inside the class body.
+        let is_tuple_type = matches!(&base_type.kind, TypeKind::Tuple(_))
+            || matches!(&base_type.kind, TypeKind::Custom(name, _) if name == "Tuple");
+
+        if is_tuple_type {
+            let elem_type_kind = Self::resolve_collection_elem_type(base_type, ptr_type);
+            let cl_elem_ty =
+                crate::codegen::cranelift::types::translate_type_kind(elem_type_kind, ptr_type);
+            let elem_size = cl_elem_ty.bytes() as i64;
+
+            // Read length from offset 0 (stored count)
+            let len_val = builder.ins().load(ptr_type, MemFlags::new(), base_value, 0);
+
+            // Runtime bounds check
+            let oob = builder.ins().icmp(
+                cranelift_codegen::ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
+                idx_val,
+                len_val,
+            );
+            let panic_block = builder.create_block();
+            let cont_block = builder.create_block();
+            builder.ins().brif(oob, panic_block, &[], cont_block, &[]);
+
+            builder.switch_to_block(panic_block);
+            Self::call_rt_array_panic_oob(builder, ctx, idx_val, len_val)?;
+            builder.ins().trap(TrapCode::unwrap_user(1));
+
+            builder.switch_to_block(cont_block);
+
+            // Compute element address: base + ptr_size + index * elem_size
+            // Fields start after the count header
+            let fields_base = builder.ins().iadd_imm(base_value, ptr_size as i64);
+            let elem_size_val = builder.ins().iconst(ptr_type, elem_size);
+            let byte_offset = builder.ins().imul(idx_val, elem_size_val);
+            let elem_addr = builder.ins().iadd(fields_base, byte_offset);
+
+            builder.seal_block(panic_block);
+            builder.seal_block(cont_block);
+
+            return Ok(builder
+                .ins()
+                .load(cl_elem_ty, MemFlags::new(), elem_addr, 0));
+        }
 
         let elem_type_kind = Self::resolve_collection_elem_type(base_type, ptr_type);
         let cl_elem_ty =
@@ -1001,20 +1117,30 @@ impl<'a> FunctionTranslator<'a> {
             .ins()
             .load(ptr_type, MemFlags::new(), base_value, ptr_size);
 
-        // Runtime bounds check: trap if index >= length
+        // Runtime bounds check
         let oob = builder.ins().icmp(
             cranelift_codegen::ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
             idx_val,
             len_val,
         );
-        builder
-            .ins()
-            .trapnz(oob, TrapCode::user(1).expect("valid user trap code"));
+        let panic_block = builder.create_block();
+        let cont_block = builder.create_block();
+        builder.ins().brif(oob, panic_block, &[], cont_block, &[]);
+
+        builder.switch_to_block(panic_block);
+        Self::call_rt_array_panic_oob(builder, ctx, idx_val, len_val)?;
+        builder.ins().trap(TrapCode::unwrap_user(1));
+
+        builder.switch_to_block(cont_block);
 
         // Compute element address: data + index * elem_size
         let elem_size_val = builder.ins().iconst(ptr_type, elem_size);
         let byte_offset = builder.ins().imul(idx_val, elem_size_val);
         let elem_addr = builder.ins().iadd(data_ptr, byte_offset);
+
+        // Seal blocks
+        builder.seal_block(panic_block);
+        builder.seal_block(cont_block);
 
         // Load the element
         Ok(builder
@@ -1026,6 +1152,7 @@ impl<'a> FunctionTranslator<'a> {
     /// Same layout assumptions as `translate_collection_index_read`.
     pub(crate) fn translate_collection_index_write(
         builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
         base_addr: Value,
         idx_val: Value,
         value: Value,
@@ -1054,15 +1181,26 @@ impl<'a> FunctionTranslator<'a> {
             idx_val,
             len_val,
         );
-        builder
-            .ins()
-            .trapnz(oob, TrapCode::user(1).expect("valid user trap code"));
+
+        let panic_block = builder.create_block();
+        let cont_block = builder.create_block();
+        builder.ins().brif(oob, panic_block, &[], cont_block, &[]);
+
+        builder.switch_to_block(panic_block);
+        Self::call_rt_array_panic_oob(builder, ctx, idx_val, len_val)?;
+        builder.ins().trap(TrapCode::unwrap_user(1));
+
+        builder.switch_to_block(cont_block);
 
         // Compute element address and store
         let elem_size_val = builder.ins().iconst(ptr_type, elem_size);
         let byte_offset = builder.ins().imul(idx_val, elem_size_val);
         let elem_addr = builder.ins().iadd(data_ptr, byte_offset);
         builder.ins().store(MemFlags::new(), value, elem_addr, 0);
+
+        builder.seal_block(panic_block);
+        builder.seal_block(cont_block);
+
         Ok(())
     }
 
@@ -1121,7 +1259,8 @@ impl<'a> FunctionTranslator<'a> {
 fn is_field_managed(kind: &TypeKind) -> bool {
     matches!(
         kind,
-        TypeKind::String
+        TypeKind::Option(_)
+            | TypeKind::String
             | TypeKind::List(_)
             | TypeKind::Array(_, _)
             | TypeKind::Map(_, _)
