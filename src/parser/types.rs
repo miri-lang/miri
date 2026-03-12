@@ -340,7 +340,15 @@ impl<'source> Parser<'source> {
         let ident = self.identifier()?;
         let span = ident.span;
         Ok(match ident.node {
-            ExpressionKind::Identifier(id, Some(class)) => (format!("{}::{}", class, id), span), // Reconstruct the full path
+            ExpressionKind::Identifier(id, Some(class)) => {
+                // Pre-allocate string instead of using format! to minimize heap allocations
+                // and avoid runtime format string parsing in this hot parser path.
+                let mut path = String::with_capacity(class.len() + 2 + id.len());
+                path.push_str(&class);
+                path.push_str("::");
+                path.push_str(&id);
+                (path, span)
+            }
             ExpressionKind::Identifier(id, None) => (id, span),
             _ => return Err(self.error_unexpected_token("identifier", &self.lookahead_as_string())),
         })
