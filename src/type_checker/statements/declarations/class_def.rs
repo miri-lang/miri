@@ -74,16 +74,9 @@ impl TypeChecker {
         };
 
         // Check for duplicate type definitions
-        if let Some(existing) = self.global_type_definitions.get(&name) {
-            let is_placeholder = match existing {
-                TypeDefinition::Class(def) => def.fields.is_empty() && def.methods.is_empty(),
-                _ => false,
-            };
-
-            if !is_placeholder {
-                self.report_error(format!("Type '{}' is already defined", name), span);
-                return;
-            }
+        if self.global_type_definitions.contains_key(&name) {
+            self.report_error(format!("Type '{}' is already defined", name), span);
+            return;
         }
 
         // Process generics
@@ -181,7 +174,7 @@ impl TypeChecker {
         context.enter_class(name.clone(), base_class_name.clone(), class_type);
 
         // PASS 1: Collect fields and method signatures (without checking bodies)
-        let mut fields: Vec<(String, FieldInfo)> = Vec::new();
+        let mut fields: BTreeMap<String, FieldInfo> = BTreeMap::new();
         let mut methods: BTreeMap<String, MethodInfo> = BTreeMap::new();
         // Store method info for second pass body checking
         let mut method_statements: Vec<&Statement> = Vec::with_capacity(body.len());
@@ -208,14 +201,14 @@ impl TypeChecker {
                             | VariableDeclarationType::Constant => false,
                         };
 
-                        fields.push((
+                        fields.insert(
                             decl.name.clone(),
                             FieldInfo {
                                 ty: field_type,
                                 mutable: is_mutable,
                                 visibility: vis.clone(),
                             },
-                        ));
+                        );
                     }
                 }
                 StatementKind::FunctionDeclaration(decl) => {

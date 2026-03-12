@@ -134,7 +134,7 @@ pub struct ClassDefinition {
     pub generics: Option<Vec<GenericDefinition>>,
     pub base_class: Option<String>,
     pub traits: Vec<String>,
-    pub fields: Vec<(String, FieldInfo)>, // Preserves declaration order for constructor and layout
+    pub fields: BTreeMap<String, FieldInfo>, // Deterministic field order
     pub methods: BTreeMap<String, MethodInfo>, // Deterministic method order
     pub module: String,
     /// Whether this class is abstract.

@@ -1,0 +1,22 @@
+// SPDX-License-Identifier: Apache-2.0
+// Demonstrates comparison operators, logical operators, and boolean expressions.
+use system.io
+
+fn is_even(n int) bool
+    n % 2 == 0
+
+fn abs_val(n int) int
+    if n >= 0: n else: -n
+
+fn main()
+    println(f"{is_even(4)}")
+    println(f"{is_even(7)}")
+    println(f"{abs_val(-5)}")
+    println(f"{abs_val(3)}")
+    let x = 15
+    let in_range = x >= 10 and x <= 20
+    println(f"{in_range}")
+    let a = true
+    let b = false
+    println(f"{a or b}")
+    println(f"{not b}")

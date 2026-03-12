@@ -1,0 +1,15 @@
+// SPDX-License-Identifier: Apache-2.0
+// Demonstrates f32/f64 arithmetic, comparisons, and f-string formatting.
+use system.io
+
+fn main()
+    let sum = 3.5 + 4.0
+    println(f"{sum}")
+
+    let a = 5.0
+    let b = 3.0
+    println(f"{a > b}")
+    println(f"{a < b}")
+
+    let x = 1.5
+    println(f"x is {x}")

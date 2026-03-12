@@ -198,21 +198,10 @@ fn lower_null_coalesce(
         expr.span,
     ));
 
-    // Some block: extract the payload by projecting Field(0)
+    // Some block: assign LHS directly to result (Option<T> == T at runtime)
     ctx.set_current_block(some_bb);
-
-    // Convert lhs_op to a Place so we can project it
-    let lhs_place = crate::mir::lowering::helpers::ensure_place(ctx, lhs_op, expr.span);
-    let mut payload_place = lhs_place;
-    payload_place
-        .projection
-        .push(crate::mir::PlaceElem::Field(0));
-
     ctx.push_statement(crate::mir::Statement {
-        kind: MirStatementKind::Assign(
-            Place::new(result_local),
-            Rvalue::Use(Operand::Copy(payload_place)),
-        ),
+        kind: MirStatementKind::Assign(Place::new(result_local), Rvalue::Use(lhs_op)),
         span: expr.span,
     });
     ctx.set_terminator(Terminator::new(

@@ -1,0 +1,22 @@
+use system.io
+
+fn get_name(id int) String?
+    if id == 1
+        return Some("Alice")
+    if id == 2
+        return Some("Bob")
+    return None
+
+fn main()
+    let alice = get_name(id: 1)
+    let unknown = get_name(id: 99)
+
+    match alice
+        Some(name): println(f"Found person: {name}")
+        None: println("Person not found")
+
+    if let Some(name) = unknown
+        println(f"Found: {name}")
+
+    let fallback = unknown ?? "Guest"
+    println(f"Welcome, {fallback}")

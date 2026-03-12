@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: Apache-2.0
+// Demonstrates string operations: concatenation and built-in methods.
+use system.io
+
+fn main()
+    let s = "Hello"
+    let t = " World"
+    let combined = s + t
+    println(combined)
+    println(s.to_upper())
+    println(f"{combined.length()}")

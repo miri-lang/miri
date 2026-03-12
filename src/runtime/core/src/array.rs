@@ -311,24 +311,6 @@ pub unsafe extern "C" fn miri_rt_array_to_list(ptr: *const MiriArray) -> *mut Mi
 }
 
 // =============================================================================
-// Error Handling
-// =============================================================================
-
-/// Panics with a clear out-of-bounds error message.
-///
-/// This provides a better debugging experience than crashing silently on
-/// a hardware trap.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_array_panic_oob(index: usize, len: usize) {
-    eprintln!(
-        "Runtime error: Array index out of bounds: the len is {} but the index is {}",
-        len, index
-    );
-    std::process::abort();
-}
-
-// =============================================================================
 // Tests
 // =============================================================================
 

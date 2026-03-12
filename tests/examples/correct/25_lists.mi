@@ -1,0 +1,22 @@
+use system.io
+use system.collections.list
+
+fn process_list(items [int]) [int]
+    items.push(40)
+    items.pop()
+    items.sort()
+    items.reverse()
+    return items
+
+fn main()
+    let l = List([30, 10, 20])
+    let processed = process_list(items: l)
+
+    println(f"List size: {processed.length()}")
+    println(f"First: {processed[0]}, Second: {processed[1]}, Third: {processed[2]}")
+
+    var sum = 0
+    for x in processed
+        sum += x
+
+    println(f"Sum is {sum}")

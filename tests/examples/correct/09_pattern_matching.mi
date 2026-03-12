@@ -1,0 +1,22 @@
+// SPDX-License-Identifier: Apache-2.0
+// Demonstrates match expressions with literal arms, guard conditions, and wildcards.
+use system.io
+
+fn describe(n int) String
+    match n
+        0: "zero"
+        1: "one"
+        2: "two"
+        n if n < 0: "negative"
+        _: "many"
+
+fn main()
+    println(describe(0))
+    println(describe(1))
+    println(describe(-5))
+    println(describe(100))
+    let x = 42
+    let msg = match x
+        42: "the answer"
+        _: "something else"
+    println(msg)

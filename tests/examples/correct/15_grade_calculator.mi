@@ -1,0 +1,18 @@
+// SPDX-License-Identifier: Apache-2.0
+// Converts numeric scores to letter grades using match with guard conditions.
+use system.io
+
+fn grade(score int) String
+    match score
+        s if s >= 90: "A"
+        s if s >= 80: "B"
+        s if s >= 70: "C"
+        s if s >= 60: "D"
+        _: "F"
+
+fn main()
+    println(grade(95))
+    println(grade(82))
+    println(grade(71))
+    println(grade(65))
+    println(grade(43))

@@ -190,19 +190,17 @@ pub fn bind_pattern(
             if is_option_some {
                 if let Some(Pattern::Identifier(name)) = bindings.first() {
                     let subject_ty = ctx.body.local_decls[subject_local.0].ty.clone();
-                    // The inner type is the boxed value
+                    // The inner type is the same as the subject (Option<T> has same repr as T)
                     let inner_ty = if let TypeKind::Option(inner) = &subject_ty.kind {
                         inner.as_ref().clone()
                     } else {
                         subject_ty
                     };
                     let var_local = ctx.push_local(name.clone(), inner_ty, *span);
-                    let mut place = Place::new(subject_local);
-                    place.projection.push(PlaceElem::Field(0));
                     ctx.push_statement(crate::mir::Statement {
                         kind: MirStatementKind::Assign(
                             Place::new(var_local),
-                            Rvalue::Use(Operand::Copy(place)),
+                            Rvalue::Use(Operand::Copy(Place::new(subject_local))),
                         ),
                         span: *span,
                     });
@@ -264,17 +262,6 @@ pub fn bind_pattern(
     Ok(())
 }
 
-/// Helper to construct an Rvalue that coerces `operand` of type `op_ty` into `target_ty`.
-/// If `target_ty` is `Option<T>` and `op_ty` is `T`, it allocates an Option box.
-/// Otherwise, it emits a standard type Cast.
-pub fn coerce_rvalue(operand: Operand, op_ty: &Type, target_ty: &Type) -> Rvalue {
-    if matches!(target_ty.kind, TypeKind::Option(_)) && !matches!(op_ty.kind, TypeKind::Option(_)) {
-        crate::mir::Rvalue::Aggregate(crate::mir::AggregateKind::Option, vec![operand])
-    } else {
-        crate::mir::Rvalue::Cast(Box::new(operand), target_ty.clone())
-    }
-}
-
 /// Helper to lower a statement and assign the result expression to a target local.
 /// This is used for match branches where each branch result should be assigned to result_local.
 pub fn lower_to_local(
@@ -333,10 +320,10 @@ pub fn lower_as_return(
     match &stmt.node {
         StatementKind::Expression(expr) => {
             let operand = lower_expression(ctx, expr, None)?;
-            let op_ty = operand.ty(&ctx.body).clone();
+            let op_ty = operand.ty(&ctx.body);
 
             let rvalue = if op_ty.kind != ret_ty.kind {
-                coerce_rvalue(operand, &op_ty, ret_ty)
+                Rvalue::Cast(Box::new(operand), ret_ty.clone())
             } else {
                 Rvalue::Use(operand)
             };

@@ -1,0 +1,17 @@
+use system.io
+use system.collections.array
+
+fn main()
+    var a = [50, 20, 40, 10, 30]
+
+    println(f"Initial array length: {a.length()}")
+    println(f"First element: {a.first() ?? -1}")
+
+    a.sort()
+
+    println("Sorted array:")
+    for x in a
+        println(f"{x}")
+
+    a[0] = 99
+    println(f"Modified first element to {a[0]}")

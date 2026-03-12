@@ -20,7 +20,7 @@ use crate::type_checker::context::TypeDefinition;
 use super::context::LoweringContext;
 use super::control_flow::{lower_break, lower_continue, lower_for, lower_if, lower_while};
 use super::expression::lower_expression;
-use super::helpers::{coerce_rvalue, resolve_type};
+use super::helpers::resolve_type;
 use super::variable::lower_variable;
 
 /// Lower an AST statement to MIR.
@@ -57,10 +57,10 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
                     lower_expression(ctx, expr, Some(Place::new(crate::mir::Local(0))))?;
                 } else {
                     let ret_val = lower_expression(ctx, expr, None)?;
-                    let val_ty = ret_val.ty(&ctx.body).clone();
+                    let val_ty = ret_val.ty(&ctx.body);
 
                     let rvalue = if val_ty.kind != ret_ty.kind {
-                        coerce_rvalue(ret_val, &val_ty, &ret_ty)
+                        Rvalue::Cast(Box::new(ret_val), ret_ty)
                     } else {
                         Rvalue::Use(ret_val)
                     };

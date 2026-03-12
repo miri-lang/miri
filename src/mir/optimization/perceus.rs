@@ -64,33 +64,6 @@ impl OptimizationPass for Perceus {
                                 block_changed = true;
                             }
                         }
-                        // Also insert IncRef for managed operands inside Aggregates.
-                        // When a heap-allocated value is stored into a collection (Map,
-                        // List, Array, Set), the collection holds an additional reference
-                        // that must be reflected in the RC. This applies to both Copy
-                        // and Move operands: Move operands need IncRef because Perceus
-                        // will still insert DecRef at StorageDead for the source local.
-                        if let Rvalue::Aggregate(_, operands) = rvalue {
-                            for op in operands {
-                                let place = match op {
-                                    Operand::Copy(p) | Operand::Move(p) => Some(p),
-                                    _ => None,
-                                };
-                                if let Some(place) = place {
-                                    if is_place_managed(
-                                        place,
-                                        &body.local_decls,
-                                        &body.auto_copy_types,
-                                    ) {
-                                        new_stmts.push(Statement {
-                                            kind: StatementKind::IncRef(place.clone()),
-                                            span: stmt.span,
-                                        });
-                                        block_changed = true;
-                                    }
-                                }
-                            }
-                        }
                     }
                     StatementKind::StorageDead(place) => {
                         if managed_locals.contains(&place.local) {
@@ -130,12 +103,8 @@ impl OptimizationPass for Perceus {
 /// are NOT in the auto-copy set.
 fn is_managed_type(kind: &TypeKind, auto_copy_types: &std::collections::HashSet<String>) -> bool {
     match kind {
-        // Collections and Options use [RC][payload] layout via alloc_with_rc.
-        TypeKind::Option(_)
-        | TypeKind::List(_)
-        | TypeKind::Array(_, _)
-        | TypeKind::Map(_, _)
-        | TypeKind::Set(_) => true,
+        // Collections use [RC][payload] layout via alloc_with_rc.
+        TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => true,
         // Note: String is excluded — it uses Box allocation, not alloc_with_rc,
         // so it doesn't have the [RC][payload] layout that IncRef/DecRef expect.
         TypeKind::Custom(name, _) => {

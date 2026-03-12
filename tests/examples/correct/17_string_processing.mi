@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0
+// Demonstrates string methods: to_upper, trim, contains, and length.
+use system.io
+
+fn main()
+    let greeting = "hello, world"
+    println(greeting.to_upper())
+    let padded = "  trim me  "
+    println(padded.trim())
+    let has_world = greeting.contains("world")
+    println(f"{has_world}")
+    println(f"{greeting.length()}")

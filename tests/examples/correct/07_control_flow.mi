@@ -1,0 +1,17 @@
+// SPDX-License-Identifier: Apache-2.0
+// Demonstrates control-flow: if/else inline expression and while loop.
+use system.io
+
+fn main()
+    let x = 10
+    let sign = if x > 0: 1 else: -1
+    println(f"{sign}")
+
+    var count = 0
+    while count < 5
+        count = count + 1
+    println(f"{count}")
+
+    let y = -3
+    let abs_y = if y >= 0: y else: -y
+    println(f"{abs_y}")

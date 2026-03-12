@@ -27,7 +27,7 @@ impl<'a> FunctionTranslator<'a> {
             StatementKind::IncRef(place) => {
                 // Uniform RC increment for all heap types.
                 // All heap values use [RC][payload] layout; ptr points past RC.
-                let ptr = Self::read_place(builder, ctx, place, locals, type_ctx)?;
+                let ptr = Self::read_place(builder, place, locals, type_ctx)?;
 
                 // Guard: skip if pointer is null (uninitialized local)
                 let null = builder.ins().iconst(ptr_type, 0);
@@ -60,7 +60,7 @@ impl<'a> FunctionTranslator<'a> {
                 // Uniform RC decrement for all heap types.
                 // When RC reaches zero, call type-appropriate cleanup.
                 let place_ty = &type_ctx.local_types[place.local.0];
-                let ptr = Self::read_place(builder, ctx, place, locals, type_ctx)?;
+                let ptr = Self::read_place(builder, place, locals, type_ctx)?;
 
                 // Guard: skip if pointer is null (uninitialized local)
                 let null = builder.ins().iconst(ptr_type, 0);
@@ -107,7 +107,7 @@ impl<'a> FunctionTranslator<'a> {
                 // this value needs freeing (e.g., unique owner going out of scope).
                 // Guard against null (uninitialized locals).
                 let place_ty = &type_ctx.local_types[place.local.0];
-                let ptr = Self::read_place(builder, ctx, place, locals, type_ctx)?;
+                let ptr = Self::read_place(builder, place, locals, type_ctx)?;
 
                 let null = builder.ins().iconst(ptr_type, 0);
                 let is_null = builder.ins().icmp(IntCC::Equal, ptr, null);
@@ -145,7 +145,7 @@ impl<'a> FunctionTranslator<'a> {
                     )?;
                 }
 
-                Self::assign_to_place(builder, ctx, place, value, locals, type_ctx)?;
+                Self::assign_to_place(builder, place, value, locals, type_ctx)?;
             }
             StatementKind::Nop => {
                 // Nothing to do
@@ -259,12 +259,8 @@ impl<'a> FunctionTranslator<'a> {
                 let mut sig = Signature::new(builder.func.signature.call_conv);
                 let mut arg_values = Vec::new();
 
-                let is_runtime_fcall = func_name.starts_with("miri_rt_");
                 for arg in args {
-                    let mut val = Self::translate_operand(builder, ctx, arg, locals, type_ctx)?;
-                    if is_runtime_fcall {
-                        val = Self::widen_to_ptr(builder, val, ptr_type);
-                    }
+                    let val = Self::translate_operand(builder, ctx, arg, locals, type_ctx)?;
                     arg_values.push(val);
                     sig.params
                         .push(AbiParam::new(builder.func.dfg.value_type(val)));

@@ -3,8 +3,8 @@
 
 use crate::utils::{miri_run, strip_ansi};
 
-/// Run the given source, assert success, and check that stdout contains the expected marker.
-fn assert_example_contains(source: &str, expected_marker: &str) {
+/// Run the given source, assert success, and check that stdout equals the expected output exactly.
+fn assert_example_output(source: &str, expected_output: &str) {
     let result = miri_run(source);
     if !result.success {
         panic!(
@@ -12,89 +12,236 @@ fn assert_example_contains(source: &str, expected_marker: &str) {
             result.output()
         );
     }
-    let actual = strip_ansi(&result.stdout);
-    assert!(
-        actual.contains(expected_marker),
-        "Program output did not contain expected marker.\nExpected marker: {expected_marker}\nActual:\n{actual}"
+    let actual = strip_ansi(&result.stdout)
+        .trim_end_matches('\n')
+        .to_string();
+    let expected = expected_output.trim_end_matches('\n');
+    assert_eq!(
+        actual, expected,
+        "Program output did not match.\nExpected:\n{expected}\nActual:\n{actual}"
     );
 }
 
 #[test]
-fn example_01_binary_search() {
-    assert_example_contains(
-        include_str!("../examples/correct/01_binary_search.mi"),
-        "Binary Search result for 70: 6",
+fn example_01_hello() {
+    assert_example_output(
+        include_str!("../examples/correct/01_hello.mi"),
+        "Hello, World!",
     );
 }
 
 #[test]
-fn example_02_bubble_sort() {
-    assert_example_contains(
-        include_str!("../examples/correct/02_bubble_sort.mi"),
-        "Sorted array:   1 5 11 12 22 25 34 45 64 90",
+fn example_02_arithmetic() {
+    assert_example_output(
+        include_str!("../examples/correct/02_arithmetic.mi"),
+        "13\n7\n30\n3\n1",
     );
 }
 
 #[test]
-fn example_03_merge_sort() {
-    assert_example_contains(
-        include_str!("../examples/correct/03_merge_sort.mi"),
-        "Sorted list:   3 9 10 27 38 43 82",
+fn example_03_variables() {
+    assert_example_output(
+        include_str!("../examples/correct/03_variables.mi"),
+        "42\n15",
     );
 }
 
 #[test]
-fn example_04_quick_sort() {
-    assert_example_contains(
-        include_str!("../examples/correct/04_quick_sort.mi"),
-        "Sorted list:   10 30 40 50 70 80 90",
+fn example_04_strings() {
+    assert_example_output(
+        include_str!("../examples/correct/04_strings.mi"),
+        "Hello World\nHELLO\n11",
     );
 }
 
 #[test]
-fn example_05_fibonacci() {
-    assert_example_contains(
-        include_str!("../examples/correct/05_fibonacci.mi"),
-        "Fibonacci(20) = 6765",
+fn example_05_functions() {
+    assert_example_output(
+        include_str!("../examples/correct/05_functions.mi"),
+        "7\nHello, Miri!",
     );
 }
 
 #[test]
-fn example_06_matrix_multiplication() {
-    assert_example_contains(
-        include_str!("../examples/correct/06_matrix_multiplication.mi"),
-        "30 24 18 \n84 69 54 \n138 114 90",
+fn example_06_recursion() {
+    assert_example_output(
+        include_str!("../examples/correct/06_recursion.mi"),
+        "120\n55",
     );
 }
 
 #[test]
-fn example_07_tree_traversal() {
-    assert_example_contains(
-        include_str!("../examples/correct/07_tree_traversal.mi"),
-        "In-order DFS traversal: 4 2 5 1 3",
+fn example_07_control_flow() {
+    assert_example_output(
+        include_str!("../examples/correct/07_control_flow.mi"),
+        "1\n5\n3",
     );
 }
 
 #[test]
-fn example_08_graph_bfs() {
-    assert_example_contains(
-        include_str!("../examples/correct/08_graph_bfs.mi"),
-        "BFS from node 2: 2 0 3 1",
+fn example_08_loops() {
+    assert_example_output(
+        include_str!("../examples/correct/08_loops.mi"),
+        "15\n32\n120",
     );
 }
 
 #[test]
-fn example_09_linked_list_reverse() {
-    assert_example_contains(
-        include_str!("../examples/correct/09_linked_list_reverse.mi"),
-        "50 -> 40 -> 30",
+fn example_09_pattern_matching() {
+    assert_example_output(
+        include_str!("../examples/correct/09_pattern_matching.mi"),
+        "zero\none\nnegative\nmany\nthe answer",
     );
 }
 
 #[test]
-fn example_10_dijkstra() {
-    assert_example_contains(
-        include_str!("../examples/correct/10_dijkstra.mi"),
-        "Node 0: 0",
+fn example_10_enums() {
+    assert_example_output(
+        include_str!("../examples/correct/10_enums.mi"),
+        "north\n25\n16",
+    );
+}
+
+#[test]
+fn example_11_structs() {
+    assert_example_output(
+        include_str!("../examples/correct/11_structs.mi"),
+        "3\n4\n25",
+    );
+}
+
+#[test]
+fn example_12_constants() {
+    assert_example_output(
+        include_str!("../examples/correct/12_constants.mi"),
+        "3\n100\nHello",
+    );
+}
+
+#[test]
+fn example_13_fstrings() {
+    assert_example_output(
+        include_str!("../examples/correct/13_fstrings.mi"),
+        "Hello, World!\nCount: 42\n84 is double 42\n5 + 3 = 8",
+    );
+}
+
+#[test]
+fn example_14_fizzbuzz() {
+    assert_example_output(
+        include_str!("../examples/correct/14_fizzbuzz.mi"),
+        "1\n2\nFizz\n4\nBuzz\nFizz\n7\n8\nFizz\nBuzz\n11\nFizz\n13\n14\nFizzBuzz",
+    );
+}
+
+#[test]
+fn example_15_grade_calculator() {
+    assert_example_output(
+        include_str!("../examples/correct/15_grade_calculator.mi"),
+        "A\nB\nC\nD\nF",
+    );
+}
+
+#[test]
+fn example_16_comparisons() {
+    assert_example_output(
+        include_str!("../examples/correct/16_comparisons.mi"),
+        "true\nfalse\n5\n3\ntrue\ntrue\ntrue",
+    );
+}
+
+#[test]
+fn example_17_string_processing() {
+    assert_example_output(
+        include_str!("../examples/correct/17_string_processing.mi"),
+        "HELLO, WORLD\ntrim me\ntrue\n12",
+    );
+}
+
+#[test]
+fn example_18_unless() {
+    assert_example_output(
+        include_str!("../examples/correct/18_unless.mi"),
+        "small\ndone",
+    );
+}
+
+#[test]
+fn example_19_loops_advanced() {
+    assert_example_output(
+        include_str!("../examples/correct/19_loops_advanced.mi"),
+        "5\n3\n4",
+    );
+}
+
+#[test]
+fn example_20_typed_params() {
+    assert_example_output(
+        include_str!("../examples/correct/20_typed_params.mi"),
+        "42\n5.0\nfalse\nHELLO",
+    );
+}
+
+#[test]
+fn example_21_string_comparison() {
+    assert_example_output(
+        include_str!("../examples/correct/21_string_comparison.mi"),
+        "equal\nnot equal\ntrue\nfalse",
+    );
+}
+
+#[test]
+fn example_22_float_ops() {
+    assert_example_output(
+        include_str!("../examples/correct/22_float_ops.mi"),
+        "7.5\ntrue\nfalse\nx is 1.5",
+    );
+}
+
+#[test]
+fn example_23_maps() {
+    assert_example_output(
+        include_str!("../examples/correct/23_maps.mi"),
+        "Capital of Japan is Tokyo\nWe know the capital of France!\nWe have 3 capitals stored.\nRemoved one. Now we have 2 capitals.",
+    );
+}
+
+#[test]
+fn example_24_sets() {
+    assert_example_output(
+        include_str!("../examples/correct/24_sets.mi"),
+        "Set has 5 elements\nSet contains 5\nSet does not contain 3",
+    );
+}
+
+#[test]
+fn example_25_lists() {
+    assert_example_output(
+        include_str!("../examples/correct/25_lists.mi"),
+        "List size: 3\nFirst: 30, Second: 20, Third: 10\nSum is 60",
+    );
+}
+
+#[test]
+fn example_26_arrays() {
+    assert_example_output(
+        include_str!("../examples/correct/26_arrays.mi"),
+        "Initial array length: 5\nFirst element: 50\nSorted array:\n10\n20\n30\n40\n50\nModified first element to 99",
+    );
+}
+
+#[test]
+fn example_27_type_aliases() {
+    assert_example_output(
+        include_str!("../examples/correct/27_type_aliases.mi"),
+        "City: Metropolis\nCoords: 40, -74\nPopulation: 5000000",
+    );
+}
+
+#[test]
+fn example_28_option_types() {
+    assert_example_output(
+        include_str!("../examples/correct/28_option_types.mi"),
+        "Found person: Alice\nWelcome, Guest",
     );
 }

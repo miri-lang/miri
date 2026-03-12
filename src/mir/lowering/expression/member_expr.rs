@@ -194,12 +194,12 @@ pub(crate) fn lower_member_expr(
             ctx.type_checker.global_type_definitions.get(struct_name)
         {
             if let ExpressionKind::Identifier(field_name, _) = &prop.node {
-                // Build operands in field declaration order
+                // Check fields in BTreeMap (note: index is stored in FieldInfo)
                 if let Some((idx, _)) = def
                     .fields
                     .iter()
                     .enumerate()
-                    .find(|(_, f)| f.0 == *field_name)
+                    .find(|(_, (f, _))| *f == field_name)
                 {
                     let place = ensure_place(ctx, obj_operand, obj.span);
 

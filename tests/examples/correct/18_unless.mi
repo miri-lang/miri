@@ -1,0 +1,14 @@
+// SPDX-License-Identifier: Apache-2.0
+// Demonstrates unless/else control flow: unless runs when condition is false.
+use system.io
+
+fn main()
+    let x = 5
+    unless x > 10
+        println("small")
+
+    let done = true
+    unless done
+        println("not done")
+    else
+        println("done")
