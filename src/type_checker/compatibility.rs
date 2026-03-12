@@ -61,6 +61,11 @@ impl TypeChecker {
             return result;
         }
 
+        // Handle cross-representation compatibility (TypeKind::Map vs Custom("Map", ...))
+        if let Some(result) = self.check_cross_representation_compatibility(t1, t2, context) {
+            return result;
+        }
+
         // Handle function types
         if let Some(result) = self.check_function_compatibility(t1, t2, context) {
             return result;
@@ -354,7 +359,7 @@ impl TypeChecker {
             if let Some(c) = constraint {
                 return Some(self.satisfies_constraint(t2, c, kind, context));
             }
-            return Some(true); // Unconstrained generic accepts anything
+            return Some(false); // An unconstrained generic T cannot accept arbitrary concrete types!
         }
 
         if let TypeKind::Generic(_, Some(constraint), kind) = &t2.kind {
@@ -597,5 +602,87 @@ impl TypeChecker {
             TypeKind::Custom(name, _) => name == "String",
             _ => false,
         }
+    }
+
+    /// Checks compatibility between built-in collection variants and their Custom class equivalents.
+    fn check_cross_representation_compatibility(
+        &self,
+        t1: &Type,
+        t2: &Type,
+        context: &Context,
+    ) -> Option<bool> {
+        match (&t1.kind, &t2.kind) {
+            // Map variations
+            (TypeKind::Map(k1, v1), TypeKind::Custom(name, args)) if name == "Map" => {
+                Some(self.check_generic_args_compatible_with_exprs(
+                    &Some(vec![*k1.clone(), *v1.clone()]),
+                    args,
+                    context,
+                ))
+            }
+            (TypeKind::Custom(name, args), TypeKind::Map(k2, v2)) if name == "Map" => {
+                Some(self.check_generic_args_compatible_with_exprs(
+                    args,
+                    &Some(vec![*k2.clone(), *v2.clone()]),
+                    context,
+                ))
+            }
+            // List variations
+            (TypeKind::List(inner1), TypeKind::Custom(name, args)) if name == "List" => {
+                Some(self.check_generic_args_compatible_with_exprs(
+                    &Some(vec![*inner1.clone()]),
+                    args,
+                    context,
+                ))
+            }
+            (TypeKind::Custom(name, args), TypeKind::List(inner2)) if name == "List" => {
+                Some(self.check_generic_args_compatible_with_exprs(
+                    args,
+                    &Some(vec![*inner2.clone()]),
+                    context,
+                ))
+            }
+            // Set variations
+            (TypeKind::Set(inner1), TypeKind::Custom(name, args)) if name == "Set" => {
+                Some(self.check_generic_args_compatible_with_exprs(
+                    &Some(vec![*inner1.clone()]),
+                    args,
+                    context,
+                ))
+            }
+            (TypeKind::Custom(name, args), TypeKind::Set(inner2)) if name == "Set" => {
+                Some(self.check_generic_args_compatible_with_exprs(
+                    args,
+                    &Some(vec![*inner2.clone()]),
+                    context,
+                ))
+            }
+            // Array variations
+            (TypeKind::Array(inner1, _), TypeKind::Custom(name, args)) if name == "Array" => {
+                Some(self.check_generic_args_compatible_with_exprs(
+                    &Some(vec![*inner1.clone()]),
+                    args,
+                    context,
+                ))
+            }
+            (TypeKind::Custom(name, args), TypeKind::Array(inner2, _)) if name == "Array" => {
+                Some(self.check_generic_args_compatible_with_exprs(
+                    args,
+                    &Some(vec![*inner2.clone()]),
+                    context,
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    /// Helper to compare generic arguments when one or both sides are already Vec<Expression>.
+    fn check_generic_args_compatible_with_exprs(
+        &self,
+        args1: &Option<Vec<crate::ast::Expression>>,
+        args2: &Option<Vec<crate::ast::Expression>>,
+        context: &Context,
+    ) -> bool {
+        self.check_generic_args_compatible(args1, args2, context)
     }
 }

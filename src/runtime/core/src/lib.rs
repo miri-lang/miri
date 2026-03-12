@@ -18,11 +18,14 @@ pub mod map;
 pub mod rc;
 pub mod set;
 pub mod string;
+pub mod time;
 
 pub use alloc::*;
 pub use array::*;
 pub use io::*;
 pub use list::*;
 pub use map::*;
+pub use rc::*;
 pub use set::*;
 pub use string::*;
+pub use time::*;

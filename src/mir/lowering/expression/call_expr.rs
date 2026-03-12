@@ -26,11 +26,39 @@ pub(crate) fn lower_call_expr(
     let ExpressionKind::Call(func, args) = &expr.node else {
         unreachable!()
     };
-    // Handle Some(value) constructor — identity operation at runtime
-    if let ExpressionKind::Identifier(name, _) = &func.node {
-        if name == "Some" && args.len() == 1 {
-            return lower_expression(ctx, &args[0], dest);
+    // Handle Some(value) constructor — allocate an Option box
+    let is_option_some = match &func.node {
+        ExpressionKind::Identifier(name, _) => name == "Some",
+        ExpressionKind::Member(enum_expr, variant_expr) => {
+            if let ExpressionKind::Identifier(type_name, _) = &enum_expr.node {
+                if let ExpressionKind::Identifier(variant_name, _) = &variant_expr.node {
+                    type_name == "Option" && variant_name == "Some"
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
         }
+        _ => false,
+    };
+
+    if is_option_some && args.len() == 1 {
+        let inner_val = lower_expression(ctx, &args[0], None)?;
+        let target = if let Some(d) = dest {
+            d
+        } else {
+            let ty = resolve_type(ctx.type_checker, expr);
+            Place::new(ctx.push_temp(ty, expr.span))
+        };
+        ctx.push_statement(crate::mir::Statement {
+            kind: MirStatementKind::Assign(
+                target.clone(),
+                Rvalue::Aggregate(AggregateKind::Option, vec![inner_val]),
+            ),
+            span: expr.span,
+        });
+        return Ok(Operand::Copy(target));
     }
 
     // Check for legacy GPU intrinsic function names (gpu_thread_idx_x etc.)

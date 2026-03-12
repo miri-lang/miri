@@ -341,8 +341,12 @@ impl<'source> Parser<'source> {
         let span = ident.span;
         Ok(match ident.node {
             ExpressionKind::Identifier(id, Some(class)) => {
+<<<<<<< bolt-optimize-parser-path-17710817821761907135
                 // Pre-allocate string instead of using format! to minimize heap allocations
                 // and avoid runtime format string parsing in this hot parser path.
+=======
+                // Pre-allocate to eliminate format!() overhead in this hot path
+>>>>>>> main
                 let mut path = String::with_capacity(class.len() + 2 + id.len());
                 path.push_str(&class);
                 path.push_str("::");

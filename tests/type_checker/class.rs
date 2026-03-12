@@ -456,7 +456,7 @@ class A extends B
 class B extends A
     var y int
     ";
-    type_checker_error_test(code, "not defined");
+    type_checker_error_test(code, "Circular inheritance detected");
 }
 
 #[test]
@@ -567,14 +567,12 @@ class SimpleProcessor implements Processor
 
 #[test]
 fn test_class_self_reference_type() {
-    // TODO: Feature not implemented - class self-reference as field type
-    type_checker_error_test(
+    type_checker_test(
         "
 class Node
     var value int
     var next Node?
 ",
-        "Unknown type",
     );
 }
 
