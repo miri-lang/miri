@@ -64,6 +64,20 @@ impl TypeChecker {
             }
         };
 
+        // Security: Prevent path traversal by structurally rejecting
+        // directory traversal patterns and absolute path anchors in the input string
+        // *before* any path transformations are applied.
+        if path_str.contains("..") || path_str.contains('/') || path_str.contains('\\') {
+            self.report_error(
+                format!(
+                    "Invalid import path '{}': path traversal is not allowed",
+                    path_str
+                ),
+                path.span,
+            );
+            return;
+        }
+
         // 2. Resolve file path
         // Assume src/stdlib for now.
         // Convert "system.io" -> "system/io.mi"
