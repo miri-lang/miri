@@ -341,6 +341,7 @@ impl<'source> Parser<'source> {
         let span = ident.span;
         Ok(match ident.node {
             ExpressionKind::Identifier(id, Some(class)) => {
+                // Pre-allocate to eliminate format!() overhead in this hot path
                 let mut path = String::with_capacity(class.len() + 2 + id.len());
                 path.push_str(&class);
                 path.push_str("::");
