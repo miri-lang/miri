@@ -65,6 +65,14 @@ impl TypeChecker {
         };
 
         // 2. Resolve file path
+        if path_str.contains("..") || path_str.contains('/') || path_str.contains('\\') {
+            self.report_error(
+                format!("Invalid characters in module path: '{}'", path_str),
+                path.span,
+            );
+            return;
+        }
+
         // Assume src/stdlib for now.
         // Convert "system.io" -> "system/io.mi"
         let relative_path = path_str.replace(".", "/") + ".mi";
