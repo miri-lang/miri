@@ -201,11 +201,11 @@ impl fmt::Display for TypeKind {
             TypeKind::Map(k, v) => write!(f, "Map({}, {})", k.node, v.node),
             TypeKind::Tuple(elements) => {
                 write!(f, "Tuple(")?;
-                for (i, e) in elements.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
+                if let Some((first, rest)) = elements.split_first() {
+                    write!(f, "{}", first.node)?;
+                    for e in rest {
+                        write!(f, ", {}", e.node)?;
                     }
-                    write!(f, "{}", e.node)?;
                 }
                 write!(f, ")")
             }
@@ -214,11 +214,11 @@ impl fmt::Display for TypeKind {
             TypeKind::Future(inner) => write!(f, "Future({})", inner.node),
             TypeKind::Function(func) => {
                 write!(f, "Function(")?;
-                for (i, p) in func.params.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
+                if let Some((first, rest)) = func.params.split_first() {
+                    write!(f, "{}", first.typ.node)?;
+                    for p in rest {
+                        write!(f, ", {}", p.typ.node)?;
                     }
-                    write!(f, "{}", p.typ.node)?;
                 }
                 write!(f, ")")?;
                 if let Some(ret) = &func.return_type {
