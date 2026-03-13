@@ -527,8 +527,8 @@ add_one(triple(double(add_one(double(1)))))
 
 #[test]
 fn test_function_mutual_recursion() {
-    // TODO: Feature not implemented - mutual recursion requires forward declarations
-    type_checker_error_test(
+    // Mutual recursion is supported via forward declaration of function signatures
+    type_checker_test(
         "
 fn is_even(n int) bool
     if n == 0: return true
@@ -540,7 +540,6 @@ fn is_odd(n int) bool
 
 is_even(10)
 ",
-        "Undefined variable: is_odd",
     );
 }
 

@@ -34,13 +34,14 @@ fn main()
 
 #[test]
 fn test_empty_struct() {
-    assert_runs(
+    assert_compiler_error(
         r#"
 struct Empty
 
 fn main()
     let e = Empty()
     "#,
+        "Missing Struct Members",
     );
 }
 
@@ -55,6 +56,6 @@ struct Node
 fn main()
     let x = 1
     "#,
-        "Unknown type: Node",
+        "Infinite recursive type",
     );
 }

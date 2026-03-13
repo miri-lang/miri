@@ -20,7 +20,7 @@ class Broken implements Equatable
 fn test_custom_class_equatable_type_checks() {
     // Verify that the type checker accepts a class implementing Equatable
     // and allows the `==` operator on it (even if codegen isn't tested here).
-    assert_compiler_error(
+    assert_type_checks(
         r#"
 use system.ops
 
@@ -33,14 +33,13 @@ class Color implements Equatable
     public fn equals(other Color) bool
         return self.r == other.r
 "#,
-        "does not match trait",
     );
 }
 
 #[test]
 fn test_custom_class_addable_type_checks() {
     // Verify that the type checker recognizes the Addable trait implementation.
-    assert_compiler_error(
+    assert_type_checks(
         r#"
 use system.ops
 
@@ -53,6 +52,5 @@ class Counter implements Addable
     public fn concat(other Counter) Counter
         return Counter(self.value + other.value)
 "#,
-        "does not match trait",
     );
 }

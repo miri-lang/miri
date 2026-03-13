@@ -77,23 +77,46 @@ impl<'a> FunctionTranslator<'a> {
             }
 
             Rvalue::BinaryOp(op, lhs, rhs) => {
-                // Tuple structural equality: compare field-by-field instead of
-                // pointer comparison.
+                // Structural equality: compare field-by-field instead of
+                // pointer comparison for tuples and structs.
                 if matches!(op, BinOp::Eq | BinOp::Ne) {
                     let lhs_kind = Self::operand_type_kind(lhs, type_ctx);
-                    if let TypeKind::Tuple(element_exprs) = lhs_kind {
-                        let lhs_val = Self::translate_operand(builder, ctx, lhs, locals, type_ctx)?;
-                        let rhs_val = Self::translate_operand(builder, ctx, rhs, locals, type_ctx)?;
-                        let result = Self::translate_tuple_equality(
-                            builder,
-                            ctx,
-                            lhs_val,
-                            rhs_val,
-                            element_exprs,
-                            type_ctx,
-                        )?;
+
+                    let structural_eq_result = match lhs_kind {
+                        TypeKind::Tuple(element_exprs) => {
+                            let lhs_val =
+                                Self::translate_operand(builder, ctx, lhs, locals, type_ctx)?;
+                            let rhs_val =
+                                Self::translate_operand(builder, ctx, rhs, locals, type_ctx)?;
+                            Some(Self::translate_tuple_equality(
+                                builder,
+                                ctx,
+                                lhs_val,
+                                rhs_val,
+                                element_exprs,
+                                type_ctx,
+                            )?)
+                        }
+                        TypeKind::Custom(name, _) => {
+                            if let Some(crate::type_checker::context::TypeDefinition::Struct(def)) =
+                                type_ctx.type_definitions.get(name)
+                            {
+                                let lhs_val =
+                                    Self::translate_operand(builder, ctx, lhs, locals, type_ctx)?;
+                                let rhs_val =
+                                    Self::translate_operand(builder, ctx, rhs, locals, type_ctx)?;
+                                Some(Self::translate_struct_equality(
+                                    builder, lhs_val, rhs_val, lhs_kind, def, type_ctx,
+                                )?)
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    };
+
+                    if let Some(result) = structural_eq_result {
                         return if *op == BinOp::Ne {
-                            // Negate the equality result
                             let one = builder.ins().iconst(cranelift_codegen::ir::types::I8, 1);
                             Ok(builder.ins().bxor(result, one))
                         } else {
@@ -790,6 +813,39 @@ impl<'a> FunctionTranslator<'a> {
 
         for i in 0..element_exprs.len() {
             let (offset, cl_ty) = field_layout(&tuple_type, i, type_ctx.type_definitions, ptr_type);
+
+            let lhs_field = builder.ins().load(cl_ty, MemFlags::new(), lhs_ptr, offset);
+            let rhs_field = builder.ins().load(cl_ty, MemFlags::new(), rhs_ptr, offset);
+
+            let field_eq = if cl_ty.is_float() {
+                builder.ins().fcmp(FloatCC::Equal, lhs_field, rhs_field)
+            } else {
+                builder.ins().icmp(IntCC::Equal, lhs_field, rhs_field)
+            };
+
+            result = builder.ins().band(result, field_eq);
+        }
+
+        Ok(result)
+    }
+
+    /// Generate structural equality comparison for two struct instances.
+    /// Compares each field and ANDs the results together.
+    fn translate_struct_equality(
+        builder: &mut FunctionBuilder,
+        lhs_ptr: Value,
+        rhs_ptr: Value,
+        struct_type: &TypeKind,
+        def: &crate::type_checker::context::StructDefinition,
+        type_ctx: &TypeCtx,
+    ) -> Result<Value, String> {
+        let ptr_type = type_ctx.ptr_type;
+
+        // Start with true (all fields equal so far)
+        let mut result = builder.ins().iconst(cranelift_codegen::ir::types::I8, 1);
+
+        for i in 0..def.fields.len() {
+            let (offset, cl_ty) = field_layout(struct_type, i, type_ctx.type_definitions, ptr_type);
 
             let lhs_field = builder.ins().load(cl_ty, MemFlags::new(), lhs_ptr, offset);
             let rhs_field = builder.ins().load(cl_ty, MemFlags::new(), rhs_ptr, offset);

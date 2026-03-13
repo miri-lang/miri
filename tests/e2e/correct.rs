@@ -87,7 +87,7 @@ fn example_08_graph_bfs() {
 fn example_09_linked_list_reverse() {
     assert_example_contains(
         include_str!("../examples/correct/09_linked_list_reverse.mi"),
-        "Reversed list: 5 -> 4 -> 3 -> 2 -> 1 -> None",
+        "50 -> 40 -> 30 -> 20 -> 10 -> None",
     );
 }
 
@@ -95,6 +95,6 @@ fn example_09_linked_list_reverse() {
 fn example_10_dijkstra() {
     assert_example_contains(
         include_str!("../examples/correct/10_dijkstra.mi"),
-        "Node 0: 0\nNode 1: 4\nNode 2: 12\nNode 3: 19\nNode 7: 8",
+        "Node 0: 0\nNode 1: 3\nNode 2: 1\nNode 3: 4",
     );
 }

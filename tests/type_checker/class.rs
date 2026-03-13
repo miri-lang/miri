@@ -447,8 +447,6 @@ class Triangle extends Polygon
 
 #[test]
 fn test_circular_inheritance_direct() {
-    // Note: This test may not work because A needs to be defined before B can extend it
-    // But we test what we can - classes extending themselves indirectly
     let code = "
 class A extends B
     var x int
@@ -456,7 +454,7 @@ class A extends B
 class B extends A
     var y int
     ";
-    type_checker_error_test(code, "not defined");
+    type_checker_error_test(code, "Circular inheritance");
 }
 
 #[test]
@@ -567,14 +565,13 @@ class SimpleProcessor implements Processor
 
 #[test]
 fn test_class_self_reference_type() {
-    // TODO: Feature not implemented - class self-reference as field type
-    type_checker_error_test(
+    // Class self-reference with optional type is valid (e.g., linked list nodes)
+    type_checker_test(
         "
 class Node
     var value int
     var next Node?
 ",
-        "Unknown type",
     );
 }
 
