@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+pub mod ast;
 pub mod cli;
 pub mod codegen;
 pub mod e2e;
