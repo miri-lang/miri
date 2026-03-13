@@ -122,3 +122,56 @@ fn test_find_best_match_unicode() {
         Some("🦀rust".to_string())
     );
 }
+
+#[test]
+fn test_color_scheme_colored() {
+    use miri::error::format::ColorScheme;
+    let scheme = ColorScheme::colored();
+    assert_eq!(scheme.reset, "\x1b[0m");
+    assert_eq!(scheme.bold, "\x1b[1m");
+    assert_eq!(scheme.red, "\x1b[31m");
+    assert_eq!(scheme.yellow, "\x1b[33m");
+    assert_eq!(scheme.blue, "\x1b[34m");
+    assert_eq!(scheme.cyan, "\x1b[36m");
+}
+
+#[test]
+fn test_color_scheme_plain() {
+    use miri::error::format::ColorScheme;
+    let scheme = ColorScheme::plain();
+    assert_eq!(scheme.reset, "");
+    assert_eq!(scheme.bold, "");
+    assert_eq!(scheme.red, "");
+    assert_eq!(scheme.yellow, "");
+    assert_eq!(scheme.blue, "");
+    assert_eq!(scheme.cyan, "");
+}
+
+#[test]
+fn test_color_scheme_detect() {
+    use miri::error::format::ColorScheme;
+    // detect() depends on stderr being a terminal, which might not be true in tests.
+    // However, we can at least verify it returns a valid scheme (either colored or plain).
+    let scheme = ColorScheme::detect();
+    let is_colored = scheme.red == "\x1b[31m";
+    let is_plain = scheme.red == "";
+    assert!(
+        is_colored || is_plain,
+        "detect() should return either a colored or plain scheme"
+    );
+}
+
+#[test]
+fn test_color_scheme_severity_color() {
+    use miri::error::diagnostic::Severity;
+    use miri::error::format::ColorScheme;
+    let scheme = ColorScheme::colored();
+    assert_eq!(scheme.severity_color(Severity::Error), scheme.red);
+    assert_eq!(scheme.severity_color(Severity::Warning), scheme.yellow);
+    assert_eq!(scheme.severity_color(Severity::Note), scheme.cyan);
+
+    let plain = ColorScheme::plain();
+    assert_eq!(plain.severity_color(Severity::Error), "");
+    assert_eq!(plain.severity_color(Severity::Warning), "");
+    assert_eq!(plain.severity_color(Severity::Note), "");
+}
