@@ -180,24 +180,25 @@ src/
 Miri is written in Rust. Build with a stable Rust toolchain:
 
 ```bash
-cargo build --release
+make build        # Build compiler + all runtime crates (debug)
+make release      # Build compiler + all runtime crates (release)
 ```
 
-The binary will be available at `target/release/miri`.
+The release binary will be available at `target/release/miri`.
 
 ## Running Tests
 
-Run the full test suite for the compiler and standard library:
+Run the full test suite across the compiler, standard library, and all runtime crates:
 
 ```bash
-cargo test
+make test
 ```
 
-To run tests for the runtime components (like the Miri core runtime), navigate to the runtime directory:
+## Linting & Formatting
 
 ```bash
-cd src/runtime/core
-cargo test
+make lint         # Check formatting + clippy (compiler + runtimes)
+make format       # Auto-format all code (compiler + runtimes)
 ```
 
 ## Contributing
