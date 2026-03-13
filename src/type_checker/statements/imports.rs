@@ -64,6 +64,12 @@ impl TypeChecker {
             }
         };
 
+        // 1.5 Security: Sanitize path string to prevent traversal
+        if path_str.contains("..") || path_str.contains('/') || path_str.contains('\\') {
+            self.report_error("Invalid characters in import path".to_string(), path.span);
+            return;
+        }
+
         // 2. Resolve file path
         // Assume src/stdlib for now.
         // Convert "system.io" -> "system/io.mi"
