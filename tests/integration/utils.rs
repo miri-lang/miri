@@ -10,6 +10,19 @@ fn has_error_header(output: &str) -> bool {
     output.contains("error:") || output.contains("error[")
 }
 
+/// Assert that the code passes type checking (no errors).
+pub fn assert_type_checks(code: &str) {
+    let result = miri_check(code);
+    let output = result.output();
+
+    if has_error_header(&output) {
+        panic!(
+            "Expected program to pass type checking, but got errors:\n{}",
+            output
+        );
+    }
+}
+
 /// Assert that the code successfully compiles to an executable.
 pub fn assert_runs(code: &str) {
     let result = miri_run(code);

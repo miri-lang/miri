@@ -259,8 +259,26 @@ impl<'a> FunctionTranslator<'a> {
                 let mut sig = Signature::new(builder.func.signature.call_conv);
                 let mut arg_values = Vec::new();
 
-                for arg in args {
+                // Runtime collection functions use pointer-sized values for element
+                // arguments to maintain a consistent FFI signature regardless of the
+                // element type (bool/i8, int/i64, etc.).
+                let widen_value_args = matches!(
+                    func_name.as_str(),
+                    "miri_rt_list_push" | "miri_rt_list_insert"
+                );
+
+                for (i, arg) in args.iter().enumerate() {
                     let val = Self::translate_operand(builder, ctx, arg, locals, type_ctx)?;
+                    let val_ty = builder.func.dfg.value_type(val);
+
+                    // For collection runtime calls, widen non-pointer element values
+                    // (skip arg 0 which is the collection pointer)
+                    let val = if widen_value_args && i > 0 && val_ty.bytes() < ptr_type.bytes() {
+                        builder.ins().sextend(ptr_type, val)
+                    } else {
+                        val
+                    };
+
                     arg_values.push(val);
                     sig.params
                         .push(AbiParam::new(builder.func.dfg.value_type(val)));

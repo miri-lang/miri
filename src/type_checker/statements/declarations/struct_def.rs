@@ -119,6 +119,22 @@ impl TypeChecker {
 
         context.exit_scope();
 
+        // Detect infinite recursive struct types: a struct that contains itself
+        // (directly or indirectly) without going through an optional type would
+        // have infinite size and cannot be instantiated.
+        for (field_name, field_type, _) in &fields_vec {
+            if self.is_infinite_recursive_type(&name, &field_type.kind) {
+                self.report_error(
+                    format!(
+                        "Infinite recursive type: field '{}' of struct '{}' contains '{}' without indirection",
+                        field_name, name, name
+                    ),
+                    name_expr.span,
+                );
+                return;
+            }
+        }
+
         let struct_def = StructDefinition {
             fields: fields_vec,
             generics: if generic_defs.is_empty() {
