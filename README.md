@@ -1,21 +1,32 @@
 # The Miri Programming Language
 
+<p align="center">
+  <img src="banner.png"/>
+</p>
+
 **A modern, GPU-first, statically-typed, compiled programming language designed for balancing high performance and safety in the age of Generative AI.**
 
 Miri is designed for agentic engineering, where humans define intent and AI fills in safe, verifiable, high-performance implementations.
 
-## Current State (v0.1.0-alpha.1)
+## Current State (v0.1.0-alpha.2)
 
-Miri is currently in its first Alpha release, supporting foundational language features.
+Miri is in its second Alpha release. On top of the core language from Alpha 1, this release adds data types, collections, and memory management foundations.
 
 **Working Features:**
 - **Primitives & Variables**: `int`, `float`, `bool`, `String` via `let` (immutable) and `var` (mutable).
-- **Functions**: Typed parameters and returns.
+- **Functions**: Typed parameters and returns, named arguments.
 - **Control Flow**: `if/else`, `unless`, `while`, `until`, `do-while`, `forever`, `for..in`.
-- **Pattern Matching**: The `match` statement.
-- **Compilation Pipeline**: Full frontend (Lexer, Parser, Type Checker), MIR Lowering, and Native Codegen (via Cranelift).
+- **Pattern Matching**: `match` with guards, destructuring, and or-patterns.
+- **Structs**: Named fields, construction with named arguments, field access.
+- **Enums**: Variants with associated data, pattern matching with extraction.
+- **Tuples**: Construction, index access, destructuring in match.
+- **Collections**: `Array` (fixed-size `[T; N]`), `List` (dynamic `[T]`), `Map` (`{K: V}`), `Set` (`{T}`) — all with full method APIs.
+- **Option Types**: `Type?`, `None`, `Some`, `if let` unwrapping.
+- **Type Aliases**: `type ID is String`.
+- **Memory Model**: Container-level reference counting, auto-copy for small types, drop specialization.
+- **Compilation Pipeline**: Full frontend (Lexer, Parser, Type Checker), MIR Lowering with 5 optimization passes, and Native Codegen (via Cranelift).
 
-*Note: Collections (lists, maps, tuples), object-oriented features (classes, traits, structs), and GPU codegen are planned for upcoming milestones.*
+*Note: Object-oriented features (classes, traits), closures, generics codegen, and GPU codegen are planned for upcoming milestones.*
 
 ## Quick Start
 
@@ -44,6 +55,63 @@ fn add(a int, b int) int
     a + b
 
 let result = add(5, 10)
+```
+
+### Structs
+
+```miri
+use system.io
+
+struct Point
+    x int
+    y int
+
+fn offset(p Point, dx int, dy int) Point
+    Point(x: p.x + dx, y: p.y + dy)
+
+fn main()
+    let p = Point(x: 1, y: 2)
+    let q = offset(p, 10, 20)
+    println(f"{q.x}, {q.y}")
+```
+
+### Enums with Data
+
+```miri
+use system.io
+
+enum Shape
+    Circle(float)
+    Rect(float, float)
+
+fn area(s Shape) float
+    match s
+        Shape.Circle(r): 3.14 * r * r
+        Shape.Rect(w, h): w * h
+```
+
+### Collections
+
+```miri
+use system.io
+use system.collections.list
+use system.collections.map
+
+var items = List([1, 2, 3])
+items.push(4)
+
+let scores = {"Alice": 95, "Bob": 87}
+println(f"{scores["Alice"]}")
+```
+
+### Option Types
+
+```miri
+use system.io
+
+fn find(name String?)
+    if let Some(s) = name
+        println(f"Found: {s}")
 ```
 
 ### Control Flow
