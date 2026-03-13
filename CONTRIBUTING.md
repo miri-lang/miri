@@ -6,17 +6,16 @@ Thank you for your interest in contributing to Miri! This guide will help you ge
 
 1. **Fork the repository** and clone it locally
 2. **Set up your environment** — Ensure you have a stable Rust toolchain installed
-3. **Build the project:**
+3. **Build the project** (compiler + all runtime crates):
 
    ```bash
-   cargo build
+   make build
    ```
 
 4. **Run tests** to verify everything works:
 
    ```bash
-   cargo test
-   cd src/runtime/core && cargo test
+   make test
    ```
 
 ## Before Submitting
@@ -26,7 +25,7 @@ Every contribution must pass these checks:
 ### 1. Format Your Code
 
 ```bash
-cargo fmt
+make format
 ```
 
 Formatting must produce **zero diffs**. This is enforced in CI.
@@ -34,27 +33,18 @@ Formatting must produce **zero diffs**. This is enforced in CI.
 ### 2. Run the Linter
 
 ```bash
-cargo clippy -- -D warnings
+make lint
 ```
 
-All Clippy warnings must be resolved.
+This runs `cargo fmt --check` and `cargo clippy -- -D warnings` across the compiler and all runtime crates. All warnings must be resolved.
 
 ### 3. Run Tests
 
-To test the main compiler and standard library:
-
 ```bash
-cargo test
+make test
 ```
 
-To test the runtime components, you must explicitly change directories:
-
-```bash
-cd src/runtime/core
-cargo test
-```
-
-All tests across components must pass. If you're adding new functionality, include appropriate tests.
+This runs tests across the compiler, standard library, and all runtime crates. All tests must pass. If you're adding new functionality, include appropriate tests.
 
 ## Code Style
 
@@ -131,11 +121,11 @@ Miri uses a modern Rust edition (2024) consistently across the workspace.
 
 ## CI/CD
 
-CI runs the following checks:
+CI runs the following checks (equivalent to `make lint && make test`):
 
-- `cargo fmt --check`
-- `cargo clippy -- -D warnings`  
-- `cargo test` (unit + integration)
+- `cargo fmt --check` (compiler + runtimes)
+- `cargo clippy -- -D warnings` (compiler + runtimes)
+- `cargo test` (unit + integration, compiler + runtimes)
 - Documentation build
 
 ## Questions?
