@@ -924,4 +924,53 @@ impl TypeChecker {
             notes: Vec::new(),
         });
     }
+
+    // ==================== Recursive Type Detection ====================
+
+    /// Checks whether a field type contains the struct `target_name` directly
+    /// (without going through an optional/pointer indirection), which would
+    /// make the type infinitely sized.
+    pub(crate) fn is_infinite_recursive_type(&self, target_name: &str, ty: &TypeKind) -> bool {
+        let mut visited = std::collections::HashSet::new();
+        self.contains_type_directly(target_name, ty, &mut visited)
+    }
+
+    fn contains_type_directly(
+        &self,
+        target_name: &str,
+        ty: &TypeKind,
+        visited: &mut std::collections::HashSet<String>,
+    ) -> bool {
+        match ty {
+            TypeKind::Custom(name, _) if name == target_name => true,
+            TypeKind::Custom(name, _) => {
+                if !visited.insert(name.clone()) {
+                    return false; // Already checked, avoid infinite loop
+                }
+                // Check if this custom type transitively contains target_name
+                if let Some(TypeDefinition::Struct(def)) = self.global_type_definitions.get(name) {
+                    def.fields.iter().any(|(_, field_ty, _)| {
+                        self.contains_type_directly(target_name, &field_ty.kind, visited)
+                    })
+                } else {
+                    false
+                }
+            }
+            // Tuple fields are inline, so check them
+            TypeKind::Tuple(elements) => elements.iter().any(|expr| {
+                if let ExpressionKind::Type(t, _) = &expr.node {
+                    self.contains_type_directly(target_name, &t.kind, visited)
+                } else {
+                    false
+                }
+            }),
+            // Optional, List, Array, Set, Map use pointer indirection — safe
+            TypeKind::Option(_)
+            | TypeKind::List(_)
+            | TypeKind::Array(_, _)
+            | TypeKind::Set(_)
+            | TypeKind::Map(_, _) => false,
+            _ => false,
+        }
+    }
 }
