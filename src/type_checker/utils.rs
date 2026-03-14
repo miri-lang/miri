@@ -935,16 +935,16 @@ impl TypeChecker {
         self.contains_type_directly(target_name, ty, &mut visited)
     }
 
-    fn contains_type_directly(
-        &self,
+    fn contains_type_directly<'a>(
+        &'a self,
         target_name: &str,
-        ty: &TypeKind,
-        visited: &mut std::collections::HashSet<String>,
+        ty: &'a TypeKind,
+        visited: &mut std::collections::HashSet<&'a str>,
     ) -> bool {
         match ty {
             TypeKind::Custom(name, _) if name == target_name => true,
             TypeKind::Custom(name, _) => {
-                if !visited.insert(name.clone()) {
+                if !visited.insert(name.as_str()) {
                     return false; // Already checked, avoid infinite loop
                 }
                 // Check if this custom type transitively contains target_name
