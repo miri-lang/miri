@@ -181,7 +181,7 @@ impl TypeChecker {
         context.enter_class(name.clone(), base_class_name.clone(), class_type);
 
         // PASS 1: Collect fields and method signatures (without checking bodies)
-        let mut fields: Vec<(String, FieldInfo)> = Vec::new();
+        let mut fields: Vec<(String, FieldInfo)> = Vec::with_capacity(body.len());
         let mut methods: BTreeMap<String, MethodInfo> = BTreeMap::new();
         // Store method info for second pass body checking
         let mut method_statements: Vec<&Statement> = Vec::with_capacity(body.len());
