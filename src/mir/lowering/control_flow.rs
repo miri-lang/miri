@@ -1484,7 +1484,8 @@ fn lower_struct_constructor(
     Ok(result_op)
 }
 
-/// Lowers a class constructor call to an Aggregate rvalue.
+/// Lowers a class constructor call to an Aggregate rvalue,
+/// then calls the `init` method if one exists.
 fn lower_class_constructor(
     ctx: &mut LoweringContext,
     span: &Span,
@@ -1493,81 +1494,142 @@ fn lower_class_constructor(
     args: &[crate::ast::expression::Expression],
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    // Separate positional and named arguments
-    let mut positional_args = Vec::with_capacity(args.len());
-    let mut named_args: std::collections::HashMap<&str, Operand> =
-        std::collections::HashMap::with_capacity(args.len());
+    let has_init = def.methods.get("init").is_some_and(|m| !m.is_abstract);
 
-    for arg in args {
-        match &arg.node {
-            ExpressionKind::NamedArgument(name, value) => {
-                let op = lower_expression(ctx, value, None)?;
-                named_args.insert(name, op);
-            }
-            _ => {
-                let op = lower_expression(ctx, arg, None)?;
-                positional_args.push(op);
+    if has_init {
+        // When init exists, constructor args are init params, not field values.
+        // Allocate the object with default field values, then call init.
+        let mut field_defaults = Vec::with_capacity(def.fields.len());
+        for (_field_name, field_info) in &def.fields {
+            field_defaults.push(create_default_value(&field_info.ty, span));
+        }
+
+        let class_ty = Type::new(TypeKind::Custom(class_name.to_string(), None), *span);
+
+        let (destination, result_op) = if let Some(d) = dest {
+            (d.clone(), Operand::Copy(d))
+        } else {
+            let temp = ctx.push_temp(class_ty.clone(), *span);
+            let p = Place::new(temp);
+            (p.clone(), Operand::Copy(p))
+        };
+
+        ctx.push_statement(crate::mir::Statement {
+            kind: StatementKind::Assign(
+                destination.clone(),
+                Rvalue::Aggregate(AggregateKind::Class(class_ty), field_defaults),
+            ),
+            span: *span,
+        });
+
+        // Build init call args: self + constructor args + allocator
+        let mut call_args = vec![Operand::Copy(destination)];
+        for arg in args {
+            match &arg.node {
+                ExpressionKind::NamedArgument(_name, value) => {
+                    call_args.push(lower_expression(ctx, value, None)?);
+                }
+                _ => {
+                    call_args.push(lower_expression(ctx, arg, None)?);
+                }
             }
         }
-    }
+        if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
+            call_args.push(Operand::Copy(Place::new(alloc_local)));
+        }
 
-    // Build operands in field declaration order
-    let mut operands = Vec::with_capacity(def.fields.len());
-    let mut pos_iter = positional_args.into_iter();
+        let mangled_name = format!("{}_init", class_name);
+        let func_op = Operand::Constant(Box::new(Constant {
+            span: *span,
+            ty: Type::new(TypeKind::Identifier, *span),
+            literal: crate::ast::literal::Literal::Identifier(mangled_name),
+        }));
 
-    for (field_name, field_info) in &def.fields {
-        let op = if let Some(op) = pos_iter.next() {
-            // Positional argument
-            op
-        } else if let Some(op) = named_args.remove(field_name.as_str()) {
-            // Named argument
-            op
-        } else {
-            // No argument provided - use default value (zero for now)
-            // TODO: Support default field values from class definition
-            create_default_value(&field_info.ty, span)
-        };
+        // init returns void; use a temp destination for the call
+        let void_ty = Type::new(TypeKind::Void, *span);
+        let void_dest = ctx.push_temp(void_ty, *span);
+        let target_bb = ctx.new_basic_block();
+        ctx.set_terminator(Terminator::new(
+            TerminatorKind::Call {
+                func: func_op,
+                args: call_args,
+                destination: Place::new(void_dest),
+                target: Some(target_bb),
+            },
+            *span,
+        ));
+        ctx.set_current_block(target_bb);
 
-        // Cast if types don't match
-        let op_ty = op.ty(&ctx.body).clone();
-        let op = if op_ty.kind != field_info.ty.kind {
-            let temp = ctx.push_temp(field_info.ty.clone(), *span);
-            ctx.push_statement(crate::mir::Statement {
-                kind: StatementKind::Assign(
-                    Place::new(temp),
-                    coerce_rvalue(op, &op_ty, &field_info.ty),
-                ),
-                span: *span,
-            });
-            Operand::Copy(Place::new(temp))
-        } else {
-            op
-        };
-
-        operands.push(op);
-    }
-
-    // Create the class type
-    let class_ty = Type::new(TypeKind::Custom(class_name.to_string(), None), *span);
-
-    // Assign aggregate to destination
-    let (destination, result_op) = if let Some(d) = dest {
-        (d.clone(), Operand::Copy(d))
+        Ok(result_op)
     } else {
-        let temp = ctx.push_temp(class_ty.clone(), *span);
-        let p = Place::new(temp);
-        (p.clone(), Operand::Copy(p))
-    };
+        // No init method — map constructor args directly to fields.
+        let mut positional_args = Vec::with_capacity(args.len());
+        let mut named_args: std::collections::HashMap<&str, Operand> =
+            std::collections::HashMap::with_capacity(args.len());
 
-    ctx.push_statement(crate::mir::Statement {
-        kind: StatementKind::Assign(
-            destination,
-            Rvalue::Aggregate(AggregateKind::Class(class_ty), operands),
-        ),
-        span: *span,
-    });
+        for arg in args {
+            match &arg.node {
+                ExpressionKind::NamedArgument(name, value) => {
+                    let op = lower_expression(ctx, value, None)?;
+                    named_args.insert(name, op);
+                }
+                _ => {
+                    let op = lower_expression(ctx, arg, None)?;
+                    positional_args.push(op);
+                }
+            }
+        }
 
-    Ok(result_op)
+        let mut operands = Vec::with_capacity(def.fields.len());
+        let mut pos_iter = positional_args.into_iter();
+
+        for (field_name, field_info) in &def.fields {
+            let op = if let Some(op) = pos_iter.next() {
+                op
+            } else if let Some(op) = named_args.remove(field_name.as_str()) {
+                op
+            } else {
+                create_default_value(&field_info.ty, span)
+            };
+
+            let op_ty = op.ty(&ctx.body).clone();
+            let op = if op_ty.kind != field_info.ty.kind {
+                let temp = ctx.push_temp(field_info.ty.clone(), *span);
+                ctx.push_statement(crate::mir::Statement {
+                    kind: StatementKind::Assign(
+                        Place::new(temp),
+                        coerce_rvalue(op, &op_ty, &field_info.ty),
+                    ),
+                    span: *span,
+                });
+                Operand::Copy(Place::new(temp))
+            } else {
+                op
+            };
+
+            operands.push(op);
+        }
+
+        let class_ty = Type::new(TypeKind::Custom(class_name.to_string(), None), *span);
+
+        let (destination, result_op) = if let Some(d) = dest {
+            (d.clone(), Operand::Copy(d))
+        } else {
+            let temp = ctx.push_temp(class_ty.clone(), *span);
+            let p = Place::new(temp);
+            (p.clone(), Operand::Copy(p))
+        };
+
+        ctx.push_statement(crate::mir::Statement {
+            kind: StatementKind::Assign(
+                destination,
+                Rvalue::Aggregate(AggregateKind::Class(class_ty), operands),
+            ),
+            span: *span,
+        });
+
+        Ok(result_op)
+    }
 }
 
 /// Creates a default value operand for a given type.
