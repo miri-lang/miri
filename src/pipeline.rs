@@ -473,16 +473,59 @@ impl Pipeline {
         let mut bodies = Vec::new();
         let mut lowered_names = std::collections::HashSet::new();
 
-        // Lower functions from the program AST
+        // Lower functions and class methods from the program AST
         for stmt in &result.ast.body {
-            if let StatementKind::FunctionDeclaration(decl) = &stmt.node {
-                let body =
-                    mir::lowering::lower_function(stmt, &result.type_checker, is_release, true)
-                        .map_err(|e| {
-                            CompilerError::Codegen(format!("MIR lowering failed: {}", e))
-                        })?;
-                lowered_names.insert(decl.name.clone());
-                bodies.push((decl.name.clone(), body));
+            match &stmt.node {
+                StatementKind::FunctionDeclaration(decl) => {
+                    let body =
+                        mir::lowering::lower_function(stmt, &result.type_checker, is_release, true)
+                            .map_err(|e| {
+                                CompilerError::Codegen(format!("MIR lowering failed: {}", e))
+                            })?;
+                    lowered_names.insert(decl.name.clone());
+                    bodies.push((decl.name.clone(), body));
+                }
+                StatementKind::Class(class_data) => {
+                    let class_name =
+                        if let ExpressionKind::Identifier(name, _) = &class_data.name.node {
+                            name.as_str()
+                        } else {
+                            continue;
+                        };
+
+                    let self_type =
+                        Type::new(TypeKind::Custom(class_name.to_string(), None), stmt.span);
+
+                    for method_stmt in &class_data.body {
+                        if let StatementKind::FunctionDeclaration(method_decl) = &method_stmt.node {
+                            if method_decl.body.is_none() {
+                                continue;
+                            }
+
+                            let mangled = format!("{}_{}", class_name, method_decl.name);
+                            if lowered_names.contains(&mangled) {
+                                continue;
+                            }
+
+                            let mir_body = mir::lowering::lower_class_method(
+                                method_stmt,
+                                self_type.clone(),
+                                &result.type_checker,
+                                is_release,
+                            )
+                            .map_err(|e| {
+                                CompilerError::Codegen(format!(
+                                    "MIR lowering failed for {}: {}",
+                                    mangled, e
+                                ))
+                            })?;
+
+                            lowered_names.insert(mangled.clone());
+                            bodies.push((mangled, mir_body));
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -522,12 +565,6 @@ impl Pipeline {
                         if let StatementKind::FunctionDeclaration(method_decl) = &method_stmt.node {
                             // Skip methods without a body (abstract/forward declarations)
                             if method_decl.body.is_none() {
-                                continue;
-                            }
-
-                            // Skip constructors — `init` has special semantics and is not
-                            // called from compiled code (strings are created as literals).
-                            if method_decl.name == "init" {
                                 continue;
                             }
 
