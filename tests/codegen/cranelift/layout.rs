@@ -575,9 +575,10 @@ fn test_class_field_layout_uses_pointer_slots() {
     let (o0, t0) = field_layout(&kind, 0, &type_defs, ptr);
     let (o1, t1) = field_layout(&kind, 1, &type_defs, ptr);
     let (o2, t2) = field_layout(&kind, 2, &type_defs, ptr);
-    assert_eq!(o0, 2 * ptr.bytes() as i32);
-    assert_eq!(o1, 2 * ptr.bytes() as i32 + ptr.bytes() as i32);
-    assert_eq!(o2, 2 * ptr.bytes() as i32 + 2 * ptr.bytes() as i32);
+    // Offsets are relative to payload pointer (past the 16-byte header)
+    assert_eq!(o0, 0);
+    assert_eq!(o1, ptr.bytes() as i32);
+    assert_eq!(o2, 2 * ptr.bytes() as i32);
 
     assert_eq!(t0, ptr);
     assert_eq!(t1, ptr);

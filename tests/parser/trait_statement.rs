@@ -30,7 +30,7 @@ trait Drawable
             None,
             block(vec![expression_statement(identifier("x"))]),
             FunctionProperties {
-                visibility: MemberVisibility::Private,
+                visibility: MemberVisibility::Public,
                 ..Default::default()
             },
         )],
@@ -64,7 +64,7 @@ trait Comparable
                 Some(Box::new(type_expr_non_null(type_int()))),
                 block(vec![expression_statement(int_literal_expression(0))]),
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -80,7 +80,7 @@ trait Comparable
                 Some(Box::new(type_expr_non_null(type_bool()))),
                 block(vec![expression_statement(boolean_literal(true))]),
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -107,7 +107,7 @@ trait Sortable extends Comparable
             None,
             block(vec![expression_statement(identifier("x"))]),
             FunctionProperties {
-                visibility: MemberVisibility::Private,
+                visibility: MemberVisibility::Public,
                 ..Default::default()
             },
         )],
@@ -133,7 +133,7 @@ trait ReadWrite extends Readable, Writable
             None,
             block(vec![expression_statement(identifier("x"))]),
             FunctionProperties {
-                visibility: MemberVisibility::Private,
+                visibility: MemberVisibility::Public,
                 ..Default::default()
             },
         )],
@@ -164,7 +164,7 @@ trait Container<T>
             None,
             block(vec![expression_statement(identifier("x"))]),
             FunctionProperties {
-                visibility: MemberVisibility::Private,
+                visibility: MemberVisibility::Public,
                 ..Default::default()
             },
         )],
@@ -197,7 +197,7 @@ trait OrderedContainer<T extends Comparable>
             None,
             block(vec![expression_statement(identifier("x"))]),
             FunctionProperties {
-                visibility: MemberVisibility::Private,
+                visibility: MemberVisibility::Public,
                 ..Default::default()
             },
         )],
@@ -223,7 +223,7 @@ trait API
             None,
             block(vec![expression_statement(identifier("x"))]),
             FunctionProperties {
-                visibility: MemberVisibility::Private,
+                visibility: MemberVisibility::Public,
                 ..Default::default()
             },
         )],
@@ -282,7 +282,7 @@ trait Drawable
             vec![],
             None,
             FunctionProperties {
-                visibility: MemberVisibility::Private,
+                visibility: MemberVisibility::Public,
                 ..Default::default()
             },
         )],
@@ -307,7 +307,7 @@ trait Measurable
             vec![],
             Some(Box::new(type_expr_non_null(type_int()))),
             FunctionProperties {
-                visibility: MemberVisibility::Private,
+                visibility: MemberVisibility::Public,
                 ..Default::default()
             },
         )],
@@ -335,7 +335,7 @@ trait Processor
             ],
             Some(Box::new(type_expr_non_null(type_bool()))),
             FunctionProperties {
-                visibility: MemberVisibility::Private,
+                visibility: MemberVisibility::Public,
                 ..Default::default()
             },
         )],
@@ -369,7 +369,7 @@ trait CRUD
                 )],
                 None,
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -384,7 +384,7 @@ trait CRUD
                 )],
                 Some(Box::new(type_expr_non_null(type_string()))),
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -397,7 +397,7 @@ trait CRUD
                 ],
                 None,
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -412,7 +412,7 @@ trait CRUD
                 )],
                 None,
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -442,7 +442,7 @@ trait Serializable
                 vec![],
                 Some(Box::new(type_expr_non_null(type_string()))),
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -457,7 +457,7 @@ trait Serializable
                 )],
                 None,
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -470,7 +470,7 @@ trait Serializable
                     "default",
                 ))]),
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -503,7 +503,7 @@ trait Container<T>
                 )],
                 None,
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -518,7 +518,7 @@ trait Container<T>
                 )],
                 Some(Box::new(type_expr_non_null(type_custom("T", None)))),
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -596,7 +596,7 @@ trait Compact
                 vec![],
                 None,
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -606,7 +606,7 @@ trait Compact
                 vec![],
                 None,
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -616,7 +616,7 @@ trait Compact
                 vec![],
                 None,
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -642,7 +642,7 @@ trait Child extends Parent
             vec![],
             None,
             FunctionProperties {
-                visibility: MemberVisibility::Private,
+                visibility: MemberVisibility::Public,
                 ..Default::default()
             },
         )],
@@ -667,7 +667,7 @@ trait Combined extends Readable, Writable
             vec![],
             None,
             FunctionProperties {
-                visibility: MemberVisibility::Private,
+                visibility: MemberVisibility::Public,
                 ..Default::default()
             },
         )],
@@ -705,7 +705,7 @@ trait Configurable
             ],
             None,
             FunctionProperties {
-                visibility: MemberVisibility::Private,
+                visibility: MemberVisibility::Public,
                 ..Default::default()
             },
         )],
@@ -730,7 +730,7 @@ trait AsyncProcessor
             vec![],
             None,
             FunctionProperties {
-                visibility: MemberVisibility::Private,
+                visibility: MemberVisibility::Public,
                 is_async: true,
                 ..Default::default()
             },
