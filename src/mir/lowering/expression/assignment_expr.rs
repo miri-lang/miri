@@ -118,93 +118,90 @@ pub(crate) fn lower_assignment_expr(
                     .get_type(obj.id)
                     .ok_or_else(|| LoweringError::type_not_found(obj.id, obj.span))?;
 
-                if let TypeKind::Custom(struct_name, _) = &obj_ty.kind {
-                    if let Some(crate::type_checker::context::TypeDefinition::Struct(def)) =
-                        ctx.type_checker.global_type_definitions.get(struct_name)
+                if let TypeKind::Custom(type_name, _) = &obj_ty.kind {
+                    let field_index = match ctx.type_checker.global_type_definitions.get(type_name)
                     {
-                        if let ExpressionKind::Identifier(field_name, _) = &prop.node {
-                            if let Some(idx) =
+                        Some(crate::type_checker::context::TypeDefinition::Struct(def)) => {
+                            if let ExpressionKind::Identifier(field_name, _) = &prop.node {
                                 def.fields.iter().position(|(f, _, _)| f == field_name)
-                            {
-                                let obj_place = ensure_place(ctx, obj_operand, obj.span);
-
-                                // Create field projection
-                                let mut target_place = obj_place;
-                                target_place.projection.push(PlaceElem::Field(idx));
-
-                                // Handle simple assignment vs compound assignment
-                                match op {
-                                    crate::ast::operator::AssignmentOp::Assign => {
-                                        ctx.push_statement(crate::mir::Statement {
-                                            kind: MirStatementKind::Assign(
-                                                target_place,
-                                                Rvalue::Use(val.clone()),
-                                            ),
-                                            span: expr.span,
-                                        });
-                                    }
-                                    crate::ast::operator::AssignmentOp::AssignAdd
-                                    | crate::ast::operator::AssignmentOp::AssignSub
-                                    | crate::ast::operator::AssignmentOp::AssignMul
-                                    | crate::ast::operator::AssignmentOp::AssignDiv
-                                    | crate::ast::operator::AssignmentOp::AssignMod => {
-                                        let bin_op = match op {
-                                            crate::ast::operator::AssignmentOp::AssignAdd => {
-                                                BinOp::Add
-                                            }
-                                            crate::ast::operator::AssignmentOp::AssignSub => {
-                                                BinOp::Sub
-                                            }
-                                            crate::ast::operator::AssignmentOp::AssignMul => {
-                                                BinOp::Mul
-                                            }
-                                            crate::ast::operator::AssignmentOp::AssignDiv => {
-                                                BinOp::Div
-                                            }
-                                            crate::ast::operator::AssignmentOp::AssignMod => {
-                                                BinOp::Rem
-                                            }
-                                            _ => unreachable!(),
-                                        };
-
-                                        let lhs_op = Operand::Copy(target_place.clone());
-                                        let result_ty = resolve_type(ctx.type_checker, prop);
-                                        let temp = ctx.push_temp(result_ty, expr.span);
-
-                                        ctx.push_statement(crate::mir::Statement {
-                                            kind: MirStatementKind::Assign(
-                                                Place::new(temp),
-                                                Rvalue::BinaryOp(
-                                                    bin_op,
-                                                    Box::new(lhs_op),
-                                                    Box::new(val.clone()),
-                                                ),
-                                            ),
-                                            span: expr.span,
-                                        });
-
-                                        ctx.push_statement(crate::mir::Statement {
-                                            kind: MirStatementKind::Assign(
-                                                target_place,
-                                                Rvalue::Use(Operand::Copy(Place::new(temp))),
-                                            ),
-                                            span: expr.span,
-                                        });
-                                    }
-                                }
-                                if let Some(d) = dest {
-                                    ctx.push_statement(crate::mir::Statement {
-                                        kind: MirStatementKind::Assign(
-                                            d.clone(),
-                                            Rvalue::Use(val.clone()),
-                                        ),
-                                        span: expr.span,
-                                    });
-                                    return Ok(Operand::Copy(d));
-                                } else {
-                                    return Ok(val);
-                                }
+                            } else {
+                                None
                             }
+                        }
+                        Some(crate::type_checker::context::TypeDefinition::Class(def)) => {
+                            if let ExpressionKind::Identifier(field_name, _) = &prop.node {
+                                def.fields.iter().position(|(f, _)| f == field_name)
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    };
+                    if let Some(idx) = field_index {
+                        let obj_place = ensure_place(ctx, obj_operand, obj.span);
+
+                        // Create field projection
+                        let mut target_place = obj_place;
+                        target_place.projection.push(PlaceElem::Field(idx));
+
+                        // Handle simple assignment vs compound assignment
+                        match op {
+                            crate::ast::operator::AssignmentOp::Assign => {
+                                ctx.push_statement(crate::mir::Statement {
+                                    kind: MirStatementKind::Assign(
+                                        target_place,
+                                        Rvalue::Use(val.clone()),
+                                    ),
+                                    span: expr.span,
+                                });
+                            }
+                            crate::ast::operator::AssignmentOp::AssignAdd
+                            | crate::ast::operator::AssignmentOp::AssignSub
+                            | crate::ast::operator::AssignmentOp::AssignMul
+                            | crate::ast::operator::AssignmentOp::AssignDiv
+                            | crate::ast::operator::AssignmentOp::AssignMod => {
+                                let bin_op = match op {
+                                    crate::ast::operator::AssignmentOp::AssignAdd => BinOp::Add,
+                                    crate::ast::operator::AssignmentOp::AssignSub => BinOp::Sub,
+                                    crate::ast::operator::AssignmentOp::AssignMul => BinOp::Mul,
+                                    crate::ast::operator::AssignmentOp::AssignDiv => BinOp::Div,
+                                    crate::ast::operator::AssignmentOp::AssignMod => BinOp::Rem,
+                                    _ => unreachable!(),
+                                };
+
+                                let lhs_op = Operand::Copy(target_place.clone());
+                                let result_ty = resolve_type(ctx.type_checker, prop);
+                                let temp = ctx.push_temp(result_ty, expr.span);
+
+                                ctx.push_statement(crate::mir::Statement {
+                                    kind: MirStatementKind::Assign(
+                                        Place::new(temp),
+                                        Rvalue::BinaryOp(
+                                            bin_op,
+                                            Box::new(lhs_op),
+                                            Box::new(val.clone()),
+                                        ),
+                                    ),
+                                    span: expr.span,
+                                });
+
+                                ctx.push_statement(crate::mir::Statement {
+                                    kind: MirStatementKind::Assign(
+                                        target_place,
+                                        Rvalue::Use(Operand::Copy(Place::new(temp))),
+                                    ),
+                                    span: expr.span,
+                                });
+                            }
+                        }
+                        if let Some(d) = dest {
+                            ctx.push_statement(crate::mir::Statement {
+                                kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(val.clone())),
+                                span: expr.span,
+                            });
+                            return Ok(Operand::Copy(d));
+                        } else {
+                            return Ok(val);
                         }
                     }
                 }
