@@ -5,3 +5,5 @@ pub use crate::integration::utils;
 
 pub mod basic;
 pub mod constructor;
+pub mod drop;
+pub mod inheritance;

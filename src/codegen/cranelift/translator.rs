@@ -799,9 +799,18 @@ impl<'a> FunctionTranslator<'a> {
             }
             Self::call_libc_free(builder, ctx, header_ptr)
         } else if let TypeKind::Custom(name, _) = kind {
-            // Drop specialization: release managed fields before freeing the struct.
-            Self::emit_struct_drop(builder, ctx, name, ptr, type_ctx)?;
-            Self::call_libc_free(builder, ctx, header_ptr)
+            // Dispatch through the type-specific drop function, which encapsulates:
+            // (1) user-defined drop hook — no-op placeholder until M5 Task 3,
+            // (2) recursive DecRef of all managed fields,
+            // (3) freeing the RC allocation.
+            //
+            // For types with no managed fields we skip the thunk and free directly,
+            // since their drop function would be a no-op aside from the free.
+            if Self::has_managed_fields(name, type_ctx.type_definitions) {
+                Self::call_drop_thunk(builder, ctx, name, ptr, type_ctx.ptr_type)
+            } else {
+                Self::call_libc_free(builder, ctx, header_ptr)
+            }
         } else {
             Self::call_libc_free(builder, ctx, header_ptr)
         }
@@ -826,12 +835,15 @@ impl<'a> FunctionTranslator<'a> {
         }
     }
 
-    /// Emits DecRef calls for all managed fields of a struct or enum.
+    /// Emits DecRef calls for all managed fields of a struct, class, or enum.
     ///
-    /// For structs, iterates all fields and emits a DecRef sequence for each
-    /// managed (heap-allocated) field. For enums, reads the discriminant and
-    /// conditionally DecRefs the active variant's managed fields.
-    fn emit_struct_drop(
+    /// For structs and classes, iterates all fields and emits a DecRef sequence
+    /// for each managed (heap-allocated) field. For enums, reads the discriminant
+    /// and conditionally DecRefs the active variant's managed fields.
+    ///
+    /// This is the body of the generated `__drop_TypeName` function and is also
+    /// called directly from `generate_drop_function`.
+    pub(crate) fn emit_struct_drop(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         type_name: &str,
@@ -928,10 +940,33 @@ impl<'a> FunctionTranslator<'a> {
                     builder.seal_block(merge_block);
                 }
             }
-            TypeDefinition::Class(_)
-            | TypeDefinition::Trait(_)
-            | TypeDefinition::Alias(_)
-            | TypeDefinition::Generic(_) => {}
+            TypeDefinition::Class(class_def) => {
+                // Classes use the same field-by-field drop logic as structs.
+                // Fields are stored in declaration order using field_layout().
+                let managed_fields: Vec<(usize, TypeKind)> = class_def
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (_, fi))| is_field_managed(&fi.ty.kind))
+                    .map(|(idx, (_, fi))| (idx, fi.ty.kind.clone()))
+                    .collect();
+
+                let custom_kind = TypeKind::Custom(type_name.to_string(), None);
+                for (field_idx, field_kind) in &managed_fields {
+                    let (offset, _cl_ty) = layout::field_layout(
+                        &custom_kind,
+                        *field_idx,
+                        type_ctx.type_definitions,
+                        ptr_type,
+                    );
+                    let field_ptr =
+                        builder
+                            .ins()
+                            .load(ptr_type, MemFlags::new(), payload_ptr, offset);
+                    Self::emit_decref_value(builder, ctx, field_kind, field_ptr, type_ctx)?;
+                }
+            }
+            TypeDefinition::Trait(_) | TypeDefinition::Alias(_) | TypeDefinition::Generic(_) => {}
         }
 
         Ok(())
@@ -1204,6 +1239,124 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
+    /// Emits a call to the type-specific drop thunk `__drop_{type_name}(ptr)`.
+    ///
+    /// This is the sole call site for dropping a Custom type once RC reaches zero.
+    /// The thunk function is declared as `Import` here and must be defined elsewhere
+    /// (via `generate_drop_function`) before the final link.
+    fn call_drop_thunk(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        type_name: &str,
+        ptr: Value,
+        ptr_type: cranelift_codegen::ir::Type,
+    ) -> Result<(), String> {
+        let thunk_name = format!("__drop_{}", type_name);
+        let mut sig = Signature::new(builder.func.signature.call_conv);
+        sig.params.push(AbiParam::new(ptr_type));
+        let func_id = ctx
+            .module
+            .declare_function(&thunk_name, Linkage::Import, &sig)
+            .map_err(|e| format!("Failed to declare drop thunk {thunk_name}: {e}"))?;
+        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+        builder.ins().call(local_func, &[ptr]);
+        Ok(())
+    }
+
+    /// Generates the `__drop_{type_name}(ptr)` function in the given module.
+    ///
+    /// The generated function implements the three-step destructor pipeline:
+    /// 1. User-defined drop hook — no-op placeholder (M5 Task 3 will add this).
+    /// 2. Recursively DecRef all managed fields.
+    /// 3. Free the RC allocation via `libc::free`.
+    ///
+    /// This function is called once per managed concrete type during codegen,
+    /// before any user functions are compiled, so the thunk symbols are available
+    /// when user code later references them via Import declarations.
+    pub(crate) fn generate_drop_function(
+        module: &mut ObjectModule,
+        ctx: &mut cranelift_codegen::Context,
+        isa: &Arc<dyn TargetIsa>,
+        type_name: &str,
+        type_definitions: &HashMap<String, TypeDefinition>,
+    ) -> Result<(), String> {
+        let ptr_type = isa.pointer_type();
+        let call_conv = isa.default_call_conv();
+        let ptr_size = ptr_type.bytes() as i64;
+
+        // Declare the function with Export linkage so other functions can call it.
+        let func_name = format!("__drop_{}", type_name);
+        let mut sig = Signature::new(call_conv);
+        sig.params.push(AbiParam::new(ptr_type));
+        let func_id = module
+            .declare_function(&func_name, Linkage::Export, &sig)
+            .map_err(|e| format!("Failed to declare {func_name}: {e}"))?;
+
+        // Build the function IR.
+        ctx.func = cranelift_codegen::ir::Function::with_name_signature(
+            cranelift_codegen::ir::UserFuncName::user(0, func_id.as_u32()),
+            sig,
+        );
+
+        let mut builder_ctx = FunctionBuilderContext::new();
+        {
+            let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
+
+            let entry_block = builder.create_block();
+            builder.append_block_params_for_function_params(entry_block);
+            builder.switch_to_block(entry_block);
+            builder.seal_block(entry_block);
+
+            let ptr = builder.block_params(entry_block)[0];
+
+            let mut string_literals = HashMap::new();
+            let mut module_ctx = ModuleCtx {
+                module,
+                string_literals: &mut string_literals,
+                malloc_func_id: None,
+                free_func_id: None,
+                rt_array_new_id: None,
+                rt_array_free_id: None,
+                rt_array_panic_oob_id: None,
+                rt_list_new_id: None,
+                rt_list_push_id: None,
+                rt_list_free_id: None,
+                rt_map_new_id: None,
+                rt_map_set_id: None,
+                rt_map_free_id: None,
+                rt_set_new_id: None,
+                rt_set_add_id: None,
+                rt_set_free_id: None,
+            };
+            let type_ctx = TypeCtx {
+                local_types: &[],
+                type_definitions,
+                ptr_type,
+            };
+
+            // Step 1: User-defined drop hook (no-op placeholder for M5 Task 3).
+
+            // Step 2: DecRef all managed fields.
+            Self::emit_struct_drop(&mut builder, &mut module_ctx, type_name, ptr, &type_ctx)?;
+
+            // Step 3: Free the RC allocation.
+            // header_ptr = ptr - ptr_size (points to the RC word).
+            let header_ptr = builder.ins().iadd_imm(ptr, -ptr_size);
+            Self::call_libc_free(&mut builder, &mut module_ctx, header_ptr)?;
+
+            builder.ins().return_(&[]);
+            builder.seal_all_blocks();
+            builder.finalize();
+        }
+
+        module
+            .define_function(func_id, ctx)
+            .map_err(|e| format!("Failed to define {func_name}: {e}"))?;
+
+        ctx.clear();
+        Ok(())
+    }
+
     /// Helper to call libc malloc, caching the FuncId across invocations.
     pub(crate) fn call_libc_malloc(
         builder: &mut FunctionBuilder,
@@ -1252,6 +1405,31 @@ impl<'a> FunctionTranslator<'a> {
             &[real_ptr],
         )?;
         Ok(())
+    }
+
+    /// Returns true if a named Custom type has at least one managed field.
+    ///
+    /// Used to decide whether to call `__drop_TypeName` (when there are managed
+    /// fields to clean up) or just `libc::free` (when all fields are primitives).
+    pub(crate) fn has_managed_fields(
+        name: &str,
+        type_defs: &HashMap<String, TypeDefinition>,
+    ) -> bool {
+        match type_defs.get(name) {
+            Some(TypeDefinition::Struct(def)) => def
+                .fields
+                .iter()
+                .any(|(_, ty, _)| is_field_managed(&ty.kind)),
+            Some(TypeDefinition::Class(def)) => def
+                .fields
+                .iter()
+                .any(|(_, fi)| is_field_managed(&fi.ty.kind)),
+            Some(TypeDefinition::Enum(def)) => def
+                .variants
+                .values()
+                .any(|fields| fields.iter().any(|ty| is_field_managed(&ty.kind))),
+            _ => false,
+        }
     }
 }
 
