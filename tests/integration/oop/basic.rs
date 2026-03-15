@@ -45,19 +45,18 @@ fn main()
 }
 
 #[test]
-#[ignore = "Type checker: class fields are private by default"]
 fn test_class_field_access() {
     assert_runs_with_output(
         r#"
 use system.io
 
 class Point
-    var x int = 10
-    var y int = 20
+    var x int
+    var y int
 
 fn main()
-    let p = Point()
-    println(p.x + p.y)
+    let p = Point(x: 10, y: 20)
+    println(f"{p.x + p.y}")
     "#,
         "30",
     );

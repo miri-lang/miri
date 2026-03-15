@@ -33,7 +33,7 @@ class MyClass
                     opt_expr(type_expr_non_null(type_int())),
                     None,
                 )],
-                MemberVisibility::Private,
+                MemberVisibility::Public,
             )],
             MemberVisibility::Public,
         )],
@@ -60,7 +60,7 @@ class Point
                         opt_expr(type_expr_non_null(type_int())),
                         None,
                     )],
-                    MemberVisibility::Private,
+                    MemberVisibility::Public,
                 ),
                 variable_statement(
                     vec![let_variable(
@@ -68,7 +68,7 @@ class Point
                         opt_expr(type_expr_non_null(type_int())),
                         None,
                     )],
-                    MemberVisibility::Private,
+                    MemberVisibility::Public,
                 ),
             ],
             MemberVisibility::Public,
@@ -90,7 +90,7 @@ class Counter
             vec![],
             vec![variable_statement(
                 vec![var("count", opt_expr(type_expr_non_null(type_int())), None)],
-                MemberVisibility::Private,
+                MemberVisibility::Public,
             )],
             MemberVisibility::Public,
         )],
@@ -123,7 +123,7 @@ class Calculator
                 identifier("b"),
             ))]),
             FunctionProperties {
-                visibility: MemberVisibility::Private,
+                visibility: MemberVisibility::Public,
                 ..Default::default()
             },
         )],
@@ -151,7 +151,7 @@ class Point
                     opt_expr(type_expr_non_null(type_int())),
                     None,
                 )],
-                MemberVisibility::Private,
+                MemberVisibility::Public,
             ),
             function_declaration(
                 "init",
@@ -169,7 +169,7 @@ class Point
                     identifier("x"),
                 ))]),
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -195,7 +195,7 @@ class Dog extends Animal
                 opt_expr(type_expr_non_null(type_string())),
                 None,
             )],
-            MemberVisibility::Private,
+            MemberVisibility::Public,
         )],
         MemberVisibility::Public,
     );
@@ -218,7 +218,7 @@ class MyList implements Iterable
                 opt_expr(type_expr_non_null(type_int())),
                 None,
             )],
-            MemberVisibility::Private,
+            MemberVisibility::Public,
         )],
         MemberVisibility::Public,
     );
@@ -241,7 +241,7 @@ class MyList implements Iterable, Sortable
                 opt_expr(type_expr_non_null(type_int())),
                 None,
             )],
-            MemberVisibility::Private,
+            MemberVisibility::Public,
         )],
         MemberVisibility::Public,
     );
@@ -264,7 +264,7 @@ class Dog extends Animal implements Trainable
                 opt_expr(type_expr_non_null(type_string())),
                 None,
             )],
-            MemberVisibility::Private,
+            MemberVisibility::Public,
         )],
         MemberVisibility::Public,
     );
@@ -360,7 +360,7 @@ class Box<T>
                 opt_expr(type_expr_non_null(type_custom("T", None))),
                 None,
             )],
-            MemberVisibility::Private,
+            MemberVisibility::Public,
         )],
         MemberVisibility::Public,
     );
@@ -390,7 +390,7 @@ class SortedList<T extends Comparable>
                 opt_expr(type_expr_non_null(type_custom("T", None))),
                 None,
             )],
-            MemberVisibility::Private,
+            MemberVisibility::Public,
         )],
         MemberVisibility::Public,
     );
@@ -468,7 +468,7 @@ abstract class Shape
                 opt_expr(type_expr_non_null(type_string())),
                 None,
             )],
-            MemberVisibility::Private,
+            MemberVisibility::Public,
         )],
         MemberVisibility::Public,
     );
@@ -492,7 +492,7 @@ abstract class Shape
             vec![],
             Some(Box::new(type_expr_non_null(type_float()))),
             FunctionProperties {
-                visibility: MemberVisibility::Private,
+                visibility: MemberVisibility::Public,
                 ..Default::default()
             },
         )],
@@ -522,7 +522,7 @@ abstract class Shape
                 "A shape",
             ))]),
             FunctionProperties {
-                visibility: MemberVisibility::Private,
+                visibility: MemberVisibility::Public,
                 ..Default::default()
             },
         )],
@@ -553,11 +553,11 @@ abstract class Animal
                     opt_expr(type_expr_non_null(type_string())),
                     None,
                 )],
-                MemberVisibility::Private,
+                MemberVisibility::Public,
             ),
             variable_statement(
                 vec![var("age", opt_expr(type_expr_non_null(type_int())), None)],
-                MemberVisibility::Private,
+                MemberVisibility::Public,
             ),
             abstract_function_declaration(
                 "speak",
@@ -565,7 +565,7 @@ abstract class Animal
                 vec![],
                 Some(Box::new(type_expr_non_null(type_string()))),
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -576,7 +576,7 @@ abstract class Animal
                 None,
                 block(vec![expression_statement(identifier("x"))]),
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -603,7 +603,7 @@ abstract class Dog extends Animal
             vec![],
             Some(Box::new(type_expr_non_null(type_string()))),
             FunctionProperties {
-                visibility: MemberVisibility::Private,
+                visibility: MemberVisibility::Public,
                 ..Default::default()
             },
         )],
@@ -629,7 +629,7 @@ abstract class Handler implements Runnable
             vec![],
             None,
             FunctionProperties {
-                visibility: MemberVisibility::Private,
+                visibility: MemberVisibility::Public,
                 ..Default::default()
             },
         )],
@@ -657,7 +657,7 @@ abstract class Service extends BaseService implements Callable, Serializable
                 vec![],
                 None,
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -667,7 +667,7 @@ abstract class Service extends BaseService implements Callable, Serializable
                 vec![],
                 Some(Box::new(type_expr_non_null(type_string()))),
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -696,7 +696,7 @@ abstract class Container<T>
                 vec![],
                 Some(Box::new(type_expr_non_null(type_custom("T", None)))),
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -711,7 +711,7 @@ abstract class Container<T>
                 )],
                 None,
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -752,7 +752,7 @@ abstract class SortedContainer<T extends Comparable>
                 )],
                 None,
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -762,7 +762,7 @@ abstract class SortedContainer<T extends Comparable>
                 vec![],
                 None,
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -793,7 +793,7 @@ abstract class Repository
                 vec![],
                 Some(Box::new(type_expr_non_null(type_list(type_int())))),
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -808,7 +808,7 @@ abstract class Repository
                 )],
                 Some(Box::new(type_expr_non_null(type_int()))),
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -823,7 +823,7 @@ abstract class Repository
                 )],
                 None,
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -838,7 +838,7 @@ abstract class Repository
                 )],
                 None,
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -917,7 +917,7 @@ abstract class AsyncHandler
             vec![],
             None,
             FunctionProperties {
-                visibility: MemberVisibility::Private,
+                visibility: MemberVisibility::Public,
                 is_async: true,
                 ..Default::default()
             },
@@ -946,7 +946,7 @@ class Regular
             Some(Box::new(type_expr_non_null(type_int()))),
             empty_statement(),
             FunctionProperties {
-                visibility: MemberVisibility::Private,
+                visibility: MemberVisibility::Public,
                 ..Default::default()
             },
         )],
@@ -1029,7 +1029,7 @@ abstract class Regular
                 vec![],
                 Some(Box::new(type_expr_non_null(type_int()))),
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),
@@ -1039,7 +1039,7 @@ abstract class Regular
                 vec![],
                 Some(Box::new(type_expr_non_null(type_int()))),
                 FunctionProperties {
-                    visibility: MemberVisibility::Private,
+                    visibility: MemberVisibility::Public,
                     ..Default::default()
                 },
             ),

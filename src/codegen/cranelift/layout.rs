@@ -119,7 +119,9 @@ pub fn field_layout(
                     TypeDefinition::Class(class_def) => {
                         // Class layout: [header: 16 bytes (malloc_ptr + RC)][field0][field1]...
                         // Fields are stored in declaration order (Vec).
-                        let mut offset: i32 = 2 * ptr_size; // Header overhead
+                        // Offset starts at 0 because the variable holds a payload pointer
+                        // (past the header), matching struct layout convention.
+                        let mut offset: i32 = 0;
                         for (i, (_field_name, field_info)) in class_def.fields.iter().enumerate() {
                             let cl_ty = translate_type_kind(&field_info.ty.kind, ptr_ty);
                             let alignment = type_alignment(cl_ty);
