@@ -163,3 +163,79 @@ fn main()
         "42",
     );
 }
+
+#[test]
+fn test_drop_struct_with_string_and_list_fields() {
+    // Acceptance criteria: a struct with both a String and a [int] (List<int>) field
+    // must release both managed fields when dropped. This is the canonical drop
+    // specialization test.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+struct Container
+    label String
+    items [int]
+
+fn main()
+    let c = Container(label: "hello", items: List([1, 2, 3]))
+    println(c.label)
+    println(f"{c.items.length()}")
+    "#,
+        "hello\n3",
+    );
+}
+
+#[test]
+fn test_drop_struct_with_list_field_in_scope() {
+    // Struct with a List field goes out of scope in a called function.
+    // The List must be released (no crash, no leak).
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+struct DataBag
+    name String
+    values [int]
+
+fn make_and_sum() int
+    let d = DataBag(name: "tmp", values: List([10, 20, 30]))
+    d.values.length()
+
+fn main()
+    let n = make_and_sum()
+    println(f"{n}")
+    "#,
+        "3",
+    );
+}
+
+#[test]
+fn test_drop_deeply_nested_struct() {
+    // Deeply nested: Outer struct contains an Inner struct with managed fields.
+    // All managed fields must be released transitively.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+struct Inner
+    name String
+    data [int]
+
+struct Outer
+    inner Inner
+    label String
+
+fn main()
+    let i = Inner(name: "inner", data: List([1, 2, 3]))
+    let o = Outer(inner: i, label: "outer")
+    println(o.label)
+    println(o.inner.name)
+    println(f"{o.inner.data.length()}")
+    "#,
+        "outer\ninner\n3",
+    );
+}
