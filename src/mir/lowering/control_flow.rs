@@ -1297,7 +1297,7 @@ pub fn lower_call(
         None
     };
 
-    let mut arg_ops = Vec::new();
+    let mut arg_ops = Vec::with_capacity(args.len());
     for (i, arg) in args.iter().enumerate() {
         let op = lower_expression(ctx, arg, None)?;
 
@@ -1408,8 +1408,9 @@ fn lower_struct_constructor(
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     // Separate positional and named arguments
-    let mut positional_args = Vec::new();
-    let mut named_args: std::collections::HashMap<&str, Operand> = std::collections::HashMap::new();
+    let mut positional_args = Vec::with_capacity(args.len());
+    let mut named_args: std::collections::HashMap<&str, Operand> =
+        std::collections::HashMap::with_capacity(args.len());
 
     for arg in args {
         match &arg.node {
@@ -1493,8 +1494,9 @@ fn lower_class_constructor(
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     // Separate positional and named arguments
-    let mut positional_args = Vec::new();
-    let mut named_args: std::collections::HashMap<&str, Operand> = std::collections::HashMap::new();
+    let mut positional_args = Vec::with_capacity(args.len());
+    let mut named_args: std::collections::HashMap<&str, Operand> =
+        std::collections::HashMap::with_capacity(args.len());
 
     for arg in args {
         match &arg.node {
