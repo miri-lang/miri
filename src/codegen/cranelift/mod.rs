@@ -244,6 +244,13 @@ impl Backend for CraneliftBackend {
         // Declare runtime function imports as external symbols
         self.declare_runtime_imports(&mut module)?;
 
+        // Generate type-specific `__drop_TypeName` functions for every managed
+        // concrete type (structs, classes, enums with managed fields).
+        // These must be defined before user functions so that Import declarations
+        // inside user code resolve correctly.
+        self.generate_type_drop_functions(&mut module, &mut ctx, &isa)
+            .map_err(|e| CodegenError::Module(format!("drop thunk generation: {e}")))?;
+
         // Compile each function
         let mut string_literals = HashMap::new();
         for (name, body) in bodies {
@@ -397,6 +404,61 @@ impl CraneliftBackend {
         // Clear context for next function
         ctx.clear();
 
+        Ok(())
+    }
+
+    /// Generates `__drop_TypeName(ptr)` functions for every managed concrete type.
+    ///
+    /// A type is "managed" if it is a non-generic struct, class, or enum that has
+    /// at least one field of a managed (heap-allocated) type. These drop functions
+    /// form the foundation of the Perceus RC destructor pipeline:
+    ///
+    ///   RC reaches 0 → call `__drop_TypeName(ptr)`
+    ///     → (1) user-defined drop hook (no-op placeholder for M5 Task 3)
+    ///     → (2) recursively DecRef all managed fields
+    ///     → (3) free the RC allocation
+    ///
+    /// Types with no managed fields do not get a thunk; their drop path calls
+    /// `libc::free` directly from `emit_type_drop`.
+    fn generate_type_drop_functions(
+        &self,
+        module: &mut ObjectModule,
+        ctx: &mut Context,
+        isa: &Arc<dyn TargetIsa>,
+    ) -> Result<(), String> {
+        // Collect all managed, non-generic concrete types and sort for deterministic output.
+        let mut managed_names: Vec<&str> = self
+            .type_definitions
+            .iter()
+            .filter_map(|(name, def)| {
+                // Skip generic types — they are not concrete instantiations.
+                let has_generics = match def {
+                    TypeDefinition::Struct(sd) => sd.generics.is_some(),
+                    TypeDefinition::Class(cd) => cd.generics.is_some(),
+                    TypeDefinition::Enum(ed) => ed.generics.is_some(),
+                    _ => return None,
+                };
+                if has_generics {
+                    return None;
+                }
+                if FunctionTranslator::has_managed_fields(name, &self.type_definitions) {
+                    Some(name.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        managed_names.sort_unstable();
+
+        for type_name in managed_names {
+            FunctionTranslator::generate_drop_function(
+                module,
+                ctx,
+                isa,
+                type_name,
+                &self.type_definitions,
+            )?;
+        }
         Ok(())
     }
 }

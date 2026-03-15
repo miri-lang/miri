@@ -14,7 +14,38 @@ use crate::mir::{
 
 use super::{helpers::coerce_rvalue, lower_expression, lower_statement, LoweringContext};
 use crate::error::lowering::LoweringError;
-use crate::type_checker::context::{ClassDefinition, StructDefinition, TypeDefinition};
+use crate::type_checker::context::{ClassDefinition, MethodInfo, StructDefinition, TypeDefinition};
+
+/// Walk the inheritance chain starting at `class_name` to find the first class
+/// that directly declares `method_name`. Returns the defining class name and a
+/// clone of its [`MethodInfo`] so the caller can mangle the symbol correctly.
+///
+/// This is the core of inherited method resolution: if `Dog extends Animal` and
+/// only `Animal` defines `speak`, the returned defining class is `"Animal"` and
+/// the call is mangled to `Animal_speak`.
+fn resolve_inherited_method(
+    type_defs: &std::collections::HashMap<String, TypeDefinition>,
+    class_name: &str,
+    method_name: &str,
+) -> Option<(String, MethodInfo)> {
+    let mut current = class_name.to_string();
+    loop {
+        // Resolve the base class name before the borrow of `type_defs` ends.
+        let base = match type_defs.get(&current) {
+            Some(TypeDefinition::Class(class_def)) => {
+                if let Some(method_info) = class_def.methods.get(method_name) {
+                    return Some((current, method_info.clone()));
+                }
+                class_def.base_class.clone()
+            }
+            _ => return None,
+        };
+        match base {
+            Some(b) => current = b,
+            None => return None,
+        }
+    }
+}
 
 pub fn lower_break(ctx: &mut LoweringContext, span: &Span) -> Result<(), LoweringError> {
     if let Some(target) = ctx.get_break_target() {
@@ -1049,51 +1080,51 @@ pub fn lower_call(
 
             if let Some(class_name) = class_name {
                 if let ExpressionKind::Identifier(method_name, _) = &method_expr.node {
-                    if let Some(crate::type_checker::context::TypeDefinition::Class(class_def)) =
-                        ctx.type_checker.global_type_definitions.get(&class_name)
-                    {
-                        if let Some(method_info) = class_def.methods.get(method_name.as_str()) {
-                            let mangled_name = format!("{}_{}", class_name, method_name);
-                            let return_ty = method_info.return_type.clone();
+                    if let Some((defining_class, method_info)) = resolve_inherited_method(
+                        &ctx.type_checker.global_type_definitions,
+                        &class_name,
+                        method_name,
+                    ) {
+                        let mangled_name = format!("{}_{}", defining_class, method_name);
+                        let return_ty = method_info.return_type.clone();
 
-                            let self_op = lower_expression(ctx, obj, None)?;
-                            let mut call_args = vec![self_op];
-                            for arg in args {
-                                call_args.push(lower_expression(ctx, arg, None)?);
-                            }
-
-                            // Inject allocator — compiled class methods accept it as their last arg
-                            if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
-                                call_args.push(Operand::Copy(Place::new(alloc_local)));
-                            }
-
-                            let func_op = Operand::Constant(Box::new(crate::mir::Constant {
-                                span: *span,
-                                ty: Type::new(TypeKind::Identifier, *span),
-                                literal: crate::ast::literal::Literal::Identifier(mangled_name),
-                            }));
-
-                            let (destination, op) = if let Some(d) = dest {
-                                (d.clone(), Operand::Copy(d))
-                            } else {
-                                let temp = ctx.push_temp(return_ty, *span);
-                                let p = Place::new(temp);
-                                (p.clone(), Operand::Copy(p))
-                            };
-
-                            let target_bb = ctx.new_basic_block();
-                            ctx.set_terminator(Terminator::new(
-                                TerminatorKind::Call {
-                                    func: func_op,
-                                    args: call_args,
-                                    destination,
-                                    target: Some(target_bb),
-                                },
-                                *span,
-                            ));
-                            ctx.set_current_block(target_bb);
-                            return Ok(op);
+                        let self_op = lower_expression(ctx, obj, None)?;
+                        let mut call_args = vec![self_op];
+                        for arg in args {
+                            call_args.push(lower_expression(ctx, arg, None)?);
                         }
+
+                        // Inject allocator — compiled class methods accept it as their last arg
+                        if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
+                            call_args.push(Operand::Copy(Place::new(alloc_local)));
+                        }
+
+                        let func_op = Operand::Constant(Box::new(crate::mir::Constant {
+                            span: *span,
+                            ty: Type::new(TypeKind::Identifier, *span),
+                            literal: crate::ast::literal::Literal::Identifier(mangled_name),
+                        }));
+
+                        let (destination, op) = if let Some(d) = dest {
+                            (d.clone(), Operand::Copy(d))
+                        } else {
+                            let temp = ctx.push_temp(return_ty, *span);
+                            let p = Place::new(temp);
+                            (p.clone(), Operand::Copy(p))
+                        };
+
+                        let target_bb = ctx.new_basic_block();
+                        ctx.set_terminator(Terminator::new(
+                            TerminatorKind::Call {
+                                func: func_op,
+                                args: call_args,
+                                destination,
+                                target: Some(target_bb),
+                            },
+                            *span,
+                        ));
+                        ctx.set_current_block(target_bb);
+                        return Ok(op);
                     }
                 }
             }
