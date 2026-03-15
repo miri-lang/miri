@@ -311,7 +311,7 @@ impl<'source> Parser<'source> {
                 self.eat_token(&Token::Private)?;
                 MemberVisibility::Private
             }
-            _ => MemberVisibility::Private, // Default visibility is private
+            _ => MemberVisibility::Public, // Default visibility is public
         };
 
         // Check for 'abstract' keyword
