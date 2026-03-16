@@ -19,26 +19,43 @@ pub(crate) fn lower_array_expr(
     let ExpressionKind::Array(elements, _size) = &expr.node else {
         unreachable!()
     };
+    // Record watermark before lowering elements so we can release any managed
+    // temps created for sub-expressions (e.g. anonymous nested arrays).
+    let elem_watermark = ctx.body.local_decls.len();
     let ops: Vec<Operand> = elements
         .iter()
         .map(|e| lower_expression(ctx, e, None))
         .collect::<Result<_, _>>()?;
     let ty = resolve_type(ctx.type_checker, expr);
-    if let Some(d) = dest {
+
+    let result = if let Some(d) = dest {
         ctx.push_statement(crate::mir::Statement {
-            kind: MirStatementKind::Assign(d.clone(), Rvalue::Aggregate(AggregateKind::Array, ops)),
+            kind: MirStatementKind::Assign(
+                d.clone(),
+                Rvalue::Aggregate(AggregateKind::Array, ops.clone()),
+            ),
             span: expr.span,
         });
-        Ok(Operand::Copy(d))
+        Operand::Copy(d)
     } else {
         let temp = ctx.push_temp(ty, expr.span);
         ctx.push_statement(crate::mir::Statement {
             kind: MirStatementKind::Assign(
                 Place::new(temp),
-                Rvalue::Aggregate(AggregateKind::Array, ops),
+                Rvalue::Aggregate(AggregateKind::Array, ops.clone()),
             ),
             span: expr.span,
         });
-        Ok(Operand::Copy(Place::new(temp)))
+        Operand::Copy(Place::new(temp))
+    };
+
+    // Release managed element temps — the Aggregate IncRef transferred ownership
+    // into the array, so the original temp references are no longer needed.
+    for op in &ops {
+        if let Operand::Copy(p) = op {
+            ctx.emit_temp_drop(p.local, elem_watermark, expr.span);
+        }
     }
+
+    Ok(result)
 }

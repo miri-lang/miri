@@ -9,11 +9,9 @@ fn test_add() {
         "fn main(): 1 + 2",
         r#"
             let _0: int;
-            let _1: int;
 
             bb0: {
-                _1 = Add(const Integer(I8(1)), const Integer(I8(2)));
-                _0 = _1;
+                _0 = Add(const Integer(I8(1)), const Integer(I8(2)));
                 return;
             }
         "#,
@@ -26,11 +24,9 @@ fn test_sub() {
         "fn main(): 5 - 3",
         r#"
             let _0: int;
-            let _1: int;
 
             bb0: {
-                _1 = Sub(const Integer(I8(5)), const Integer(I8(3)));
-                _0 = _1;
+                _0 = Sub(const Integer(I8(5)), const Integer(I8(3)));
                 return;
             }
         "#,
@@ -43,11 +39,9 @@ fn test_mul() {
         "fn main(): 2 * 3",
         r#"
             let _0: int;
-            let _1: int;
 
             bb0: {
-                _1 = Mul(const Integer(I8(2)), const Integer(I8(3)));
-                _0 = _1;
+                _0 = Mul(const Integer(I8(2)), const Integer(I8(3)));
                 return;
             }
         "#,
@@ -60,11 +54,9 @@ fn test_div() {
         "fn main(): 10 / 2",
         r#"
             let _0: int;
-            let _1: int;
 
             bb0: {
-                _1 = Div(const Integer(I8(10)), const Integer(I8(2)));
-                _0 = _1;
+                _0 = Div(const Integer(I8(10)), const Integer(I8(2)));
                 return;
             }
         "#,
@@ -77,11 +69,9 @@ fn test_mod() {
         "fn main(): 10 % 3",
         r#"
             let _0: int;
-            let _1: int;
 
             bb0: {
-                _1 = Rem(const Integer(I8(10)), const Integer(I8(3)));
-                _0 = _1;
+                _0 = Rem(const Integer(I8(10)), const Integer(I8(3)));
                 return;
             }
         "#,
@@ -94,11 +84,9 @@ fn test_eq() {
         "fn main(): 1 == 1",
         r#"
             let _0: bool;
-            let _1: bool;
 
             bb0: {
-                _1 = Eq(const Integer(I8(1)), const Integer(I8(1)));
-                _0 = _1;
+                _0 = Eq(const Integer(I8(1)), const Integer(I8(1)));
                 return;
             }
         "#,
@@ -111,11 +99,9 @@ fn test_ne() {
         "fn main(): 1 != 2",
         r#"
             let _0: bool;
-            let _1: bool;
 
             bb0: {
-                _1 = Ne(const Integer(I8(1)), const Integer(I8(2)));
-                _0 = _1;
+                _0 = Ne(const Integer(I8(1)), const Integer(I8(2)));
                 return;
             }
         "#,
@@ -128,11 +114,9 @@ fn test_lt() {
         "fn main(): 1 < 2",
         r#"
             let _0: bool;
-            let _1: bool;
 
             bb0: {
-                _1 = Lt(const Integer(I8(1)), const Integer(I8(2)));
-                _0 = _1;
+                _0 = Lt(const Integer(I8(1)), const Integer(I8(2)));
                 return;
             }
         "#,
@@ -145,11 +129,9 @@ fn test_le() {
         "fn main(): 1 <= 2",
         r#"
             let _0: bool;
-            let _1: bool;
 
             bb0: {
-                _1 = Le(const Integer(I8(1)), const Integer(I8(2)));
-                _0 = _1;
+                _0 = Le(const Integer(I8(1)), const Integer(I8(2)));
                 return;
             }
         "#,
@@ -162,11 +144,9 @@ fn test_gt() {
         "fn main(): 2 > 1",
         r#"
             let _0: bool;
-            let _1: bool;
 
             bb0: {
-                _1 = Gt(const Integer(I8(2)), const Integer(I8(1)));
-                _0 = _1;
+                _0 = Gt(const Integer(I8(2)), const Integer(I8(1)));
                 return;
             }
         "#,
@@ -179,11 +159,9 @@ fn test_ge() {
         "fn main(): 2 >= 1",
         r#"
             let _0: bool;
-            let _1: bool;
 
             bb0: {
-                _1 = Ge(const Integer(I8(2)), const Integer(I8(1)));
-                _0 = _1;
+                _0 = Ge(const Integer(I8(2)), const Integer(I8(1)));
                 return;
             }
         "#,
@@ -196,11 +174,9 @@ fn test_bitwise_and() {
         "fn main(): 5 & 3",
         r#"
             let _0: int;
-            let _1: int;
 
             bb0: {
-                _1 = BitAnd(const Integer(I8(5)), const Integer(I8(3)));
-                _0 = _1;
+                _0 = BitAnd(const Integer(I8(5)), const Integer(I8(3)));
                 return;
             }
         "#,
@@ -213,11 +189,9 @@ fn test_deeply_nested_parentheses() {
         "fn main(): ((((1 + 2))))",
         r#"
             let _0: int;
-            let _1: int;
 
             bb0: {
-                _1 = Add(const Integer(I8(1)), const Integer(I8(2)));
-                _0 = _1;
+                _0 = Add(const Integer(I8(1)), const Integer(I8(2)));
                 return;
             }
         "#,
@@ -234,14 +208,12 @@ fn test_chained_additions() {
             let _1: int;
             let _2: int;
             let _3: int;
-            let _4: int;
 
             bb0: {
                 _1 = Add(const Integer(I8(1)), const Integer(I8(2)));
                 _2 = Add(_1, const Integer(I8(3)));
                 _3 = Add(_2, const Integer(I8(4)));
-                _4 = Add(_3, const Integer(I8(5)));
-                _0 = _4;
+                _0 = Add(_3, const Integer(I8(5)));
                 return;
             }
         "#,
@@ -258,14 +230,12 @@ fn test_chained_mixed_operations() {
             let _1: int;
             let _2: int;
             let _3: int;
-            let _4: int;
 
             bb0: {
                 _1 = Mul(const Integer(I8(2)), const Integer(I8(3)));
                 _2 = Add(const Integer(I8(1)), _1);
                 _3 = Div(const Integer(I8(4)), const Integer(I8(2)));
-                _4 = Sub(_2, _3);
-                _0 = _4;
+                _0 = Sub(_2, _3);
                 return;
             }
         "#,

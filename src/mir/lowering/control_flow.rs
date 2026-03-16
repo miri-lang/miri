@@ -334,18 +334,15 @@ fn lower_for_over_iterable(
         None
     };
 
-    // Lower the iterable
-    let list_op = lower_expression(ctx, iterable, None)?;
+    // Lower the iterable using DPS to avoid an extra Copy (and spurious IncRef).
+    // The single reference owned by list_local is released via StorageDead after the loop.
     let list_ty = if let Some(ty) = ctx.type_checker.get_type(iterable.id) {
         ty.clone()
     } else {
         Type::new(TypeKind::Void, *span)
     };
     let list_local = ctx.push_temp(list_ty, *span);
-    ctx.push_statement(crate::mir::Statement {
-        kind: StatementKind::Assign(Place::new(list_local), Rvalue::Use(list_op)),
-        span: *span,
-    });
+    lower_expression(ctx, iterable, Some(Place::new(list_local)))?;
 
     // Index variable
     let idx_ty = Type::new(TypeKind::Int, *span);
@@ -585,6 +582,8 @@ fn lower_for_over_iterable(
     ));
 
     ctx.set_current_block(exit_bb);
+    // Release the iterable local now that the loop is done.
+    ctx.emit_temp_drop(list_local, 0, *span);
     ctx.pop_scope(*span);
     Ok(())
 }
@@ -834,7 +833,15 @@ pub fn lower_call(
                         TypeKind::Custom(name, _) if name == "Array" || name == "List" || name == "Map" || name == "Set" || name == "Tuple"
                     ))
                 {
+                    let obj_watermark = ctx.body.local_decls.len();
                     let obj_op = lower_expression(ctx, obj, None)?;
+                    // Only drop obj_local if obj_op is a plain Copy (no field projections).
+                    // Perceus inserts IncRef only for projection-free Copy operands; field
+                    // projections (e.g. `b.values`) are not IncRef'd by Perceus, so emitting
+                    // StorageDead (and thus a balancing DecRef) would prematurely free the value.
+                    // For Move operands Perceus does not IncRef, so no drop is needed either.
+                    let obj_op_is_copy =
+                        matches!(&obj_op, Operand::Copy(p) if p.projection.is_empty());
                     // Create a temp local to hold the object, so we can form Place for Rvalue::Len
                     let obj_local = ctx.push_temp(obj_ty.clone(), *span);
                     ctx.push_statement(crate::mir::Statement {
@@ -859,6 +866,9 @@ pub fn lower_call(
                         span: *span,
                     });
 
+                    if obj_op_is_copy {
+                        ctx.emit_temp_drop(obj_local, obj_watermark, *span);
+                    }
                     return Ok(op);
                 }
 
@@ -872,7 +882,12 @@ pub fn lower_call(
                     ))
                     && args.len() == 1
                 {
+                    let obj_watermark = ctx.body.local_decls.len();
                     let obj_op = lower_expression(ctx, obj, None)?;
+                    // See comment in the `length` branch: Perceus only IncRefs projection-free
+                    // Copy operands, so field projections must not trigger emit_temp_drop.
+                    let obj_op_is_copy =
+                        matches!(&obj_op, Operand::Copy(p) if p.projection.is_empty());
                     let index_op = lower_expression(ctx, &args[0], None)?;
 
                     // Create a temp local to hold the object
@@ -926,6 +941,10 @@ pub fn lower_call(
                         span: *span,
                     });
 
+                    // Only drop obj_local when a Copy was used (Perceus will have IncRef'd).
+                    if obj_op_is_copy {
+                        ctx.emit_temp_drop(obj_local, obj_watermark, *span);
+                    }
                     return Ok(op);
                 }
 
@@ -1174,14 +1193,17 @@ pub fn lower_call(
                                 _ => None,
                             };
 
-                            // Determine array length and element size
+                            // Determine array length, element size, and whether
+                            // elements are RC-managed (Option, List, Array, etc.)
                             let mut len_val = 0;
                             let mut elem_size = 8;
+                            let mut elems_are_managed = false;
                             if let ExpressionKind::Array(elements, _) = &args[0].node {
                                 len_val = elements.len() as i64;
                                 if !elements.is_empty() {
                                     if let Some(ty) = ctx.type_checker.get_type(elements[0].id) {
                                         elem_size = compute_elem_size_from_type(&ty.kind);
+                                        elems_are_managed = ctx.is_perceus_managed(&ty.kind);
                                     }
                                 }
                             }
@@ -1202,11 +1224,19 @@ pub fn lower_call(
                                 ),
                             }));
 
+                            // Use the managed-array variant when elements are
+                            // heap-allocated so the list IncRefs them before the
+                            // source array's element-drop loop releases its refs.
+                            let rt_fn_name = if elems_are_managed {
+                                "miri_rt_list_new_from_managed_array"
+                            } else {
+                                "miri_rt_list_new_from_raw"
+                            };
                             let func_op = Operand::Constant(Box::new(Constant {
                                 span: *span,
                                 ty: Type::new(TypeKind::Identifier, *span),
                                 literal: crate::ast::literal::Literal::Identifier(
-                                    "miri_rt_list_new_from_raw".to_string(),
+                                    rt_fn_name.to_string(),
                                 ),
                             }));
 
@@ -1328,6 +1358,7 @@ pub fn lower_call(
         None
     };
 
+    let arg_watermark = ctx.body.local_decls.len();
     let mut arg_ops = Vec::with_capacity(args.len());
     for (i, arg) in args.iter().enumerate() {
         let op = lower_expression(ctx, arg, None)?;
@@ -1356,6 +1387,17 @@ pub fn lower_call(
         } else {
             op
         };
+
+        // Ensure managed arguments are passed as Copy so that Perceus inserts
+        // an IncRef at the call site. The callee owns the reference and releases
+        // it via StorageDead on the parameter in finalize_body. Without this, a
+        // Move argument is not IncRef'd, the callee's DecRef brings RC to 0, and
+        // the caller's reference becomes dangling.
+        let op = match op {
+            Operand::Move(p) => Operand::Copy(p),
+            other => other,
+        };
+
         arg_ops.push(op);
     }
 
@@ -1417,14 +1459,24 @@ pub fn lower_call(
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
             func: func_op,
-            args: arg_ops,
-            destination,
+            args: arg_ops.clone(),
+            destination: destination.clone(),
             target: Some(target_bb),
         },
         *span,
     ));
 
     ctx.set_current_block(target_bb);
+
+    // Release managed temporaries created while lowering the call arguments.
+    let dest_local = destination.local;
+    for arg_op in &arg_ops {
+        if let Operand::Copy(place) | Operand::Move(place) = arg_op {
+            if place.local != dest_local {
+                ctx.emit_temp_drop(place.local, arg_watermark, *span);
+            }
+        }
+    }
 
     Ok(op)
 }
@@ -1439,6 +1491,7 @@ fn lower_struct_constructor(
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     // Separate positional and named arguments
+    let arg_watermark = ctx.body.local_decls.len();
     let mut positional_args = Vec::with_capacity(args.len());
     let mut named_args: std::collections::HashMap<&str, Operand> =
         std::collections::HashMap::with_capacity(args.len());
@@ -1504,13 +1557,25 @@ fn lower_struct_constructor(
         (p.clone(), Operand::Copy(p))
     };
 
+    let dest_local = destination.local;
     ctx.push_statement(crate::mir::Statement {
         kind: StatementKind::Assign(
             destination,
-            Rvalue::Aggregate(AggregateKind::Struct(struct_ty), operands),
+            Rvalue::Aggregate(AggregateKind::Struct(struct_ty), operands.clone()),
         ),
         span: *span,
     });
+
+    // Release managed temporaries created while lowering the constructor arguments.
+    // After the Aggregate assignment, Perceus has IncRef'd them (the struct now owns
+    // the references). The caller's temporary locals are no longer needed.
+    for op in &operands {
+        if let Operand::Copy(place) | Operand::Move(place) = op {
+            if place.local != dest_local {
+                ctx.emit_temp_drop(place.local, arg_watermark, *span);
+            }
+        }
+    }
 
     Ok(result_op)
 }
@@ -1555,6 +1620,7 @@ fn lower_class_constructor(
 
         // Build init call args: self + constructor args + allocator
         let mut call_args = vec![Operand::Copy(destination)];
+        let init_arg_watermark = ctx.body.local_decls.len();
         for arg in args {
             match &arg.node {
                 ExpressionKind::NamedArgument(_name, value) => {
@@ -1583,7 +1649,7 @@ fn lower_class_constructor(
         ctx.set_terminator(Terminator::new(
             TerminatorKind::Call {
                 func: func_op,
-                args: call_args,
+                args: call_args.clone(),
                 destination: Place::new(void_dest),
                 target: Some(target_bb),
             },
@@ -1591,9 +1657,18 @@ fn lower_class_constructor(
         ));
         ctx.set_current_block(target_bb);
 
+        // Release managed temporaries created while lowering init call arguments.
+        // Skip call_args[0] which is `self` (the destination, not a fresh temp).
+        for arg_op in call_args.iter().skip(1) {
+            if let Operand::Copy(place) | Operand::Move(place) = arg_op {
+                ctx.emit_temp_drop(place.local, init_arg_watermark, *span);
+            }
+        }
+
         Ok(result_op)
     } else {
         // No init method — map constructor args directly to fields.
+        let arg_watermark = ctx.body.local_decls.len();
         let mut positional_args = Vec::with_capacity(args.len());
         let mut named_args: std::collections::HashMap<&str, Operand> =
             std::collections::HashMap::with_capacity(args.len());
@@ -1651,13 +1726,23 @@ fn lower_class_constructor(
             (p.clone(), Operand::Copy(p))
         };
 
+        let dest_local = destination.local;
         ctx.push_statement(crate::mir::Statement {
             kind: StatementKind::Assign(
                 destination,
-                Rvalue::Aggregate(AggregateKind::Class(class_ty), operands),
+                Rvalue::Aggregate(AggregateKind::Class(class_ty), operands.clone()),
             ),
             span: *span,
         });
+
+        // Release managed temporaries created while lowering the constructor arguments.
+        for op in &operands {
+            if let Operand::Copy(place) | Operand::Move(place) = op {
+                if place.local != dest_local {
+                    ctx.emit_temp_drop(place.local, arg_watermark, *span);
+                }
+            }
+        }
 
         Ok(result_op)
     }

@@ -23,6 +23,7 @@ pub(crate) fn lower_assignment_expr(
     match &**lhs {
         crate::ast::expression::LeftHandSideExpression::Identifier(id_expr) => {
             if let ExpressionKind::Identifier(name, _) = &id_expr.node {
+                let rhs_watermark = ctx.body.local_decls.len();
                 let val = lower_expression(ctx, rhs, None)?;
 
                 if let Some(&local) = ctx.variable_map.get(name.as_str()) {
@@ -36,6 +37,21 @@ pub(crate) fn lower_assignment_expr(
                             } else {
                                 Rvalue::Use(val.clone())
                             };
+
+                            // Before overwriting a managed local, DecRef the old value so
+                            // it is released. The codegen's null guard makes this safe even
+                            // on the first assignment (null pointer → no-op DecRef).
+                            // Skip self-assignment (l = l) to avoid freeing a live object.
+                            let is_self_copy = matches!(
+                                &rvalue,
+                                Rvalue::Use(Operand::Copy(p)) if p.local == local
+                            );
+                            if ctx.is_perceus_managed(&lhs_ty.kind) && !is_self_copy {
+                                ctx.push_statement(crate::mir::Statement {
+                                    kind: MirStatementKind::DecRef(Place::new(local)),
+                                    span: expr.span,
+                                });
+                            }
 
                             ctx.push_statement(crate::mir::Statement {
                                 kind: MirStatementKind::Assign(Place::new(local), rvalue),
@@ -89,8 +105,15 @@ pub(crate) fn lower_assignment_expr(
                             kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(val.clone())),
                             span: expr.span,
                         });
+                        // When the result is copied to a different dest, release the RHS
+                        // temp's ownership — the dest now holds the reference.
+                        if let Operand::Copy(place) | Operand::Move(place) = &val {
+                            ctx.emit_temp_drop(place.local, rhs_watermark, expr.span);
+                        }
                         Ok(Operand::Copy(d))
                     } else {
+                        // No dest: return the RHS operand directly. The caller owns
+                        // its RC reference and is responsible for releasing it.
                         Ok(val)
                     }
                 } else {

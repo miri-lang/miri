@@ -21,7 +21,7 @@ release:
 	fi
 
 test:
-	cargo test
+	cargo test -- --test-threads=4
 	@if [ -n "$(RUNTIMES)" ]; then \
 		for rt in $(RUNTIMES); do \
 			echo "Testing $$rt"; \

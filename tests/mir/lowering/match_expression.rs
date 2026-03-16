@@ -22,8 +22,7 @@ fn main()
             let _0: String;
             let _1: int; // x
             let _2: int;
-            let _3: String;
-            let _4: int; // _
+            let _3: int; // _
 
             bb0: {
                 StorageLive(_1);
@@ -33,26 +32,25 @@ fn main()
             }
 
             bb1: {
-                _0 = _3;
                 StorageDead(_1);
                 return;
             }
 
             bb2: {
-                _3 = const String("one");
+                _0 = const String("one");
                 goto bb1;
             }
 
             bb3: {
-                _3 = const String("two");
+                _0 = const String("two");
                 goto bb1;
             }
 
             bb4: {
-                StorageLive(_4);
-                _4 = _2;
-                _3 = const String("other");
-                StorageDead(_4);
+                StorageLive(_3);
+                _3 = _2;
+                _0 = const String("other");
+                StorageDead(_3);
                 goto bb1;
             }
         "#,
