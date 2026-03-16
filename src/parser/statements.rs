@@ -48,6 +48,25 @@ impl<'source> Parser<'source> {
             ;
     */
     pub(crate) fn statement(&mut self) -> Result<Statement, SyntaxError> {
+        self.depth += 1;
+        if self.depth > crate::parser::MAX_PARSE_DEPTH {
+            self.depth -= 1;
+            let span = self
+                ._lookahead
+                .as_ref()
+                .map(|(_, s)| *s)
+                .unwrap_or(crate::error::syntax::Span::new(0, 0));
+            return Err(SyntaxError::new(
+                crate::error::syntax::SyntaxErrorKind::RecursionLimitExceeded,
+                span,
+            ));
+        }
+        let res = self.statement_internal();
+        self.depth -= 1;
+        res
+    }
+
+    fn statement_internal(&mut self) -> Result<Statement, SyntaxError> {
         if self._lookahead.is_none() {
             return Ok(ast::empty_statement());
         }
