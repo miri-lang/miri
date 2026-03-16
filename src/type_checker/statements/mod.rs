@@ -207,7 +207,7 @@ impl TypeChecker {
                         if let Some(target) = target_expr {
                             // Extract generic definitions from the generics expression
                             let generic_defs = if let Some(gens) = generics {
-                                let mut defs = Vec::new();
+                                let mut defs = Vec::with_capacity(gens.len());
                                 for gen in gens {
                                     if let ExpressionKind::GenericType(
                                         name_expr,
