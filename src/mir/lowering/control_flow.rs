@@ -1107,7 +1107,21 @@ pub fn lower_call(
                         let mangled_name = format!("{}_{}", defining_class, method_name);
                         let return_ty = method_info.return_type.clone();
 
-                        let self_op = lower_expression(ctx, obj, None)?;
+                        // For `super.method()`, the receiver must be `self` (the current
+                        // instance), not the super constant (which would lower to a null
+                        // pointer via Literal::Identifier). The type checker already resolved
+                        // obj_ty to the parent class type so `resolve_inherited_method` above
+                        // correctly starts its search from the parent — we only need to
+                        // substitute the actual self operand here.
+                        let self_op = if matches!(&obj.node, ExpressionKind::Super) {
+                            if let Some(&self_local) = ctx.variable_map.get("self") {
+                                Operand::Copy(Place::new(self_local))
+                            } else {
+                                lower_expression(ctx, obj, None)?
+                            }
+                        } else {
+                            lower_expression(ctx, obj, None)?
+                        };
                         let mut call_args = vec![self_op];
                         for arg in args {
                             call_args.push(lower_expression(ctx, arg, None)?);

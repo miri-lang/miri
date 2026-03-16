@@ -7,3 +7,4 @@ pub mod basic;
 pub mod constructor;
 pub mod drop;
 pub mod inheritance;
+pub mod super_calls;
