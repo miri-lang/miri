@@ -44,6 +44,7 @@ pub(crate) fn lower_call_expr(
     };
 
     if is_option_some && args.len() == 1 {
+        let arg_watermark = ctx.body.local_decls.len();
         let inner_val = lower_expression(ctx, &args[0], None)?;
         let target = if let Some(d) = dest {
             d
@@ -54,10 +55,15 @@ pub(crate) fn lower_call_expr(
         ctx.push_statement(crate::mir::Statement {
             kind: MirStatementKind::Assign(
                 target.clone(),
-                Rvalue::Aggregate(AggregateKind::Option, vec![inner_val]),
+                Rvalue::Aggregate(AggregateKind::Option, vec![inner_val.clone()]),
             ),
             span: expr.span,
         });
+        // Release any managed temp created to hold the inner value — the
+        // Aggregate IncRef already transferred ownership into the Option.
+        if let Operand::Copy(ref p) | Operand::Move(ref p) = inner_val {
+            ctx.emit_temp_drop(p.local, arg_watermark, expr.span);
+        }
         return Ok(Operand::Copy(target));
     }
 
@@ -112,6 +118,7 @@ pub(crate) fn lower_call_expr(
                         }));
 
                         // Lower all arguments
+                        let arg_watermark = ctx.body.local_decls.len();
                         let mut ops = vec![discr_op];
                         for arg in args {
                             ops.push(lower_expression(ctx, arg, None)?);
@@ -134,11 +141,19 @@ pub(crate) fn lower_call_expr(
                                         Rc::from(type_name.as_str()),
                                         Rc::from(variant_name.as_str()),
                                     ),
-                                    ops,
+                                    ops.clone(),
                                 ),
                             ),
                             span: expr.span,
                         });
+                        // Release any managed temps that were created for the
+                        // args — Aggregate IncRef transferred ownership into the enum.
+                        for op in ops.iter().skip(1) {
+                            // skip the discriminant constant
+                            if let Operand::Copy(ref p) | Operand::Move(ref p) = op {
+                                ctx.emit_temp_drop(p.local, arg_watermark, expr.span);
+                            }
+                        }
                         return Ok(Operand::Copy(target));
                     }
                 }

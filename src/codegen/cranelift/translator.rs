@@ -753,6 +753,149 @@ impl<'a> FunctionTranslator<'a> {
             || matches!(kind, TypeKind::Custom(name, _) if name == "Set")
     }
 
+    /// Emits a loop that DecRefs each managed value in a map's hash table.
+    ///
+    /// Iterates over all `capacity` slots, checks the state byte for SLOT_OCCUPIED (1),
+    /// and DecRefs the value pointer in each occupied slot.
+    ///
+    /// MiriMap states array: 1 byte per slot (0=empty, 1=occupied, 2=tombstone).
+    /// Values are stored as pointer-sized entries (managed types are always pointers).
+    fn emit_map_managed_values_drop_loop(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        states: Value,
+        values: Value,
+        capacity: Value,
+        val_kind: &TypeKind,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), String> {
+        let ptr_type = type_ctx.ptr_type;
+        let ptr_size = ptr_type.bytes() as i64;
+
+        let loop_header = builder.create_block();
+        builder.append_block_param(loop_header, ptr_type);
+        let check_block = builder.create_block();
+        let decref_block = builder.create_block();
+        let increment_block = builder.create_block();
+        let after_loop = builder.create_block();
+
+        // Enter loop with index 0
+        let zero = builder.ins().iconst(ptr_type, 0);
+        let zero_arg = cranelift_codegen::ir::BlockArg::Value(zero);
+        builder.ins().jump(loop_header, &[zero_arg]);
+
+        // Loop header: check i < capacity
+        builder.switch_to_block(loop_header);
+        let i = builder.block_params(loop_header)[0];
+        let in_range = builder.ins().icmp(
+            cranelift_codegen::ir::condcodes::IntCC::UnsignedLessThan,
+            i,
+            capacity,
+        );
+        builder
+            .ins()
+            .brif(in_range, check_block, &[], after_loop, &[]);
+
+        // Check state[i] == SLOT_OCCUPIED (1)
+        builder.switch_to_block(check_block);
+        builder.seal_block(check_block);
+        let state_addr = builder.ins().iadd(states, i);
+        let state_i8 = builder
+            .ins()
+            .load(cl_types::I8, MemFlags::new(), state_addr, 0);
+        let state = builder.ins().uextend(ptr_type, state_i8);
+        let slot_occupied = builder.ins().iconst(ptr_type, 1);
+        let is_occupied = builder.ins().icmp(
+            cranelift_codegen::ir::condcodes::IntCC::Equal,
+            state,
+            slot_occupied,
+        );
+        builder
+            .ins()
+            .brif(is_occupied, decref_block, &[], increment_block, &[]);
+
+        // DecRef the value in this slot
+        builder.switch_to_block(decref_block);
+        builder.seal_block(decref_block);
+        let byte_offset = builder.ins().imul_imm(i, ptr_size);
+        let val_addr = builder.ins().iadd(values, byte_offset);
+        let val_ptr = builder.ins().load(ptr_type, MemFlags::new(), val_addr, 0);
+        Self::emit_decref_value(builder, ctx, val_kind, val_ptr, type_ctx)?;
+        builder.ins().jump(increment_block, &[]);
+
+        // Increment i and loop back
+        builder.switch_to_block(increment_block);
+        builder.seal_block(increment_block);
+        let next_i = builder.ins().iadd_imm(i, 1);
+        let next_i_arg = cranelift_codegen::ir::BlockArg::Value(next_i);
+        builder.ins().jump(loop_header, &[next_i_arg]);
+
+        builder.seal_block(loop_header);
+        builder.seal_block(after_loop);
+        builder.switch_to_block(after_loop);
+        Ok(())
+    }
+
+    /// Emits a loop that DecRefs each managed element in a contiguous pointer array.
+    ///
+    /// Used when freeing a List or Array whose inner type is managed, so that the
+    /// RC of each stored element is properly decremented before the container is freed.
+    ///
+    /// `data` — pointer to the element buffer (pointer-sized elements assumed).
+    /// `len`  — number of elements.
+    fn emit_managed_elements_drop_loop(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        data: Value,
+        len: Value,
+        inner_kind: &TypeKind,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), String> {
+        let ptr_type = type_ctx.ptr_type;
+        let ptr_size = ptr_type.bytes() as i64;
+
+        let loop_header = builder.create_block();
+        builder.append_block_param(loop_header, ptr_type);
+        let loop_body = builder.create_block();
+        let after_loop = builder.create_block();
+
+        // Jump into the loop with initial index = 0
+        let zero = builder.ins().iconst(ptr_type, 0);
+        let zero_arg = cranelift_codegen::ir::BlockArg::Value(zero);
+        builder.ins().jump(loop_header, &[zero_arg]);
+
+        builder.switch_to_block(loop_header);
+        let i = builder.block_params(loop_header)[0];
+        let in_range = builder.ins().icmp(
+            cranelift_codegen::ir::condcodes::IntCC::UnsignedLessThan,
+            i,
+            len,
+        );
+        builder
+            .ins()
+            .brif(in_range, loop_body, &[], after_loop, &[]);
+
+        // loop_body: load element, DecRef it, increment index
+        builder.switch_to_block(loop_body);
+        builder.seal_block(loop_body); // only predecessor: loop_header
+
+        let byte_offset = builder.ins().imul_imm(i, ptr_size);
+        let elem_addr = builder.ins().iadd(data, byte_offset);
+        let elem_ptr = builder.ins().load(ptr_type, MemFlags::new(), elem_addr, 0);
+        Self::emit_decref_value(builder, ctx, inner_kind, elem_ptr, type_ctx)?;
+
+        let next_i = builder.ins().iadd_imm(i, 1);
+        let next_i_arg = cranelift_codegen::ir::BlockArg::Value(next_i);
+        builder.ins().jump(loop_header, &[next_i_arg]);
+
+        // Seal loop_header now that both predecessors are defined
+        builder.seal_block(loop_header);
+
+        builder.seal_block(after_loop); // only predecessor: loop_header
+        builder.switch_to_block(after_loop);
+        Ok(())
+    }
+
     /// Emits the type-appropriate cleanup when an object's RC reaches zero.
     ///
     /// All heap types share the same `[RC][payload]` layout, so the RC
@@ -778,13 +921,116 @@ impl<'a> FunctionTranslator<'a> {
         let kind = resolved.unwrap_or(kind);
 
         if Self::is_map_type(kind) {
+            // DecRef managed values before freeing the map struct.
+            // MiriMap layout: [states: ptr][keys: ptr][values: ptr][len: ptr][capacity: ptr]...
+            // (each field is ptr_size bytes on the target platform)
+            if let TypeKind::Map(_, val_expr) = kind {
+                if let ExpressionKind::Type(val_ty, _) = &val_expr.node {
+                    if is_field_managed(&val_ty.kind) {
+                        let ptr_type = type_ctx.ptr_type;
+                        let ptr_size = ptr_type.bytes() as i32;
+                        // states pointer at offset 0
+                        let states = builder.ins().load(ptr_type, MemFlags::new(), ptr, 0);
+                        // values pointer at offset 2 * ptr_size
+                        let values =
+                            builder
+                                .ins()
+                                .load(ptr_type, MemFlags::new(), ptr, 2 * ptr_size);
+                        // capacity at offset 4 * ptr_size
+                        let capacity =
+                            builder
+                                .ins()
+                                .load(ptr_type, MemFlags::new(), ptr, 4 * ptr_size);
+                        Self::emit_map_managed_values_drop_loop(
+                            builder,
+                            ctx,
+                            states,
+                            values,
+                            capacity,
+                            &val_ty.kind,
+                            type_ctx,
+                        )?;
+                    }
+                }
+            }
             Self::call_rt_map_free(builder, ctx, ptr)
         } else if Self::is_set_type(kind) {
             Self::call_rt_set_free(builder, ctx, ptr)
         } else if Self::is_list_type(kind) {
+            // DecRef managed elements before freeing the list struct.
+            // MiriList layout: [data: ptr][len: ptr][capacity: ptr][elem_size: ptr]
+            if let TypeKind::List(inner_expr) = kind {
+                if let ExpressionKind::Type(inner_ty, _) = &inner_expr.node {
+                    if is_field_managed(&inner_ty.kind) {
+                        let ptr_type = type_ctx.ptr_type;
+                        let ptr_size = ptr_type.bytes() as i32;
+                        let data = builder.ins().load(ptr_type, MemFlags::new(), ptr, 0);
+                        let len = builder.ins().load(ptr_type, MemFlags::new(), ptr, ptr_size);
+                        Self::emit_managed_elements_drop_loop(
+                            builder,
+                            ctx,
+                            data,
+                            len,
+                            &inner_ty.kind,
+                            type_ctx,
+                        )?;
+                    }
+                }
+            }
             Self::call_rt_list_free(builder, ctx, ptr)
         } else if Self::is_collection_type(kind) {
+            // DecRef managed elements before freeing the array struct.
+            // MiriArray layout: [data: ptr][elem_count: ptr][elem_size: ptr]
+            if let TypeKind::Array(inner_expr, _) = kind {
+                if let ExpressionKind::Type(inner_ty, _) = &inner_expr.node {
+                    if is_field_managed(&inner_ty.kind) {
+                        let ptr_type = type_ctx.ptr_type;
+                        let ptr_size = ptr_type.bytes() as i32;
+                        let data = builder.ins().load(ptr_type, MemFlags::new(), ptr, 0);
+                        let len = builder.ins().load(ptr_type, MemFlags::new(), ptr, ptr_size);
+                        Self::emit_managed_elements_drop_loop(
+                            builder,
+                            ctx,
+                            data,
+                            len,
+                            &inner_ty.kind,
+                            type_ctx,
+                        )?;
+                    }
+                }
+            }
             Self::call_rt_array_free(builder, ctx, ptr)
+        } else if let TypeKind::Tuple(element_exprs) = kind {
+            // DecRef each managed field before freeing the tuple.
+            // Tuple layout: [elem_count: ptr][field0][field1]... (payload_ptr = ptr)
+            let ptr_type = type_ctx.ptr_type;
+            let tuple_type = kind.clone();
+            let managed_fields: Vec<(i32, TypeKind)> = element_exprs
+                .iter()
+                .enumerate()
+                .filter_map(|(i, expr)| {
+                    if let ExpressionKind::Type(ty, _) = &expr.node {
+                        if is_field_managed(&ty.kind) {
+                            let (offset, _) = layout::field_layout(
+                                &tuple_type,
+                                i,
+                                type_ctx.type_definitions,
+                                ptr_type,
+                            );
+                            Some((offset, ty.kind.clone()))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            for (offset, field_kind) in managed_fields {
+                let field_ptr = builder.ins().load(ptr_type, MemFlags::new(), ptr, offset);
+                Self::emit_decref_value(builder, ctx, &field_kind, field_ptr, type_ctx)?;
+            }
+            Self::call_libc_free(builder, ctx, header_ptr)
         } else if let TypeKind::Option(inner) = kind {
             // Drop specialization: DecRef the inner value if it's managed, then free the Option space.
             if is_field_managed(&inner.kind) {
@@ -1443,6 +1689,7 @@ fn is_field_managed(kind: &TypeKind) -> bool {
             | TypeKind::Array(_, _)
             | TypeKind::Map(_, _)
             | TypeKind::Set(_)
+            | TypeKind::Tuple(_)
             | TypeKind::Custom(_, _)
     )
 }

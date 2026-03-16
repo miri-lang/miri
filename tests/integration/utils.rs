@@ -28,8 +28,11 @@ pub fn assert_runs(code: &str) {
     let result = miri_run(code);
 
     if !result.success {
+        if result.stderr.contains("MIRI_LEAK_CHECK: leaked") {
+            panic!("Memory leak detected:\n{}", result.output());
+        }
         panic!(
-            "Expected program to compile successfully, but got errors:\n{}",
+            "Expected program to compile and run successfully, but it failed:\n{}",
             result.output()
         );
     }
@@ -47,8 +50,11 @@ pub fn assert_runs_with_output(code: &str, expected_output: &str) {
     let result = miri_run(code);
 
     if !result.success {
+        if result.stderr.contains("MIRI_LEAK_CHECK: leaked") {
+            panic!("Memory leak detected:\n{}", result.output());
+        }
         panic!(
-            "Expected program to compile successfully, but got errors:\n{}",
+            "Expected program to compile and run successfully, but it failed:\n{}",
             result.output()
         );
     }

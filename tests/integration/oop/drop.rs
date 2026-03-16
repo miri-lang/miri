@@ -5,9 +5,9 @@ use super::utils::*;
 
 #[test]
 fn test_class_drop_with_string_field() {
-    // A class with a String field: the String must be released when the class is dropped.
-    // Uses a string literal (immortal) so no crash is expected even if RC is not decremented,
-    // but this confirms that the drop path does not corrupt memory.
+    // String field must not corrupt memory when the class is dropped.
+    // String literals are immortal (RC not tracked), so this validates
+    // the drop path runs without crashing.
     assert_runs_with_output(
         r#"
 use system.io
@@ -27,8 +27,8 @@ fn main()
 
 #[test]
 fn test_class_drop_with_list_field() {
-    // A class containing a List field must DecRef the list when dropped.
-    // If the List is not DecRef'd, this leaks the list allocation.
+    // A List field must be DecRef'd (and freed if RC reaches 0) when the class
+    // instance is dropped. Without the fix, the List would leak (RC stays 2).
     assert_runs_with_output(
         r#"
 use system.io
@@ -49,7 +49,7 @@ fn main()
 
 #[test]
 fn test_class_drop_with_string_and_list_fields() {
-    // Acceptance criteria: class with both String and List<int> fields freed correctly.
+    // Both String and List fields must be handled correctly on drop.
     assert_runs_with_output(
         r#"
 use system.io
@@ -70,8 +70,8 @@ fn main()
 
 #[test]
 fn test_class_drop_in_function_scope() {
-    // Class with managed fields is created inside a function and goes out of scope.
-    // The nested managed fields must be released correctly (no crash, no leak).
+    // Class with managed fields created inside a helper function. Fields must
+    // be released when the local goes out of scope, not just at program exit.
     assert_runs_with_output(
         r#"
 use system.io
@@ -95,7 +95,7 @@ fn main()
 
 #[test]
 fn test_class_drop_multiple_instances() {
-    // Multiple class instances with managed fields, all going out of scope.
+    // Multiple class instances with managed fields all going out of scope.
     assert_runs_with_output(
         r#"
 use system.io
@@ -112,5 +112,22 @@ fn main()
     println(f"{b.values.length()}")
     "#,
         "first\n3",
+    );
+}
+
+#[test]
+fn test_class_list_field_reassign() {
+    // Reassigning a managed field variable frees the old value.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    var l = List([1, 2, 3])
+    l = List([4, 5])
+    println(f"{l.length()}")
+    "#,
+        "2",
     );
 }
