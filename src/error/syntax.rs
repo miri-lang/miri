@@ -76,6 +76,8 @@ pub enum SyntaxErrorKind {
         reason: String,
     },
 
+    RecursionLimitExceeded,
+
     /// An unknown runtime name was specified in a runtime function declaration.
     UnknownRuntime {
         name: String,
@@ -282,6 +284,12 @@ impl SyntaxErrorKind {
                 title: "Invalid Modifier Combination",
                 message: None,
                 help: Some("These modifiers cannot be used together.".to_string()),
+            },
+            Self::RecursionLimitExceeded => ErrorProperties {
+                code: "E0035",
+                title: "Recursion Limit Exceeded",
+                message: None,
+                help: Some("The expression or statement is nested too deeply. Simplify your code.".to_string()),
             },
             Self::UnknownRuntime { name } => ErrorProperties {
                 code: "E0032",

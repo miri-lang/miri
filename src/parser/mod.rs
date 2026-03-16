@@ -19,6 +19,9 @@ pub(crate) struct DeclarationBlockConfig<'a> {
     pub missing_members_error: SyntaxErrorKind,
 }
 
+/// Maximum recursion depth allowed during parsing to prevent stack overflow DoS attacks.
+pub const MAX_PARSE_DEPTH: usize = 256;
+
 /// Recursive descent parser for Miri source code.
 ///
 /// Consumes tokens from a `Lexer` and produces a `Program` AST.
@@ -27,6 +30,7 @@ pub struct Parser<'source> {
     pub(super) lexer: &'source mut Lexer<'source>,
     pub(super) source: &'source str,
     pub(super) _lookahead: Option<TokenSpan>,
+    pub(super) depth: usize,
 }
 
 impl<'source> Parser<'source> {
@@ -36,6 +40,7 @@ impl<'source> Parser<'source> {
             lexer,
             source,
             _lookahead: None,
+            depth: 0,
         }
     }
 
