@@ -18,7 +18,7 @@ use crate::mir::lowering::helpers::{lower_as_return, resolve_type};
 pub(crate) fn lower_lambda_expr(
     ctx: &mut LoweringContext,
     expr: &Expression,
-    _dest: Option<Place>,
+    dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
     let ExpressionKind::Lambda(lambda) = &expr.node else {
         unreachable!()
@@ -113,12 +113,17 @@ pub(crate) fn lower_lambda_expr(
     };
     ctx.lambda_bodies.push(lambda_info);
 
-    // Create a constant identifier representing the lambda
-    // Backends will look up the lambda body by this name
-    let temp = ctx.push_temp(lambda_ty.clone(), expr.span);
+    // Create a constant identifier representing the lambda.
+    // Use the caller-provided destination (DPS) when available to avoid an
+    // extra temp copy; otherwise allocate a fresh temp.
+    let target = if let Some(d) = dest {
+        d
+    } else {
+        Place::new(ctx.push_temp(lambda_ty.clone(), expr.span))
+    };
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(
-            Place::new(temp),
+            target.clone(),
             Rvalue::Use(Operand::Constant(Box::new(Constant {
                 span: expr.span,
                 ty: lambda_ty,
@@ -128,5 +133,5 @@ pub(crate) fn lower_lambda_expr(
         span: expr.span,
     });
 
-    Ok(Operand::Copy(Place::new(temp)))
+    Ok(Operand::Copy(target))
 }

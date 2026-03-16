@@ -12,6 +12,7 @@ pub mod enums;
 pub mod fstring;
 pub mod function_params;
 pub mod functions;
+pub mod lambdas;
 pub mod list;
 pub mod map;
 pub mod oop;
