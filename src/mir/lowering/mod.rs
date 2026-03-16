@@ -26,6 +26,7 @@ use crate::mir::{
     BinOp, Body, Constant, Discriminant, ExecutionModel, LocalDecl, Operand, Place, Rvalue,
     StatementKind as MirStatementKind, Terminator, TerminatorKind,
 };
+use crate::mir::lambda::LambdaInfo;
 use crate::type_checker::TypeChecker;
 
 // Re-export commonly used items from submodules
@@ -55,7 +56,7 @@ pub fn lower_function(
     tc: &TypeChecker,
     is_release: bool,
     inject_allocator: bool,
-) -> Result<Body, LoweringError> {
+) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
     let StatementKind::FunctionDeclaration(decl) = &ast_func.node else {
         return Err(LoweringError::unsupported_statement(
             "Expected FunctionDeclaration".to_string(),
@@ -144,7 +145,7 @@ pub fn lower_class_method(
     self_type: Type,
     tc: &TypeChecker,
     is_release: bool,
-) -> Result<Body, LoweringError> {
+) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
     let StatementKind::FunctionDeclaration(decl) = &ast_method.node else {
         return Err(LoweringError::unsupported_statement(
             "Expected FunctionDeclaration for class method".to_string(),
@@ -317,7 +318,7 @@ fn emit_parameter_guards(
 fn finalize_body(
     ctx: &mut LoweringContext,
     span: crate::error::syntax::Span,
-) -> Result<Body, LoweringError> {
+) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
     // Pop root scope variables if falling through
     if ctx.body.basic_blocks[ctx.current_block.0]
         .terminator
@@ -341,8 +342,10 @@ fn finalize_body(
         ));
     }
 
-    Ok(std::mem::replace(
+    let body = std::mem::replace(
         &mut ctx.body,
         Body::new(0, span, ExecutionModel::Cpu),
-    ))
+    );
+    let lambda_bodies = std::mem::take(&mut ctx.lambda_bodies);
+    Ok((body, lambda_bodies))
 }

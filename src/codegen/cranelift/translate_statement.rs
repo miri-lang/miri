@@ -241,7 +241,7 @@ impl<'a> FunctionTranslator<'a> {
                 destination,
                 target,
             } => {
-                // Handle function calls
+                // Determine whether this is a direct (named) or indirect (function-pointer) call.
                 let func_name = match func {
                     Operand::Constant(c) => match &c.literal {
                         Literal::Identifier(name) => Some(name.clone()),
@@ -249,9 +249,6 @@ impl<'a> FunctionTranslator<'a> {
                     },
                     _ => None,
                 };
-
-                let func_name =
-                    func_name.ok_or_else(|| "Indirect calls not supported".to_string())?;
 
                 // Check if it's a runtime function
                 // For now, we assume all reachable calls in MIR are either internal or runtime functions.
@@ -262,10 +259,9 @@ impl<'a> FunctionTranslator<'a> {
                 // Runtime collection functions use pointer-sized values for element
                 // arguments to maintain a consistent FFI signature regardless of the
                 // element type (bool/i8, int/i64, etc.).
-                let widen_value_args = matches!(
-                    func_name.as_str(),
-                    "miri_rt_list_push" | "miri_rt_list_insert"
-                );
+                let widen_value_args = func_name.as_deref().is_some_and(|n| {
+                    matches!(n, "miri_rt_list_push" | "miri_rt_list_insert")
+                });
 
                 for (i, arg) in args.iter().enumerate() {
                     let val = Self::translate_operand(builder, ctx, arg, locals, type_ctx)?;
@@ -290,19 +286,36 @@ impl<'a> FunctionTranslator<'a> {
                     sig.returns.push(AbiParam::new(cl_dest_ty));
                 }
 
-                let func_id = ctx
-                    .module
-                    .declare_function(&func_name, Linkage::Import, &sig)
-                    .map_err(|e| format!("Failed to declare function {}: {}", func_name, e))?;
-                let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
-                let call = builder.ins().call(local_func, &arg_values);
+                if let Some(func_name) = func_name {
+                    // Direct call to a named symbol.
+                    let func_id = ctx
+                        .module
+                        .declare_function(&func_name, Linkage::Import, &sig)
+                        .map_err(|e| format!("Failed to declare function {}: {}", func_name, e))?;
+                    let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+                    let call = builder.ins().call(local_func, &arg_values);
 
-                if dest_ty.kind != TypeKind::Void {
-                    let result = builder.inst_results(call)[0];
-                    let dest_var = locals.get(&destination.local).ok_or_else(|| {
-                        format!("Unknown call destination local: {:?}", destination.local)
-                    })?;
-                    builder.def_var(*dest_var, result);
+                    if dest_ty.kind != TypeKind::Void {
+                        let result = builder.inst_results(call)[0];
+                        let dest_var = locals.get(&destination.local).ok_or_else(|| {
+                            format!("Unknown call destination local: {:?}", destination.local)
+                        })?;
+                        builder.def_var(*dest_var, result);
+                    }
+                } else {
+                    // Indirect call through a function pointer stored in a local variable.
+                    let func_ptr =
+                        Self::translate_operand(builder, ctx, func, locals, type_ctx)?;
+                    let sig_ref = builder.import_signature(sig);
+                    let call = builder.ins().call_indirect(sig_ref, func_ptr, &arg_values);
+
+                    if dest_ty.kind != TypeKind::Void {
+                        let result = builder.inst_results(call)[0];
+                        let dest_var = locals.get(&destination.local).ok_or_else(|| {
+                            format!("Unknown call destination local: {:?}", destination.local)
+                        })?;
+                        builder.def_var(*dest_var, result);
+                    }
                 }
 
                 if let Some(t) = target {

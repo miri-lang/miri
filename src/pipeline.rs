@@ -478,13 +478,17 @@ impl Pipeline {
         for stmt in &result.ast.body {
             match &stmt.node {
                 StatementKind::FunctionDeclaration(decl) => {
-                    let body =
+                    let (body, lambdas) =
                         mir::lowering::lower_function(stmt, &result.type_checker, is_release, true)
                             .map_err(|e| {
                                 CompilerError::Codegen(format!("MIR lowering failed: {}", e))
                             })?;
                     lowered_names.insert(decl.name.clone());
                     bodies.push((decl.name.clone(), body));
+                    for lambda in lambdas {
+                        lowered_names.insert(lambda.name.clone());
+                        bodies.push((lambda.name, lambda.body));
+                    }
                 }
                 StatementKind::Class(class_data) => {
                     let class_name =
@@ -530,7 +534,7 @@ impl Pipeline {
                                 continue;
                             }
 
-                            let mir_body = mir::lowering::lower_class_method(
+                            let (mir_body, lambdas) = mir::lowering::lower_class_method(
                                 method_stmt,
                                 self_type.clone(),
                                 &result.type_checker,
@@ -545,6 +549,10 @@ impl Pipeline {
 
                             lowered_names.insert(mangled.clone());
                             bodies.push((mangled, mir_body));
+                            for lambda in lambdas {
+                                lowered_names.insert(lambda.name.clone());
+                                bodies.push((lambda.name, lambda.body));
+                            }
                         }
                     }
                 }
@@ -557,7 +565,7 @@ impl Pipeline {
             match &stmt.node {
                 StatementKind::FunctionDeclaration(decl) => {
                     if !lowered_names.contains(&decl.name) {
-                        let body = mir::lowering::lower_function(
+                        let (body, lambdas) = mir::lowering::lower_function(
                             stmt,
                             &result.type_checker,
                             is_release,
@@ -568,6 +576,10 @@ impl Pipeline {
                         })?;
                         lowered_names.insert(decl.name.clone());
                         bodies.push((decl.name.clone(), body));
+                        for lambda in lambdas {
+                            lowered_names.insert(lambda.name.clone());
+                            bodies.push((lambda.name, lambda.body));
+                        }
                     }
                 }
                 StatementKind::Class(class_data) => {
@@ -617,7 +629,7 @@ impl Pipeline {
                                 continue;
                             }
 
-                            let mir_body = mir::lowering::lower_class_method(
+                            let (mir_body, lambdas) = mir::lowering::lower_class_method(
                                 method_stmt,
                                 self_type.clone(),
                                 &result.type_checker,
@@ -632,6 +644,10 @@ impl Pipeline {
 
                             lowered_names.insert(mangled.clone());
                             bodies.push((mangled, mir_body));
+                            for lambda in lambdas {
+                                lowered_names.insert(lambda.name.clone());
+                                bodies.push((lambda.name, lambda.body));
+                            }
                         }
                     }
                 }
