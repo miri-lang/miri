@@ -1429,14 +1429,23 @@ pub fn lower_call(
         }
     }
 
-    // Implicit Allocator Injection at Call Site
+    // Implicit Allocator Injection at Call Site.
+    // Skip for runtime functions (miri_ prefix) and for indirect calls through
+    // function-pointer variables (lambdas) — those bodies have no allocator param.
     let is_runtime_fn = if let ExpressionKind::Identifier(name, _) = &func.node {
         name.starts_with("miri_")
     } else {
         false
     };
 
-    if !is_runtime_fn {
+    // An indirect call is one where the callee operand resolved to a local
+    // variable (function pointer) rather than a named constant identifier.
+    let is_indirect_call = !matches!(
+        func_op,
+        Operand::Constant(ref c) if matches!(c.literal, crate::ast::literal::Literal::Identifier(_))
+    );
+
+    if !is_runtime_fn && !is_indirect_call {
         if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
             let already_has_alloc = arg_ops.iter().any(|op| {
                 if let Operand::Copy(p) | Operand::Move(p) = op {

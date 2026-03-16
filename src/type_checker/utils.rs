@@ -66,6 +66,9 @@ fn is_auto_copy_inner<'a>(
         | TypeKind::Error
         | TypeKind::Identifier => true,
 
+        // Function types are plain function pointers (pointer-sized, no RC).
+        TypeKind::Function(_) => true,
+
         // Managed heap types are never auto-copy
         TypeKind::String
         | TypeKind::List(_)
@@ -74,7 +77,6 @@ fn is_auto_copy_inner<'a>(
         | TypeKind::Set(_)
         | TypeKind::Result(_, _)
         | TypeKind::Future(_)
-        | TypeKind::Function(_)
         | TypeKind::Meta(_)
         | TypeKind::Linear(_)
         | TypeKind::Generic(_, _, _) => false,

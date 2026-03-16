@@ -1,6 +1,7 @@
-use crate::ast::expression::Expression;
+use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
 use crate::ast::types::TypeKind;
+use cranelift_codegen::ir::{AbiParam, Signature};
 use crate::codegen::cranelift::layout::field_layout;
 use crate::codegen::cranelift::translator::{FunctionTranslator, ModuleCtx, TypeCtx};
 use crate::codegen::cranelift::types::translate_type;
@@ -581,9 +582,35 @@ impl<'a> FunctionTranslator<'a> {
                 Ok(builder.ins().iadd_imm(struct_addr, ptr_size as i64))
             }
 
-            Literal::Identifier(_) => {
-                // Identifiers are represented as pointer-sized integers
-                Ok(builder.ins().iconst(ptr_type, 0))
+            Literal::Identifier(name) => {
+                // For function-typed identifiers (lambdas, named function references),
+                // emit a function pointer using func_addr. Build the Cranelift
+                // signature from the FunctionTypeData carried in the constant's type.
+                if let TypeKind::Function(func_data) = &constant.ty.kind {
+                    let call_conv = builder.func.signature.call_conv;
+                    let mut sig = Signature::new(call_conv);
+                    for param in &func_data.params {
+                        if let ExpressionKind::Type(param_type, _) = &param.typ.node {
+                            sig.params.push(AbiParam::new(translate_type(param_type, ptr_type)));
+                        }
+                    }
+                    if let Some(ret_expr) = &func_data.return_type {
+                        if let ExpressionKind::Type(ret_type, _) = &ret_expr.node {
+                            if ret_type.kind != TypeKind::Void {
+                                sig.returns.push(AbiParam::new(translate_type(ret_type, ptr_type)));
+                            }
+                        }
+                    }
+                    let func_id = ctx
+                        .module
+                        .declare_function(name, Linkage::Import, &sig)
+                        .map_err(|e| format!("Error declaring function {}: {}", name, e))?;
+                    let func_ref = ctx.module.declare_func_in_func(func_id, builder.func);
+                    Ok(builder.ins().func_addr(ptr_type, func_ref))
+                } else {
+                    // Non-function identifiers — emit a null pointer (placeholder).
+                    Ok(builder.ins().iconst(ptr_type, 0))
+                }
             }
 
             Literal::Regex(_) => Err("Regex constants not supported in codegen".to_string()),

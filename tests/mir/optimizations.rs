@@ -22,7 +22,7 @@ fn get_main_mir(source: &str, is_release: bool) -> miri::mir::Body {
         })
         .expect("No main function found");
 
-    lower_function(func_stmt, &result.type_checker, is_release, false).expect("Lowering failed")
+    lower_function(func_stmt, &result.type_checker, is_release, false).expect("Lowering failed").0
 }
 
 #[test]
