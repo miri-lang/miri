@@ -3,6 +3,7 @@
 
 pub use crate::integration::utils;
 
+pub mod abstract_methods;
 pub mod basic;
 pub mod constructor;
 pub mod drop;

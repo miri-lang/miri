@@ -21,6 +21,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::type_checker::context::TypeDefinition;
 use crate::type_checker::TypeChecker;
 
 fn has_main_function(program: &Program) -> bool {
@@ -498,9 +499,31 @@ impl Pipeline {
 
                     for method_stmt in &class_data.body {
                         if let StatementKind::FunctionDeclaration(method_decl) = &method_stmt.node {
+                            // Skip abstract methods — they have no body and must not be compiled.
                             if method_decl.body.is_none() {
                                 continue;
                             }
+
+                            // Invariant: if the AST says there is a body, the type checker
+                            // must not have marked this method as abstract.
+                            debug_assert!(
+                                !result
+                                    .type_checker
+                                    .type_definitions()
+                                    .get(class_name)
+                                    .and_then(|td| {
+                                        if let TypeDefinition::Class(def) = td {
+                                            def.methods.get(method_decl.name.as_str())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .map(|m| m.is_abstract)
+                                    .unwrap_or(false),
+                                "abstract method '{}::{}' must not reach codegen",
+                                class_name,
+                                method_decl.name
+                            );
 
                             let mangled = format!("{}_{}", class_name, method_decl.name);
                             if lowered_names.contains(&mangled) {
@@ -563,10 +586,31 @@ impl Pipeline {
                     // Compile each non-runtime method in the class body
                     for method_stmt in &class_data.body {
                         if let StatementKind::FunctionDeclaration(method_decl) = &method_stmt.node {
-                            // Skip methods without a body (abstract/forward declarations)
+                            // Skip abstract methods — they have no body and must not be compiled.
                             if method_decl.body.is_none() {
                                 continue;
                             }
+
+                            // Invariant: if the AST says there is a body, the type checker
+                            // must not have marked this method as abstract.
+                            debug_assert!(
+                                !result
+                                    .type_checker
+                                    .type_definitions()
+                                    .get(class_name)
+                                    .and_then(|td| {
+                                        if let TypeDefinition::Class(def) = td {
+                                            def.methods.get(method_decl.name.as_str())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .map(|m| m.is_abstract)
+                                    .unwrap_or(false),
+                                "abstract method '{}::{}' must not reach codegen",
+                                class_name,
+                                method_decl.name
+                            );
 
                             let mangled = format!("{}_{}", class_name, method_decl.name);
                             if lowered_names.contains(&mangled) {
