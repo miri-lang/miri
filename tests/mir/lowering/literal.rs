@@ -24,11 +24,9 @@ fn test_lower_negative_integer() {
         "fn main(): -10",
         r#"
             let _0: int;
-            let _1: int;
 
             bb0: {
-                _1 = Neg(const Integer(I8(10)));
-                _0 = _1;
+                _0 = Neg(const Integer(I8(10)));
                 return;
             }
         "#,

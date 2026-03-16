@@ -33,8 +33,12 @@ pub(crate) fn lower_index_expr(
         }
     }
 
-    // Lower object to get a place
+    // Lower object to get a place. Record a watermark so we can release any
+    // managed temp created just for this subexpression (e.g. an array literal).
+    let obj_watermark = ctx.body.local_decls.len();
     let obj_operand = lower_expression(ctx, obj, None)?;
+    // Only drop if we got a Copy (Perceus will have IncRef'd the source temp).
+    let obj_op_is_copy = matches!(&obj_operand, Operand::Copy(_));
 
     let obj_place = ensure_place(ctx, obj_operand, obj.span);
 
@@ -61,7 +65,7 @@ pub(crate) fn lower_index_expr(
     };
 
     // Create indexed place with projection
-    let mut indexed_place = obj_place;
+    let mut indexed_place = obj_place.clone();
     indexed_place.projection.push(PlaceElem::Index(index_local));
 
     if let Some(d) = dest {
@@ -69,8 +73,32 @@ pub(crate) fn lower_index_expr(
             kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(Operand::Copy(indexed_place))),
             span: expr.span,
         });
+        // Release the collection temp only if it was a Copy (Perceus IncRef'd it).
+        if obj_op_is_copy {
+            ctx.emit_temp_drop(obj_place.local, obj_watermark, expr.span);
+        }
         Ok(Operand::Copy(d))
+    } else if obj_op_is_copy {
+        // obj was a temporary (Copy-returned) that we IncRef'd. Materialize the
+        // element value into its own temp first, then release the collection temp.
+        // This ensures the collection is freed AFTER the element has been read.
+        let elem_ty = ctx
+            .type_checker
+            .get_type(expr.id)
+            .cloned()
+            .unwrap_or_else(|| Type::new(TypeKind::Int, expr.span));
+        let elem_temp = ctx.push_temp(elem_ty, expr.span);
+        ctx.push_statement(crate::mir::Statement {
+            kind: MirStatementKind::Assign(
+                Place::new(elem_temp),
+                Rvalue::Use(Operand::Copy(indexed_place)),
+            ),
+            span: expr.span,
+        });
+        ctx.emit_temp_drop(obj_place.local, obj_watermark, expr.span);
+        Ok(Operand::Copy(Place::new(elem_temp)))
     } else {
+        // obj was accessed via Move — no IncRef, no drop needed. Return the projected place.
         Ok(Operand::Copy(indexed_place))
     }
 }

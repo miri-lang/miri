@@ -287,6 +287,45 @@ pub unsafe extern "C" fn miri_rt_list_new_from_raw(
     list
 }
 
+/// Creates a new list from a MiriArray whose elements are RC-managed pointers.
+///
+/// Same as `miri_rt_list_new_from_raw` but IncRefs each non-null element pointer
+/// after copying. This is necessary when elements are heap-allocated (Option,
+/// List, Array, Map, Set, Tuple, Custom) because the caller's array will
+/// release its element references via the element-drop loop when freed. Without
+/// this IncRef the list would hold dangling pointers.
+#[no_mangle]
+#[allow(clippy::missing_safety_doc)]
+pub unsafe extern "C" fn miri_rt_list_new_from_managed_array(
+    array: *mut crate::array::MiriArray,
+    _len: usize,
+    _elem_size: usize,
+) -> *mut MiriList {
+    let list = miri_rt_list_new_from_raw(array, _len, _elem_size);
+    if list.is_null() || array.is_null() {
+        return list;
+    }
+    // IncRef each element in the newly-created list so the list owns a
+    // reference independent of the source array.
+    let list_ref = &*list;
+    let data = list_ref.data;
+    let len = list_ref.len;
+    let elem_size = list_ref.elem_size;
+    if data.is_null() || len == 0 || elem_size == 0 {
+        return list;
+    }
+    for i in 0..len {
+        let slot = data.add(i * elem_size) as *const usize;
+        let ptr_val = *slot;
+        if ptr_val != 0 {
+            // RC is stored at ptr - RC_HEADER_SIZE (one word before the payload)
+            let rc_ptr = (ptr_val as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *mut usize;
+            *rc_ptr += 1;
+        }
+    }
+    list
+}
+
 /// Creates a new empty list with the given element size.
 ///
 /// Allocates `[RC=1][MiriList fields]`.

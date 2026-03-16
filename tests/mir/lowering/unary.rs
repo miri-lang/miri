@@ -9,11 +9,9 @@ fn test_neg() {
         "fn main(): -1",
         r#"
             let _0: int;
-            let _1: int;
 
             bb0: {
-                _1 = Neg(const Integer(I8(1)));
-                _0 = _1;
+                _0 = Neg(const Integer(I8(1)));
                 return;
             }
         "#,
@@ -26,11 +24,9 @@ fn test_not() {
         "fn main(): not true",
         r#"
             let _0: bool;
-            let _1: bool;
 
             bb0: {
-                _1 = Not(const Boolean(true));
-                _0 = _1;
+                _0 = Not(const Boolean(true));
                 return;
             }
         "#,
@@ -50,7 +46,6 @@ fn test_double_negation() {
             bb0: {
                 _1 = Neg(const Integer(I8(1)));
                 _2 = Neg(_1);
-                _0 = _2;
                 return;
             }
         "#,
@@ -64,12 +59,10 @@ fn test_double_not() {
         r#"
             let _0: bool;
             let _1: bool;
-            let _2: bool;
 
             bb0: {
                 _1 = Not(const Boolean(true));
-                _2 = Not(_1);
-                _0 = _2;
+                _0 = Not(_1);
                 return;
             }
         "#,
@@ -84,12 +77,10 @@ fn test_negation_with_parentheses() {
         r#"
             let _0: int;
             let _1: int;
-            let _2: int;
 
             bb0: {
                 _1 = Add(const Integer(I8(1)), const Integer(I8(2)));
-                _2 = Neg(_1);
-                _0 = _2;
+                _0 = Neg(_1);
                 return;
             }
         "#,
@@ -104,12 +95,10 @@ fn test_not_with_comparison() {
         r#"
             let _0: bool;
             let _1: bool;
-            let _2: bool;
 
             bb0: {
                 _1 = Lt(const Integer(I8(1)), const Integer(I8(2)));
-                _2 = Not(_1);
-                _0 = _2;
+                _0 = Not(_1);
                 return;
             }
         "#,

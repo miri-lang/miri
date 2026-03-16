@@ -55,7 +55,7 @@ fn main()
                 StorageLive(_1);
                 _1 = const Integer(I8(0)) as i64;
                 _1 = const Integer(I8(10)) as i64;
-                _0 = const Integer(I8(10)) as i64;
+                _0 = const Integer(I8(10));
                 StorageDead(_1);
                 return;
             }

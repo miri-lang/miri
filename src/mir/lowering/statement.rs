@@ -80,21 +80,45 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
             lower_variable(ctx, decls, &stmt.span)?;
         }
         StatementKind::Expression(expr) => {
+            let rhs_watermark = ctx.body.local_decls.len();
             let operand = lower_expression(ctx, expr, None)?;
 
+            // Determine the type of the operand for managed-drop purposes.
+            // `operand.ty()` returns the base local's type and ignores projections, so
+            // for projected places like `a[0]` (returns Array instead of element type)
+            // we fall back to the type checker. For constants and plain locals we use
+            // the operand type directly to avoid the type checker returning the LHS type
+            // (e.g. `int?` for `x = 20` when x is int?).
             let ty = match &operand {
                 Operand::Constant(c) => c.ty.clone(),
                 Operand::Copy(place) | Operand::Move(place) => {
-                    ctx.body.local_decls[place.local.0].ty.clone()
+                    if !place.projection.is_empty() {
+                        ctx.type_checker
+                            .get_type(expr.id)
+                            .cloned()
+                            .unwrap_or_else(|| ctx.body.local_decls[place.local.0].ty.clone())
+                    } else {
+                        ctx.body.local_decls[place.local.0].ty.clone()
+                    }
                 }
             };
 
             let temp = ctx.push_temp(ty, expr.span);
 
             ctx.push_statement(crate::mir::Statement {
-                kind: MirStatementKind::Assign(Place::new(temp), Rvalue::Use(operand)),
+                kind: MirStatementKind::Assign(Place::new(temp), Rvalue::Use(operand.clone())),
                 span: expr.span,
             });
+
+            // Discard the statement-level result temp if it holds a managed value.
+            ctx.emit_temp_drop(temp, 0, expr.span);
+
+            // Also release the inner operand temp if it was freshly created.
+            if let Operand::Copy(place) | Operand::Move(place) = &operand {
+                if place.local != temp {
+                    ctx.emit_temp_drop(place.local, rhs_watermark, expr.span);
+                }
+            }
         }
         StatementKind::If(cond, then_block, else_block_opt, if_type) => {
             lower_if(ctx, &stmt.span, cond, then_block, else_block_opt, if_type)?;

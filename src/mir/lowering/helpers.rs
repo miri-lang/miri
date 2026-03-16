@@ -196,7 +196,7 @@ pub fn bind_pattern(
                     } else {
                         subject_ty
                     };
-                    let var_local = ctx.push_local(name.clone(), inner_ty, *span);
+                    let var_local = ctx.push_local(name.clone(), inner_ty.clone(), *span);
                     let mut place = Place::new(subject_local);
                     place.projection.push(PlaceElem::Field(0));
                     ctx.push_statement(crate::mir::Statement {
@@ -206,6 +206,15 @@ pub fn bind_pattern(
                         ),
                         span: *span,
                     });
+                    // Perceus does not IncRef Field projections (is_place_managed returns false
+                    // for projected places). Emit an explicit IncRef so that when Perceus
+                    // inserts DecRef(var_local) at the arm's scope end the RC balance is correct.
+                    if ctx.is_perceus_managed(&inner_ty.kind) {
+                        ctx.push_statement(crate::mir::Statement {
+                            kind: MirStatementKind::IncRef(Place::new(var_local)),
+                            span: *span,
+                        });
+                    }
                 }
                 return Ok(());
             }
@@ -242,7 +251,7 @@ pub fn bind_pattern(
                         .and_then(|types| types.get(i))
                         .cloned()
                         .unwrap_or_else(|| Type::new(TypeKind::Void, *span));
-                    let elem_local = ctx.push_local(name.clone(), ty, *span);
+                    let elem_local = ctx.push_local(name.clone(), ty.clone(), *span);
 
                     // Create Field projection for element (i+1 to skip discriminant at field 0)
                     let mut place = Place::new(subject_local);
@@ -255,6 +264,14 @@ pub fn bind_pattern(
                         ),
                         span: *span,
                     });
+                    // Same as for Option::Some above: Perceus skips Field projections,
+                    // so emit an explicit IncRef to keep the RC balance correct.
+                    if ctx.is_perceus_managed(&ty.kind) {
+                        ctx.push_statement(crate::mir::Statement {
+                            kind: MirStatementKind::IncRef(Place::new(elem_local)),
+                            span: *span,
+                        });
+                    }
                 }
             }
         }
@@ -332,19 +349,29 @@ pub fn lower_as_return(
 
     match &stmt.node {
         StatementKind::Expression(expr) => {
-            let operand = lower_expression(ctx, expr, None)?;
-            let op_ty = operand.ty(&ctx.body).clone();
+            let expr_ty = ctx.type_checker.get_type(expr.id).cloned();
+            let types_match = expr_ty
+                .as_ref()
+                .map(|t| t.kind == ret_ty.kind)
+                .unwrap_or(false);
 
-            let rvalue = if op_ty.kind != ret_ty.kind {
-                coerce_rvalue(operand, &op_ty, ret_ty)
+            if types_match {
+                // DPS: write directly to _0 to avoid a temp that would leak.
+                lower_expression(ctx, expr, Some(Place::new(crate::mir::Local(0))))?;
             } else {
-                Rvalue::Use(operand)
-            };
-
-            ctx.push_statement(crate::mir::Statement {
-                kind: MirStatementKind::Assign(Place::new(crate::mir::Local(0)), rvalue),
-                span: expr.span,
-            });
+                let watermark = ctx.body.local_decls.len();
+                let operand = lower_expression(ctx, expr, None)?;
+                let op_ty = operand.ty(&ctx.body).clone();
+                let rvalue = coerce_rvalue(operand.clone(), &op_ty, ret_ty);
+                ctx.push_statement(crate::mir::Statement {
+                    kind: MirStatementKind::Assign(Place::new(crate::mir::Local(0)), rvalue),
+                    span: expr.span,
+                });
+                // Drop any managed temp created during the expression.
+                if let Operand::Copy(place) | Operand::Move(place) = &operand {
+                    ctx.emit_temp_drop(place.local, watermark, expr.span);
+                }
+            }
         }
         StatementKind::Block(stmts) => {
             ctx.push_scope();

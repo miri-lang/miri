@@ -130,12 +130,13 @@ impl OptimizationPass for Perceus {
 /// are NOT in the auto-copy set.
 fn is_managed_type(kind: &TypeKind, auto_copy_types: &std::collections::HashSet<String>) -> bool {
     match kind {
-        // Collections and Options use [RC][payload] layout via alloc_with_rc.
+        // Collections, Options, and Tuples use heap allocation and need RC.
         TypeKind::Option(_)
         | TypeKind::List(_)
         | TypeKind::Array(_, _)
         | TypeKind::Map(_, _)
-        | TypeKind::Set(_) => true,
+        | TypeKind::Set(_)
+        | TypeKind::Tuple(_) => true,
         // Note: String is excluded — it uses Box allocation, not alloc_with_rc,
         // so it doesn't have the [RC][payload] layout that IncRef/DecRef expect.
         TypeKind::Custom(name, _) => {

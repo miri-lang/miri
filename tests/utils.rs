@@ -30,9 +30,7 @@ fn exec_miri(command: &str, input: &str) -> CompilerResult {
     let mut cmd = miri_cmd();
     let output = cmd
         .env("RUST_BACKTRACE", "1")
-        // Leak check is opt-in: set MIRI_LEAK_CHECK=1 externally to enable.
-        // Many collection temporaries don't yet get StorageDead → DecRef,
-        // so enabling by default causes false-positive failures.
+        .env("MIRI_LEAK_CHECK", "1")
         .arg(command)
         .arg(&path)
         .output()
