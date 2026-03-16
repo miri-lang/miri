@@ -162,6 +162,32 @@ pub enum TypeDefinition {
     Trait(TraitDefinition),
 }
 
+/// Collect all fields for a class by walking the inheritance chain from root to leaf.
+///
+/// Returns fields in declaration order: ancestor fields come before descendant fields.
+/// This is the canonical field layout for class instances in codegen and MIR lowering.
+pub fn collect_class_fields_all<'a>(
+    class_def: &'a ClassDefinition,
+    type_definitions: &'a HashMap<String, TypeDefinition>,
+) -> Vec<(&'a str, &'a FieldInfo)> {
+    let mut chain: Vec<&ClassDefinition> = vec![class_def];
+    let mut current = class_def;
+    while let Some(base_name) = &current.base_class {
+        match type_definitions.get(base_name) {
+            Some(TypeDefinition::Class(base)) => {
+                chain.push(base);
+                current = base;
+            }
+            _ => break,
+        }
+    }
+    chain.reverse(); // root class first
+    chain
+        .into_iter()
+        .flat_map(|def| def.fields.iter().map(|(n, f)| (n.as_str(), f)))
+        .collect()
+}
+
 /// Context holds the current state of the type checking process, including
 /// variable scopes, return types for functions, and loop depth.
 pub struct Context {

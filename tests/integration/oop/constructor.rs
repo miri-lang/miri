@@ -81,36 +81,29 @@ fn main()
     );
 }
 
-// NOTE: super.init() chaining requires inherited field layout support
-// in codegen, which is not yet implemented. The type checker validates
-// super.init() calls, and the MIR lowering emits the correct call,
-// but field offsets for inherited fields are not resolved correctly.
-// Uncomment when inherited field layout is implemented.
-// TODO: this also needs member visibility support.
-//
-// #[test]
-// fn test_super_init_chaining() {
-//     assert_runs_with_output(
-//         r#"
-// use system.io
-//
-// class Animal
-//     var name String
-//     public fn init(n String)
-//         self.name = n
-//         println("Animal init")
-//
-// class Dog extends Animal
-//     var breed String
-//     public fn init(n String, b String)
-//         super.init(n)
-//         self.breed = b
-//         println("Dog init")
-//
-// fn main()
-//     let d = Dog(n: "Rex", b: "Lab")
-//     println(d.breed)
-//     "#,
-//         "Animal init\nDog init\nLab",
-//     );
-// }
+#[test]
+fn test_super_init_chaining() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+class Animal
+    var name String
+    fn init(n String)
+        self.name = n
+        println("Animal init")
+
+class Dog extends Animal
+    var breed String
+    fn init(n String, b String)
+        super.init(n)
+        self.breed = b
+        println("Dog init")
+
+fn main()
+    let d = Dog(n: "Rex", b: "Lab")
+    println(d.breed)
+    "#,
+        "Animal init\nDog init\nLab",
+    );
+}
