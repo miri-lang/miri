@@ -153,7 +153,13 @@ pub(crate) fn lower_assignment_expr(
                         }
                         Some(crate::type_checker::context::TypeDefinition::Class(def)) => {
                             if let ExpressionKind::Identifier(field_name, _) = &prop.node {
-                                def.fields.iter().position(|(f, _)| f == field_name)
+                                // Compute global field index across the full inheritance chain.
+                                let all_fields =
+                                    crate::type_checker::context::collect_class_fields_all(
+                                        def,
+                                        &ctx.type_checker.global_type_definitions,
+                                    );
+                                all_fields.iter().position(|(n, _)| *n == field_name.as_str())
                             } else {
                                 None
                             }

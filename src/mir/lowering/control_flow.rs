@@ -14,7 +14,9 @@ use crate::mir::{
 
 use super::{helpers::coerce_rvalue, lower_expression, lower_statement, LoweringContext};
 use crate::error::lowering::LoweringError;
-use crate::type_checker::context::{ClassDefinition, MethodInfo, StructDefinition, TypeDefinition};
+use crate::type_checker::context::{
+    collect_class_fields_all, ClassDefinition, MethodInfo, StructDefinition, TypeDefinition,
+};
 
 /// Walk the inheritance chain starting at `class_name` to find the first class
 /// that directly declares `method_name`. Returns the defining class name and a
@@ -1604,15 +1606,39 @@ fn lower_class_constructor(
     args: &[crate::ast::expression::Expression],
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    let has_init = def.methods.get("init").is_some_and(|m| !m.is_abstract);
-
-    if has_init {
-        // When init exists, constructor args are init params, not field values.
-        // Allocate the object with default field values, then call init.
-        let mut field_defaults = Vec::with_capacity(def.fields.len());
-        for (_field_name, field_info) in &def.fields {
-            field_defaults.push(create_default_value(&field_info.ty, span));
+    // Resolve init method: own class first, then walk the inheritance chain.
+    let init_class_name: Option<String> = {
+        if def.methods.get("init").is_some_and(|m| !m.is_abstract) {
+            Some(class_name.to_string())
+        } else if let Some(base) = &def.base_class {
+            resolve_inherited_method(
+                &ctx.type_checker.global_type_definitions,
+                base,
+                "init",
+            )
+            .filter(|(_, m)| !m.is_abstract)
+            .map(|(c, _)| c)
+        } else {
+            None
         }
+    };
+
+    // Collect ALL fields in inheritance order (base class fields first).
+    // This defines the canonical memory layout for the class instance.
+    let all_fields: Vec<(String, crate::type_checker::context::FieldInfo)> = {
+        collect_class_fields_all(def, &ctx.type_checker.global_type_definitions)
+            .into_iter()
+            .map(|(n, f)| (n.to_string(), f.clone()))
+            .collect()
+    };
+
+    if let Some(init_class) = init_class_name {
+        // When init exists (own or inherited), constructor args are init params.
+        // Allocate the object with default field values for ALL fields, then call init.
+        let field_defaults: Vec<Operand> = all_fields
+            .iter()
+            .map(|(_, fi)| create_default_value(&fi.ty, span))
+            .collect();
 
         let class_ty = Type::new(TypeKind::Custom(class_name.to_string(), None), *span);
 
@@ -1649,7 +1675,7 @@ fn lower_class_constructor(
             call_args.push(Operand::Copy(Place::new(alloc_local)));
         }
 
-        let mangled_name = format!("{}_init", class_name);
+        let mangled_name = format!("{}_init", init_class);
         let func_op = Operand::Constant(Box::new(Constant {
             span: *span,
             ty: Type::new(TypeKind::Identifier, *span),
@@ -1681,7 +1707,7 @@ fn lower_class_constructor(
 
         Ok(result_op)
     } else {
-        // No init method — map constructor args directly to fields.
+        // No init method anywhere in the chain — map constructor args directly to ALL fields.
         let arg_watermark = ctx.body.local_decls.len();
         let mut positional_args = Vec::with_capacity(args.len());
         let mut named_args: std::collections::HashMap<&str, Operand> =
@@ -1700,10 +1726,10 @@ fn lower_class_constructor(
             }
         }
 
-        let mut operands = Vec::with_capacity(def.fields.len());
+        let mut operands = Vec::with_capacity(all_fields.len());
         let mut pos_iter = positional_args.into_iter();
 
-        for (field_name, field_info) in &def.fields {
+        for (field_name, field_info) in &all_fields {
             let op = if let Some(op) = pos_iter.next() {
                 op
             } else if let Some(op) = named_args.remove(field_name.as_str()) {

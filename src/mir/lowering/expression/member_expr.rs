@@ -194,12 +194,13 @@ pub(crate) fn lower_member_expr(
             ctx.type_checker.global_type_definitions.get(struct_name)
         {
             if let ExpressionKind::Identifier(field_name, _) = &prop.node {
-                // Build operands in field declaration order
-                if let Some((idx, _)) = def
-                    .fields
-                    .iter()
-                    .enumerate()
-                    .find(|(_, f)| f.0 == *field_name)
+                // Compute global field index across the full inheritance chain.
+                // Base class fields come before derived class fields.
+                let all_fields = crate::type_checker::context::collect_class_fields_all(
+                    def,
+                    &ctx.type_checker.global_type_definitions,
+                );
+                if let Some(idx) = all_fields.iter().position(|(n, _)| *n == field_name.as_str())
                 {
                     let place = ensure_place(ctx, obj_operand, obj.span);
 

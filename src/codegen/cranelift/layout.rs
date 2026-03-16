@@ -9,7 +9,7 @@
 use crate::ast::expression::ExpressionKind;
 use crate::ast::types::TypeKind;
 use crate::codegen::cranelift::types::translate_type_kind;
-use crate::type_checker::context::TypeDefinition;
+use crate::type_checker::context::{collect_class_fields_all, TypeDefinition};
 use cranelift_codegen::ir::Type as CraneliftType;
 use std::collections::HashMap;
 
@@ -118,11 +118,12 @@ pub fn field_layout(
                     TypeDefinition::Generic(_) => ((field_idx as i32) * ptr_size, ptr_ty),
                     TypeDefinition::Class(class_def) => {
                         // Class layout: [header: 16 bytes (malloc_ptr + RC)][field0][field1]...
-                        // Fields are stored in declaration order (Vec).
-                        // Offset starts at 0 because the variable holds a payload pointer
-                        // (past the header), matching struct layout convention.
+                        // Fields are stored in inheritance order (base class fields first),
+                        // then derived class fields. Offset starts at 0 because the variable
+                        // holds a payload pointer (past the header).
+                        let all_fields = collect_class_fields_all(class_def, type_definitions);
                         let mut offset: i32 = 0;
-                        for (i, (_field_name, field_info)) in class_def.fields.iter().enumerate() {
+                        for (i, (_field_name, field_info)) in all_fields.iter().enumerate() {
                             let cl_ty = translate_type_kind(&field_info.ty.kind, ptr_ty);
                             let alignment = type_alignment(cl_ty);
                             offset = align_to(offset, alignment);
