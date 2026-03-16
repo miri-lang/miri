@@ -153,3 +153,104 @@ fn main()
         "animal\nfetching",
     );
 }
+
+#[test]
+fn test_inherited_init_no_own_fields() {
+    // Dog has no own fields; constructor must detect and call Animal_init
+    assert_runs_with_output(
+        r#"
+use system.io
+
+class Animal
+    var name String
+    fn init(n String)
+        self.name = n
+
+class Dog extends Animal
+
+fn main()
+    let d = Dog(n: "Rex")
+    println(d.name)
+    "#,
+        "Rex",
+    );
+}
+
+#[test]
+fn test_parent_method_reads_inherited_field() {
+    // Animal.speak reads self.name; must use correct offset when called on Dog instance
+    assert_runs_with_output(
+        r#"
+use system.io
+
+class Animal
+    var name String
+    fn init(n String)
+        self.name = n
+    fn speak()
+        println(self.name)
+
+class Dog extends Animal
+
+fn main()
+    let d = Dog(n: "Rex")
+    d.speak()
+    "#,
+        "Rex",
+    );
+}
+
+#[test]
+fn test_subclass_method_reads_inherited_field() {
+    // DoubleCounter.doubled() reads self.count which is an inherited field
+    assert_runs_with_output(
+        r#"
+use system.io
+
+class Counter
+    var count int
+    fn init(c int)
+        self.count = c
+
+class DoubleCounter extends Counter
+    fn doubled() int
+        self.count * 2
+
+fn main()
+    let dc = DoubleCounter(c: 5)
+    println(f"{dc.doubled()}")
+    "#,
+        "10",
+    );
+}
+
+#[test]
+fn test_field_layout_base_fields_before_derived() {
+    // Base class fields must come before derived class fields in memory layout.
+    // Dog has own field `breed`; Animal has `name`. Full layout: [name, breed].
+    // Animal.init sets self.name; Dog.init calls super.init then sets self.breed.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+class Animal
+    var name String
+    fn init(n String)
+        self.name = n
+
+class Dog extends Animal
+    var breed String
+    fn init(n String, b String)
+        super.init(n)
+        self.breed = b
+    fn describe()
+        println(self.name)
+        println(self.breed)
+
+fn main()
+    let d = Dog(n: "Rex", b: "Lab")
+    d.describe()
+    "#,
+        "Rex\nLab",
+    );
+}
