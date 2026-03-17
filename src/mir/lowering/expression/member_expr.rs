@@ -200,7 +200,9 @@ pub(crate) fn lower_member_expr(
                     def,
                     &ctx.type_checker.global_type_definitions,
                 );
-                if let Some(idx) = all_fields.iter().position(|(n, _)| *n == field_name.as_str())
+                if let Some(idx) = all_fields
+                    .iter()
+                    .position(|(n, _)| *n == field_name.as_str())
                 {
                     let place = ensure_place(ctx, obj_operand, obj.span);
 
