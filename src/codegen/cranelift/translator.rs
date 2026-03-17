@@ -192,6 +192,37 @@ impl<'a> FunctionTranslator<'a> {
             let block = blocks[&BasicBlock(idx)];
             builder.switch_to_block(block);
 
+            // For closure bodies: load captured values from env_ptr (Local 1) at the
+            // START of the entry block. This must run AFTER switch_to_block so the block
+            // is in Pristine (Empty) state — Cranelift disallows switching to Partial blocks.
+            // env_capture_locals[i] is loaded from env_ptr + (i+1)*ptr_size.
+            if idx == 0 && !body.env_capture_locals.is_empty() {
+                let env_ptr_var = locals[&Local(1)];
+                let env_ptr_val = builder.use_var(env_ptr_var);
+
+                for (i, &cap_local) in body.env_capture_locals.iter().enumerate() {
+                    let offset = (i + 1) as i64 * self.ptr_type.bytes() as i64;
+                    let cap_ptr = builder.ins().iadd_imm(env_ptr_val, offset);
+                    let cap_cl_type =
+                        translate_type(&body.local_decls[cap_local.0].ty, self.ptr_type);
+                    // Load as ptr_type (captures are stored as ptr-size slots),
+                    // then reduce to the target type if needed.
+                    let raw_val = builder
+                        .ins()
+                        .load(self.ptr_type, MemFlags::new(), cap_ptr, 0);
+                    let cap_val = if cap_cl_type == self.ptr_type {
+                        raw_val
+                    } else if cap_cl_type.is_int() && cap_cl_type.bits() < self.ptr_type.bits() {
+                        builder.ins().ireduce(cap_cl_type, raw_val)
+                    } else {
+                        raw_val
+                    };
+                    if let Some(&cap_var) = locals.get(&cap_local) {
+                        builder.def_var(cap_var, cap_val);
+                    }
+                }
+            }
+
             // Translate all statements
             for stmt in &block_data.statements {
                 Self::translate_statement(&mut builder, &mut module_ctx, stmt, &locals, &type_ctx)?;

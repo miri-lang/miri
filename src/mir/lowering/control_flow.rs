@@ -1620,13 +1620,9 @@ fn lower_class_constructor(
         if def.methods.get("init").is_some_and(|m| !m.is_abstract) {
             Some(class_name.to_string())
         } else if let Some(base) = &def.base_class {
-            resolve_inherited_method(
-                &ctx.type_checker.global_type_definitions,
-                base,
-                "init",
-            )
-            .filter(|(_, m)| !m.is_abstract)
-            .map(|(c, _)| c)
+            resolve_inherited_method(&ctx.type_checker.global_type_definitions, base, "init")
+                .filter(|(_, m)| !m.is_abstract)
+                .map(|(c, _)| c)
         } else {
             None
         }

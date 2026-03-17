@@ -159,7 +159,9 @@ pub(crate) fn lower_assignment_expr(
                                         def,
                                         &ctx.type_checker.global_type_definitions,
                                     );
-                                all_fields.iter().position(|(n, _)| *n == field_name.as_str())
+                                all_fields
+                                    .iter()
+                                    .position(|(n, _)| *n == field_name.as_str())
                             } else {
                                 None
                             }
