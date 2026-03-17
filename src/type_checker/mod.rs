@@ -79,6 +79,9 @@ pub struct TypeChecker {
     /// AST statements collected from imported modules.
     /// These need to be included in MIR lowering and codegen.
     pub imported_statements: Vec<Statement>,
+    /// Maps call expression IDs to their inferred generic type arguments (in declaration order).
+    /// Populated when a generic function is called so MIR lowering can mangle the call target.
+    pub call_generic_mappings: HashMap<usize, Vec<(String, Type)>>,
 }
 
 impl Default for TypeChecker {
@@ -106,6 +109,7 @@ impl TypeChecker {
             loaded_modules: std::collections::HashSet::new(),
             reported_errors: std::collections::HashSet::new(),
             imported_statements: Vec::new(),
+            call_generic_mappings: HashMap::new(),
         }
     }
 

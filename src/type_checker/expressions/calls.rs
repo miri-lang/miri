@@ -62,6 +62,7 @@ impl TypeChecker {
         args: &[Expression],
         span: Span,
         context: &mut Context,
+        call_id: usize,
     ) -> Type {
         let func_type = self.infer_expression(func, context);
 
@@ -170,6 +171,35 @@ impl TypeChecker {
 
                 if func_data.generics.is_some() {
                     context.exit_scope();
+
+                    // Store the call-site generic mapping so MIR lowering can mangle the name.
+                    if !generic_map.is_empty() {
+                        let ordered: Vec<(String, crate::ast::types::Type)> =
+                            if let Some(gens) = &func_data.generics {
+                                gens.iter()
+                                    .filter_map(|g| {
+                                        if let ExpressionKind::GenericType(name_expr, _, _) =
+                                            &g.node
+                                        {
+                                            if let ExpressionKind::Identifier(n, _) =
+                                                &name_expr.node
+                                            {
+                                                generic_map.get(n).map(|t| (n.clone(), t.clone()))
+                                            } else {
+                                                None
+                                            }
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect()
+                            } else {
+                                Vec::new()
+                            };
+                        if !ordered.is_empty() {
+                            self.call_generic_mappings.insert(call_id, ordered);
+                        }
+                    }
                 }
 
                 // GPU kernels cannot call host functions.
