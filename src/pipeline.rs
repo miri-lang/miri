@@ -687,7 +687,10 @@ impl Pipeline {
             // Build: mangled_name → (original_name, substitution_map)
             let mut needed: std::collections::HashMap<
                 String,
-                (String, std::collections::HashMap<String, crate::ast::types::Type>),
+                (
+                    String,
+                    std::collections::HashMap<String, crate::ast::types::Type>,
+                ),
             > = std::collections::HashMap::new();
 
             for (call_id, type_args) in &result.type_checker.call_generic_mappings {
@@ -715,11 +718,8 @@ impl Pipeline {
                         {
                             if let crate::ast::literal::Literal::Identifier(fname) = &c.literal {
                                 if fname.contains("__") && !lowered_names.contains(fname) {
-                                    let original = fname
-                                        .split("__")
-                                        .next()
-                                        .unwrap_or("")
-                                        .to_string();
+                                    let original =
+                                        fname.split("__").next().unwrap_or("").to_string();
                                     for type_args in
                                         result.type_checker.call_generic_mappings.values()
                                     {
@@ -729,14 +729,10 @@ impl Pipeline {
                                         > = type_args.iter().cloned().collect();
                                         let candidate =
                                             mir::lowering::control_flow::mangle_generic_name(
-                                                &original,
-                                                type_args,
+                                                &original, type_args,
                                             );
                                         if candidate == *fname {
-                                            needed.insert(
-                                                fname.clone(),
-                                                (original.clone(), subs),
-                                            );
+                                            needed.insert(fname.clone(), (original.clone(), subs));
                                             break;
                                         }
                                     }
