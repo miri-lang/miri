@@ -58,6 +58,11 @@ fn collect_read_locals(body: &Body) -> HashSet<crate::mir::Local> {
                         collect_operand_locals(arg, &mut used);
                     }
                 }
+                TerminatorKind::VirtualCall { args, .. } => {
+                    for arg in args {
+                        collect_operand_locals(arg, &mut used);
+                    }
+                }
                 TerminatorKind::SwitchInt { discr, .. } => {
                     collect_operand_locals(discr, &mut used);
                 }
