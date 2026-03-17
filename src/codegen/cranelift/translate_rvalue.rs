@@ -1,7 +1,6 @@
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
 use crate::ast::types::TypeKind;
-use cranelift_codegen::ir::{AbiParam, Signature};
 use crate::codegen::cranelift::layout::field_layout;
 use crate::codegen::cranelift::translator::{FunctionTranslator, ModuleCtx, TypeCtx};
 use crate::codegen::cranelift::types::translate_type;
@@ -10,6 +9,7 @@ use cranelift_codegen::ir::{
     condcodes::{FloatCC, IntCC},
     types as cl_types, InstBuilder, MemFlags, StackSlotData, StackSlotKind, TrapCode, Value,
 };
+use cranelift_codegen::ir::{AbiParam, Signature};
 use cranelift_frontend::{FunctionBuilder, Variable};
 use cranelift_module::{Linkage, Module};
 use std::collections::HashMap;
@@ -153,6 +153,19 @@ impl<'a> FunctionTranslator<'a> {
             }
 
             Rvalue::Aggregate(kind, operands) => {
+                // Handle closure allocation separately.
+                if let AggregateKind::Closure(lambda_name, fn_type) = kind {
+                    return Self::translate_closure_aggregate(
+                        builder,
+                        ctx,
+                        lambda_name,
+                        fn_type,
+                        operands,
+                        locals,
+                        type_ctx,
+                    );
+                }
+
                 let is_collection = matches!(
                     kind,
                     AggregateKind::Array
@@ -591,13 +604,15 @@ impl<'a> FunctionTranslator<'a> {
                     let mut sig = Signature::new(call_conv);
                     for param in &func_data.params {
                         if let ExpressionKind::Type(param_type, _) = &param.typ.node {
-                            sig.params.push(AbiParam::new(translate_type(param_type, ptr_type)));
+                            sig.params
+                                .push(AbiParam::new(translate_type(param_type, ptr_type)));
                         }
                     }
                     if let Some(ret_expr) = &func_data.return_type {
                         if let ExpressionKind::Type(ret_type, _) = &ret_expr.node {
                             if ret_type.kind != TypeKind::Void {
-                                sig.returns.push(AbiParam::new(translate_type(ret_type, ptr_type)));
+                                sig.returns
+                                    .push(AbiParam::new(translate_type(ret_type, ptr_type)));
                             }
                         }
                     }
@@ -616,6 +631,119 @@ impl<'a> FunctionTranslator<'a> {
             Literal::Regex(_) => Err("Regex constants not supported in codegen".to_string()),
         }
     }
+    /// Translate a closure aggregate into a heap-allocated closure struct.
+    ///
+    /// Layout: [raw_ptr(=malloc_ptr)][RC=1][fn_ptr][cap0][cap1]...
+    /// The returned value is `payload_ptr` = `raw_ptr + 2*ptr_size`.
+    fn translate_closure_aggregate(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        lambda_name: &str,
+        fn_type: &crate::ast::types::Type,
+        capture_ops: &[Operand],
+        locals: &HashMap<Local, Variable>,
+        type_ctx: &TypeCtx,
+    ) -> Result<Value, String> {
+        use cranelift_codegen::ir::condcodes::IntCC;
+        use cranelift_codegen::ir::TrapCode;
+        use cranelift_module::Module;
+
+        let ptr_type = type_ctx.ptr_type;
+        let ptr_size = ptr_type.bytes() as i64;
+
+        // Translate captured values.
+        let capture_vals: Vec<Value> = capture_ops
+            .iter()
+            .map(|op| Self::translate_operand(builder, ctx, op, locals, type_ctx))
+            .collect::<Result<_, _>>()?;
+
+        // Compute total allocation size:
+        //   2 * ptr_size  (header: malloc_ptr + RC)
+        // + ptr_size       (fn_ptr slot)
+        // + ptr_size * N   (one ptr-size slot per capture)
+        let n_captures = capture_vals.len();
+        let total_size = (2 + 1 + n_captures as i64) * ptr_size;
+        let size_val = builder.ins().iconst(ptr_type, total_size);
+
+        // Allocate raw memory.
+        let raw_ptr = Self::call_libc_malloc(builder, ctx, size_val)?;
+
+        // Trap on OOM.
+        let null = builder.ins().iconst(ptr_type, 0);
+        let is_null = builder.ins().icmp(IntCC::Equal, raw_ptr, null);
+        let trap_code = TrapCode::user(2).expect("valid user trap code");
+        builder.ins().trapnz(is_null, trap_code);
+
+        // Store malloc_ptr at offset 0 (so free() can recover the original pointer).
+        builder.ins().store(MemFlags::new(), raw_ptr, raw_ptr, 0);
+
+        // Store RC = 1 at offset ptr_size.
+        let one = builder.ins().iconst(ptr_type, 1);
+        builder
+            .ins()
+            .store(MemFlags::new(), one, raw_ptr, ptr_size as i32);
+
+        // payload_ptr = raw_ptr + 2*ptr_size
+        let payload_ptr = builder.ins().iadd_imm(raw_ptr, 2 * ptr_size);
+
+        // Build the lambda's Cranelift signature (env_ptr first, then user params).
+        let call_conv = builder.func.signature.call_conv;
+        let mut sig = cranelift_codegen::ir::Signature::new(call_conv);
+        // env_ptr is always the first parameter.
+        sig.params
+            .push(cranelift_codegen::ir::AbiParam::new(ptr_type));
+        if let crate::ast::types::TypeKind::Function(func_data) = &fn_type.kind {
+            use crate::ast::expression::ExpressionKind;
+            for param in &func_data.params {
+                if let ExpressionKind::Type(param_type, _) = &param.typ.node {
+                    sig.params
+                        .push(cranelift_codegen::ir::AbiParam::new(translate_type(
+                            param_type, ptr_type,
+                        )));
+                }
+            }
+            if let Some(ret_expr) = &func_data.return_type {
+                if let ExpressionKind::Type(ret_type, _) = &ret_expr.node {
+                    use crate::ast::types::TypeKind;
+                    if ret_type.kind != TypeKind::Void {
+                        sig.returns
+                            .push(cranelift_codegen::ir::AbiParam::new(translate_type(
+                                ret_type, ptr_type,
+                            )));
+                    }
+                }
+            }
+        }
+
+        // Declare the lambda function and get its address.
+        let func_id = ctx
+            .module
+            .declare_function(lambda_name, cranelift_module::Linkage::Import, &sig)
+            .map_err(|e| format!("Error declaring closure fn {}: {}", lambda_name, e))?;
+        let func_ref = ctx.module.declare_func_in_func(func_id, builder.func);
+        let fn_ptr = builder.ins().func_addr(ptr_type, func_ref);
+
+        // Store fn_ptr at payload[0] (offset 0 from payload_ptr).
+        builder.ins().store(MemFlags::new(), fn_ptr, payload_ptr, 0);
+
+        // Store each captured value in its slot (widened to ptr_size).
+        for (i, val) in capture_vals.into_iter().enumerate() {
+            let val_ty = builder.func.dfg.value_type(val);
+            let widened =
+                if val_ty != ptr_type && val_ty.is_int() && val_ty.bits() < ptr_type.bits() {
+                    builder.ins().sextend(ptr_type, val)
+                } else {
+                    val
+                };
+            let offset = (1 + i as i32) * ptr_size as i32;
+            builder
+                .ins()
+                .store(MemFlags::new(), widened, payload_ptr, offset);
+        }
+
+        Ok(payload_ptr)
+    }
+
     /// Translate a binary operation.
     ///
     /// `is_unsigned` indicates whether the operands are unsigned integer types.

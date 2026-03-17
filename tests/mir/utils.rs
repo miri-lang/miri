@@ -36,7 +36,9 @@ pub fn mir_lower_code(source: &str) -> Body {
         })
         .expect("No function declaration found in source");
 
-    lower_function(func_stmt, &result.type_checker, false, false).expect("Lowering failed").0
+    lower_function(func_stmt, &result.type_checker, false, false)
+        .expect("Lowering failed")
+        .0
 }
 
 /// Normalize MIR output for comparison by trimming lines and removing empty lines.

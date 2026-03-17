@@ -42,6 +42,10 @@ pub struct Body {
     /// primitive or other auto-copy types, and total size <= `AUTO_COPY_MAX_SIZE`).
     /// These types use bitwise copy on assignment and do not need RC.
     pub auto_copy_types: HashSet<String>,
+    /// For closure/lambda bodies: the list of locals that hold captured values.
+    /// Entry `i` should be loaded from `env_ptr + (i+1) * ptr_size` at function entry.
+    /// Empty for non-closure functions.
+    pub env_capture_locals: Vec<Local>,
 }
 
 impl Body {
@@ -57,6 +61,7 @@ impl Body {
             execution_model,
             backend_metadata: None,
             auto_copy_types: HashSet::new(),
+            env_capture_locals: Vec::new(),
         }
     }
 

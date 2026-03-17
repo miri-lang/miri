@@ -259,9 +259,9 @@ impl<'a> FunctionTranslator<'a> {
                 // Runtime collection functions use pointer-sized values for element
                 // arguments to maintain a consistent FFI signature regardless of the
                 // element type (bool/i8, int/i64, etc.).
-                let widen_value_args = func_name.as_deref().is_some_and(|n| {
-                    matches!(n, "miri_rt_list_push" | "miri_rt_list_insert")
-                });
+                let widen_value_args = func_name
+                    .as_deref()
+                    .is_some_and(|n| matches!(n, "miri_rt_list_push" | "miri_rt_list_insert"));
 
                 for (i, arg) in args.iter().enumerate() {
                     let val = Self::translate_operand(builder, ctx, arg, locals, type_ctx)?;
@@ -303,11 +303,28 @@ impl<'a> FunctionTranslator<'a> {
                         builder.def_var(*dest_var, result);
                     }
                 } else {
-                    // Indirect call through a function pointer stored in a local variable.
-                    let func_ptr =
+                    // Indirect call through a closure struct.
+                    // Layout: payload_ptr[0] = fn_ptr, payload_ptr[ptr_size..] = captures.
+                    let closure_ptr =
                         Self::translate_operand(builder, ctx, func, locals, type_ctx)?;
-                    let sig_ref = builder.import_signature(sig);
-                    let call = builder.ins().call_indirect(sig_ref, func_ptr, &arg_values);
+
+                    // Load fn_ptr from closure struct (first word of payload).
+                    let fn_ptr = builder
+                        .ins()
+                        .load(ptr_type, MemFlags::new(), closure_ptr, 0);
+
+                    // Prepend env_ptr (= closure_ptr) to the argument list.
+                    let mut full_args = vec![closure_ptr];
+                    full_args.extend_from_slice(&arg_values);
+
+                    // Prepend env_ptr to the signature.
+                    let mut full_sig = Signature::new(builder.func.signature.call_conv);
+                    full_sig.params.push(AbiParam::new(ptr_type)); // env_ptr
+                    full_sig.params.extend(sig.params);
+                    full_sig.returns.extend(sig.returns);
+
+                    let sig_ref = builder.import_signature(full_sig);
+                    let call = builder.ins().call_indirect(sig_ref, fn_ptr, &full_args);
 
                     if dest_ty.kind != TypeKind::Void {
                         let result = builder.inst_results(call)[0];
