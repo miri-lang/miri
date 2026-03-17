@@ -2,6 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 pub mod arithmetic;
+pub mod generics;
 pub mod array;
 pub mod basic;
 pub mod comparisons;
