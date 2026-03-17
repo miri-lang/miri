@@ -78,7 +78,9 @@ impl TypeChecker {
             ExpressionKind::Assignment(lhs, op, rhs) => {
                 self.infer_assignment(lhs, op, rhs, expr.span, context)
             }
-            ExpressionKind::Call(func, args) => self.infer_call(func, args, expr.span, context),
+            ExpressionKind::Call(func, args) => {
+                self.infer_call(func, args, expr.span, context, expr.id)
+            }
             ExpressionKind::Range(start, end, kind) => {
                 self.infer_range(start, end, kind, expr.span, context)
             }
