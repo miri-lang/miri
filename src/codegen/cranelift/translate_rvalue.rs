@@ -5,6 +5,7 @@ use crate::codegen::cranelift::layout::field_layout;
 use crate::codegen::cranelift::translator::{FunctionTranslator, ModuleCtx, TypeCtx};
 use crate::codegen::cranelift::types::translate_type;
 use crate::mir::{AggregateKind, BinOp, Constant, Local, Operand, Rvalue, UnOp};
+use crate::type_checker::context::class_needs_vtable;
 use cranelift_codegen::ir::{
     condcodes::{FloatCC, IntCC},
     types as cl_types, InstBuilder, MemFlags, StackSlotData, StackSlotKind, TrapCode, Value,
@@ -305,7 +306,19 @@ impl<'a> FunctionTranslator<'a> {
                     }
                 } else {
                     // Non-collection aggregates (Tuple, Struct, Class, Enum, etc.)
-                    if operands.is_empty() {
+                    // Empty operands normally mean a zero-sized value (null pointer).
+                    // EXCEPTION: vtable-bearing classes must still be heap-allocated so
+                    // the vtable pointer slot at payload[0] can be written.
+                    let needs_vtable_alloc = if let AggregateKind::Class(ty) = kind {
+                        if let TypeKind::Custom(class_name, _) = &ty.kind {
+                            class_needs_vtable(class_name, type_ctx.type_definitions)
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+                    if operands.is_empty() && !needs_vtable_alloc {
                         return Ok(builder.ins().iconst(ptr_type, 0));
                     }
 
@@ -339,11 +352,32 @@ impl<'a> FunctionTranslator<'a> {
                         .collect::<Result<_, _>>()?;
 
                     // For tuples, prepend a length field (ptr_size) so runtime methods work.
-                    // Layout: [malloc_ptr][RC][elem_count][field0][field1]...
+                    // For vtable-bearing classes, prepend a vtable pointer slot (ptr_size).
+                    // Layout for classes: [malloc_ptr][RC][vtable_ptr?][field0][field1]...
                     let tuple_header = if is_tuple { ptr_size as u32 } else { 0 };
 
+                    // Determine if this class needs a vtable pointer at offset 0.
+                    let vtable_header = if let AggregateKind::Class(ty) = kind {
+                        if let TypeKind::Custom(class_name, _) = &ty.kind {
+                            if class_needs_vtable(class_name, type_ctx.type_definitions) {
+                                Some(class_name.clone())
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    let vtable_header_size = if vtable_header.is_some() {
+                        ptr_size as u32
+                    } else {
+                        0
+                    };
+
                     // Compute field offsets with proper alignment
-                    let mut current_offset: u32 = tuple_header;
+                    let mut current_offset: u32 = tuple_header + vtable_header_size;
                     let mut field_offsets = Vec::new();
                     let mut max_align: u32 = if is_tuple { ptr_size as u32 } else { 1 };
 
@@ -392,6 +426,30 @@ impl<'a> FunctionTranslator<'a> {
                     if is_tuple {
                         let count = builder.ins().iconst(ptr_type, translated.len() as i64);
                         builder.ins().store(MemFlags::new(), count, payload_ptr, 0);
+                    }
+
+                    // For vtable-bearing classes, store vtable pointer at offset 0 of payload.
+                    if let Some(ref class_name) = vtable_header {
+                        use cranelift_module::Module;
+                        let vtable_sym = format!("__vtable_{}", class_name);
+                        let vtable_data_id = ctx
+                            .module
+                            .declare_data(
+                                &vtable_sym,
+                                cranelift_module::Linkage::Import,
+                                false,
+                                false,
+                            )
+                            .map_err(|e| {
+                                format!("Failed to declare vtable {}: {}", vtable_sym, e)
+                            })?;
+                        let gv = ctx
+                            .module
+                            .declare_data_in_func(vtable_data_id, builder.func);
+                        let vtable_ptr = builder.ins().global_value(ptr_type, gv);
+                        builder
+                            .ins()
+                            .store(MemFlags::new(), vtable_ptr, payload_ptr, 0);
                     }
 
                     for (i, val) in translated.into_iter().enumerate() {

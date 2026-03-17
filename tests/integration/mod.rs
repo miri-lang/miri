@@ -2,7 +2,6 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 pub mod arithmetic;
-pub mod generics;
 pub mod array;
 pub mod basic;
 pub mod comparisons;
@@ -13,6 +12,7 @@ pub mod enums;
 pub mod fstring;
 pub mod function_params;
 pub mod functions;
+pub mod generics;
 pub mod lambdas;
 pub mod list;
 pub mod map;

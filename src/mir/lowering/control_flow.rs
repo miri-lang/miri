@@ -15,7 +15,8 @@ use crate::mir::{
 use super::{helpers::coerce_rvalue, lower_expression, lower_statement, LoweringContext};
 use crate::error::lowering::LoweringError;
 use crate::type_checker::context::{
-    collect_class_fields_all, ClassDefinition, MethodInfo, StructDefinition, TypeDefinition,
+    class_needs_vtable, collect_class_fields_all, vtable_slot_index, ClassDefinition, MethodInfo,
+    StructDefinition, TypeDefinition,
 };
 
 /// Produce a mangled function name for a generic instantiation.
@@ -1150,7 +1151,6 @@ pub fn lower_call(
                         &class_name,
                         method_name,
                     ) {
-                        let mangled_name = format!("{}_{}", defining_class, method_name);
                         let return_ty = method_info.return_type.clone();
 
                         // For `super.method()`, the receiver must be `self` (the current
@@ -1168,11 +1168,66 @@ pub fn lower_call(
                         } else {
                             lower_expression(ctx, obj, None)?
                         };
+
+                        let (destination, op) = if let Some(d) = dest {
+                            (d.clone(), Operand::Copy(d))
+                        } else {
+                            let temp = ctx.push_temp(return_ty, *span);
+                            let p = Place::new(temp);
+                            (p.clone(), Operand::Copy(p))
+                        };
+
+                        let target_bb = ctx.new_basic_block();
+
+                        // Virtual dispatch: when the receiver's static type is an abstract class,
+                        // look up the function pointer through the object's vtable at runtime.
+                        let use_virtual_dispatch = !matches!(&obj.node, ExpressionKind::Super)
+                            && class_needs_vtable(
+                                &class_name,
+                                &ctx.type_checker.global_type_definitions,
+                            )
+                            && matches!(
+                                ctx.type_checker.global_type_definitions.get(&class_name),
+                                Some(TypeDefinition::Class(cd)) if cd.is_abstract
+                            );
+
+                        if use_virtual_dispatch {
+                            // Find the vtable slot index in the abstract class's method table.
+                            if let Some(slot) = vtable_slot_index(
+                                &class_name,
+                                method_name,
+                                &ctx.type_checker.global_type_definitions,
+                            ) {
+                                let mut call_args = vec![self_op];
+                                for arg in args {
+                                    call_args.push(lower_expression(ctx, arg, None)?);
+                                }
+                                // Inject allocator — compiled class methods accept it as their last arg
+                                if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
+                                    call_args.push(Operand::Copy(Place::new(alloc_local)));
+                                }
+
+                                ctx.set_terminator(Terminator::new(
+                                    TerminatorKind::VirtualCall {
+                                        vtable_slot: slot,
+                                        args: call_args,
+                                        destination,
+                                        target: Some(target_bb),
+                                    },
+                                    *span,
+                                ));
+                                ctx.set_current_block(target_bb);
+                                return Ok(op);
+                            }
+                            // If slot not found, fall through to static dispatch below.
+                        }
+
+                        // Static dispatch path (concrete receiver type, super calls, etc.)
+                        let mangled_name = format!("{}_{}", defining_class, method_name);
                         let mut call_args = vec![self_op];
                         for arg in args {
                             call_args.push(lower_expression(ctx, arg, None)?);
                         }
-
                         // Inject allocator — compiled class methods accept it as their last arg
                         if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
                             call_args.push(Operand::Copy(Place::new(alloc_local)));
@@ -1184,15 +1239,6 @@ pub fn lower_call(
                             literal: crate::ast::literal::Literal::Identifier(mangled_name),
                         }));
 
-                        let (destination, op) = if let Some(d) = dest {
-                            (d.clone(), Operand::Copy(d))
-                        } else {
-                            let temp = ctx.push_temp(return_ty, *span);
-                            let p = Place::new(temp);
-                            (p.clone(), Operand::Copy(p))
-                        };
-
-                        let target_bb = ctx.new_basic_block();
                         ctx.set_terminator(Terminator::new(
                             TerminatorKind::Call {
                                 func: func_op,
@@ -1408,11 +1454,7 @@ pub fn lower_call(
 
     // If this call site has generic type substitutions, mangle the function name.
     let func_op = if let ExpressionKind::Identifier(func_name, _) = &func.node {
-        if let Some(generic_args) = ctx
-            .type_checker
-            .call_generic_mappings
-            .get(&call_expr_id)
-        {
+        if let Some(generic_args) = ctx.type_checker.call_generic_mappings.get(&call_expr_id) {
             let mangled = mangle_generic_name(func_name, generic_args);
             Operand::Constant(Box::new(crate::mir::Constant {
                 span: func.span,
