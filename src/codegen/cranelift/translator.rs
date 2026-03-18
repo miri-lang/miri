@@ -1757,10 +1757,6 @@ impl<'a> FunctionTranslator<'a> {
                 }
             }
 
-            if abstract_chain.is_empty() {
-                continue;
-            }
-
             // Collect methods from all abstract ancestors. We iterate from the topmost
             // abstract ancestor downward so that when there are conflicting names, the
             // most-derived abstract class wins (though in practice abstract classes
@@ -1777,6 +1773,32 @@ impl<'a> FunctionTranslator<'a> {
                     }
                 }
             }
+
+            // Also collect methods from all traits implemented by this class or any
+            // ancestor, appending those not already covered by the abstract chain.
+            {
+                use crate::type_checker::context::collect_trait_vtable_methods;
+                let mut walk = class_name.to_string();
+                while let Some(TypeDefinition::Class(cd)) = type_definitions.get(&walk) {
+                    let base = cd.base_class.clone();
+                    let traits = cd.traits.clone();
+                    for trait_name in &traits {
+                        let trait_methods =
+                            collect_trait_vtable_methods(type_definitions, trait_name);
+                        for m in trait_methods {
+                            if !seen.contains(&m) {
+                                seen.insert(m.clone());
+                                vtable_methods.push(m);
+                            }
+                        }
+                    }
+                    match base {
+                        Some(b) => walk = b,
+                        None => break,
+                    }
+                }
+            }
+
             vtable_methods.sort(); // deterministic alphabetical order
 
             if vtable_methods.is_empty() {
@@ -1838,30 +1860,45 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Resolve which function implements `method_name` for `class_name` via inheritance.
-    /// Returns `"ClassName_methodName"` for the first class in the chain that defines it.
+    /// Returns `"ClassName_methodName"` for the first class in the chain that defines it,
+    /// or `"TraitName_methodName"` if the method is a default trait implementation.
     fn resolve_vtable_method(
         class_name: &str,
         method_name: &str,
         type_definitions: &HashMap<String, TypeDefinition>,
     ) -> Option<String> {
         let mut current = class_name.to_string();
-        loop {
-            match type_definitions.get(&current) {
-                Some(TypeDefinition::Class(cd)) => {
-                    if let Some(method) = cd.methods.get(method_name) {
-                        // Only use this implementation if it has a body (not abstract).
-                        if !method.is_abstract {
-                            return Some(format!("{}_{}", current, method_name));
-                        }
-                    }
-                    match cd.base_class.clone() {
-                        Some(base) => current = base,
-                        None => return None,
-                    }
+        let mut all_traits: Vec<String> = Vec::new();
+        while let Some(TypeDefinition::Class(cd)) = type_definitions.get(&current) {
+            if let Some(method) = cd.methods.get(method_name) {
+                // Only use this implementation if it has a body (not abstract).
+                if !method.is_abstract {
+                    return Some(format!("{}_{}", current, method_name));
                 }
-                _ => return None,
+            }
+            all_traits.extend(cd.traits.iter().cloned());
+            match cd.base_class.clone() {
+                Some(base) => current = base,
+                None => break,
             }
         }
+        // Fall back to a default trait method implementation.
+        let mut visited = std::collections::HashSet::new();
+        let mut trait_stack = all_traits;
+        while let Some(t_name) = trait_stack.pop() {
+            if !visited.insert(t_name.clone()) {
+                continue;
+            }
+            if let Some(TypeDefinition::Trait(td)) = type_definitions.get(&t_name) {
+                if let Some(method) = td.methods.get(method_name) {
+                    if !method.is_abstract {
+                        return Some(format!("{}_{}", t_name, method_name));
+                    }
+                }
+                trait_stack.extend(td.parent_traits.iter().cloned());
+            }
+        }
+        None
     }
 
     /// Returns true if a named Custom type has at least one managed field.

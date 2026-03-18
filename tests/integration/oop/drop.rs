@@ -131,3 +131,94 @@ fn main()
         "2",
     );
 }
+
+// ── Nested / complex drop scenarios ──────────────────────────────────────────
+
+#[test]
+fn test_class_with_nested_class_field_drops_correctly() {
+    // Inner class is heap-allocated and reference-counted. Dropping Outer must
+    // DecRef Inner; if Inner's RC reaches zero, Inner is freed too.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+class Inner
+    var x int
+
+class Outer
+    var child Inner
+
+fn make() int
+    let o = Outer(child: Inner(x: 99))
+    o.child.x
+
+fn main()
+    let v = make()
+    println(f"{v}")
+    "#,
+        "99",
+    );
+}
+
+#[test]
+fn test_reassign_class_field_drops_old_value() {
+    // Reassigning a class-typed field must DecRef the old object.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+class Node
+    var value int
+
+class Holder
+    var node Node
+
+fn main()
+    var h = Holder(node: Node(value: 1))
+    h.node = Node(value: 2)
+    println(f"{h.node.value}")
+    "#,
+        "2",
+    );
+}
+
+#[test]
+fn test_object_shared_between_two_variables_not_freed_early() {
+    // Assigning the same object to two variables bumps its RC to 2.
+    // Neither variable alone should free it.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    let l = List([1, 2, 3])
+    let l2 = l
+    println(f"{l2.length()}")
+    "#,
+        "3",
+    );
+}
+
+#[test]
+fn test_drop_in_loop() {
+    // Object created inside a loop body must be dropped at end of each iteration,
+    // not accumulated until the loop exits.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    var i = 0
+    while i < 3
+        let tmp = List([i])
+        i += 1
+    println("ok")
+    "#,
+        "ok",
+    );
+}
+
+// Custom drop: currently not supported by the language.
+// When a destructor hook (`fn drop()`) is added, add tests here.

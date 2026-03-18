@@ -640,11 +640,14 @@ impl TypeChecker {
                     if let Some((_, field_info)) =
                         search_class_def.fields.iter().find(|(n, _)| n == prop_name)
                     {
-                        // Check visibility for class field
+                        // Check visibility for class field.
+                        // Pass the receiver's declared type (`name`) so that the
+                        // protected check can reject sibling-class access.
                         if !self.check_member_visibility(
                             &field_info.visibility,
                             &search_class_def.name,
                             context.current_class.as_deref(),
+                            Some(name.as_str()),
                         ) {
                             self.report_error(
                                 format!(
@@ -665,11 +668,14 @@ impl TypeChecker {
 
                     // Check methods in current class
                     if let Some(method_info) = search_class_def.methods.get(prop_name) {
-                        // Check visibility for class method
+                        // Check visibility for class method.
+                        // Pass the receiver's declared type (`name`) so that the
+                        // protected check can reject sibling-class access.
                         if !self.check_member_visibility(
                             &method_info.visibility,
                             &search_class_def.name,
                             context.current_class.as_deref(),
+                            Some(name.as_str()),
                         ) {
                             self.report_error(
                                 format!(
@@ -736,6 +742,78 @@ impl TypeChecker {
                     break;
                 }
 
+                // Fallback: look for a default (non-abstract) method in any trait
+                // implemented by this class or any of its ancestors.
+                {
+                    let mut search_class_name = name.clone();
+                    'trait_search: loop {
+                        let search_def = context
+                            .resolve_type_definition(&search_class_name)
+                            .cloned()
+                            .or_else(|| {
+                                self.global_type_definitions
+                                    .get(&search_class_name)
+                                    .cloned()
+                            });
+
+                        if let Some(TypeDefinition::Class(class_def)) = search_def {
+                            for trait_name in &class_def.traits {
+                                let mut to_check = vec![trait_name.clone()];
+                                let mut visited = std::collections::HashSet::new();
+                                while let Some(t_name) = to_check.pop() {
+                                    if !visited.insert(t_name.clone()) {
+                                        continue;
+                                    }
+                                    if let Some(TypeDefinition::Trait(t_def)) =
+                                        self.global_type_definitions.get(&t_name).cloned()
+                                    {
+                                        if let Some(method_info) = t_def.methods.get(prop_name) {
+                                            if !method_info.is_abstract {
+                                                // Found a default trait implementation.
+                                                let params: Vec<Parameter> = method_info
+                                                    .params
+                                                    .iter()
+                                                    .map(|(pname, ty)| Parameter {
+                                                        name: pname.clone(),
+                                                        typ: Box::new(
+                                                            self.create_type_expression(ty.clone()),
+                                                        ),
+                                                        guard: None,
+                                                        default_value: None,
+                                                    })
+                                                    .collect();
+                                                let return_type_expr = if matches!(
+                                                    method_info.return_type.kind,
+                                                    TypeKind::Void
+                                                ) {
+                                                    None
+                                                } else {
+                                                    Some(Box::new(self.create_type_expression(
+                                                        method_info.return_type.clone(),
+                                                    )))
+                                                };
+                                                return make_type(TypeKind::Function(Box::new(
+                                                    FunctionTypeData {
+                                                        generics: None,
+                                                        params,
+                                                        return_type: return_type_expr,
+                                                    },
+                                                )));
+                                            }
+                                        }
+                                        to_check.extend(t_def.parent_traits.iter().cloned());
+                                    }
+                                }
+                            }
+                            if let Some(base_name) = class_def.base_class.clone() {
+                                search_class_name = base_name;
+                                continue 'trait_search;
+                            }
+                        }
+                        break;
+                    }
+                }
+
                 // Collect all candidates from the class hierarchy for suggestions
                 let mut candidates: Vec<String> = Vec::new();
                 let mut collect_class_name = name.clone();
@@ -771,6 +849,87 @@ impl TypeChecker {
                 } else {
                     self.report_error(
                         format!("Type '{}' has no field or method '{}'", name, prop_name),
+                        span,
+                    );
+                }
+                return make_type(TypeKind::Error);
+            } else if let Some(TypeDefinition::Trait(trait_def)) = def_opt {
+                // Trait-typed variable: look up the method in the trait's method table
+                // (and recursively in parent traits). This enables polymorphic dispatch
+                // through a trait-typed variable: `let x MyTrait = ConcreteImpl()`.
+                let mut to_check = vec![name.clone()];
+                let mut visited = std::collections::HashSet::new();
+                while let Some(t_name) = to_check.pop() {
+                    if !visited.insert(t_name.clone()) {
+                        continue;
+                    }
+                    let t_def_opt = if t_name == name {
+                        Some(trait_def.clone())
+                    } else {
+                        match self.global_type_definitions.get(&t_name) {
+                            Some(TypeDefinition::Trait(d)) => Some(d.clone()),
+                            _ => None,
+                        }
+                    };
+                    if let Some(t_def) = t_def_opt {
+                        if let Some(method_info) = t_def.methods.get(prop_name) {
+                            let params: Vec<Parameter> = method_info
+                                .params
+                                .iter()
+                                .map(|(pname, ty)| Parameter {
+                                    name: pname.clone(),
+                                    typ: Box::new(self.create_type_expression(ty.clone())),
+                                    guard: None,
+                                    default_value: None,
+                                })
+                                .collect();
+                            let return_type_expr =
+                                if matches!(method_info.return_type.kind, TypeKind::Void) {
+                                    None
+                                } else {
+                                    Some(Box::new(
+                                        self.create_type_expression(
+                                            method_info.return_type.clone(),
+                                        ),
+                                    ))
+                                };
+                            return make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                                generics: None,
+                                params,
+                                return_type: return_type_expr,
+                            })));
+                        }
+                        to_check.extend(t_def.parent_traits.iter().cloned());
+                    }
+                }
+                // Method not found in any trait
+                let all_methods: Vec<String> = {
+                    let mut methods = Vec::new();
+                    let mut all_to_check = vec![name.clone()];
+                    let mut all_visited = std::collections::HashSet::new();
+                    while let Some(t_name) = all_to_check.pop() {
+                        if !all_visited.insert(t_name.clone()) {
+                            continue;
+                        }
+                        if let Some(TypeDefinition::Trait(td)) =
+                            self.global_type_definitions.get(&t_name)
+                        {
+                            methods.extend(td.methods.keys().cloned());
+                            all_to_check.extend(td.parent_traits.iter().cloned());
+                        }
+                    }
+                    methods
+                };
+                let candidate_refs: Vec<&str> = all_methods.iter().map(|s| s.as_str()).collect();
+                if let Some(suggestion) = find_best_match(prop_name, &candidate_refs) {
+                    self.report_error_with_help(
+                        format!("Trait '{}' has no method '{}'", name, prop_name),
+                        span,
+                        format!("Did you mean '{}'?", suggestion),
+                    );
+                } else {
+                    self.report_error(
+                        format!("Trait '{}' has no method '{}'", name, prop_name),
                         span,
                     );
                 }

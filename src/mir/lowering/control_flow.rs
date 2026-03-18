@@ -64,34 +64,98 @@ fn type_kind_to_mangle_str(kind: &TypeKind) -> String {
 }
 
 /// Walk the inheritance chain starting at `class_name` to find the first class
-/// that directly declares `method_name`. Returns the defining class name and a
-/// clone of its [`MethodInfo`] so the caller can mangle the symbol correctly.
+/// or trait that directly declares `method_name`. Returns the defining class/trait
+/// name and a clone of its [`MethodInfo`] so the caller can mangle the symbol correctly.
 ///
 /// This is the core of inherited method resolution: if `Dog extends Animal` and
 /// only `Animal` defines `speak`, the returned defining class is `"Animal"` and
 /// the call is mangled to `Animal_speak`.
+///
+/// Also handles:
+/// - Trait-typed receivers: walks the trait hierarchy to find the method.
+/// - Default trait methods: if the class doesn't define the method, checks all
+///   implemented traits (and their parent traits) for a default (non-abstract) impl.
 fn resolve_inherited_method(
     type_defs: &std::collections::HashMap<String, TypeDefinition>,
     class_name: &str,
     method_name: &str,
 ) -> Option<(String, MethodInfo)> {
+    // Handle trait-typed receiver (polymorphic trait dispatch).
+    if matches!(type_defs.get(class_name), Some(TypeDefinition::Trait(_))) {
+        return resolve_in_trait_hierarchy(type_defs, class_name, method_name);
+    }
+
     let mut current = class_name.to_string();
     loop {
-        // Resolve the base class name before the borrow of `type_defs` ends.
-        let base = match type_defs.get(&current) {
+        let (base, traits) = match type_defs.get(&current) {
             Some(TypeDefinition::Class(class_def)) => {
                 if let Some(method_info) = class_def.methods.get(method_name) {
                     return Some((current, method_info.clone()));
                 }
-                class_def.base_class.clone()
+                (class_def.base_class.clone(), class_def.traits.clone())
             }
             _ => return None,
         };
+        // Check default (non-abstract) methods in implemented traits.
+        for trait_name in &traits {
+            if let Some(result) = resolve_trait_default_method(type_defs, trait_name, method_name) {
+                return Some(result);
+            }
+        }
         match base {
             Some(b) => current = b,
             None => return None,
         }
     }
+}
+
+/// Walk the trait hierarchy to find `method_name`. Returns the defining trait
+/// name and method info (abstract or concrete).
+fn resolve_in_trait_hierarchy(
+    type_defs: &std::collections::HashMap<String, TypeDefinition>,
+    trait_name: &str,
+    method_name: &str,
+) -> Option<(String, MethodInfo)> {
+    let mut to_check = vec![trait_name.to_string()];
+    let mut visited = std::collections::HashSet::new();
+    while let Some(t_name) = to_check.pop() {
+        if !visited.insert(t_name.clone()) {
+            continue;
+        }
+        if let Some(TypeDefinition::Trait(td)) = type_defs.get(&t_name) {
+            if let Some(method_info) = td.methods.get(method_name) {
+                return Some((t_name, method_info.clone()));
+            }
+            to_check.extend(td.parent_traits.iter().cloned());
+        }
+    }
+    None
+}
+
+/// Walk the trait hierarchy (starting from `trait_name`) to find a non-abstract
+/// (default) implementation of `method_name`. Returns None if only abstract
+/// declarations exist or the method is not found.
+fn resolve_trait_default_method(
+    type_defs: &std::collections::HashMap<String, TypeDefinition>,
+    trait_name: &str,
+    method_name: &str,
+) -> Option<(String, MethodInfo)> {
+    let mut to_check = vec![trait_name.to_string()];
+    let mut visited = std::collections::HashSet::new();
+    while let Some(t_name) = to_check.pop() {
+        if !visited.insert(t_name.clone()) {
+            continue;
+        }
+        if let Some(TypeDefinition::Trait(td)) = type_defs.get(&t_name) {
+            if let Some(method_info) = td.methods.get(method_name) {
+                if !method_info.is_abstract {
+                    return Some((t_name, method_info.clone()));
+                }
+            }
+            to_check.extend(td.parent_traits.iter().cloned());
+        }
+    }
+    None
 }
 
 pub fn lower_break(ctx: &mut LoweringContext, span: &Span) -> Result<(), LoweringError> {
@@ -1179,16 +1243,23 @@ pub fn lower_call(
 
                         let target_bb = ctx.new_basic_block();
 
-                        // Virtual dispatch: when the receiver's static type is an abstract class,
-                        // look up the function pointer through the object's vtable at runtime.
+                        // Virtual dispatch: when the receiver's static type is an abstract class
+                        // or a trait, look up the function pointer through the vtable at runtime.
                         let use_virtual_dispatch = !matches!(&obj.node, ExpressionKind::Super)
-                            && class_needs_vtable(
-                                &class_name,
-                                &ctx.type_checker.global_type_definitions,
-                            )
-                            && matches!(
-                                ctx.type_checker.global_type_definitions.get(&class_name),
-                                Some(TypeDefinition::Class(cd)) if cd.is_abstract
+                            && (
+                                // Abstract class dispatch: receiver is an abstract class with vtable.
+                                (class_needs_vtable(
+                                    &class_name,
+                                    &ctx.type_checker.global_type_definitions,
+                                ) && matches!(
+                                    ctx.type_checker.global_type_definitions.get(&class_name),
+                                    Some(TypeDefinition::Class(cd)) if cd.is_abstract
+                                ))
+                                // Trait dispatch: receiver is a trait type.
+                                || matches!(
+                                    ctx.type_checker.global_type_definitions.get(&class_name),
+                                    Some(TypeDefinition::Trait(_))
+                                )
                             );
 
                         if use_virtual_dispatch {

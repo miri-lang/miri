@@ -273,21 +273,44 @@ impl TypeChecker {
 
     /// Checks if a class member can be accessed from the current context.
     ///
-    /// - `public`: always accessible
-    /// - `private`: only accessible from within the same class
-    /// - `protected`: accessible from same class or subclasses
+    /// - `public`: always accessible.
+    /// - `private`: only accessible from within the declaring class itself.
+    /// - `protected`: accessible from the declaring class and its subclasses,
+    ///   **but only through a receiver whose declared type is also a subtype of
+    ///   the current class**. This prevents sibling-class access: if `Cat` and
+    ///   `Dog` both extend `Animal`, a method on `Cat` must not read `dog.field`
+    ///   even when `field` is declared `protected` on `Animal`.
+    ///
+    /// # Parameters
+    /// - `member_class`: the class that declares the member.
+    /// - `current_class`: the class in whose method body the access occurs.
+    /// - `receiver_class`: the declared type of the receiver expression. For
+    ///   self-access this equals `current_class`; for external receivers it is
+    ///   the type of the object being accessed.
     pub(crate) fn check_member_visibility(
         &self,
         visibility: &MemberVisibility,
         member_class: &str,
         current_class: Option<&str>,
+        receiver_class: Option<&str>,
     ) -> bool {
         match visibility {
             MemberVisibility::Public => true,
             MemberVisibility::Private => current_class == Some(member_class),
             MemberVisibility::Protected => {
                 if let Some(curr) = current_class {
-                    curr == member_class || self.is_subtype(curr, member_class)
+                    // The current class must be in the member's inheritance subtree.
+                    let owns_member = curr == member_class || self.is_subtype(curr, member_class);
+
+                    // For external receiver access the current class must also be a
+                    // subtype of the receiver's declared type (Java-style rule).
+                    // This blocks sibling access: Cat is not a subtype of Dog.
+                    let can_reach_receiver = match receiver_class {
+                        Some(recv) if recv != curr => curr == recv || self.is_subtype(curr, recv),
+                        _ => true, // self-access or same-class: no extra restriction
+                    };
+
+                    owns_member && can_reach_receiver
                 } else {
                     false
                 }
