@@ -1,2 +1,0 @@
-type MyInt is int
-let x MyInt = "string"

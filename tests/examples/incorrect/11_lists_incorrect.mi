@@ -1,3 +1,0 @@
-use system.collections.list
-let l = List([1, 2, 3])
-let x = l["index"]

@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 // Binary Search algorithm implementation and performance test.
+
 use system.io
 use system.time
 use system.collections.array

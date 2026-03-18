@@ -1,0 +1,111 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// Functional Pipeline — non-capturing lambdas, capturing closures,
+// higher-order functions, generic functions, and collection transformation.
+
+use system.io
+use system.collections.list
+
+
+fn apply(f fn(x int) int, n int) int: f(n)
+
+fn transform(values List<int>, f fn(x int) int) List<int>
+    var result = List<int>()
+    var i = 0
+    while i < values.length()
+        result.push(f(values.element_at(i)))
+        i += 1
+    result
+
+fn fold(values List<int>, init_val int, f fn(acc int, x int) int) int
+    var acc = init_val
+    var i = 0
+    while i < values.length()
+        acc = f(acc, values.element_at(i))
+        i += 1
+    acc
+
+fn count_matching(values List<int>, pred fn(x int) bool) int
+    var count = 0
+    var i = 0
+    while i < values.length()
+        if pred(values.element_at(i))
+            count += 1
+        i += 1
+    count
+
+fn identity<T>(x T) T: x
+
+fn first_or_default<T>(values List<int>, default_val int, f fn(x int) bool) int
+    var i = 0
+    while i < values.length()
+        if f(values.element_at(i))
+            return values.element_at(i)
+        i += 1
+    default_val
+
+fn print_list(label String, values List<int>)
+    print(f"{label}:")
+    var i = 0
+    while i < values.length()
+        print(f" {values.element_at(i)}")
+        i += 1
+    println()
+
+fn main()
+    let double  = fn(x int) int: x * 2
+    let square  = fn(x int) int: x * x
+    let negate  = fn(x int) int: 0 - x
+
+    println(f"double(7)  = {double(7)}")
+    println(f"square(6)  = {square(6)}")
+    println(f"negate(5)  = {negate(5)}")
+    println(f"apply double to 9 = {apply(double, 9)}")
+    println(f"apply inline       = {apply(fn(x int) int: x + 100, 5)}")
+
+    println(f"identity(42)  = {identity(42)}")
+    let s = identity("pipeline")
+    println(f"identity str  = {s}")
+
+    var nums = List<int>([1, 2, 3, 4, 5])
+
+    let doubled  = transform(nums, double)
+    let squared  = transform(nums, square)
+    let negated  = transform(nums, negate)
+
+    print_list("Doubled", doubled)
+    print_list("Squared", squared)
+    print_list("Negated", negated)
+
+    let sum     = fold(nums, 0, fn(acc int, x int) int: acc + x)
+    let product = fold(nums, 1, fn(acc int, x int) int: acc * x)
+    let max_val = fold(nums, 0, fn(acc int, x int) int: if x > acc: x else: acc)
+
+    println(f"Sum 1..5     = {sum}")
+    println(f"Product 1..5 = {product}")
+    println(f"Max 1..5     = {max_val}")
+
+    let base = 100
+    let add_base = fn(x int) int: base + x
+
+    println(f"add_base(5)  = {add_base(5)}")
+    println(f"add_base(20) = {add_base(20)}")
+
+    // Closure captures a threshold for filtering
+    let threshold = 3
+    let above = count_matching(nums, fn(x int) bool: x > threshold)
+    println(f"Elements > {threshold}: {above}")
+
+    let offset = 10
+    let shifted = transform(nums, fn(x int) int: x + offset)
+    print_list("Shifted+10", shifted)
+
+    let factor = 3
+    let scaled_doubled = transform(transform(nums, fn(x int) int: x * factor), double)
+    print_list("x*3 then *2", scaled_doubled)
+    let first_gt3 = first_or_default(nums, -1, fn(x int) bool: x > 3)
+    println(f"First > 3: {first_gt3}")
+
+    let first_gt10 = first_or_default(nums, -1, fn(x int) bool: x > 10)
+    println(f"First > 10: {first_gt10}")
