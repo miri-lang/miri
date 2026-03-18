@@ -22,11 +22,11 @@ use crate::ast::expression::ExpressionKind;
 use crate::ast::statement::{Statement, StatementKind};
 use crate::ast::types::{Type, TypeKind};
 use crate::error::lowering::LoweringError;
+use crate::mir::lambda::LambdaInfo;
 use crate::mir::{
     BinOp, Body, Constant, Discriminant, ExecutionModel, LocalDecl, Operand, Place, Rvalue,
     StatementKind as MirStatementKind, Terminator, TerminatorKind,
 };
-use crate::mir::lambda::LambdaInfo;
 use crate::type_checker::TypeChecker;
 
 // Re-export commonly used items from submodules
@@ -342,10 +342,7 @@ fn finalize_body(
         ));
     }
 
-    let body = std::mem::replace(
-        &mut ctx.body,
-        Body::new(0, span, ExecutionModel::Cpu),
-    );
+    let body = std::mem::replace(&mut ctx.body, Body::new(0, span, ExecutionModel::Cpu));
     let lambda_bodies = std::mem::take(&mut ctx.lambda_bodies);
     Ok((body, lambda_bodies))
 }
