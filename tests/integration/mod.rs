@@ -13,6 +13,7 @@ pub mod fstring;
 pub mod function_params;
 pub mod functions;
 pub mod lambdas;
+pub mod linker;
 pub mod list;
 pub mod map;
 pub mod oop;

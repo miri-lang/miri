@@ -259,9 +259,9 @@ impl<'a> FunctionTranslator<'a> {
                 // Runtime collection functions use pointer-sized values for element
                 // arguments to maintain a consistent FFI signature regardless of the
                 // element type (bool/i8, int/i64, etc.).
-                let widen_value_args = func_name.as_deref().is_some_and(|n| {
-                    matches!(n, "miri_rt_list_push" | "miri_rt_list_insert")
-                });
+                let widen_value_args = func_name
+                    .as_deref()
+                    .is_some_and(|n| matches!(n, "miri_rt_list_push" | "miri_rt_list_insert"));
 
                 for (i, arg) in args.iter().enumerate() {
                     let val = Self::translate_operand(builder, ctx, arg, locals, type_ctx)?;
@@ -304,8 +304,7 @@ impl<'a> FunctionTranslator<'a> {
                     }
                 } else {
                     // Indirect call through a function pointer stored in a local variable.
-                    let func_ptr =
-                        Self::translate_operand(builder, ctx, func, locals, type_ctx)?;
+                    let func_ptr = Self::translate_operand(builder, ctx, func, locals, type_ctx)?;
                     let sig_ref = builder.import_signature(sig);
                     let call = builder.ins().call_indirect(sig_ref, func_ptr, &arg_values);
 

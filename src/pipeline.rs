@@ -696,7 +696,8 @@ impl Pipeline {
         output_path: &PathBuf,
         required_runtimes: &HashSet<RuntimeKind>,
     ) -> Result<(), CompilerError> {
-        let mut cmd = Command::new("cc");
+        let linker_path = resolve_linker()?;
+        let mut cmd = Command::new(linker_path);
         cmd.arg(object_path).arg("-o").arg(output_path);
 
         // Link required runtime libraries
@@ -719,6 +720,35 @@ impl Pipeline {
 
         Ok(())
     }
+}
+
+/// Resolve the path to the linker (cc) using absolute paths or environment variables.
+/// This prevents unqualified command execution vulnerabilities.
+fn resolve_linker() -> Result<PathBuf, CompilerError> {
+    if let Ok(cc) = std::env::var("MIRI_CC") {
+        return Ok(PathBuf::from(cc));
+    }
+    if let Ok(cc) = std::env::var("CC") {
+        return Ok(PathBuf::from(cc));
+    }
+
+    // Default to common absolute paths for 'cc'
+    let common_paths = [
+        "/usr/bin/cc",
+        "/usr/local/bin/cc",
+        "/usr/bin/gcc",
+        "/usr/bin/clang",
+    ];
+    for path in common_paths {
+        let p = PathBuf::from(path);
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+
+    Err(CompilerError::Codegen(
+        "Linker 'cc' not found in standard locations. Please set the MIRI_CC or CC environment variable to the absolute path of your linker.".to_string(),
+    ))
 }
 
 /// Resolve the directory containing the compiled static library for a runtime.

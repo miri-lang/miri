@@ -1,7 +1,6 @@
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
 use crate::ast::types::TypeKind;
-use cranelift_codegen::ir::{AbiParam, Signature};
 use crate::codegen::cranelift::layout::field_layout;
 use crate::codegen::cranelift::translator::{FunctionTranslator, ModuleCtx, TypeCtx};
 use crate::codegen::cranelift::types::translate_type;
@@ -10,6 +9,7 @@ use cranelift_codegen::ir::{
     condcodes::{FloatCC, IntCC},
     types as cl_types, InstBuilder, MemFlags, StackSlotData, StackSlotKind, TrapCode, Value,
 };
+use cranelift_codegen::ir::{AbiParam, Signature};
 use cranelift_frontend::{FunctionBuilder, Variable};
 use cranelift_module::{Linkage, Module};
 use std::collections::HashMap;
@@ -591,13 +591,15 @@ impl<'a> FunctionTranslator<'a> {
                     let mut sig = Signature::new(call_conv);
                     for param in &func_data.params {
                         if let ExpressionKind::Type(param_type, _) = &param.typ.node {
-                            sig.params.push(AbiParam::new(translate_type(param_type, ptr_type)));
+                            sig.params
+                                .push(AbiParam::new(translate_type(param_type, ptr_type)));
                         }
                     }
                     if let Some(ret_expr) = &func_data.return_type {
                         if let ExpressionKind::Type(ret_type, _) = &ret_expr.node {
                             if ret_type.kind != TypeKind::Void {
-                                sig.returns.push(AbiParam::new(translate_type(ret_type, ptr_type)));
+                                sig.returns
+                                    .push(AbiParam::new(translate_type(ret_type, ptr_type)));
                             }
                         }
                     }
