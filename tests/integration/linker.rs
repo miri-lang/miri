@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 #[test]
 fn test_linker_resolution_miri_cc() {
-    let source = "fn main() { return 0 }";
+    let source = "0";
     let pipeline = Pipeline::new();
 
     // Set MIRI_CC to a non-existent path
@@ -46,7 +46,7 @@ fn test_linker_resolution_miri_cc() {
 
 #[test]
 fn test_linker_resolution_cc() {
-    let source = "fn main() { return 0 }";
+    let source = "0";
     let pipeline = Pipeline::new();
 
     // Ensure MIRI_CC is NOT set
