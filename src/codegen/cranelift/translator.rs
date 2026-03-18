@@ -1220,8 +1220,13 @@ impl<'a> FunctionTranslator<'a> {
             TypeDefinition::Class(class_def) => {
                 // Classes use the same field-by-field drop logic as structs.
                 // Fields are stored in declaration order using field_layout().
-                let managed_fields: Vec<(usize, TypeKind)> = class_def
-                    .fields
+                //
+                // IMPORTANT: field_layout() expects an index into the FULL field
+                // list (inherited + own fields via collect_class_fields_all).
+                // We must enumerate all_fields here so the indices match.
+                use crate::type_checker::context::collect_class_fields_all;
+                let all_fields = collect_class_fields_all(class_def, type_ctx.type_definitions);
+                let managed_fields: Vec<(usize, TypeKind)> = all_fields
                     .iter()
                     .enumerate()
                     .filter(|(_, (_, fi))| is_field_managed(&fi.ty.kind))

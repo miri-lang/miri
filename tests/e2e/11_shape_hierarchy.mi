@@ -1,0 +1,126 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// Shape Hierarchy — OOP with abstract classes, inheritance, constructors,
+// virtual dispatch from base class, and lambda-based computation.
+
+use system.io
+use system.collections.list
+
+
+abstract class Shape
+    var color String
+
+    fn init(c String)
+        self.color = c
+
+    abstract fn area() int
+    abstract fn kind() String
+
+    // This concrete method calls two abstract methods on self —
+    // requires vtable dispatch to resolve to the concrete override.
+    fn describe()
+        println(f"{self.kind()} ({self.color}): area = {self.area()}")
+
+class Rectangle extends Shape
+    var width int
+    var height int
+
+    fn init(w int, h int, c String)
+        super.init(c)
+        self.width = w
+        self.height = h
+
+    fn area() int
+        self.width * self.height
+
+    fn kind() String
+        "Rectangle"
+
+class Square extends Shape
+    var side int
+
+    fn init(s int, c String)
+        super.init(c)
+        self.side = s
+
+    fn area() int
+        self.side * self.side
+
+    fn kind() String
+        "Square"
+
+class Triangle extends Shape
+    var base int
+    var height int
+
+    fn init(b int, h int, c String)
+        super.init(c)
+        self.base = b
+        self.height = h
+
+    fn area() int
+        self.base * self.height / 2
+
+    fn kind() String
+        "Triangle"
+
+
+fn max_two(a int, b int) int
+    if a >= b: a
+    else: b
+
+fn sum_list(values List<int>) int
+    var total = 0
+    var i = 0
+    while i < values.length()
+        total += values.element_at(i)
+        i += 1
+    total
+
+// Apply a transformation lambda to each element and return a new list.
+fn map_list(values List<int>, f fn(x int) int) List<int>
+    var result = List<int>()
+    var i = 0
+    while i < values.length()
+        result.push(f(values.element_at(i)))
+        i += 1
+    result
+
+
+fn main()
+    let rect = Rectangle(w: 6, h: 4, c: "red")
+    let sq   = Square(s: 5, c: "blue")
+    let tri  = Triangle(b: 8, h: 6, c: "green")
+
+    // Virtual dispatch: describe() is defined on Shape and calls
+    // self.kind() and self.area() which resolve to each subclass's override.
+    rect.describe()
+    sq.describe()
+    tri.describe()
+
+    // Inherited field access (color comes from Shape base class)
+    println(f"Colors: {rect.color}, {sq.color}, {tri.color}")
+
+    // Collect areas into a list and sum with helper
+    var areas = List<int>([rect.area(), sq.area(), tri.area()])
+
+    let total = sum_list(areas)
+    println(f"Total area: {total}")
+
+    // Find the largest using a lambda and higher-order logic
+    let largest = max_two(max_two(rect.area(), sq.area()), tri.area())
+    println(f"Largest area: {largest}")
+
+    // Double all areas using a lambda passed to a higher-order function
+    let doubled = map_list(areas, fn(x int) int: x * 2)
+    print("Doubled areas:")
+    var i = 0
+    while i < doubled.length()
+        print(f" {doubled.element_at(i)}")
+        i += 1
+    println()
+
+    // Perimeter-style calculations directly on objects
+    println(f"Rect perimeter: {2 * (rect.width + rect.height)}")
+    println(f"Square perimeter: {4 * sq.side}")

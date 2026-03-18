@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 // Quick Sort algorithm implementation.
+
 use system.io
 use system.time
 use system.collections.list
+
 
 fn partition(arr List<int>, low int, high int) int
     var a = arr
@@ -30,14 +34,7 @@ fn quick_sort(arr List<int>, low int, high int)
         quick_sort(a, pivot_idx + 1, high)
 
 fn main()
-    let data = List<int>()
-    data.push(10)
-    data.push(80)
-    data.push(30)
-    data.push(90)
-    data.push(40)
-    data.push(50)
-    data.push(70)
+    let data = List<int>([10, 80, 30, 90, 40, 50, 70])
     
     print("Unsorted list: ")
     for x in data: print(f"{x} ")

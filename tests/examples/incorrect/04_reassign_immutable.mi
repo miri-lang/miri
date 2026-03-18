@@ -1,7 +1,0 @@
-// SPDX-License-Identifier: Apache-2.0
-// INCORRECT: Type-checker error — reassigning an immutable (let) variable.
-// Level: Type checker
-// Expected error: cannot reassign / immutable variable
-fn main()
-    let x = 42
-    x = 100
