@@ -1,2 +1,0 @@
-let x int? = 5
-let y = x + 1

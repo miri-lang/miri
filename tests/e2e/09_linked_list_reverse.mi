@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 // Linked List Reversal implementation (using flat lists for stability).
+
 use system.io
 use system.time
 use system.collections.list

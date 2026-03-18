@@ -1,0 +1,157 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// Employee Payroll System — combines OOP hierarchy (abstract classes,
+// inheritance, super.init, traits) with lambdas for payroll computation.
+
+use system.io
+use system.collections.list
+
+
+trait Reportable
+    fn report()
+
+abstract class Employee
+    var name String
+    var department String
+
+    fn init(n String, dept String)
+        self.name = n
+        self.department = dept
+
+    abstract fn role() String
+    abstract fn monthly_salary() int
+
+class FullTimeEmployee extends Employee implements Reportable
+    var base_salary int
+    var bonus int
+
+    fn init(n String, dept String, salary int, b int)
+        super.init(n, dept)
+        self.base_salary = salary
+        self.bonus = b
+
+    fn role() String
+        "Full-time"
+
+    fn monthly_salary() int
+        self.base_salary + self.bonus
+
+    fn report()
+        println(f"{self.name} [{self.role()}] dept={self.department} salary={self.monthly_salary()}")
+
+class PartTimeEmployee extends Employee implements Reportable
+    var hourly_rate int
+    var hours_per_month int
+
+    fn init(n String, dept String, rate int, hours int)
+        super.init(n, dept)
+        self.hourly_rate = rate
+        self.hours_per_month = hours
+
+    fn role() String
+        "Part-time"
+
+    fn monthly_salary() int
+        self.hourly_rate * self.hours_per_month
+
+    fn report()
+        println(f"{self.name} [{self.role()}] dept={self.department} salary={self.monthly_salary()}")
+
+class Contractor extends Employee implements Reportable
+    var daily_rate int
+    var working_days int
+    var project String
+
+    fn init(n String, rate int, days int, proj String)
+        super.init(n, "external")
+        self.daily_rate = rate
+        self.working_days = days
+        self.project = proj
+
+    fn role() String
+        "Contractor"
+
+    fn monthly_salary() int
+        self.daily_rate * self.working_days
+
+    fn report()
+        println(f"{self.name} [{self.role()}] project={self.project} salary={self.monthly_salary()}")
+
+fn apply_raise(salary int, pct int) int
+    salary + salary * pct / 100
+
+fn collect_salaries(a int, b int, c int) List<int>
+    List<int>([a, b, c])
+
+fn sum_salaries(salaries List<int>) int
+    var total = 0
+    var i = 0
+    while i < salaries.length()
+        total += salaries.element_at(i)
+        i += 1
+    total
+
+fn count_above_threshold(salaries List<int>, threshold int) int
+    var count = 0
+    var i = 0
+    while i < salaries.length()
+        if salaries.element_at(i) > threshold
+            count += 1
+        i += 1
+    count
+
+fn transform_salaries(salaries List<int>, f fn(s int) int) List<int>
+    var result = List<int>()
+    var i = 0
+    while i < salaries.length()
+        result.push(f(salaries.element_at(i)))
+        i += 1
+    result
+
+fn main()
+    let alice = FullTimeEmployee(n: "Alice", dept: "Engineering", salary: 5000, b: 1000)
+    let bob   = PartTimeEmployee(n: "Bob",   dept: "Marketing",   rate: 50, hours: 80)
+    let carol = Contractor(n: "Carol", rate: 300, days: 20, proj: "Phoenix")
+
+    // Trait method calls (Reportable.report)
+    alice.report()
+    bob.report()
+    carol.report()
+
+    // Abstract method calls (overridden in each subclass)
+    println(f"Alice role:  {alice.role()}")
+    println(f"Bob role:    {bob.role()}")
+    println(f"Carol role:  {carol.role()}")
+
+    // Inherited field access (name and department from Employee base class)
+    println(f"Alice dept:  {alice.department}")
+    println(f"Bob dept:    {bob.department}")
+    println(f"Carol dept:  {carol.department}")
+
+    // Collect salaries into a list and compute totals
+    let salaries = collect_salaries(alice.monthly_salary(), bob.monthly_salary(), carol.monthly_salary())
+    let total_payroll = sum_salaries(salaries)
+    println(f"Total payroll: {total_payroll}")
+
+    // Lambda-based threshold check (capturing closure)
+    let threshold = 5000
+    let is_high_earner = fn(s int) bool: s > threshold
+    println(f"Alice high earner: {is_high_earner(alice.monthly_salary())}")
+    println(f"Bob high earner:   {is_high_earner(bob.monthly_salary())}")
+    println(f"Carol high earner: {is_high_earner(carol.monthly_salary())}")
+
+    let high_earner_count = count_above_threshold(salaries, threshold)
+    println(f"High earners: {high_earner_count}")
+
+    // Apply a 10% raise to all salaries using a capturing lambda
+    let raise_pct = 10
+    let raise_fn = fn(s int) int: apply_raise(s, raise_pct)
+    let raised_salaries = transform_salaries(salaries, raise_fn)
+    let new_total = sum_salaries(raised_salaries)
+    println(f"Payroll after 10% raise: {new_total}")
+
+    // Specific raise amounts
+    println(f"Alice after raise: {raise_fn(alice.monthly_salary())}")
+    println(f"Bob after raise:   {raise_fn(bob.monthly_salary())}")
+    println(f"Carol after raise: {raise_fn(carol.monthly_salary())}")

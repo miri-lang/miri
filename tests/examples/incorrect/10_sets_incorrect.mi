@@ -1,3 +1,0 @@
-use system.collections.set
-let s = {1, 2, 3}
-let x = s[0]

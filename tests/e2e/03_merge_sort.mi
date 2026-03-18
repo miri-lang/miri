@@ -1,10 +1,34 @@
 // SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 // Merge Sort algorithm implementation.
+
 use system.io
 use system.time
 use system.collections.list
 
-// TODO: forward reference support!
+
+fn merge_sort(l List<int>) List<int>
+    let n = l.length()
+    if n <= 1: return l
+    
+    let mid = n / 2
+    var left = List<int>()
+    var right = List<int>()
+    
+    var i = 0
+    while i < mid
+        left.push(l[i])
+        i += 1
+    while i < n
+        right.push(l[i])
+        i += 1
+        
+    left = merge_sort(left)
+    right = merge_sort(right)
+    
+    return merge(left, right)
+
 fn merge(left List<int>, right List<int>) List<int>
     var result = List<int>()
     var i = 0
@@ -28,27 +52,6 @@ fn merge(left List<int>, right List<int>) List<int>
         j += 1
         
     return result
-
-fn merge_sort(l List<int>) List<int>
-    let n = l.length()
-    if n <= 1: return l
-    
-    let mid = n / 2
-    var left = List<int>()
-    var right = List<int>()
-    
-    var i = 0
-    while i < mid
-        left.push(l[i])
-        i += 1
-    while i < n
-        right.push(l[i])
-        i += 1
-        
-    left = merge_sort(left)
-    right = merge_sort(right)
-    
-    return merge(left, right)
 
 fn main()
     let data = List<int>()
