@@ -12,7 +12,6 @@ pub mod enums;
 pub mod fstring;
 pub mod function_params;
 pub mod functions;
-pub mod generics;
 pub mod lambdas;
 pub mod linker;
 pub mod list;

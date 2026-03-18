@@ -104,9 +104,7 @@ fn thread_jumps(body: &mut Body) -> bool {
                         changed = true;
                     }
                 }
-                TerminatorKind::Call { target, .. }
-                | TerminatorKind::GpuLaunch { target, .. }
-                | TerminatorKind::VirtualCall { target, .. } => {
+                TerminatorKind::Call { target, .. } | TerminatorKind::GpuLaunch { target, .. } => {
                     if let Some(t) = target {
                         if let Some(new_target) = replacements.get(t) {
                             *t = *new_target;
@@ -175,9 +173,7 @@ fn remove_unreachable_blocks(body: &mut Body) -> bool {
                     }
                     *otherwise = map[otherwise];
                 }
-                TerminatorKind::Call { target, .. }
-                | TerminatorKind::GpuLaunch { target, .. }
-                | TerminatorKind::VirtualCall { target, .. } => {
+                TerminatorKind::Call { target, .. } | TerminatorKind::GpuLaunch { target, .. } => {
                     if let Some(t) = target {
                         *t = map[t];
                     }

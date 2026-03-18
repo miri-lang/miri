@@ -87,9 +87,9 @@ impl Terminator {
                 succs
             }
             TerminatorKind::Return | TerminatorKind::Unreachable => vec![],
-            TerminatorKind::Call { target, .. }
-            | TerminatorKind::GpuLaunch { target, .. }
-            | TerminatorKind::VirtualCall { target, .. } => target.iter().copied().collect(),
+            TerminatorKind::Call { target, .. } | TerminatorKind::GpuLaunch { target, .. } => {
+                target.iter().copied().collect()
+            }
         }
     }
 
@@ -112,9 +112,7 @@ impl Terminator {
                     *otherwise = new;
                 }
             }
-            TerminatorKind::Call { target, .. }
-            | TerminatorKind::GpuLaunch { target, .. }
-            | TerminatorKind::VirtualCall { target, .. } => {
+            TerminatorKind::Call { target, .. } | TerminatorKind::GpuLaunch { target, .. } => {
                 if let Some(t) = target {
                     if *t == old {
                         *t = new;
@@ -181,26 +179,6 @@ impl fmt::Display for Terminator {
                     write!(f, "unwind")
                 }
             }
-            TerminatorKind::VirtualCall {
-                vtable_slot,
-                args,
-                destination,
-                target,
-            } => {
-                write!(f, "{} = vcall[{}](", destination, vtable_slot)?;
-                for (i, arg) in args.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}", arg)?;
-                }
-                write!(f, ") -> ")?;
-                if let Some(t) = target {
-                    write!(f, "{}", t)
-                } else {
-                    write!(f, "unwind")
-                }
-            }
         }
     }
 }
@@ -238,19 +216,6 @@ pub enum TerminatorKind {
         kernel: Operand,
         grid: Operand,
         block: Operand,
-        destination: Place,
-        target: Option<BasicBlock>,
-    },
-    /// Virtual method call dispatched through the receiver's vtable.
-    ///
-    /// `args[0]` is the receiver (self); its vtable pointer is loaded from
-    /// `receiver[0]`. The function pointer is loaded from `vtable[vtable_slot * ptr_size]`
-    /// and called with all `args`.
-    VirtualCall {
-        /// Slot index into the receiver's vtable.
-        vtable_slot: usize,
-        /// Arguments: args[0] is the receiver, rest are method arguments.
-        args: Vec<Operand>,
         destination: Place,
         target: Option<BasicBlock>,
     },

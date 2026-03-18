@@ -115,9 +115,7 @@ impl<'a> SSADestructor<'a> {
                         let needs_split = num_succs > 1
                             || matches!(
                                 term.kind,
-                                TerminatorKind::Call { .. }
-                                    | TerminatorKind::GpuLaunch { .. }
-                                    | TerminatorKind::VirtualCall { .. }
+                                TerminatorKind::Call { .. } | TerminatorKind::GpuLaunch { .. }
                             );
 
                         if needs_split {
