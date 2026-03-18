@@ -235,3 +235,84 @@ class Stranger
         "Protected and cannot be accessed",
     );
 }
+
+// ── Constructor visibility ─────────────────────────────────────────────────────
+
+#[test]
+fn test_private_init_still_constructible_within_class() {
+    // A private `init` is callable through the constructor syntax from outside
+    // because the constructor syntax is the canonical way to build objects.
+    // Document the actual behavior: either it works or gives a clear error.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+class Token
+    private var value int
+    private fn init(v int)
+        self.value = v
+    fn getValue() int
+        self.value
+
+fn main()
+    let t = Token(v: 7)
+    println(f"{t.getValue()}")
+    "#,
+        "7",
+    );
+}
+
+#[test]
+fn test_protected_field_not_accessible_via_sibling_class() {
+    // Two classes share the same parent but are not in a subtype relationship.
+    // Cat is not a subtype of Dog, so Cat must NOT read Dog's protected field
+    // via an instance parameter `d Dog`.
+    assert_compiler_error(
+        r#"
+class Animal
+    protected var dna String
+
+class Dog extends Animal
+
+class Cat extends Animal
+    fn sniff(d Dog) String
+        d.dna
+    "#,
+        "Protected and cannot be accessed",
+    );
+}
+
+#[test]
+fn test_private_field_inaccessible_from_subclass_method() {
+    // A subclass method must NOT read a private field of its parent via `self`.
+    assert_compiler_error(
+        r#"
+class Vehicle
+    private var vin String
+
+class Car extends Vehicle
+    fn getVin() String
+        self.vin
+    "#,
+        "Private and cannot be accessed",
+    );
+}
+
+#[test]
+fn test_visibility_defaults_to_public() {
+    // A field declared without an explicit modifier is accessible externally
+    // (default visibility is public in Miri).
+    assert_runs_with_output(
+        r#"
+use system.io
+
+class Box
+    var side int
+
+fn main()
+    let b = Box(side: 5)
+    println(f"{b.side}")
+    "#,
+        "5",
+    );
+}

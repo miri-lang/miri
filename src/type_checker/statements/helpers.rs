@@ -141,7 +141,17 @@ impl TypeChecker {
         }
     }
 
-    /// Checks if a statement (typically a method body) contains a call to super.init()
+    /// Checks if a statement (typically a method body) contains a call to `super.init()`
+    /// on **all** code paths — i.e., the call is guaranteed to execute regardless of
+    /// runtime conditions.
+    ///
+    /// Rules:
+    /// - Block: guaranteed if any statement in the block is guaranteed (short-circuits).
+    /// - `if`/`else`: guaranteed only when **both** branches guarantee the call.
+    ///   An `if` without an `else` is **not** guaranteed (the else path skips it).
+    /// - `while`/`for`/`until`/`do-while`: never guaranteed — the loop body may not
+    ///   execute at all (zero iterations).
+    /// - Expression statement: guaranteed when the expression itself is `super.init(…)`.
     pub(crate) fn contains_super_init_call(&self, stmt: &Statement) -> bool {
         match &stmt.node {
             StatementKind::Block(stmts) => stmts.iter().any(|s| self.contains_super_init_call(s)),
@@ -150,18 +160,22 @@ impl TypeChecker {
                 .as_ref()
                 .is_some_and(|e| self.expression_contains_super_init(e)),
             StatementKind::If(cond, then_branch, else_branch, _) => {
-                self.expression_contains_super_init(cond)
-                    || self.contains_super_init_call(then_branch)
-                    || else_branch
-                        .as_ref()
-                        .is_some_and(|e| self.contains_super_init_call(e))
+                // If the condition expression is super.init() itself (unusual but possible).
+                if self.expression_contains_super_init(cond) {
+                    return true;
+                }
+                // super.init() is guaranteed only when BOTH the then-branch and the
+                // else-branch call it. A missing else means the call is skipped on that path.
+                let then_has = self.contains_super_init_call(then_branch);
+                let else_has = else_branch
+                    .as_ref()
+                    .is_some_and(|e| self.contains_super_init_call(e));
+                then_has && else_has
             }
-            StatementKind::While(cond, body, _) => {
-                self.expression_contains_super_init(cond) || self.contains_super_init_call(body)
-            }
-            StatementKind::For(_, iter, body) => {
-                self.expression_contains_super_init(iter) || self.contains_super_init_call(body)
-            }
+            // Loop bodies are not guaranteed to execute (zero iterations possible).
+            // Only a super.init() in the loop condition expression itself is guaranteed.
+            StatementKind::While(cond, _body, _) => self.expression_contains_super_init(cond),
+            StatementKind::For(_, iter, _body) => self.expression_contains_super_init(iter),
             StatementKind::Variable(decls, _) => decls.iter().any(|d| {
                 d.initializer
                     .as_ref()

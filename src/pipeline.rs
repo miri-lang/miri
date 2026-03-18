@@ -556,6 +556,51 @@ impl Pipeline {
                         }
                     }
                 }
+                StatementKind::Trait(name_expr, _generics, _parent_traits, body, _vis) => {
+                    // Compile default (non-abstract) trait methods as `TraitName_methodName`.
+                    let trait_name = if let ExpressionKind::Identifier(name, _) = &name_expr.node {
+                        name.as_str()
+                    } else {
+                        continue;
+                    };
+
+                    let self_type =
+                        Type::new(TypeKind::Custom(trait_name.to_string(), None), stmt.span);
+
+                    for method_stmt in body {
+                        if let StatementKind::FunctionDeclaration(method_decl) = &method_stmt.node {
+                            // Only compile methods with a body (default implementations).
+                            if method_decl.body.is_none() {
+                                continue;
+                            }
+
+                            let mangled = format!("{}_{}", trait_name, method_decl.name);
+                            if lowered_names.contains(&mangled) {
+                                continue;
+                            }
+
+                            let (mir_body, lambdas) = mir::lowering::lower_class_method(
+                                method_stmt,
+                                self_type.clone(),
+                                &result.type_checker,
+                                is_release,
+                            )
+                            .map_err(|e| {
+                                CompilerError::Codegen(format!(
+                                    "MIR lowering failed for {}: {}",
+                                    mangled, e
+                                ))
+                            })?;
+
+                            lowered_names.insert(mangled.clone());
+                            bodies.push((mangled, mir_body));
+                            for lambda in lambdas {
+                                lowered_names.insert(lambda.name.clone());
+                                bodies.push((lambda.name, lambda.body));
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }

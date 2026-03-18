@@ -9,4 +9,5 @@ pub mod constructor;
 pub mod drop;
 pub mod inheritance;
 pub mod super_calls;
+pub mod traits;
 pub mod visibility;
