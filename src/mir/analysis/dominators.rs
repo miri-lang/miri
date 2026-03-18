@@ -92,9 +92,7 @@ fn compute_predecessors(body: &Body) -> HashMap<BasicBlock, Vec<BasicBlock>> {
                     succs
                 }
                 TerminatorKind::Return | TerminatorKind::Unreachable => vec![],
-                TerminatorKind::Call { target, .. }
-                | TerminatorKind::GpuLaunch { target, .. }
-                | TerminatorKind::VirtualCall { target, .. } => {
+                TerminatorKind::Call { target, .. } | TerminatorKind::GpuLaunch { target, .. } => {
                     if let Some(t) = target {
                         vec![*t]
                     } else {
