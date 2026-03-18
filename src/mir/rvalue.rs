@@ -36,6 +36,10 @@ pub enum AggregateKind {
     Enum(Rc<str>, Rc<str>),
     /// An Option value, `Some(val)`. It is heap-allocated for correct representation.
     Option,
+    /// A closure allocation. The `Rc<str>` is the lambda function name.
+    /// The `Type` is the lambda's function type (used to build fn_ptr signature in codegen).
+    /// Operands are captured values in slot order.
+    Closure(std::rc::Rc<str>, crate::ast::types::Type),
 }
 
 /// Right-hand value: the result of a computation.
@@ -159,6 +163,16 @@ impl fmt::Display for Rvalue {
                 }
                 AggregateKind::Option => {
                     write!(f, "Some(")?;
+                    for (i, op) in ops.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", op)?;
+                    }
+                    write!(f, ")")
+                }
+                AggregateKind::Closure(name, _) => {
+                    write!(f, "closure<{}>(", name)?;
                     for (i, op) in ops.iter().enumerate() {
                         if i > 0 {
                             write!(f, ", ")?;

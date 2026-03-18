@@ -188,6 +188,75 @@ pub fn collect_class_fields_all<'a>(
         .collect()
 }
 
+/// Returns `true` if `class_name` or any ancestor in the inheritance chain is abstract.
+///
+/// Abstract classes use vtable-based virtual dispatch and store a vtable pointer
+/// as the first word (offset 0) of their heap payload.
+pub fn class_needs_vtable(class_name: &str, type_defs: &HashMap<String, TypeDefinition>) -> bool {
+    let mut current = class_name.to_string();
+    loop {
+        match type_defs.get(&current) {
+            Some(TypeDefinition::Class(cd)) => {
+                if cd.is_abstract {
+                    return true;
+                }
+                match cd.base_class.clone() {
+                    Some(base) => current = base,
+                    None => return false,
+                }
+            }
+            _ => return false,
+        }
+    }
+}
+
+/// Returns the vtable slot index for `method_name` in the vtable of a class
+/// that inherits from `abstract_class`.
+///
+/// Slot ordering: collect all non-constructor methods from the full abstract
+/// ancestor chain starting at `abstract_class`, deduplicated, sorted
+/// alphabetically. Returns `None` if not found.
+pub fn vtable_slot_index(
+    abstract_class: &str,
+    method_name: &str,
+    type_defs: &HashMap<String, TypeDefinition>,
+) -> Option<usize> {
+    // Collect all abstract ancestors starting from abstract_class (inclusive),
+    // walking up the chain.
+    let mut abstract_chain: Vec<String> = Vec::new();
+    let mut current = abstract_class.to_string();
+    loop {
+        match type_defs.get(&current) {
+            Some(TypeDefinition::Class(cd)) if cd.is_abstract => {
+                abstract_chain.push(current.clone());
+                match cd.base_class.clone() {
+                    Some(base) => current = base,
+                    None => break,
+                }
+            }
+            _ => break,
+        }
+    }
+
+    // Collect methods from all abstract ancestors (topmost last in chain,
+    // so we reverse to process topmost first), deduplicated, alphabetically sorted.
+    let mut seen = std::collections::BTreeSet::new();
+    let mut all_methods: Vec<String> = Vec::new();
+    for ancestor in abstract_chain.iter().rev() {
+        if let Some(TypeDefinition::Class(cd)) = type_defs.get(ancestor) {
+            for (name, m) in &cd.methods {
+                if !m.is_constructor && !seen.contains(name) {
+                    seen.insert(name.clone());
+                    all_methods.push(name.clone());
+                }
+            }
+        }
+    }
+    all_methods.sort();
+
+    all_methods.iter().position(|n| n.as_str() == method_name)
+}
+
 /// Context holds the current state of the type checking process, including
 /// variable scopes, return types for functions, and loop depth.
 pub struct Context {

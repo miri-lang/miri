@@ -15,8 +15,53 @@ use crate::mir::{
 use super::{helpers::coerce_rvalue, lower_expression, lower_statement, LoweringContext};
 use crate::error::lowering::LoweringError;
 use crate::type_checker::context::{
-    collect_class_fields_all, ClassDefinition, MethodInfo, StructDefinition, TypeDefinition,
+    class_needs_vtable, collect_class_fields_all, vtable_slot_index, ClassDefinition, MethodInfo,
+    StructDefinition, TypeDefinition,
 };
+
+/// Produce a mangled function name for a generic instantiation.
+///
+/// Example: `identity` with `[("T", int)]` → `identity__int`
+pub(crate) fn mangle_generic_name(
+    base: &str,
+    type_args: &[(String, crate::ast::types::Type)],
+) -> String {
+    if type_args.is_empty() {
+        return base.to_string();
+    }
+    let suffix: Vec<String> = type_args
+        .iter()
+        .map(|(_, ty)| type_kind_to_mangle_str(&ty.kind))
+        .collect();
+    format!("{}__{}", base, suffix.join("__"))
+}
+
+fn type_kind_to_mangle_str(kind: &TypeKind) -> String {
+    match kind {
+        TypeKind::Int => "int".to_string(),
+        TypeKind::Float | TypeKind::F64 => "float".to_string(),
+        TypeKind::F32 => "f32".to_string(),
+        TypeKind::Boolean => "bool".to_string(),
+        TypeKind::String => "String".to_string(),
+        TypeKind::Void => "void".to_string(),
+        TypeKind::Custom(name, None) => name.clone(),
+        TypeKind::Custom(name, Some(_)) => name.clone(),
+        TypeKind::List(_) => "list".to_string(),
+        TypeKind::Array(_, _) => "array".to_string(),
+        TypeKind::Map(_, _) => "map".to_string(),
+        TypeKind::Set(_) => "set".to_string(),
+        TypeKind::Option(_) => "option".to_string(),
+        TypeKind::I8 => "i8".to_string(),
+        TypeKind::I16 => "i16".to_string(),
+        TypeKind::I32 => "i32".to_string(),
+        TypeKind::I64 => "i64".to_string(),
+        TypeKind::U8 => "u8".to_string(),
+        TypeKind::U16 => "u16".to_string(),
+        TypeKind::U32 => "u32".to_string(),
+        TypeKind::U64 => "u64".to_string(),
+        _ => "unknown".to_string(),
+    }
+}
 
 /// Walk the inheritance chain starting at `class_name` to find the first class
 /// that directly declares `method_name`. Returns the defining class name and a
@@ -1106,7 +1151,6 @@ pub fn lower_call(
                         &class_name,
                         method_name,
                     ) {
-                        let mangled_name = format!("{}_{}", defining_class, method_name);
                         let return_ty = method_info.return_type.clone();
 
                         // For `super.method()`, the receiver must be `self` (the current
@@ -1124,11 +1168,66 @@ pub fn lower_call(
                         } else {
                             lower_expression(ctx, obj, None)?
                         };
+
+                        let (destination, op) = if let Some(d) = dest {
+                            (d.clone(), Operand::Copy(d))
+                        } else {
+                            let temp = ctx.push_temp(return_ty, *span);
+                            let p = Place::new(temp);
+                            (p.clone(), Operand::Copy(p))
+                        };
+
+                        let target_bb = ctx.new_basic_block();
+
+                        // Virtual dispatch: when the receiver's static type is an abstract class,
+                        // look up the function pointer through the object's vtable at runtime.
+                        let use_virtual_dispatch = !matches!(&obj.node, ExpressionKind::Super)
+                            && class_needs_vtable(
+                                &class_name,
+                                &ctx.type_checker.global_type_definitions,
+                            )
+                            && matches!(
+                                ctx.type_checker.global_type_definitions.get(&class_name),
+                                Some(TypeDefinition::Class(cd)) if cd.is_abstract
+                            );
+
+                        if use_virtual_dispatch {
+                            // Find the vtable slot index in the abstract class's method table.
+                            if let Some(slot) = vtable_slot_index(
+                                &class_name,
+                                method_name,
+                                &ctx.type_checker.global_type_definitions,
+                            ) {
+                                let mut call_args = vec![self_op];
+                                for arg in args {
+                                    call_args.push(lower_expression(ctx, arg, None)?);
+                                }
+                                // Inject allocator — compiled class methods accept it as their last arg
+                                if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
+                                    call_args.push(Operand::Copy(Place::new(alloc_local)));
+                                }
+
+                                ctx.set_terminator(Terminator::new(
+                                    TerminatorKind::VirtualCall {
+                                        vtable_slot: slot,
+                                        args: call_args,
+                                        destination,
+                                        target: Some(target_bb),
+                                    },
+                                    *span,
+                                ));
+                                ctx.set_current_block(target_bb);
+                                return Ok(op);
+                            }
+                            // If slot not found, fall through to static dispatch below.
+                        }
+
+                        // Static dispatch path (concrete receiver type, super calls, etc.)
+                        let mangled_name = format!("{}_{}", defining_class, method_name);
                         let mut call_args = vec![self_op];
                         for arg in args {
                             call_args.push(lower_expression(ctx, arg, None)?);
                         }
-
                         // Inject allocator — compiled class methods accept it as their last arg
                         if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
                             call_args.push(Operand::Copy(Place::new(alloc_local)));
@@ -1140,15 +1239,6 @@ pub fn lower_call(
                             literal: crate::ast::literal::Literal::Identifier(mangled_name),
                         }));
 
-                        let (destination, op) = if let Some(d) = dest {
-                            (d.clone(), Operand::Copy(d))
-                        } else {
-                            let temp = ctx.push_temp(return_ty, *span);
-                            let p = Place::new(temp);
-                            (p.clone(), Operand::Copy(p))
-                        };
-
-                        let target_bb = ctx.new_basic_block();
                         ctx.set_terminator(Terminator::new(
                             TerminatorKind::Call {
                                 func: func_op,
@@ -1362,9 +1452,35 @@ pub fn lower_call(
 
     let func_op = lower_expression(ctx, func, None)?;
 
-    // Try to get function type to check parameters
+    // If this call site has generic type substitutions, mangle the function name.
+    let func_op = if let ExpressionKind::Identifier(func_name, _) = &func.node {
+        if let Some(generic_args) = ctx.type_checker.call_generic_mappings.get(&call_expr_id) {
+            let mangled = mangle_generic_name(func_name, generic_args);
+            Operand::Constant(Box::new(crate::mir::Constant {
+                span: func.span,
+                ty: crate::ast::types::Type::new(TypeKind::Identifier, func.span),
+                literal: crate::ast::literal::Literal::Identifier(mangled),
+            }))
+        } else {
+            func_op
+        }
+    } else {
+        func_op
+    };
+
+    // Try to get function type to check parameters.
+    // For generic calls (those with a mangled name), skip parameter coercion: the
+    // arguments already have the correct concrete types and coercing them against the
+    // unsubstituted generic parameter type (TypeKind::Custom("T", None)) would corrupt
+    // the call signature.
+    let is_generic_call = ctx
+        .type_checker
+        .call_generic_mappings
+        .contains_key(&call_expr_id);
     let func_ty = ctx.type_checker.get_type(func.id);
-    let param_types = if let Some(ty) = func_ty {
+    let param_types = if is_generic_call {
+        None
+    } else if let Some(ty) = func_ty {
         if let TypeKind::Function(func) = &ty.kind {
             Some(func.params.clone())
         } else {

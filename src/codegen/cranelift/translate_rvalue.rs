@@ -5,6 +5,7 @@ use crate::codegen::cranelift::layout::field_layout;
 use crate::codegen::cranelift::translator::{FunctionTranslator, ModuleCtx, TypeCtx};
 use crate::codegen::cranelift::types::translate_type;
 use crate::mir::{AggregateKind, BinOp, Constant, Local, Operand, Rvalue, UnOp};
+use crate::type_checker::context::class_needs_vtable;
 use cranelift_codegen::ir::{
     condcodes::{FloatCC, IntCC},
     types as cl_types, InstBuilder, MemFlags, StackSlotData, StackSlotKind, TrapCode, Value,
@@ -153,6 +154,19 @@ impl<'a> FunctionTranslator<'a> {
             }
 
             Rvalue::Aggregate(kind, operands) => {
+                // Handle closure allocation separately.
+                if let AggregateKind::Closure(lambda_name, fn_type) = kind {
+                    return Self::translate_closure_aggregate(
+                        builder,
+                        ctx,
+                        lambda_name,
+                        fn_type,
+                        operands,
+                        locals,
+                        type_ctx,
+                    );
+                }
+
                 let is_collection = matches!(
                     kind,
                     AggregateKind::Array
@@ -292,7 +306,19 @@ impl<'a> FunctionTranslator<'a> {
                     }
                 } else {
                     // Non-collection aggregates (Tuple, Struct, Class, Enum, etc.)
-                    if operands.is_empty() {
+                    // Empty operands normally mean a zero-sized value (null pointer).
+                    // EXCEPTION: vtable-bearing classes must still be heap-allocated so
+                    // the vtable pointer slot at payload[0] can be written.
+                    let needs_vtable_alloc = if let AggregateKind::Class(ty) = kind {
+                        if let TypeKind::Custom(class_name, _) = &ty.kind {
+                            class_needs_vtable(class_name, type_ctx.type_definitions)
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+                    if operands.is_empty() && !needs_vtable_alloc {
                         return Ok(builder.ins().iconst(ptr_type, 0));
                     }
 
@@ -326,11 +352,32 @@ impl<'a> FunctionTranslator<'a> {
                         .collect::<Result<_, _>>()?;
 
                     // For tuples, prepend a length field (ptr_size) so runtime methods work.
-                    // Layout: [malloc_ptr][RC][elem_count][field0][field1]...
+                    // For vtable-bearing classes, prepend a vtable pointer slot (ptr_size).
+                    // Layout for classes: [malloc_ptr][RC][vtable_ptr?][field0][field1]...
                     let tuple_header = if is_tuple { ptr_size as u32 } else { 0 };
 
+                    // Determine if this class needs a vtable pointer at offset 0.
+                    let vtable_header = if let AggregateKind::Class(ty) = kind {
+                        if let TypeKind::Custom(class_name, _) = &ty.kind {
+                            if class_needs_vtable(class_name, type_ctx.type_definitions) {
+                                Some(class_name.clone())
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    let vtable_header_size = if vtable_header.is_some() {
+                        ptr_size as u32
+                    } else {
+                        0
+                    };
+
                     // Compute field offsets with proper alignment
-                    let mut current_offset: u32 = tuple_header;
+                    let mut current_offset: u32 = tuple_header + vtable_header_size;
                     let mut field_offsets = Vec::new();
                     let mut max_align: u32 = if is_tuple { ptr_size as u32 } else { 1 };
 
@@ -379,6 +426,30 @@ impl<'a> FunctionTranslator<'a> {
                     if is_tuple {
                         let count = builder.ins().iconst(ptr_type, translated.len() as i64);
                         builder.ins().store(MemFlags::new(), count, payload_ptr, 0);
+                    }
+
+                    // For vtable-bearing classes, store vtable pointer at offset 0 of payload.
+                    if let Some(ref class_name) = vtable_header {
+                        use cranelift_module::Module;
+                        let vtable_sym = format!("__vtable_{}", class_name);
+                        let vtable_data_id = ctx
+                            .module
+                            .declare_data(
+                                &vtable_sym,
+                                cranelift_module::Linkage::Import,
+                                false,
+                                false,
+                            )
+                            .map_err(|e| {
+                                format!("Failed to declare vtable {}: {}", vtable_sym, e)
+                            })?;
+                        let gv = ctx
+                            .module
+                            .declare_data_in_func(vtable_data_id, builder.func);
+                        let vtable_ptr = builder.ins().global_value(ptr_type, gv);
+                        builder
+                            .ins()
+                            .store(MemFlags::new(), vtable_ptr, payload_ptr, 0);
                     }
 
                     for (i, val) in translated.into_iter().enumerate() {
@@ -618,6 +689,119 @@ impl<'a> FunctionTranslator<'a> {
             Literal::Regex(_) => Err("Regex constants not supported in codegen".to_string()),
         }
     }
+    /// Translate a closure aggregate into a heap-allocated closure struct.
+    ///
+    /// Layout: [raw_ptr(=malloc_ptr)][RC=1][fn_ptr][cap0][cap1]...
+    /// The returned value is `payload_ptr` = `raw_ptr + 2*ptr_size`.
+    fn translate_closure_aggregate(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        lambda_name: &str,
+        fn_type: &crate::ast::types::Type,
+        capture_ops: &[Operand],
+        locals: &HashMap<Local, Variable>,
+        type_ctx: &TypeCtx,
+    ) -> Result<Value, String> {
+        use cranelift_codegen::ir::condcodes::IntCC;
+        use cranelift_codegen::ir::TrapCode;
+        use cranelift_module::Module;
+
+        let ptr_type = type_ctx.ptr_type;
+        let ptr_size = ptr_type.bytes() as i64;
+
+        // Translate captured values.
+        let capture_vals: Vec<Value> = capture_ops
+            .iter()
+            .map(|op| Self::translate_operand(builder, ctx, op, locals, type_ctx))
+            .collect::<Result<_, _>>()?;
+
+        // Compute total allocation size:
+        //   2 * ptr_size  (header: malloc_ptr + RC)
+        // + ptr_size       (fn_ptr slot)
+        // + ptr_size * N   (one ptr-size slot per capture)
+        let n_captures = capture_vals.len();
+        let total_size = (2 + 1 + n_captures as i64) * ptr_size;
+        let size_val = builder.ins().iconst(ptr_type, total_size);
+
+        // Allocate raw memory.
+        let raw_ptr = Self::call_libc_malloc(builder, ctx, size_val)?;
+
+        // Trap on OOM.
+        let null = builder.ins().iconst(ptr_type, 0);
+        let is_null = builder.ins().icmp(IntCC::Equal, raw_ptr, null);
+        let trap_code = TrapCode::user(2).expect("valid user trap code");
+        builder.ins().trapnz(is_null, trap_code);
+
+        // Store malloc_ptr at offset 0 (so free() can recover the original pointer).
+        builder.ins().store(MemFlags::new(), raw_ptr, raw_ptr, 0);
+
+        // Store RC = 1 at offset ptr_size.
+        let one = builder.ins().iconst(ptr_type, 1);
+        builder
+            .ins()
+            .store(MemFlags::new(), one, raw_ptr, ptr_size as i32);
+
+        // payload_ptr = raw_ptr + 2*ptr_size
+        let payload_ptr = builder.ins().iadd_imm(raw_ptr, 2 * ptr_size);
+
+        // Build the lambda's Cranelift signature (env_ptr first, then user params).
+        let call_conv = builder.func.signature.call_conv;
+        let mut sig = cranelift_codegen::ir::Signature::new(call_conv);
+        // env_ptr is always the first parameter.
+        sig.params
+            .push(cranelift_codegen::ir::AbiParam::new(ptr_type));
+        if let crate::ast::types::TypeKind::Function(func_data) = &fn_type.kind {
+            use crate::ast::expression::ExpressionKind;
+            for param in &func_data.params {
+                if let ExpressionKind::Type(param_type, _) = &param.typ.node {
+                    sig.params
+                        .push(cranelift_codegen::ir::AbiParam::new(translate_type(
+                            param_type, ptr_type,
+                        )));
+                }
+            }
+            if let Some(ret_expr) = &func_data.return_type {
+                if let ExpressionKind::Type(ret_type, _) = &ret_expr.node {
+                    use crate::ast::types::TypeKind;
+                    if ret_type.kind != TypeKind::Void {
+                        sig.returns
+                            .push(cranelift_codegen::ir::AbiParam::new(translate_type(
+                                ret_type, ptr_type,
+                            )));
+                    }
+                }
+            }
+        }
+
+        // Declare the lambda function and get its address.
+        let func_id = ctx
+            .module
+            .declare_function(lambda_name, cranelift_module::Linkage::Import, &sig)
+            .map_err(|e| format!("Error declaring closure fn {}: {}", lambda_name, e))?;
+        let func_ref = ctx.module.declare_func_in_func(func_id, builder.func);
+        let fn_ptr = builder.ins().func_addr(ptr_type, func_ref);
+
+        // Store fn_ptr at payload[0] (offset 0 from payload_ptr).
+        builder.ins().store(MemFlags::new(), fn_ptr, payload_ptr, 0);
+
+        // Store each captured value in its slot (widened to ptr_size).
+        for (i, val) in capture_vals.into_iter().enumerate() {
+            let val_ty = builder.func.dfg.value_type(val);
+            let widened =
+                if val_ty != ptr_type && val_ty.is_int() && val_ty.bits() < ptr_type.bits() {
+                    builder.ins().sextend(ptr_type, val)
+                } else {
+                    val
+                };
+            let offset = (1 + i as i32) * ptr_size as i32;
+            builder
+                .ins()
+                .store(MemFlags::new(), widened, payload_ptr, offset);
+        }
+
+        Ok(payload_ptr)
+    }
+
     /// Translate a binary operation.
     ///
     /// `is_unsigned` indicates whether the operands are unsigned integer types.
