@@ -28,7 +28,6 @@ use crate::mir::{
     StatementKind as MirStatementKind, Terminator, TerminatorKind,
 };
 use crate::type_checker::TypeChecker;
-use std::collections::HashMap;
 
 // Re-export commonly used items from submodules
 pub use context::LoweringContext;
@@ -112,93 +111,6 @@ pub fn lower_function(
     emit_parameter_guards(&mut ctx, params)?;
 
     // Lower body with support for implicit return
-    if let Some(body_box) = body_stmt {
-        lower_as_return(&mut ctx, body_box, &ret_ty)?;
-    }
-
-    finalize_body(&mut ctx, ast_func.span)
-}
-
-/// Apply a generic substitution mapping to a `Type`, replacing generic parameters
-/// with their concrete counterparts.
-///
-/// Handles two representations that appear in `resolve_type` output:
-/// - `TypeKind::Generic("T", ...)` - explicit generic placeholder
-/// - `TypeKind::Custom("T", None)` - generic param written as a plain identifier
-pub(crate) fn apply_generic_sub(ty: &Type, subs: &HashMap<String, Type>) -> Type {
-    match &ty.kind {
-        TypeKind::Generic(name, _, _) => subs.get(name).cloned().unwrap_or_else(|| ty.clone()),
-        TypeKind::Custom(name, None) if subs.contains_key(name.as_str()) => {
-            subs[name.as_str()].clone()
-        }
-        _ => ty.clone(),
-    }
-}
-
-/// Lower a generic function with concrete type substitutions to produce a
-/// specialised MIR Body.
-///
-/// This is used by the monomorphisation pass in the pipeline after all call
-/// sites have been lowered. `mangled_name` is the already-computed symbol
-/// (e.g. `identity__int`) and `subs` maps each generic parameter name to its
-/// concrete type.
-pub fn lower_generic_instantiation(
-    ast_func: &Statement,
-    tc: &TypeChecker,
-    is_release: bool,
-    inject_allocator: bool,
-    subs: &HashMap<String, Type>,
-) -> Result<(Body, Vec<LambdaInfo>), LoweringError> {
-    let StatementKind::FunctionDeclaration(decl) = &ast_func.node else {
-        return Err(LoweringError::unsupported_statement(
-            "Expected FunctionDeclaration".to_string(),
-            ast_func.span,
-        ));
-    };
-    let name = &decl.name;
-    let params = &decl.params;
-    let ret_type_expr = &decl.return_type;
-    let body_stmt = &decl.body;
-    let props = &decl.properties;
-
-    // Resolve return type with generic substitution applied
-    let ret_ty = if let Some(ret_expr) = ret_type_expr {
-        apply_generic_sub(&resolve_type(tc, ret_expr), subs)
-    } else if let Some(ty) = tc.get_variable_type(name) {
-        if let TypeKind::Function(func) = &ty.kind {
-            if let Some(rt) = &func.return_type {
-                apply_generic_sub(&resolve_type(tc, rt), subs)
-            } else {
-                Type::new(TypeKind::Void, ast_func.span)
-            }
-        } else {
-            Type::new(TypeKind::Void, ast_func.span)
-        }
-    } else {
-        Type::new(TypeKind::Void, ast_func.span)
-    };
-
-    let execution_model = resolve_execution_model(props);
-
-    let body = Body::new(params.len(), ast_func.span, execution_model);
-    let mut ctx = LoweringContext::new(body, tc, is_release);
-
-    // _0: Return value (concrete type)
-    ctx.body
-        .new_local(LocalDecl::new(ret_ty.clone(), ast_func.span));
-
-    // Lower parameters with generic substitution
-    for param in params.iter() {
-        let param_ty = apply_generic_sub(&resolve_type(tc, &param.typ), subs);
-        ctx.push_param(param.name.clone(), param_ty, param.typ.span);
-    }
-
-    if inject_allocator {
-        inject_allocator_param(&mut ctx, name, ast_func.span);
-    }
-
-    emit_parameter_guards(&mut ctx, params)?;
-
     if let Some(body_box) = body_stmt {
         lower_as_return(&mut ctx, body_box, &ret_ty)?;
     }
