@@ -105,7 +105,8 @@ impl SSABuilder {
             if let Some(terminator) = &block.terminator {
                 match &terminator.kind {
                     TerminatorKind::Call { destination, .. }
-                    | TerminatorKind::GpuLaunch { destination, .. } => {
+                    | TerminatorKind::GpuLaunch { destination, .. }
+                    | TerminatorKind::VirtualCall { destination, .. } => {
                         if destination.projection.is_empty() {
                             self.def_sites[destination.local.0].insert(bb);
                         }
@@ -218,7 +219,8 @@ impl SSABuilder {
         if let Some(terminator) = &mut basic_blocks[block.0].terminator {
             match &mut terminator.kind {
                 TerminatorKind::Call { destination, .. }
-                | TerminatorKind::GpuLaunch { destination, .. } => {
+                | TerminatorKind::GpuLaunch { destination, .. }
+                | TerminatorKind::VirtualCall { destination, .. } => {
                     if destination.projection.is_empty() {
                         let new_local = self.new_version(local_decls, destination.local);
                         let original = self.get_original_local(destination.local);
@@ -299,6 +301,11 @@ impl SSABuilder {
             TerminatorKind::SwitchInt { discr, .. } => self.rewrite_operand(discr),
             TerminatorKind::Call { func, args, .. } => {
                 self.rewrite_operand(func);
+                for arg in args {
+                    self.rewrite_operand(arg);
+                }
+            }
+            TerminatorKind::VirtualCall { args, .. } => {
                 for arg in args {
                     self.rewrite_operand(arg);
                 }
@@ -406,7 +413,9 @@ impl SSABuilder {
                     }
                     succs.push(*otherwise);
                 }
-                TerminatorKind::Call { target, .. } | TerminatorKind::GpuLaunch { target, .. } => {
+                TerminatorKind::Call { target, .. }
+                | TerminatorKind::GpuLaunch { target, .. }
+                | TerminatorKind::VirtualCall { target, .. } => {
                     if let Some(t) = target {
                         succs.push(*t);
                     }

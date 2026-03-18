@@ -303,10 +303,28 @@ impl<'a> FunctionTranslator<'a> {
                         builder.def_var(*dest_var, result);
                     }
                 } else {
-                    // Indirect call through a function pointer stored in a local variable.
-                    let func_ptr = Self::translate_operand(builder, ctx, func, locals, type_ctx)?;
-                    let sig_ref = builder.import_signature(sig);
-                    let call = builder.ins().call_indirect(sig_ref, func_ptr, &arg_values);
+                    // Indirect call through a closure struct.
+                    // Layout: payload_ptr[0] = fn_ptr, payload_ptr[ptr_size..] = captures.
+                    let closure_ptr =
+                        Self::translate_operand(builder, ctx, func, locals, type_ctx)?;
+
+                    // Load fn_ptr from closure struct (first word of payload).
+                    let fn_ptr = builder
+                        .ins()
+                        .load(ptr_type, MemFlags::new(), closure_ptr, 0);
+
+                    // Prepend env_ptr (= closure_ptr) to the argument list.
+                    let mut full_args = vec![closure_ptr];
+                    full_args.extend_from_slice(&arg_values);
+
+                    // Prepend env_ptr to the signature.
+                    let mut full_sig = Signature::new(builder.func.signature.call_conv);
+                    full_sig.params.push(AbiParam::new(ptr_type)); // env_ptr
+                    full_sig.params.extend(sig.params);
+                    full_sig.returns.extend(sig.returns);
+
+                    let sig_ref = builder.import_signature(full_sig);
+                    let call = builder.ins().call_indirect(sig_ref, fn_ptr, &full_args);
 
                     if dest_ty.kind != TypeKind::Void {
                         let result = builder.inst_results(call)[0];
@@ -331,6 +349,65 @@ impl<'a> FunctionTranslator<'a> {
 
             TerminatorKind::GpuLaunch { .. } => {
                 return Err("GPU launches not supported in CPU backend".to_string());
+            }
+
+            TerminatorKind::VirtualCall {
+                vtable_slot,
+                args,
+                destination,
+                target,
+            } => {
+                // args[0] is the receiver. Load vtable ptr from receiver[0], then
+                // load fn_ptr from vtable[vtable_slot * ptr_size], then call_indirect.
+                debug_assert!(
+                    !args.is_empty(),
+                    "VirtualCall must have at least one arg (receiver)"
+                );
+
+                // Translate all arguments
+                let mut sig = Signature::new(builder.func.signature.call_conv);
+                let mut arg_values = Vec::new();
+                for arg in args {
+                    let val = Self::translate_operand(builder, ctx, arg, locals, type_ctx)?;
+                    arg_values.push(val);
+                    sig.params
+                        .push(AbiParam::new(builder.func.dfg.value_type(val)));
+                }
+
+                let dest_ty = &body.local_decls[destination.local.0].ty;
+                let cl_dest_ty = translate_type(dest_ty, ptr_type);
+                if dest_ty.kind != TypeKind::Void {
+                    sig.returns.push(AbiParam::new(cl_dest_ty));
+                }
+
+                // Load vtable pointer from receiver[0]
+                let receiver_ptr = arg_values[0];
+                let vtable_ptr = builder
+                    .ins()
+                    .load(ptr_type, MemFlags::new(), receiver_ptr, 0);
+
+                // Load fn_ptr from vtable[slot * ptr_size]
+                let slot_offset = (*vtable_slot as i32) * ptr_type.bytes() as i32;
+                let fn_ptr = builder
+                    .ins()
+                    .load(ptr_type, MemFlags::new(), vtable_ptr, slot_offset);
+
+                // Call via call_indirect — receiver is already in arg_values[0]
+                let sig_ref = builder.import_signature(sig);
+                let call = builder.ins().call_indirect(sig_ref, fn_ptr, &arg_values);
+
+                if dest_ty.kind != TypeKind::Void {
+                    let result = builder.inst_results(call)[0];
+                    let dest_var = locals.get(&destination.local).ok_or_else(|| {
+                        format!("Unknown vcall destination local: {:?}", destination.local)
+                    })?;
+                    builder.def_var(*dest_var, result);
+                }
+
+                if let Some(t) = target {
+                    let target_block = blocks[t];
+                    builder.ins().jump(target_block, &[]);
+                }
             }
         }
 

@@ -264,6 +264,11 @@ impl Backend for CraneliftBackend {
             )?;
         }
 
+        // Generate vtables for classes that participate in virtual dispatch.
+        // Must run after all user functions are compiled so method symbols are registered.
+        FunctionTranslator::generate_vtables(&mut module, &isa, &self.type_definitions)
+            .map_err(|e| CodegenError::Module(format!("vtable generation: {e}")))?;
+
         // Define string literals as static data structures
         let ptr_type = isa.pointer_type();
         let ptr_size = ptr_type.bytes();
