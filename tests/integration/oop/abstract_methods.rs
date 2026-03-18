@@ -266,6 +266,7 @@ fn main()
 
 #[test]
 fn test_non_abstract_class_missing_override_is_error() {
+    // TODO: needs to validate the specific error message
     assert_compiler_error(
         r#"
 abstract class Animal

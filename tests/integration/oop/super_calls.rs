@@ -31,15 +31,61 @@ fn main()
     );
 }
 
-// NOTE: a test verifying that the actual self pointer (not null) is passed
-// through super.method() requires both inherited field layout and inherited
-// class construction, which are not yet implemented. The tests above verify
-// the dispatch logic (correct method mangling + receiver passing) for methods
-// that do not access self fields.
-//
-// When inherited field layout is implemented (tracked separately), add a test
-// like: parent method reads self.count, child calls super.show(), verify
-// the value equals what was set in the child's init.
+// ── Super calls that read/write self fields ───────────────────────────────────
+
+#[test]
+fn test_super_method_reads_own_field_via_self() {
+    // The parent method reads `self.count`; child's super.show() must pass the
+    // real self pointer so the value set in child's init is visible.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+class Counter
+    var count int
+    fn init(c int)
+        self.count = c
+    fn show()
+        println(f"{self.count}")
+
+class DoubleCounter extends Counter
+    fn showViaSuper()
+        super.show()
+
+fn main()
+    let dc = DoubleCounter(c: 7)
+    dc.showViaSuper()
+    "#,
+        "7",
+    );
+}
+
+#[test]
+fn test_super_method_modifies_field_visible_in_child() {
+    // Parent method mutates `self.value`; after super.reset() the child sees 0.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+class Base
+    var value int
+    fn init(v int)
+        self.value = v
+    fn reset()
+        self.value = 0
+
+class Child extends Base
+    fn resetAndPrint()
+        super.reset()
+        println(f"{self.value}")
+
+fn main()
+    let c = Child(v: 42)
+    c.resetAndPrint()
+    "#,
+        "0",
+    );
+}
 
 #[test]
 fn test_super_method_call_basic() {

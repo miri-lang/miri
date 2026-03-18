@@ -188,16 +188,17 @@ pub fn collect_class_fields_all<'a>(
         .collect()
 }
 
-/// Returns `true` if `class_name` or any ancestor in the inheritance chain is abstract.
+/// Returns `true` if `class_name` or any ancestor in the inheritance chain is abstract,
+/// or if the class (or any ancestor) implements at least one trait.
 ///
-/// Abstract classes use vtable-based virtual dispatch and store a vtable pointer
-/// as the first word (offset 0) of their heap payload.
+/// Both abstract classes and trait-implementing classes use vtable-based virtual dispatch
+/// and store a vtable pointer as the first word (offset 0) of their heap payload.
 pub fn class_needs_vtable(class_name: &str, type_defs: &HashMap<String, TypeDefinition>) -> bool {
     let mut current = class_name.to_string();
     loop {
         match type_defs.get(&current) {
             Some(TypeDefinition::Class(cd)) => {
-                if cd.is_abstract {
+                if cd.is_abstract || !cd.traits.is_empty() {
                     return true;
                 }
                 match cd.base_class.clone() {
@@ -211,20 +212,32 @@ pub fn class_needs_vtable(class_name: &str, type_defs: &HashMap<String, TypeDefi
 }
 
 /// Returns the vtable slot index for `method_name` in the vtable of a class
-/// that inherits from `abstract_class`.
+/// that inherits from `abstract_class_or_trait`.
 ///
-/// Slot ordering: collect all non-constructor methods from the full abstract
-/// ancestor chain starting at `abstract_class`, deduplicated, sorted
-/// alphabetically. Returns `None` if not found.
+/// When `abstract_class_or_trait` is a trait name, collects all non-constructor
+/// methods from the trait hierarchy (sorted alphabetically) and returns the position.
+///
+/// When it is an abstract class name, collects all non-constructor methods from
+/// the full abstract ancestor chain, deduplicated, sorted alphabetically.
 pub fn vtable_slot_index(
-    abstract_class: &str,
+    abstract_class_or_trait: &str,
     method_name: &str,
     type_defs: &HashMap<String, TypeDefinition>,
 ) -> Option<usize> {
+    // Handle trait-typed receivers.
+    if matches!(
+        type_defs.get(abstract_class_or_trait),
+        Some(TypeDefinition::Trait(_))
+    ) {
+        let mut methods = collect_trait_vtable_methods(type_defs, abstract_class_or_trait);
+        methods.sort();
+        return methods.iter().position(|n| n.as_str() == method_name);
+    }
+
     // Collect all abstract ancestors starting from abstract_class (inclusive),
     // walking up the chain.
     let mut abstract_chain: Vec<String> = Vec::new();
-    let mut current = abstract_class.to_string();
+    let mut current = abstract_class_or_trait.to_string();
     loop {
         match type_defs.get(&current) {
             Some(TypeDefinition::Class(cd)) if cd.is_abstract => {
@@ -255,6 +268,30 @@ pub fn vtable_slot_index(
     all_methods.sort();
 
     all_methods.iter().position(|n| n.as_str() == method_name)
+}
+
+/// Collect all non-constructor method names from a trait and its parent traits.
+pub fn collect_trait_vtable_methods(
+    type_defs: &HashMap<String, TypeDefinition>,
+    trait_name: &str,
+) -> Vec<String> {
+    let mut methods = Vec::new();
+    let mut to_check = vec![trait_name.to_string()];
+    let mut visited = std::collections::HashSet::new();
+    while let Some(t_name) = to_check.pop() {
+        if !visited.insert(t_name.clone()) {
+            continue;
+        }
+        if let Some(TypeDefinition::Trait(td)) = type_defs.get(&t_name) {
+            for (m_name, m_info) in &td.methods {
+                if !m_info.is_constructor {
+                    methods.push(m_name.clone());
+                }
+            }
+            to_check.extend(td.parent_traits.iter().cloned());
+        }
+    }
+    methods
 }
 
 /// Context holds the current state of the type checking process, including
