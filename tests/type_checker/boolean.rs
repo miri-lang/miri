@@ -39,7 +39,7 @@ fn test_equality() {
         ("1 == 1", type_bool()),
         ("1 != 2", type_bool()),
         ("1.5 == 1.5", type_bool()),
-        // ("\"a\" == \"b\"", type_bool()), // TODO: Enable when string equality is supported
+        ("\"a\" == \"b\"", type_bool()),
     ]);
 }
 
