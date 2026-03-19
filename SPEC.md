@@ -1,6 +1,6 @@
-# Miri Language Specification (v0.1.0-alpha.2)
+# Miri Language Specification (v0.1.0-alpha.3)
 
-*This specification documents the currently implemented features of Miri v0.1.0-alpha.2.*
+*This specification documents the currently implemented features of Miri v0.1.0-alpha.3.*
 
 ---
 
@@ -20,6 +20,10 @@
 - [Type Aliases](#type-aliases)
 - [Imports](#imports)
 - [Memory Model](#memory-model)
+- [Classes](#classes)
+- [Traits](#traits)
+- [Closures](#closures)
+- [Generics](#generics)
 
 ---
 
@@ -435,4 +439,306 @@ a = [4, 5, 6]       // old array's RC decremented, freed if zero
 
 *Note: Element-level RC (managed types inside collections) and full string ownership are deferred to a future release. See the project roadmap for details.*
 
-*Note: OOP features (classes, traits, inheritance), closures, generic monomorphization, and GPU codegen are parsed but not yet supported in code generation. They will be covered in future specifications.*
+*Note: GPU codegen, closures with capture-by-reference (`out` closures), and cross-module visibility are planned for upcoming milestones.*
+
+---
+
+## Classes
+
+Classes are reference types with named fields, constructors, methods, and single-inheritance.
+
+### Declaration
+
+```miri
+class Animal
+    protected name String
+
+    fn init(n String)
+        self.name = n
+
+    fn speak()
+        println(f"I am {self.name}")
+```
+
+### Constructor
+
+The `init` method is the constructor. Fields are initialized inside `init` via `self.field = value`. Instantiation uses named arguments matching the `init` parameters.
+
+```miri
+let a = Animal(n: "Buddy")
+```
+
+### Inheritance
+
+Use `extends` for single inheritance. Subclasses inherit all fields and methods from the parent.
+
+```miri
+class Dog extends Animal
+    fn speak()
+        super.speak()
+        println("Woof!")
+```
+
+### `super` Calls
+
+`super.method()` dispatches to the parent class implementation. `super.init()` chains to the parent constructor.
+
+```miri
+class Cat extends Animal
+    fn init(n String)
+        super.init(n)
+        println("Cat created")
+```
+
+### Visibility Modifiers
+
+| Modifier | Accessible from |
+|----------|----------------|
+| `public` | Everywhere (default for methods) |
+| `protected` | Declaring class and all subclasses |
+| `private` | Declaring class only |
+
+```miri
+class Counter
+    private count int
+
+    fn init()
+        self.count = 0
+
+    public fn increment()
+        self.count = self.count + 1
+
+    public fn value() int
+        self.count
+```
+
+### Abstract Classes
+
+Abstract classes cannot be instantiated. Abstract methods must be overridden in concrete subclasses.
+
+```miri
+abstract class Shape
+    abstract fn area() float
+
+class Circle extends Shape
+    private radius float
+
+    fn init(r float)
+        self.radius = r
+
+    fn area() float
+        3.14159 * self.radius * self.radius
+```
+
+### Virtual Dispatch
+
+When a variable is typed as a base class, method calls are dispatched at runtime via vtables to the correct subclass implementation.
+
+```miri
+let s Shape = Circle(r: 5.0)
+println(f"{s.area()}")   // dispatches to Circle_area
+```
+
+---
+
+## Traits
+
+Traits define shared interfaces — a set of abstract (and optionally concrete) method signatures that classes can implement.
+
+### Declaration
+
+A trait contains method signatures. Methods without a body are abstract (required by implementors). Methods with a body are concrete (default implementations, overridable).
+
+```miri
+trait Greetable
+    fn greet()
+
+trait Printable
+    fn to_string() String
+        "object"   // default implementation
+```
+
+### Implementing Traits
+
+Use `implements` to attach one or more traits to a class. The class must provide implementations for all abstract trait methods.
+
+```miri
+class Person implements Greetable
+    fn greet()
+        println("Hello!")
+```
+
+Multiple traits:
+
+```miri
+class SuperHero implements Runnable, Flyable
+    fn run()
+        println("running")
+    fn fly()
+        println("flying")
+```
+
+### Combining `extends` and `implements`
+
+A class can extend a base class and implement traits simultaneously:
+
+```miri
+class Fish extends Animal implements Swimmer
+    fn swim()
+        println("swimming")
+```
+
+### Trait Inheritance
+
+Traits can extend other traits using `extends`. Implementing a derived trait requires implementing all methods from the entire inheritance chain.
+
+```miri
+trait Shape
+    fn area() float
+
+trait ColoredShape extends Shape
+    fn color() String
+
+class RedCircle implements ColoredShape
+    fn area() float
+        3.14159 * 5.0 * 5.0
+    fn color() String
+        "red"
+```
+
+Multiple parent traits:
+
+```miri
+trait ReadWrite extends Readable, Writable
+    fn readwrite()
+```
+
+### Default (Concrete) Methods
+
+Traits can provide default method implementations. Classes inherit the default unless they override it.
+
+```miri
+trait Logger
+    fn prefix() String
+        "INFO"
+
+    fn log(msg String)
+        println(f"[{self.prefix()}] {msg}")
+
+class AppLogger implements Logger
+    fn prefix() String
+        "APP"
+```
+
+### `Self` Type
+
+Use `Self` in trait method signatures to refer to the implementing class's own type.
+
+```miri
+trait SameAs
+    fn same(other Self) bool
+
+class Point implements SameAs
+    var x int
+    var y int
+    fn same(other Point) bool
+        self.x == other.x
+```
+
+### Standard Library Traits
+
+The `system.ops` module defines built-in traits used by the language:
+
+| Trait | Used for |
+|-------|----------|
+| `Equatable` | `==` and `!=` operators |
+| `Addable` | `+` operator |
+| `Multiplicable` | `*` operator (repetition) |
+| `Iterable` | `for x in collection` loops |
+
+*Note: Trait objects (polymorphic variables typed as a trait, e.g. `let x Greetable = Person()`) require vtable support and are not yet implemented. Dynamic dispatch is available through class-typed variables.*
+
+---
+
+## Closures
+
+Lambdas are first-class values. They can be stored in variables, passed as arguments, and returned from functions.
+
+### Non-Capturing Lambda
+
+```miri
+let square = fn(x int) int: x * x
+println(f"{square(5)}")   // 25
+```
+
+### Capturing Closure
+
+A closure captures variables from the enclosing scope by value.
+
+```miri
+var base = 100
+let add = fn(n int) int: base + n
+println(f"{add(42)}")   // 142
+```
+
+Closures are represented as fat pointers `(fn_ptr, env_ptr)` at the ABI level. Captured variables are copied into an environment struct at the point of closure creation.
+
+### Passing Closures
+
+```miri
+fn apply(f fn(int) int, x int) int
+    f(x)
+
+let double = fn(x int) int: x * 2
+println(f"{apply(double, 7)}")   // 14
+```
+
+---
+
+## Generics
+
+Generic functions and types are monomorphized at compile time — a specialized copy is emitted for each unique set of type arguments.
+
+### Generic Functions
+
+```miri
+fn identity<T>(x T) T
+    x
+
+fn first<T>(a T, b T) T
+    a
+```
+
+Calling with different types produces separate compiled functions (`identity_int`, `identity_string`, etc.).
+
+```miri
+let n = identity(42)
+let s = identity("hello")
+```
+
+### Generic Structs
+
+```miri
+struct Pair<T, U>
+    first T
+    second U
+
+let p = Pair<int, String>(first: 1, second: "one")
+println(f"{p.first}: {p.second}")
+```
+
+### Generic Classes
+
+```miri
+class Box<T>
+    private value T
+
+    fn init(v T)
+        self.value = v
+
+    fn get() T
+        self.value
+
+let b = Box<int>(v: 99)
+println(f"{b.get()}")   // 99
+```
