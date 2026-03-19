@@ -150,11 +150,11 @@ impl fmt::Display for Terminator {
                 target,
             } => {
                 write!(f, "{} = {}(", destination, func)?;
-                for (i, arg) in args.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
+                if let Some((first, rest)) = args.split_first() {
+                    write!(f, "{}", first)?;
+                    for arg in rest {
+                        write!(f, ", {}", arg)?;
                     }
-                    write!(f, "{}", arg)?;
                 }
                 write!(f, ") -> ")?;
                 if let Some(t) = target {
@@ -188,11 +188,11 @@ impl fmt::Display for Terminator {
                 target,
             } => {
                 write!(f, "{} = vcall[{}](", destination, vtable_slot)?;
-                for (i, arg) in args.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
+                if let Some((first, rest)) = args.split_first() {
+                    write!(f, "{}", first)?;
+                    for arg in rest {
+                        write!(f, ", {}", arg)?;
                     }
-                    write!(f, "{}", arg)?;
                 }
                 write!(f, ") -> ")?;
                 if let Some(t) = target {
