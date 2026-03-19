@@ -8,9 +8,9 @@
 
 Miri is designed for agentic engineering, where humans define intent and AI fills in safe, verifiable, high-performance implementations.
 
-## Current State (v0.1.0-alpha.2)
+## Current State (v0.1.0-alpha.3)
 
-Miri is in its second Alpha release. On top of the core language from Alpha 1, this release adds data types, collections, and memory management foundations.
+Miri is in its third Alpha release. On top of the core language from Alpha 2, this release adds full OOP support, closures, and generics monomorphization.
 
 **Working Features:**
 - **Primitives & Variables**: `int`, `float`, `bool`, `String` via `let` (immutable) and `var` (mutable).
@@ -25,8 +25,13 @@ Miri is in its second Alpha release. On top of the core language from Alpha 1, t
 - **Type Aliases**: `type ID is String`.
 - **Memory Model**: Container-level reference counting, auto-copy for small types, drop specialization.
 - **Compilation Pipeline**: Full frontend (Lexer, Parser, Type Checker), MIR Lowering with 5 optimization passes, and Native Codegen (via Cranelift).
+- **Classes**: Full OOP with constructors (`init`), methods, field access, visibility modifiers (`private`, `protected`, `public`), inheritance with complete field layout, `super` method calls, and abstract class/method enforcement.
+- **Traits**: Declare shared interfaces with abstract and concrete (default) methods. Classes implement one or more traits; trait inheritance chains are fully validated by the type checker.
+- **Closures**: Non-capturing and capturing lambdas compiled to native code. Captures by value; closure represented as a fat pointer `(fn_ptr, env_ptr)`.
+- **Generics**: Generic function and generic struct/class monomorphization. Specialized copies emitted per unique type instantiation.
+- **Virtual Dispatch**: Vtable generation for class hierarchies; runtime method dispatch for polymorphic variables and trait objects.
 
-*Note: Object-oriented features (classes, traits), closures, generics codegen, and GPU codegen are planned for upcoming milestones.*
+*Note: GPU codegen, closures with capture-by-reference, and cross-module visibility are planned for upcoming milestones.*
 
 ## Quick Start
 
@@ -102,6 +107,81 @@ items.push(4)
 
 let scores = {"Alice": 95, "Bob": 87}
 println(f"{scores["Alice"]}")
+```
+
+### Classes
+
+```miri
+use system.io
+
+class Animal
+    protected name String
+
+    fn init(n String)
+        self.name = n
+
+    fn speak()
+        println(f"I am {self.name}")
+
+class Dog extends Animal
+    fn speak()
+        super.speak()
+        println("Woof!")
+
+fn main()
+    let d = Dog(n: "Rex")
+    d.speak()
+```
+
+### Closures
+
+```miri
+use system.io
+
+fn main()
+    var x = 10
+    let add = fn(n int) int: x + n
+    println(f"{add(5)}")   // 15
+```
+
+### Generics
+
+```miri
+use system.io
+
+fn identity<T>(x T) T
+    x
+
+struct Wrapper<T>
+    value T
+
+fn main()
+    println(f"{identity(42)}")
+    println(f"{identity("hello")}")
+    let w = Wrapper<int>(value: 99)
+    println(f"{w.value}")
+```
+
+### Traits
+
+```miri
+use system.io
+
+trait Speakable
+    fn speak()
+
+trait Describable extends Speakable
+    fn describe()
+        println("I am an animal")
+
+class Dog implements Describable
+    fn speak()
+        println("Woof!")
+
+fn main()
+    let d = Dog()
+    d.speak()
+    d.describe()
 ```
 
 ### Option Types
