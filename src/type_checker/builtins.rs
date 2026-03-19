@@ -154,9 +154,10 @@ mod tests {
 
         if let Some(TypeDefinition::Struct(def)) = types.get("Future") {
             assert!(def.generics.is_some());
-            let generics = def.generics.as_ref().unwrap();
-            assert_eq!(generics.len(), 1);
-            assert_eq!(generics[0].name, "T");
+            if let Some(generics) = def.generics.as_ref() {
+                assert_eq!(generics.len(), 1);
+                assert_eq!(generics[0].name, "T");
+            }
         } else {
             panic!("Future should be a struct");
         }
