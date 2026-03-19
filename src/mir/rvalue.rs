@@ -91,104 +91,107 @@ impl fmt::Display for Rvalue {
             Rvalue::Aggregate(kind, ops) => match kind {
                 AggregateKind::Tuple => {
                     write!(f, "(")?;
-                    for (i, op) in ops.iter().enumerate() {
-                        if i > 0 {
-                            write!(f, ", ")?;
+                    if let Some((first, rest)) = ops.split_first() {
+                        write!(f, "{}", first)?;
+                        for op in rest {
+                            write!(f, ", {}", op)?;
                         }
-                        write!(f, "{}", op)?;
                     }
                     write!(f, ")")
                 }
                 AggregateKind::FormattedString => {
                     write!(f, "f\"")?;
-                    for (i, op) in ops.iter().enumerate() {
-                        if i > 0 {
-                            write!(f, ", ")?;
+                    if let Some((first, rest)) = ops.split_first() {
+                        write!(f, "{{{}}}", first)?;
+                        for op in rest {
+                            write!(f, ", {{{}}}", op)?;
                         }
-                        write!(f, "{{{}}}", op)?;
                     }
                     write!(f, "\"")
                 }
                 AggregateKind::Array | AggregateKind::List => {
                     write!(f, "[")?;
-                    for (i, op) in ops.iter().enumerate() {
-                        if i > 0 {
-                            write!(f, ", ")?;
+                    if let Some((first, rest)) = ops.split_first() {
+                        write!(f, "{}", first)?;
+                        for op in rest {
+                            write!(f, ", {}", op)?;
                         }
-                        write!(f, "{}", op)?;
                     }
                     write!(f, "]")
                 }
                 AggregateKind::Set => {
                     write!(f, "{{")?;
-                    for (i, op) in ops.iter().enumerate() {
-                        if i > 0 {
-                            write!(f, ", ")?;
+                    if let Some((first, rest)) = ops.split_first() {
+                        write!(f, "{}", first)?;
+                        for op in rest {
+                            write!(f, ", {}", op)?;
                         }
-                        write!(f, "{}", op)?;
                     }
                     write!(f, "}}")
                 }
                 AggregateKind::Map => {
                     write!(f, "{{")?;
-                    for (i, chunk) in ops.chunks(2).enumerate() {
-                        if i > 0 {
-                            write!(f, ", ")?;
+                    let mut chunks = ops.chunks(2);
+                    if let Some(first) = chunks.next() {
+                        if first.len() == 2 {
+                            write!(f, "{}: {}", first[0], first[1])?;
                         }
-                        if chunk.len() == 2 {
-                            write!(f, "{}: {}", chunk[0], chunk[1])?;
+                        for chunk in chunks {
+                            if chunk.len() == 2 {
+                                write!(f, ", {}: {}", chunk[0], chunk[1])?;
+                            }
                         }
                     }
                     write!(f, "}}")
                 }
                 AggregateKind::Struct(ty) | AggregateKind::Class(ty) => {
                     write!(f, "{} {{ ", ty)?;
-                    for (i, op) in ops.iter().enumerate() {
-                        if i > 0 {
-                            write!(f, ", ")?;
+                    if let Some((first, rest)) = ops.split_first() {
+                        write!(f, "{}", first)?;
+                        for op in rest {
+                            write!(f, ", {}", op)?;
                         }
-                        write!(f, "{}", op)?;
                     }
                     write!(f, " }}")
                 }
                 AggregateKind::Enum(type_name, variant_name) => {
                     write!(f, "{}.{}(", type_name, variant_name)?;
-                    for (i, op) in ops.iter().enumerate() {
-                        if i > 0 {
-                            write!(f, ", ")?;
+                    if let Some((first, rest)) = ops.split_first() {
+                        write!(f, "{}", first)?;
+                        for op in rest {
+                            write!(f, ", {}", op)?;
                         }
-                        write!(f, "{}", op)?;
                     }
                     write!(f, ")")
                 }
                 AggregateKind::Option => {
                     write!(f, "Some(")?;
-                    for (i, op) in ops.iter().enumerate() {
-                        if i > 0 {
-                            write!(f, ", ")?;
+                    if let Some((first, rest)) = ops.split_first() {
+                        write!(f, "{}", first)?;
+                        for op in rest {
+                            write!(f, ", {}", op)?;
                         }
-                        write!(f, "{}", op)?;
                     }
                     write!(f, ")")
                 }
                 AggregateKind::Closure(name, _) => {
                     write!(f, "closure<{}>(", name)?;
-                    for (i, op) in ops.iter().enumerate() {
-                        if i > 0 {
-                            write!(f, ", ")?;
+                    if let Some((first, rest)) = ops.split_first() {
+                        write!(f, "{}", first)?;
+                        for op in rest {
+                            write!(f, ", {}", op)?;
                         }
-                        write!(f, "{}", op)?;
                     }
                     write!(f, ")")
                 }
             },
             Rvalue::Phi(args) => {
                 write!(f, "phi(")?;
-                for (i, (op, block)) in args.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
+                if let Some((first, rest)) = args.split_first() {
+                    write!(f, "[ {}, {} ]", first.0, first.1)?;
+                    for (op, block) in rest {
+                        write!(f, ", [ {}, {} ]", op, block)?;
                     }
-                    write!(f, "[ {}, {} ]", op, block)?;
                 }
                 write!(f, ")")
             }
