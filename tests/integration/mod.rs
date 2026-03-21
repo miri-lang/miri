@@ -16,6 +16,7 @@ pub mod generics;
 pub mod lambdas;
 pub mod list;
 pub mod map;
+pub mod memory;
 pub mod oop;
 pub mod operator_traits;
 pub mod option;
