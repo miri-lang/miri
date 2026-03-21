@@ -49,10 +49,34 @@ impl OptimizationPass for Perceus {
             let mut new_stmts = Vec::with_capacity(old_stmts.len());
             let mut block_changed = false;
 
-            for stmt in old_stmts {
+            // Pre-scan: collect managed locals that have a StorageDead in this block.
+            // Used by the field-projection Use fix to avoid emitting IncRef for
+            // temporary locals that have no balancing DecRef (e.g. `.length()` object
+            // temps that are never StorageDead'd because obj_op_is_copy = false).
+            let locals_with_dead_in_block: std::collections::HashSet<crate::mir::Local> = old_stmts
+                .iter()
+                .filter_map(|s| {
+                    if let StatementKind::StorageDead(p) = &s.kind {
+                        if managed_locals.contains(&p.local) {
+                            Some(p.local)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Use a peekable iterator so we can look one statement ahead.
+            // This is needed to avoid double-IncRef when bind_pattern already emits
+            // an explicit IncRef(lhs) immediately after a field-projection assignment.
+            let mut stmts_iter = old_stmts.into_iter().peekable();
+
+            while let Some(stmt) = stmts_iter.next() {
                 match &stmt.kind {
-                    StatementKind::Assign(_lhs, rvalue) => {
-                        // Only insert IncRef for Copy operands (aliasing).
+                    StatementKind::Assign(lhs, rvalue) => {
+                        // Insert IncRef for Copy operands (aliasing).
                         // Move operands transfer ownership — no IncRef needed
                         // because the source gives up its reference.
                         if let Some(place) = get_copy_source_place(rvalue) {
@@ -62,6 +86,62 @@ impl OptimizationPass for Perceus {
                                     span: stmt.span,
                                 });
                                 block_changed = true;
+                            } else if place
+                                .projection
+                                .iter()
+                                .any(|e| matches!(e, PlaceElem::Field(_)))
+                                && locals_with_dead_in_block.contains(&lhs.local)
+                            {
+                                // Field-projected Use(Copy(...)): op.ty() returns the base
+                                // local's type, not the field's type, so is_place_managed
+                                // returns false. Use the pre-scanned set of locals that
+                                // have a StorageDead in this block as a proxy: if the LHS
+                                // has a StorageDead here, Perceus will emit DecRef(lhs),
+                                // so we need a balancing IncRef for the field copy.
+                                //
+                                // Locals without StorageDead (e.g. .length() object temps
+                                // where obj_op_is_copy=false skips emit_temp_drop) must
+                                // NOT get an IncRef — there would be no matching DecRef.
+                                //
+                                // Guard: skip when the very next statement is IncRef(lhs) —
+                                // that means an earlier lowering pass (e.g. bind_pattern)
+                                // already emitted an explicit IncRef to balance DecRef(lhs)
+                                // at StorageDead. Emitting a second IncRef here would
+                                // double-increment the RC and cause a leak.
+                                let already_incref = matches!(
+                                    stmts_iter.peek(),
+                                    Some(Statement {
+                                        kind: StatementKind::IncRef(p),
+                                        ..
+                                    }) if p.local == lhs.local && p.projection.is_empty()
+                                );
+                                if !already_incref {
+                                    new_stmts.push(Statement {
+                                        kind: StatementKind::IncRef(place),
+                                        span: stmt.span,
+                                    });
+                                    block_changed = true;
+                                }
+                            }
+                        } else if let Rvalue::Cast(operand, target_ty) = rvalue {
+                            // Handle Cast(Copy(place_with_field_projection), managed_ty):
+                            // emitted by coerce_rvalue when op.ty() returns the base local
+                            // type but the cast target is the field's actual managed type.
+                            // Guard: only fire for field projections to avoid matching
+                            // numeric casts (e.g. int→string) which have no field source.
+                            if let Operand::Copy(place) = operand.as_ref() {
+                                if place
+                                    .projection
+                                    .iter()
+                                    .any(|e| matches!(e, PlaceElem::Field(_)))
+                                    && is_managed_type(&target_ty.kind, &body.auto_copy_types)
+                                {
+                                    new_stmts.push(Statement {
+                                        kind: StatementKind::IncRef(place.clone()),
+                                        span: stmt.span,
+                                    });
+                                    block_changed = true;
+                                }
                             }
                         }
                         // Also insert IncRef for managed operands inside Aggregates.
