@@ -231,11 +231,11 @@ impl fmt::Display for TypeKind {
                 write!(f, "{}", name)?;
                 if let Some(args) = args {
                     write!(f, "<")?;
-                    for (i, arg) in args.iter().enumerate() {
-                        if i > 0 {
-                            write!(f, ", ")?;
+                    if let Some((first, rest)) = args.split_first() {
+                        write!(f, "{}", first.node)?;
+                        for arg in rest {
+                            write!(f, ", {}", arg.node)?;
                         }
-                        write!(f, "{}", arg.node)?;
                     }
                     write!(f, ">")?;
                 }
