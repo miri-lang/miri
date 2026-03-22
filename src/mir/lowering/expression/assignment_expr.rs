@@ -38,25 +38,99 @@ pub(crate) fn lower_assignment_expr(
                                 Rvalue::Use(val.clone())
                             };
 
-                            // Before overwriting a managed local, DecRef the old value so
-                            // it is released. The codegen's null guard makes this safe even
-                            // on the first assignment (null pointer → no-op DecRef).
-                            // Skip self-assignment (l = l) to avoid freeing a live object.
-                            let is_self_copy = matches!(
-                                &rvalue,
-                                Rvalue::Use(Operand::Copy(p)) if p.local == local
-                            );
-                            if ctx.is_perceus_managed(&lhs_ty.kind) && !is_self_copy {
+                            // For managed-type reassignment where the rhs is a plain
+                            // place (Copy or Move of a local), use the "inc-then-dec"
+                            // RC pattern:
+                            //   1. IncRef(rhs) — bump rhs before releasing lhs so the
+                            //      object survives even when lhs and rhs alias the same
+                            //      allocation (the classic alias-safety problem).
+                            //   2. DecRef(lhs) — release the old value.
+                            //   3. Assign(lhs, Move(rhs)) — Move prevents Perceus from
+                            //      inserting a second IncRef for the same reference.
+                            //
+                            // For non-place rvalues (Cast, etc.) fall back to
+                            // dec-then-assign; Perceus handles IncRef inside those.
+                            if ctx.is_perceus_managed(&lhs_ty.kind) {
+                                let rhs_place = match &rvalue {
+                                    Rvalue::Use(Operand::Copy(p))
+                                    | Rvalue::Use(Operand::Move(p)) => Some(p.clone()),
+                                    _ => None,
+                                };
+
+                                if let Some(rhs_place) = rhs_place {
+                                    // inc-then-dec: alias-safe assignment.
+                                    ctx.push_statement(crate::mir::Statement {
+                                        kind: MirStatementKind::IncRef(rhs_place.clone()),
+                                        span: expr.span,
+                                    });
+                                    ctx.push_statement(crate::mir::Statement {
+                                        kind: MirStatementKind::DecRef(Place::new(local)),
+                                        span: expr.span,
+                                    });
+                                    ctx.push_statement(crate::mir::Statement {
+                                        kind: MirStatementKind::Assign(
+                                            Place::new(local),
+                                            Rvalue::Use(Operand::Move(rhs_place.clone())),
+                                        ),
+                                        span: expr.span,
+                                    });
+                                    // Drop any freshly-created rhs temp (e.g. from a
+                                    // constructor or function call). Named locals
+                                    // (rhs_place.local < rhs_watermark) are skipped.
+                                    ctx.emit_temp_drop(rhs_place.local, rhs_watermark, expr.span);
+
+                                    // Assignment evaluates to the assigned value.
+                                    if let Some(d) = dest {
+                                        ctx.push_statement(crate::mir::Statement {
+                                            kind: MirStatementKind::Assign(
+                                                d.clone(),
+                                                Rvalue::Use(Operand::Copy(Place::new(local))),
+                                            ),
+                                            span: expr.span,
+                                        });
+                                        return Ok(Operand::Copy(d));
+                                    } else {
+                                        // Return Copy of lhs so lower_statement's temp
+                                        // properly borrows (IncRef) then releases
+                                        // (DecRef at StorageDead), netting zero change.
+                                        return Ok(Operand::Copy(Place::new(local)));
+                                    }
+                                } else {
+                                    // Non-place rvalue (e.g. Cast): dec-then-assign fallback.
+                                    // Perceus does not IncRef Cast rvalues, so the assignment
+                                    // transfers ownership of the rhs temp into `local`.
+                                    ctx.push_statement(crate::mir::Statement {
+                                        kind: MirStatementKind::DecRef(Place::new(local)),
+                                        span: expr.span,
+                                    });
+                                    ctx.push_statement(crate::mir::Statement {
+                                        kind: MirStatementKind::Assign(Place::new(local), rvalue),
+                                        span: expr.span,
+                                    });
+                                    // Return the lhs so callers see the updated local, not the
+                                    // rhs temp. Returning the rhs temp would cause a double-free:
+                                    // lower_statement creates temp = Copy(rhs_temp) (Perceus
+                                    // IncRef), drops temp (DecRef→RC=1), then drops rhs_temp
+                                    // (DecRef→RC=0→free), leaving local with a dangling pointer.
+                                    if let Some(d) = dest {
+                                        ctx.push_statement(crate::mir::Statement {
+                                            kind: MirStatementKind::Assign(
+                                                d.clone(),
+                                                Rvalue::Use(Operand::Copy(Place::new(local))),
+                                            ),
+                                            span: expr.span,
+                                        });
+                                        return Ok(Operand::Copy(d));
+                                    } else {
+                                        return Ok(Operand::Copy(Place::new(local)));
+                                    }
+                                }
+                            } else {
                                 ctx.push_statement(crate::mir::Statement {
-                                    kind: MirStatementKind::DecRef(Place::new(local)),
+                                    kind: MirStatementKind::Assign(Place::new(local), rvalue),
                                     span: expr.span,
                                 });
                             }
-
-                            ctx.push_statement(crate::mir::Statement {
-                                kind: MirStatementKind::Assign(Place::new(local), rvalue),
-                                span: expr.span,
-                            });
                         }
                         crate::ast::operator::AssignmentOp::AssignAdd
                         | crate::ast::operator::AssignmentOp::AssignSub
@@ -178,6 +252,24 @@ pub(crate) fn lower_assignment_expr(
                         // Handle simple assignment vs compound assignment
                         match op {
                             crate::ast::operator::AssignmentOp::Assign => {
+                                // Before overwriting a managed field, DecRef the old value.
+                                let field_is_managed = if let Some(ft) = ctx
+                                    .body
+                                    .field_types
+                                    .get(type_name.as_str())
+                                    .and_then(|fs| fs.get(idx))
+                                {
+                                    let kind = ft.kind.clone();
+                                    ctx.is_perceus_managed(&kind)
+                                } else {
+                                    false
+                                };
+                                if field_is_managed {
+                                    ctx.push_statement(crate::mir::Statement {
+                                        kind: MirStatementKind::DecRef(target_place.clone()),
+                                        span: expr.span,
+                                    });
+                                }
                                 ctx.push_statement(crate::mir::Statement {
                                     kind: MirStatementKind::Assign(
                                         target_place,

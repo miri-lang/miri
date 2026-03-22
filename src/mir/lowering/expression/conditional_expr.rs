@@ -59,11 +59,20 @@ pub(crate) fn lower_conditional_expr(
 
     // Then block
     ctx.set_current_block(then_bb);
+    let then_watermark = ctx.body.local_decls.len();
     let then_op = lower_expression(ctx, then_expr, None)?;
     ctx.push_statement(crate::mir::Statement {
-        kind: MirStatementKind::Assign(Place::new(result_local), Rvalue::Use(then_op)),
+        kind: MirStatementKind::Assign(Place::new(result_local), Rvalue::Use(then_op.clone())),
         span: then_expr.span,
     });
+    // Drop any managed temp created during the then branch (e.g. an inline
+    // constructor like `List([1, 2, 3])`). Perceus inserts IncRef for the
+    // Copy before the Assign, so we need a matching StorageDead/DecRef for
+    // the source temp. Only fires for fresh temps (local >= watermark) and
+    // only for Copy operands (Move operands have no matching IncRef).
+    if let Operand::Copy(p) = &then_op {
+        ctx.emit_temp_drop(p.local, then_watermark, then_expr.span);
+    }
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Goto { target: join_bb },
         then_expr.span,
@@ -72,11 +81,15 @@ pub(crate) fn lower_conditional_expr(
     // Else block
     ctx.set_current_block(else_bb);
     if let Some(else_expr) = else_expr_opt {
+        let else_watermark = ctx.body.local_decls.len();
         let else_op = lower_expression(ctx, else_expr, None)?;
         ctx.push_statement(crate::mir::Statement {
-            kind: MirStatementKind::Assign(Place::new(result_local), Rvalue::Use(else_op)),
+            kind: MirStatementKind::Assign(Place::new(result_local), Rvalue::Use(else_op.clone())),
             span: else_expr.span,
         });
+        if let Operand::Copy(p) = &else_op {
+            ctx.emit_temp_drop(p.local, else_watermark, else_expr.span);
+        }
     }
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Goto { target: join_bb },
