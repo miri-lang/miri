@@ -74,6 +74,10 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
                     });
                 }
             }
+            // Emit StorageDead for all live named locals before returning so
+            // that Perceus can insert DecRef for any managed values still in
+            // scope (early-return cleanup).
+            ctx.emit_return_cleanup(stmt.span);
             ctx.set_terminator(Terminator::new(TerminatorKind::Return, stmt.span));
         }
         StatementKind::Variable(decls, _) => {

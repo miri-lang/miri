@@ -238,6 +238,30 @@ impl<'a> FunctionTranslator<'a> {
                                 Self::call_rt_list_push(builder, ctx, list_ptr, widened)?;
                             }
 
+                            // If elements are managed Lists, set the drop function so that
+                            // mutation operations (clear, remove_at, remove) properly DecRef
+                            // removed elements. Mirrors the same pattern used for Map values.
+                            let elems_are_managed_lists = !operands.is_empty() && {
+                                let first_op = &operands[0];
+                                match first_op {
+                                    Operand::Copy(place) | Operand::Move(place) => matches!(
+                                        type_ctx.local_types[place.local.0].kind,
+                                        TypeKind::List(_)
+                                    ),
+                                    _ => false,
+                                }
+                            };
+                            if elems_are_managed_lists {
+                                let drop_fn_addr =
+                                    Self::get_rt_list_decref_element_addr(builder, ctx, ptr_type)?;
+                                Self::call_rt_list_set_elem_drop_fn(
+                                    builder,
+                                    ctx,
+                                    list_ptr,
+                                    drop_fn_addr,
+                                )?;
+                            }
+
                             Ok(list_ptr)
                         }
                         AggregateKind::Map => {
@@ -280,6 +304,29 @@ impl<'a> FunctionTranslator<'a> {
                                 value_size_val,
                                 key_kind_val,
                             )?;
+
+                            // If values are managed Lists, set the drop function so that
+                            // map mutations (remove, clear, set overwrite) properly DecRef them.
+                            let val_is_managed_list = operands.len() >= 2 && {
+                                let val_op = &operands[1];
+                                match val_op {
+                                    Operand::Copy(place) | Operand::Move(place) => matches!(
+                                        type_ctx.local_types[place.local.0].kind,
+                                        TypeKind::List(_)
+                                    ),
+                                    _ => false,
+                                }
+                            };
+                            if val_is_managed_list {
+                                let drop_fn_addr =
+                                    Self::get_rt_list_decref_element_addr(builder, ctx, ptr_type)?;
+                                Self::call_rt_map_set_val_drop_fn(
+                                    builder,
+                                    ctx,
+                                    map_ptr,
+                                    drop_fn_addr,
+                                )?;
+                            }
 
                             // Insert each key-value pair
                             for chunk in translated.chunks(2) {
