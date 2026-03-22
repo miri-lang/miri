@@ -6,6 +6,34 @@ use crate::ast::expression::Expression;
 use crate::error::syntax::Span;
 use std::fmt;
 
+/// Identifies a built-in collection type canonically.
+///
+/// This enum is the single source of truth for the names "Array", "List", "Map", "Set".
+/// All compiler logic that needs to identify built-in collections should use
+/// `TypeKind::as_builtin_collection()` rather than matching on string literals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BuiltinCollectionKind {
+    Array,
+    List,
+    Map,
+    Set,
+}
+
+impl BuiltinCollectionKind {
+    /// Returns the `BuiltinCollectionKind` for a type name string, or `None` if it
+    /// is not a built-in collection.  This is the **only** place in the compiler
+    /// where the canonical names "Array", "List", "Map", "Set" are written.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "Array" => Some(Self::Array),
+            "List" => Some(Self::List),
+            "Map" => Some(Self::Map),
+            "Set" => Some(Self::Set),
+            _ => None,
+        }
+    }
+}
+
 /// Data for a function type, boxed to reduce `TypeKind` enum size.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FunctionTypeData {
@@ -165,6 +193,20 @@ impl TypeKind {
             // Tuple: Check that all elements are Copy (simplified - we'd need to resolve types)
             // For now, treat tuples as Copy since lowering doesn't track element types here
             TypeKind::Tuple(_) => true,
+        }
+    }
+
+    /// Returns the `BuiltinCollectionKind` if this type is a built-in collection,
+    /// for either the canonical variant (`TypeKind::List(...)`) or a class reference
+    /// (`TypeKind::Custom("List", ...)`).  Returns `None` for all other types.
+    pub fn as_builtin_collection(&self) -> Option<BuiltinCollectionKind> {
+        match self {
+            TypeKind::Array(_, _) => Some(BuiltinCollectionKind::Array),
+            TypeKind::List(_) => Some(BuiltinCollectionKind::List),
+            TypeKind::Map(_, _) => Some(BuiltinCollectionKind::Map),
+            TypeKind::Set(_) => Some(BuiltinCollectionKind::Set),
+            TypeKind::Custom(name, _) => BuiltinCollectionKind::from_name(name),
+            _ => None,
         }
     }
 }

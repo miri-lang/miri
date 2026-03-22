@@ -44,7 +44,7 @@
 
 use crate::ast::factory as ast_factory;
 use crate::ast::factory::make_type;
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
 use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
@@ -249,7 +249,10 @@ impl TypeChecker {
                 self.resolve_type_expression(&inner_type_expr, context)
             }
             TypeKind::Custom(name, args)
-                if name == "Array" || name == "List" || name == "Tuple" =>
+                if matches!(
+                    BuiltinCollectionKind::from_name(name.as_str()),
+                    Some(BuiltinCollectionKind::Array | BuiltinCollectionKind::List)
+                ) || name == "Tuple" =>
             {
                 if !matches!(index_type.kind, TypeKind::Int) {
                     self.report_error(format!("{} index must be an integer", name), index.span);
@@ -286,7 +289,10 @@ impl TypeChecker {
                 }
                 self.resolve_type_expression(&val_type_expr, context)
             }
-            TypeKind::Custom(name, args) if name == "Map" => {
+            TypeKind::Custom(name, args)
+                if BuiltinCollectionKind::from_name(name.as_str())
+                    == Some(BuiltinCollectionKind::Map) =>
+            {
                 // Inside the Map class definition, self is Custom("Map", None).
                 // The key type is generic K, the value type is generic V.
                 if let Some(args) = args {

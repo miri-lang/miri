@@ -4,7 +4,7 @@
 //! Expression lowering - converts AST expressions to MIR.
 
 use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::mir::{BinOp, Operand, Place, PlaceElem, Rvalue, StatementKind as MirStatementKind};
 
@@ -345,9 +345,7 @@ pub(crate) fn lower_assignment_expr(
             if let ExpressionKind::Index(obj, idx) = &index_expr.node {
                 // Intercept map index write: m[key] = value → miri_rt_map_set(m, key, value)
                 if let Some(obj_ty) = ctx.type_checker.get_type(obj.id) {
-                    if matches!(&obj_ty.kind, TypeKind::Map(_, _))
-                        || matches!(&obj_ty.kind, TypeKind::Custom(name, _) if name == "Map")
-                    {
+                    if obj_ty.kind.as_builtin_collection() == Some(BuiltinCollectionKind::Map) {
                         let val = lower_expression(ctx, rhs, None)?;
                         let obj_op = lower_expression(ctx, obj, None)?;
                         let key_op = lower_expression(ctx, idx, None)?;

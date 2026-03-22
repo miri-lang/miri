@@ -7,7 +7,7 @@
 //! types such as `String`, `List`, `Map`, `Set`, and user-defined types.
 //! It implements the "Functional But In-Place" (FBIP) strategy where possible.
 
-use crate::ast::types::TypeKind;
+use crate::ast::types::{BuiltinCollectionKind, TypeKind};
 use crate::mir::optimization::OptimizationPass;
 use crate::mir::rc::is_managed_type;
 use crate::mir::statement::{Statement, StatementKind};
@@ -221,7 +221,8 @@ fn is_place_managed(
                         // An unresolved Identifier in an element-type position is managed
                         // if it names a known collection/String type, or is a concrete
                         // user type (not auto-copy and not a generic type parameter).
-                        if matches!(name.as_str(), "String" | "List" | "Array" | "Map" | "Set")
+                        if name == "String"
+                            || BuiltinCollectionKind::from_name(name).is_some()
                             || (name.as_str() != "Self"
                                 && !auto_copy_types.contains(name.as_str())
                                 && !type_params.contains(name.as_str()))
@@ -235,7 +236,8 @@ fn is_place_managed(
                 TypeKind::List(inner) | TypeKind::Set(inner) => match &inner.node {
                     crate::ast::expression::ExpressionKind::Type(ty, _) => ty.kind.clone(),
                     crate::ast::expression::ExpressionKind::Identifier(name, _) => {
-                        if matches!(name.as_str(), "String" | "List" | "Array" | "Map" | "Set")
+                        if name == "String"
+                            || BuiltinCollectionKind::from_name(name).is_some()
                             || (name.as_str() != "Self"
                                 && !auto_copy_types.contains(name.as_str())
                                 && !type_params.contains(name.as_str()))
@@ -249,7 +251,8 @@ fn is_place_managed(
                 TypeKind::Map(_, v) => match &v.node {
                     crate::ast::expression::ExpressionKind::Type(ty, _) => ty.kind.clone(),
                     crate::ast::expression::ExpressionKind::Identifier(name, _) => {
-                        if matches!(name.as_str(), "String" | "List" | "Array" | "Map" | "Set")
+                        if name == "String"
+                            || BuiltinCollectionKind::from_name(name).is_some()
                             || (name.as_str() != "Self"
                                 && !auto_copy_types.contains(name.as_str())
                                 && !type_params.contains(name.as_str()))

@@ -40,7 +40,7 @@
 //! - Return type compatibility
 
 use crate::ast::factory::make_type;
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, SymbolInfo};
@@ -300,16 +300,21 @@ impl TypeChecker {
                     );
                 }
             } else if matches!(&iterable_type.kind, TypeKind::Map(_, _))
-                || matches!(&iterable_type.kind, TypeKind::Custom(name, _) if name == "Map")
+                || matches!(&iterable_type.kind, TypeKind::Custom(_name, _) if iterable_type.kind.as_builtin_collection() == Some(BuiltinCollectionKind::Map))
             {
                 // For Map iterables, `for k, v in map` means: k = key, v = value.
                 let val_type = match &iterable_type.kind {
                     TypeKind::Map(_, val_expr) => self
                         .extract_type_from_expression(val_expr)
                         .unwrap_or_else(|_| make_type(TypeKind::Error)),
-                    TypeKind::Custom(name, Some(args)) if name == "Map" && args.len() == 2 => self
-                        .extract_type_from_expression(&args[1])
-                        .unwrap_or_else(|_| make_type(TypeKind::Error)),
+                    TypeKind::Custom(name, Some(args))
+                        if BuiltinCollectionKind::from_name(name)
+                            == Some(BuiltinCollectionKind::Map)
+                            && args.len() == 2 =>
+                    {
+                        self.extract_type_from_expression(&args[1])
+                            .unwrap_or_else(|_| make_type(TypeKind::Error))
+                    }
                     _ => make_type(TypeKind::Error),
                 };
 
