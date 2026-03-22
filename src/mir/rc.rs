@@ -6,7 +6,7 @@
 //! This module is the single authority on whether a type requires RC management.
 //! Both the Perceus optimization pass and the MIR lowering context delegate here.
 
-use crate::ast::types::TypeKind;
+use crate::ast::types::{BuiltinCollectionKind, TypeKind};
 use std::collections::HashSet;
 
 /// Returns `true` if a type is managed (heap-allocated, needs RC).
@@ -46,7 +46,7 @@ pub fn is_managed_type(
             name != "Self"
                 && !auto_copy_types.contains(name.as_str())
                 && !type_params.contains(name.as_str())
-                && !matches!(name.as_str(), "Array" | "List" | "Map" | "Set")
+                && BuiltinCollectionKind::from_name(name).is_none()
         }
         _ => false,
     }

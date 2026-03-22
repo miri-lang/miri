@@ -6,7 +6,8 @@ use std::rc::Rc;
 use crate::ast::expression::Expression;
 use crate::ast::statement::{IfStatementType, Statement};
 use crate::ast::{
-    ExpressionKind, RangeExpressionType, Type, TypeKind, VariableDeclaration, WhileStatementType,
+    BuiltinCollectionKind, ExpressionKind, RangeExpressionType, Type, TypeKind,
+    VariableDeclaration, WhileStatementType,
 };
 use crate::error::syntax::Span;
 use crate::mir::{
@@ -404,7 +405,11 @@ fn lower_for_over_iterable(
     let iterable_ty = ctx.type_checker.get_type(iterable.id).cloned();
     let is_map = match iterable_ty.as_ref().map(|t| &t.kind) {
         Some(TypeKind::Map(_, _)) => true,
-        Some(TypeKind::Custom(name, _)) if name == "Map" => true,
+        Some(TypeKind::Custom(name, _))
+            if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Map) =>
+        {
+            true
+        }
         _ => false,
     };
     let elem_ty = if let Some(ty) = &iterable_ty {
@@ -420,11 +425,7 @@ fn lower_for_over_iterable(
                 super::resolve_type(ctx.type_checker, &elem_type_exprs[0])
             }
             TypeKind::Custom(name, Some(args))
-                if (name == "Array"
-                    || name == "List"
-                    || name == "Set"
-                    || name == "Map"
-                    || name == "Tuple")
+                if (BuiltinCollectionKind::from_name(name).is_some() || name == "Tuple")
                     && !args.is_empty() =>
             {
                 super::resolve_type(ctx.type_checker, &args[0])
@@ -484,7 +485,11 @@ fn lower_for_over_iterable(
                 Some(TypeKind::Map(_, val_type_expr)) => {
                     super::resolve_type(ctx.type_checker, val_type_expr)
                 }
-                Some(TypeKind::Custom(name, Some(args))) if name == "Map" && args.len() == 2 => {
+                Some(TypeKind::Custom(name, Some(args)))
+                    if BuiltinCollectionKind::from_name(name)
+                        == Some(BuiltinCollectionKind::Map)
+                        && args.len() == 2 =>
+                {
                     super::resolve_type(ctx.type_checker, &args[1])
                 }
                 _ => Type::new(TypeKind::Int, *span),
@@ -542,7 +547,7 @@ fn lower_for_over_iterable(
             TypeKind::String => Some("String".to_string()),
             TypeKind::Map(_, _) => Some("Map".to_string()),
             TypeKind::Set(_) => Some("Set".to_string()),
-            TypeKind::Custom(name, _) if name != "Array" && name != "List" && name != "Tuple" => Some(name.clone()),
+            TypeKind::Custom(name, _) if !matches!(BuiltinCollectionKind::from_name(name), Some(BuiltinCollectionKind::Array | BuiltinCollectionKind::List)) && name != "Tuple" => Some(name.clone()),
             _ => None,
         })
         .filter(|name| {
@@ -1020,7 +1025,7 @@ pub fn lower_call(
                             | TypeKind::String
                     ) || matches!(
                         &obj_ty.kind,
-                        TypeKind::Custom(name, _) if name == "Array" || name == "List" || name == "Map" || name == "Set" || name == "Tuple"
+                        TypeKind::Custom(name, _) if BuiltinCollectionKind::from_name(name).is_some() || name == "Tuple"
                     ))
                 {
                     let obj_watermark = ctx.body.local_decls.len();
@@ -1075,7 +1080,7 @@ pub fn lower_call(
                         TypeKind::Tuple(_) | TypeKind::List(_) | TypeKind::Array(_, _)
                     ) || matches!(
                         &obj_ty.kind,
-                        TypeKind::Custom(name, _) if name == "Array" || name == "List" || name == "Tuple"
+                        TypeKind::Custom(name, _) if matches!(BuiltinCollectionKind::from_name(name), Some(BuiltinCollectionKind::Array | BuiltinCollectionKind::List)) || name == "Tuple"
                     ))
                     && args.len() == 1
                 {
@@ -1155,7 +1160,7 @@ pub fn lower_call(
 
                 if method_name == "push"
                     && (matches!(&obj_ty.kind, TypeKind::List(_))
-                        || matches!(&obj_ty.kind, TypeKind::Custom(name, _) if name == "List"))
+                        || matches!(&obj_ty.kind, TypeKind::Custom(name, _) if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::List)))
                     && args.len() == 1
                 {
                     let obj_op = lower_expression(ctx, obj, None)?;
@@ -1197,7 +1202,7 @@ pub fn lower_call(
 
                 if method_name == "set"
                     && (matches!(&obj_ty.kind, TypeKind::List(_) | TypeKind::Array(_, _))
-                        || matches!(&obj_ty.kind, TypeKind::Custom(name, _) if name == "Array" || name == "List"))
+                        || matches!(&obj_ty.kind, TypeKind::Custom(name, _) if matches!(BuiltinCollectionKind::from_name(name), Some(BuiltinCollectionKind::Array | BuiltinCollectionKind::List))))
                     && args.len() == 2
                 {
                     let obj_op = lower_expression(ctx, obj, None)?;
@@ -1250,7 +1255,7 @@ pub fn lower_call(
 
                 if method_name == "insert"
                     && (matches!(&obj_ty.kind, TypeKind::List(_))
-                        || matches!(&obj_ty.kind, TypeKind::Custom(name, _) if name == "List"))
+                        || matches!(&obj_ty.kind, TypeKind::Custom(name, _) if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::List)))
                     && args.len() == 2
                 {
                     let obj_op = lower_expression(ctx, obj, None)?;
@@ -1437,7 +1442,9 @@ pub fn lower_call(
                 if let Some(TypeDefinition::Class(def)) =
                     ctx.type_checker.global_type_definitions.get(type_name)
                 {
-                    if type_name == "List" {
+                    if BuiltinCollectionKind::from_name(type_name)
+                        == Some(BuiltinCollectionKind::List)
+                    {
                         let list_ty = if let Some(call_ty) = ctx.type_checker.get_type(call_expr_id)
                         {
                             call_ty.clone()
@@ -1570,11 +1577,16 @@ pub fn lower_call(
                         return Ok(result_op);
                     }
 
-                    if type_name == "Map" || type_name == "Set" {
+                    if matches!(
+                        BuiltinCollectionKind::from_name(type_name),
+                        Some(BuiltinCollectionKind::Map | BuiltinCollectionKind::Set)
+                    ) {
                         let return_ty =
                             if let Some(call_ty) = ctx.type_checker.get_type(call_expr_id) {
                                 call_ty.clone()
-                            } else if type_name == "Map" {
+                            } else if BuiltinCollectionKind::from_name(type_name)
+                                == Some(BuiltinCollectionKind::Map)
+                            {
                                 crate::ast::factory::type_map(
                                     crate::ast::factory::type_void(),
                                     crate::ast::factory::type_void(),
@@ -1591,7 +1603,9 @@ pub fn lower_call(
                             (p.clone(), Operand::Copy(p))
                         };
 
-                        let aggregate_kind = if type_name == "Map" {
+                        let aggregate_kind = if BuiltinCollectionKind::from_name(type_name)
+                            == Some(BuiltinCollectionKind::Map)
+                        {
                             AggregateKind::Map
                         } else {
                             AggregateKind::Set

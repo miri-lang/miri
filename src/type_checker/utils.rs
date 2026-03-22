@@ -12,7 +12,7 @@
 use super::context::{Context, TypeDefinition};
 use super::TypeChecker;
 use crate::ast::factory::make_type;
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
 use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
@@ -357,11 +357,7 @@ impl TypeChecker {
                 }
             }
             TypeKind::Custom(name, args)
-                if name == "Array"
-                    || name == "List"
-                    || name == "Set"
-                    || name == "Map"
-                    || name == "Tuple" =>
+                if BuiltinCollectionKind::from_name(name).is_some() || name == "Tuple" =>
             {
                 if let Some(args) = args {
                     if !args.is_empty() {
