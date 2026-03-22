@@ -80,6 +80,14 @@ impl OptimizationPass for CopyPropagation {
                         // Also invalidate any dependencies on 'dest'
                         replacements.retain(|_, op| !uses_local(op, dest));
                     }
+                } else if let StatementKind::Reassign(place, _) = &stmt.kind {
+                    // Reassign also defines the lhs — invalidate stale replacements.
+                    // We never add Reassign lhs to the propagation map because the
+                    // lhs is a mutable variable; propagating it as a copy source
+                    // across a reassignment would be unsound.
+                    let dest = place.local;
+                    replacements.retain(|_, op| !uses_local(op, dest));
+                    replacements.remove(&dest);
                 }
             }
 

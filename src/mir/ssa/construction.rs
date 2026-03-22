@@ -96,7 +96,9 @@ impl SSABuilder {
         for (i, block) in body.basic_blocks.iter().enumerate() {
             let bb = BasicBlock(i);
             for stmt in &block.statements {
-                if let StatementKind::Assign(place, _) = &stmt.kind {
+                if let StatementKind::Assign(place, _) | StatementKind::Reassign(place, _) =
+                    &stmt.kind
+                {
                     if place.projection.is_empty() {
                         self.def_sites[place.local.0].insert(bb);
                     }
@@ -183,7 +185,7 @@ impl SSABuilder {
 
                 // Rewrite Uses first
                 match &mut stmt.kind {
-                    StatementKind::Assign(_, rvalue) => {
+                    StatementKind::Assign(_, rvalue) | StatementKind::Reassign(_, rvalue) => {
                         self.rewrite_uses_in_rvalue(rvalue);
                     }
                     StatementKind::Nop
@@ -199,7 +201,9 @@ impl SSABuilder {
                 }
 
                 // Rewrite Defs
-                if let StatementKind::Assign(place, _) = &mut stmt.kind {
+                if let StatementKind::Assign(place, _) | StatementKind::Reassign(place, _) =
+                    &mut stmt.kind
+                {
                     if place.projection.is_empty() {
                         let new_local = self.new_version(local_decls, place.local);
                         let original = self.get_original_local(place.local);
