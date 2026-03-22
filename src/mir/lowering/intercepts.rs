@@ -23,6 +23,7 @@ use crate::ast::{BuiltinCollectionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::{Constant, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind};
+use crate::runtime_fns::rt;
 
 use super::{lower_expression, LoweringContext};
 
@@ -340,7 +341,7 @@ fn handle_push(
     let func_op = Operand::Constant(Box::new(Constant {
         span: *span,
         ty: Type::new(TypeKind::Identifier, *span),
-        literal: crate::ast::literal::Literal::Identifier("miri_rt_list_push".to_string()),
+        literal: crate::ast::literal::Literal::Identifier(rt::LIST_PUSH.to_string()),
     }));
 
     let target_bb = ctx.new_basic_block();
@@ -442,7 +443,7 @@ fn handle_insert(
     let func_op = Operand::Constant(Box::new(Constant {
         span: *span,
         ty: Type::new(TypeKind::Identifier, *span),
-        literal: crate::ast::literal::Literal::Identifier("miri_rt_list_insert".to_string()),
+        literal: crate::ast::literal::Literal::Identifier(rt::LIST_INSERT.to_string()),
     }));
 
     let target_bb = ctx.new_basic_block();

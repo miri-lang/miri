@@ -10,6 +10,7 @@ use crate::mir::{
     BinOp, Constant, Discriminant, Operand, Place, Rvalue, StatementKind as MirStatementKind,
     Terminator, TerminatorKind, UnOp,
 };
+use crate::runtime_fns::rt;
 
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::lower_expression;
@@ -37,8 +38,8 @@ pub(crate) fn lower_binary_expr(
 
         // Resolve the collection type to pick the right runtime function
         let fn_name = match ctx.type_checker.get_type(rhs.id).map(|t| &t.kind) {
-            Some(TypeKind::Set(_)) => "miri_rt_set_contains",
-            Some(TypeKind::Map(_, _)) => "miri_rt_map_contains_key",
+            Some(TypeKind::Set(_)) => rt::SET_CONTAINS,
+            Some(TypeKind::Map(_, _)) => rt::MAP_CONTAINS_KEY,
             _ => "__contains",
         };
 
