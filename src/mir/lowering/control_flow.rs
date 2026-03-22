@@ -29,11 +29,27 @@ pub(crate) fn mangle_generic_name(
     if type_args.is_empty() {
         return base.to_string();
     }
-    let suffix: Vec<String> = type_args
+
+    // Convert all types to strings first so we can compute the exact capacity needed.
+    // We avoid building an intermediate `Vec<String>` and calling `.join("__")`
+    // which requires an extra pass and format! macro overhead.
+    let mut total_len = base.len();
+    let mangled_types: Vec<String> = type_args
         .iter()
-        .map(|(_, ty)| type_kind_to_mangle_str(&ty.kind))
+        .map(|(_, ty)| {
+            let s = type_kind_to_mangle_str(&ty.kind);
+            total_len += 2 + s.len(); // "__" + type string length
+            s
+        })
         .collect();
-    format!("{}__{}", base, suffix.join("__"))
+
+    let mut path = String::with_capacity(total_len);
+    path.push_str(base);
+    for s in &mangled_types {
+        path.push_str("__");
+        path.push_str(s);
+    }
+    path
 }
 
 fn type_kind_to_mangle_str(kind: &TypeKind) -> String {

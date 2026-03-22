@@ -9,3 +9,7 @@
 ## 2024-03-03 - [Target Hot Paths Instead of Cold Paths for Optimization]
 **Learning:** Optimizing cold paths (like deduplication logic in error reporting `reported_errors`) goes against the principle of avoiding micro-optimizations that have no measurable impact. Always look for hot paths (e.g., `is_auto_copy_inner`) that are executed continuously. Replacing a `String` clone with a string slice borrow (`&'a str`) in hot paths provides a measurable performance gain.
 **Action:** When searching for optimizations, ignore error reporting logic entirely. Focus on parsing, type checking traversals, cycle detection (`is_auto_copy`), and codegen translation where operations are executed frequently and optimizations yield tangible benefits.
+
+## 2024-03-03 - [Eliminate Format String Overhead in String Reconstructions]
+**Learning:** In hot paths that require combining strings (like generating mangled generic names in the MIR lowerer), using `format!("{}__{}", base, suffix.join("__"))` adds unnecessary runtime overhead to parse the format string and introduces intermediate heap allocations (e.g. `suffix.join("__")` creates an extra `String` that is then copied into the format string).
+**Action:** Replace `format!` macros in performance-critical string builders with manual string construction. First calculate the exact final size needed using lengths of components, allocate using `String::with_capacity(total_len)`, and then sequentially use `push_str()`. This minimizes heap allocations and eliminates format parsing overhead.
