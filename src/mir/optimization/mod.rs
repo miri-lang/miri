@@ -7,6 +7,11 @@
 //! Passes are run in sequence until a fixpoint is reached (no pass makes changes)
 //! or a maximum iteration count is exceeded.
 //!
+//! Perceus RC insertion is intentionally *not* part of the fixpoint loop. It runs
+//! exactly once, after all optimizations are complete, via [`insert_rc`]. Running
+//! Perceus inside the loop would cause duplicate IncRef/DecRef insertions and allow
+//! later passes (DCE, copy propagation) to invalidate the RC annotations.
+//!
 //! # Available Passes
 //!
 //! | Pass | Description |
@@ -19,11 +24,12 @@
 //! # Usage
 //!
 //! ```no_run
-//! use miri::mir::optimization::optimize;
+//! use miri::mir::optimization::{optimize, insert_rc};
 //! use miri::mir::Body;
 //!
 //! fn example(body: &mut Body) {
-//!     optimize(body); // Runs all passes to fixpoint
+//!     optimize(body);   // Runs all passes to fixpoint
+//!     insert_rc(body);  // Insert RC operations exactly once, after optimizations
 //! }
 //! ```
 
@@ -89,6 +95,9 @@ pub trait OptimizationPass {
 /// CopyPropagation → DeadCodeElimination) and the sequence repeats until
 /// no pass makes changes or `MAX_ITERATIONS` (10) is reached.
 ///
+/// Perceus RC insertion is **not** included here. Call [`insert_rc`] after
+/// this function to insert IncRef/DecRef exactly once on the optimized body.
+///
 /// # Arguments
 ///
 /// * `body` - The MIR function body to optimize (mutated in place)
@@ -98,7 +107,6 @@ pub fn optimize(body: &mut Body) {
         Box::new(ConstantPropagation),
         Box::new(CopyPropagation),
         Box::new(DeadCodeElimination),
-        Box::new(Perceus),
     ];
 
     let mut changed = true;
@@ -115,4 +123,18 @@ pub fn optimize(body: &mut Body) {
             }
         }
     }
+}
+
+/// Insert Perceus reference-counting operations into the MIR body.
+///
+/// This must be called exactly once, after all optimization passes have
+/// converged. Running RC insertion inside the fixpoint loop would cause
+/// duplicate IncRef/DecRef and allow later passes to invalidate the RC
+/// annotations.
+///
+/// # Arguments
+///
+/// * `body` - The MIR function body to annotate with RC operations (mutated in place)
+pub fn insert_rc(body: &mut Body) {
+    Perceus.run(body);
 }
