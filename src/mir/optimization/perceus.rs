@@ -35,7 +35,8 @@ impl OptimizationPass for Perceus {
             .iter()
             .enumerate()
             .filter(|(i, decl)| {
-                *i > body.arg_count && is_managed_type(&decl.ty.kind, &body.auto_copy_types)
+                *i > body.arg_count
+                    && is_managed_type(&decl.ty.kind, &body.auto_copy_types, &body.type_params)
             })
             .map(|(i, _)| crate::mir::Local(i))
             .collect();
@@ -62,6 +63,7 @@ impl OptimizationPass for Perceus {
                                 &body.local_decls,
                                 &body.auto_copy_types,
                                 &body.field_types,
+                                &body.type_params,
                             ) {
                                 new_stmts.push(Statement {
                                     kind: StatementKind::IncRef(place),
@@ -97,7 +99,11 @@ impl OptimizationPass for Perceus {
                                     .projection
                                     .iter()
                                     .any(|e| matches!(e, PlaceElem::Field(_)))
-                                    && is_managed_type(&target_ty.kind, &body.auto_copy_types)
+                                    && is_managed_type(
+                                        &target_ty.kind,
+                                        &body.auto_copy_types,
+                                        &body.type_params,
+                                    )
                                 {
                                     new_stmts.push(Statement {
                                         kind: StatementKind::IncRef(place.clone()),
@@ -125,6 +131,7 @@ impl OptimizationPass for Perceus {
                                         &body.local_decls,
                                         &body.auto_copy_types,
                                         &body.field_types,
+                                        &body.type_params,
                                     ) {
                                         new_stmts.push(Statement {
                                             kind: StatementKind::IncRef(place.clone()),
@@ -199,6 +206,7 @@ fn is_place_managed(
     local_decls: &[crate::mir::LocalDecl],
     auto_copy_types: &std::collections::HashSet<String>,
     field_types: &std::collections::HashMap<String, Vec<crate::ast::types::Type>>,
+    type_params: &std::collections::HashSet<String>,
 ) -> bool {
     // Clone once so we can rebind `current` freely across projection sources.
     let mut current: TypeKind = local_decls[place.local.0].ty.kind.clone();
@@ -210,9 +218,13 @@ fn is_place_managed(
                 TypeKind::Array(inner, _) => match &inner.node {
                     crate::ast::expression::ExpressionKind::Type(ty, _) => ty.kind.clone(),
                     crate::ast::expression::ExpressionKind::Identifier(name, _) => {
+                        // An unresolved Identifier in an element-type position is managed
+                        // if it names a known collection/String type, or is a concrete
+                        // user type (not auto-copy and not a generic type parameter).
                         if matches!(name.as_str(), "String" | "List" | "Array" | "Map" | "Set")
-                            || (!auto_copy_types.contains(name)
-                                && !matches!(name.as_str(), "Self" | "T" | "K" | "V" | "U"))
+                            || (name.as_str() != "Self"
+                                && !auto_copy_types.contains(name.as_str())
+                                && !type_params.contains(name.as_str()))
                         {
                             return true;
                         }
@@ -224,8 +236,9 @@ fn is_place_managed(
                     crate::ast::expression::ExpressionKind::Type(ty, _) => ty.kind.clone(),
                     crate::ast::expression::ExpressionKind::Identifier(name, _) => {
                         if matches!(name.as_str(), "String" | "List" | "Array" | "Map" | "Set")
-                            || (!auto_copy_types.contains(name)
-                                && !matches!(name.as_str(), "Self" | "T" | "K" | "V" | "U"))
+                            || (name.as_str() != "Self"
+                                && !auto_copy_types.contains(name.as_str())
+                                && !type_params.contains(name.as_str()))
                         {
                             return true;
                         }
@@ -237,8 +250,9 @@ fn is_place_managed(
                     crate::ast::expression::ExpressionKind::Type(ty, _) => ty.kind.clone(),
                     crate::ast::expression::ExpressionKind::Identifier(name, _) => {
                         if matches!(name.as_str(), "String" | "List" | "Array" | "Map" | "Set")
-                            || (!auto_copy_types.contains(name)
-                                && !matches!(name.as_str(), "Self" | "T" | "K" | "V" | "U"))
+                            || (name.as_str() != "Self"
+                                && !auto_copy_types.contains(name.as_str())
+                                && !type_params.contains(name.as_str()))
                         {
                             return true;
                         }
@@ -258,6 +272,7 @@ fn is_place_managed(
                         return is_managed_type(
                             &TypeKind::Custom(name.clone(), None),
                             auto_copy_types,
+                            type_params,
                         );
                     }
                     _ => return false,
@@ -278,5 +293,5 @@ fn is_place_managed(
         current = next;
     }
 
-    is_managed_type(&current, auto_copy_types)
+    is_managed_type(&current, auto_copy_types, type_params)
 }
