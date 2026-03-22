@@ -239,7 +239,12 @@ impl TypeChecker {
                 let expr_type = self.infer_expression(expr, context);
                 match expr_type.kind {
                     TypeKind::Function(func_data) if func_data.generics.is_some() => {
-                        let params = func_data.generics.as_ref().unwrap();
+                        let params = if let Some(p) = func_data.generics.as_ref() {
+                            p
+                        } else {
+                            // Should not happen since we matched on `is_some()`
+                            return make_type(TypeKind::Error);
+                        };
                         let func_params = &func_data.params;
                         let ret = &func_data.return_type;
                         let mut mapping = HashMap::new();
