@@ -50,6 +50,12 @@ pub struct Body {
     /// Entry `i` should be loaded from `env_ptr + (i+1) * ptr_size` at function entry.
     /// Empty for non-closure functions.
     pub env_capture_locals: Vec<Local>,
+    /// Names of generic type parameters in scope for this function body.
+    /// Used by `is_managed_type` to distinguish unresolved generic placeholders
+    /// (which are never managed) from concrete user-defined types.
+    /// Populated from the function's explicit generics and from `TypeKind::Generic`
+    /// names found in parameter/return types (captures class-level generics too).
+    pub type_params: HashSet<String>,
 }
 
 impl Body {
@@ -67,6 +73,7 @@ impl Body {
             auto_copy_types: HashSet::new(),
             field_types: HashMap::new(),
             env_capture_locals: Vec::new(),
+            type_params: HashSet::new(),
         }
     }
 
