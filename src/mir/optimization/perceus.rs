@@ -53,7 +53,9 @@ impl OptimizationPass for Perceus {
 
             for stmt in old_stmts {
                 match &stmt.kind {
-                    StatementKind::Assign(lhs, rvalue) => {
+                    StatementKind::Assign(lhs, rvalue) | StatementKind::Reassign(lhs, rvalue) => {
+                        let is_reassign = matches!(stmt.kind, StatementKind::Reassign(_, _));
+
                         // Insert IncRef for Copy operands (aliasing).
                         // Move operands transfer ownership — no IncRef needed
                         // because the source gives up its reference.
@@ -141,6 +143,25 @@ impl OptimizationPass for Perceus {
                                     }
                                 }
                             }
+                        }
+                        // For Reassign: the LHS already holds a live reference that must
+                        // be released before the new value is written.  Emit DecRef(lhs)
+                        // after any IncRef for the rhs (preserving alias-safe order) and
+                        // before the Reassign statement itself.
+                        if is_reassign
+                            && is_place_managed(
+                                lhs,
+                                &body.local_decls,
+                                &body.auto_copy_types,
+                                &body.field_types,
+                                &body.type_params,
+                            )
+                        {
+                            new_stmts.push(Statement {
+                                kind: StatementKind::DecRef(lhs.clone()),
+                                span: stmt.span,
+                            });
+                            block_changed = true;
                         }
                     }
                     StatementKind::StorageDead(place) => {

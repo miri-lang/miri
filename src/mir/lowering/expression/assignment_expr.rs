@@ -39,18 +39,16 @@ pub(crate) fn lower_assignment_expr(
                                 Rvalue::Use(val.clone())
                             };
 
-                            // For managed-type reassignment where the rhs is a plain
-                            // place (Copy or Move of a local), use the "inc-then-dec"
-                            // RC pattern:
-                            //   1. IncRef(rhs) — bump rhs before releasing lhs so the
-                            //      object survives even when lhs and rhs alias the same
-                            //      allocation (the classic alias-safety problem).
-                            //   2. DecRef(lhs) — release the old value.
-                            //   3. Assign(lhs, Move(rhs)) — Move prevents Perceus from
-                            //      inserting a second IncRef for the same reference.
-                            //
-                            // For non-place rvalues (Cast, etc.) fall back to
-                            // dec-then-assign; Perceus handles IncRef inside those.
+                            // For managed-type reassignment, emit a `Reassign` statement.
+                            // The Perceus RC pass will insert the appropriate IncRef/DecRef
+                            // around it:
+                            //   - For a Copy-of-place rhs: IncRef(rhs) then DecRef(lhs)
+                            //     (alias-safe "inc-then-dec" order).
+                            //   - For a non-place rhs (Cast, Aggregate, etc.): DecRef(lhs)
+                            //     only.
+                            // Using Copy (not Move) for place rhs lets Perceus handle the
+                            // IncRef automatically. The rhs temp is still dropped via
+                            // emit_temp_drop which triggers DecRef at its StorageDead.
                             if ctx.is_perceus_managed(&lhs_ty.kind) {
                                 let rhs_place = match &rvalue {
                                     Rvalue::Use(Operand::Copy(p))
@@ -59,19 +57,10 @@ pub(crate) fn lower_assignment_expr(
                                 };
 
                                 if let Some(rhs_place) = rhs_place {
-                                    // inc-then-dec: alias-safe assignment.
                                     ctx.push_statement(crate::mir::Statement {
-                                        kind: MirStatementKind::IncRef(rhs_place.clone()),
-                                        span: expr.span,
-                                    });
-                                    ctx.push_statement(crate::mir::Statement {
-                                        kind: MirStatementKind::DecRef(Place::new(local)),
-                                        span: expr.span,
-                                    });
-                                    ctx.push_statement(crate::mir::Statement {
-                                        kind: MirStatementKind::Assign(
+                                        kind: MirStatementKind::Reassign(
                                             Place::new(local),
-                                            Rvalue::Use(Operand::Move(rhs_place.clone())),
+                                            Rvalue::Use(Operand::Copy(rhs_place.clone())),
                                         ),
                                         span: expr.span,
                                     });
@@ -97,22 +86,15 @@ pub(crate) fn lower_assignment_expr(
                                         return Ok(Operand::Copy(Place::new(local)));
                                     }
                                 } else {
-                                    // Non-place rvalue (e.g. Cast): dec-then-assign fallback.
-                                    // Perceus does not IncRef Cast rvalues, so the assignment
-                                    // transfers ownership of the rhs temp into `local`.
+                                    // Non-place rvalue (e.g. Cast): Perceus will emit
+                                    // DecRef(lhs) for the Reassign, and no IncRef for the
+                                    // non-place rhs.  This transfers ownership of the rhs
+                                    // temp into `local`.
                                     ctx.push_statement(crate::mir::Statement {
-                                        kind: MirStatementKind::DecRef(Place::new(local)),
+                                        kind: MirStatementKind::Reassign(Place::new(local), rvalue),
                                         span: expr.span,
                                     });
-                                    ctx.push_statement(crate::mir::Statement {
-                                        kind: MirStatementKind::Assign(Place::new(local), rvalue),
-                                        span: expr.span,
-                                    });
-                                    // Return the lhs so callers see the updated local, not the
-                                    // rhs temp. Returning the rhs temp would cause a double-free:
-                                    // lower_statement creates temp = Copy(rhs_temp) (Perceus
-                                    // IncRef), drops temp (DecRef→RC=1), then drops rhs_temp
-                                    // (DecRef→RC=0→free), leaving local with a dangling pointer.
+                                    // Return the lhs so callers see the updated local.
                                     if let Some(d) = dest {
                                         ctx.push_statement(crate::mir::Statement {
                                             kind: MirStatementKind::Assign(
@@ -253,7 +235,8 @@ pub(crate) fn lower_assignment_expr(
                         // Handle simple assignment vs compound assignment
                         match op {
                             crate::ast::operator::AssignmentOp::Assign => {
-                                // Before overwriting a managed field, DecRef the old value.
+                                // When the field type is managed, emit Reassign so that the
+                                // Perceus pass inserts DecRef(old_field) before the store.
                                 let field_is_managed = if let Some(ft) = ctx
                                     .body
                                     .field_types
@@ -267,17 +250,21 @@ pub(crate) fn lower_assignment_expr(
                                 };
                                 if field_is_managed {
                                     ctx.push_statement(crate::mir::Statement {
-                                        kind: MirStatementKind::DecRef(target_place.clone()),
+                                        kind: MirStatementKind::Reassign(
+                                            target_place,
+                                            Rvalue::Use(val.clone()),
+                                        ),
+                                        span: expr.span,
+                                    });
+                                } else {
+                                    ctx.push_statement(crate::mir::Statement {
+                                        kind: MirStatementKind::Assign(
+                                            target_place,
+                                            Rvalue::Use(val.clone()),
+                                        ),
                                         span: expr.span,
                                     });
                                 }
-                                ctx.push_statement(crate::mir::Statement {
-                                    kind: MirStatementKind::Assign(
-                                        target_place,
-                                        Rvalue::Use(val.clone()),
-                                    ),
-                                    span: expr.span,
-                                });
                             }
                             crate::ast::operator::AssignmentOp::AssignAdd
                             | crate::ast::operator::AssignmentOp::AssignSub

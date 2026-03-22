@@ -38,7 +38,7 @@ fn collect_read_locals(body: &Body) -> HashSet<crate::mir::Local> {
     for block in &body.basic_blocks {
         for stmt in &block.statements {
             match &stmt.kind {
-                MirStatementKind::Assign(_, rvalue) => {
+                MirStatementKind::Assign(_, rvalue) | MirStatementKind::Reassign(_, rvalue) => {
                     collect_rvalue_locals(rvalue, &mut used);
                 }
                 MirStatementKind::IncRef(place)
