@@ -129,7 +129,7 @@ impl<'a> FunctionTranslator<'a> {
                 builder.switch_to_block(merge_block);
                 builder.seal_block(merge_block);
             }
-            StatementKind::Assign(place, rvalue) => {
+            StatementKind::Assign(place, rvalue) | StatementKind::Reassign(place, rvalue) => {
                 let mut value = Self::translate_rvalue(builder, ctx, rvalue, locals, type_ctx)?;
 
                 // Handle implicit casts (e.g. float -> f32, u8 -> u32)

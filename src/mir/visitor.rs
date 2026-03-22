@@ -75,7 +75,7 @@ pub trait Visitor {
 
     fn visit_statement(&mut self, block: BasicBlock, statement: &Statement) {
         match &statement.kind {
-            StatementKind::Assign(place, rvalue) => {
+            StatementKind::Assign(place, rvalue) | StatementKind::Reassign(place, rvalue) => {
                 self.visit_assign(block, place, rvalue);
             }
             StatementKind::StorageLive(place) => {
@@ -247,7 +247,7 @@ pub trait MutVisitor {
 
     fn visit_statement(&mut self, block: BasicBlock, statement: &mut Statement) {
         match &mut statement.kind {
-            StatementKind::Assign(place, rvalue) => {
+            StatementKind::Assign(place, rvalue) | StatementKind::Reassign(place, rvalue) => {
                 self.visit_assign(block, place, rvalue);
             }
             StatementKind::StorageLive(place) => {
