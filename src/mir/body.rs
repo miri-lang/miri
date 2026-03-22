@@ -6,7 +6,7 @@ use crate::error::syntax::Span;
 use crate::mir::backend::BackendMetadata;
 use crate::mir::block::BasicBlockData;
 use crate::mir::place::Local;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::rc::Rc;
 
@@ -42,6 +42,10 @@ pub struct Body {
     /// primitive or other auto-copy types, and total size <= `AUTO_COPY_MAX_SIZE`).
     /// These types use bitwise copy on assignment and do not need RC.
     pub auto_copy_types: HashSet<String>,
+    /// Maps struct/class type names to their ordered field types (in layout order).
+    /// Used by Perceus to resolve `Field(i)` place projections and determine
+    /// whether the projected field is a managed type.
+    pub field_types: HashMap<String, Vec<Type>>,
     /// For closure/lambda bodies: the list of locals that hold captured values.
     /// Entry `i` should be loaded from `env_ptr + (i+1) * ptr_size` at function entry.
     /// Empty for non-closure functions.
@@ -61,6 +65,7 @@ impl Body {
             execution_model,
             backend_metadata: None,
             auto_copy_types: HashSet::new(),
+            field_types: HashMap::new(),
             env_capture_locals: Vec::new(),
         }
     }

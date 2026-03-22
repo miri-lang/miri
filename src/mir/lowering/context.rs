@@ -68,6 +68,9 @@ impl<'a> LoweringContext<'a> {
     ) -> Self {
         // Pre-compute auto-copy type set from type definitions
         body.auto_copy_types = Self::compute_auto_copy_types(type_checker);
+        // Pre-compute field type map for struct/class types (used by Perceus to resolve
+        // Field(i) projections without access to the type checker at optimization time).
+        body.field_types = Self::compute_field_types(type_checker);
 
         let mut ctx = Self {
             body,
@@ -128,14 +131,25 @@ impl<'a> LoweringContext<'a> {
     /// and restores any shadowed variables.
     pub fn pop_scope(&mut self, span: Span) {
         if let Some(mut scope) = self.scope_stack.pop() {
+            // Only emit StorageDead if the current block is not yet terminated.
+            // When a `return` statement sets the terminator first (via
+            // `emit_return_cleanup`), the subsequent `pop_scope` from the
+            // enclosing `lower_as_return` Block handler must not re-emit
+            // StorageDead for variables that were already cleaned up.
+            let block_is_live = self.body.basic_blocks[self.current_block.0]
+                .terminator
+                .is_none();
+
             // Remove variables introduced in this scope
             for name in scope.introduced.iter().rev() {
                 if let Some(local) = self.variable_map.remove(name) {
-                    // Emit StorageDead for variables leaving scope
-                    self.push_statement(crate::mir::Statement {
-                        kind: StatementKind::StorageDead(Place::new(local)),
-                        span,
-                    });
+                    if block_is_live {
+                        // Emit StorageDead for variables leaving scope
+                        self.push_statement(crate::mir::Statement {
+                            kind: StatementKind::StorageDead(Place::new(local)),
+                            span,
+                        });
+                    }
                 }
             }
 
@@ -156,6 +170,54 @@ impl<'a> LoweringContext<'a> {
     /// Returns the current scope depth (0 = root scope)
     pub fn scope_depth(&self) -> usize {
         self.scope_stack.len().saturating_sub(1)
+    }
+
+    /// Emit `StorageDead` for every named local in every scope, from innermost
+    /// to outermost, without modifying the scope stack or `variable_map`.
+    ///
+    /// Used before a `return` terminator so that managed locals live in
+    /// enclosing scopes receive `StorageDead` (and thus a Perceus `DecRef`) on
+    /// early-return paths.  The scope stack is intentionally left intact so
+    /// that the AST lowering loop for the enclosing block can continue
+    /// resolving variables (the current basic block will be dead after Return,
+    /// but the MIR lowering loop still runs over remaining AST statements).
+    pub fn emit_return_cleanup(&mut self, span: Span) {
+        // Simulate pop_scope for each level without mutating the real structures.
+        // `effective` tracks what the variable_map would look like after each
+        // simulated pop, so shadowed variables are handled correctly.
+        //
+        // Collect the locals to drop first (avoiding a simultaneous mutable +
+        // immutable borrow of `self`), then emit statements in a second pass.
+        let mut to_drop: Vec<Local> = Vec::new();
+        let mut effective: HashMap<Rc<str>, Local> = self.variable_map.clone();
+
+        for scope in self.scope_stack.iter().rev() {
+            // Collect StorageDead targets for each variable introduced by this scope.
+            // `effective[name]` is the local bound by this scope at this point.
+            for name in scope.introduced.iter().rev() {
+                if let Some(&local) = effective.get(name.as_ref()) {
+                    to_drop.push(local);
+                }
+            }
+
+            // Simulate the pop: restore shadowed bindings and remove fresh
+            // introductions, so the next (outer) scope sees the right locals.
+            for (name, &local) in &scope.shadowed {
+                effective.insert(name.clone(), local);
+            }
+            for name in &scope.introduced {
+                if !scope.shadowed.contains_key(name) {
+                    effective.remove(name.as_ref());
+                }
+            }
+        }
+
+        for local in to_drop {
+            self.push_statement(crate::mir::Statement {
+                kind: StatementKind::StorageDead(Place::new(local)),
+                span,
+            });
+        }
     }
 
     /// Normalize `Custom("Map", Some([k,v]))` → `TypeKind::Map(k,v)` etc. so that
@@ -262,26 +324,10 @@ impl<'a> LoweringContext<'a> {
         self.body.new_local(decl)
     }
 
-    /// Returns `true` if `kind` requires reference-count management,
-    /// mirroring the `is_managed_type` check in `src/mir/optimization/perceus.rs`.
+    /// Returns `true` if `kind` requires reference-count management.
+    /// Delegates to the single authority in `crate::mir::rc::is_managed_type`.
     pub fn is_perceus_managed(&self, kind: &crate::ast::types::TypeKind) -> bool {
-        use crate::ast::types::TypeKind;
-        match kind {
-            TypeKind::Option(_)
-            | TypeKind::List(_)
-            | TypeKind::Array(_, _)
-            | TypeKind::Map(_, _)
-            | TypeKind::Set(_)
-            | TypeKind::Tuple(_) => true,
-            TypeKind::Custom(name, _) => {
-                !self.body.auto_copy_types.contains(name.as_str())
-                    && !matches!(
-                        name.as_str(),
-                        "Self" | "T" | "K" | "V" | "U" | "Array" | "List" | "Map" | "Set"
-                    )
-            }
-            _ => false,
-        }
+        crate::mir::rc::is_managed_type(kind, &self.body.auto_copy_types)
     }
 
     /// Emits `StorageDead` for `local` if it was created at or after `watermark`
@@ -351,5 +397,46 @@ impl<'a> LoweringContext<'a> {
             }
         }
         auto_copy
+    }
+
+    /// Builds a map from struct/class type names to their ordered field types.
+    ///
+    /// This is used by the Perceus RC pass to resolve `Field(i)` place projections
+    /// and determine whether the projected field type is managed (needs RC).
+    ///
+    /// For structs, fields are in declaration order.
+    /// For classes, fields are in inheritance order (ancestor fields first), matching
+    /// the layout produced by `collect_class_fields_all`.
+    /// Enum types are excluded: their field layout depends on which variant is active,
+    /// so Perceus falls back to checking the LHS local's type for enum field projections.
+    fn compute_field_types(
+        type_checker: &crate::type_checker::TypeChecker,
+    ) -> HashMap<String, Vec<crate::ast::types::Type>> {
+        let mut field_types = HashMap::new();
+
+        for (name, def) in &type_checker.global_type_definitions {
+            match def {
+                crate::type_checker::context::TypeDefinition::Struct(struct_def) => {
+                    let types: Vec<_> = struct_def
+                        .fields
+                        .iter()
+                        .map(|(_, ty, _)| ty.clone())
+                        .collect();
+                    field_types.insert(name.clone(), types);
+                }
+                crate::type_checker::context::TypeDefinition::Class(class_def) => {
+                    let all_fields = crate::type_checker::context::collect_class_fields_all(
+                        class_def,
+                        &type_checker.global_type_definitions,
+                    );
+                    let types: Vec<_> = all_fields.iter().map(|(_, fi)| fi.ty.clone()).collect();
+                    field_types.insert(name.clone(), types);
+                }
+                // Enums, aliases, generics, traits: excluded (see doc comment above).
+                _ => {}
+            }
+        }
+
+        field_types
     }
 }

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+use std::rc::Rc;
+
 use crate::ast::expression::Expression;
 use crate::ast::statement::{IfStatementType, Statement};
 use crate::ast::{
@@ -417,10 +419,44 @@ fn lower_for_over_iterable(
         Type::new(TypeKind::Int, *span)
     };
 
-    // In lower_for_over_iterable, we want to keep the name if it's user defined.
-    // The ctx.push_local logic already handles is_release stripping if we pass the name.
-    // However, push_local takes String, and ctx handles the logic.
-    let loop_var = ctx.push_local(decl.name.clone(), elem_ty, *span);
+    // Determine if the element type needs RC management.
+    let elem_is_managed = ctx.is_perceus_managed(&elem_ty.kind);
+
+    // For managed element types we must emit StorageLive at the *start* of each body
+    // iteration and StorageDead at the *start* of the increment block.  This causes
+    // Perceus to insert a DecRef for the previous iteration's element before the next
+    // element_at overwrites loop_var, preventing a reference-count leak of N-1 elements.
+    //
+    // To achieve this without pop_scope emitting a redundant StorageDead for loop_var
+    // (which would DecRef an uninitialized slot on the empty-list path), we create the
+    // local via push_temp (which does NOT add it to scope.introduced) and manually
+    // register it in variable_map so that the loop body can resolve it by name.
+    //
+    // For non-managed element types (e.g. Int), use the regular push_local path.
+    let loop_var = if elem_is_managed {
+        let local = ctx.push_temp(elem_ty.clone(), *span);
+        if !ctx.is_release {
+            ctx.body.local_decls[local.0].name = Some(Rc::from(decl.name.as_str()));
+        }
+        ctx.body.local_decls[local.0].is_user_variable = true;
+        // Register in variable_map, saving any shadowed binding so pop_scope can restore it.
+        let name_rc: Rc<str> = Rc::from(decl.name.as_str());
+        match ctx.variable_map.entry(name_rc) {
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                let old_local = *entry.get();
+                if let Some(scope) = ctx.scope_stack.last_mut() {
+                    scope.shadowed.insert(entry.key().clone(), old_local);
+                }
+                entry.insert(local);
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(local);
+            }
+        }
+        local
+    } else {
+        ctx.push_local(decl.name.clone(), elem_ty, *span)
+    };
 
     // If there's a second declaration:
     // - For Map: it's the value variable (for k, v in map)
@@ -566,6 +602,17 @@ fn lower_for_over_iterable(
     ctx.enter_loop(exit_bb, increment_bb);
     ctx.set_current_block(body_bb);
 
+    // For managed element types, start the lifetime of loop_var at the top of each
+    // body iteration.  Perceus will pair this StorageLive with the StorageDead in the
+    // increment block, yielding an IncRef (for the element_at Copy below) followed by
+    // a DecRef (when the iteration ends), correctly balancing every element reference.
+    if elem_is_managed {
+        ctx.push_statement(crate::mir::Statement {
+            kind: StatementKind::StorageLive(Place::new(loop_var)),
+            span: *span,
+        });
+    }
+
     // Assign loop_var = element_at(idx) or list[idx]
     if let Some(ref class_name) = iterable_class {
         // Call ClassName_element_at(iterable, idx) via MIR terminator
@@ -670,6 +717,17 @@ fn lower_for_over_iterable(
 
     // Increment
     ctx.set_current_block(increment_bb);
+
+    // For managed element types, end the lifetime of loop_var at the top of the
+    // increment block.  Perceus converts this StorageDead into a DecRef, releasing
+    // the current iteration's element reference before the next element_at is called.
+    if elem_is_managed {
+        ctx.push_statement(crate::mir::Statement {
+            kind: StatementKind::StorageDead(Place::new(loop_var)),
+            span: *span,
+        });
+    }
+
     let one = Operand::Constant(Box::new(Constant {
         span: *span,
         ty: idx_ty,
@@ -695,6 +753,11 @@ fn lower_for_over_iterable(
     ctx.set_current_block(exit_bb);
     // Release the iterable local now that the loop is done.
     ctx.emit_temp_drop(list_local, 0, *span);
+    // For managed loop vars, remove the manually-registered binding before pop_scope.
+    // pop_scope's shadowed.drain() will restore any outer binding that was shadowed.
+    if elem_is_managed {
+        ctx.variable_map.remove(decl.name.as_str());
+    }
     ctx.pop_scope(*span);
     Ok(())
 }
@@ -946,13 +1009,16 @@ pub fn lower_call(
                 {
                     let obj_watermark = ctx.body.local_decls.len();
                     let obj_op = lower_expression(ctx, obj, None)?;
-                    // Only drop obj_local if obj_op is a plain Copy (no field projections).
-                    // Perceus inserts IncRef only for projection-free Copy operands; field
-                    // projections (e.g. `b.values`) are not IncRef'd by Perceus, so emitting
-                    // StorageDead (and thus a balancing DecRef) would prematurely free the value.
-                    // For Move operands Perceus does not IncRef, so no drop is needed either.
-                    let obj_op_is_copy =
-                        matches!(&obj_op, Operand::Copy(p) if p.projection.is_empty());
+                    // Drop obj_local for any Copy operand (including field-projected ones).
+                    // Perceus now IncRefs all Copy operands whose source place is managed
+                    // (including field projections via the updated is_place_managed), so
+                    // emit_temp_drop is safe for all copies.
+                    // For Move operands Perceus does not IncRef, so no drop is needed.
+                    let obj_op_copy_src = if let Operand::Copy(ref p) = obj_op {
+                        Some(p.local)
+                    } else {
+                        None
+                    };
                     // Create a temp local to hold the object, so we can form Place for Rvalue::Len
                     let obj_local = ctx.push_temp(obj_ty.clone(), *span);
                     ctx.push_statement(crate::mir::Statement {
@@ -977,8 +1043,12 @@ pub fn lower_call(
                         span: *span,
                     });
 
-                    if obj_op_is_copy {
+                    if let Some(src_local) = obj_op_copy_src {
                         ctx.emit_temp_drop(obj_local, obj_watermark, *span);
+                        // Also drop the source of the Copy (e.g. an inline constructor temp).
+                        // Perceus IncRef'd the source for the Copy, so we need a matching
+                        // DecRef (via StorageDead) for the source local itself.
+                        ctx.emit_temp_drop(src_local, obj_watermark, *span);
                     }
                     return Ok(op);
                 }
@@ -995,10 +1065,14 @@ pub fn lower_call(
                 {
                     let obj_watermark = ctx.body.local_decls.len();
                     let obj_op = lower_expression(ctx, obj, None)?;
-                    // See comment in the `length` branch: Perceus only IncRefs projection-free
-                    // Copy operands, so field projections must not trigger emit_temp_drop.
-                    let obj_op_is_copy =
-                        matches!(&obj_op, Operand::Copy(p) if p.projection.is_empty());
+                    // See comment in the `length` branch: Perceus now IncRefs all managed
+                    // Copy operands including field projections, so emit_temp_drop is safe
+                    // for any Copy (including field-projected ones).
+                    let obj_op_copy_src = if let Operand::Copy(ref p) = obj_op {
+                        Some(p.local)
+                    } else {
+                        None
+                    };
                     let index_op = lower_expression(ctx, &args[0], None)?;
 
                     // Create a temp local to hold the object
@@ -1053,8 +1127,12 @@ pub fn lower_call(
                     });
 
                     // Only drop obj_local when a Copy was used (Perceus will have IncRef'd).
-                    if obj_op_is_copy {
+                    if let Some(src_local) = obj_op_copy_src {
                         ctx.emit_temp_drop(obj_local, obj_watermark, *span);
+                        // Also drop the source of the Copy (e.g. an inline constructor temp).
+                        // Perceus IncRef'd the source for the Copy, so we need a matching
+                        // DecRef (via StorageDead) for the source local itself.
+                        ctx.emit_temp_drop(src_local, obj_watermark, *span);
                     }
                     return Ok(op);
                 }

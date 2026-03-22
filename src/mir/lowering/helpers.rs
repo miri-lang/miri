@@ -206,15 +206,8 @@ pub fn bind_pattern(
                         ),
                         span: *span,
                     });
-                    // Perceus does not IncRef Field projections (is_place_managed returns false
-                    // for projected places). Emit an explicit IncRef so that when Perceus
-                    // inserts DecRef(var_local) at the arm's scope end the RC balance is correct.
-                    if ctx.is_perceus_managed(&inner_ty.kind) {
-                        ctx.push_statement(crate::mir::Statement {
-                            kind: MirStatementKind::IncRef(Place::new(var_local)),
-                            span: *span,
-                        });
-                    }
+                    // Perceus now handles Field(0) projections on Option types via
+                    // is_place_managed, so no explicit IncRef needed here.
                 }
                 return Ok(());
             }
@@ -264,14 +257,8 @@ pub fn bind_pattern(
                         ),
                         span: *span,
                     });
-                    // Same as for Option::Some above: Perceus skips Field projections,
-                    // so emit an explicit IncRef to keep the RC balance correct.
-                    if ctx.is_perceus_managed(&ty.kind) {
-                        ctx.push_statement(crate::mir::Statement {
-                            kind: MirStatementKind::IncRef(Place::new(elem_local)),
-                            span: *span,
-                        });
-                    }
+                    // Perceus handles enum field projections via the managed_locals fallback
+                    // in its main loop, so no explicit IncRef needed here.
                 }
             }
         }

@@ -37,6 +37,10 @@ const LOAD_FACTOR_DEN: usize = 4;
 /// - `key_size`: size of each key in bytes
 /// - `value_size`: size of each value in bytes
 /// - `key_kind`: 0 = value type, 1 = string type
+/// - `val_drop_fn`: If non-zero, called on each value pointer when that entry is
+///   removed by a mutation operation (`remove`, `clear`, or `set` overwriting an
+///   existing key). Allows managed values (Lists, Maps, etc.) to have their RC
+///   decremented on removal. Set via `miri_rt_map_set_val_drop_fn`.
 #[repr(C)]
 pub struct MiriMap {
     states: *mut u8,
@@ -47,6 +51,9 @@ pub struct MiriMap {
     key_size: usize,
     value_size: usize,
     key_kind: usize,
+    /// Drop function for managed values: `fn(val_ptr: *mut u8)`.
+    /// Zero means values are plain (no RC management on removal).
+    val_drop_fn: usize,
 }
 
 const STRUCT_SIZE: usize = std::mem::size_of::<MiriMap>();
@@ -267,6 +274,18 @@ impl MiriMap {
     /// Inserts a key-value pair without checking load factor.
     unsafe fn insert_raw(&mut self, key: *const u8, value: *const u8) {
         let (idx, found) = self.find_slot(key);
+
+        // If the key already exists and values are managed, DecRef the old value
+        // before overwriting so the old object's RC is decremented correctly.
+        if found && self.val_drop_fn != 0 && self.value_size > 0 {
+            let drop_fn: unsafe extern "C" fn(*mut u8) = std::mem::transmute(self.val_drop_fn);
+            let old_val_addr = self.values.add(idx * self.value_size) as *const usize;
+            let old_val_ptr = *old_val_addr;
+            if old_val_ptr != 0 {
+                drop_fn(old_val_ptr as *mut u8);
+            }
+        }
+
         let dest_key = self.keys.add(idx * self.key_size);
         let dest_value = self.values.add(idx * self.value_size);
 
@@ -314,6 +333,15 @@ impl MiriMap {
         }
         let (idx, found) = self.find_slot(key);
         if found {
+            // DecRef the value being removed if managed.
+            if self.val_drop_fn != 0 && self.value_size > 0 {
+                let drop_fn: unsafe extern "C" fn(*mut u8) = std::mem::transmute(self.val_drop_fn);
+                let val_addr = self.values.add(idx * self.value_size) as *const usize;
+                let val_ptr = *val_addr;
+                if val_ptr != 0 {
+                    drop_fn(val_ptr as *mut u8);
+                }
+            }
             *self.states.add(idx) = SLOT_TOMBSTONE;
             self.len -= 1;
             true
@@ -336,6 +364,20 @@ impl MiriMap {
     pub fn clear(&mut self) {
         if self.capacity > 0 && !self.states.is_null() {
             unsafe {
+                // DecRef all managed values before zeroing states.
+                if self.val_drop_fn != 0 && self.value_size > 0 {
+                    let drop_fn: unsafe extern "C" fn(*mut u8) =
+                        std::mem::transmute(self.val_drop_fn);
+                    for i in 0..self.capacity {
+                        if *self.states.add(i) == SLOT_OCCUPIED {
+                            let val_addr = self.values.add(i * self.value_size) as *const usize;
+                            let val_ptr = *val_addr;
+                            if val_ptr != 0 {
+                                drop_fn(val_ptr as *mut u8);
+                            }
+                        }
+                    }
+                }
                 ptr::write_bytes(self.states, 0, self.capacity);
             }
         }
@@ -387,6 +429,7 @@ pub unsafe extern "C" fn miri_rt_map_new(
     (*map).key_size = key_size;
     (*map).value_size = value_size;
     (*map).key_kind = key_kind;
+    (*map).val_drop_fn = 0;
     map
 }
 
@@ -507,6 +550,19 @@ pub unsafe extern "C" fn miri_rt_map_remove(ptr: *mut MiriMap, key: usize) -> u8
 pub unsafe extern "C" fn miri_rt_map_clear(ptr: *mut MiriMap) {
     if !ptr.is_null() {
         (*ptr).clear();
+    }
+}
+
+/// Sets the drop function for managed values.
+///
+/// When non-zero, this function is called with the value pointer whenever an
+/// entry is removed by `remove`, `clear`, or `set` overwriting an existing key.
+/// Must be called after `miri_rt_map_new` when values are heap-allocated (e.g. List).
+#[no_mangle]
+#[allow(clippy::missing_safety_doc)]
+pub unsafe extern "C" fn miri_rt_map_set_val_drop_fn(ptr: *mut MiriMap, fn_ptr: usize) {
+    if !ptr.is_null() {
+        (*ptr).val_drop_fn = fn_ptr;
     }
 }
 

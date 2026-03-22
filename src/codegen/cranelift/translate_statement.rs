@@ -3,7 +3,8 @@ use crate::ast::types::TypeKind;
 use crate::codegen::cranelift::translator::{FunctionTranslator, ModuleCtx, TypeCtx};
 use crate::codegen::cranelift::types::translate_type;
 use crate::mir::{
-    BasicBlock, Body, Local, Operand, Statement, StatementKind, Terminator, TerminatorKind,
+    BasicBlock, Body, Local, Operand, Place, PlaceElem, Statement, StatementKind, Terminator,
+    TerminatorKind,
 };
 use cranelift_codegen::ir::{
     condcodes::IntCC, AbiParam, Block, InstBuilder, MemFlags, Signature, TrapCode,
@@ -59,7 +60,8 @@ impl<'a> FunctionTranslator<'a> {
             StatementKind::DecRef(place) => {
                 // Uniform RC decrement for all heap types.
                 // When RC reaches zero, call type-appropriate cleanup.
-                let place_ty = &type_ctx.local_types[place.local.0];
+                // Resolve the actual field type when place has projections (e.g. h.data).
+                let place_kind_cow = Self::resolve_projected_type_kind(place, type_ctx);
                 let ptr = Self::read_place(builder, ctx, place, locals, type_ctx)?;
 
                 // Guard: skip if pointer is null (uninitialized local)
@@ -92,7 +94,7 @@ impl<'a> FunctionTranslator<'a> {
                     .brif(is_zero, free_block, &[], merge_block, &[]);
 
                 builder.switch_to_block(free_block);
-                Self::emit_type_drop(builder, ctx, &place_ty.kind, ptr, header_ptr, type_ctx)?;
+                Self::emit_type_drop(builder, ctx, &place_kind_cow, ptr, header_ptr, type_ctx)?;
                 builder.ins().jump(merge_block, &[]);
 
                 builder.seal_block(rc_block);
@@ -106,7 +108,7 @@ impl<'a> FunctionTranslator<'a> {
                 // Unconditional cleanup — the caller has already determined
                 // this value needs freeing (e.g., unique owner going out of scope).
                 // Guard against null (uninitialized locals).
-                let place_ty = &type_ctx.local_types[place.local.0];
+                let place_kind_cow = Self::resolve_projected_type_kind(place, type_ctx);
                 let ptr = Self::read_place(builder, ctx, place, locals, type_ctx)?;
 
                 let null = builder.ins().iconst(ptr_type, 0);
@@ -119,7 +121,7 @@ impl<'a> FunctionTranslator<'a> {
 
                 builder.switch_to_block(dealloc_block);
                 let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size as i64));
-                Self::emit_type_drop(builder, ctx, &place_ty.kind, ptr, header_ptr, type_ctx)?;
+                Self::emit_type_drop(builder, ctx, &place_kind_cow, ptr, header_ptr, type_ctx)?;
                 builder.ins().jump(merge_block, &[]);
 
                 builder.seal_block(dealloc_block);
@@ -412,5 +414,50 @@ impl<'a> FunctionTranslator<'a> {
         }
 
         Ok(())
+    }
+
+    /// Resolve the `TypeKind` of a place after following its `Field` projections.
+    ///
+    /// For an unprojected local, returns the local's type kind directly.
+    /// For a `Field(i)` projection on a `Custom` type, looks up the field type from
+    /// `type_definitions` so that callers like `emit_type_drop` receive the correct
+    /// kind (e.g. `List([int])`) instead of the container's kind (e.g. `Custom("Holder")`).
+    fn resolve_projected_type_kind(place: &Place, type_ctx: &TypeCtx) -> TypeKind {
+        let mut current = type_ctx.local_types[place.local.0].kind.clone();
+
+        for proj in &place.projection {
+            match proj {
+                PlaceElem::Field(idx) => {
+                    current = match &current {
+                        TypeKind::Custom(name, _) => {
+                            match type_ctx.type_definitions.get(name.as_str()) {
+                                Some(crate::type_checker::context::TypeDefinition::Struct(def)) => {
+                                    def.fields
+                                        .get(*idx)
+                                        .map(|(_, ty, _)| ty.kind.clone())
+                                        .unwrap_or(TypeKind::Error)
+                                }
+                                Some(crate::type_checker::context::TypeDefinition::Class(def)) => {
+                                    let all_fields =
+                                        crate::type_checker::context::collect_class_fields_all(
+                                            def,
+                                            type_ctx.type_definitions,
+                                        );
+                                    all_fields
+                                        .get(*idx)
+                                        .map(|(_, fi)| fi.ty.kind.clone())
+                                        .unwrap_or(TypeKind::Error)
+                                }
+                                _ => TypeKind::Error,
+                            }
+                        }
+                        _ => TypeKind::Error,
+                    };
+                }
+                _ => break,
+            }
+        }
+
+        current
     }
 }

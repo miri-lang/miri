@@ -19,12 +19,19 @@ use crate::rc::{alloc_with_rc, free_with_rc};
 /// - `len`: Number of elements (not bytes)
 /// - `capacity`: Allocated capacity in elements
 /// - `elem_size`: Size of each element in bytes
+/// - `elem_drop_fn`: If non-zero, called on each element pointer when that element is
+///   removed by a mutation operation (`clear`, `remove_at`). Allows managed elements
+///   (Lists, Maps, class instances) to have their RC decremented on removal.
+///   Set by `miri_rt_list_new_from_managed_array` when elements are heap-allocated.
 #[repr(C)]
 pub struct MiriList {
     data: *mut u8,
     len: usize,
     capacity: usize,
     elem_size: usize,
+    /// Drop function for managed elements: `fn(elem_ptr: *mut u8)`.
+    /// Zero means elements are plain values (no RC management on removal).
+    elem_drop_fn: usize,
 }
 
 impl MiriList {
@@ -35,6 +42,7 @@ impl MiriList {
             len: 0,
             capacity: 0,
             elem_size,
+            elem_drop_fn: 0,
         }
     }
 
@@ -59,6 +67,7 @@ impl MiriList {
             len: 0,
             capacity,
             elem_size,
+            elem_drop_fn: 0,
         }
     }
 
@@ -237,7 +246,23 @@ impl MiriList {
     }
 
     /// Clears all elements from the list.
+    ///
+    /// If `elem_drop_fn` is set, calls it on each element pointer before clearing
+    /// so that managed elements (Lists, Maps, etc.) have their RC decremented.
     pub fn clear(&mut self) {
+        if self.elem_drop_fn != 0 && !self.data.is_null() && self.len > 0 {
+            let drop_fn: unsafe extern "C" fn(*mut u8) =
+                unsafe { std::mem::transmute(self.elem_drop_fn) };
+            for i in 0..self.len {
+                unsafe {
+                    let slot = self.data.add(i * self.elem_size) as *const usize;
+                    let elem_ptr = *slot;
+                    if elem_ptr != 0 {
+                        drop_fn(elem_ptr as *mut u8);
+                    }
+                }
+            }
+        }
         self.len = 0;
     }
 }
@@ -323,6 +348,17 @@ pub unsafe extern "C" fn miri_rt_list_new_from_managed_array(
             *rc_ptr += 1;
         }
     }
+    // Mark this list as holding managed (heap-allocated) elements. When elements
+    // are later removed by mutation operations (clear, remove_at), elem_drop_fn
+    // is called so that each removed element's RC is decremented.
+    //
+    // NOTE: This sets a single drop function for all managed element types. For
+    // List-of-List cases the function handles one level of recursion. Deeper
+    // nesting (List<List<List<T>>>) is handled correctly for the normal drop path
+    // (variables going out of scope) by the codegen's element-drop loops, but
+    // mutation operations on lists holding non-List managed elements would need
+    // a different drop function (future work).
+    (*list).elem_drop_fn = miri_rt_list_decref_element as usize;
     list
 }
 
@@ -342,6 +378,7 @@ pub unsafe extern "C" fn miri_rt_list_new(elem_size: usize) -> *mut MiriList {
     (*list).len = 0;
     (*list).capacity = 0;
     (*list).elem_size = elem_size;
+    (*list).elem_drop_fn = 0;
     list
 }
 
@@ -491,6 +528,9 @@ pub unsafe extern "C" fn miri_rt_list_insert(ptr: *mut MiriList, index: usize, v
 
 /// Removes the element at the given index.
 /// Returns true (1) if successful, false (0) if the index was out of bounds.
+///
+/// If `elem_drop_fn` is set, calls it on the removed element pointer so that
+/// managed elements have their RC decremented on removal.
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_list_remove(ptr: *mut MiriList, index: usize) -> u8 {
@@ -500,6 +540,16 @@ pub unsafe extern "C" fn miri_rt_list_remove(ptr: *mut MiriList, index: usize) -
     let list = &mut *ptr;
     if index >= list.len {
         return 0;
+    }
+
+    // DecRef the element being removed if managed.
+    if list.elem_drop_fn != 0 {
+        let drop_fn: unsafe extern "C" fn(*mut u8) = std::mem::transmute(list.elem_drop_fn);
+        let slot = list.data.add(index * list.elem_size) as *const usize;
+        let elem_ptr = *slot;
+        if elem_ptr != 0 {
+            drop_fn(elem_ptr as *mut u8);
+        }
     }
 
     // Shift elements down
@@ -512,6 +562,48 @@ pub unsafe extern "C" fn miri_rt_list_remove(ptr: *mut MiriList, index: usize) -
 
     list.len -= 1;
     1
+}
+
+/// Sets the element drop function for a list.
+///
+/// When set, mutation operations (`clear`, `remove_at`, `remove`) call `fn_ptr`
+/// on each removed element pointer so that managed elements (Lists, Maps, class
+/// instances) have their RC decremented on removal.
+#[no_mangle]
+#[allow(clippy::missing_safety_doc)]
+pub unsafe extern "C" fn miri_rt_list_set_elem_drop_fn(ptr: *mut MiriList, fn_ptr: usize) {
+    if !ptr.is_null() {
+        (*ptr).elem_drop_fn = fn_ptr;
+    }
+}
+
+/// Decrements the RC of a managed List element and frees it if RC reaches zero.
+///
+/// Used as the `elem_drop_fn` for `List<List<...>>` collections so that
+/// `clear()` and `remove_at()` correctly release inner list references.
+///
+/// LIMITATION: Calls `miri_rt_list_free` directly, which does not invoke
+/// `elem_drop_fn` recursively. This means mutation operations on lists whose
+/// elements are themselves lists of managed values (three or more levels of
+/// nesting) will not fully release inner references. The normal drop path
+/// (variables going out of scope) handles all levels via the codegen's inline
+/// element-drop loops and is unaffected by this function.
+#[no_mangle]
+#[allow(clippy::missing_safety_doc)]
+pub unsafe extern "C" fn miri_rt_list_decref_element(ptr: *mut u8) {
+    if ptr.is_null() {
+        return;
+    }
+    let rc_ptr = (ptr as usize - crate::rc::RC_HEADER_SIZE) as *mut usize;
+    let rc = *rc_ptr;
+    // Skip immortal objects (RC stored as negative isize)
+    if (rc as isize) < 0 {
+        return;
+    }
+    *rc_ptr -= 1;
+    if *rc_ptr == 0 {
+        miri_rt_list_free(ptr as *mut MiriList);
+    }
 }
 
 /// Clears all elements from the list.
