@@ -10,6 +10,7 @@ use crate::mir::{
     Constant, Operand, Place, PlaceElem, Rvalue, StatementKind as MirStatementKind, Terminator,
     TerminatorKind,
 };
+use crate::runtime_fns::rt;
 
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::lower_expression;
@@ -119,7 +120,7 @@ fn lower_map_index_read(
     let func_op = Operand::Constant(Box::new(Constant {
         span: expr.span,
         ty: Type::new(TypeKind::Identifier, expr.span),
-        literal: crate::ast::literal::Literal::Identifier("miri_rt_map_get_checked".to_string()),
+        literal: crate::ast::literal::Literal::Identifier(rt::MAP_GET_CHECKED.to_string()),
     }));
 
     let result_ty = if let Some(t) = ctx.type_checker.get_type(expr.id) {

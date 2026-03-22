@@ -7,6 +7,7 @@ use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::mir::{BinOp, Operand, Place, PlaceElem, Rvalue, StatementKind as MirStatementKind};
+use crate::runtime_fns::rt;
 
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::lower_expression;
@@ -354,7 +355,7 @@ pub(crate) fn lower_assignment_expr(
                             span: expr.span,
                             ty: Type::new(TypeKind::Identifier, expr.span),
                             literal: crate::ast::literal::Literal::Identifier(
-                                "miri_rt_map_set".to_string(),
+                                rt::MAP_SET.to_string(),
                             ),
                         }));
 

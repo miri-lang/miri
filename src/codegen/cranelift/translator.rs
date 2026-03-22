@@ -11,6 +11,7 @@ use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::codegen::cranelift::layout;
 use crate::codegen::cranelift::types::translate_type;
 use crate::mir::{BasicBlock, Body, Local, Place, PlaceElem};
+use crate::runtime_fns::rt;
 use crate::type_checker::context::TypeDefinition;
 
 use cranelift_codegen::ir::types as cl_types;
@@ -504,7 +505,7 @@ impl<'a> FunctionTranslator<'a> {
             builder,
             ctx.module,
             &mut ctx.rt_array_new_id,
-            "miri_rt_array_new",
+            rt::ARRAY_NEW,
             &[pt, pt],
             &[pt],
             &[elem_count, elem_size],
@@ -522,7 +523,7 @@ impl<'a> FunctionTranslator<'a> {
             builder,
             ctx.module,
             &mut ctx.rt_array_free_id,
-            "miri_rt_array_free",
+            rt::ARRAY_FREE,
             &[pt],
             &[],
             &[ptr],
@@ -540,7 +541,7 @@ impl<'a> FunctionTranslator<'a> {
             builder,
             ctx.module,
             &mut ctx.rt_list_new_id,
-            "miri_rt_list_new",
+            rt::LIST_NEW,
             &[pt],
             &[pt],
             &[elem_size],
@@ -559,7 +560,7 @@ impl<'a> FunctionTranslator<'a> {
             builder,
             ctx.module,
             &mut ctx.rt_list_push_id,
-            "miri_rt_list_push",
+            rt::LIST_PUSH,
             &[pt, pt],
             &[],
             &[list_ptr, val],
@@ -577,7 +578,7 @@ impl<'a> FunctionTranslator<'a> {
             builder,
             ctx.module,
             &mut ctx.rt_list_free_id,
-            "miri_rt_list_free",
+            rt::LIST_FREE,
             &[pt],
             &[],
             &[ptr],
@@ -597,7 +598,7 @@ impl<'a> FunctionTranslator<'a> {
             builder,
             ctx.module,
             &mut ctx.rt_map_new_id,
-            "miri_rt_map_new",
+            rt::MAP_NEW,
             &[pt, pt, pt],
             &[pt],
             &[key_size, value_size, key_kind],
@@ -617,7 +618,7 @@ impl<'a> FunctionTranslator<'a> {
             builder,
             ctx.module,
             &mut ctx.rt_map_set_id,
-            "miri_rt_map_set",
+            rt::MAP_SET,
             &[pt, pt, pt],
             &[],
             &[map_ptr, key, value],
@@ -635,7 +636,7 @@ impl<'a> FunctionTranslator<'a> {
             builder,
             ctx.module,
             &mut ctx.rt_map_free_id,
-            "miri_rt_map_free",
+            rt::MAP_FREE,
             &[pt],
             &[],
             &[ptr],
@@ -659,8 +660,8 @@ impl<'a> FunctionTranslator<'a> {
                 };
                 let id = ctx
                     .module
-                    .declare_function("miri_rt_list_decref_element", Linkage::Import, &sig)
-                    .map_err(|e| format!("Failed to declare miri_rt_list_decref_element: {}", e))?;
+                    .declare_function(rt::LIST_DECREF_ELEMENT, Linkage::Import, &sig)
+                    .map_err(|e| format!("Failed to declare {}: {}", rt::LIST_DECREF_ELEMENT, e))?;
                 ctx.rt_list_decref_element_id = Some(id);
                 id
             }
@@ -681,7 +682,7 @@ impl<'a> FunctionTranslator<'a> {
             builder,
             ctx.module,
             &mut ctx.rt_map_set_val_drop_fn_id,
-            "miri_rt_map_set_val_drop_fn",
+            rt::MAP_SET_VAL_DROP_FN,
             &[pt, pt],
             &[],
             &[map_ptr, fn_ptr],
@@ -701,7 +702,7 @@ impl<'a> FunctionTranslator<'a> {
             builder,
             ctx.module,
             &mut ctx.rt_list_set_elem_drop_fn_id,
-            "miri_rt_list_set_elem_drop_fn",
+            rt::LIST_SET_ELEM_DROP_FN,
             &[pt, pt],
             &[],
             &[list_ptr, fn_ptr],
@@ -719,7 +720,7 @@ impl<'a> FunctionTranslator<'a> {
             builder,
             ctx.module,
             &mut ctx.rt_set_new_id,
-            "miri_rt_set_new",
+            rt::SET_NEW,
             &[pt],
             &[pt],
             &[elem_size],
@@ -738,7 +739,7 @@ impl<'a> FunctionTranslator<'a> {
             builder,
             ctx.module,
             &mut ctx.rt_set_add_id,
-            "miri_rt_set_add",
+            rt::SET_ADD,
             &[pt, pt],
             &[cl_types::I8],
             &[set_ptr, elem],
@@ -756,7 +757,7 @@ impl<'a> FunctionTranslator<'a> {
             builder,
             ctx.module,
             &mut ctx.rt_set_free_id,
-            "miri_rt_set_free",
+            rt::SET_FREE,
             &[pt],
             &[],
             &[ptr],
@@ -1414,7 +1415,7 @@ impl<'a> FunctionTranslator<'a> {
             builder,
             ctx.module,
             &mut ctx.rt_array_panic_oob_id,
-            "miri_rt_array_panic_oob",
+            rt::ARRAY_PANIC_OOB,
             &[pt, pt],
             &[],
             &[index, len],

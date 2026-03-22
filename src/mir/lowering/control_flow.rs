@@ -14,6 +14,7 @@ use crate::mir::{
     AggregateKind, BinOp, Constant, Discriminant, Operand, Place, Rvalue, StatementKind,
     Terminator, TerminatorKind,
 };
+use crate::runtime_fns::rt;
 
 use super::{
     helpers::coerce_rvalue, intercepts, lower_expression, lower_statement, LoweringContext,
@@ -547,8 +548,9 @@ fn lower_for_over_iterable(
         .get_type(iterable.id)
         .and_then(|ty| match &ty.kind {
             TypeKind::String => Some("String".to_string()),
-            TypeKind::Map(_, _) => Some("Map".to_string()),
-            TypeKind::Set(_) => Some("Set".to_string()),
+            TypeKind::Map(_, _) | TypeKind::Set(_) => {
+                ty.kind.as_builtin_collection().map(|b| b.name().to_string())
+            }
             TypeKind::Custom(name, _) if !matches!(BuiltinCollectionKind::from_name(name), Some(BuiltinCollectionKind::Array | BuiltinCollectionKind::List)) && name != "Tuple" => Some(name.clone()),
             _ => None,
         })
@@ -1018,19 +1020,15 @@ pub fn lower_call(
             // site stays a simple lookup with no method-specific logic.
             if let ExpressionKind::Identifier(method_name, _) = &method_expr.node {
                 if let Some(handler) = intercepts::lookup(method_name, &obj_ty.kind, args.len()) {
-                    return handler(ctx, span, call_expr_id, obj, &obj_ty, args, dest);
+                    return handler(ctx, span, call_expr_id, obj, obj_ty, args, dest);
                 }
             }
 
             let class_name = match &obj_ty.kind {
                 TypeKind::String => Some("String".to_string()),
-                TypeKind::List(_) => Some("List".to_string()),
-                TypeKind::Array(_, _) => Some("Array".to_string()),
-                TypeKind::Map(_, _) => Some("Map".to_string()),
-                TypeKind::Set(_) => Some("Set".to_string()),
                 TypeKind::Tuple(_) => Some("Tuple".to_string()),
                 TypeKind::Custom(name, _) => Some(name.clone()),
-                _ => None,
+                k => k.as_builtin_collection().map(|b| b.name().to_string()),
             };
 
             if let Some(class_name) = class_name {
@@ -1232,9 +1230,9 @@ pub fn lower_call(
                             // heap-allocated so the list IncRefs them before the
                             // source array's element-drop loop releases its refs.
                             let rt_fn_name = if elems_are_managed {
-                                "miri_rt_list_new_from_managed_array"
+                                rt::LIST_NEW_FROM_MANAGED_ARRAY
                             } else {
-                                "miri_rt_list_new_from_raw"
+                                rt::LIST_NEW_FROM_RAW
                             };
                             let func_op = Operand::Constant(Box::new(Constant {
                                 span: *span,
@@ -1285,7 +1283,7 @@ pub fn lower_call(
                                 span: *span,
                                 ty: Type::new(TypeKind::Identifier, *span),
                                 literal: crate::ast::literal::Literal::Identifier(
-                                    "miri_rt_list_new".to_string(),
+                                    rt::LIST_NEW.to_string(),
                                 ),
                             }));
                             ctx.set_terminator(Terminator::new(

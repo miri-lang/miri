@@ -32,6 +32,20 @@ impl BuiltinCollectionKind {
             _ => None,
         }
     }
+
+    /// Returns the canonical class name for this built-in collection kind.
+    ///
+    /// This is the reverse of [`from_name`]: the returned string is the single
+    /// authoritative spelling used everywhere the compiler needs the class name
+    /// as a string (e.g. for method-dispatch mangling or registry look-ups).
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Array => "Array",
+            Self::List => "List",
+            Self::Map => "Map",
+            Self::Set => "Set",
+        }
+    }
 }
 
 /// Data for a function type, boxed to reduce `TypeKind` enum size.
