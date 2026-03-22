@@ -7,6 +7,7 @@ pub mod collections;
 pub mod edge_cases;
 pub mod field_projections;
 pub mod functions;
+pub mod generics;
 pub mod loops;
 pub mod reassignment;
 pub mod temporaries;

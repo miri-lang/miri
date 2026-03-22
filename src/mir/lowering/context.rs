@@ -327,7 +327,7 @@ impl<'a> LoweringContext<'a> {
     /// Returns `true` if `kind` requires reference-count management.
     /// Delegates to the single authority in `crate::mir::rc::is_managed_type`.
     pub fn is_perceus_managed(&self, kind: &crate::ast::types::TypeKind) -> bool {
-        crate::mir::rc::is_managed_type(kind, &self.body.auto_copy_types)
+        crate::mir::rc::is_managed_type(kind, &self.body.auto_copy_types, &self.body.type_params)
     }
 
     /// Emits `StorageDead` for `local` if it was created at or after `watermark`

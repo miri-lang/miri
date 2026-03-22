@@ -93,6 +93,10 @@ pub fn lower_function(
     let body = Body::new(params.len(), ast_func.span, execution_model);
     let mut ctx = LoweringContext::new(body, tc, is_release);
 
+    // Populate generic type parameter names so that `is_managed_type` can
+    // distinguish unresolved generic placeholders from concrete user types.
+    ctx.body.type_params = collect_type_params(decl, tc);
+
     // _0: Return value
     ctx.body
         .new_local(LocalDecl::new(ret_ty.clone(), ast_func.span));
@@ -183,6 +187,12 @@ pub fn lower_generic_instantiation(
     let body = Body::new(params.len(), ast_func.span, execution_model);
     let mut ctx = LoweringContext::new(body, tc, is_release);
 
+    // For an instantiated generic, `subs` maps each generic name to its concrete
+    // type — those names no longer remain as unresolved placeholders after
+    // substitution. Populate type_params with the original names anyway so that
+    // any types not yet substituted (e.g. nested generics) are handled correctly.
+    ctx.body.type_params = subs.keys().cloned().collect();
+
     // _0: Return value (concrete type)
     ctx.body
         .new_local(LocalDecl::new(ret_ty.clone(), ast_func.span));
@@ -258,6 +268,10 @@ pub fn lower_class_method(
     let body = Body::new(params.len() + 1, ast_method.span, execution_model);
     let mut ctx = LoweringContext::new(body, tc, is_release);
 
+    // Populate generic type parameter names (captures both method-own generics
+    // and class-level generics that appear in param/return types, e.g. T in List<T>).
+    ctx.body.type_params = collect_type_params(decl, tc);
+
     // _0: Return value
     ctx.body
         .new_local(LocalDecl::new(ret_ty.clone(), ast_method.span));
@@ -294,6 +308,77 @@ fn resolve_execution_model(props: &crate::ast::common::FunctionProperties) -> Ex
         ExecutionModel::Async
     } else {
         ExecutionModel::Cpu
+    }
+}
+
+/// Collect generic type parameter names from a function declaration.
+///
+/// Extracts names from:
+/// - Explicit generic declarations in `decl.generics` (e.g. `fn foo<T, K>(...)`)
+/// - `TypeKind::Generic` names found in parameter types (captures class-level
+///   generics that appear in method signatures, e.g. `T` in `List<T>::push(item: T)`)
+/// - `TypeKind::Generic` names found in the return type
+///
+/// The resulting set is stored in `Body::type_params` and used by `is_managed_type`
+/// to distinguish unresolved generic placeholders from concrete user-defined types.
+fn collect_type_params(
+    decl: &crate::ast::statement::FunctionDeclarationData,
+    tc: &TypeChecker,
+) -> std::collections::HashSet<String> {
+    let mut params = std::collections::HashSet::new();
+
+    // Explicit generic declarations (e.g., `fn foo<T>(...)`)
+    if let Some(gens) = &decl.generics {
+        for gen_expr in gens {
+            if let ExpressionKind::GenericType(name_expr, _, _) = &gen_expr.node {
+                if let ExpressionKind::Identifier(name, _) = &name_expr.node {
+                    params.insert(name.clone());
+                }
+            }
+        }
+    }
+
+    // Generic names appearing in parameter types (catches class-level generics)
+    for param in &decl.params {
+        collect_generic_names_from_type(&resolve_type(tc, &param.typ), &mut params);
+    }
+
+    // Generic names appearing in the return type
+    if let Some(ret_expr) = &decl.return_type {
+        collect_generic_names_from_type(&resolve_type(tc, ret_expr), &mut params);
+    }
+
+    params
+}
+
+/// Recursively collect `TypeKind::Generic` parameter names from a resolved type.
+fn collect_generic_names_from_type(ty: &Type, params: &mut std::collections::HashSet<String>) {
+    use crate::ast::expression::ExpressionKind as EK;
+    match &ty.kind {
+        TypeKind::Generic(name, _, _) => {
+            params.insert(name.clone());
+        }
+        TypeKind::Option(inner) => collect_generic_names_from_type(inner, params),
+        TypeKind::Linear(inner) => collect_generic_names_from_type(inner, params),
+        TypeKind::List(inner) | TypeKind::Set(inner) => {
+            if let EK::Type(inner_ty, _) = &inner.node {
+                collect_generic_names_from_type(inner_ty, params);
+            }
+        }
+        TypeKind::Array(inner, _) => {
+            if let EK::Type(inner_ty, _) = &inner.node {
+                collect_generic_names_from_type(inner_ty, params);
+            }
+        }
+        TypeKind::Map(k, v) => {
+            if let EK::Type(k_ty, _) = &k.node {
+                collect_generic_names_from_type(k_ty, params);
+            }
+            if let EK::Type(v_ty, _) = &v.node {
+                collect_generic_names_from_type(v_ty, params);
+            }
+        }
+        _ => {}
     }
 }
 
