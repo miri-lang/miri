@@ -358,7 +358,7 @@ pub unsafe extern "C" fn miri_rt_list_new_from_managed_array(
     // (variables going out of scope) by the codegen's element-drop loops, but
     // mutation operations on lists holding non-List managed elements would need
     // a different drop function (future work).
-    (*list).elem_drop_fn = miri_rt_list_decref_element as usize;
+    (*list).elem_drop_fn = miri_rt_list_decref_element as *const () as usize;
     list
 }
 
