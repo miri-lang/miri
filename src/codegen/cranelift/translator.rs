@@ -7,7 +7,7 @@
 //! which can then be compiled to machine code.
 
 use crate::ast::expression::ExpressionKind;
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::codegen::cranelift::layout;
 use crate::codegen::cranelift::types::translate_type;
 use crate::mir::{BasicBlock, Body, Local, Place, PlaceElem};
@@ -793,7 +793,12 @@ impl<'a> FunctionTranslator<'a> {
                     _ => &TypeKind::Int,
                 }
             }
-            TypeKind::Custom(name, args) if name == "Array" || name == "List" => {
+            TypeKind::Custom(name, args)
+                if matches!(
+                    BuiltinCollectionKind::from_name(name),
+                    Some(BuiltinCollectionKind::Array | BuiltinCollectionKind::List)
+                ) =>
+            {
                 if let Some(args) = args {
                     if let Some(arg) = args.first() {
                         match &arg.node {
@@ -824,8 +829,7 @@ impl<'a> FunctionTranslator<'a> {
 
     /// Returns true if the given type is a List (dynamic collection).
     pub(crate) fn is_list_type(kind: &TypeKind) -> bool {
-        matches!(kind, TypeKind::List(_))
-            || matches!(kind, TypeKind::Custom(name, _) if name == "List")
+        kind.as_builtin_collection() == Some(BuiltinCollectionKind::List)
     }
 
     /// Returns true if the type kind is an unsigned integer.
@@ -838,22 +842,17 @@ impl<'a> FunctionTranslator<'a> {
 
     /// Returns true if the given type is an Array, List, Map, or Set collection.
     pub(crate) fn is_collection_type(kind: &TypeKind) -> bool {
-        matches!(
-            kind,
-            TypeKind::Array(_, _) | TypeKind::List(_) | TypeKind::Map(_, _) | TypeKind::Set(_)
-        ) || matches!(kind, TypeKind::Custom(name, _) if name == "Array" || name == "List" || name == "Map" || name == "Set")
+        kind.as_builtin_collection().is_some()
     }
 
     /// Returns true if the given type is a Map.
     pub(crate) fn is_map_type(kind: &TypeKind) -> bool {
-        matches!(kind, TypeKind::Map(_, _))
-            || matches!(kind, TypeKind::Custom(name, _) if name == "Map")
+        kind.as_builtin_collection() == Some(BuiltinCollectionKind::Map)
     }
 
     /// Returns true if the given type is a Set.
     pub(crate) fn is_set_type(kind: &TypeKind) -> bool {
-        matches!(kind, TypeKind::Set(_))
-            || matches!(kind, TypeKind::Custom(name, _) if name == "Set")
+        kind.as_builtin_collection() == Some(BuiltinCollectionKind::Set)
     }
 
     /// Emits a loop that DecRefs each managed value in a map's hash table.

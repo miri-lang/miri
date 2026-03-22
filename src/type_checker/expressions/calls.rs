@@ -44,7 +44,7 @@
 
 use crate::ast::factory as ast_factory;
 use crate::ast::factory::make_type;
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, TypeDefinition};
@@ -238,7 +238,9 @@ impl TypeChecker {
                         // Special handling for List constructor: List([1,2,3]) → TypeKind::List(int)
                         // This produces a built-in List type so the existing codegen
                         // infrastructure for indexing, for-loops, and bounds checking works.
-                        if name == "List" {
+                        if BuiltinCollectionKind::from_name(name)
+                            == Some(BuiltinCollectionKind::List)
+                        {
                             // Check explicit template args
                             if let Some(args) = type_args {
                                 if args.len() == 1 {
