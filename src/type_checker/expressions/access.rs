@@ -438,7 +438,7 @@ impl TypeChecker {
             TypeKind::List(inner_expr) => {
                 let inner_ty = self.resolve_type_expression(inner_expr, context);
                 (
-                    Some("List".to_string()),
+                    Some(BuiltinCollectionKind::List.name().to_string()),
                     Some(vec![self.create_type_expression(inner_ty)]),
                 )
             }
@@ -446,7 +446,7 @@ impl TypeChecker {
                 let key_ty = self.resolve_type_expression(key_expr, context);
                 let val_ty = self.resolve_type_expression(val_expr, context);
                 (
-                    Some("Map".to_string()),
+                    Some(BuiltinCollectionKind::Map.name().to_string()),
                     Some(vec![
                         self.create_type_expression(key_ty),
                         self.create_type_expression(val_ty),
@@ -456,7 +456,7 @@ impl TypeChecker {
             TypeKind::Set(inner_expr) => {
                 let inner_ty = self.resolve_type_expression(inner_expr, context);
                 (
-                    Some("Set".to_string()),
+                    Some(BuiltinCollectionKind::Set.name().to_string()),
                     Some(vec![self.create_type_expression(inner_ty)]),
                 )
             }
@@ -487,7 +487,7 @@ impl TypeChecker {
             TypeKind::Array(inner_expr, size_expr) => {
                 let inner_ty = self.resolve_type_expression(inner_expr, context);
                 (
-                    Some("Array".to_string()),
+                    Some(BuiltinCollectionKind::Array.name().to_string()),
                     Some(vec![
                         self.create_type_expression(inner_ty),
                         *size_expr.clone(),

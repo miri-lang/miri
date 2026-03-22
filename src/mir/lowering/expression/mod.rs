@@ -9,6 +9,7 @@ use crate::error::lowering::LoweringError;
 use crate::mir::{
     Constant, Operand, Place, Rvalue, StatementKind as MirStatementKind, Terminator, TerminatorKind,
 };
+use crate::runtime_fns::rt;
 
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::statement::lower_statement;
@@ -139,7 +140,7 @@ pub(super) fn emit_to_string(
                 span: *span,
             });
             let call_args = vec![Operand::Copy(Place::new(int_temp))];
-            emit_runtime_to_string(ctx, "miri_rt_bool_to_string", call_args, span)
+            emit_runtime_to_string(ctx, rt::BOOL_TO_STRING, call_args, span)
         }
         TypeKind::Float | TypeKind::F64 | TypeKind::F32 => {
             // miri_rt_float_to_string expects f64. Promote F32 if needed.
@@ -158,7 +159,7 @@ pub(super) fn emit_to_string(
                 operand
             };
             let call_args = vec![float_op];
-            emit_runtime_to_string(ctx, "miri_rt_float_to_string", call_args, span)
+            emit_runtime_to_string(ctx, rt::FLOAT_TO_STRING, call_args, span)
         }
         TypeKind::Int
         | TypeKind::I64
@@ -182,7 +183,7 @@ pub(super) fn emit_to_string(
                 span: *span,
             });
             let call_args = vec![Operand::Copy(Place::new(int_temp))];
-            emit_runtime_to_string(ctx, "miri_rt_int_to_string", call_args, span)
+            emit_runtime_to_string(ctx, rt::INT_TO_STRING, call_args, span)
         }
         other => Err(LoweringError::unsupported_expression(
             format!(

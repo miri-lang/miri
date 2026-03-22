@@ -6,6 +6,7 @@ use crate::mir::{
     BasicBlock, Body, Local, Operand, Place, PlaceElem, Statement, StatementKind, Terminator,
     TerminatorKind,
 };
+use crate::runtime_fns::rt;
 use cranelift_codegen::ir::{
     condcodes::IntCC, AbiParam, Block, InstBuilder, MemFlags, Signature, TrapCode,
 };
@@ -263,7 +264,7 @@ impl<'a> FunctionTranslator<'a> {
                 // element type (bool/i8, int/i64, etc.).
                 let widen_value_args = func_name
                     .as_deref()
-                    .is_some_and(|n| matches!(n, "miri_rt_list_push" | "miri_rt_list_insert"));
+                    .is_some_and(|n| n == rt::LIST_PUSH || n == rt::LIST_INSERT);
 
                 for (i, arg) in args.iter().enumerate() {
                     let val = Self::translate_operand(builder, ctx, arg, locals, type_ctx)?;

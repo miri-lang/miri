@@ -17,5 +17,7 @@ pub mod mir;
 pub mod parser;
 /// Compilation pipeline orchestrating all phases.
 pub mod pipeline;
+/// Runtime function name constants (`miri_rt_*` symbols).
+pub mod runtime_fns;
 /// Type checker and inference engine.
 pub mod type_checker;
