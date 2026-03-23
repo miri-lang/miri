@@ -70,18 +70,39 @@ impl TypeChecker {
             return;
         }
 
-        // 2. Resolve file path
-        // Assume src/stdlib for now.
-        // Convert "system.io" -> "system/io.mi"
-        let relative_path = path_str.replace(".", "/") + ".mi";
+        // 2. Resolve file path.
+        //
+        // `local.*` is the project-local namespace:  `local.utils.math` maps to
+        // `utils/math.mi` relative to the project root (= the source_dir of the
+        // entry-point file).  All other imports are resolved against stdlib first,
+        // then the current working directory.
+        //
+        // The stdlib location can be overridden via the `MIRI_STDLIB_PATH`
+        // environment variable so that integration tests can change the working
+        // directory without losing access to the standard library.
+        let stdlib_base = std::env::var("MIRI_STDLIB_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("src/stdlib"));
 
-        let stdlib_base = PathBuf::from("src/stdlib");
         let current_dir = std::env::current_dir().unwrap_or_default();
+        let project_root = self
+            .source_dir
+            .clone()
+            .unwrap_or_else(|| current_dir.clone());
 
-        let possible_locations = vec![
-            (stdlib_base.clone(), stdlib_base.join(&relative_path)),
-            (current_dir.clone(), current_dir.join(&relative_path)),
-        ];
+        let possible_locations: Vec<(PathBuf, PathBuf)> =
+            if let Some(rest) = path_str.strip_prefix("local.") {
+                // `local.*` — look only inside the project root.
+                let relative_path = rest.replace('.', "/") + ".mi";
+                vec![(project_root.clone(), project_root.join(&relative_path))]
+            } else {
+                // stdlib + current working directory (existing behaviour).
+                let relative_path = path_str.replace('.', "/") + ".mi";
+                vec![
+                    (stdlib_base.clone(), stdlib_base.join(&relative_path)),
+                    (current_dir.clone(), current_dir.join(&relative_path)),
+                ]
+            };
 
         let mut found_path = None;
         for (base, loc) in possible_locations {
@@ -156,7 +177,11 @@ impl TypeChecker {
         };
 
         // 5. Check Module Body (merge into current context)
-        // Store current module name
+        // `source_dir` is intentionally NOT changed here.  It is set once to
+        // the entry-point file's directory and stays fixed for the entire
+        // compilation so that every `local.*` import — no matter how deeply
+        // nested the importing module is — resolves relative to the project
+        // root (the directory that contains the entry-point file).
         let old_module = self.current_module.clone();
         self.current_module = path_str.clone();
 

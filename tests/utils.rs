@@ -1,5 +1,6 @@
 use assert_cmd::{pkg_name, Command};
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::OnceLock;
 use tempfile::NamedTempFile;
 
@@ -58,6 +59,59 @@ pub fn miri_build(input: &str) -> CompilerResult {
 /// Run Miri binary with 'run' command (compilation + execution)
 pub fn miri_run(input: &str) -> CompilerResult {
     exec_miri("run", input)
+}
+
+/// Run a multi-file Miri project.
+///
+/// `files` is a slice of `(relative_path, content)` pairs. The first file is
+/// used as the entry point (`miri run <first_path>`). All files are written
+/// into a temporary directory and the compiler is invoked with that directory
+/// as the working directory. `MIRI_STDLIB_PATH` is set to the project's own
+/// stdlib so it remains accessible even when CWD changes.
+pub fn miri_run_project(files: &[(&str, &str)]) -> CompilerResult {
+    use std::fs;
+    use tempfile::tempdir;
+
+    assert!(
+        !files.is_empty(),
+        "miri_run_project: files list must not be empty"
+    );
+
+    let temp_dir = tempdir().unwrap();
+
+    for (rel_path, content) in files {
+        let file_path = temp_dir.path().join(rel_path);
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(file_path, content).unwrap();
+    }
+
+    let entry_file = files[0].0;
+    let stdlib_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("stdlib");
+
+    let mut cmd = miri_cmd();
+    let output = cmd
+        .env("RUST_BACKTRACE", "1")
+        .env("MIRI_LEAK_CHECK", "1")
+        .env("MIRI_VERIFY_MIR", "1")
+        .env("MIRI_STDLIB_PATH", stdlib_path.to_str().unwrap())
+        // Prevent linker-override env vars from leaking in from concurrent tests.
+        .env_remove("MIRI_CC")
+        .env_remove("CC")
+        .current_dir(temp_dir.path())
+        .arg("run")
+        .arg(entry_file)
+        .output()
+        .unwrap();
+
+    CompilerResult {
+        success: output.status.success(),
+        stdout: String::from_utf8(output.stdout).unwrap(),
+        stderr: String::from_utf8(output.stderr).unwrap(),
+    }
 }
 
 /// Strip ANSI escape codes from a string
