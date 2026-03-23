@@ -568,7 +568,9 @@ fn lower_for_over_iterable(
 
     if let Some(ref class_name) = iterable_class {
         // Call ClassName_length(iterable) via MIR terminator
-        let length_symbol = format!("{}_length", class_name);
+        let mut length_symbol = String::with_capacity(class_name.len() + 7);
+        length_symbol.push_str(class_name);
+        length_symbol.push_str("_length");
         let func_op = Operand::Constant(Box::new(Constant {
             span: *span,
             ty: Type::new(TypeKind::Identifier, *span),
@@ -641,7 +643,9 @@ fn lower_for_over_iterable(
     // Assign loop_var = element_at(idx) or list[idx]
     if let Some(ref class_name) = iterable_class {
         // Call ClassName_element_at(iterable, idx) via MIR terminator
-        let element_at_symbol = format!("{}_element_at", class_name);
+        let mut element_at_symbol = String::with_capacity(class_name.len() + 11);
+        element_at_symbol.push_str(class_name);
+        element_at_symbol.push_str("_element_at");
         let func_op = Operand::Constant(Box::new(Constant {
             span: *span,
             ty: Type::new(TypeKind::Identifier, *span),
@@ -1117,7 +1121,11 @@ pub fn lower_call(
                         }
 
                         // Static dispatch path (concrete receiver type, super calls, etc.)
-                        let mangled_name = format!("{}_{}", defining_class, method_name);
+                        let mut mangled_name =
+                            String::with_capacity(defining_class.len() + 1 + method_name.len());
+                        mangled_name.push_str(&defining_class);
+                        mangled_name.push('_');
+                        mangled_name.push_str(method_name);
                         let mut call_args = vec![self_op];
                         for arg in args {
                             call_args.push(lower_expression(ctx, arg, None)?);
@@ -1699,7 +1707,9 @@ fn lower_class_constructor(
             call_args.push(Operand::Copy(Place::new(alloc_local)));
         }
 
-        let mangled_name = format!("{}_init", init_class);
+        let mut mangled_name = String::with_capacity(init_class.len() + 5);
+        mangled_name.push_str(&init_class);
+        mangled_name.push_str("_init");
         let func_op = Operand::Constant(Box::new(Constant {
             span: *span,
             ty: Type::new(TypeKind::Identifier, *span),
