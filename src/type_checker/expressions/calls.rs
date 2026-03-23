@@ -235,9 +235,9 @@ impl TypeChecker {
                             return make_type(TypeKind::Error);
                         }
 
-                        // Special handling for List constructor: List([1,2,3]) → TypeKind::List(int)
-                        // This produces a built-in List type so the existing codegen
-                        // infrastructure for indexing, for-loops, and bounds checking works.
+                        // Special handling for built-in collection constructors: always return
+                        // the canonical TypeKind (List/Map/Set) rather than Custom("List", ...),
+                        // eliminating the dual-representation problem at the source.
                         if BuiltinCollectionKind::from_name(name)
                             == Some(BuiltinCollectionKind::List)
                         {
@@ -251,7 +251,7 @@ impl TypeChecker {
                                 } else {
                                     self.report_error(
                                         format!(
-                                            "Class 'List<T>' expects 1 generic arguments, got {}",
+                                            "Class 'List<T>' expects 1 generic argument, got {}",
                                             args.len()
                                         ),
                                         span,
@@ -275,6 +275,74 @@ impl TypeChecker {
 
                             self.report_error(
                                 "Cannot instantiate generic class 'List<T>' without explicit type arguments".to_string(),
+                                span,
+                            );
+                            return make_type(TypeKind::Error);
+                        }
+
+                        if BuiltinCollectionKind::from_name(name)
+                            == Some(BuiltinCollectionKind::Map)
+                        {
+                            if let Some(args) = type_args {
+                                if args.len() == 2 {
+                                    let k_type = self.resolve_type_expression(&args[0], context);
+                                    let v_type = self.resolve_type_expression(&args[1], context);
+                                    return make_type(TypeKind::Map(
+                                        Box::new(self.create_type_expression(k_type)),
+                                        Box::new(self.create_type_expression(v_type)),
+                                    ));
+                                } else {
+                                    self.report_error(
+                                        format!(
+                                            "Class 'Map<K, V>' expects 2 generic arguments, got {}",
+                                            args.len()
+                                        ),
+                                        span,
+                                    );
+                                    return make_type(TypeKind::Error);
+                                }
+                            }
+                            // No type args: infer from positional arg if it's a map literal
+                            if let Some((_, arg_type)) = positional_args.first() {
+                                if let TypeKind::Map(k, v) = &arg_type.kind {
+                                    return make_type(TypeKind::Map(k.clone(), v.clone()));
+                                }
+                            }
+                            self.report_error(
+                                "Cannot instantiate generic class 'Map<K, V>' without explicit type arguments".to_string(),
+                                span,
+                            );
+                            return make_type(TypeKind::Error);
+                        }
+
+                        if BuiltinCollectionKind::from_name(name)
+                            == Some(BuiltinCollectionKind::Set)
+                        {
+                            if let Some(args) = type_args {
+                                if args.len() == 1 {
+                                    let elem_type = self.resolve_type_expression(&args[0], context);
+                                    return make_type(TypeKind::Set(Box::new(
+                                        self.create_type_expression(elem_type),
+                                    )));
+                                } else {
+                                    self.report_error(
+                                        format!(
+                                            "Class 'Set<T>' expects 1 generic argument, got {}",
+                                            args.len()
+                                        ),
+                                        span,
+                                    );
+                                    return make_type(TypeKind::Error);
+                                }
+                            }
+                            // No type args: infer from positional arg if it's a set literal
+                            if let Some((_, arg_type)) = positional_args.first() {
+                                if let TypeKind::Set(inner) = &arg_type.kind {
+                                    return make_type(TypeKind::Set(inner.clone()));
+                                }
+                            }
+                            self.report_error(
+                                "Cannot instantiate generic class 'Set<T>' without explicit type arguments".to_string(),
                                 span,
                             );
                             return make_type(TypeKind::Error);

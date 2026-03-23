@@ -220,33 +220,7 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
-    /// Normalize `Custom("Map", Some([k,v]))` → `TypeKind::Map(k,v)` etc. so that
-    /// Perceus correctly identifies these locals as managed even when the type
-    /// checker returns a `Custom` variant for generic collection constructors.
-    fn normalize_collection_type(ty: Type) -> Type {
-        use crate::ast::types::TypeKind;
-        if let TypeKind::Custom(ref name, Some(ref args)) = ty.kind {
-            match (name.as_str(), args.len()) {
-                ("Map", 2) => {
-                    return Type::new(
-                        TypeKind::Map(Box::new(args[0].clone()), Box::new(args[1].clone())),
-                        ty.span,
-                    );
-                }
-                ("Set", 1) => {
-                    return Type::new(TypeKind::Set(Box::new(args[0].clone())), ty.span);
-                }
-                ("List", 1) => {
-                    return Type::new(TypeKind::List(Box::new(args[0].clone())), ty.span);
-                }
-                _ => {}
-            }
-        }
-        ty
-    }
-
     pub fn push_local(&mut self, name: String, ty: Type, span: Span) -> Local {
-        let ty = Self::normalize_collection_type(ty);
         let mut decl = LocalDecl::new(ty, span);
         let name_rc: Rc<str> = Rc::from(name);
 
@@ -319,7 +293,6 @@ impl<'a> LoweringContext<'a> {
     }
 
     pub fn push_temp(&mut self, ty: Type, span: Span) -> Local {
-        let ty = Self::normalize_collection_type(ty);
         let decl = LocalDecl::new(ty, span);
         self.body.new_local(decl)
     }

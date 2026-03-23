@@ -29,6 +29,7 @@ pub mod rvalue;
 pub mod ssa;
 pub mod statement;
 pub mod terminator;
+pub mod types;
 pub mod visitor;
 
 pub use backend::{
@@ -48,3 +49,4 @@ pub use place::{Local, Place, PlaceElem};
 pub use rvalue::{AggregateKind, BinOp, Dimension, GpuIntrinsic, Rvalue, UnOp};
 pub use statement::{Statement, StatementKind};
 pub use terminator::{Discriminant, Terminator, TerminatorKind};
+pub use types::MirType;

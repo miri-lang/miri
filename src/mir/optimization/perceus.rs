@@ -7,10 +7,9 @@
 //! types such as `String`, `List`, `Map`, `Set`, and user-defined types.
 //! It implements the "Functional But In-Place" (FBIP) strategy where possible.
 
-use crate::ast::types::{BuiltinCollectionKind, TypeKind};
 use crate::mir::optimization::OptimizationPass;
-use crate::mir::rc::is_managed_type;
 use crate::mir::statement::{Statement, StatementKind};
+use crate::mir::types::MirType;
 use crate::mir::{Body, Operand, Place, PlaceElem, Rvalue};
 
 /// Inserts reference counting operations for managed types.
@@ -36,7 +35,9 @@ impl OptimizationPass for Perceus {
             .enumerate()
             .filter(|(i, decl)| {
                 *i > body.arg_count
-                    && is_managed_type(&decl.ty.kind, &body.auto_copy_types, &body.type_params)
+                    && decl
+                        .mir_ty
+                        .is_managed(&body.auto_copy_types, &body.type_params)
             })
             .map(|(i, _)| crate::mir::Local(i))
             .collect();
@@ -101,11 +102,8 @@ impl OptimizationPass for Perceus {
                                     .projection
                                     .iter()
                                     .any(|e| matches!(e, PlaceElem::Field(_)))
-                                    && is_managed_type(
-                                        &target_ty.kind,
-                                        &body.auto_copy_types,
-                                        &body.type_params,
-                                    )
+                                    && MirType::from_type_kind(&target_ty.kind)
+                                        .is_managed(&body.auto_copy_types, &body.type_params)
                                 {
                                     new_stmts.push(Statement {
                                         kind: StatementKind::IncRef(place.clone()),
@@ -219,9 +217,9 @@ fn get_copy_source_place(rvalue: &Rvalue) -> Option<Place> {
 /// which variant is active), so the Perceus main loop falls back to checking
 /// `managed_locals.contains(&lhs.local)` for those cases.
 ///
-/// Uses owned `TypeKind` throughout so that projections can be followed across
-/// different data sources (local_decls → field_types) without lifetime conflicts,
-/// and so multi-step projections like `Custom.Field(0).Index(i)` resolve correctly.
+/// Uses [`MirType`] throughout, which stores collection element types as resolved
+/// `MirType` values (not `Box<Expression>`), so this function never needs to
+/// inspect AST expression nodes.
 fn is_place_managed(
     place: &Place,
     local_decls: &[crate::mir::LocalDecl],
@@ -229,85 +227,35 @@ fn is_place_managed(
     field_types: &std::collections::HashMap<String, Vec<crate::ast::types::Type>>,
     type_params: &std::collections::HashSet<String>,
 ) -> bool {
-    // Clone once so we can rebind `current` freely across projection sources.
-    let mut current: TypeKind = local_decls[place.local.0].ty.kind.clone();
+    // Start from the MIR-level resolved type of the base local.
+    let mut current: MirType = local_decls[place.local.0].mir_ty.clone();
 
     for elem in &place.projection {
         let next = match elem {
             PlaceElem::Deref => return false,
-            PlaceElem::Index(_) => match &current {
-                TypeKind::Array(inner, _) => match &inner.node {
-                    crate::ast::expression::ExpressionKind::Type(ty, _) => ty.kind.clone(),
-                    crate::ast::expression::ExpressionKind::Identifier(name, _) => {
-                        // An unresolved Identifier in an element-type position is managed
-                        // if it names a known collection/String type, or is a concrete
-                        // user type (not auto-copy and not a generic type parameter).
-                        if name == "String"
-                            || BuiltinCollectionKind::from_name(name).is_some()
-                            || (name.as_str() != "Self"
-                                && !auto_copy_types.contains(name.as_str())
-                                && !type_params.contains(name.as_str()))
-                        {
-                            return true;
-                        }
-                        return false;
-                    }
-                    _ => return false,
-                },
-                TypeKind::List(inner) | TypeKind::Set(inner) => match &inner.node {
-                    crate::ast::expression::ExpressionKind::Type(ty, _) => ty.kind.clone(),
-                    crate::ast::expression::ExpressionKind::Identifier(name, _) => {
-                        if name == "String"
-                            || BuiltinCollectionKind::from_name(name).is_some()
-                            || (name.as_str() != "Self"
-                                && !auto_copy_types.contains(name.as_str())
-                                && !type_params.contains(name.as_str()))
-                        {
-                            return true;
-                        }
-                        return false;
-                    }
-                    _ => return false,
-                },
-                TypeKind::Map(_, v) => match &v.node {
-                    crate::ast::expression::ExpressionKind::Type(ty, _) => ty.kind.clone(),
-                    crate::ast::expression::ExpressionKind::Identifier(name, _) => {
-                        if name == "String"
-                            || BuiltinCollectionKind::from_name(name).is_some()
-                            || (name.as_str() != "Self"
-                                && !auto_copy_types.contains(name.as_str())
-                                && !type_params.contains(name.as_str()))
-                        {
-                            return true;
-                        }
-                        return false;
-                    }
-                    _ => return false,
-                },
+            // For Index projections, extract the element type from the collection.
+            // MirType stores element types as resolved MirType values — no AST
+            // expression nodes to inspect.
+            PlaceElem::Index(_) => match current {
+                MirType::Array(elem) | MirType::List(elem) | MirType::Set(elem) => *elem,
+                MirType::Map(_, v) => *v,
                 _ => return false,
             },
             PlaceElem::Field(i) => match &current {
                 // Option<T>.Field(0) → the inner type T
-                TypeKind::Option(inner) if *i == 0 => inner.kind.clone(),
-                // Tuple(T0,T1,...).Field(i) → Ti (resolved from the element expression)
-                TypeKind::Tuple(elems) => match elems.get(*i).map(|e| &e.node) {
-                    Some(crate::ast::expression::ExpressionKind::Type(ty, _)) => ty.kind.clone(),
-                    Some(crate::ast::expression::ExpressionKind::Identifier(name, _)) => {
-                        return is_managed_type(
-                            &TypeKind::Custom(name.clone(), None),
-                            auto_copy_types,
-                            type_params,
-                        );
-                    }
-                    _ => return false,
+                MirType::Option(inner) if *i == 0 => *inner.clone(),
+                // Tuple(T0, T1, …).Field(i) → Ti
+                MirType::Tuple(elems) => match elems.get(*i).cloned() {
+                    Some(t) => t,
+                    None => return false,
                 },
-                // Custom(struct/class).Field(i) → look up in the pre-built field_types map.
-                // Cloning the result lets subsequent projections (e.g. Index after Field)
-                // continue correctly — e.g. Custom("Data").Field(0) yields Array, then
-                // Array.Index(k) yields the element type (not Array itself).
-                TypeKind::Custom(name, _) => {
+                // Custom(struct/class).Field(i) → look up in the pre-built field_types map
+                // and convert to MirType on the fly.
+                // Resolving here (not at LocalDecl creation time) avoids needing a separate
+                // MIR-level field_types map — we reuse the existing one that holds `Type`.
+                MirType::Custom(name) => {
                     match field_types.get(name.as_str()).and_then(|fs| fs.get(*i)) {
-                        Some(ty) => ty.kind.clone(),
+                        Some(ty) => MirType::from_type_kind(&ty.kind),
                         None => return false,
                     }
                 }
@@ -317,5 +265,5 @@ fn is_place_managed(
         current = next;
     }
 
-    is_managed_type(&current, auto_copy_types, type_params)
+    current.is_managed(auto_copy_types, type_params)
 }
