@@ -30,6 +30,7 @@ pub mod ssa;
 pub mod statement;
 pub mod terminator;
 pub mod types;
+pub mod verify;
 pub mod visitor;
 
 pub use backend::{

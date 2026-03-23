@@ -43,6 +43,9 @@ pub enum CompilerError {
 
     #[error("Runtime Error: {0}")]
     Runtime(String),
+
+    #[error("MIR Verification Error: {0}")]
+    MirVerification(String),
 }
 
 impl CompilerError {
@@ -125,6 +128,22 @@ impl CompilerError {
                     message: msg.clone(),
                     span: None,
                     help: None,
+                    notes: Vec::new(),
+                };
+                format_diagnostic_full(source, &diagnostic)
+            }
+            CompilerError::MirVerification(msg) => {
+                let diagnostic = Diagnostic {
+                    severity: Severity::Error,
+                    code: None,
+                    title: "MIR Verification Error".to_string(),
+                    message: msg.clone(),
+                    span: None,
+                    help: Some(
+                        "This indicates a bug in MIR lowering or Perceus RC insertion. \
+                         Please report it."
+                            .to_string(),
+                    ),
                     notes: Vec::new(),
                 };
                 format_diagnostic_full(source, &diagnostic)

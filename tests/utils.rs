@@ -32,6 +32,7 @@ fn exec_miri(command: &str, input: &str) -> CompilerResult {
     let output = cmd
         .env("RUST_BACKTRACE", "1")
         .env("MIRI_LEAK_CHECK", "1")
+        .env("MIRI_VERIFY_MIR", "1")
         .arg(command)
         .arg(&path)
         .output()
