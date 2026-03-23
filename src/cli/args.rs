@@ -15,6 +15,18 @@ pub struct Cli {
 
     #[arg(short, long, action = ArgAction::Count, global = true, help = "Increase verbosity level")]
     pub verbose: u8,
+
+    /// Run the MIR verification pass after Perceus RC insertion.
+    ///
+    /// When enabled, the compiler checks RC invariants (StorageLive/Dead balance,
+    /// no RC ops on parameters) and reports any violations as errors. Disabled
+    /// by default. Also enabled by setting MIRI_VERIFY_MIR=1 in the environment.
+    #[arg(
+        long,
+        global = true,
+        help = "Enable MIR verification after RC insertion"
+    )]
+    pub verify_mir: bool,
 }
 
 #[derive(Subcommand, Debug)]

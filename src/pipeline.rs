@@ -823,6 +823,27 @@ impl Pipeline {
             mir::optimization::insert_rc(body);
         }
 
+        // Optional MIR verification pass: check RC invariants after Perceus.
+        // Enabled by setting the MIRI_VERIFY_MIR environment variable to any
+        // non-empty value, or by passing --verify-mir on the CLI (which sets
+        // this variable before invoking the pipeline).
+        if std::env::var("MIRI_VERIFY_MIR").is_ok() {
+            let mut all_violations = Vec::new();
+            for (name, body) in &bodies {
+                let violations = mir::verify::verify_body(body);
+                for v in violations {
+                    all_violations.push(format!("  fn {}: {}", name, v));
+                }
+            }
+            if !all_violations.is_empty() {
+                return Err(CompilerError::MirVerification(format!(
+                    "RC invariant violations detected in {} function(s):\n{}",
+                    all_violations.len(),
+                    all_violations.join("\n")
+                )));
+            }
+        }
+
         Ok(bodies)
     }
 

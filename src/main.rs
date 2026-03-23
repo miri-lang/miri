@@ -14,6 +14,15 @@ use miri::pipeline::{BuildOptions, Pipeline};
 pub fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Propagate --verify-mir as an environment variable so the pipeline can
+    // check it without requiring every call site to thread a flag through.
+    if cli.verify_mir {
+        // SAFETY: single-threaded at this point (before the pipeline starts).
+        unsafe {
+            std::env::set_var("MIRI_VERIFY_MIR", "1");
+        }
+    }
+
     match cli.command {
         Some(command) => match command {
             Commands::Run { path, program_args } => run_file(path, program_args, cli.verbose),
