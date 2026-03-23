@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::utils::{miri_check, miri_run};
+use crate::utils::{miri_check, miri_run, miri_run_project};
 
 /// Checks whether the output contains an error header in either format:
 /// - `error:` (plain, no error code)
@@ -149,6 +149,74 @@ pub fn assert_runtime_crash(code: &str) {
         panic!(
             "Expected program to crash at runtime, but it succeeded.\nOutput:\n{}",
             result.output()
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Multi-file project helpers
+//
+// `files` is a slice of `(relative_path, content)` pairs.  The first file is
+// used as the entry point.  All files are written into a temporary directory
+// and the compiler is invoked with that directory as the working directory.
+// ---------------------------------------------------------------------------
+
+/// Assert that a multi-file project compiles and runs without errors.
+pub fn assert_project_runs(files: &[(&str, &str)]) {
+    let result = miri_run_project(files);
+
+    if !result.success {
+        if result.stderr.contains("MIRI_LEAK_CHECK: leaked") {
+            panic!("Memory leak detected:\n{}", result.output());
+        }
+        panic!(
+            "Expected project to compile and run successfully, but it failed:\n{}",
+            result.output()
+        );
+    }
+}
+
+/// Assert that a multi-file project compiles, runs, and produces output
+/// containing `expected_output`.
+pub fn assert_project_runs_with_output(files: &[(&str, &str)], expected_output: &str) {
+    let result = miri_run_project(files);
+
+    if !result.success {
+        if result.stderr.contains("MIRI_LEAK_CHECK: leaked") {
+            panic!("Memory leak detected:\n{}", result.output());
+        }
+        panic!(
+            "Expected project to compile and run successfully, but it failed:\n{}",
+            result.output()
+        );
+    }
+
+    if !result.output().contains(expected_output) {
+        panic!(
+            "Expected output '{}' not found in project output:\n{}",
+            expected_output,
+            result.output()
+        );
+    }
+}
+
+/// Assert that a multi-file project fails during compilation with a message
+/// containing `expected_error`.
+pub fn assert_project_compiler_error(files: &[(&str, &str)], expected_error: &str) {
+    let result = miri_run_project(files);
+    let output = result.output();
+
+    if result.success {
+        panic!(
+            "Expected project compilation to fail, but it succeeded.\nOutput:\n{}",
+            output
+        );
+    }
+
+    if !output.contains(expected_error) {
+        panic!(
+            "Expected error '{}' not found in project output:\n{}",
+            expected_error, output
         );
     }
 }

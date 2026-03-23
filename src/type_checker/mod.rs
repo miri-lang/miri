@@ -28,6 +28,7 @@ use crate::error::diagnostic::Diagnostic;
 use crate::error::syntax::Span;
 use crate::error::type_error::TypeError;
 use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
 
 mod builtins;
 mod compatibility;
@@ -82,6 +83,8 @@ pub struct TypeChecker {
     /// Maps call expression IDs to their inferred generic type arguments (in declaration order).
     /// Populated when a generic function is called so MIR lowering can mangle the call target.
     pub call_generic_mappings: HashMap<usize, Vec<(String, Type)>>,
+    /// Directory of the source file being compiled, used to resolve `local.*` imports.
+    pub(crate) source_dir: Option<PathBuf>,
 }
 
 impl Default for TypeChecker {
@@ -110,7 +113,18 @@ impl TypeChecker {
             reported_errors: std::collections::HashSet::new(),
             imported_statements: Vec::new(),
             call_generic_mappings: HashMap::new(),
+            source_dir: None,
         }
+    }
+
+    /// Creates a new type checker with a known source-file directory.
+    ///
+    /// The directory is used to resolve `local.*` module imports relative to
+    /// the project root (i.e. the directory that contains the entry-point file).
+    pub fn with_source_dir(source_dir: PathBuf) -> Self {
+        let mut tc = Self::new();
+        tc.source_dir = Some(source_dir);
+        tc
     }
 
     /// Sets the current module name for scoping declarations.
