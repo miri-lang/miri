@@ -6,6 +6,7 @@ use crate::error::syntax::Span;
 use crate::mir::backend::BackendMetadata;
 use crate::mir::block::BasicBlockData;
 use crate::mir::place::Local;
+use crate::mir::types::MirType;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::rc::Rc;
@@ -244,16 +245,26 @@ pub struct LocalDecl {
     pub name: Option<Rc<str>>,
     pub is_user_variable: bool,
     pub storage_class: StorageClass,
+    /// Resolved MIR-level type, free of AST expression nodes.
+    ///
+    /// Derived from `ty` at construction time via [`MirType::from_type_kind`].
+    /// Used by analysis passes (e.g. Perceus) to traverse collection element
+    /// types without pattern-matching on [`ExpressionKind`] nodes.
+    ///
+    /// [`ExpressionKind`]: crate::ast::expression::ExpressionKind
+    pub mir_ty: MirType,
 }
 
 impl LocalDecl {
     pub fn new(ty: Type, span: Span) -> Self {
+        let mir_ty = MirType::from_type_kind(&ty.kind);
         Self {
             ty,
             span,
             name: None,
             is_user_variable: false,
             storage_class: StorageClass::Stack,
+            mir_ty,
         }
     }
 }
