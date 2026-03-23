@@ -51,7 +51,13 @@ fn run_file(path: PathBuf, _program_args: Vec<String>, _verbose: u8) -> Result<(
     let source = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read file: {}", path.display()))?;
 
-    let pipeline = Pipeline::new();
+    let mut pipeline = Pipeline::new();
+    // Canonicalize first so that a bare filename like "main.mi" resolves to an
+    // absolute path whose parent is the working directory, not an empty path.
+    let abs_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+    if let Some(dir) = abs_path.parent() {
+        pipeline = pipeline.with_source_dir(dir.to_path_buf());
+    }
 
     match pipeline.run(&source) {
         Ok(exit_code) => {
@@ -78,7 +84,11 @@ fn build_file(
     let source = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read file: {}", path.display()))?;
 
-    let pipeline = Pipeline::new();
+    let mut pipeline = Pipeline::new();
+    let abs_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+    if let Some(dir) = abs_path.parent() {
+        pipeline = pipeline.with_source_dir(dir.to_path_buf());
+    }
     let build_options = BuildOptions {
         out_path: out,
         release,
@@ -102,7 +112,11 @@ fn check_file(path: PathBuf, _verbose: u8) -> Result<()> {
     let source = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read file: {}", path.display()))?;
 
-    let pipeline = Pipeline::new();
+    let mut pipeline = Pipeline::new();
+    let abs_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+    if let Some(dir) = abs_path.parent() {
+        pipeline = pipeline.with_source_dir(dir.to_path_buf());
+    }
     match pipeline.frontend(&source) {
         Ok(result) => {
             for warning in &result.type_checker.warnings {

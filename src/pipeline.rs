@@ -281,7 +281,11 @@ pub struct BuildOptions {
 }
 
 /// Orchestrates the full compilation pipeline from source to executable.
-pub struct Pipeline {}
+pub struct Pipeline {
+    /// Directory of the entry-point source file.  When set, the type checker
+    /// uses this to resolve `local.*` module imports.
+    source_dir: Option<PathBuf>,
+}
 
 impl Default for Pipeline {
     fn default() -> Self {
@@ -291,7 +295,22 @@ impl Default for Pipeline {
 
 impl Pipeline {
     pub fn new() -> Self {
-        Self {}
+        Self { source_dir: None }
+    }
+
+    /// Configure the pipeline with the directory of the source file being
+    /// compiled.  This enables `local.*` import resolution.
+    pub fn with_source_dir(mut self, dir: PathBuf) -> Self {
+        self.source_dir = Some(dir);
+        self
+    }
+
+    /// Build a `TypeChecker` configured with this pipeline's source directory.
+    fn make_type_checker(&self) -> TypeChecker {
+        match &self.source_dir {
+            Some(dir) => TypeChecker::with_source_dir(dir.clone()),
+            None => TypeChecker::new(),
+        }
     }
 
     /// Run the frontend (lexer, parser, type checker) on source code.
@@ -300,7 +319,7 @@ impl Pipeline {
         let mut parser = Parser::new(&mut lexer, source);
         let ast = parser.parse().map_err(CompilerError::Parser)?;
 
-        let mut type_checker = crate::type_checker::TypeChecker::new();
+        let mut type_checker = self.make_type_checker();
         type_checker
             .check(&ast)
             .map_err(|errors| CompilerError::TypeErrors {
@@ -321,7 +340,7 @@ impl Pipeline {
         wrap_script_in_main(&mut ast);
         patch_main_return(&mut ast);
 
-        let mut type_checker = crate::type_checker::TypeChecker::new();
+        let mut type_checker = self.make_type_checker();
         type_checker
             .check(&ast)
             .map_err(|errors| CompilerError::TypeErrors {
