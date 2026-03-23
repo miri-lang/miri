@@ -582,7 +582,7 @@ impl TypeChecker {
                 }
                 None
             }
-            "list" => {
+            "List" | "list" => {
                 if let Some(args) = args {
                     if args.len() == 1 {
                         let t = self.resolve_type_expression(&args[0], context);
@@ -593,7 +593,7 @@ impl TypeChecker {
                 }
                 None
             }
-            "set" => {
+            "Set" | "set" => {
                 if let Some(args) = args {
                     if args.len() == 1 {
                         let t = self.resolve_type_expression(&args[0], context);

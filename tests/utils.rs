@@ -1,5 +1,6 @@
 use assert_cmd::{pkg_name, Command};
 use std::io::Write;
+use std::sync::OnceLock;
 use tempfile::NamedTempFile;
 
 pub const BINARY_NAME: &str = pkg_name!();
@@ -60,7 +61,8 @@ pub fn miri_run(input: &str) -> CompilerResult {
 
 /// Strip ANSI escape codes from a string
 pub fn strip_ansi(s: &str) -> String {
-    let re = regex::Regex::new(r"\x1b\[[0-9;]*m").unwrap();
+    static ANSI_RE: OnceLock<regex::Regex> = OnceLock::new();
+    let re = ANSI_RE.get_or_init(|| regex::Regex::new(r"\x1b\[[0-9;]*m").unwrap());
     re.replace_all(s, "").to_string()
 }
 
