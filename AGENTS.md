@@ -62,6 +62,13 @@ Testing is the only way to prove your work is correct.
     - `assert_runs_with_output(code, expected)`: Check for specific output.
     - `assert_compiler_error(code, "message")`: Test negative cases.
     - `assert_runtime_error(code, "message")`: Test runtime panics.
+- **Running Tests**:
+    - **CRITICAL**: The integration test binary is named `mod`, NOT `integration`. Always use `--test mod`.
+    - Full suite: `cargo test --test mod`
+    - Filter by name: `cargo test --test mod "test_name_filter"`
+    - Example: `cargo test --test mod "test_list"` runs all tests whose name contains `test_list`
+    - **WRONG**: `cargo test --test integration "..."` → error: no test target named `integration`
+    - **CORRECT**: `cargo test --test mod "..."`
 - **Verification Flow**:
     1. **`make format`**: MUST run after every change.
     2. **`make lint`**: Fix all clippy warnings.
