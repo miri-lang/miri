@@ -266,7 +266,6 @@ fn main()
 
 #[test]
 fn test_non_abstract_class_missing_override_is_error() {
-    // TODO: needs to validate the specific error message
     assert_compiler_error(
         r#"
 abstract class Animal
@@ -277,7 +276,7 @@ class Dog extends Animal
 fn main()
     let d = Dog()
     "#,
-        "speak",
+        "Class 'Dog' must implement abstract method 'speak' from class 'Animal'",
     );
 }
 
