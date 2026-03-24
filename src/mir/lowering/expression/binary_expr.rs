@@ -304,7 +304,11 @@ pub(crate) fn lower_binary_expr(
                     if class_def.methods.contains_key(method_name) {
                         use crate::ast::literal::Literal;
 
-                        let mangled_name = format!("{}_{}", class_name, method_name);
+                        let mut mangled_name =
+                            String::with_capacity(class_name.len() + 1 + method_name.len());
+                        mangled_name.push_str(&class_name);
+                        mangled_name.push('_');
+                        mangled_name.push_str(method_name);
 
                         let alloc_op = ctx
                             .variable_map
