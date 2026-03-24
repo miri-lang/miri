@@ -126,10 +126,11 @@ print("ab" * count)
 
 #[test]
 fn test_string_multiply_invalid_rhs() {
+    // String * String is invalid — the right-hand side must be an integer.
     assert_compiler_error(
         r#"
 let s = "ha" * "3"
 "#,
-        "Invalid types for arithmetic operation",
+        "Type mismatch: cannot multiply String by String",
     );
 }
