@@ -34,6 +34,9 @@ fn exec_miri(command: &str, input: &str) -> CompilerResult {
         .env("RUST_BACKTRACE", "1")
         .env("MIRI_LEAK_CHECK", "1")
         .env("MIRI_VERIFY_MIR", "1")
+        // Prevent linker-override env vars from leaking in from concurrent tests.
+        .env_remove("MIRI_CC")
+        .env_remove("CC")
         .arg(command)
         .arg(&path)
         .output()
