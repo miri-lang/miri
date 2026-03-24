@@ -12,7 +12,12 @@ pub mod rt {
     // ── Array ────────────────────────────────────────────────────────────────
     pub const ARRAY_NEW: &str = "miri_rt_array_new";
     pub const ARRAY_FREE: &str = "miri_rt_array_free";
+    pub const ARRAY_LEN: &str = "miri_rt_array_len";
+    pub const ARRAY_SET_VAL: &str = "miri_rt_array_set_val";
     pub const ARRAY_PANIC_OOB: &str = "miri_rt_array_panic_oob";
+
+    // ── Tuple ─────────────────────────────────────────────────────────────────
+    pub const TUPLE_LEN: &str = "miri_rt_tuple_len";
 
     // ── List ─────────────────────────────────────────────────────────────────
     pub const LIST_NEW: &str = "miri_rt_list_new";

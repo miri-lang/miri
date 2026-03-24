@@ -19,19 +19,19 @@ public class Array<T, Size> implements Iterable
     runtime "core" fn miri_rt_array_new(count int, elem_size int) Self
     runtime "core" fn miri_rt_array_free(a Self)
     runtime "core" fn miri_rt_array_sort(a Self)
+    runtime "core" fn miri_rt_array_len(a Self) int
+    runtime "core" fn miri_rt_array_set_val(a Self, index int, value T) bool
 
     /// Returns the number of elements in the array (always equals Size).
-    /// Handled as a built-in operation by the compiler.
-    public fn length() int: 0
+    public fn length() int: miri_rt_array_len(self)
 
     /// Returns the element at the given index.
     /// This enables for-loop iteration: `for x in array`.
-    /// Handled as a built-in operation by the compiler.
     public fn element_at(index int) T: self[index]
 
     /// Sets the element at the given index.
     public fn set(index int, value T)
-        self[index] = value
+        miri_rt_array_set_val(self, index, value)
 
     /// Returns true if the array has no elements.
     public fn is_empty() bool: self.length() == 0

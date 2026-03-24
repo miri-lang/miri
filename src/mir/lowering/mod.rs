@@ -17,7 +17,6 @@ pub mod control_flow;
 pub mod dispatch;
 pub mod expression;
 pub mod helpers;
-pub mod intercepts;
 pub mod loops;
 pub mod statement;
 pub mod variable;

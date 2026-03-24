@@ -36,7 +36,8 @@ public class List<T> implements Iterable
     public fn get(index int) T: self[index]
 
     /// Sets the element at the given index.
-    public fn set(index int, value T): self[index] = value
+    public fn set(index int, value T)
+        miri_rt_list_set(self, index, value)
 
     /// Inserts an element at the given index.
     public fn insert(index int, item T)

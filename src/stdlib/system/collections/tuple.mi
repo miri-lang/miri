@@ -20,9 +20,10 @@ use system.ops
 
 public class Tuple<T> implements Iterable
 
+    runtime "core" fn miri_rt_tuple_len(t Self) int
+
     /// Returns the number of elements in the tuple.
-    /// Handled as a built-in operation by the compiler.
-    public fn length() int: 0
+    public fn length() int: miri_rt_tuple_len(self)
 
     /// Returns the element at the given index.
     /// This enables for-loop iteration: `for x in tuple`.

@@ -19,6 +19,7 @@ pub mod rc;
 pub mod set;
 pub mod string;
 pub mod time;
+pub mod tuple;
 
 pub use alloc::*;
 pub use array::*;
@@ -29,3 +30,4 @@ pub use rc::*;
 pub use set::*;
 pub use string::*;
 pub use time::*;
+pub use tuple::*;
