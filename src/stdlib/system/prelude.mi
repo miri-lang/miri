@@ -1,0 +1,8 @@
+/// Implicit prelude: loaded automatically before every Miri program.
+///
+/// Modules listed here are available in all programs without an explicit
+/// `use` statement, mirroring Rust's `std::prelude` and Kotlin's default imports.
+///
+/// If a user also writes `use system.string` explicitly, the already-loaded
+/// guard in the type checker makes it a no-op.
+use system.string

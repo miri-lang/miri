@@ -39,14 +39,16 @@
 //! - Implicit vs explicit returns
 //! - Return type compatibility
 
+use crate::ast::factory;
 use crate::ast::*;
+use crate::error::syntax::Span;
 use crate::lexer::Lexer;
 use crate::parser::Parser;
 use crate::type_checker::context::Context;
 use crate::type_checker::TypeChecker;
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 impl TypeChecker {
     pub(crate) fn check_use(
@@ -408,5 +410,109 @@ impl TypeChecker {
             }
             _ => None,
         }
+    }
+
+    /// Loads the implicit prelude, making its definitions available in every program.
+    ///
+    /// The prelude (`system/prelude.mi`) is loaded exactly once before the user's
+    /// code is type-checked. If the prelude file cannot be found (e.g. in isolated
+    /// test environments without stdlib), this is a silent no-op — programs still
+    /// compile but without implicit prelude imports.
+    ///
+    /// The already-loaded guard in [`check_use`] ensures that an explicit
+    /// `use system.string` (or any other prelude module) in user code is a no-op.
+    pub(crate) fn load_prelude(&mut self, context: &mut Context) {
+        let stdlib_base = std::env::var("MIRI_STDLIB_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("src/stdlib"));
+
+        // Only attempt the load when the file physically exists; silently skip
+        // otherwise so that isolated unit tests without stdlib still work.
+        if !stdlib_base.join("system").join("prelude.mi").exists() {
+            return;
+        }
+
+        let path = factory::expr_with_span(
+            ExpressionKind::ImportPath(
+                vec![
+                    factory::identifier_with_span("system", Span::default()),
+                    factory::identifier_with_span("prelude", Span::default()),
+                ],
+                ImportPathKind::Simple,
+            ),
+            Span::default(),
+        );
+        self.check_use(&path, &None, context);
+    }
+
+    /// Returns the stdlib module path that defines `type_name`, or `None` if
+    /// the type is not found in the stdlib directory.
+    ///
+    /// This is used to generate actionable import hints in error messages (e.g.
+    /// "Consider importing 'system.collections.array'") without hard-coding any
+    /// stdlib module paths in the compiler source.  The scan is intentionally
+    /// lazy — it runs only on error paths — so its cost is not felt in the
+    /// normal (success) compilation path.
+    pub(crate) fn suggest_module_for_type(&self, type_name: &str) -> Option<String> {
+        let stdlib_base = std::env::var("MIRI_STDLIB_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("src/stdlib"));
+
+        Self::scan_dir_for_class_definition(&stdlib_base, type_name, &stdlib_base)
+    }
+
+    /// Recursively scans `dir` for a `.mi` file whose top-level declarations
+    /// include `class <type_name>`.  Returns the dot-separated module path
+    /// (e.g. `"system.collections.array"`) derived from the file's position
+    /// relative to `base`, or `None` if no such file is found.
+    fn scan_dir_for_class_definition(dir: &Path, type_name: &str, base: &Path) -> Option<String> {
+        let read_dir = fs::read_dir(dir).ok()?;
+
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(result) = Self::scan_dir_for_class_definition(&path, type_name, base) {
+                    return Some(result);
+                }
+            } else if path.extension().and_then(|e| e.to_str()) == Some("mi") {
+                if let Ok(content) = fs::read_to_string(&path) {
+                    let defines_type = content.lines().any(|line| {
+                        let trimmed = line.trim();
+                        // Skip comment lines.
+                        if trimmed.starts_with("//") {
+                            return false;
+                        }
+                        // Look for `class <type_name>` as adjacent whitespace-separated tokens,
+                        // handling optional modifiers like `public` or `abstract`, and
+                        // stripping any generic parameters (e.g. `Array<T, Size>` → `Array`).
+                        trimmed
+                            .split_whitespace()
+                            .collect::<Vec<_>>()
+                            .windows(2)
+                            .any(|w| {
+                                w[0] == "class"
+                                    && w[1].split('<').next().unwrap_or(w[1]) == type_name
+                            })
+                    });
+
+                    if defines_type {
+                        if let Ok(relative) = path.strip_prefix(base) {
+                            let parts: Vec<String> = relative
+                                .components()
+                                .filter_map(|c| c.as_os_str().to_str().map(|s| s.to_string()))
+                                .collect();
+                            if !parts.is_empty() {
+                                let last =
+                                    parts.last().unwrap().trim_end_matches(".mi").to_string();
+                                let mut module_parts = parts[..parts.len() - 1].to_vec();
+                                module_parts.push(last);
+                                return Some(module_parts.join("."));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 }

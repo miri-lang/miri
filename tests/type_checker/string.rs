@@ -14,13 +14,10 @@ fn test_string_literals() {
 }
 
 #[test]
-fn test_string_concatenation_without_trait() {
-    // Without loading the Addable trait from stdlib, string + string is a type error.
-    // String concatenation via `+` is tested in integration::strings which loads stdlib.
-    type_checker_error_test(
-        "\"hello\" + \" world\"",
-        "Invalid types for arithmetic operation",
-    );
+fn test_string_concatenation() {
+    // The prelude loads system.string (which loads system.ops with Addable),
+    // so string concatenation via `+` works without an explicit import.
+    type_checker_expr_type_test("\"hello\" + \" world\"", type_string());
 }
 
 #[test]
@@ -59,21 +56,23 @@ x += \" world\"
 
 #[test]
 fn test_string_int_mismatch() {
+    // String + int is invalid — both sides must be String for Addable (concat).
     type_checker_error_test(
         "
 let x = \"hello\" + 1
 ",
-        "Invalid types for arithmetic operation",
+        "Type mismatch: cannot add String and int",
     );
 }
 
 #[test]
 fn test_string_bool_mismatch() {
+    // String + bool is invalid — both sides must be String for Addable (concat).
     type_checker_error_test(
         "
 let x = \"hello\" + true
 ",
-        "Invalid types for arithmetic operation",
+        "Type mismatch: cannot add String and bool",
     );
 }
 
@@ -212,9 +211,10 @@ fn test_string_membership() {
 }
 
 #[test]
-fn test_string_multiplication_not_supported() {
-    // String repetition via `*` is not supported; use trait-based dispatch.
-    type_checker_error_test("\"a\" * 3", "Invalid types for arithmetic operation");
+fn test_string_repetition() {
+    // The prelude loads system.string (which loads Multiplicable from system.ops),
+    // so string repetition via `*` works without an explicit import.
+    type_checker_expr_type_test("\"a\" * 3", type_string());
 }
 
 #[test]
@@ -224,11 +224,16 @@ fn test_string_slicing() {
 }
 
 #[test]
-fn test_string_property_access() {
-    type_checker_expr_type_test("\"hello\".length", type_int());
+fn test_string_length_method_type() {
+    // `s.length()` returns int via normal class method dispatch (prelude loads String).
+    type_checker_expr_type_test("\"hello\".length()", type_int());
 }
 
 #[test]
 fn test_string_property_access_error() {
-    type_checker_error_test("\"hello\".invalid", "Type 'String' has no field 'invalid'");
+    // After Phase 2 the class method dispatch reports "no field or method".
+    type_checker_error_test(
+        "\"hello\".invalid",
+        "Type 'String' has no field or method 'invalid'",
+    );
 }
