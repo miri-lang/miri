@@ -409,7 +409,9 @@ fn lower_for_over_iterable(
 
     if let Some(ref class_name) = iterable_class {
         // Call ClassName_length(iterable) via MIR terminator
-        let length_symbol = format!("{}_length", class_name);
+        let mut length_symbol = String::with_capacity(class_name.len() + 7);
+        length_symbol.push_str(class_name);
+        length_symbol.push_str("_length");
         let func_op = Operand::Constant(Box::new(Constant {
             span: *span,
             ty: Type::new(TypeKind::Identifier, *span),
@@ -482,7 +484,9 @@ fn lower_for_over_iterable(
     // Assign loop_var = element_at(idx) or list[idx]
     if let Some(ref class_name) = iterable_class {
         // Call ClassName_element_at(iterable, idx) via MIR terminator
-        let element_at_symbol = format!("{}_element_at", class_name);
+        let mut element_at_symbol = String::with_capacity(class_name.len() + 11);
+        element_at_symbol.push_str(class_name);
+        element_at_symbol.push_str("_element_at");
         let func_op = Operand::Constant(Box::new(Constant {
             span: *span,
             ty: Type::new(TypeKind::Identifier, *span),
