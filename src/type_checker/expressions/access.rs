@@ -977,29 +977,12 @@ impl TypeChecker {
                 self.report_error(format!("Type '{}' does not have members", name), span);
                 return make_type(TypeKind::Error);
             } else if def_opt.is_none() {
-                let module_to_import = match name.as_str() {
-                    "Array" => Some("system.collections.array"),
-                    "List" => Some("system.collections.list"),
-                    "Map" => Some("system.collections.map"),
-                    "Set" => Some("system.collections.set"),
-                    _ => None,
-                };
-
-                if let Some(module) = module_to_import {
+                if let Some(module) = self.suggest_module_for_type(&name) {
                     self.report_error_with_help(
                         format!("Type '{}' does not have members", obj_type),
                         span,
                         format!("Consider importing '{}' to use {} methods", module, name),
                     );
-                } else if name == "String" {
-                    if prop_name == "length" {
-                        return make_type(TypeKind::Int);
-                    } else {
-                        self.report_error(
-                            format!("Type 'String' has no field '{}'", prop_name),
-                            span,
-                        );
-                    }
                 } else {
                     self.report_error(format!("Type '{}' does not have members", obj_type), span);
                 }

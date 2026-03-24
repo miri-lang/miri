@@ -166,6 +166,10 @@ impl TypeChecker {
     pub fn check(&mut self, program: &Program) -> Result<(), Vec<TypeError>> {
         let mut context = Context::new();
 
+        // Load the implicit prelude so that core types (e.g. String) are available
+        // in every program without an explicit `use` statement.
+        self.load_prelude(&mut context);
+
         // Pass 1: Collect all top-level declarations to support forward references.
         // This registers function signatures and type definitions (structs, enums, classes, traits).
         for statement in &program.body {
