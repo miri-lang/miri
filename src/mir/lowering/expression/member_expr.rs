@@ -338,7 +338,11 @@ pub(crate) fn lower_member_expr(
                 if let Some(method_info) = class_def.methods.get(prop_name.as_str()) {
                     // Only treat zero-arg methods as property access
                     if method_info.params.is_empty() {
-                        let mangled_name = format!("{}_{}", class_name, prop_name);
+                        let mut mangled_name =
+                            String::with_capacity(class_name.len() + 1 + prop_name.len());
+                        mangled_name.push_str(&class_name);
+                        mangled_name.push('_');
+                        mangled_name.push_str(prop_name);
                         let return_ty = method_info.return_type.clone();
 
                         let func_op = Operand::Constant(Box::new(Constant {

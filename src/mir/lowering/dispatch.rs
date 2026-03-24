@@ -628,7 +628,11 @@ pub fn lower_call(
                         }
 
                         // Static dispatch path (concrete receiver type, super calls, etc.)
-                        let mangled_name = format!("{}_{}", defining_class, method_name);
+                        let mut mangled_name =
+                            String::with_capacity(defining_class.len() + 1 + method_name.len());
+                        mangled_name.push_str(&defining_class);
+                        mangled_name.push('_');
+                        mangled_name.push_str(method_name);
                         let mut call_args = vec![self_op];
                         for arg in args {
                             call_args.push(lower_expression(ctx, arg, None)?);
