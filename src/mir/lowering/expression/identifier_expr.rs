@@ -39,13 +39,51 @@ pub(crate) fn lower_identifier_expr(
             }
         }
     } else {
-        // Assume global function/identifier
-        // In a real compiler we would check if it exists in globals
-        let constant = Operand::Constant(Box::new(Constant {
-            span: expr.span,
-            ty: Type::new(TypeKind::Identifier, expr.span),
-            literal: crate::ast::literal::Literal::Identifier(name.clone()),
-        }));
+        // Check if this identifier is a global non-function constant with a known
+        // compile-time value. Such constants (e.g. `const MAX = 5` from an imported
+        // module) are never allocated as locals in the calling function, so they
+        // must be inlined as a literal operand at every use site.
+        //
+        // Functions whose body is a single literal also have `is_constant = true` in
+        // global_scope (for call-site optimisation), but they must NOT be inlined here
+        // — they are still called through their symbol name.
+        let constant = if let Some(info) = ctx.type_checker.global_scope.get(name.as_str()) {
+            // When this symbol is an import alias (e.g. `use m.{add as plus}`),
+            // emit the *original* name so the linker resolves to the right symbol.
+            let emit_name = info
+                .original_name
+                .as_deref()
+                .unwrap_or(name.as_str())
+                .to_string();
+            if info.is_constant && !matches!(info.ty.kind, TypeKind::Function(_)) {
+                if let Some(lit) = &info.value {
+                    Operand::Constant(Box::new(Constant {
+                        span: expr.span,
+                        ty: info.ty.clone(),
+                        literal: lit.clone(),
+                    }))
+                } else {
+                    Operand::Constant(Box::new(Constant {
+                        span: expr.span,
+                        ty: Type::new(TypeKind::Identifier, expr.span),
+                        literal: crate::ast::literal::Literal::Identifier(emit_name),
+                    }))
+                }
+            } else {
+                Operand::Constant(Box::new(Constant {
+                    span: expr.span,
+                    ty: Type::new(TypeKind::Identifier, expr.span),
+                    literal: crate::ast::literal::Literal::Identifier(emit_name),
+                }))
+            }
+        } else {
+            // Assume global function/identifier
+            Operand::Constant(Box::new(Constant {
+                span: expr.span,
+                ty: Type::new(TypeKind::Identifier, expr.span),
+                literal: crate::ast::literal::Literal::Identifier(name.clone()),
+            }))
+        };
 
         if let Some(d) = dest {
             ctx.push_statement(crate::mir::Statement {

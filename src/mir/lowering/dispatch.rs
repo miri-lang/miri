@@ -185,6 +185,74 @@ pub fn lower_call(
     args: &[Expression],
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
+    // Module alias call: `M.foo(args)` where `M` was declared via `use X as M`.
+    // Lower as a direct call to `foo` by emitting a plain function-name operand.
+    if let ExpressionKind::Member(obj_expr, method_expr) = &func.node {
+        if let ExpressionKind::Identifier(alias_name, _) = &obj_expr.node {
+            let is_module_alias = ctx
+                .type_checker
+                .module_aliases
+                .contains_key(alias_name.as_str());
+            if is_module_alias {
+                if let ExpressionKind::Identifier(func_name, _) = &method_expr.node {
+                    let mangled = if let Some(generic_args) =
+                        ctx.type_checker.call_generic_mappings.get(&call_expr_id)
+                    {
+                        mangle_generic_name(func_name, generic_args)
+                    } else {
+                        func_name.clone()
+                    };
+                    let func_op = Operand::Constant(Box::new(crate::mir::Constant {
+                        span: *span,
+                        ty: Type::new(TypeKind::Identifier, *span),
+                        literal: crate::ast::literal::Literal::Identifier(mangled),
+                    }));
+                    let mut arg_ops = Vec::with_capacity(args.len());
+                    for arg in args {
+                        arg_ops.push(lower_expression(ctx, arg, None)?);
+                    }
+                    // Inject allocator the same way the generic call path does.
+                    if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
+                        let already_has_alloc = arg_ops.iter().any(|op| {
+                            if let Operand::Copy(p) | Operand::Move(p) = op {
+                                p.local == alloc_local
+                            } else {
+                                false
+                            }
+                        });
+                        if !already_has_alloc {
+                            arg_ops.push(Operand::Copy(Place::new(alloc_local)));
+                        }
+                    }
+                    let return_ty = ctx
+                        .type_checker
+                        .get_type(call_expr_id)
+                        .cloned()
+                        .unwrap_or_else(|| Type::new(TypeKind::Void, *span));
+                    let (destination, result_op) = if let Some(d) = dest {
+                        (d.clone(), Operand::Copy(d))
+                    } else {
+                        let temp = ctx.push_temp(return_ty, *span);
+                        let p = Place::new(temp);
+                        (p.clone(), Operand::Copy(p))
+                    };
+                    let target_bb = ctx.new_basic_block();
+                    ctx.set_terminator(crate::mir::Terminator::new(
+                        TerminatorKind::Call {
+                            func: func_op,
+                            args: arg_ops,
+                            destination,
+                            target: Some(target_bb),
+                        },
+                        *span,
+                    ));
+                    ctx.set_current_block(target_bb);
+                    return Ok(result_op);
+                }
+            }
+        }
+    }
+
     // Check for kernel launch: kernel_handle.launch(grid, block)
     if let ExpressionKind::Member(obj, prop) = &func.node {
         if let ExpressionKind::Identifier(name, _) = &prop.node {

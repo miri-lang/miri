@@ -407,6 +407,38 @@ impl TypeChecker {
         span: Span,
         context: &mut Context,
     ) -> Type {
+        // Module alias access: `M.foo` where `M` was introduced by `use X as M`.
+        // Resolve `foo` directly from global_scope without treating `M` as a variable.
+        if let ExpressionKind::Identifier(alias_name, _) = &obj.node {
+            if self.module_aliases.contains_key(alias_name.as_str()) {
+                let prop_name = if let ExpressionKind::Identifier(name, _) = &prop.node {
+                    name.clone()
+                } else {
+                    self.report_error(
+                        "Member property must be an identifier".to_string(),
+                        prop.span,
+                    );
+                    return make_type(TypeKind::Error);
+                };
+                // Record a placeholder type for the alias identifier itself so that
+                // `get_type(obj.id)` returns None (not triggering class dispatch).
+                self.types.insert(obj.id, make_type(TypeKind::Identifier));
+                if let Some(info) = self.global_scope.get(prop_name.as_str()).cloned() {
+                    if !self.check_visibility(&info.visibility, &info.module) {
+                        self.report_error(format!("'{}' is not visible", prop_name), span);
+                        return make_type(TypeKind::Error);
+                    }
+                    return info.ty.clone();
+                }
+                let module_path = self.module_aliases.get(alias_name).unwrap();
+                self.report_error(
+                    format!("'{}' is not defined in module '{}'", prop_name, module_path),
+                    span,
+                );
+                return make_type(TypeKind::Error);
+            }
+        }
+
         let obj_type = self.infer_expression(obj, context);
 
         if let TypeKind::Tuple(element_types) = &obj_type.kind {

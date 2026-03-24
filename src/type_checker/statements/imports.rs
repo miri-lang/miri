@@ -44,7 +44,7 @@ use crate::lexer::Lexer;
 use crate::parser::Parser;
 use crate::type_checker::context::Context;
 use crate::type_checker::TypeChecker;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
@@ -52,7 +52,7 @@ impl TypeChecker {
     pub(crate) fn check_use(
         &mut self,
         path: &Expression,
-        _alias: &Option<Box<Expression>>,
+        alias: &Option<Box<Expression>>,
         context: &mut Context,
     ) {
         // 1. Extract path string and import kind
@@ -149,12 +149,37 @@ impl TypeChecker {
         if self.loaded_modules.contains(&abs_path_str) {
             return; // Already loaded
         }
-        self.loaded_modules.insert(abs_path_str.clone());
+
+        if self.loading_stack.contains(&abs_path_str) {
+            // Build chain: show the cycle path for clear diagnostics.
+            let cycle_start = self
+                .loading_stack
+                .iter()
+                .position(|m| m == &abs_path_str)
+                .unwrap_or(0);
+            let chain: Vec<&str> = self.loading_stack[cycle_start..]
+                .iter()
+                .map(|s| s.as_str())
+                .collect();
+            self.report_error(
+                format!(
+                    "Circular import detected: '{}' is already being loaded. Import chain: {} -> {}",
+                    path_str,
+                    chain.join(" -> "),
+                    abs_path_str
+                ),
+                path.span,
+            );
+            return;
+        }
+
+        self.loading_stack.push(abs_path_str.clone());
 
         // 4. Load and Parse
         let source = match fs::read_to_string(&file_path) {
             Ok(s) => s,
             Err(e) => {
+                self.loading_stack.retain(|m| m != &abs_path_str);
                 self.report_error(
                     format!("Failed to read module '{}': {}", path_str, e),
                     path.span,
@@ -168,6 +193,7 @@ impl TypeChecker {
         let module_ast = match parser.parse() {
             Ok(ast) => ast,
             Err(e) => {
+                self.loading_stack.retain(|m| m != &abs_path_str);
                 self.report_error(
                     format!("Failed to parse module '{}': {:?}", path_str, e),
                     path.span,
@@ -185,17 +211,34 @@ impl TypeChecker {
         let old_module = self.current_module.clone();
         self.current_module = path_str.clone();
 
-        // Snapshot global_scope keys before loading the module so we can
-        // restrict visibility for selective imports afterwards.
-        let pre_import_globals: HashSet<String> = self.global_scope.keys().cloned().collect();
+        // Snapshot global_scope keys (and their source module) before loading
+        // the module so we can (a) restrict visibility for selective imports
+        // afterwards and (b) detect namespace collisions.
+        let pre_import_globals: HashMap<String, String> = self
+            .global_scope
+            .iter()
+            .map(|(k, v)| (k.clone(), v.module.clone()))
+            .collect();
         let pre_import_types: HashSet<String> = context
             .type_definitions
             .last()
             .map(|scope| scope.keys().cloned().collect())
             .unwrap_or_default();
+        let pre_import_global_types: HashSet<String> =
+            self.global_type_definitions.keys().cloned().collect();
 
         for stmt in &module_ast.body {
             self.check_statement(stmt, context);
+        }
+
+        // Register module-level alias (e.g., `use system.math as M`).
+        // This must happen after the module symbols are loaded so that
+        // `infer_member` can look them up in global_scope when resolving `M.foo`.
+        if let Some(alias_box) = alias {
+            if let ExpressionKind::Identifier(alias_name, _) = &alias_box.node {
+                self.module_aliases
+                    .insert(alias_name.clone(), path_str.clone());
+            }
         }
 
         // 6. For selective imports, restrict visibility to only the named items.
@@ -213,11 +256,32 @@ impl TypeChecker {
                 })
                 .collect();
 
+            // 7. Detect namespace collisions for selective imports: a selected
+            // name that already existed (from a prior import or local declaration)
+            // with a different source module is a conflict.
+            for sel_name in &selected_names {
+                if let Some(old_module) = pre_import_globals.get(sel_name) {
+                    if let Some(info) = self.global_scope.get(sel_name) {
+                        if info.module == path_str {
+                            self.report_error(
+                                format!(
+                                    "Name '{}' conflicts with an existing definition from \
+                                     module '{}'. Use selective imports with an alias to \
+                                     disambiguate, e.g. `use {}.{{... as ...}}`.",
+                                    sel_name, old_module, path_str
+                                ),
+                                path.span,
+                            );
+                        }
+                    }
+                }
+            }
+
             // Remove symbols added by this module that are not in the selective list
             let module_name = &path_str;
             self.global_scope.retain(|name, info| {
                 if info.module == *module_name
-                    && !pre_import_globals.contains(name)
+                    && !pre_import_globals.contains_key(name)
                     && !selected_names.contains(name)
                 {
                     return false;
@@ -225,7 +289,9 @@ impl TypeChecker {
                 true
             });
 
-            // Remove type definitions added by this module that are not selected
+            // Remove type definitions added by this module that are not selected.
+            // Both the scoped context and the flat global_type_definitions map must
+            // be filtered — the type checker always falls back to the latter.
             if let Some(scope) = context.type_definitions.last_mut() {
                 scope.retain(|name, _| {
                     if !pre_import_types.contains(name) && !selected_names.contains(name) {
@@ -234,12 +300,18 @@ impl TypeChecker {
                     true
                 });
             }
+            self.global_type_definitions.retain(|name, _| {
+                if !pre_import_global_types.contains(name) && !selected_names.contains(name) {
+                    return false;
+                }
+                true
+            });
 
             // Also clean up the context's symbol scopes
             if let Some(scope) = context.scopes.last_mut() {
                 scope.retain(|name, info| {
                     if info.module == *module_name
-                        && !pre_import_globals.contains(name)
+                        && !pre_import_globals.contains_key(name)
                         && !selected_names.contains(name)
                     {
                         return false;
@@ -247,12 +319,60 @@ impl TypeChecker {
                     true
                 });
             }
+
+            // Register item aliases: `use m.{add as plus}` makes `plus` available
+            // in global_scope pointing at the same type as `add`, but with
+            // `original_name = Some("add")` so MIR lowering emits the right symbol.
+            for (name_expr, item_alias_opt) in items {
+                if let ExpressionKind::Identifier(orig_name, _) = &name_expr.node {
+                    if let Some(alias_box) = item_alias_opt {
+                        if let ExpressionKind::Identifier(alias_name, _) = &alias_box.node {
+                            if let Some(info) = self.global_scope.get(orig_name).cloned() {
+                                let mut aliased = info;
+                                aliased.original_name = Some(orig_name.clone());
+                                self.global_scope.insert(alias_name.clone(), aliased);
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // 7. Detect namespace collisions for wildcard imports: any name that
+            // already existed (from a prior import or local declaration) and is
+            // now overwritten by this module is a conflict.
+            let mut collisions: Vec<(String, String)> = Vec::new();
+            for (name, info) in &self.global_scope {
+                if info.module == path_str {
+                    if let Some(old_module) = pre_import_globals.get(name) {
+                        if old_module != &path_str {
+                            collisions.push((name.clone(), old_module.clone()));
+                        }
+                    }
+                }
+            }
+            // Sort for deterministic error ordering
+            collisions.sort_by(|a, b| a.0.cmp(&b.0));
+            for (name, old_module) in collisions {
+                self.report_error(
+                    format!(
+                        "Name '{}' conflicts with an existing definition from module \
+                         '{}'. Use selective imports to avoid ambiguity, e.g. \
+                         `use {}.{{...}}`.",
+                        name, old_module, path_str
+                    ),
+                    path.span,
+                );
+            }
         }
 
         // Collect imported statements for MIR lowering and codegen
         self.imported_statements.extend(module_ast.body);
 
         self.current_module = old_module;
+
+        // Mark as fully loaded and remove from the in-progress stack.
+        self.loading_stack.retain(|m| m != &abs_path_str);
+        self.loaded_modules.insert(abs_path_str);
     }
 
     /// Extracts the module path string and import kind from a use-statement expression.

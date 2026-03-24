@@ -44,6 +44,9 @@ pub struct SymbolInfo {
     pub consumed: bool,
     /// Optional known compile-time literal value for constants or simple variables
     pub value: Option<Literal>,
+    /// When this symbol is an import alias (e.g. `use m.{add as plus}`), the
+    /// original symbol name (`"add"`) so MIR lowering can emit the right call target.
+    pub original_name: Option<String>,
 }
 
 impl SymbolInfo {
@@ -63,6 +66,7 @@ impl SymbolInfo {
             module,
             consumed: false,
             value,
+            original_name: None,
         }
     }
 }
