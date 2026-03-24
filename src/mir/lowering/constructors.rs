@@ -188,7 +188,9 @@ pub fn lower_class_constructor(
             call_args.push(Operand::Copy(Place::new(alloc_local)));
         }
 
-        let mangled_name = format!("{}_init", init_class);
+        let mut mangled_name = String::with_capacity(init_class.len() + 5);
+        mangled_name.push_str(&init_class);
+        mangled_name.push_str("_init");
         let func_op = Operand::Constant(Box::new(Constant {
             span: *span,
             ty: Type::new(TypeKind::Identifier, *span),
