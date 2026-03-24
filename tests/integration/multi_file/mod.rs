@@ -3,6 +3,8 @@
 
 pub use crate::integration::utils;
 
+pub mod aliases;
 pub mod basic;
+pub mod collisions;
 pub mod errors;
 pub mod project_root;
