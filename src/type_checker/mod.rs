@@ -72,8 +72,10 @@ pub struct TypeChecker {
     pub(crate) current_module: String,
     pub(crate) global_scope: HashMap<String, SymbolInfo>,
     pub(crate) global_type_definitions: HashMap<String, TypeDefinition>,
-    /// Set of modules that have been loaded to prevent cycles.
+    /// Set of modules that have been fully loaded.
     pub(crate) loaded_modules: std::collections::HashSet<String>,
+    /// Stack of modules currently being loaded (used to detect circular imports).
+    pub(crate) loading_stack: Vec<String>,
     /// Tracks (message, span) pairs to deduplicate errors reported multiple times
     /// for the same source location (e.g. when a type expression is resolved twice).
     pub(crate) reported_errors: std::collections::HashSet<(String, Span)>,
@@ -85,6 +87,9 @@ pub struct TypeChecker {
     pub call_generic_mappings: HashMap<usize, Vec<(String, Type)>>,
     /// Directory of the source file being compiled, used to resolve `local.*` imports.
     pub(crate) source_dir: Option<PathBuf>,
+    /// Maps module alias names to their full module paths.
+    /// e.g., `"M"` → `"system.math"` for `use system.math as M`.
+    pub(crate) module_aliases: HashMap<String, String>,
 }
 
 impl Default for TypeChecker {
@@ -110,10 +115,12 @@ impl TypeChecker {
             global_scope,
             global_type_definitions,
             loaded_modules: std::collections::HashSet::new(),
+            loading_stack: Vec::new(),
             reported_errors: std::collections::HashSet::new(),
             imported_statements: Vec::new(),
             call_generic_mappings: HashMap::new(),
             source_dir: None,
+            module_aliases: HashMap::new(),
         }
     }
 
