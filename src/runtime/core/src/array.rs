@@ -207,6 +207,24 @@ pub unsafe extern "C" fn miri_rt_array_set(
     1
 }
 
+/// Sets the element at the given index, passing the value by value (as usize).
+///
+/// The value is copied from the address of `val` on the caller's stack,
+/// so this works for any element type that fits in a pointer-sized register.
+/// This is the value-based variant used by the stdlib `set` method, which
+/// receives the element as a Miri value (not a raw pointer).
+///
+/// Returns true (1) if successful, false (0) if the index is out of bounds.
+#[no_mangle]
+#[allow(clippy::missing_safety_doc)]
+pub unsafe extern "C" fn miri_rt_array_set_val(
+    ptr: *mut MiriArray,
+    index: usize,
+    val: usize,
+) -> u8 {
+    miri_rt_array_set(ptr, index, &val as *const usize as *const u8)
+}
+
 /// Fills all elements with the given value.
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
