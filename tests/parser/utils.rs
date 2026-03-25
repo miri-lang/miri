@@ -18,7 +18,9 @@ fn parse(input: &str) -> Result<Program, SyntaxError> {
 }
 
 pub fn parse_program(input: &str) -> Program {
-    parse(input).unwrap()
+    let mut program = parse(input).unwrap();
+    miri::ast::normalize::normalize(&mut program);
+    program
 }
 
 pub fn parser_test(input: &str, _expected_body: Vec<Statement>) {
@@ -208,11 +210,11 @@ pub fn run_parser_error_tests(inputs: Vec<&str>, expected_kind: &SyntaxErrorKind
 }
 
 pub fn type_list_expr(inner: Expression) -> Type {
-    make_type(TypeKind::List(Box::new(inner)))
+    make_type(TypeKind::Custom("List".to_string(), Some(vec![inner])))
 }
 
 pub fn type_map_expr(key: Expression, value: Expression) -> Type {
-    make_type(TypeKind::Map(Box::new(key), Box::new(value)))
+    make_type(TypeKind::Custom("Map".to_string(), Some(vec![key, value])))
 }
 
 pub fn type_tuple_expr(elements: Vec<Expression>) -> Type {

@@ -4,10 +4,13 @@
 //! Constructor lowering — struct and class constructors.
 
 use crate::ast::expression::Expression;
-use crate::ast::{ExpressionKind, Type, TypeKind};
+use crate::ast::{BuiltinCollectionKind, ExpressionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
-use crate::mir::{AggregateKind, Constant, Operand, Place, Rvalue, StatementKind};
+use crate::mir::{
+    AggregateKind, Constant, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind,
+};
+use crate::runtime_fns::rt;
 use crate::type_checker::context::{collect_class_fields_all, ClassDefinition, StructDefinition};
 
 use super::dispatch::resolve_inherited_method;
@@ -331,6 +334,247 @@ pub(crate) fn create_default_value(ty: &Type, span: &Span) -> Operand {
     }))
 }
 
+/// Function-pointer type shared by all built-in collection constructor handlers.
+///
+/// Every handler receives the full call context so the table dispatch site in
+/// `dispatch.rs` is a single uniform call regardless of which collection is being
+/// constructed.
+pub(crate) type CollectionCtorFn = fn(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    call_expr_id: usize,
+    args: &[Expression],
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError>;
+
+/// Maps each built-in collection to its constructor handler.
+///
+/// Collection constructors legitimately require `sizeof(T)` as a compile-time
+/// argument; that value is only available during MIR lowering and cannot be
+/// expressed in Miri source code until a `sizeof<T>` built-in is added to the
+/// language.  When that built-in exists, each `init()` method can be moved to
+/// stdlib and the corresponding entry removed from this table.
+///
+/// This table exists **solely for constructor dispatch**.  Method dispatch for
+/// collections goes through normal class method resolution (as of Phase 1 —
+/// the interception registry has been removed).  Adding a new collection type
+/// requires: (1) a `.mi` file, (2) a runtime module, (3) constants in
+/// `runtime_fns.rs`, and (4) one entry here plus one handler function below.
+pub(crate) const COLLECTION_CTORS: &[(BuiltinCollectionKind, CollectionCtorFn)] = &[
+    (BuiltinCollectionKind::List, lower_list_constructor),
+    (BuiltinCollectionKind::Map, lower_map_constructor),
+    (BuiltinCollectionKind::Set, lower_set_constructor),
+];
+
+/// Lowers a `List(args)` constructor call.
+///
+/// Two forms are supported:
+/// - `List()` — allocates an empty list with a default element stride of 8 bytes.
+/// - `List([...])` — converts an array literal into a list, choosing the
+///   managed-array variant when elements are heap-allocated so RC is correct.
+pub(crate) fn lower_list_constructor(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    call_expr_id: usize,
+    args: &[Expression],
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let list_ty = if let Some(call_ty) = ctx.type_checker.get_type(call_expr_id) {
+        call_ty.clone()
+    } else {
+        Type::new(TypeKind::Int, *span)
+    };
+
+    let (destination, result_op) = if let Some(d) = dest {
+        (d.clone(), Operand::Copy(d))
+    } else {
+        let temp = ctx.push_temp(list_ty.clone(), *span);
+        let p = Place::new(temp);
+        (p.clone(), Operand::Copy(p))
+    };
+
+    let target_bb = ctx.new_basic_block();
+
+    if args.len() == 1 {
+        let array_op = lower_expression(ctx, &args[0], None)?;
+
+        // Track the temp array local so we can emit StorageDead after the call.
+        let temp_array_local = match &array_op {
+            Operand::Copy(p) | Operand::Move(p) => Some(p.clone()),
+            _ => None,
+        };
+
+        // Determine array length, element size, and whether elements are
+        // RC-managed (Option, List, Array, etc.) from the array literal.
+        let mut len_val = 0i64;
+        let mut elem_size = 8i64;
+        let mut elems_are_managed = false;
+        if let ExpressionKind::Array(elements, _) = &args[0].node {
+            len_val = elements.len() as i64;
+            if !elements.is_empty() {
+                if let Some(ty) = ctx.type_checker.get_type(elements[0].id) {
+                    elem_size = compute_elem_size_from_type(&ty.kind);
+                    elems_are_managed = ctx.is_perceus_managed(&ty.kind);
+                }
+            }
+        }
+
+        let len_op = Operand::Constant(Box::new(Constant {
+            span: *span,
+            ty: Type::new(TypeKind::Int, *span),
+            literal: crate::ast::literal::Literal::Integer(
+                crate::ast::literal::IntegerLiteral::I64(len_val),
+            ),
+        }));
+
+        let size_op = Operand::Constant(Box::new(Constant {
+            span: *span,
+            ty: Type::new(TypeKind::Int, *span),
+            literal: crate::ast::literal::Literal::Integer(
+                crate::ast::literal::IntegerLiteral::I64(elem_size),
+            ),
+        }));
+
+        // Use the managed-array variant when elements are heap-allocated so the
+        // list IncRefs them before the source array's element-drop loop releases
+        // its refs.
+        let rt_fn_name = if elems_are_managed {
+            rt::LIST_NEW_FROM_MANAGED_ARRAY
+        } else {
+            rt::LIST_NEW_FROM_RAW
+        };
+        let func_op = Operand::Constant(Box::new(Constant {
+            span: *span,
+            ty: Type::new(TypeKind::Identifier, *span),
+            literal: crate::ast::literal::Literal::Identifier(rt_fn_name.to_string()),
+        }));
+
+        ctx.set_terminator(Terminator::new(
+            TerminatorKind::Call {
+                func: func_op,
+                args: vec![array_op, len_op, size_op],
+                destination: destination.clone(),
+                target: Some(target_bb),
+            },
+            *span,
+        ));
+
+        // The temp array was consumed by the runtime (data copied).
+        // Emit StorageDead so Perceus inserts the matching DecRef.
+        ctx.set_current_block(target_bb);
+        if let Some(arr_place) = temp_array_local {
+            ctx.push_statement(crate::mir::Statement {
+                kind: StatementKind::StorageDead(arr_place),
+                span: *span,
+            });
+        }
+
+        // Need a fresh block since we just added statements to target_bb.
+        let final_bb = ctx.new_basic_block();
+        ctx.set_terminator(Terminator::new(
+            TerminatorKind::Goto { target: final_bb },
+            *span,
+        ));
+        ctx.set_current_block(final_bb);
+        return Ok(result_op);
+    } else {
+        // List() with no arguments: allocate an empty list.
+        // Use a default element stride of 8 bytes (pointer-sized).
+        let size_op = Operand::Constant(Box::new(Constant {
+            span: *span,
+            ty: Type::new(TypeKind::Int, *span),
+            literal: crate::ast::literal::Literal::Integer(
+                crate::ast::literal::IntegerLiteral::I64(8),
+            ),
+        }));
+        let func_op = Operand::Constant(Box::new(Constant {
+            span: *span,
+            ty: Type::new(TypeKind::Identifier, *span),
+            literal: crate::ast::literal::Literal::Identifier(rt::LIST_NEW.to_string()),
+        }));
+        ctx.set_terminator(Terminator::new(
+            TerminatorKind::Call {
+                func: func_op,
+                args: vec![size_op],
+                destination: destination.clone(),
+                target: Some(target_bb),
+            },
+            *span,
+        ));
+    }
+
+    ctx.set_current_block(target_bb);
+    Ok(result_op)
+}
+
+/// Lowers a `Map()` constructor call.
+///
+/// Maps are always constructed empty; entries are inserted via method calls.
+pub(crate) fn lower_map_constructor(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    call_expr_id: usize,
+    _args: &[Expression],
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let return_ty = if let Some(call_ty) = ctx.type_checker.get_type(call_expr_id) {
+        call_ty.clone()
+    } else {
+        crate::ast::factory::type_map(
+            crate::ast::factory::type_void(),
+            crate::ast::factory::type_void(),
+        )
+    };
+
+    let (destination, result_op) = if let Some(d) = dest {
+        (d.clone(), Operand::Copy(d))
+    } else {
+        let temp = ctx.push_temp(return_ty, *span);
+        let p = Place::new(temp);
+        (p.clone(), Operand::Copy(p))
+    };
+
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(destination, Rvalue::Aggregate(AggregateKind::Map, vec![])),
+        span: *span,
+    });
+
+    Ok(result_op)
+}
+
+/// Lowers a `Set()` constructor call (set literal syntax `{1, 2, 3}` is handled
+/// separately; this handles the explicit `Set()` empty constructor form).
+///
+/// Sets are always constructed empty; elements are added via method calls.
+pub(crate) fn lower_set_constructor(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    call_expr_id: usize,
+    _args: &[Expression],
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let return_ty = if let Some(call_ty) = ctx.type_checker.get_type(call_expr_id) {
+        call_ty.clone()
+    } else {
+        crate::ast::factory::type_set(crate::ast::factory::type_void())
+    };
+
+    let (destination, result_op) = if let Some(d) = dest {
+        (d.clone(), Operand::Copy(d))
+    } else {
+        let temp = ctx.push_temp(return_ty, *span);
+        let p = Place::new(temp);
+        (p.clone(), Operand::Copy(p))
+    };
+
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(destination, Rvalue::Aggregate(AggregateKind::Set, vec![])),
+        span: *span,
+    });
+
+    Ok(result_op)
+}
+
 /// Computes the element size in bytes for a collection element type.
 ///
 /// Primitives use their natural size. Managed types (String, collections,
@@ -343,14 +587,14 @@ pub(crate) fn compute_elem_size_from_type(kind: &TypeKind) -> i64 {
         TypeKind::Int | TypeKind::I64 | TypeKind::U64 | TypeKind::Float | TypeKind::F64 => 8,
         TypeKind::I128 | TypeKind::U128 => 16,
         // All heap-allocated types are pointer-sized (8 bytes on 64-bit).
-        // This includes String, List, Array, Map, Set, Custom (structs/enums/classes).
-        TypeKind::String
-        | TypeKind::List(_)
-        | TypeKind::Array(_, _)
-        | TypeKind::Map(_, _)
-        | TypeKind::Set(_)
-        | TypeKind::Custom(_, _)
-        | TypeKind::RawPtr => 8,
+        // This includes String, Custom (structs/enums/classes).
+        // Note: canonical collection variants (List/Array/Map/Set) are normalized to
+        // Custom before MIR lowering, so they fall through to the Custom arm here.
+        TypeKind::String | TypeKind::Custom(_, _) | TypeKind::RawPtr => 8,
+        // Canonical variants are normalized to Custom before this point.
+        TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => {
+            unreachable!("collection types are normalized to Custom before this point")
+        }
         // Default to 8 for unknown/complex types
         _ => 8,
     }

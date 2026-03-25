@@ -856,6 +856,38 @@ impl<'a> FunctionTranslator<'a> {
         kind.as_builtin_collection() == Some(BuiltinCollectionKind::Set)
     }
 
+    /// Extracts the element expression from a List or Array TypeKind.
+    /// Handles both canonical variants (`TypeKind::List(e)`, `TypeKind::Array(e, _)`)
+    /// and the normalised `TypeKind::Custom("List"/"Array", Some([e, ...]))`.
+    fn collection_elem_expr(kind: &TypeKind) -> Option<&crate::ast::expression::Expression> {
+        match kind {
+            TypeKind::List(e) | TypeKind::Array(e, _) => Some(e),
+            TypeKind::Custom(name, Some(args))
+                if matches!(
+                    BuiltinCollectionKind::from_name(name),
+                    Some(BuiltinCollectionKind::List | BuiltinCollectionKind::Array)
+                ) =>
+            {
+                args.first()
+            }
+            _ => None,
+        }
+    }
+
+    /// Extracts the value expression from a Map TypeKind.
+    /// Handles both canonical `TypeKind::Map(_, v)` and `TypeKind::Custom("Map", Some([_, v]))`.
+    fn map_val_expr(kind: &TypeKind) -> Option<&crate::ast::expression::Expression> {
+        match kind {
+            TypeKind::Map(_, v) => Some(v),
+            TypeKind::Custom(name, Some(args))
+                if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Map) =>
+            {
+                args.get(1)
+            }
+            _ => None,
+        }
+    }
+
     /// Emits a loop that DecRefs each managed value in a map's hash table.
     ///
     /// Iterates over all `capacity` slots, checks the state byte for SLOT_OCCUPIED (1),
@@ -1027,7 +1059,7 @@ impl<'a> FunctionTranslator<'a> {
             // DecRef managed values before freeing the map struct.
             // MiriMap layout: [states: ptr][keys: ptr][values: ptr][len: ptr][capacity: ptr]...
             // (each field is ptr_size bytes on the target platform)
-            if let TypeKind::Map(_, val_expr) = kind {
+            if let Some(val_expr) = Self::map_val_expr(kind) {
                 if let ExpressionKind::Type(val_ty, _) = &val_expr.node {
                     if is_field_managed(&val_ty.kind) {
                         let ptr_type = type_ctx.ptr_type;
@@ -1062,7 +1094,7 @@ impl<'a> FunctionTranslator<'a> {
         } else if Self::is_list_type(kind) {
             // DecRef managed elements before freeing the list struct.
             // MiriList layout: [data: ptr][len: ptr][capacity: ptr][elem_size: ptr]
-            if let TypeKind::List(inner_expr) = kind {
+            if let Some(inner_expr) = Self::collection_elem_expr(kind) {
                 if let ExpressionKind::Type(inner_ty, _) = &inner_expr.node {
                     if is_field_managed(&inner_ty.kind) {
                         let ptr_type = type_ctx.ptr_type;
@@ -1084,7 +1116,7 @@ impl<'a> FunctionTranslator<'a> {
         } else if Self::is_collection_type(kind) {
             // DecRef managed elements before freeing the array struct.
             // MiriArray layout: [data: ptr][elem_count: ptr][elem_size: ptr]
-            if let TypeKind::Array(inner_expr, _) = kind {
+            if let Some(inner_expr) = Self::collection_elem_expr(kind) {
                 if let ExpressionKind::Type(inner_ty, _) = &inner_expr.node {
                     if is_field_managed(&inner_ty.kind) {
                         let ptr_type = type_ctx.ptr_type;

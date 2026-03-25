@@ -248,7 +248,10 @@ fn lower_for_over_iterable(
     // Infer element type from type checker or default to Int
     let iterable_ty = ctx.type_checker.get_type(iterable.id).cloned();
     let is_map = match iterable_ty.as_ref().map(|t| &t.kind) {
-        Some(TypeKind::Map(_, _)) => true,
+        // Canonical variants are normalized to Custom before MIR lowering.
+        Some(TypeKind::Map(_, _)) => {
+            unreachable!("collection types are normalized to Custom before this point")
+        }
         Some(TypeKind::Custom(name, _))
             if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Map) =>
         {
@@ -257,14 +260,12 @@ fn lower_for_over_iterable(
         _ => false,
     };
     let elem_ty = if let Some(ty) = &iterable_ty {
-        // Extract element type from list/array/map/set type parameters
+        // Extract element type from collection type parameters.
+        // After normalization, all builtin collections are Custom("Name", args).
         match &ty.kind {
-            TypeKind::List(elem_type_expr) => super::resolve_type(ctx.type_checker, elem_type_expr),
-            TypeKind::Array(elem_type_expr, _) => {
-                super::resolve_type(ctx.type_checker, elem_type_expr)
+            TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => {
+                unreachable!("collection types are normalized to Custom before this point")
             }
-            TypeKind::Map(key_type_expr, _) => super::resolve_type(ctx.type_checker, key_type_expr),
-            TypeKind::Set(elem_type_expr) => super::resolve_type(ctx.type_checker, elem_type_expr),
             TypeKind::Tuple(elem_type_exprs) if !elem_type_exprs.is_empty() => {
                 super::resolve_type(ctx.type_checker, &elem_type_exprs[0])
             }
@@ -326,8 +327,8 @@ fn lower_for_over_iterable(
         let idx_decl = &decls[1];
         let var_ty = if is_map {
             match iterable_ty.as_ref().map(|t| &t.kind) {
-                Some(TypeKind::Map(_, val_type_expr)) => {
-                    super::resolve_type(ctx.type_checker, val_type_expr)
+                Some(TypeKind::Map(_, _)) => {
+                    unreachable!("collection types are normalized to Custom before this point")
                 }
                 Some(TypeKind::Custom(name, Some(args)))
                     if BuiltinCollectionKind::from_name(name)
@@ -389,8 +390,17 @@ fn lower_for_over_iterable(
         .get_type(iterable.id)
         .and_then(|ty| match &ty.kind {
             TypeKind::String => Some("String".to_string()),
+            // Canonical variants are normalized to Custom before MIR lowering.
             TypeKind::Map(_, _) | TypeKind::Set(_) => {
-                ty.kind.as_builtin_collection().map(|b| b.name().to_string())
+                unreachable!("collection types are normalized to Custom before this point")
+            }
+            TypeKind::Custom(name, _)
+                if matches!(
+                    BuiltinCollectionKind::from_name(name),
+                    Some(BuiltinCollectionKind::Map | BuiltinCollectionKind::Set)
+                ) =>
+            {
+                Some(name.clone())
             }
             TypeKind::Custom(name, _) if !matches!(BuiltinCollectionKind::from_name(name), Some(BuiltinCollectionKind::Array | BuiltinCollectionKind::List)) && name != "Tuple" => Some(name.clone()),
             _ => None,

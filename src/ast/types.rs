@@ -11,6 +11,16 @@ use std::fmt;
 /// This enum is the single source of truth for the names "Array", "List", "Map", "Set".
 /// All compiler logic that needs to identify built-in collections should use
 /// `TypeKind::as_builtin_collection()` rather than matching on string literals.
+///
+/// **Scope**: after Phase 1 (interception registry removed) and Phase 2 (String
+/// special-case removed), this enum exists solely to key the **constructor dispatch
+/// table** in `mir::lowering::constructors::COLLECTION_CTORS`. It is *not* used for
+/// method dispatch; method calls on collections go through normal class method
+/// resolution like any other type.
+///
+/// When a `sizeof<T>` built-in is added to the language, each collection's `init()`
+/// can be expressed in pure Miri source and moved to stdlib, at which point the
+/// corresponding entry in `COLLECTION_CTORS` (and eventually this enum) can be removed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BuiltinCollectionKind {
     Array,
@@ -119,14 +129,26 @@ pub enum TypeKind {
     /// (e.g., I64 on 64-bit, I32 on 32-bit).
     RawPtr,
     /// List type (e.g., `[i32]`).
+    ///
+    /// **Parser-only variant.** Normalized to `TypeKind::Custom("List", [T])`
+    /// by [`crate::ast::normalize`] before any downstream compiler phase sees it.
     List(Box<Expression>),
     /// Array type (e.g., `[i32; 4]`).
+    ///
+    /// **Parser-only variant.** Normalized to `TypeKind::Custom("Array", [T, N])`
+    /// by [`crate::ast::normalize`] before any downstream compiler phase sees it.
     Array(Box<Expression>, Box<Expression>),
     /// Map type (e.g., `{string: i32}`).
+    ///
+    /// **Parser-only variant.** Normalized to `TypeKind::Custom("Map", [K, V])`
+    /// by [`crate::ast::normalize`] before any downstream compiler phase sees it.
     Map(Box<Expression>, Box<Expression>),
     /// Tuple type (e.g., `(i32, string)`).
     Tuple(Vec<Expression>),
     /// Set type (e.g., `{i32}`).
+    ///
+    /// **Parser-only variant.** Normalized to `TypeKind::Custom("Set", [T])`
+    /// by [`crate::ast::normalize`] before any downstream compiler phase sees it.
     Set(Box<Expression>),
     /// Result type (e.g., `result<i32, string>`).
     Result(Box<Expression>, Box<Expression>),
@@ -286,14 +308,23 @@ impl fmt::Display for TypeKind {
             TypeKind::Custom(name, args) => {
                 write!(f, "{}", name)?;
                 if let Some(args) = args {
-                    write!(f, "<")?;
+                    // Builtin collections use parenthesis notation (e.g. `Array(int, 3)`)
+                    // to match the display style of the old canonical variants.
+                    // Generic user-defined types use angle bracket notation (e.g. `Foo<T>`).
+                    let (open, close) = if BuiltinCollectionKind::from_name(name.as_str()).is_some()
+                    {
+                        ('(', ')')
+                    } else {
+                        ('<', '>')
+                    };
+                    write!(f, "{}", open)?;
                     if let Some((first, rest)) = args.split_first() {
                         write!(f, "{}", first.node)?;
                         for arg in rest {
                             write!(f, ", {}", arg.node)?;
                         }
                     }
-                    write!(f, ">")?;
+                    write!(f, "{}", close)?;
                 }
                 Ok(())
             }

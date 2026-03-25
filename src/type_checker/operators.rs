@@ -8,7 +8,7 @@
 
 use super::context::{Context, TypeDefinition};
 use super::TypeChecker;
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::BinaryOp;
 use crate::ast::UnaryOp;
 
@@ -202,8 +202,17 @@ impl TypeChecker {
         let bool_type = || crate::ast::factory::make_type(TypeKind::Boolean);
 
         match &right.kind {
-            TypeKind::List(inner_expr) | TypeKind::Set(inner_expr) => {
-                let inner = self.resolve_type_expression(inner_expr, context);
+            // Canonical collection variants are normalized to Custom before this point.
+            TypeKind::List(_) | TypeKind::Set(_) | TypeKind::Map(_, _) => {
+                unreachable!("collection types are normalized to Custom before this point")
+            }
+            TypeKind::Custom(name, Some(args))
+                if matches!(
+                    BuiltinCollectionKind::from_name(name.as_str()),
+                    Some(BuiltinCollectionKind::List | BuiltinCollectionKind::Set)
+                ) && !args.is_empty() =>
+            {
+                let inner = self.resolve_type_expression(&args[0], context);
                 if self.are_compatible(&inner, left, context) {
                     Ok(bool_type())
                 } else {
@@ -213,8 +222,12 @@ impl TypeChecker {
                     ))
                 }
             }
-            TypeKind::Map(key_expr, _) => {
-                let key = self.resolve_type_expression(key_expr, context);
+            TypeKind::Custom(name, Some(args))
+                if BuiltinCollectionKind::from_name(name.as_str())
+                    == Some(BuiltinCollectionKind::Map)
+                    && !args.is_empty() =>
+            {
+                let key = self.resolve_type_expression(&args[0], context);
                 if self.are_compatible(&key, left, context) {
                     Ok(bool_type())
                 } else {

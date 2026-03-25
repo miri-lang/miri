@@ -49,11 +49,12 @@ pub fn translate_type_kind(kind: &TypeKind, ptr_ty: CraneliftType) -> CraneliftT
         // Raw pointer - maps to target pointer width
         TypeKind::RawPtr => ptr_ty,
 
-        // Collections are represented as pointers
-        TypeKind::List(_) => ptr_ty,
-        TypeKind::Array(_, _) => ptr_ty,
-        TypeKind::Map(_, _) => ptr_ty,
-        TypeKind::Set(_) => ptr_ty,
+        // Collections are represented as pointers.
+        // Canonical variants are normalized to Custom before codegen, but kept
+        // here for exhaustive match coverage.
+        TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => {
+            ptr_ty
+        }
         TypeKind::Tuple(_) => ptr_ty,
         TypeKind::Result(_, _) => ptr_ty,
         TypeKind::Future(_) => ptr_ty,

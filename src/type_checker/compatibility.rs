@@ -61,11 +61,6 @@ impl TypeChecker {
             return result;
         }
 
-        // Handle cross-representation compatibility (TypeKind::Map vs Custom("Map", ...))
-        if let Some(result) = self.check_cross_representation_compatibility(t1, t2, context) {
-            return result;
-        }
-
         // Handle function types
         if let Some(result) = self.check_function_compatibility(t1, t2, context) {
             return result;
@@ -148,6 +143,14 @@ impl TypeChecker {
         context: &Context,
     ) -> Option<bool> {
         if let (TypeKind::Custom(n1, args1), TypeKind::Custom(n2, args2)) = (&t1.kind, &t2.kind) {
+            // Delegate builtin collection types to check_collection_compatibility,
+            // which has dedicated size/element-type logic (e.g. Array size matching).
+            if BuiltinCollectionKind::from_name(n1.as_str()).is_some()
+                || BuiltinCollectionKind::from_name(n2.as_str()).is_some()
+            {
+                return None;
+            }
+
             if n1 == n2 {
                 // Same type name - check generic arguments
                 return Some(self.check_generic_args_compatible(args1, args2, context));
@@ -192,53 +195,103 @@ impl TypeChecker {
     }
 
     /// Checks collection type compatibility (List, Set, Map, Array).
+    ///
+    /// After normalization, all built-in collection types are represented as
+    /// `TypeKind::Custom("List"/"Array"/"Map"/"Set", args)`.  The canonical
+    /// `TypeKind::List/Array/Map/Set` variants are never produced by downstream
+    /// code and are guarded with `unreachable!`.
     fn check_collection_compatibility(
         &self,
         t1: &Type,
         t2: &Type,
         context: &Context,
     ) -> Option<bool> {
+        // Canonical variants are normalized away before this point.
+        debug_assert!(
+            !matches!(
+                &t1.kind,
+                TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_)
+            ),
+            "collection canonical variant reached check_collection_compatibility: {:?}",
+            t1.kind
+        );
+        debug_assert!(
+            !matches!(
+                &t2.kind,
+                TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_)
+            ),
+            "collection canonical variant reached check_collection_compatibility: {:?}",
+            t2.kind
+        );
+
         match (&t1.kind, &t2.kind) {
-            (TypeKind::Array(inner1, size1), TypeKind::Array(inner2, size2)) => {
-                // Compare inner types
-                if !self.check_inner_type_compatible(inner1, inner2, context) {
-                    return Some(false);
-                }
-                // Compare sizes using constant evaluation
-                match (
-                    Self::try_eval_const_int(size1),
-                    Self::try_eval_const_int(size2),
-                ) {
-                    (Some(s1), Some(s2)) => Some(s1 == s2),
-                    _ => Some(size1 == size2), // fallback to structural equality
-                }
-            }
-            (TypeKind::List(inner1), TypeKind::List(inner2)) => {
-                Some(self.check_inner_type_compatible(inner1, inner2, context))
-            }
-            (TypeKind::Set(inner1), TypeKind::Set(inner2)) => {
-                Some(self.check_inner_type_compatible(inner1, inner2, context))
-            }
-            (TypeKind::Map(k1, v1), TypeKind::Map(k2, v2)) => {
-                if let (Ok(k2_t), Ok(v2_t)) = (
-                    self.extract_type_from_expression(k2),
-                    self.extract_type_from_expression(v2),
-                ) {
-                    // Empty map compatible with any map type
-                    if matches!(k2_t.kind, TypeKind::Void) && matches!(v2_t.kind, TypeKind::Void) {
-                        return Some(true);
+            (TypeKind::Custom(n1, args1), TypeKind::Custom(n2, args2)) if n1 == n2 => {
+                match BuiltinCollectionKind::from_name(n1.as_str()) {
+                    Some(BuiltinCollectionKind::Array) => {
+                        // args: [inner_type_expr, size_expr]
+                        let (inner1, size1) = match args1.as_deref() {
+                            Some([i, s, ..]) => (i, s),
+                            _ => return Some(false),
+                        };
+                        let (inner2, size2) = match args2.as_deref() {
+                            Some([i, s, ..]) => (i, s),
+                            _ => return Some(false),
+                        };
+                        if !self.check_inner_type_compatible(inner1, inner2, context) {
+                            return Some(false);
+                        }
+                        match (
+                            Self::try_eval_const_int(size1),
+                            Self::try_eval_const_int(size2),
+                        ) {
+                            (Some(s1), Some(s2)) => Some(s1 == s2),
+                            _ => Some(size1 == size2),
+                        }
                     }
-                    if let (Ok(k1_t), Ok(v1_t)) = (
-                        self.extract_type_from_expression(k1),
-                        self.extract_type_from_expression(v1),
-                    ) {
-                        return Some(
-                            self.are_compatible(&k1_t, &k2_t, context)
-                                && self.are_compatible(&v1_t, &v2_t, context),
-                        );
+                    Some(BuiltinCollectionKind::List) | Some(BuiltinCollectionKind::Set) => {
+                        let inner1 = match args1.as_deref() {
+                            Some([i, ..]) => i,
+                            _ => return Some(false),
+                        };
+                        let inner2 = match args2.as_deref() {
+                            Some([i, ..]) => i,
+                            _ => return Some(false),
+                        };
+                        Some(self.check_inner_type_compatible(inner1, inner2, context))
                     }
+                    Some(BuiltinCollectionKind::Map) => {
+                        let (k1, v1) = match args1.as_deref() {
+                            Some([k, v, ..]) => (k, v),
+                            _ => return Some(false),
+                        };
+                        let (k2, v2) = match args2.as_deref() {
+                            Some([k, v, ..]) => (k, v),
+                            _ => return Some(false),
+                        };
+                        if let (Ok(k2_t), Ok(v2_t)) = (
+                            self.extract_type_from_expression(k2),
+                            self.extract_type_from_expression(v2),
+                        ) {
+                            // Empty map compatible with any map type
+                            if matches!(k2_t.kind, TypeKind::Void)
+                                && matches!(v2_t.kind, TypeKind::Void)
+                            {
+                                return Some(true);
+                            }
+                            if let (Ok(k1_t), Ok(v1_t)) = (
+                                self.extract_type_from_expression(k1),
+                                self.extract_type_from_expression(v1),
+                            ) {
+                                return Some(
+                                    self.are_compatible(&k1_t, &k2_t, context)
+                                        && self.are_compatible(&v1_t, &v2_t, context),
+                                );
+                            }
+                        }
+                        Some(false)
+                    }
+                    None => None, // Not a builtin collection — fall through to custom-type check
                 }
-                Some(false)
             }
             (TypeKind::Option(inner1), TypeKind::Option(inner2)) => {
                 if matches!(inner2.kind, TypeKind::Void) {
@@ -602,103 +655,5 @@ impl TypeChecker {
             TypeKind::Custom(name, _) => name == "String",
             _ => false,
         }
-    }
-
-    /// Checks compatibility between built-in collection variants and their Custom class equivalents.
-    fn check_cross_representation_compatibility(
-        &self,
-        t1: &Type,
-        t2: &Type,
-        context: &Context,
-    ) -> Option<bool> {
-        match (&t1.kind, &t2.kind) {
-            // Map variations
-            (TypeKind::Map(k1, v1), TypeKind::Custom(name, args))
-                if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Map) =>
-            {
-                Some(self.check_generic_args_compatible_with_exprs(
-                    &Some(vec![*k1.clone(), *v1.clone()]),
-                    args,
-                    context,
-                ))
-            }
-            (TypeKind::Custom(name, args), TypeKind::Map(k2, v2))
-                if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Map) =>
-            {
-                Some(self.check_generic_args_compatible_with_exprs(
-                    args,
-                    &Some(vec![*k2.clone(), *v2.clone()]),
-                    context,
-                ))
-            }
-            // List variations
-            (TypeKind::List(inner1), TypeKind::Custom(name, args))
-                if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::List) =>
-            {
-                Some(self.check_generic_args_compatible_with_exprs(
-                    &Some(vec![*inner1.clone()]),
-                    args,
-                    context,
-                ))
-            }
-            (TypeKind::Custom(name, args), TypeKind::List(inner2))
-                if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::List) =>
-            {
-                Some(self.check_generic_args_compatible_with_exprs(
-                    args,
-                    &Some(vec![*inner2.clone()]),
-                    context,
-                ))
-            }
-            // Set variations
-            (TypeKind::Set(inner1), TypeKind::Custom(name, args))
-                if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Set) =>
-            {
-                Some(self.check_generic_args_compatible_with_exprs(
-                    &Some(vec![*inner1.clone()]),
-                    args,
-                    context,
-                ))
-            }
-            (TypeKind::Custom(name, args), TypeKind::Set(inner2))
-                if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Set) =>
-            {
-                Some(self.check_generic_args_compatible_with_exprs(
-                    args,
-                    &Some(vec![*inner2.clone()]),
-                    context,
-                ))
-            }
-            // Array variations
-            (TypeKind::Array(inner1, _), TypeKind::Custom(name, args))
-                if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Array) =>
-            {
-                Some(self.check_generic_args_compatible_with_exprs(
-                    &Some(vec![*inner1.clone()]),
-                    args,
-                    context,
-                ))
-            }
-            (TypeKind::Custom(name, args), TypeKind::Array(inner2, _))
-                if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Array) =>
-            {
-                Some(self.check_generic_args_compatible_with_exprs(
-                    args,
-                    &Some(vec![*inner2.clone()]),
-                    context,
-                ))
-            }
-            _ => None,
-        }
-    }
-
-    /// Helper to compare generic arguments when one or both sides are already Vec<Expression>.
-    fn check_generic_args_compatible_with_exprs(
-        &self,
-        args1: &Option<Vec<crate::ast::Expression>>,
-        args2: &Option<Vec<crate::ast::Expression>>,
-        context: &Context,
-    ) -> bool {
-        self.check_generic_args_compatible(args1, args2, context)
     }
 }

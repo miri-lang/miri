@@ -1,6 +1,6 @@
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
-use crate::ast::types::TypeKind;
+use crate::ast::types::{BuiltinCollectionKind, TypeKind};
 use crate::codegen::cranelift::layout::field_layout;
 use crate::codegen::cranelift::translator::{FunctionTranslator, ModuleCtx, TypeCtx};
 use crate::codegen::cranelift::types::translate_type;
@@ -241,16 +241,18 @@ impl<'a> FunctionTranslator<'a> {
                             // If elements are managed Lists, set the drop function so that
                             // mutation operations (clear, remove_at, remove) properly DecRef
                             // removed elements. Mirrors the same pattern used for Map values.
-                            let elems_are_managed_lists = !operands.is_empty() && {
-                                let first_op = &operands[0];
-                                match first_op {
-                                    Operand::Copy(place) | Operand::Move(place) => matches!(
-                                        type_ctx.local_types[place.local.0].kind,
-                                        TypeKind::List(_)
-                                    ),
-                                    _ => false,
-                                }
-                            };
+                            let elems_are_managed_lists = !operands.is_empty()
+                                && {
+                                    let first_op = &operands[0];
+                                    match first_op {
+                                        Operand::Copy(place) | Operand::Move(place) => {
+                                            let kind = &type_ctx.local_types[place.local.0].kind;
+                                            matches!(kind, TypeKind::List(_))
+                                                || matches!(kind, TypeKind::Custom(n, Some(_)) if BuiltinCollectionKind::from_name(n) == Some(BuiltinCollectionKind::List))
+                                        }
+                                        _ => false,
+                                    }
+                                };
                             if elems_are_managed_lists {
                                 let drop_fn_addr =
                                     Self::get_rt_list_decref_element_addr(builder, ctx, ptr_type)?;
@@ -307,16 +309,18 @@ impl<'a> FunctionTranslator<'a> {
 
                             // If values are managed Lists, set the drop function so that
                             // map mutations (remove, clear, set overwrite) properly DecRef them.
-                            let val_is_managed_list = operands.len() >= 2 && {
-                                let val_op = &operands[1];
-                                match val_op {
-                                    Operand::Copy(place) | Operand::Move(place) => matches!(
-                                        type_ctx.local_types[place.local.0].kind,
-                                        TypeKind::List(_)
-                                    ),
-                                    _ => false,
-                                }
-                            };
+                            let val_is_managed_list = operands.len() >= 2
+                                && {
+                                    let val_op = &operands[1];
+                                    match val_op {
+                                        Operand::Copy(place) | Operand::Move(place) => {
+                                            let kind = &type_ctx.local_types[place.local.0].kind;
+                                            matches!(kind, TypeKind::List(_))
+                                                || matches!(kind, TypeKind::Custom(n, Some(_)) if BuiltinCollectionKind::from_name(n) == Some(BuiltinCollectionKind::List))
+                                        }
+                                        _ => false,
+                                    }
+                                };
                             if val_is_managed_list {
                                 let drop_fn_addr =
                                     Self::get_rt_list_decref_element_addr(builder, ctx, ptr_type)?;

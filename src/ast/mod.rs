@@ -6,6 +6,7 @@ pub mod expression;
 pub mod factory;
 pub mod literal;
 pub mod node;
+pub mod normalize;
 pub mod operator;
 pub mod pattern;
 pub mod program;

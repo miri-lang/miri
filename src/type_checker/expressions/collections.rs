@@ -42,7 +42,7 @@
 //! - Enum variant construction: `Ok(value)`, `Err(error)`
 //! - Generic type instantiation
 
-use crate::ast::factory::{make_type, type_array};
+use crate::ast::factory::make_type;
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::*;
 use crate::type_checker::context::Context;
@@ -51,9 +51,10 @@ use crate::type_checker::TypeChecker;
 impl TypeChecker {
     pub(crate) fn infer_list(&mut self, elements: &[Expression], context: &mut Context) -> Type {
         if elements.is_empty() {
-            return make_type(TypeKind::List(Box::new(
-                self.create_type_expression(make_type(TypeKind::Void)),
-            )));
+            return make_type(TypeKind::Custom(
+                "List".to_string(),
+                Some(vec![self.create_type_expression(make_type(TypeKind::Void))]),
+            ));
         }
 
         let first_type = self.infer_expression(&elements[0], context);
@@ -74,9 +75,10 @@ impl TypeChecker {
             return make_type(TypeKind::Error);
         }
 
-        make_type(TypeKind::List(Box::new(
-            self.create_type_expression(first_type),
-        )))
+        make_type(TypeKind::Custom(
+            "List".to_string(),
+            Some(vec![self.create_type_expression(first_type)]),
+        ))
     }
 
     /// Infers the type of an array literal expression (`[1, 2, 3]`).
@@ -89,8 +91,11 @@ impl TypeChecker {
         context: &mut Context,
     ) -> Type {
         if elements.is_empty() {
-            let inner_type = make_type(TypeKind::Void);
-            return type_array(inner_type, 0);
+            let inner_type_expr = self.create_type_expression(make_type(TypeKind::Void));
+            return make_type(TypeKind::Custom(
+                "Array".to_string(),
+                Some(vec![inner_type_expr, size.clone()]),
+            ));
         }
 
         let first_type = self.infer_expression(&elements[0], context);
@@ -111,9 +116,9 @@ impl TypeChecker {
             return make_type(TypeKind::Error);
         }
 
-        make_type(TypeKind::Array(
-            Box::new(self.create_type_expression(first_type)),
-            Box::new(size.clone()),
+        make_type(TypeKind::Custom(
+            "Array".to_string(),
+            Some(vec![self.create_type_expression(first_type), size.clone()]),
         ))
     }
 
@@ -123,9 +128,12 @@ impl TypeChecker {
         context: &mut Context,
     ) -> Type {
         if entries.is_empty() {
-            return make_type(TypeKind::Map(
-                Box::new(self.create_type_expression(make_type(TypeKind::Void))),
-                Box::new(self.create_type_expression(make_type(TypeKind::Void))),
+            return make_type(TypeKind::Custom(
+                "Map".to_string(),
+                Some(vec![
+                    self.create_type_expression(make_type(TypeKind::Void)),
+                    self.create_type_expression(make_type(TypeKind::Void)),
+                ]),
             ));
         }
 
@@ -152,17 +160,21 @@ impl TypeChecker {
             return make_type(TypeKind::Error);
         }
 
-        make_type(TypeKind::Map(
-            Box::new(self.create_type_expression(key_type)),
-            Box::new(self.create_type_expression(val_type)),
+        make_type(TypeKind::Custom(
+            "Map".to_string(),
+            Some(vec![
+                self.create_type_expression(key_type),
+                self.create_type_expression(val_type),
+            ]),
         ))
     }
 
     pub(crate) fn infer_set(&mut self, elements: &[Expression], context: &mut Context) -> Type {
         if elements.is_empty() {
-            return make_type(TypeKind::Set(Box::new(
-                self.create_type_expression(make_type(TypeKind::Void)),
-            )));
+            return make_type(TypeKind::Custom(
+                "Set".to_string(),
+                Some(vec![self.create_type_expression(make_type(TypeKind::Void))]),
+            ));
         }
 
         let first_type = self.infer_expression(&elements[0], context);
@@ -190,9 +202,10 @@ impl TypeChecker {
             );
         }
 
-        make_type(TypeKind::Set(Box::new(
-            self.create_type_expression(first_type),
-        )))
+        make_type(TypeKind::Custom(
+            "Set".to_string(),
+            Some(vec![self.create_type_expression(first_type)]),
+        ))
     }
 
     pub(crate) fn infer_tuple(&mut self, elements: &[Expression], context: &mut Context) -> Type {

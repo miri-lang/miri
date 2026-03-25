@@ -299,14 +299,13 @@ impl TypeChecker {
                         span,
                     );
                 }
-            } else if matches!(&iterable_type.kind, TypeKind::Map(_, _))
-                || matches!(&iterable_type.kind, TypeKind::Custom(_name, _) if iterable_type.kind.as_builtin_collection() == Some(BuiltinCollectionKind::Map))
+            } else if matches!(&iterable_type.kind, TypeKind::Custom(_name, _) if iterable_type.kind.as_builtin_collection() == Some(BuiltinCollectionKind::Map))
             {
                 // For Map iterables, `for k, v in map` means: k = key, v = value.
                 let val_type = match &iterable_type.kind {
-                    TypeKind::Map(_, val_expr) => self
-                        .extract_type_from_expression(val_expr)
-                        .unwrap_or_else(|_| make_type(TypeKind::Error)),
+                    TypeKind::Map(_, _) => {
+                        unreachable!("collection types are normalized to Custom before this point")
+                    }
                     TypeKind::Custom(name, Some(args))
                         if BuiltinCollectionKind::from_name(name)
                             == Some(BuiltinCollectionKind::Map)
