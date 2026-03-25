@@ -214,14 +214,17 @@ impl MiriMap {
             }
         }
         if !keys.is_null() {
-            if let Ok(layout) = Layout::from_size_align(capacity * key_size, 8) {
-                dealloc(keys, layout);
+            if let Some(key_total) = capacity.checked_mul(key_size) {
+                if let Ok(layout) = Layout::from_size_align(key_total, 8) {
+                    dealloc(keys, layout);
+                }
             }
         }
         if !values.is_null() {
-            let val_total = capacity * value_size.max(1);
-            if let Ok(layout) = Layout::from_size_align(val_total, 8) {
-                dealloc(values, layout);
+            if let Some(val_total) = capacity.checked_mul(value_size.max(1)) {
+                if let Ok(layout) = Layout::from_size_align(val_total, 8) {
+                    dealloc(values, layout);
+                }
             }
         }
     }
