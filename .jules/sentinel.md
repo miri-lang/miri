@@ -11,3 +11,8 @@
 **Vulnerability:** `unwrap()` inside `Drop` implementations in core runtime types (`MiriList`, `MiriArray`).
 **Learning:** `unwrap()` in `Drop` is particularly dangerous. If the `unwrap()` panics during unwinding from another panic, it causes an immediate abort of the process (double panic). For memory allocations, an invalid layout can panic the program instead of failing gracefully.
 **Prevention:** Avoid panicking (`unwrap`, `expect`) inside `Drop` handlers. Gracefully swallow errors if there is no way to propagate them, especially since `Drop` cannot return a `Result`.
+
+## 2024-05-26 - [Integer Overflow UB in Layout Calculation]
+**Vulnerability:** Potential Integer Overflow during capacity calculations in `free_buffers` of `src/runtime/core/src/map.rs` where `capacity * key_size` is calculated.
+**Learning:** Raw memory deallocation operations using `Layout::from_size_align` can accept incorrect wrapped-around integer values resulting in Undefined Behavior (UB) if the size overflows `usize`.
+**Prevention:** Use `checked_mul` (e.g. `capacity.checked_mul(key_size)`) to detect overflow during manual memory management operations.
