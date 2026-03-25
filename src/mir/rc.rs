@@ -25,28 +25,40 @@ pub fn is_managed_type(
 ) -> bool {
     match kind {
         // Collections, Options, and Tuples use heap allocation and need RC.
-        TypeKind::Option(_)
-        | TypeKind::List(_)
-        | TypeKind::Array(_, _)
-        | TypeKind::Map(_, _)
-        | TypeKind::Set(_)
-        | TypeKind::Tuple(_) => true,
+        TypeKind::Option(_) | TypeKind::Tuple(_) => true,
+        // Canonical collection variants are normalized to Custom before RC analysis.
+        // Keep them here as a safety net for any residual code paths.
+        TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => true,
         // Explicit generic type parameters are never concrete heap objects.
         TypeKind::Generic(_, _, _) => false,
         // Note: String is excluded — it uses Box allocation, not alloc_with_rc,
         // so it doesn't have the [RC][payload] layout that IncRef/DecRef expect.
-        TypeKind::Custom(name, _) => {
+        TypeKind::Custom(name, args) => {
             // Exclude generic placeholders that appear as Custom types (e.g. when
             // the type checker stores Custom("T", None) for a generic param reference).
             // Also exclude "Self" — a reserved keyword, never a user-defined type.
-            // Also exclude unresolved collection class names (Array, List, Map, Set)
-            // that appear in stdlib method local_decls — their locals may actually
-            // hold element values rather than collections.
             // Auto-copy types use bitwise copy, no RC.
-            name != "Self"
-                && !auto_copy_types.contains(name.as_str())
-                && !type_params.contains(name.as_str())
-                && BuiltinCollectionKind::from_name(name).is_none()
+            if name == "Self"
+                || auto_copy_types.contains(name.as_str())
+                || type_params.contains(name.as_str())
+            {
+                return false;
+            }
+
+            // After normalization, builtin collection types arrive as
+            // Custom("List", Some([...])) — these ARE heap-managed.
+            // However, inside stdlib class bodies the names appear as
+            // Custom("List", None) / Custom("Array", None) for unresolved generic
+            // class self-references — those locals hold element values, not collections,
+            // so they must NOT be treated as managed.
+            if let Some(_kind) = BuiltinCollectionKind::from_name(name) {
+                // If args is Some (instantiated), it's a real collection.
+                // If args is None, it's the unresolved self-reference inside class body.
+                return args.is_some();
+            }
+
+            // All other user-defined types (classes, structs, enums) are managed.
+            true
         }
         _ => false,
     }

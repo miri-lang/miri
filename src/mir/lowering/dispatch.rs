@@ -7,17 +7,13 @@ use crate::ast::expression::Expression;
 use crate::ast::{BuiltinCollectionKind, ExpressionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
-use crate::mir::{
-    AggregateKind, Constant, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind,
-};
+use crate::mir::{Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind};
 use crate::runtime_fns::rt;
 use crate::type_checker::context::{
     class_needs_vtable, vtable_slot_index, MethodInfo, TypeDefinition,
 };
 
-use super::constructors::{
-    compute_elem_size_from_type, lower_class_constructor, lower_struct_constructor,
-};
+use super::constructors::{lower_class_constructor, lower_struct_constructor, COLLECTION_CTORS};
 use super::helpers::coerce_rvalue;
 use super::{lower_expression, LoweringContext};
 
@@ -64,10 +60,10 @@ fn type_kind_to_mangle_str(kind: &TypeKind) -> String {
         TypeKind::Void => "void".to_string(),
         TypeKind::Custom(name, None) => name.clone(),
         TypeKind::Custom(name, Some(_)) => name.clone(),
-        TypeKind::List(_) => "list".to_string(),
-        TypeKind::Array(_, _) => "array".to_string(),
-        TypeKind::Map(_, _) => "map".to_string(),
-        TypeKind::Set(_) => "set".to_string(),
+        // Canonical collection variants are normalized to Custom before this point.
+        TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => {
+            unreachable!("collection types are normalized to Custom before this point")
+        }
         TypeKind::Option(_) => "option".to_string(),
         TypeKind::I8 => "i8".to_string(),
         TypeKind::I16 => "i16".to_string(),
@@ -684,187 +680,18 @@ pub fn lower_call(
                 if let Some(TypeDefinition::Class(def)) =
                     ctx.type_checker.global_type_definitions.get(type_name)
                 {
-                    if BuiltinCollectionKind::from_name(type_name)
-                        == Some(BuiltinCollectionKind::List)
-                    {
-                        let list_ty = if let Some(call_ty) = ctx.type_checker.get_type(call_expr_id)
+                    // Dispatch to the built-in collection constructor if one exists.
+                    // NLL: `def`'s borrow is not live at the ctor_fn call because we
+                    // return immediately, so the mutable `ctx` borrow is valid here.
+                    if let Some(kind) = BuiltinCollectionKind::from_name(type_name) {
+                        if let Some((_, ctor_fn)) =
+                            COLLECTION_CTORS.iter().find(|(k, _)| *k == kind)
                         {
-                            call_ty.clone()
-                        } else {
-                            Type::new(TypeKind::Int, *span)
-                        };
-
-                        let (destination, result_op) = if let Some(d) = dest {
-                            (d.clone(), Operand::Copy(d))
-                        } else {
-                            let temp = ctx.push_temp(list_ty.clone(), *span);
-                            let p = Place::new(temp);
-                            (p.clone(), Operand::Copy(p))
-                        };
-
-                        let target_bb = ctx.new_basic_block();
-
-                        if args.len() == 1 {
-                            let array_op = lower_expression(ctx, &args[0], None)?;
-
-                            // Track the temp array local so we can emit StorageDead after the call
-                            let temp_array_local = match &array_op {
-                                Operand::Copy(p) | Operand::Move(p) => Some(p.clone()),
-                                _ => None,
-                            };
-
-                            // Determine array length, element size, and whether
-                            // elements are RC-managed (Option, List, Array, etc.)
-                            let mut len_val = 0;
-                            let mut elem_size = 8;
-                            let mut elems_are_managed = false;
-                            if let ExpressionKind::Array(elements, _) = &args[0].node {
-                                len_val = elements.len() as i64;
-                                if !elements.is_empty() {
-                                    if let Some(ty) = ctx.type_checker.get_type(elements[0].id) {
-                                        elem_size = compute_elem_size_from_type(&ty.kind);
-                                        elems_are_managed = ctx.is_perceus_managed(&ty.kind);
-                                    }
-                                }
-                            }
-
-                            let len_op = Operand::Constant(Box::new(Constant {
-                                span: *span,
-                                ty: Type::new(TypeKind::Int, *span),
-                                literal: crate::ast::literal::Literal::Integer(
-                                    crate::ast::literal::IntegerLiteral::I64(len_val),
-                                ),
-                            }));
-
-                            let size_op = Operand::Constant(Box::new(Constant {
-                                span: *span,
-                                ty: Type::new(TypeKind::Int, *span),
-                                literal: crate::ast::literal::Literal::Integer(
-                                    crate::ast::literal::IntegerLiteral::I64(elem_size),
-                                ),
-                            }));
-
-                            // Use the managed-array variant when elements are
-                            // heap-allocated so the list IncRefs them before the
-                            // source array's element-drop loop releases its refs.
-                            let rt_fn_name = if elems_are_managed {
-                                rt::LIST_NEW_FROM_MANAGED_ARRAY
-                            } else {
-                                rt::LIST_NEW_FROM_RAW
-                            };
-                            let func_op = Operand::Constant(Box::new(Constant {
-                                span: *span,
-                                ty: Type::new(TypeKind::Identifier, *span),
-                                literal: crate::ast::literal::Literal::Identifier(
-                                    rt_fn_name.to_string(),
-                                ),
-                            }));
-
-                            ctx.set_terminator(Terminator::new(
-                                TerminatorKind::Call {
-                                    func: func_op,
-                                    args: vec![array_op, len_op, size_op],
-                                    destination: destination.clone(),
-                                    target: Some(target_bb),
-                                },
-                                *span,
-                            ));
-
-                            // The temp array was consumed by miri_rt_list_new_from_raw
-                            // (data copied). Emit StorageDead so Perceus inserts DecRef.
-                            ctx.set_current_block(target_bb);
-                            if let Some(arr_place) = temp_array_local {
-                                ctx.push_statement(crate::mir::Statement {
-                                    kind: StatementKind::StorageDead(arr_place),
-                                    span: *span,
-                                });
-                            }
-
-                            // Need a new target block since we added statements to the original
-                            let final_bb = ctx.new_basic_block();
-                            ctx.set_terminator(Terminator::new(
-                                TerminatorKind::Goto { target: final_bb },
-                                *span,
-                            ));
-                            ctx.set_current_block(final_bb);
-                            return Ok(result_op);
-                        } else {
-                            // Assuming element size is 8 for simplicity, or 0 if it doesn't matter yet
-                            let size_op = Operand::Constant(Box::new(Constant {
-                                span: *span,
-                                ty: Type::new(TypeKind::Int, *span),
-                                literal: crate::ast::literal::Literal::Integer(
-                                    crate::ast::literal::IntegerLiteral::I64(8),
-                                ),
-                            }));
-                            let func_op = Operand::Constant(Box::new(Constant {
-                                span: *span,
-                                ty: Type::new(TypeKind::Identifier, *span),
-                                literal: crate::ast::literal::Literal::Identifier(
-                                    rt::LIST_NEW.to_string(),
-                                ),
-                            }));
-                            ctx.set_terminator(Terminator::new(
-                                TerminatorKind::Call {
-                                    func: func_op,
-                                    args: vec![size_op],
-                                    destination: destination.clone(),
-                                    target: Some(target_bb),
-                                },
-                                *span,
-                            ));
+                            return ctor_fn(ctx, span, call_expr_id, args, dest);
                         }
-
-                        ctx.set_current_block(target_bb);
-                        return Ok(result_op);
                     }
 
-                    if matches!(
-                        BuiltinCollectionKind::from_name(type_name),
-                        Some(BuiltinCollectionKind::Map | BuiltinCollectionKind::Set)
-                    ) {
-                        let return_ty =
-                            if let Some(call_ty) = ctx.type_checker.get_type(call_expr_id) {
-                                call_ty.clone()
-                            } else if BuiltinCollectionKind::from_name(type_name)
-                                == Some(BuiltinCollectionKind::Map)
-                            {
-                                crate::ast::factory::type_map(
-                                    crate::ast::factory::type_void(),
-                                    crate::ast::factory::type_void(),
-                                )
-                            } else {
-                                crate::ast::factory::type_set(crate::ast::factory::type_void())
-                            };
-
-                        let (destination, result_op) = if let Some(d) = dest {
-                            (d.clone(), Operand::Copy(d))
-                        } else {
-                            let temp = ctx.push_temp(return_ty, *span);
-                            let p = Place::new(temp);
-                            (p.clone(), Operand::Copy(p))
-                        };
-
-                        let aggregate_kind = if BuiltinCollectionKind::from_name(type_name)
-                            == Some(BuiltinCollectionKind::Map)
-                        {
-                            AggregateKind::Map
-                        } else {
-                            AggregateKind::Set
-                        };
-
-                        ctx.push_statement(crate::mir::Statement {
-                            kind: StatementKind::Assign(
-                                destination,
-                                Rvalue::Aggregate(aggregate_kind, vec![]),
-                            ),
-                            span: *span,
-                        });
-
-                        return Ok(result_op);
-                    }
-
-                    // This is a class constructor - emit Aggregate instead of Call
+                    // This is a regular class constructor - emit Aggregate instead of Call
                     return lower_class_constructor(ctx, span, type_name, def, args, dest);
                 }
             }

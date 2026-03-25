@@ -155,36 +155,68 @@ impl TypeChecker {
 
                 match obj_type.kind {
                     TypeKind::String => return make_type(TypeKind::String),
-                    TypeKind::List(inner) => return make_type(TypeKind::List(inner)),
-                    TypeKind::Array(inner, size_expr) => {
-                        let array_size = Self::try_eval_const_int(&size_expr);
-                        check_slice_bounds(self, array_size, index, span);
-                        // Compute slice size from range bounds
-                        if let ExpressionKind::Range(start, end, range_type) = &index.node {
-                            let start_val = Self::try_eval_const_int_with_context(start, context);
-                            let end_val = end
-                                .as_ref()
-                                .and_then(|e| Self::try_eval_const_int_with_context(e, context));
-                            if let (Some(s), Some(e)) = (start_val, end_val) {
-                                let slice_size = match range_type {
-                                    RangeExpressionType::Exclusive => e - s,
-                                    RangeExpressionType::Inclusive => e - s + 1,
-                                    _ => e - s,
-                                };
-                                let size = Box::new(crate::ast::factory::int_literal_expression(
-                                    slice_size,
-                                ));
-                                return make_type(TypeKind::Array(inner, size));
+                    // Collection canonical variants are normalized to Custom before this point.
+                    TypeKind::List(_) | TypeKind::Array(_, _) => {
+                        unreachable!("collection types are normalized to Custom before this point")
+                    }
+                    TypeKind::Custom(ref cname, ref cargs)
+                        if matches!(
+                            BuiltinCollectionKind::from_name(cname.as_str()),
+                            Some(BuiltinCollectionKind::List)
+                        ) =>
+                    {
+                        return make_type(TypeKind::Custom(cname.clone(), cargs.clone()));
+                    }
+                    TypeKind::Custom(ref cname, ref cargs)
+                        if BuiltinCollectionKind::from_name(cname.as_str())
+                            == Some(BuiltinCollectionKind::Array) =>
+                    {
+                        // args: [inner_type_expr, size_expr]
+                        let inner = match cargs.as_deref() {
+                            Some([i, ..]) => i.clone(),
+                            _ => return make_type(TypeKind::Error),
+                        };
+                        let size_expr_opt = match cargs.as_deref() {
+                            Some([_, s, ..]) => Some(s.clone()),
+                            _ => None,
+                        };
+                        if let Some(size_expr) = size_expr_opt {
+                            let array_size = Self::try_eval_const_int(&size_expr);
+                            check_slice_bounds(self, array_size, index, span);
+                            if let ExpressionKind::Range(start, end, range_type) = &index.node {
+                                let start_val =
+                                    Self::try_eval_const_int_with_context(start, context);
+                                let end_val = end.as_ref().and_then(|e| {
+                                    Self::try_eval_const_int_with_context(e, context)
+                                });
+                                if let (Some(s), Some(e)) = (start_val, end_val) {
+                                    let slice_size = match range_type {
+                                        RangeExpressionType::Exclusive => e - s,
+                                        RangeExpressionType::Inclusive => e - s + 1,
+                                        _ => e - s,
+                                    };
+                                    let new_size =
+                                        crate::ast::factory::int_literal_expression(slice_size);
+                                    return make_type(TypeKind::Custom(
+                                        "Array".to_string(),
+                                        Some(vec![inner, new_size]),
+                                    ));
+                                }
                             }
+                            // Fallback: unknown slice size, return original
+                            return make_type(TypeKind::Custom(
+                                cname.clone(),
+                                Some(vec![inner, size_expr]),
+                            ));
                         }
-                        // Fallback: unknown slice size, return original
-                        return make_type(TypeKind::Array(inner, size_expr));
+                        return make_type(TypeKind::Custom(cname.clone(), cargs.clone()));
                     }
                     TypeKind::Tuple(elements) => {
                         if elements.is_empty() {
-                            return make_type(TypeKind::List(Box::new(
-                                self.create_type_expression(make_type(TypeKind::Void)),
-                            )));
+                            return make_type(TypeKind::Custom(
+                                "List".to_string(),
+                                Some(vec![self.create_type_expression(make_type(TypeKind::Void))]),
+                            ));
                         }
                         let first = self.resolve_type_expression(&elements[0], context);
                         let is_homogeneous = elements.iter().all(|e| {
@@ -193,9 +225,10 @@ impl TypeChecker {
                         });
 
                         if is_homogeneous {
-                            return make_type(TypeKind::List(Box::new(
-                                self.create_type_expression(first),
-                            )));
+                            return make_type(TypeKind::Custom(
+                                "List".to_string(),
+                                Some(vec![self.create_type_expression(first)]),
+                            ));
                         } else {
                             self.report_error("Cannot slice heterogeneous tuple".to_string(), span);
                             return make_type(TypeKind::Error);
@@ -210,43 +243,9 @@ impl TypeChecker {
         }
 
         match obj_type.kind {
-            TypeKind::Array(inner_type_expr, size_expr) => {
-                if !matches!(index_type.kind, TypeKind::Int) {
-                    self.report_error("Array index must be an integer".to_string(), index.span);
-                    return make_type(TypeKind::Error);
-                }
-                // Compile-time bounds check using constant evaluation
-                if let Some(idx_val) = Self::try_eval_const_int_with_context(index, context) {
-                    if idx_val < 0 {
-                        self.report_error(
-                            "Array index must be a non-negative integer".to_string(),
-                            index.span,
-                        );
-                        return make_type(TypeKind::Error);
-                    }
-                    if let Some(size_val) = Self::try_eval_const_int(&size_expr) {
-                        let idx = idx_val as usize;
-                        let size = size_val as usize;
-                        if idx >= size {
-                            self.report_error(
-                                format!(
-                                    "Array index out of bounds: index {} but array has {} elements",
-                                    idx, size
-                                ),
-                                span,
-                            );
-                            return make_type(TypeKind::Error);
-                        }
-                    }
-                }
-                self.resolve_type_expression(&inner_type_expr, context)
-            }
-            TypeKind::List(inner_type_expr) => {
-                if !matches!(index_type.kind, TypeKind::Int) {
-                    self.report_error("List index must be an integer".to_string(), index.span);
-                    return make_type(TypeKind::Error);
-                }
-                self.resolve_type_expression(&inner_type_expr, context)
+            // Canonical collection variants are normalized to Custom before this point.
+            TypeKind::Array(_, _) | TypeKind::List(_) | TypeKind::Map(_, _) => {
+                unreachable!("collection types are normalized to Custom before this point")
             }
             TypeKind::Custom(name, args)
                 if matches!(
@@ -257,6 +256,36 @@ impl TypeChecker {
                 if !matches!(index_type.kind, TypeKind::Int) {
                     self.report_error(format!("{} index must be an integer", name), index.span);
                     return make_type(TypeKind::Error);
+                }
+                // Compile-time bounds check for Array
+                if BuiltinCollectionKind::from_name(name.as_str())
+                    == Some(BuiltinCollectionKind::Array)
+                {
+                    if let Some(idx_val) = Self::try_eval_const_int_with_context(index, context) {
+                        if idx_val < 0 {
+                            self.report_error(
+                                "Array index must be a non-negative integer".to_string(),
+                                index.span,
+                            );
+                            return make_type(TypeKind::Error);
+                        }
+                        if let Some(size_expr) = args.as_deref().and_then(|a| a.get(1)) {
+                            if let Some(size_val) = Self::try_eval_const_int(size_expr) {
+                                let idx = idx_val as usize;
+                                let size = size_val as usize;
+                                if idx >= size {
+                                    self.report_error(
+                                        format!(
+                                            "Array index out of bounds: index {} but array has {} elements",
+                                            idx, size
+                                        ),
+                                        span,
+                                    );
+                                    return make_type(TypeKind::Error);
+                                }
+                            }
+                        }
+                    }
                 }
                 if let Some(args) = args {
                     if let Some(inner_type_expr) = args.first() {
@@ -281,20 +310,12 @@ impl TypeChecker {
                 }
                 make_type(TypeKind::Error)
             }
-            TypeKind::Map(key_type_expr, val_type_expr) => {
-                let key_type = self.resolve_type_expression(&key_type_expr, context);
-                if !self.are_compatible(&key_type, &index_type, context) {
-                    self.report_error("Invalid map key type".to_string(), index.span);
-                    return make_type(TypeKind::Error);
-                }
-                self.resolve_type_expression(&val_type_expr, context)
-            }
             TypeKind::Custom(name, args)
                 if BuiltinCollectionKind::from_name(name.as_str())
                     == Some(BuiltinCollectionKind::Map) =>
             {
-                // Inside the Map class definition, self is Custom("Map", None).
-                // The key type is generic K, the value type is generic V.
+                // Custom("Map", args): key=args[0], value=args[1].
+                // Inside the Map class definition, args may be None (generic placeholders).
                 if let Some(args) = args {
                     if args.len() >= 2 {
                         let key_type = self.resolve_type_expression(&args[0], context);
@@ -467,30 +488,9 @@ impl TypeChecker {
         // Try to resolve the type definition for the object's type
         let (type_name, type_args) = match &obj_type.kind {
             TypeKind::String => (Some("String".to_string()), None),
-            TypeKind::List(inner_expr) => {
-                let inner_ty = self.resolve_type_expression(inner_expr, context);
-                (
-                    Some(BuiltinCollectionKind::List.name().to_string()),
-                    Some(vec![self.create_type_expression(inner_ty)]),
-                )
-            }
-            TypeKind::Map(key_expr, val_expr) => {
-                let key_ty = self.resolve_type_expression(key_expr, context);
-                let val_ty = self.resolve_type_expression(val_expr, context);
-                (
-                    Some(BuiltinCollectionKind::Map.name().to_string()),
-                    Some(vec![
-                        self.create_type_expression(key_ty),
-                        self.create_type_expression(val_ty),
-                    ]),
-                )
-            }
-            TypeKind::Set(inner_expr) => {
-                let inner_ty = self.resolve_type_expression(inner_expr, context);
-                (
-                    Some(BuiltinCollectionKind::Set.name().to_string()),
-                    Some(vec![self.create_type_expression(inner_ty)]),
-                )
+            // Canonical collection variants are normalized to Custom before type-checking.
+            TypeKind::List(_) | TypeKind::Map(_, _) | TypeKind::Set(_) | TypeKind::Array(_, _) => {
+                unreachable!("collection types are normalized to Custom before this point")
             }
             TypeKind::Tuple(element_type_exprs) => {
                 // For homogeneous tuples, resolve to "Tuple" class with element type
@@ -516,16 +516,6 @@ impl TypeChecker {
                 }
             }
             TypeKind::Custom(name, args) => (Some(name.clone()), args.clone()),
-            TypeKind::Array(inner_expr, size_expr) => {
-                let inner_ty = self.resolve_type_expression(inner_expr, context);
-                (
-                    Some(BuiltinCollectionKind::Array.name().to_string()),
-                    Some(vec![
-                        self.create_type_expression(inner_ty),
-                        *size_expr.clone(),
-                    ]),
-                )
-            }
             TypeKind::Result(ok_type, _) => {
                 if prop_name == "unwrap" {
                     let t = self.resolve_type_expression(ok_type, context);

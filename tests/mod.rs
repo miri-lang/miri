@@ -10,5 +10,6 @@ pub mod integration;
 pub mod lexer;
 pub mod mir;
 pub mod parser;
+pub mod stdlib;
 pub mod type_checker;
 pub mod utils;

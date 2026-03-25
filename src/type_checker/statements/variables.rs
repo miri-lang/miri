@@ -40,7 +40,7 @@
 //! - Return type compatibility
 
 use crate::ast::factory::make_type;
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, SymbolInfo};
@@ -66,7 +66,9 @@ impl TypeChecker {
 
                 if let Some(typ_expr) = &decl.typ {
                     let resolved_type = self.resolve_type_expression(typ_expr, context);
-                    if !matches!(resolved_type.kind, TypeKind::Array(_, _)) {
+                    let is_array = matches!(&resolved_type.kind, TypeKind::Array(_, _))
+                        || matches!(&resolved_type.kind, TypeKind::Custom(n, Some(_)) if BuiltinCollectionKind::from_name(n) == Some(BuiltinCollectionKind::Array));
+                    if !is_array {
                         self.report_error(
                             format!(
                                 "Shared variable '{}' must be an array, got {}",
