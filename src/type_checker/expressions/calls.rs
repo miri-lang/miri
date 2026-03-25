@@ -245,9 +245,10 @@ impl TypeChecker {
                             if let Some(args) = type_args {
                                 if args.len() == 1 {
                                     let elem_type = self.resolve_type_expression(&args[0], context);
-                                    return make_type(TypeKind::List(Box::new(
-                                        self.create_type_expression(elem_type),
-                                    )));
+                                    return make_type(TypeKind::Custom(
+                                        "List".to_string(),
+                                        Some(vec![self.create_type_expression(elem_type)]),
+                                    ));
                                 } else {
                                     self.report_error(
                                         format!(
@@ -263,14 +264,22 @@ impl TypeChecker {
                             // Infer element type from the argument (expected to be an array)
                             if let Some((_, arg_type)) = positional_args.first() {
                                 let elem_type = match &arg_type.kind {
-                                    TypeKind::Array(inner, _) | TypeKind::List(inner) => {
-                                        self.resolve_type_expression(inner, context)
+                                    TypeKind::Custom(cname, Some(cargs))
+                                        if (BuiltinCollectionKind::from_name(cname.as_str())
+                                            == Some(BuiltinCollectionKind::Array)
+                                            || BuiltinCollectionKind::from_name(
+                                                cname.as_str(),
+                                            ) == Some(BuiltinCollectionKind::List))
+                                            && !cargs.is_empty() =>
+                                    {
+                                        self.resolve_type_expression(&cargs[0], context)
                                     }
                                     _ => arg_type.clone(),
                                 };
-                                return make_type(TypeKind::List(Box::new(
-                                    self.create_type_expression(elem_type),
-                                )));
+                                return make_type(TypeKind::Custom(
+                                    "List".to_string(),
+                                    Some(vec![self.create_type_expression(elem_type)]),
+                                ));
                             }
 
                             self.report_error(
@@ -287,9 +296,12 @@ impl TypeChecker {
                                 if args.len() == 2 {
                                     let k_type = self.resolve_type_expression(&args[0], context);
                                     let v_type = self.resolve_type_expression(&args[1], context);
-                                    return make_type(TypeKind::Map(
-                                        Box::new(self.create_type_expression(k_type)),
-                                        Box::new(self.create_type_expression(v_type)),
+                                    return make_type(TypeKind::Custom(
+                                        "Map".to_string(),
+                                        Some(vec![
+                                            self.create_type_expression(k_type),
+                                            self.create_type_expression(v_type),
+                                        ]),
                                     ));
                                 } else {
                                     self.report_error(
@@ -304,8 +316,16 @@ impl TypeChecker {
                             }
                             // No type args: infer from positional arg if it's a map literal
                             if let Some((_, arg_type)) = positional_args.first() {
-                                if let TypeKind::Map(k, v) = &arg_type.kind {
-                                    return make_type(TypeKind::Map(k.clone(), v.clone()));
+                                if let TypeKind::Custom(cname, Some(cargs)) = &arg_type.kind {
+                                    if BuiltinCollectionKind::from_name(cname.as_str())
+                                        == Some(BuiltinCollectionKind::Map)
+                                        && cargs.len() == 2
+                                    {
+                                        return make_type(TypeKind::Custom(
+                                            "Map".to_string(),
+                                            Some(cargs.clone()),
+                                        ));
+                                    }
                                 }
                             }
                             self.report_error(
@@ -321,9 +341,10 @@ impl TypeChecker {
                             if let Some(args) = type_args {
                                 if args.len() == 1 {
                                     let elem_type = self.resolve_type_expression(&args[0], context);
-                                    return make_type(TypeKind::Set(Box::new(
-                                        self.create_type_expression(elem_type),
-                                    )));
+                                    return make_type(TypeKind::Custom(
+                                        "Set".to_string(),
+                                        Some(vec![self.create_type_expression(elem_type)]),
+                                    ));
                                 } else {
                                     self.report_error(
                                         format!(
@@ -337,8 +358,16 @@ impl TypeChecker {
                             }
                             // No type args: infer from positional arg if it's a set literal
                             if let Some((_, arg_type)) = positional_args.first() {
-                                if let TypeKind::Set(inner) = &arg_type.kind {
-                                    return make_type(TypeKind::Set(inner.clone()));
+                                if let TypeKind::Custom(cname, Some(cargs)) = &arg_type.kind {
+                                    if BuiltinCollectionKind::from_name(cname.as_str())
+                                        == Some(BuiltinCollectionKind::Set)
+                                        && !cargs.is_empty()
+                                    {
+                                        return make_type(TypeKind::Custom(
+                                            "Set".to_string(),
+                                            Some(cargs.clone()),
+                                        ));
+                                    }
                                 }
                             }
                             self.report_error(

@@ -363,24 +363,18 @@ fn collect_generic_names_from_type(ty: &Type, params: &mut std::collections::Has
         }
         TypeKind::Option(inner) => collect_generic_names_from_type(inner, params),
         TypeKind::Linear(inner) => collect_generic_names_from_type(inner, params),
-        TypeKind::List(inner) | TypeKind::Set(inner) => {
-            if let EK::Type(inner_ty, _) = &inner.node {
-                collect_generic_names_from_type(inner_ty, params);
+        // Canonical collection variants are normalized to Custom before MIR lowering.
+        TypeKind::List(_) | TypeKind::Set(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) => {
+            unreachable!("collection types are normalized to Custom before this point")
+        }
+        TypeKind::Custom(_, Some(args)) => {
+            for arg in args {
+                if let EK::Type(inner_ty, _) = &arg.node {
+                    collect_generic_names_from_type(inner_ty, params);
+                }
             }
         }
-        TypeKind::Array(inner, _) => {
-            if let EK::Type(inner_ty, _) = &inner.node {
-                collect_generic_names_from_type(inner_ty, params);
-            }
-        }
-        TypeKind::Map(k, v) => {
-            if let EK::Type(k_ty, _) = &k.node {
-                collect_generic_names_from_type(k_ty, params);
-            }
-            if let EK::Type(v_ty, _) = &v.node {
-                collect_generic_names_from_type(v_ty, params);
-            }
-        }
+        TypeKind::Custom(_, None) => {}
         _ => {}
     }
 }

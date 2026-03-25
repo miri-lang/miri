@@ -118,8 +118,9 @@ impl MirType {
             TypeKind::Identifier => MirType::Identifier,
             TypeKind::RawPtr => MirType::RawPtr,
             TypeKind::Error => MirType::Error,
+            // Canonical collection variants are normalized to Custom before MIR lowering.
+            // They are handled below in the Custom arm.
             TypeKind::List(elem) => MirType::List(Box::new(Self::from_expr(elem))),
-            // The size expression is the second argument; only the element type matters.
             TypeKind::Array(elem, _size) => MirType::Array(Box::new(Self::from_expr(elem))),
             TypeKind::Map(k, v) => {
                 MirType::Map(Box::new(Self::from_expr(k)), Box::new(Self::from_expr(v)))
@@ -134,7 +135,45 @@ impl MirType {
             TypeKind::Future(inner) => MirType::Future(Box::new(Self::from_expr(inner))),
             // Generic type parameters — never concrete managed types.
             TypeKind::Generic(_, _, _) | TypeKind::Function(_) => MirType::Generic,
-            TypeKind::Custom(name, _) => MirType::Custom(name.clone()),
+            TypeKind::Custom(name, args) => {
+                // After normalization, builtin collections are Custom("List"/"Array"/...).
+                // Map them back to the corresponding MirType collection variant, but only
+                // when args is Some (instantiated). When args is None, the name appears as
+                // an unresolved self-reference inside a stdlib class body — keep it as
+                // MirType::Custom so the managed-type check excludes it correctly.
+                match (BuiltinCollectionKind::from_name(name), args) {
+                    (Some(BuiltinCollectionKind::List), Some(args)) => {
+                        let elem = args
+                            .first()
+                            .map(Self::from_expr)
+                            .unwrap_or(MirType::Unknown);
+                        MirType::List(Box::new(elem))
+                    }
+                    (Some(BuiltinCollectionKind::Array), Some(args)) => {
+                        let elem = args
+                            .first()
+                            .map(Self::from_expr)
+                            .unwrap_or(MirType::Unknown);
+                        MirType::Array(Box::new(elem))
+                    }
+                    (Some(BuiltinCollectionKind::Map), Some(args)) => {
+                        let k = args
+                            .first()
+                            .map(Self::from_expr)
+                            .unwrap_or(MirType::Unknown);
+                        let v = args.get(1).map(Self::from_expr).unwrap_or(MirType::Unknown);
+                        MirType::Map(Box::new(k), Box::new(v))
+                    }
+                    (Some(BuiltinCollectionKind::Set), Some(args)) => {
+                        let elem = args
+                            .first()
+                            .map(Self::from_expr)
+                            .unwrap_or(MirType::Unknown);
+                        MirType::Set(Box::new(elem))
+                    }
+                    _ => MirType::Custom(name.clone()),
+                }
+            }
             // Meta and linear types are not involved in RC management.
             TypeKind::Meta(_) | TypeKind::Linear(_) => MirType::Unknown,
         }

@@ -825,28 +825,37 @@ pub fn type_u8() -> Type {
 
 /// Creates a `List` type.
 pub fn type_list(inner: Type) -> Type {
-    make_type(TypeKind::List(Box::new(type_expr_non_null(inner))))
+    make_type(TypeKind::Custom(
+        "List".to_string(),
+        Some(vec![type_expr_non_null(inner)]),
+    ))
 }
 
 /// Creates an `Array` type.
 pub fn type_array(inner: Type, size: i128) -> Type {
-    make_type(TypeKind::Array(
-        Box::new(type_expr_non_null(inner)),
-        Box::new(int_literal_expression(size)),
+    make_type(TypeKind::Custom(
+        "Array".to_string(),
+        Some(vec![
+            type_expr_non_null(inner),
+            int_literal_expression(size),
+        ]),
     ))
 }
 
 /// Creates a `Map` type.
 pub fn type_map(k: Type, v: Type) -> Type {
-    make_type(TypeKind::Map(
-        Box::new(type_expr_non_null(k)),
-        Box::new(type_expr_non_null(v)),
+    make_type(TypeKind::Custom(
+        "Map".to_string(),
+        Some(vec![type_expr_non_null(k), type_expr_non_null(v)]),
     ))
 }
 
 /// Creates a `Set` type.
 pub fn type_set(inner: Type) -> Type {
-    make_type(TypeKind::Set(Box::new(type_expr_non_null(inner))))
+    make_type(TypeKind::Custom(
+        "Set".to_string(),
+        Some(vec![type_expr_non_null(inner)]),
+    ))
 }
 
 /// Creates a `Tuple` type.

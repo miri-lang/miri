@@ -41,37 +41,14 @@ impl TypeChecker {
                 }
             }
 
-            // List<T> matches List<concrete>
-            (TypeKind::List(p_inner_expr), TypeKind::List(a_inner_expr)) => {
-                if let (Ok(p_inner), Ok(a_inner)) = (
-                    self.extract_type_from_expression(p_inner_expr),
-                    self.extract_type_from_expression(a_inner_expr),
-                ) {
-                    self.infer_generic_types(&p_inner, &a_inner, mapping);
-                }
-            }
-
-            // Map<K, V> matches Map<concrete_k, concrete_v>
-            (TypeKind::Map(p_k_expr, p_v_expr), TypeKind::Map(a_k_expr, a_v_expr)) => {
-                if let (Ok(p_k), Ok(p_v), Ok(a_k), Ok(a_v)) = (
-                    self.extract_type_from_expression(p_k_expr),
-                    self.extract_type_from_expression(p_v_expr),
-                    self.extract_type_from_expression(a_k_expr),
-                    self.extract_type_from_expression(a_v_expr),
-                ) {
-                    self.infer_generic_types(&p_k, &a_k, mapping);
-                    self.infer_generic_types(&p_v, &a_v, mapping);
-                }
-            }
-
-            // Set<T> matches Set<concrete>
-            (TypeKind::Set(p_inner_expr), TypeKind::Set(a_inner_expr)) => {
-                if let (Ok(p_inner), Ok(a_inner)) = (
-                    self.extract_type_from_expression(p_inner_expr),
-                    self.extract_type_from_expression(a_inner_expr),
-                ) {
-                    self.infer_generic_types(&p_inner, &a_inner, mapping);
-                }
+            // Collection canonical variants are normalized to Custom before type-checking.
+            // After normalization, List<T>/Map<K,V>/Set<T> all appear as Custom(...), so
+            // they are handled by the Custom arm below.
+            (
+                TypeKind::List(_) | TypeKind::Map(_, _) | TypeKind::Set(_) | TypeKind::Array(_, _),
+                _,
+            ) => {
+                unreachable!("collection types are normalized to Custom before this point")
             }
 
             // Option<T> matches Option<concrete>
@@ -139,41 +116,9 @@ impl TypeChecker {
                 make_type(TypeKind::Custom(name.clone(), new_args))
             }
 
-            // Container types - recurse into inner types
-            TypeKind::List(inner_expr) => {
-                if let Ok(inner) = self.extract_type_from_expression(inner_expr) {
-                    let subst_inner = self.substitute_type(&inner, mapping);
-                    make_type(TypeKind::List(Box::new(
-                        self.create_type_expression(subst_inner),
-                    )))
-                } else {
-                    ty.clone()
-                }
-            }
-
-            TypeKind::Map(k_expr, v_expr) => {
-                if let (Ok(k), Ok(v)) = (
-                    self.extract_type_from_expression(k_expr),
-                    self.extract_type_from_expression(v_expr),
-                ) {
-                    make_type(TypeKind::Map(
-                        Box::new(self.create_type_expression(self.substitute_type(&k, mapping))),
-                        Box::new(self.create_type_expression(self.substitute_type(&v, mapping))),
-                    ))
-                } else {
-                    ty.clone()
-                }
-            }
-
-            TypeKind::Set(inner_expr) => {
-                if let Ok(inner) = self.extract_type_from_expression(inner_expr) {
-                    let subst_inner = self.substitute_type(&inner, mapping);
-                    make_type(TypeKind::Set(Box::new(
-                        self.create_type_expression(subst_inner),
-                    )))
-                } else {
-                    ty.clone()
-                }
+            // Collection canonical variants are normalized to Custom before type-checking.
+            TypeKind::List(_) | TypeKind::Map(_, _) | TypeKind::Set(_) | TypeKind::Array(_, _) => {
+                unreachable!("collection types are normalized to Custom before this point")
             }
 
             TypeKind::Option(inner) => make_type(TypeKind::Option(Box::new(

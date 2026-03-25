@@ -4,7 +4,7 @@
 //! Expression lowering - converts AST expressions to MIR.
 
 use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::mir::{
     BinOp, Constant, Discriminant, Operand, Place, Rvalue, StatementKind as MirStatementKind,
@@ -36,10 +36,22 @@ pub(crate) fn lower_binary_expr(
             (Place::new(temp), Operand::Copy(Place::new(temp)))
         };
 
-        // Resolve the collection type to pick the right runtime function
+        // Resolve the collection type to pick the right runtime function.
+        // After normalization, Set and Map are represented as Custom("Set"/"Map", ...).
         let fn_name = match ctx.type_checker.get_type(rhs.id).map(|t| &t.kind) {
-            Some(TypeKind::Set(_)) => rt::SET_CONTAINS,
-            Some(TypeKind::Map(_, _)) => rt::MAP_CONTAINS_KEY,
+            Some(TypeKind::Set(_)) | Some(TypeKind::Map(_, _)) => {
+                unreachable!("collection types are normalized to Custom before this point")
+            }
+            Some(TypeKind::Custom(name, _))
+                if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Set) =>
+            {
+                rt::SET_CONTAINS
+            }
+            Some(TypeKind::Custom(name, _))
+                if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Map) =>
+            {
+                rt::MAP_CONTAINS_KEY
+            }
             _ => "__contains",
         };
 

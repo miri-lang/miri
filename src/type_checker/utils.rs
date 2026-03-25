@@ -71,15 +71,18 @@ fn is_auto_copy_inner<'a>(
 
         // Managed heap types are never auto-copy
         TypeKind::String
-        | TypeKind::List(_)
-        | TypeKind::Array(_, _)
-        | TypeKind::Map(_, _)
-        | TypeKind::Set(_)
         | TypeKind::Result(_, _)
         | TypeKind::Future(_)
         | TypeKind::Meta(_)
         | TypeKind::Linear(_)
         | TypeKind::Generic(_, _, _) => false,
+
+        // Collection canonical variants — after normalization these are converted to
+        // TypeKind::Custom("List"/"Array"/"Map"/"Set") before reaching this function.
+        // Keeping them here ensures exhaustive match coverage.
+        TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => {
+            unreachable!("collection types are normalized to Custom before this point")
+        }
 
         // Tuples: auto-copy if all elements are auto-copy
         TypeKind::Tuple(elements) => elements.iter().all(|elem_expr| {
@@ -334,19 +337,11 @@ impl TypeChecker {
     /// Supports: List<T>, Set<T>, Map<K,V>, String, Range<T>
     pub(crate) fn get_iterable_element_type(&mut self, ty: &Type, span: Span) -> Type {
         match &ty.kind {
-            TypeKind::List(inner) => self
-                .extract_type_from_expression(inner)
-                .unwrap_or_else(|_| Self::error_type()),
-            TypeKind::Array(inner, _) => self
-                .extract_type_from_expression(inner)
-                .unwrap_or_else(|_| Self::error_type()),
             TypeKind::String => make_type(TypeKind::String),
-            TypeKind::Set(inner) => self
-                .extract_type_from_expression(inner)
-                .unwrap_or_else(|_| Self::error_type()),
-            TypeKind::Map(key, _val) => self
-                .extract_type_from_expression(key)
-                .unwrap_or_else(|_| Self::error_type()),
+            // Collection canonical variants are normalized to Custom before type-checking.
+            TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Set(_) | TypeKind::Map(_, _) => {
+                unreachable!("collection types are normalized to Custom before this point")
+            }
             TypeKind::Tuple(element_type_exprs) => {
                 // For homogeneous tuples, return the element type
                 if element_type_exprs.is_empty() {
@@ -456,20 +451,26 @@ impl TypeChecker {
     /// Resolves a Type based on its kind.
     fn resolve_type_kind(&mut self, t: Type, expr: &Expression, context: &Context) -> Type {
         match t.kind {
+            // Collection canonical variants — after normalization these arrive as
+            // TypeKind::Custom.  If somehow they appear here (e.g. from factory
+            // functions that haven't been updated), convert them to Custom so that
+            // downstream code only sees one representation.
             TypeKind::List(inner) => {
                 let resolved_inner = self.resolve_type_expression(&inner, context);
-                make_type(TypeKind::List(Box::new(
-                    self.create_type_expression(resolved_inner),
-                )))
+                make_type(TypeKind::Custom(
+                    "List".to_string(),
+                    Some(vec![self.create_type_expression(resolved_inner)]),
+                ))
             }
             TypeKind::Set(inner) => {
                 let resolved_inner = self.resolve_type_expression(&inner, context);
                 if let TypeKind::Option(_) = resolved_inner.kind {
                     self.report_error("Set elements cannot be optional".to_string(), inner.span);
                 }
-                make_type(TypeKind::Set(Box::new(
-                    self.create_type_expression(resolved_inner),
-                )))
+                make_type(TypeKind::Custom(
+                    "Set".to_string(),
+                    Some(vec![self.create_type_expression(resolved_inner)]),
+                ))
             }
             TypeKind::Map(k, v) => {
                 let rk = self.resolve_type_expression(&k, context);
@@ -477,9 +478,12 @@ impl TypeChecker {
                     self.report_error("Map keys cannot be optional".to_string(), k.span);
                 }
                 let rv = self.resolve_type_expression(&v, context);
-                make_type(TypeKind::Map(
-                    Box::new(self.create_type_expression(rk)),
-                    Box::new(self.create_type_expression(rv)),
+                make_type(TypeKind::Custom(
+                    "Map".to_string(),
+                    Some(vec![
+                        self.create_type_expression(rk),
+                        self.create_type_expression(rv),
+                    ]),
                 ))
             }
             TypeKind::Option(inner) => {
@@ -495,9 +499,12 @@ impl TypeChecker {
                 } else {
                     size
                 };
-                make_type(TypeKind::Array(
-                    Box::new(self.create_type_expression(resolved_inner)),
-                    folded_size,
+                make_type(TypeKind::Custom(
+                    "Array".to_string(),
+                    Some(vec![
+                        self.create_type_expression(resolved_inner),
+                        *folded_size,
+                    ]),
                 ))
             }
             TypeKind::Custom(name, args) => self.resolve_custom_type(&name, args, expr, context),
@@ -574,9 +581,32 @@ impl TypeChecker {
                             );
                         }
                         let v = self.resolve_type_expression(&args[1], context);
-                        return Some(make_type(TypeKind::Map(
-                            Box::new(self.create_type_expression(k)),
-                            Box::new(self.create_type_expression(v)),
+                        return Some(make_type(TypeKind::Custom(
+                            "Map".to_string(),
+                            Some(vec![
+                                self.create_type_expression(k),
+                                self.create_type_expression(v),
+                            ]),
+                        )));
+                    }
+                }
+                None
+            }
+            "Array" => {
+                if let Some(args) = args {
+                    if args.len() == 2 {
+                        let elem = self.resolve_type_expression(&args[0], context);
+                        // The second argument is the size expression (may be a literal or a
+                        // constant-foldable expression, not a type expression).
+                        let size = &args[1];
+                        let folded_size = if let Some(val) = Self::try_eval_const_int(size) {
+                            Box::new(crate::ast::factory::int_literal_expression(val))
+                        } else {
+                            Box::new(size.clone())
+                        };
+                        return Some(make_type(TypeKind::Custom(
+                            "Array".to_string(),
+                            Some(vec![self.create_type_expression(elem), *folded_size]),
                         )));
                     }
                 }
@@ -586,9 +616,10 @@ impl TypeChecker {
                 if let Some(args) = args {
                     if args.len() == 1 {
                         let t = self.resolve_type_expression(&args[0], context);
-                        return Some(make_type(TypeKind::List(Box::new(
-                            self.create_type_expression(t),
-                        ))));
+                        return Some(make_type(TypeKind::Custom(
+                            "List".to_string(),
+                            Some(vec![self.create_type_expression(t)]),
+                        )));
                     }
                 }
                 None
@@ -603,9 +634,10 @@ impl TypeChecker {
                                 args[0].span,
                             );
                         }
-                        return Some(make_type(TypeKind::Set(Box::new(
-                            self.create_type_expression(t),
-                        ))));
+                        return Some(make_type(TypeKind::Custom(
+                            "Set".to_string(),
+                            Some(vec![self.create_type_expression(t)]),
+                        )));
                     }
                 }
                 None
