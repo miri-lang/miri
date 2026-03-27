@@ -954,7 +954,9 @@ impl TypeChecker {
     pub(crate) fn report_error(&mut self, message: String, span: Span) {
         let key = (message.clone(), span);
         if self.reported_errors.insert(key) {
-            self.errors.push(TypeError::custom(message, span, None));
+            let mut err = TypeError::custom(message, span, None);
+            err.source_override = self.current_source_override.clone();
+            self.errors.push(err);
         }
     }
 
@@ -962,8 +964,9 @@ impl TypeChecker {
     pub(crate) fn report_error_with_help(&mut self, message: String, span: Span, help: String) {
         let key = (message.clone(), span);
         if self.reported_errors.insert(key) {
-            self.errors
-                .push(TypeError::custom(message, span, Some(help)));
+            let mut err = TypeError::custom(message, span, Some(help));
+            err.source_override = self.current_source_override.clone();
+            self.errors.push(err);
         }
     }
 
@@ -985,6 +988,7 @@ impl TypeChecker {
             span: Some(span),
             help,
             notes: Vec::new(),
+            source_override: self.current_source_override.clone(),
         });
     }
 

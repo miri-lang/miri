@@ -291,6 +291,7 @@ impl Reportable for LoweringError {
             span: Some(self.span),
             help,
             notes: Vec::new(),
+            source_override: None,
         }
     }
 }

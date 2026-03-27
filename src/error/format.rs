@@ -98,6 +98,12 @@ pub fn format_diagnostic_full(source: &str, diag: &Diagnostic) -> String {
     let level = diag.severity.as_str();
     let mut output = String::new();
 
+    // Use source override if the diagnostic comes from an imported file.
+    let (effective_source, file_label) = match &diag.source_override {
+        Some((path, src)) => (src.as_str(), Some(path.as_str())),
+        None => (source, None),
+    };
+
     // Header: error[E0001]: Title
     output.push_str(colors.bold);
     output.push_str(level_color);
@@ -115,10 +121,10 @@ pub fn format_diagnostic_full(source: &str, diag: &Diagnostic) -> String {
     // If we have a span that falls within the source, show source context.
     // Spans from stdlib modules may point outside the user's source string;
     // treat those as spanless to avoid panicking in find_line_info.
-    let effective_span = diag.span.filter(|s| s.start < source.len());
+    let effective_span = diag.span.filter(|s| s.start < effective_source.len());
 
     if let Some(ref span) = effective_span {
-        let (line_num, col_num, line_str) = find_line_info(source, span.start);
+        let (line_num, col_num, line_str) = find_line_info(effective_source, span.start);
         let len = if span.end > span.start {
             span.end - span.start
         } else {
@@ -129,11 +135,18 @@ pub fn format_diagnostic_full(source: &str, diag: &Diagnostic) -> String {
         let padding = " ".repeat(col_num.saturating_sub(1));
         let underline = "^".repeat(len);
 
-        // Location: --> line:col
-        output.push_str(&format!(
-            "{}-->{} line {}:{}\n",
-            colors.blue, colors.reset, line_num, col_num
-        ));
+        // Location: --> file:line:col (or just line:col for the main file)
+        if let Some(path) = file_label {
+            output.push_str(&format!(
+                "{}-->{} {}:{}:{}\n",
+                colors.blue, colors.reset, path, line_num, col_num
+            ));
+        } else {
+            output.push_str(&format!(
+                "{}-->{} line {}:{}\n",
+                colors.blue, colors.reset, line_num, col_num
+            ));
+        }
 
         // Empty line with pipe
         output.push_str(&format!(

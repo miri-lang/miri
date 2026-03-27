@@ -161,6 +161,7 @@ impl Reportable for CodegenError {
             span: None, // Codegen errors don't have source spans
             help: props.help,
             notes: Vec::new(),
+            source_override: None,
         }
     }
 }

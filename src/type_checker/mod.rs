@@ -90,6 +90,9 @@ pub struct TypeChecker {
     /// Maps module alias names to their full module paths.
     /// e.g., `"M"` → `"system.math"` for `use system.math as M`.
     pub(crate) module_aliases: HashMap<String, String>,
+    /// When set, errors are tagged with this (file_path, source_text) so that
+    /// the formatter can display the correct source context for imported files.
+    pub(crate) current_source_override: Option<(String, String)>,
 }
 
 impl Default for TypeChecker {
@@ -121,6 +124,7 @@ impl TypeChecker {
             call_generic_mappings: HashMap::new(),
             source_dir: None,
             module_aliases: HashMap::new(),
+            current_source_override: None,
         }
     }
 

@@ -66,6 +66,9 @@ pub struct Diagnostic {
     pub help: Option<String>,
     /// Additional notes/context.
     pub notes: Vec<String>,
+    /// Optional (file_path, source_text) for errors originating from imported files.
+    /// When present, the formatter uses this source instead of the main file's source.
+    pub source_override: Option<(String, String)>,
 }
 
 /// Consolidated error properties to keep widely scattered match statements in check.
@@ -110,6 +113,7 @@ pub struct DiagnosticBuilder {
     span: Option<Span>,
     help: Option<String>,
     notes: Vec<String>,
+    source_override: Option<(String, String)>,
 }
 
 impl DiagnosticBuilder {
@@ -123,6 +127,7 @@ impl DiagnosticBuilder {
             span: None,
             help: None,
             notes: Vec::new(),
+            source_override: None,
         }
     }
 
@@ -171,6 +176,12 @@ impl DiagnosticBuilder {
         self
     }
 
+    /// Set source override for errors from imported files.
+    pub fn source_override(mut self, file_path: String, source_text: String) -> Self {
+        self.source_override = Some((file_path, source_text));
+        self
+    }
+
     /// Build the diagnostic.
     pub fn build(self) -> Diagnostic {
         Diagnostic {
@@ -181,6 +192,7 @@ impl DiagnosticBuilder {
             span: self.span,
             help: self.help,
             notes: self.notes,
+            source_override: self.source_override,
         }
     }
 }

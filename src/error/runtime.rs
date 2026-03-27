@@ -66,6 +66,7 @@ impl Reportable for RuntimeError {
             span: None, // Runtime errors don't have source spans
             help: props.help,
             notes: Vec::new(),
+            source_override: None,
         }
     }
 }
