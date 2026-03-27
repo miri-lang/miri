@@ -742,10 +742,8 @@ impl Pipeline {
             // Step 1: build abstract_class_methods —
             //   abstract class name → list of (method AST stmt, method name)
             //   for every non-abstract method body in that class.
-            let mut abstract_class_methods: std::collections::HashMap<
-                String,
-                Vec<&Statement>,
-            > = std::collections::HashMap::new();
+            let mut abstract_class_methods: std::collections::HashMap<String, Vec<&Statement>> =
+                std::collections::HashMap::new();
 
             let all_stmts = result
                 .ast
@@ -755,12 +753,12 @@ impl Pipeline {
 
             for stmt in all_stmts {
                 if let StatementKind::Class(class_data) = &stmt.node {
-                    let class_name =
-                        if let ExpressionKind::Identifier(n, _) = &class_data.name.node {
-                            n.as_str()
-                        } else {
-                            continue;
-                        };
+                    let class_name = if let ExpressionKind::Identifier(n, _) = &class_data.name.node
+                    {
+                        n.as_str()
+                    } else {
+                        continue;
+                    };
                     let is_abstract = matches!(
                         result.type_checker.global_type_definitions.get(class_name),
                         Some(TypeDefinition::Class(cd)) if cd.is_abstract
@@ -791,17 +789,13 @@ impl Pipeline {
 
             for stmt in all_stmts2 {
                 if let StatementKind::Class(class_data) = &stmt.node {
-                    let class_name =
-                        if let ExpressionKind::Identifier(n, _) = &class_data.name.node {
-                            n.as_str()
-                        } else {
-                            continue;
-                        };
-                    let cd = match result
-                        .type_checker
-                        .global_type_definitions
-                        .get(class_name)
+                    let class_name = if let ExpressionKind::Identifier(n, _) = &class_data.name.node
                     {
+                        n.as_str()
+                    } else {
+                        continue;
+                    };
+                    let cd = match result.type_checker.global_type_definitions.get(class_name) {
                         Some(TypeDefinition::Class(cd)) => cd,
                         _ => continue,
                     };
@@ -815,47 +809,38 @@ impl Pipeline {
                     // Walk up the inheritance chain; stop at the first non-abstract class.
                     let mut base_opt = cd.base_class.clone();
                     while let Some(ref base_name) = base_opt.clone() {
-                        let base_cd = match result
-                            .type_checker
-                            .global_type_definitions
-                            .get(base_name)
-                        {
-                            Some(TypeDefinition::Class(bcd)) => bcd,
-                            _ => break,
-                        };
+                        let base_cd =
+                            match result.type_checker.global_type_definitions.get(base_name) {
+                                Some(TypeDefinition::Class(bcd)) => bcd,
+                                _ => break,
+                            };
                         if !base_cd.is_abstract {
                             break;
                         }
 
-                        if let Some(method_stmts) =
-                            abstract_class_methods.get(base_name.as_str())
-                        {
+                        if let Some(method_stmts) = abstract_class_methods.get(base_name.as_str()) {
                             for method_stmt in method_stmts.iter() {
-                                if let StatementKind::FunctionDeclaration(md) =
-                                    &method_stmt.node
-                                {
+                                if let StatementKind::FunctionDeclaration(md) = &method_stmt.node {
                                     // Skip if the concrete class directly overrides this method.
                                     if cd.methods.contains_key(md.name.as_str()) {
                                         continue;
                                     }
-                                    let mangled =
-                                        format!("{}_{}", class_name, md.name);
+                                    let mangled = format!("{}_{}", class_name, md.name);
                                     if lowered_names.contains(&mangled) {
                                         continue;
                                     }
-                                    let (mir_body, lambdas) =
-                                        mir::lowering::lower_class_method(
-                                            method_stmt,
-                                            self_type.clone(),
-                                            &result.type_checker,
-                                            is_release,
-                                        )
-                                        .map_err(|e| {
-                                            CompilerError::Codegen(format!(
-                                                "MIR lowering failed for {}: {}",
-                                                mangled, e
-                                            ))
-                                        })?;
+                                    let (mir_body, lambdas) = mir::lowering::lower_class_method(
+                                        method_stmt,
+                                        self_type.clone(),
+                                        &result.type_checker,
+                                        is_release,
+                                    )
+                                    .map_err(|e| {
+                                        CompilerError::Codegen(format!(
+                                            "MIR lowering failed for {}: {}",
+                                            mangled, e
+                                        ))
+                                    })?;
                                     lowered_names.insert(mangled.clone());
                                     bodies.push((mangled, mir_body));
                                     for lambda in lambdas {
