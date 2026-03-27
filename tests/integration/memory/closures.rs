@@ -10,7 +10,7 @@
 //   - String captures — pointer capture with correct RC
 //   - Class captures where all fields are primitives
 //
-// Currently NOT WORKING (tracked in Phase 1 roadmap):
+// Currently NOT WORKING (tracked in PLAN.md — Milestone 5, Task 0e):
 //   - Lambda capture of List/Map/Set/Array — the closure environment does not
 //     DecRef the captured collection when the lambda drops, causing a leak.
 //     Tests for these patterns are present but marked #[ignore].
@@ -96,15 +96,15 @@ fn main()
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-//  Known-failing captures (Phase 1 — lambda env does not DecRef collections)
+//  Known-failing captures (Milestone 5 Task 0e — lambda env does not DecRef collections)
 //  These tests are #[ignore]d so they document the expected behavior without
-//  blocking CI.  Remove #[ignore] once the Phase 1 fix lands.
+//  blocking CI.  Remove #[ignore] once Milestone 5 Task 0e lands.
 // ────────────────────────────────────────────────────────────────────────────
 
 /// Lambda capturing a List; the List must not be freed while the lambda is live,
 /// and must be freed exactly once after both the lambda and outer binding drop.
 #[test]
-#[ignore = "lambda capture of List leaks: closure env does not DecRef on drop (Phase 1)"]
+#[ignore = "lambda capture of List leaks: closure env does not DecRef on drop (Milestone 5 Task 0e)"]
 fn test_lambda_captures_list_no_leak() {
     assert_runs_with_output(
         r#"
@@ -122,7 +122,7 @@ fn main()
 
 /// Lambda called multiple times; the captured List must not be double-freed.
 #[test]
-#[ignore = "lambda capture of List leaks (Phase 1)"]
+#[ignore = "lambda capture of List leaks: closure env does not DecRef on drop (Milestone 5 Task 0e)"]
 fn test_lambda_called_multiple_times_no_leak() {
     assert_runs_with_output(
         r#"
@@ -142,7 +142,7 @@ fn main()
 
 /// Lambda captures two managed Lists; both must be freed when the lambda drops.
 #[test]
-#[ignore = "lambda capture of List leaks (Phase 1)"]
+#[ignore = "lambda capture of List leaks: closure env does not DecRef on drop (Milestone 5 Task 0e)"]
 fn test_lambda_captures_two_lists_no_leak() {
     assert_runs_with_output(
         r#"
@@ -161,7 +161,7 @@ fn main()
 
 /// Lambda created fresh inside a loop, capturing the same outer List each time.
 #[test]
-#[ignore = "lambda capture of List leaks (Phase 1)"]
+#[ignore = "lambda capture of List leaks: closure env does not DecRef on drop (Milestone 5 Task 0e)"]
 fn test_lambda_created_in_loop_no_accumulation() {
     assert_runs_with_output(
         r#"
@@ -183,7 +183,7 @@ fn main()
 
 /// Lambda passed as argument to a higher-order function, captures a List.
 #[test]
-#[ignore = "lambda capture of List leaks (Phase 1)"]
+#[ignore = "lambda capture of List leaks: closure env does not DecRef on drop (Milestone 5 Task 0e)"]
 fn test_lambda_passed_as_arg_captures_list_no_leak() {
     assert_runs_with_output(
         r#"
@@ -204,7 +204,7 @@ fn main()
 
 /// Lambda captures a class with a managed List field.
 #[test]
-#[ignore = "lambda capture of class-with-list-field leaks (Phase 1)"]
+#[ignore = "lambda capture of class-with-list-field leaks: closure env does not DecRef on drop (Milestone 5 Task 0e)"]
 fn test_lambda_captures_class_with_list_field_no_leak() {
     assert_runs_with_output(
         r#"
@@ -227,7 +227,7 @@ fn main()
 /// Two independent lambdas each capture the same List; dropping both lambdas
 /// must not double-free the List.
 #[test]
-#[ignore = "lambda capture of List leaks (Phase 1)"]
+#[ignore = "lambda capture of List leaks: closure env does not DecRef on drop (Milestone 5 Task 0e)"]
 fn test_two_lambdas_capture_same_list_no_double_free() {
     assert_runs_with_output(
         r#"
