@@ -410,6 +410,16 @@ impl TypeChecker {
                 TypeKind::Custom(name, _) => Ok(name.as_str()),
                 _ => Err("Expected custom type".to_string()),
             },
+            // `inheritance_identifier` emits TypeDeclaration for `ClassName<T>` in
+            // `extends` / `implements` clauses.  Extract the base name from the inner
+            // identifier expression.
+            ExpressionKind::TypeDeclaration(inner, _, _, _) => {
+                if let ExpressionKind::Identifier(name, _) = &inner.node {
+                    Ok(name.as_str())
+                } else {
+                    Err("Expected identifier in type declaration".to_string())
+                }
+            }
             _ => Err("Expected type identifier".to_string()),
         }
     }

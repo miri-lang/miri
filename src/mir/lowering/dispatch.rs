@@ -85,6 +85,13 @@ fn type_kind_to_mangle_str(kind: &TypeKind) -> String {
 /// only `Animal` defines `speak`, the returned defining class is `"Animal"` and
 /// the call is mangled to `Animal_speak`.
 ///
+/// **Concrete caller / abstract definer rule**: when the original `class_name` is a
+/// *concrete* class and the method is found in an *abstract* ancestor, the caller's
+/// name is returned instead of the ancestor's name.  This ensures static dispatch
+/// goes to the per-concrete-class compiled version (e.g. `Array_is_empty`) rather
+/// than the abstract-class version (`Collection_is_empty`), which would use virtual
+/// dispatch internally and crash for objects that have no vtable pointer (Array, List).
+///
 /// Also handles:
 /// - Trait-typed receivers: walks the trait hierarchy to find the method.
 /// - Default trait methods: if the class doesn't define the method, checks all
@@ -99,12 +106,27 @@ pub(crate) fn resolve_inherited_method(
         return resolve_in_trait_hierarchy(type_defs, class_name, method_name);
     }
 
+    // Is the original caller itself abstract?  If it is, the "concrete caller" rule
+    // does not apply — we use the normal defining-class name.
+    let caller_is_abstract = matches!(
+        type_defs.get(class_name),
+        Some(TypeDefinition::Class(cd)) if cd.is_abstract
+    );
+
     let mut current = class_name.to_string();
     loop {
         let (base, traits) = match type_defs.get(&current) {
             Some(TypeDefinition::Class(class_def)) => {
                 if let Some(method_info) = class_def.methods.get(method_name) {
-                    return Some((current, method_info.clone()));
+                    // When a concrete caller finds the method in an abstract ancestor,
+                    // return the original caller's name so dispatch goes to the
+                    // per-concrete-class compiled version rather than the abstract one.
+                    let defining = if class_def.is_abstract && !caller_is_abstract {
+                        class_name.to_string()
+                    } else {
+                        current.clone()
+                    };
+                    return Some((defining, method_info.clone()));
                 }
                 (class_def.base_class.clone(), class_def.traits.clone())
             }
@@ -316,7 +338,35 @@ pub fn lower_call(
     // Resolves the class definition from the object's type and emits a call to
     // the mangled function `{ClassName}_{method_name}`.
     if let ExpressionKind::Member(obj, method_expr) = &func.node {
-        if let Some(obj_ty) = ctx.type_checker.get_type(obj.id) {
+        if let Some(raw_obj_ty) = ctx.type_checker.get_type(obj.id) {
+            // When compiling an inherited method (e.g. `Array_is_empty` from
+            // `Collection::is_empty`), the type checker recorded `self` as the
+            // abstract class `Collection`.  Prefer the concrete type from the MIR
+            // local so that `self.length()` dispatches to `Array_length` rather
+            // than the non-existent abstract `Collection_length`.
+            let obj_ty_override: Option<Type> =
+                if let TypeKind::Custom(name, _) = &raw_obj_ty.kind {
+                    let is_abstract = matches!(
+                        ctx.type_checker.global_type_definitions.get(name.as_str()),
+                        Some(TypeDefinition::Class(cd)) if cd.is_abstract
+                    );
+                    if is_abstract {
+                        if let ExpressionKind::Identifier(var_name, _) = &obj.node {
+                            if let Some(&local) = ctx.variable_map.get(var_name.as_str()) {
+                                Some(ctx.body.local_decls[local.0].ty.clone())
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+            let obj_ty = obj_ty_override.as_ref().unwrap_or(raw_obj_ty);
             let class_name = match &obj_ty.kind {
                 TypeKind::String => Some("String".to_string()),
                 TypeKind::Tuple(_) => Some("Tuple".to_string()),

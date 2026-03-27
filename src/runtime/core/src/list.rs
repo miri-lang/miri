@@ -283,475 +283,487 @@ impl Drop for MiriList {
 // FFI Functions
 // =============================================================================
 
-/// Creates a new list from a MiriArray.
-/// This is used by the compiler to lower `List([1, 2, 3])` constructor calls.
-/// The array's data is copied into the new list; the array is NOT consumed.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_list_new_from_raw(
-    array: *mut crate::array::MiriArray,
-    _len: usize,
-    _elem_size: usize,
-) -> *mut MiriList {
-    if array.is_null() {
-        // Fallback: use _elem_size if provided, otherwise default to 8
-        let es = if _elem_size > 0 { _elem_size } else { 8 };
-        return miri_rt_list_new(es);
-    }
-    let arr = &*array;
-    let data = arr.data_ptr();
-    let len = arr.len();
-    let elem_size = arr.elem_size();
-    if data.is_null() || len == 0 {
-        return miri_rt_list_new(elem_size);
-    }
-    let list = miri_rt_list_new(elem_size);
-    for i in 0..len {
-        (*list).push(data.add(i * elem_size));
-    }
-    list
-}
+/// Stable FFI interface for list operations.
+pub mod ffi {
+    use super::read_as_i64;
+    use super::*;
+    use std::alloc::{alloc, dealloc, Layout};
+    use std::ptr;
 
-/// Creates a new list from a MiriArray whose elements are RC-managed pointers.
-///
-/// Same as `miri_rt_list_new_from_raw` but IncRefs each non-null element pointer
-/// after copying. This is necessary when elements are heap-allocated (Option,
-/// List, Array, Map, Set, Tuple, Custom) because the caller's array will
-/// release its element references via the element-drop loop when freed. Without
-/// this IncRef the list would hold dangling pointers.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_list_new_from_managed_array(
-    array: *mut crate::array::MiriArray,
-    _len: usize,
-    _elem_size: usize,
-) -> *mut MiriList {
-    let list = miri_rt_list_new_from_raw(array, _len, _elem_size);
-    if list.is_null() || array.is_null() {
-        return list;
-    }
-    // IncRef each element in the newly-created list so the list owns a
-    // reference independent of the source array.
-    let list_ref = &*list;
-    let data = list_ref.data;
-    let len = list_ref.len;
-    let elem_size = list_ref.elem_size;
-    if data.is_null() || len == 0 || elem_size == 0 {
-        return list;
-    }
-    for i in 0..len {
-        let slot = data.add(i * elem_size) as *const usize;
-        let ptr_val = *slot;
-        if ptr_val != 0 {
-            // RC is stored at ptr - RC_HEADER_SIZE (one word before the payload)
-            let rc_ptr = (ptr_val as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *mut usize;
-            *rc_ptr += 1;
+    /// Creates a new list from a MiriArray.
+    /// This is used by the compiler to lower `List([1, 2, 3])` constructor calls.
+    /// The array's data is copied into the new list; the array is NOT consumed.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_new_from_raw(
+        array: *mut crate::array::MiriArray,
+        _len: usize,
+        _elem_size: usize,
+    ) -> *mut MiriList {
+        if array.is_null() {
+            // Fallback: use _elem_size if provided, otherwise default to 8
+            let es = if _elem_size > 0 { _elem_size } else { 8 };
+            return miri_rt_list_new(es);
         }
-    }
-    // Mark this list as holding managed (heap-allocated) elements. When elements
-    // are later removed by mutation operations (clear, remove_at), elem_drop_fn
-    // is called so that each removed element's RC is decremented.
-    //
-    // NOTE: This sets a single drop function for all managed element types. For
-    // List-of-List cases the function handles one level of recursion. Deeper
-    // nesting (List<List<List<T>>>) is handled correctly for the normal drop path
-    // (variables going out of scope) by the codegen's element-drop loops, but
-    // mutation operations on lists holding non-List managed elements would need
-    // a different drop function (future work).
-    (*list).elem_drop_fn = miri_rt_list_decref_element as *const () as usize;
-    list
-}
-
-/// Creates a new empty list with the given element size.
-///
-/// Allocates `[RC=1][MiriList fields]`.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_list_new(elem_size: usize) -> *mut MiriList {
-    let struct_size = std::mem::size_of::<MiriList>();
-    let payload = alloc_with_rc(struct_size);
-    if payload.is_null() {
-        return ptr::null_mut();
-    }
-    let list = payload as *mut MiriList;
-    (*list).data = ptr::null_mut();
-    (*list).len = 0;
-    (*list).capacity = 0;
-    (*list).elem_size = elem_size;
-    (*list).elem_drop_fn = 0;
-    list
-}
-
-/// Creates a new list with pre-allocated capacity.
-///
-/// Allocates `[RC=1][MiriList fields]` with a pre-allocated data buffer.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_list_with_capacity(
-    elem_size: usize,
-    capacity: usize,
-) -> *mut MiriList {
-    let list = miri_rt_list_new(elem_size);
-    if list.is_null() || capacity == 0 || elem_size == 0 {
-        return list;
-    }
-    let layout = match Layout::from_size_align(capacity * elem_size, 8) {
-        Ok(l) => l,
-        Err(_) => return list,
-    };
-    let data = alloc(layout);
-    if !data.is_null() {
-        (*list).data = data;
-        (*list).capacity = capacity;
-    }
-    list
-}
-
-/// Returns the number of elements in the list.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_list_len(ptr: *const MiriList) -> usize {
-    if ptr.is_null() {
-        return 0;
-    }
-    (*ptr).len()
-}
-
-/// Returns the capacity of the list.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_list_capacity(ptr: *const MiriList) -> usize {
-    if ptr.is_null() {
-        return 0;
-    }
-    (*ptr).capacity()
-}
-
-/// Returns true (1) if the list is empty, false (0) otherwise.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_list_is_empty(ptr: *const MiriList) -> u8 {
-    if ptr.is_null() {
-        return 1;
-    }
-    if (*ptr).is_empty() {
-        1
-    } else {
-        0
-    }
-}
-
-/// Pushes an element to the end of the list.
-///
-/// The value is passed as a pointer-sized integer. The runtime copies
-/// `elem_size` bytes from the address of the parameter on the stack.
-/// This works for all primitive element types (int, float, bool, pointers)
-/// which fit in a single register.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_list_push(ptr: *mut MiriList, val: usize) {
-    if ptr.is_null() {
-        return;
-    }
-    let list = &mut *ptr;
-    list.push(&val as *const usize as *const u8);
-}
-
-/// Pops the last element from the list.
-/// Returns true (1) if successful, false (0) if the list was empty.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_list_pop(ptr: *mut MiriList) -> u8 {
-    if ptr.is_null() {
-        return 0;
-    }
-    let list = &mut *ptr;
-    if list.len == 0 {
-        return 0;
-    }
-    list.len -= 1;
-    1
-}
-
-/// Gets a pointer to the element at the given index.
-/// Returns null if the index is out of bounds.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_list_get(ptr: *const MiriList, index: usize) -> *const u8 {
-    if ptr.is_null() {
-        return ptr::null();
-    }
-    (*ptr).get(index)
-}
-
-/// Gets a mutable pointer to the element at the given index.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_list_get_mut(ptr: *mut MiriList, index: usize) -> *mut u8 {
-    if ptr.is_null() {
-        return ptr::null_mut();
-    }
-    (*ptr).get_mut(index)
-}
-
-/// Sets the element at the given index.
-/// Returns true (1) if successful, false (0) if the index was out of bounds.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_list_set(ptr: *mut MiriList, index: usize, val: usize) -> u8 {
-    if ptr.is_null() {
-        return 0;
-    }
-    let list = &mut *ptr;
-    if list.set(index, &val as *const usize as *const u8) {
-        1
-    } else {
-        0
-    }
-}
-
-/// Inserts an element at the given index.
-/// Returns true (1) if successful, false (0) if the index was out of bounds.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_list_insert(ptr: *mut MiriList, index: usize, val: usize) -> u8 {
-    if ptr.is_null() {
-        return 0;
-    }
-    let list = &mut *ptr;
-    if list.insert(index, &val as *const usize as *const u8) {
-        1
-    } else {
-        0
-    }
-}
-
-/// Removes the element at the given index.
-/// Returns true (1) if successful, false (0) if the index was out of bounds.
-///
-/// If `elem_drop_fn` is set, calls it on the removed element pointer so that
-/// managed elements have their RC decremented on removal.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_list_remove(ptr: *mut MiriList, index: usize) -> u8 {
-    if ptr.is_null() {
-        return 0;
-    }
-    let list = &mut *ptr;
-    if index >= list.len {
-        return 0;
-    }
-
-    // DecRef the element being removed if managed.
-    if list.elem_drop_fn != 0 {
-        let drop_fn: unsafe extern "C" fn(*mut u8) = std::mem::transmute(list.elem_drop_fn);
-        let slot = list.data.add(index * list.elem_size) as *const usize;
-        let elem_ptr = *slot;
-        if elem_ptr != 0 {
-            drop_fn(elem_ptr as *mut u8);
+        let arr = &*array;
+        let data = arr.data_ptr();
+        let len = arr.len();
+        let elem_size = arr.elem_size();
+        if data.is_null() || len == 0 {
+            return miri_rt_list_new(elem_size);
         }
+        let list = miri_rt_list_new(elem_size);
+        for i in 0..len {
+            (*list).push(data.add(i * elem_size));
+        }
+        list
     }
 
-    // Shift elements down
-    if index < list.len - 1 {
-        let dest = list.data.add(index * list.elem_size);
-        let src = list.data.add((index + 1) * list.elem_size);
-        let count = (list.len - index - 1) * list.elem_size;
-        ptr::copy(src, dest, count);
-    }
-
-    list.len -= 1;
-    1
-}
-
-/// Sets the element drop function for a list.
-///
-/// When set, mutation operations (`clear`, `remove_at`, `remove`) call `fn_ptr`
-/// on each removed element pointer so that managed elements (Lists, Maps, class
-/// instances) have their RC decremented on removal.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_list_set_elem_drop_fn(ptr: *mut MiriList, fn_ptr: usize) {
-    if !ptr.is_null() {
-        (*ptr).elem_drop_fn = fn_ptr;
-    }
-}
-
-/// Decrements the RC of a managed List element and frees it if RC reaches zero.
-///
-/// Used as the `elem_drop_fn` for `List<List<...>>` collections so that
-/// `clear()` and `remove_at()` correctly release inner list references.
-///
-/// LIMITATION: Calls `miri_rt_list_free` directly, which does not invoke
-/// `elem_drop_fn` recursively. This means mutation operations on lists whose
-/// elements are themselves lists of managed values (three or more levels of
-/// nesting) will not fully release inner references. The normal drop path
-/// (variables going out of scope) handles all levels via the codegen's inline
-/// element-drop loops and is unaffected by this function.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_list_decref_element(ptr: *mut u8) {
-    if ptr.is_null() {
-        return;
-    }
-    let rc_ptr = (ptr as usize - crate::rc::RC_HEADER_SIZE) as *mut usize;
-    let rc = *rc_ptr;
-    // Skip immortal objects (RC stored as negative isize)
-    if (rc as isize) < 0 {
-        return;
-    }
-    *rc_ptr -= 1;
-    if *rc_ptr == 0 {
-        miri_rt_list_free(ptr as *mut MiriList);
-    }
-}
-
-/// Clears all elements from the list.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_list_clear(ptr: *mut MiriList) {
-    if !ptr.is_null() {
-        (*ptr).clear();
-    }
-}
-
-/// Clones a list.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_list_clone(ptr: *const MiriList) -> *mut MiriList {
-    if ptr.is_null() {
-        return miri_rt_list_new(0);
-    }
-
-    let src = &*ptr;
-    let list = miri_rt_list_with_capacity(src.elem_size, src.len);
-    if list.is_null() {
-        return list;
-    }
-
-    if !src.data.is_null() && src.len > 0 && !(*list).data.is_null() {
-        ptr::copy_nonoverlapping(src.data, (*list).data, src.len * src.elem_size);
-        (*list).len = src.len;
-    }
-
-    list
-}
-
-/// Frees a list and its backing storage.
-///
-/// The pointer must have been returned by `miri_rt_list_new` (i.e., it
-/// points past the RC header).
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_list_free(ptr: *mut MiriList) {
-    if ptr.is_null() {
-        return;
-    }
-    // Free internal data buffer
-    let list = &*ptr;
-    if !list.data.is_null() && list.capacity > 0 && list.elem_size > 0 {
-        let layout = Layout::from_size_align(list.capacity * list.elem_size, 8)
-            .unwrap_or_else(|_| std::process::abort());
-        dealloc(list.data, layout);
-    }
-    // Free the [RC][struct] block
-    let struct_size = std::mem::size_of::<MiriList>();
-    free_with_rc(ptr as *mut u8, struct_size);
-}
-
-/// Returns the first element pointer, or null if empty.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_list_first(ptr: *const MiriList) -> *const u8 {
-    if ptr.is_null() || (*ptr).is_empty() {
-        return ptr::null();
-    }
-    (*ptr).get(0)
-}
-
-/// Returns the last element pointer, or null if empty.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_list_last(ptr: *const MiriList) -> *const u8 {
-    if ptr.is_null() || (*ptr).is_empty() {
-        return ptr::null();
-    }
-    (*ptr).get((*ptr).len() - 1)
-}
-
-/// Sorts the list in ascending order (elements compared as signed 64-bit integers).
-///
-/// Uses insertion sort which is stable and efficient for small lists.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_list_sort(ptr: *mut MiriList) {
-    if ptr.is_null() {
-        return;
-    }
-    let list = &mut *ptr;
-    if list.len < 2 || list.data.is_null() {
-        return;
-    }
-
-    let elem_size = list.elem_size;
-    let mut temp = vec![0u8; elem_size];
-
-    for i in 1..list.len {
-        // Copy element[i] to temp
-        let src = list.data.add(i * elem_size);
-        ptr::copy_nonoverlapping(src, temp.as_mut_ptr(), elem_size);
-        let key = read_as_i64(temp.as_ptr(), elem_size);
-
-        let mut j = i;
-        while j > 0 {
-            let prev = list.data.add((j - 1) * elem_size);
-            let prev_val = read_as_i64(prev, elem_size);
-            if prev_val <= key {
-                break;
+    /// Creates a new list from a MiriArray whose elements are RC-managed pointers.
+    ///
+    /// Same as `miri_rt_list_new_from_raw` but IncRefs each non-null element pointer
+    /// after copying. This is necessary when elements are heap-allocated (Option,
+    /// List, Array, Map, Set, Tuple, Custom) because the caller's array will
+    /// release its element references via the element-drop loop when freed. Without
+    /// this IncRef the list would hold dangling pointers.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_new_from_managed_array(
+        array: *mut crate::array::MiriArray,
+        _len: usize,
+        _elem_size: usize,
+    ) -> *mut MiriList {
+        let list = miri_rt_list_new_from_raw(array, _len, _elem_size);
+        if list.is_null() || array.is_null() {
+            return list;
+        }
+        // IncRef each element in the newly-created list so the list owns a
+        // reference independent of the source array.
+        let list_ref = &*list;
+        let data = list_ref.data;
+        let len = list_ref.len;
+        let elem_size = list_ref.elem_size;
+        if data.is_null() || len == 0 || elem_size == 0 {
+            return list;
+        }
+        for i in 0..len {
+            let slot = data.add(i * elem_size) as *const usize;
+            let ptr_val = *slot;
+            if ptr_val != 0 {
+                // RC is stored at ptr - RC_HEADER_SIZE (one word before the payload)
+                let rc_ptr = (ptr_val as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *mut usize;
+                *rc_ptr += 1;
             }
-            // Shift element[j-1] to element[j]
+        }
+        // Mark this list as holding managed (heap-allocated) elements. When elements
+        // are later removed by mutation operations (clear, remove_at), elem_drop_fn
+        // is called so that each removed element's RC is decremented.
+        //
+        // NOTE: This sets a single drop function for all managed element types. For
+        // List-of-List cases the function handles one level of recursion. Deeper
+        // nesting (List<List<List<T>>>) is handled correctly for the normal drop path
+        // (variables going out of scope) by the codegen's element-drop loops, but
+        // mutation operations on lists holding non-List managed elements would need
+        // a different drop function (future work).
+        (*list).elem_drop_fn = miri_rt_list_decref_element as *const () as usize;
+        list
+    }
+
+    /// Creates a new empty list with the given element size.
+    ///
+    /// Allocates `[RC=1][MiriList fields]`.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_new(elem_size: usize) -> *mut MiriList {
+        let struct_size = std::mem::size_of::<MiriList>();
+        let payload = alloc_with_rc(struct_size);
+        if payload.is_null() {
+            return ptr::null_mut();
+        }
+        let list = payload as *mut MiriList;
+        (*list).data = ptr::null_mut();
+        (*list).len = 0;
+        (*list).capacity = 0;
+        (*list).elem_size = elem_size;
+        (*list).elem_drop_fn = 0;
+        list
+    }
+
+    /// Creates a new list with pre-allocated capacity.
+    ///
+    /// Allocates `[RC=1][MiriList fields]` with a pre-allocated data buffer.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_with_capacity(
+        elem_size: usize,
+        capacity: usize,
+    ) -> *mut MiriList {
+        let list = miri_rt_list_new(elem_size);
+        if list.is_null() || capacity == 0 || elem_size == 0 {
+            return list;
+        }
+        let layout = match Layout::from_size_align(capacity * elem_size, 8) {
+            Ok(l) => l,
+            Err(_) => return list,
+        };
+        let data = alloc(layout);
+        if !data.is_null() {
+            (*list).data = data;
+            (*list).capacity = capacity;
+        }
+        list
+    }
+
+    /// Returns the number of elements in the list.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_len(ptr: *const MiriList) -> usize {
+        if ptr.is_null() {
+            return 0;
+        }
+        (*ptr).len()
+    }
+
+    /// Returns the capacity of the list.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_capacity(ptr: *const MiriList) -> usize {
+        if ptr.is_null() {
+            return 0;
+        }
+        (*ptr).capacity()
+    }
+
+    /// Returns true (1) if the list is empty, false (0) otherwise.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_is_empty(ptr: *const MiriList) -> u8 {
+        if ptr.is_null() {
+            return 1;
+        }
+        if (*ptr).is_empty() {
+            1
+        } else {
+            0
+        }
+    }
+
+    /// Pushes an element to the end of the list.
+    ///
+    /// The value is passed as a pointer-sized integer. The runtime copies
+    /// `elem_size` bytes from the address of the parameter on the stack.
+    /// This works for all primitive element types (int, float, bool, pointers)
+    /// which fit in a single register.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_push(ptr: *mut MiriList, val: usize) {
+        if ptr.is_null() {
+            return;
+        }
+        let list = &mut *ptr;
+        list.push(&val as *const usize as *const u8);
+    }
+
+    /// Pops the last element from the list.
+    /// Returns true (1) if successful, false (0) if the list was empty.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_pop(ptr: *mut MiriList) -> u8 {
+        if ptr.is_null() {
+            return 0;
+        }
+        let list = &mut *ptr;
+        if list.len == 0 {
+            return 0;
+        }
+        list.len -= 1;
+        1
+    }
+
+    /// Gets a pointer to the element at the given index.
+    /// Returns null if the index is out of bounds.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_get(ptr: *const MiriList, index: usize) -> *const u8 {
+        if ptr.is_null() {
+            return ptr::null();
+        }
+        (*ptr).get(index)
+    }
+
+    /// Gets a mutable pointer to the element at the given index.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_get_mut(ptr: *mut MiriList, index: usize) -> *mut u8 {
+        if ptr.is_null() {
+            return ptr::null_mut();
+        }
+        (*ptr).get_mut(index)
+    }
+
+    /// Sets the element at the given index.
+    /// Returns true (1) if successful, false (0) if the index was out of bounds.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_set(ptr: *mut MiriList, index: usize, val: usize) -> u8 {
+        if ptr.is_null() {
+            return 0;
+        }
+        let list = &mut *ptr;
+        if list.set(index, &val as *const usize as *const u8) {
+            1
+        } else {
+            0
+        }
+    }
+
+    /// Inserts an element at the given index.
+    /// Returns true (1) if successful, false (0) if the index was out of bounds.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_insert(
+        ptr: *mut MiriList,
+        index: usize,
+        val: usize,
+    ) -> u8 {
+        if ptr.is_null() {
+            return 0;
+        }
+        let list = &mut *ptr;
+        if list.insert(index, &val as *const usize as *const u8) {
+            1
+        } else {
+            0
+        }
+    }
+
+    /// Removes the element at the given index.
+    /// Returns true (1) if successful, false (0) if the index was out of bounds.
+    ///
+    /// If `elem_drop_fn` is set, calls it on the removed element pointer so that
+    /// managed elements have their RC decremented on removal.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_remove(ptr: *mut MiriList, index: usize) -> u8 {
+        if ptr.is_null() {
+            return 0;
+        }
+        let list = &mut *ptr;
+        if index >= list.len {
+            return 0;
+        }
+
+        // DecRef the element being removed if managed.
+        if list.elem_drop_fn != 0 {
+            let drop_fn: unsafe extern "C" fn(*mut u8) = std::mem::transmute(list.elem_drop_fn);
+            let slot = list.data.add(index * list.elem_size) as *const usize;
+            let elem_ptr = *slot;
+            if elem_ptr != 0 {
+                drop_fn(elem_ptr as *mut u8);
+            }
+        }
+
+        // Shift elements down
+        if index < list.len - 1 {
+            let dest = list.data.add(index * list.elem_size);
+            let src = list.data.add((index + 1) * list.elem_size);
+            let count = (list.len - index - 1) * list.elem_size;
+            ptr::copy(src, dest, count);
+        }
+
+        list.len -= 1;
+        1
+    }
+
+    /// Sets the element drop function for a list.
+    ///
+    /// When set, mutation operations (`clear`, `remove_at`, `remove`) call `fn_ptr`
+    /// on each removed element pointer so that managed elements (Lists, Maps, class
+    /// instances) have their RC decremented on removal.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_set_elem_drop_fn(ptr: *mut MiriList, fn_ptr: usize) {
+        if !ptr.is_null() {
+            (*ptr).elem_drop_fn = fn_ptr;
+        }
+    }
+
+    /// Decrements the RC of a managed List element and frees it if RC reaches zero.
+    ///
+    /// Used as the `elem_drop_fn` for `List<List<...>>` collections so that
+    /// `clear()` and `remove_at()` correctly release inner list references.
+    ///
+    /// LIMITATION: Calls `miri_rt_list_free` directly, which does not invoke
+    /// `elem_drop_fn` recursively. This means mutation operations on lists whose
+    /// elements are themselves lists of managed values (three or more levels of
+    /// nesting) will not fully release inner references. The normal drop path
+    /// (variables going out of scope) handles all levels via the codegen's inline
+    /// element-drop loops and is unaffected by this function.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_decref_element(ptr: *mut u8) {
+        if ptr.is_null() {
+            return;
+        }
+        let rc_ptr = (ptr as usize - crate::rc::RC_HEADER_SIZE) as *mut usize;
+        let rc = *rc_ptr;
+        // Skip immortal objects (RC stored as negative isize)
+        if (rc as isize) < 0 {
+            return;
+        }
+        *rc_ptr -= 1;
+        if *rc_ptr == 0 {
+            miri_rt_list_free(ptr as *mut MiriList);
+        }
+    }
+
+    /// Clears all elements from the list.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_clear(ptr: *mut MiriList) {
+        if !ptr.is_null() {
+            (*ptr).clear();
+        }
+    }
+
+    /// Clones a list.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_clone(ptr: *const MiriList) -> *mut MiriList {
+        if ptr.is_null() {
+            return miri_rt_list_new(0);
+        }
+
+        let src = &*ptr;
+        let list = miri_rt_list_with_capacity(src.elem_size, src.len);
+        if list.is_null() {
+            return list;
+        }
+
+        if !src.data.is_null() && src.len > 0 && !(*list).data.is_null() {
+            ptr::copy_nonoverlapping(src.data, (*list).data, src.len * src.elem_size);
+            (*list).len = src.len;
+        }
+
+        list
+    }
+
+    /// Frees a list and its backing storage.
+    ///
+    /// The pointer must have been returned by `miri_rt_list_new` (i.e., it
+    /// points past the RC header).
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_free(ptr: *mut MiriList) {
+        if ptr.is_null() {
+            return;
+        }
+        // Free internal data buffer
+        let list = &*ptr;
+        if !list.data.is_null() && list.capacity > 0 && list.elem_size > 0 {
+            let layout = Layout::from_size_align(list.capacity * list.elem_size, 8)
+                .unwrap_or_else(|_| std::process::abort());
+            dealloc(list.data, layout);
+        }
+        // Free the [RC][struct] block
+        let struct_size = std::mem::size_of::<MiriList>();
+        free_with_rc(ptr as *mut u8, struct_size);
+    }
+
+    /// Returns the first element pointer, or null if empty.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_first(ptr: *const MiriList) -> *const u8 {
+        if ptr.is_null() || (*ptr).is_empty() {
+            return ptr::null();
+        }
+        (*ptr).get(0)
+    }
+
+    /// Returns the last element pointer, or null if empty.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_last(ptr: *const MiriList) -> *const u8 {
+        if ptr.is_null() || (*ptr).is_empty() {
+            return ptr::null();
+        }
+        (*ptr).get((*ptr).len() - 1)
+    }
+
+    /// Sorts the list in ascending order (elements compared as signed 64-bit integers).
+    ///
+    /// Uses insertion sort which is stable and efficient for small lists.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_sort(ptr: *mut MiriList) {
+        if ptr.is_null() {
+            return;
+        }
+        let list = &mut *ptr;
+        if list.len < 2 || list.data.is_null() {
+            return;
+        }
+
+        let elem_size = list.elem_size;
+        let mut temp = vec![0u8; elem_size];
+
+        for i in 1..list.len {
+            // Copy element[i] to temp
+            let src = list.data.add(i * elem_size);
+            ptr::copy_nonoverlapping(src, temp.as_mut_ptr(), elem_size);
+            let key = read_as_i64(temp.as_ptr(), elem_size);
+
+            let mut j = i;
+            while j > 0 {
+                let prev = list.data.add((j - 1) * elem_size);
+                let prev_val = read_as_i64(prev, elem_size);
+                if prev_val <= key {
+                    break;
+                }
+                // Shift element[j-1] to element[j]
+                let dest = list.data.add(j * elem_size);
+                ptr::copy_nonoverlapping(prev, dest, elem_size);
+                j -= 1;
+            }
+            // Place temp at position j
             let dest = list.data.add(j * elem_size);
-            ptr::copy_nonoverlapping(prev, dest, elem_size);
+            ptr::copy_nonoverlapping(temp.as_ptr(), dest, elem_size);
+        }
+    }
+
+    /// Reverses the list in place.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_reverse(ptr: *mut MiriList) {
+        if ptr.is_null() {
+            return;
+        }
+
+        let list = &mut *ptr;
+        if list.len < 2 {
+            return;
+        }
+
+        let elem_size = list.elem_size;
+        let mut temp = vec![0u8; elem_size];
+
+        let mut i = 0;
+        let mut j = list.len - 1;
+
+        while i < j {
+            let left = list.data.add(i * elem_size);
+            let right = list.data.add(j * elem_size);
+
+            // Swap using temp buffer
+            ptr::copy_nonoverlapping(left, temp.as_mut_ptr(), elem_size);
+            ptr::copy_nonoverlapping(right, left, elem_size);
+            ptr::copy_nonoverlapping(temp.as_ptr(), right, elem_size);
+
+            i += 1;
             j -= 1;
         }
-        // Place temp at position j
-        let dest = list.data.add(j * elem_size);
-        ptr::copy_nonoverlapping(temp.as_ptr(), dest, elem_size);
     }
-}
-
-/// Reverses the list in place.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_list_reverse(ptr: *mut MiriList) {
-    if ptr.is_null() {
-        return;
-    }
-
-    let list = &mut *ptr;
-    if list.len < 2 {
-        return;
-    }
-
-    let elem_size = list.elem_size;
-    let mut temp = vec![0u8; elem_size];
-
-    let mut i = 0;
-    let mut j = list.len - 1;
-
-    while i < j {
-        let left = list.data.add(i * elem_size);
-        let right = list.data.add(j * elem_size);
-
-        // Swap using temp buffer
-        ptr::copy_nonoverlapping(left, temp.as_mut_ptr(), elem_size);
-        ptr::copy_nonoverlapping(right, left, elem_size);
-        ptr::copy_nonoverlapping(temp.as_ptr(), right, elem_size);
-
-        i += 1;
-        j -= 1;
-    }
-}
+} // pub mod ffi
 
 /// Reads raw bytes as a signed 64-bit integer for comparison purposes.
 ///
@@ -766,7 +778,7 @@ pub(crate) unsafe fn read_as_i64(ptr: *const u8, elem_size: usize) -> i64 {
         _ => {
             let mut buf = [0u8; 8];
             let copy_len = elem_size.min(8);
-            ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), copy_len);
+            std::ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), copy_len);
             i64::from_ne_bytes(buf)
         }
     }
@@ -774,6 +786,7 @@ pub(crate) unsafe fn read_as_i64(ptr: *const u8, elem_size: usize) -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use super::ffi::*;
     use super::*;
 
     /// Helper: create a list and push i32 values via the internal API.

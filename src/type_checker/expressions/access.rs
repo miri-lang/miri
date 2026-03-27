@@ -649,7 +649,13 @@ impl TypeChecker {
                 let mut search_class_def = def.clone();
 
                 loop {
-                    // Substitute generic parameters if present
+                    // Substitute generic parameters if present.
+                    //
+                    // When walking up the inheritance chain (e.g. Array<T,Size> → Collection<T>),
+                    // the number of generics in the base class may not match the number of
+                    // type_args from the call site.  In that case, build a partial mapping by
+                    // matching generic names from the original class definition:
+                    // Collection<T> with Array<T,Size> instantiated as Array<int,3> → T = int.
                     let mut mapping = std::collections::HashMap::new();
                     if let Some(generics) = &search_class_def.generics {
                         if let Some(type_args) = &type_args {
@@ -659,6 +665,38 @@ impl TypeChecker {
                                         .extract_type_from_expression(arg_expr)
                                         .unwrap_or(make_type(TypeKind::Error));
                                     mapping.insert(param.name.clone(), arg_type);
+                                }
+                            } else {
+                                // Length mismatch: we're in a base class with a different
+                                // number of generics.  Map by name using the original class's
+                                // generic list so that e.g. Collection<T> gets T→int when
+                                // called on Array<int, Size>.
+                                let orig_generics_opt = self
+                                    .global_type_definitions
+                                    .get(&name)
+                                    .and_then(|td| {
+                                        if let TypeDefinition::Class(cd) = td {
+                                            cd.generics.as_ref()
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .cloned();
+                                if let Some(orig_generics) = orig_generics_opt {
+                                    for base_generic in generics.iter() {
+                                        if let Some(idx) = orig_generics
+                                            .iter()
+                                            .position(|g| g.name == base_generic.name)
+                                        {
+                                            if let Some(arg_expr) = type_args.get(idx) {
+                                                let arg_type = self
+                                                    .extract_type_from_expression(arg_expr)
+                                                    .unwrap_or(make_type(TypeKind::Error));
+                                                mapping
+                                                    .insert(base_generic.name.clone(), arg_type);
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }

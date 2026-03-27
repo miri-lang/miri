@@ -723,6 +723,155 @@ impl Pipeline {
             }
         }
 
+        // ── Per-concrete-class inherited-method compilation ──────────────────────
+        //
+        // When a concrete class C (e.g. Array, Car) inherits a non-abstract method
+        // from an abstract ancestor B (e.g. Collection, Vehicle), `resolve_inherited_method`
+        // returns C's name so that static dispatch calls `C_method` instead of `B_method`.
+        // `B_method` internally uses virtual dispatch for abstract sub-calls, which
+        // crashes for objects that carry no vtable pointer (Array, List).
+        //
+        // We therefore re-lower B's method body with self_type = C, naming the
+        // result `C_method`.  The compiled code calls `C_length`, `C_element_at`,
+        // etc. via *static* dispatch — correct and efficient for every concrete type.
+        //
+        // This pass covers both user-defined and stdlib classes.
+        {
+            use crate::type_checker::context::TypeDefinition;
+
+            // Step 1: build abstract_class_methods —
+            //   abstract class name → list of (method AST stmt, method name)
+            //   for every non-abstract method body in that class.
+            let mut abstract_class_methods: std::collections::HashMap<
+                String,
+                Vec<&Statement>,
+            > = std::collections::HashMap::new();
+
+            let all_stmts = result
+                .ast
+                .body
+                .iter()
+                .chain(result.type_checker.imported_statements.iter());
+
+            for stmt in all_stmts {
+                if let StatementKind::Class(class_data) = &stmt.node {
+                    let class_name =
+                        if let ExpressionKind::Identifier(n, _) = &class_data.name.node {
+                            n.as_str()
+                        } else {
+                            continue;
+                        };
+                    let is_abstract = matches!(
+                        result.type_checker.global_type_definitions.get(class_name),
+                        Some(TypeDefinition::Class(cd)) if cd.is_abstract
+                    );
+                    if !is_abstract {
+                        continue;
+                    }
+                    let methods_entry = abstract_class_methods
+                        .entry(class_name.to_string())
+                        .or_default();
+                    for method_stmt in &class_data.body {
+                        if let StatementKind::FunctionDeclaration(md) = &method_stmt.node {
+                            if md.body.is_some() {
+                                // Only collect methods with a concrete body.
+                                methods_entry.push(method_stmt);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Step 2: for each concrete class, compile inherited abstract-base methods.
+            let all_stmts2 = result
+                .ast
+                .body
+                .iter()
+                .chain(result.type_checker.imported_statements.iter());
+
+            for stmt in all_stmts2 {
+                if let StatementKind::Class(class_data) = &stmt.node {
+                    let class_name =
+                        if let ExpressionKind::Identifier(n, _) = &class_data.name.node {
+                            n.as_str()
+                        } else {
+                            continue;
+                        };
+                    let cd = match result
+                        .type_checker
+                        .global_type_definitions
+                        .get(class_name)
+                    {
+                        Some(TypeDefinition::Class(cd)) => cd,
+                        _ => continue,
+                    };
+                    if cd.is_abstract {
+                        continue; // only process concrete classes
+                    }
+
+                    let self_type =
+                        Type::new(TypeKind::Custom(class_name.to_string(), None), stmt.span);
+
+                    // Walk up the inheritance chain; stop at the first non-abstract class.
+                    let mut base_opt = cd.base_class.clone();
+                    while let Some(ref base_name) = base_opt.clone() {
+                        let base_cd = match result
+                            .type_checker
+                            .global_type_definitions
+                            .get(base_name)
+                        {
+                            Some(TypeDefinition::Class(bcd)) => bcd,
+                            _ => break,
+                        };
+                        if !base_cd.is_abstract {
+                            break;
+                        }
+
+                        if let Some(method_stmts) =
+                            abstract_class_methods.get(base_name.as_str())
+                        {
+                            for method_stmt in method_stmts.iter() {
+                                if let StatementKind::FunctionDeclaration(md) =
+                                    &method_stmt.node
+                                {
+                                    // Skip if the concrete class directly overrides this method.
+                                    if cd.methods.contains_key(md.name.as_str()) {
+                                        continue;
+                                    }
+                                    let mangled =
+                                        format!("{}_{}", class_name, md.name);
+                                    if lowered_names.contains(&mangled) {
+                                        continue;
+                                    }
+                                    let (mir_body, lambdas) =
+                                        mir::lowering::lower_class_method(
+                                            method_stmt,
+                                            self_type.clone(),
+                                            &result.type_checker,
+                                            is_release,
+                                        )
+                                        .map_err(|e| {
+                                            CompilerError::Codegen(format!(
+                                                "MIR lowering failed for {}: {}",
+                                                mangled, e
+                                            ))
+                                        })?;
+                                    lowered_names.insert(mangled.clone());
+                                    bodies.push((mangled, mir_body));
+                                    for lambda in lambdas {
+                                        lowered_names.insert(lambda.name.clone());
+                                        bodies.push((lambda.name, lambda.body));
+                                    }
+                                }
+                            }
+                        }
+
+                        base_opt = base_cd.base_class.clone();
+                    }
+                }
+            }
+        }
+
         if bodies.is_empty() {
             return Err(CompilerError::Codegen(
                 "No functions found to compile".to_string(),
