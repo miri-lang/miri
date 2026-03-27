@@ -1,6 +1,7 @@
 use system.ops
+use system.collections.collection
 
-public class List<T> implements Iterable
+public class List<T> extends Collection<T> implements Iterable
 
     runtime "core" fn miri_rt_list_new(elem_size int) Self
     runtime "core" fn miri_rt_list_free(l Self)
@@ -13,7 +14,6 @@ public class List<T> implements Iterable
     runtime "core" fn miri_rt_list_clear(l Self)
     runtime "core" fn miri_rt_list_reverse(l Self)
     runtime "core" fn miri_rt_list_sort(l Self)
-    runtime "core" fn miri_rt_list_is_empty(l Self) bool
 
     /// Returns the number of elements in the list.
     public fn length() int: miri_rt_list_len(self)
@@ -70,33 +70,6 @@ public class List<T> implements Iterable
     public fn reverse()
         miri_rt_list_reverse(self)
 
-    /// Returns true if the list has no elements.
-    public fn is_empty() bool: miri_rt_list_is_empty(self)
-
     /// Returns the index of the last element, or -1 if empty.
     public fn last_index() int: self.length() - 1
 
-    /// Returns the first element of the list, or None if empty.
-    public fn first() T?
-        if self.length() > 0: return self[0]
-        return None
-
-    /// Returns the last element of the list, or None if empty.
-    public fn last() T?
-        if self.length() > 0: return self[self.length() - 1]
-        return None
-
-    /// Returns true if the list contains the given item.
-    public fn contains(item T) bool
-        for x in self
-            if x == item: return true
-        return false
-
-    /// Returns the index of the first occurrence of the given item, or -1 if not found.
-    public fn index_of(item T) int
-        var i = 0
-        let len = self.length()
-        while i < len
-            if self[i] == item: return i
-            i += 1
-        return -1

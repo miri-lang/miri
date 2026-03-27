@@ -16,11 +16,11 @@ mod core;
 mod inspection;
 mod transformation;
 
-pub use constructors::*;
-pub use conversion::*;
-pub use core::*;
-pub use inspection::*;
-pub use transformation::*;
+pub use core::MiriString;
+
+// Re-export all FFI functions at module level for backward-compatible access
+// via `miri_runtime_core::string::miri_rt_string_*`.
+pub use ffi::*;
 
 // ---------------------------------------------------------------------------
 // Internal helpers shared across submodules
@@ -53,4 +53,14 @@ unsafe fn deref_as_str<'a>(ptr: *const MiriString) -> &'a str {
     } else {
         (*ptr).as_str()
     }
+}
+
+/// Stable FFI interface for string operations.
+///
+/// Aggregates all `#[no_mangle] extern "C"` functions from the string submodules.
+pub mod ffi {
+    pub use super::constructors::*;
+    pub use super::conversion::*;
+    pub use super::inspection::*;
+    pub use super::transformation::*;
 }

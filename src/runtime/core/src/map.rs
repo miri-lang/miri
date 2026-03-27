@@ -404,238 +404,244 @@ impl Drop for MiriMap {
 // FFI Functions
 // =============================================================================
 
-/// Creates a new empty map with the given key/value sizes and key kind.
-///
-/// `key_kind`: 0 = value type (int/float/bool), 1 = string type.
-///
-/// Allocates `[RC=1][MiriMap fields]`.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_map_new(
-    key_size: usize,
-    value_size: usize,
-    key_kind: usize,
-) -> *mut MiriMap {
-    let payload = alloc_with_rc(STRUCT_SIZE);
-    if payload.is_null() {
-        return ptr::null_mut();
-    }
-    let map = payload as *mut MiriMap;
-    (*map).states = ptr::null_mut();
-    (*map).keys = ptr::null_mut();
-    (*map).values = ptr::null_mut();
-    (*map).len = 0;
-    (*map).capacity = 0;
-    (*map).key_size = key_size;
-    (*map).value_size = value_size;
-    (*map).key_kind = key_kind;
-    (*map).val_drop_fn = 0;
-    map
-}
+/// Stable FFI interface for map operations.
+pub mod ffi {
+    use super::*;
+    use std::ptr;
 
-/// Returns the number of entries in the map.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_map_len(ptr: *const MiriMap) -> usize {
-    if ptr.is_null() {
-        return 0;
+    /// Creates a new empty map with the given key/value sizes and key kind.
+    ///
+    /// `key_kind`: 0 = value type (int/float/bool), 1 = string type.
+    ///
+    /// Allocates `[RC=1][MiriMap fields]`.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_map_new(
+        key_size: usize,
+        value_size: usize,
+        key_kind: usize,
+    ) -> *mut MiriMap {
+        let payload = alloc_with_rc(STRUCT_SIZE);
+        if payload.is_null() {
+            return ptr::null_mut();
+        }
+        let map = payload as *mut MiriMap;
+        (*map).states = ptr::null_mut();
+        (*map).keys = ptr::null_mut();
+        (*map).values = ptr::null_mut();
+        (*map).len = 0;
+        (*map).capacity = 0;
+        (*map).key_size = key_size;
+        (*map).value_size = value_size;
+        (*map).key_kind = key_kind;
+        (*map).val_drop_fn = 0;
+        map
     }
-    (*ptr).len
-}
 
-/// Returns true (1) if the map is empty, false (0) otherwise.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_map_is_empty(ptr: *const MiriMap) -> u8 {
-    if ptr.is_null() {
-        return 1;
+    /// Returns the number of entries in the map.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_map_len(ptr: *const MiriMap) -> usize {
+        if ptr.is_null() {
+            return 0;
+        }
+        (*ptr).len
     }
-    if (*ptr).len == 0 {
-        1
-    } else {
-        0
-    }
-}
 
-/// Sets a key-value pair in the map.
-///
-/// Both key and value are passed as pointer-sized integers. The runtime copies
-/// `key_size`/`value_size` bytes from the address of each parameter on the stack.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_map_set(ptr: *mut MiriMap, key: usize, value: usize) {
-    if ptr.is_null() {
-        return;
-    }
-    let map = &mut *ptr;
-    map.set(
-        &key as *const usize as *const u8,
-        &value as *const usize as *const u8,
-    );
-}
-
-/// Gets the value for a key, returning the value as a pointer-sized integer.
-///
-/// Returns 0 if the key is not found.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_map_get(ptr: *const MiriMap, key: usize) -> usize {
-    if ptr.is_null() {
-        return 0;
-    }
-    let map = &*ptr;
-    let result = map.get(&key as *const usize as *const u8);
-    if result.is_null() {
-        return 0;
-    }
-    // Read the stored value as usize (matches how values are stored via set)
-    *(result as *const usize)
-}
-
-/// Gets the value for a key, aborting if the key is not found.
-///
-/// Used for direct map indexing (`m[key]`). For safe access, use `m.get(key)`
-/// which returns an Option.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_map_get_checked(ptr: *const MiriMap, key: usize) -> usize {
-    if ptr.is_null() {
-        eprintln!("Runtime error: map index on null map");
-        std::process::abort();
-    }
-    let map = &*ptr;
-    let result = map.get(&key as *const usize as *const u8);
-    if result.is_null() {
-        eprintln!("Runtime error: map key not found");
-        std::process::abort();
-    }
-    *(result as *const usize)
-}
-
-/// Returns true (1) if the map contains the given key.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_map_contains_key(ptr: *const MiriMap, key: usize) -> u8 {
-    if ptr.is_null() {
-        return 0;
-    }
-    let map = &*ptr;
-    if map.contains_key(&key as *const usize as *const u8) {
-        1
-    } else {
-        0
-    }
-}
-
-/// Removes the entry with the given key.
-///
-/// Returns true (1) if the key was found and removed, false (0) otherwise.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_map_remove(ptr: *mut MiriMap, key: usize) -> u8 {
-    if ptr.is_null() {
-        return 0;
-    }
-    let map = &mut *ptr;
-    if map.remove(&key as *const usize as *const u8) {
-        1
-    } else {
-        0
-    }
-}
-
-/// Clears all entries from the map.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_map_clear(ptr: *mut MiriMap) {
-    if !ptr.is_null() {
-        (*ptr).clear();
-    }
-}
-
-/// Sets the drop function for managed values.
-///
-/// When non-zero, this function is called with the value pointer whenever an
-/// entry is removed by `remove`, `clear`, or `set` overwriting an existing key.
-/// Must be called after `miri_rt_map_new` when values are heap-allocated (e.g. List).
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_map_set_val_drop_fn(ptr: *mut MiriMap, fn_ptr: usize) {
-    if !ptr.is_null() {
-        (*ptr).val_drop_fn = fn_ptr;
-    }
-}
-
-/// Returns the key at the nth occupied slot (0-based sequential index).
-///
-/// This enables iteration over map keys via `element_at`.
-/// Returns 0 if the index is out of bounds.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_map_key_at(ptr: *const MiriMap, nth: usize) -> usize {
-    if ptr.is_null() {
-        return 0;
-    }
-    let map = &*ptr;
-    let mut count = 0usize;
-    for i in 0..map.capacity {
-        if *map.states.add(i) == SLOT_OCCUPIED {
-            if count == nth {
-                let key_ptr = map.keys.add(i * map.key_size);
-                return *(key_ptr as *const usize);
-            }
-            count += 1;
+    /// Returns true (1) if the map is empty, false (0) otherwise.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_map_is_empty(ptr: *const MiriMap) -> u8 {
+        if ptr.is_null() {
+            return 1;
+        }
+        if (*ptr).len == 0 {
+            1
+        } else {
+            0
         }
     }
-    0
-}
 
-/// Returns the value at the nth occupied slot (0-based sequential index).
-///
-/// This enables `for k, v in map` iteration.
-/// Returns 0 if the index is out of bounds.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_map_value_at(ptr: *const MiriMap, nth: usize) -> usize {
-    if ptr.is_null() {
-        return 0;
+    /// Sets a key-value pair in the map.
+    ///
+    /// Both key and value are passed as pointer-sized integers. The runtime copies
+    /// `key_size`/`value_size` bytes from the address of each parameter on the stack.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_map_set(ptr: *mut MiriMap, key: usize, value: usize) {
+        if ptr.is_null() {
+            return;
+        }
+        let map = &mut *ptr;
+        map.set(
+            &key as *const usize as *const u8,
+            &value as *const usize as *const u8,
+        );
     }
-    let map = &*ptr;
-    let mut count = 0usize;
-    for i in 0..map.capacity {
-        if *map.states.add(i) == SLOT_OCCUPIED {
-            if count == nth {
-                let val_ptr = map.values.add(i * map.value_size);
-                return *(val_ptr as *const usize);
-            }
-            count += 1;
+
+    /// Gets the value for a key, returning the value as a pointer-sized integer.
+    ///
+    /// Returns 0 if the key is not found.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_map_get(ptr: *const MiriMap, key: usize) -> usize {
+        if ptr.is_null() {
+            return 0;
+        }
+        let map = &*ptr;
+        let result = map.get(&key as *const usize as *const u8);
+        if result.is_null() {
+            return 0;
+        }
+        // Read the stored value as usize (matches how values are stored via set)
+        *(result as *const usize)
+    }
+
+    /// Gets the value for a key, aborting if the key is not found.
+    ///
+    /// Used for direct map indexing (`m[key]`). For safe access, use `m.get(key)`
+    /// which returns an Option.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_map_get_checked(ptr: *const MiriMap, key: usize) -> usize {
+        if ptr.is_null() {
+            eprintln!("Runtime error: map index on null map");
+            std::process::abort();
+        }
+        let map = &*ptr;
+        let result = map.get(&key as *const usize as *const u8);
+        if result.is_null() {
+            eprintln!("Runtime error: map key not found");
+            std::process::abort();
+        }
+        *(result as *const usize)
+    }
+
+    /// Returns true (1) if the map contains the given key.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_map_contains_key(ptr: *const MiriMap, key: usize) -> u8 {
+        if ptr.is_null() {
+            return 0;
+        }
+        let map = &*ptr;
+        if map.contains_key(&key as *const usize as *const u8) {
+            1
+        } else {
+            0
         }
     }
-    0
-}
 
-/// Frees a map and all its backing storage.
-///
-/// The pointer must have been returned by `miri_rt_map_new` (points past RC header).
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_map_free(ptr: *mut MiriMap) {
-    if ptr.is_null() {
-        return;
+    /// Removes the entry with the given key.
+    ///
+    /// Returns true (1) if the key was found and removed, false (0) otherwise.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_map_remove(ptr: *mut MiriMap, key: usize) -> u8 {
+        if ptr.is_null() {
+            return 0;
+        }
+        let map = &mut *ptr;
+        if map.remove(&key as *const usize as *const u8) {
+            1
+        } else {
+            0
+        }
     }
-    // Free internal tables
-    let map = &*ptr;
-    MiriMap::free_tables(
-        map.states,
-        map.keys,
-        map.values,
-        map.capacity,
-        map.key_size,
-        map.value_size,
-    );
-    // Free the [RC][struct] block
-    free_with_rc(ptr as *mut u8, STRUCT_SIZE);
-}
+
+    /// Clears all entries from the map.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_map_clear(ptr: *mut MiriMap) {
+        if !ptr.is_null() {
+            (*ptr).clear();
+        }
+    }
+
+    /// Sets the drop function for managed values.
+    ///
+    /// When non-zero, this function is called with the value pointer whenever an
+    /// entry is removed by `remove`, `clear`, or `set` overwriting an existing key.
+    /// Must be called after `miri_rt_map_new` when values are heap-allocated (e.g. List).
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_map_set_val_drop_fn(ptr: *mut MiriMap, fn_ptr: usize) {
+        if !ptr.is_null() {
+            (*ptr).val_drop_fn = fn_ptr;
+        }
+    }
+
+    /// Returns the key at the nth occupied slot (0-based sequential index).
+    ///
+    /// This enables iteration over map keys via `element_at`.
+    /// Returns 0 if the index is out of bounds.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_map_key_at(ptr: *const MiriMap, nth: usize) -> usize {
+        if ptr.is_null() {
+            return 0;
+        }
+        let map = &*ptr;
+        let mut count = 0usize;
+        for i in 0..map.capacity {
+            if *map.states.add(i) == SLOT_OCCUPIED {
+                if count == nth {
+                    let key_ptr = map.keys.add(i * map.key_size);
+                    return *(key_ptr as *const usize);
+                }
+                count += 1;
+            }
+        }
+        0
+    }
+
+    /// Returns the value at the nth occupied slot (0-based sequential index).
+    ///
+    /// This enables `for k, v in map` iteration.
+    /// Returns 0 if the index is out of bounds.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_map_value_at(ptr: *const MiriMap, nth: usize) -> usize {
+        if ptr.is_null() {
+            return 0;
+        }
+        let map = &*ptr;
+        let mut count = 0usize;
+        for i in 0..map.capacity {
+            if *map.states.add(i) == SLOT_OCCUPIED {
+                if count == nth {
+                    let val_ptr = map.values.add(i * map.value_size);
+                    return *(val_ptr as *const usize);
+                }
+                count += 1;
+            }
+        }
+        0
+    }
+
+    /// Frees a map and all its backing storage.
+    ///
+    /// The pointer must have been returned by `miri_rt_map_new` (points past RC header).
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_map_free(ptr: *mut MiriMap) {
+        if ptr.is_null() {
+            return;
+        }
+        // Free internal tables
+        let map = &*ptr;
+        MiriMap::free_tables(
+            map.states,
+            map.keys,
+            map.values,
+            map.capacity,
+            map.key_size,
+            map.value_size,
+        );
+        // Free the [RC][struct] block
+        free_with_rc(ptr as *mut u8, STRUCT_SIZE);
+    }
+} // pub mod ffi
 
 // =============================================================================
 // Tests
@@ -643,6 +649,7 @@ pub unsafe extern "C" fn miri_rt_map_free(ptr: *mut MiriMap) {
 
 #[cfg(test)]
 mod tests {
+    use super::ffi::*;
     use super::*;
 
     #[test]

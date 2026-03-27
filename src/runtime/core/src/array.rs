@@ -9,9 +9,7 @@
 //! points past the RC header, so field offsets are unchanged.
 
 use std::alloc::{alloc_zeroed, dealloc, Layout};
-use std::ptr;
 
-use crate::list::MiriList;
 use crate::rc::{alloc_with_rc, free_with_rc};
 
 /// A type-erased fixed-size array.
@@ -78,273 +76,283 @@ impl Drop for MiriArray {
 // FFI Functions
 // =============================================================================
 
-/// Creates a new fixed-size array with the given element count and size.
-///
-/// Allocates `[RC=1][MiriArray fields]`. All data elements are zeroed.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_array_new(elem_count: usize, elem_size: usize) -> *mut MiriArray {
-    let payload = alloc_with_rc(STRUCT_SIZE);
-    if payload.is_null() {
-        return ptr::null_mut();
+/// Stable FFI interface for array operations.
+pub mod ffi {
+    use super::*;
+    use crate::list::MiriList;
+    use std::ptr;
+
+    /// Creates a new fixed-size array with the given element count and size.
+    ///
+    /// Allocates `[RC=1][MiriArray fields]`. All data elements are zeroed.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_array_new(
+        elem_count: usize,
+        elem_size: usize,
+    ) -> *mut MiriArray {
+        let payload = alloc_with_rc(STRUCT_SIZE);
+        if payload.is_null() {
+            return ptr::null_mut();
+        }
+
+        let arr = payload as *mut MiriArray;
+
+        if elem_count > 0 && elem_size > 0 {
+            let total = match elem_count.checked_mul(elem_size) {
+                Some(t) => t,
+                None => {
+                    (*arr).data = ptr::null_mut();
+                    (*arr).elem_count = 0;
+                    (*arr).elem_size = elem_size;
+                    return arr;
+                }
+            };
+            let layout = match Layout::from_size_align(total, 8) {
+                Ok(l) => l,
+                Err(_) => {
+                    (*arr).data = ptr::null_mut();
+                    (*arr).elem_count = 0;
+                    (*arr).elem_size = elem_size;
+                    return arr;
+                }
+            };
+            let data = alloc_zeroed(layout);
+            (*arr).data = data;
+            (*arr).elem_count = if data.is_null() { 0 } else { elem_count };
+        } else {
+            (*arr).data = ptr::null_mut();
+            (*arr).elem_count = 0;
+        }
+        (*arr).elem_size = elem_size;
+
+        arr
     }
 
-    let arr = payload as *mut MiriArray;
+    /// Frees the array and its backing storage.
+    ///
+    /// The pointer must have been returned by `miri_rt_array_new` (i.e., it
+    /// points past the RC header).
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_array_free(ptr: *mut MiriArray) {
+        if ptr.is_null() {
+            return;
+        }
+        // Free internal data buffer
+        let arr = &*ptr;
+        if !arr.data.is_null() && arr.elem_count > 0 && arr.elem_size > 0 {
+            let layout = Layout::from_size_align(arr.byte_len(), 8)
+                .unwrap_or_else(|_| std::process::abort());
+            dealloc(arr.data, layout);
+        }
+        // Free the [RC][struct] block
+        free_with_rc(ptr as *mut u8, STRUCT_SIZE);
+    }
 
-    if elem_count > 0 && elem_size > 0 {
-        let total = match elem_count.checked_mul(elem_size) {
-            Some(t) => t,
-            None => {
-                (*arr).data = ptr::null_mut();
-                (*arr).elem_count = 0;
-                (*arr).elem_size = elem_size;
-                return arr;
-            }
-        };
-        let layout = match Layout::from_size_align(total, 8) {
-            Ok(l) => l,
-            Err(_) => {
-                (*arr).data = ptr::null_mut();
-                (*arr).elem_count = 0;
-                (*arr).elem_size = elem_size;
-                return arr;
-            }
-        };
-        let data = alloc_zeroed(layout);
-        (*arr).data = data;
-        (*arr).elem_count = if data.is_null() { 0 } else { elem_count };
-    } else {
-        (*arr).data = ptr::null_mut();
-        (*arr).elem_count = 0;
+    /// Returns the number of elements in the array (fixed at creation).
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_array_len(ptr: *const MiriArray) -> usize {
+        if ptr.is_null() {
+            return 0;
+        }
+        (*ptr).elem_count
     }
-    (*arr).elem_size = elem_size;
 
-    arr
-}
+    /// Gets a pointer to the element at the given index.
+    ///
+    /// Returns null if the index is out of bounds.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_array_get(ptr: *const MiriArray, index: usize) -> *const u8 {
+        if ptr.is_null() {
+            return ptr::null();
+        }
+        let arr = &*ptr;
+        if index >= arr.elem_count || arr.data.is_null() {
+            return ptr::null();
+        }
+        arr.data.add(index * arr.elem_size)
+    }
 
-/// Frees the array and its backing storage.
-///
-/// The pointer must have been returned by `miri_rt_array_new` (i.e., it
-/// points past the RC header).
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_array_free(ptr: *mut MiriArray) {
-    if ptr.is_null() {
-        return;
+    /// Gets a mutable pointer to the element at the given index.
+    ///
+    /// Returns null if the index is out of bounds.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_array_get_mut(ptr: *mut MiriArray, index: usize) -> *mut u8 {
+        if ptr.is_null() {
+            return ptr::null_mut();
+        }
+        let arr = &*ptr;
+        if index >= arr.elem_count || arr.data.is_null() {
+            return ptr::null_mut();
+        }
+        arr.data.add(index * arr.elem_size)
     }
-    // Free internal data buffer
-    let arr = &*ptr;
-    if !arr.data.is_null() && arr.elem_count > 0 && arr.elem_size > 0 {
-        let layout =
-            Layout::from_size_align(arr.byte_len(), 8).unwrap_or_else(|_| std::process::abort());
-        dealloc(arr.data, layout);
-    }
-    // Free the [RC][struct] block
-    free_with_rc(ptr as *mut u8, STRUCT_SIZE);
-}
 
-/// Returns the number of elements in the array (fixed at creation).
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_array_len(ptr: *const MiriArray) -> usize {
-    if ptr.is_null() {
-        return 0;
-    }
-    (*ptr).elem_count
-}
-
-/// Gets a pointer to the element at the given index.
-///
-/// Returns null if the index is out of bounds.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_array_get(ptr: *const MiriArray, index: usize) -> *const u8 {
-    if ptr.is_null() {
-        return ptr::null();
-    }
-    let arr = &*ptr;
-    if index >= arr.elem_count || arr.data.is_null() {
-        return ptr::null();
-    }
-    arr.data.add(index * arr.elem_size)
-}
-
-/// Gets a mutable pointer to the element at the given index.
-///
-/// Returns null if the index is out of bounds.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_array_get_mut(ptr: *mut MiriArray, index: usize) -> *mut u8 {
-    if ptr.is_null() {
-        return ptr::null_mut();
-    }
-    let arr = &*ptr;
-    if index >= arr.elem_count || arr.data.is_null() {
-        return ptr::null_mut();
-    }
-    arr.data.add(index * arr.elem_size)
-}
-
-/// Sets the element at the given index.
-///
-/// Returns true (1) if successful, false (0) if the index is out of bounds.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_array_set(
-    ptr: *mut MiriArray,
-    index: usize,
-    elem: *const u8,
-) -> u8 {
-    if ptr.is_null() || elem.is_null() {
-        return 0;
-    }
-    let arr = &*ptr;
-    if index >= arr.elem_count || arr.data.is_null() {
-        return 0;
-    }
-    let dest = arr.data.add(index * arr.elem_size);
-    ptr::copy_nonoverlapping(elem, dest, arr.elem_size);
-    1
-}
-
-/// Sets the element at the given index, passing the value by value (as usize).
-///
-/// The value is copied from the address of `val` on the caller's stack,
-/// so this works for any element type that fits in a pointer-sized register.
-/// This is the value-based variant used by the stdlib `set` method, which
-/// receives the element as a Miri value (not a raw pointer).
-///
-/// Returns true (1) if successful, false (0) if the index is out of bounds.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_array_set_val(
-    ptr: *mut MiriArray,
-    index: usize,
-    val: usize,
-) -> u8 {
-    miri_rt_array_set(ptr, index, &val as *const usize as *const u8)
-}
-
-/// Fills all elements with the given value.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_array_fill(ptr: *mut MiriArray, elem: *const u8) {
-    if ptr.is_null() || elem.is_null() {
-        return;
-    }
-    let arr = &*ptr;
-    if arr.data.is_null() {
-        return;
-    }
-    for i in 0..arr.elem_count {
-        let dest = arr.data.add(i * arr.elem_size);
+    /// Sets the element at the given index.
+    ///
+    /// Returns true (1) if successful, false (0) if the index is out of bounds.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_array_set(
+        ptr: *mut MiriArray,
+        index: usize,
+        elem: *const u8,
+    ) -> u8 {
+        if ptr.is_null() || elem.is_null() {
+            return 0;
+        }
+        let arr = &*ptr;
+        if index >= arr.elem_count || arr.data.is_null() {
+            return 0;
+        }
+        let dest = arr.data.add(index * arr.elem_size);
         ptr::copy_nonoverlapping(elem, dest, arr.elem_size);
-    }
-}
-
-/// Returns a clone of the array.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_array_clone(ptr: *const MiriArray) -> *mut MiriArray {
-    if ptr.is_null() {
-        return miri_rt_array_new(0, 0);
-    }
-    let src = &*ptr;
-    let new_arr = miri_rt_array_new(src.elem_count, src.elem_size);
-    if !new_arr.is_null() && !src.data.is_null() && !(*new_arr).data.is_null() {
-        ptr::copy_nonoverlapping(src.data, (*new_arr).data, src.byte_len());
-    }
-    new_arr
-}
-
-/// Sorts the array in ascending order (elements compared as signed 64-bit integers).
-///
-/// Uses insertion sort which is stable and efficient for small arrays.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_array_sort(ptr: *mut MiriArray) {
-    if ptr.is_null() {
-        return;
-    }
-    let arr = &*ptr;
-    if arr.elem_count < 2 || arr.data.is_null() {
-        return;
+        1
     }
 
-    let elem_size = arr.elem_size;
-    let mut temp = vec![0u8; elem_size];
+    /// Sets the element at the given index, passing the value by value (as usize).
+    ///
+    /// The value is copied from the address of `val` on the caller's stack,
+    /// so this works for any element type that fits in a pointer-sized register.
+    /// This is the value-based variant used by the stdlib `set` method, which
+    /// receives the element as a Miri value (not a raw pointer).
+    ///
+    /// Returns true (1) if successful, false (0) if the index is out of bounds.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_array_set_val(
+        ptr: *mut MiriArray,
+        index: usize,
+        val: usize,
+    ) -> u8 {
+        miri_rt_array_set(ptr, index, &val as *const usize as *const u8)
+    }
 
-    for i in 1..arr.elem_count {
-        let src = arr.data.add(i * elem_size);
-        ptr::copy_nonoverlapping(src, temp.as_mut_ptr(), elem_size);
-        let key = crate::list::read_as_i64(temp.as_ptr(), elem_size);
+    /// Fills all elements with the given value.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_array_fill(ptr: *mut MiriArray, elem: *const u8) {
+        if ptr.is_null() || elem.is_null() {
+            return;
+        }
+        let arr = &*ptr;
+        if arr.data.is_null() {
+            return;
+        }
+        for i in 0..arr.elem_count {
+            let dest = arr.data.add(i * arr.elem_size);
+            ptr::copy_nonoverlapping(elem, dest, arr.elem_size);
+        }
+    }
 
-        let mut j = i;
-        while j > 0 {
-            let prev = arr.data.add((j - 1) * elem_size);
-            let prev_val = crate::list::read_as_i64(prev, elem_size);
-            if prev_val <= key {
-                break;
+    /// Returns a clone of the array.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_array_clone(ptr: *const MiriArray) -> *mut MiriArray {
+        if ptr.is_null() {
+            return miri_rt_array_new(0, 0);
+        }
+        let src = &*ptr;
+        let new_arr = miri_rt_array_new(src.elem_count, src.elem_size);
+        if !new_arr.is_null() && !src.data.is_null() && !(*new_arr).data.is_null() {
+            ptr::copy_nonoverlapping(src.data, (*new_arr).data, src.byte_len());
+        }
+        new_arr
+    }
+
+    /// Sorts the array in ascending order (elements compared as signed 64-bit integers).
+    ///
+    /// Uses insertion sort which is stable and efficient for small arrays.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_array_sort(ptr: *mut MiriArray) {
+        if ptr.is_null() {
+            return;
+        }
+        let arr = &*ptr;
+        if arr.elem_count < 2 || arr.data.is_null() {
+            return;
+        }
+
+        let elem_size = arr.elem_size;
+        let mut temp = vec![0u8; elem_size];
+
+        for i in 1..arr.elem_count {
+            let src = arr.data.add(i * elem_size);
+            ptr::copy_nonoverlapping(src, temp.as_mut_ptr(), elem_size);
+            let key = crate::list::read_as_i64(temp.as_ptr(), elem_size);
+
+            let mut j = i;
+            while j > 0 {
+                let prev = arr.data.add((j - 1) * elem_size);
+                let prev_val = crate::list::read_as_i64(prev, elem_size);
+                if prev_val <= key {
+                    break;
+                }
+                let dest = arr.data.add(j * elem_size);
+                ptr::copy_nonoverlapping(prev, dest, elem_size);
+                j -= 1;
             }
             let dest = arr.data.add(j * elem_size);
-            ptr::copy_nonoverlapping(prev, dest, elem_size);
-            j -= 1;
+            ptr::copy_nonoverlapping(temp.as_ptr(), dest, elem_size);
         }
-        let dest = arr.data.add(j * elem_size);
-        ptr::copy_nonoverlapping(temp.as_ptr(), dest, elem_size);
     }
-}
 
-/// Returns a raw pointer to the underlying data buffer.
-///
-/// The pointer is valid for `elem_count * elem_size` bytes.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_array_data(ptr: *const MiriArray) -> *const u8 {
-    if ptr.is_null() {
-        return ptr::null();
+    /// Returns a raw pointer to the underlying data buffer.
+    ///
+    /// The pointer is valid for `elem_count * elem_size` bytes.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_array_data(ptr: *const MiriArray) -> *const u8 {
+        if ptr.is_null() {
+            return ptr::null();
+        }
+        (*ptr).data
     }
-    (*ptr).data
-}
 
-/// Converts the array to a MiriList containing all elements.
-///
-/// The caller owns the returned list and must free it with `miri_rt_list_free`.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_array_to_list(ptr: *const MiriArray) -> *mut MiriList {
-    if ptr.is_null() {
-        return crate::miri_rt_list_new(0);
+    /// Converts the array to a MiriList containing all elements.
+    ///
+    /// The caller owns the returned list and must free it with `miri_rt_list_free`.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_array_to_list(ptr: *const MiriArray) -> *mut MiriList {
+        if ptr.is_null() {
+            return crate::miri_rt_list_new(0);
+        }
+        let arr = &*ptr;
+        let list = crate::miri_rt_list_new(arr.elem_size);
+        if arr.data.is_null() {
+            return list;
+        }
+        for i in 0..arr.elem_count {
+            let src = arr.data.add(i * arr.elem_size);
+            (*list).push(src);
+        }
+        list
     }
-    let arr = &*ptr;
-    let list = crate::miri_rt_list_new(arr.elem_size);
-    if arr.data.is_null() {
-        return list;
-    }
-    for i in 0..arr.elem_count {
-        let src = arr.data.add(i * arr.elem_size);
-        (*list).push(src);
-    }
-    list
-}
 
-// =============================================================================
-// Error Handling
-// =============================================================================
+    // =============================================================================
+    // Error Handling
+    // =============================================================================
 
-/// Panics with a clear out-of-bounds error message.
-///
-/// This provides a better debugging experience than crashing silently on
-/// a hardware trap.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_array_panic_oob(index: usize, len: usize) {
-    eprintln!(
-        "Runtime error: Array index out of bounds: the len is {} but the index is {}",
-        len, index
-    );
-    std::process::abort();
-}
+    /// Panics with a clear out-of-bounds error message.
+    ///
+    /// This provides a better debugging experience than crashing silently on
+    /// a hardware trap.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_array_panic_oob(index: usize, len: usize) {
+        eprintln!(
+            "Runtime error: Array index out of bounds: the len is {} but the index is {}",
+            len, index
+        );
+        std::process::abort();
+    }
+} // pub mod ffi
 
 // =============================================================================
 // Tests
@@ -352,7 +360,7 @@ pub unsafe extern "C" fn miri_rt_array_panic_oob(index: usize, len: usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::ffi::*;
 
     #[test]
     fn test_array_new_zeroed() {

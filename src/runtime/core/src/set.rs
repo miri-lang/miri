@@ -213,150 +213,156 @@ impl MiriSet {
 // FFI Functions
 // =============================================================================
 
-/// Creates a new empty set with the given element size.
-///
-/// Allocates `[RC=1][MiriSet fields]`.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_set_new(elem_size: usize) -> *mut MiriSet {
-    let payload = alloc_with_rc(STRUCT_SIZE);
-    if payload.is_null() {
-        return ptr::null_mut();
-    }
-    let set = payload as *mut MiriSet;
-    (*set).data = ptr::null_mut();
-    (*set).len = 0;
-    (*set).states = ptr::null_mut();
-    (*set).capacity = 0;
-    (*set).elem_size = elem_size;
-    set
-}
+/// Stable FFI interface for set operations.
+pub mod ffi {
+    use super::*;
+    use std::ptr;
 
-/// Returns the number of elements in the set.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_set_len(ptr: *const MiriSet) -> usize {
-    if ptr.is_null() {
-        return 0;
+    /// Creates a new empty set with the given element size.
+    ///
+    /// Allocates `[RC=1][MiriSet fields]`.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_set_new(elem_size: usize) -> *mut MiriSet {
+        let payload = alloc_with_rc(STRUCT_SIZE);
+        if payload.is_null() {
+            return ptr::null_mut();
+        }
+        let set = payload as *mut MiriSet;
+        (*set).data = ptr::null_mut();
+        (*set).len = 0;
+        (*set).states = ptr::null_mut();
+        (*set).capacity = 0;
+        (*set).elem_size = elem_size;
+        set
     }
-    (*ptr).len
-}
 
-/// Returns true (1) if the set is empty, false (0) otherwise.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_set_is_empty(ptr: *const MiriSet) -> u8 {
-    if ptr.is_null() {
-        return 1;
+    /// Returns the number of elements in the set.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_set_len(ptr: *const MiriSet) -> usize {
+        if ptr.is_null() {
+            return 0;
+        }
+        (*ptr).len
     }
-    if (*ptr).len == 0 {
-        1
-    } else {
-        0
-    }
-}
 
-/// Adds an element to the set.
-///
-/// The value is passed as a pointer-sized integer. The runtime copies
-/// `elem_size` bytes from the address of the parameter on the stack.
-/// Returns true (1) if the element was newly inserted, false (0) if duplicate.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_set_add(ptr: *mut MiriSet, elem: usize) -> u8 {
-    if ptr.is_null() {
-        return 0;
-    }
-    let set = &mut *ptr;
-    if set.insert(&elem as *const usize as *const u8) {
-        1
-    } else {
-        0
-    }
-}
-
-/// Returns true (1) if the set contains the given element.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_set_contains(ptr: *const MiriSet, elem: usize) -> u8 {
-    if ptr.is_null() {
-        return 0;
-    }
-    let set = &*ptr;
-    if set.contains_key(&elem as *const usize as *const u8) {
-        1
-    } else {
-        0
-    }
-}
-
-/// Removes an element from the set.
-/// Returns true (1) if removed, false (0) if not found.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_set_remove(ptr: *mut MiriSet, elem: usize) -> u8 {
-    if ptr.is_null() {
-        return 0;
-    }
-    let set = &mut *ptr;
-    if set.remove_elem(&elem as *const usize as *const u8) {
-        1
-    } else {
-        0
-    }
-}
-
-/// Removes all elements from the set.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_set_clear(ptr: *mut MiriSet) {
-    if ptr.is_null() {
-        return;
-    }
-    let set = &mut *ptr;
-    if !set.states.is_null() && set.capacity > 0 {
-        ptr::write_bytes(set.states, 0, set.capacity);
-    }
-    set.len = 0;
-}
-
-/// Returns the element at the given sequential index (skipping empty/tombstone slots).
-///
-/// This enables iteration via `element_at` in for-loops.
-/// Returns the element value as a usize.
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_set_element_at(ptr: *const MiriSet, index: usize) -> usize {
-    if ptr.is_null() {
-        return 0;
-    }
-    let set = &*ptr;
-    let mut count: usize = 0;
-    for i in 0..set.capacity {
-        if *set.states.add(i) == SLOT_OCCUPIED {
-            if count == index {
-                let elem_ptr = set.data.add(i * set.elem_size);
-                return *(elem_ptr as *const usize);
-            }
-            count += 1;
+    /// Returns true (1) if the set is empty, false (0) otherwise.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_set_is_empty(ptr: *const MiriSet) -> u8 {
+        if ptr.is_null() {
+            return 1;
+        }
+        if (*ptr).len == 0 {
+            1
+        } else {
+            0
         }
     }
-    0
-}
 
-/// Frees a set and all its backing storage.
-///
-/// The pointer must have been returned by `miri_rt_set_new` (points past RC header).
-#[no_mangle]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn miri_rt_set_free(ptr: *mut MiriSet) {
-    if ptr.is_null() {
-        return;
+    /// Adds an element to the set.
+    ///
+    /// The value is passed as a pointer-sized integer. The runtime copies
+    /// `elem_size` bytes from the address of the parameter on the stack.
+    /// Returns true (1) if the element was newly inserted, false (0) if duplicate.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_set_add(ptr: *mut MiriSet, elem: usize) -> u8 {
+        if ptr.is_null() {
+            return 0;
+        }
+        let set = &mut *ptr;
+        if set.insert(&elem as *const usize as *const u8) {
+            1
+        } else {
+            0
+        }
     }
-    let set = &*ptr;
-    MiriSet::free_tables(set.states, set.data, set.capacity, set.elem_size);
-    free_with_rc(ptr as *mut u8, STRUCT_SIZE);
-}
+
+    /// Returns true (1) if the set contains the given element.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_set_contains(ptr: *const MiriSet, elem: usize) -> u8 {
+        if ptr.is_null() {
+            return 0;
+        }
+        let set = &*ptr;
+        if set.contains_key(&elem as *const usize as *const u8) {
+            1
+        } else {
+            0
+        }
+    }
+
+    /// Removes an element from the set.
+    /// Returns true (1) if removed, false (0) if not found.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_set_remove(ptr: *mut MiriSet, elem: usize) -> u8 {
+        if ptr.is_null() {
+            return 0;
+        }
+        let set = &mut *ptr;
+        if set.remove_elem(&elem as *const usize as *const u8) {
+            1
+        } else {
+            0
+        }
+    }
+
+    /// Removes all elements from the set.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_set_clear(ptr: *mut MiriSet) {
+        if ptr.is_null() {
+            return;
+        }
+        let set = &mut *ptr;
+        if !set.states.is_null() && set.capacity > 0 {
+            ptr::write_bytes(set.states, 0, set.capacity);
+        }
+        set.len = 0;
+    }
+
+    /// Returns the element at the given sequential index (skipping empty/tombstone slots).
+    ///
+    /// This enables iteration via `element_at` in for-loops.
+    /// Returns the element value as a usize.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_set_element_at(ptr: *const MiriSet, index: usize) -> usize {
+        if ptr.is_null() {
+            return 0;
+        }
+        let set = &*ptr;
+        let mut count: usize = 0;
+        for i in 0..set.capacity {
+            if *set.states.add(i) == SLOT_OCCUPIED {
+                if count == index {
+                    let elem_ptr = set.data.add(i * set.elem_size);
+                    return *(elem_ptr as *const usize);
+                }
+                count += 1;
+            }
+        }
+        0
+    }
+
+    /// Frees a set and all its backing storage.
+    ///
+    /// The pointer must have been returned by `miri_rt_set_new` (points past RC header).
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_set_free(ptr: *mut MiriSet) {
+        if ptr.is_null() {
+            return;
+        }
+        let set = &*ptr;
+        MiriSet::free_tables(set.states, set.data, set.capacity, set.elem_size);
+        free_with_rc(ptr as *mut u8, STRUCT_SIZE);
+    }
+} // pub mod ffi
 
 // =============================================================================
 // Tests
@@ -364,7 +370,7 @@ pub unsafe extern "C" fn miri_rt_set_free(ptr: *mut MiriSet) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::ffi::*;
 
     #[test]
     fn test_set_new_empty() {

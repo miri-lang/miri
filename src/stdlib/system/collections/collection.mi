@@ -1,0 +1,51 @@
+use system.ops
+
+/// Abstract base class for ordered collections.
+///
+/// Provides shared implementations for `is_empty`, `first`, `last`,
+/// `contains`, and `index_of` — methods that are the same for every
+/// indexed collection regardless of its backing storage.
+///
+/// Concrete subclasses must implement `length() int` and
+/// `element_at(index int) T` (inherited from Iterable).  All other
+/// shared methods are derived from those two primitives.
+public abstract class Collection<T> implements Iterable
+
+    /// Abstract: must be provided by the concrete subclass.
+    abstract fn length() int
+
+    /// Abstract: must be provided by the concrete subclass.
+    /// Returns the element at the given index.
+    abstract fn element_at(index int) T
+
+    /// Returns true if the collection contains no elements.
+    public fn is_empty() bool: self.length() == 0
+
+    /// Returns the first element, or None if the collection is empty.
+    public fn first() T?
+        if self.length() > 0: return self.element_at(0)
+        return None
+
+    /// Returns the last element, or None if the collection is empty.
+    public fn last() T?
+        let len = self.length()
+        if len > 0: return self.element_at(len - 1)
+        return None
+
+    /// Returns true if the collection contains an element equal to `item`.
+    public fn contains(item T) bool
+        var i = 0
+        let len = self.length()
+        while i < len
+            if self.element_at(i) == item: return true
+            i += 1
+        return false
+
+    /// Returns the index of the first occurrence of `item`, or -1 if not found.
+    public fn index_of(item T) int
+        var i = 0
+        let len = self.length()
+        while i < len
+            if self.element_at(i) == item: return i
+            i += 1
+        return -1
