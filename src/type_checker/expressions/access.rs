@@ -692,8 +692,7 @@ impl TypeChecker {
                                                 let arg_type = self
                                                     .extract_type_from_expression(arg_expr)
                                                     .unwrap_or(make_type(TypeKind::Error));
-                                                mapping
-                                                    .insert(base_generic.name.clone(), arg_type);
+                                                mapping.insert(base_generic.name.clone(), arg_type);
                                             }
                                         }
                                     }
@@ -1124,13 +1123,12 @@ impl TypeChecker {
                     make_type(TypeKind::Error)
                 }
             }
-            TypeKind::String => match prop_name.as_str() {
-                "length" => make_type(TypeKind::Int),
-                _ => {
-                    self.report_error(format!("Type 'String' has no field '{}'", prop_name), span);
-                    make_type(TypeKind::Error)
-                }
-            },
+            // TypeKind::String is NOT handled here: String resolves to type_name =
+            // Some("String") at the top of this function, enters the class-definition
+            // lookup block, and always returns from that block (either with the resolved
+            // method type or an error).  This final match is only reached when type_name
+            // was None (primitive types with no class definition), so a TypeKind::String
+            // arm here would be dead code that silently bypasses the stdlib definition.
             _ => {
                 self.report_error(format!("Type '{}' does not have members", obj_type), span);
                 make_type(TypeKind::Error)
