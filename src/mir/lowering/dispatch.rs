@@ -344,19 +344,16 @@ pub fn lower_call(
             // abstract class `Collection`.  Prefer the concrete type from the MIR
             // local so that `self.length()` dispatches to `Array_length` rather
             // than the non-existent abstract `Collection_length`.
-            let obj_ty_override: Option<Type> =
-                if let TypeKind::Custom(name, _) = &raw_obj_ty.kind {
-                    let is_abstract = matches!(
-                        ctx.type_checker.global_type_definitions.get(name.as_str()),
-                        Some(TypeDefinition::Class(cd)) if cd.is_abstract
-                    );
-                    if is_abstract {
-                        if let ExpressionKind::Identifier(var_name, _) = &obj.node {
-                            if let Some(&local) = ctx.variable_map.get(var_name.as_str()) {
-                                Some(ctx.body.local_decls[local.0].ty.clone())
-                            } else {
-                                None
-                            }
+            let obj_ty_override: Option<Type> = if let TypeKind::Custom(name, _) = &raw_obj_ty.kind
+            {
+                let is_abstract = matches!(
+                    ctx.type_checker.global_type_definitions.get(name.as_str()),
+                    Some(TypeDefinition::Class(cd)) if cd.is_abstract
+                );
+                if is_abstract {
+                    if let ExpressionKind::Identifier(var_name, _) = &obj.node {
+                        if let Some(&local) = ctx.variable_map.get(var_name.as_str()) {
+                            Some(ctx.body.local_decls[local.0].ty.clone())
                         } else {
                             None
                         }
@@ -365,7 +362,10 @@ pub fn lower_call(
                     }
                 } else {
                     None
-                };
+                }
+            } else {
+                None
+            };
             let obj_ty = obj_ty_override.as_ref().unwrap_or(raw_obj_ty);
             let class_name = match &obj_ty.kind {
                 TypeKind::String => Some("String".to_string()),
