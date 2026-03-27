@@ -1,4 +1,5 @@
 use system.ops
+use system.collections.collection
 
 /// A fixed-size array with elements of a single type.
 ///
@@ -14,7 +15,7 @@ use system.ops
 ///     for x in a
 ///         println(f"{x}")
 
-public class Array<T, Size> implements Iterable
+public class Array<T, Size> extends Collection<T> implements Iterable
 
     runtime "core" fn miri_rt_array_new(count int, elem_size int) Self
     runtime "core" fn miri_rt_array_free(a Self)
@@ -32,34 +33,6 @@ public class Array<T, Size> implements Iterable
     /// Sets the element at the given index.
     public fn set(index int, value T)
         miri_rt_array_set_val(self, index, value)
-
-    /// Returns true if the array has no elements.
-    public fn is_empty() bool: self.length() == 0
-
-    /// Returns the first element of the array, or None if empty.
-    public fn first() T?
-        if self.length() > 0: return self[0]
-        return None
-
-    /// Returns the last element of the array, or None if empty.
-    public fn last() T?
-        if self.length() > 0: return self[self.length() - 1]
-        return None
-
-    /// Returns true if the array contains the given item.
-    public fn contains(item T) bool
-        for x in self
-            if x == item: return true
-        return false
-
-    /// Returns the index of the first occurrence of the given item, or -1 if not found.
-    public fn index_of(item T) int
-        var i = 0
-        let len = self.length()
-        while i < len
-            if self[i] == item: return i
-            i += 1
-        return -1
 
     /// Sorts the array in ascending order.
     public fn sort()
