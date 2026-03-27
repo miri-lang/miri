@@ -81,6 +81,7 @@ impl CompilerError {
                     span: None,
                     help: None,
                     notes: Vec::new(),
+                    source_override: None,
                 };
                 format_diagnostic_full(source, &diagnostic)
             }
@@ -93,6 +94,7 @@ impl CompilerError {
                     span: None,
                     help: None,
                     notes: Vec::new(),
+                    source_override: None,
                 };
                 format_diagnostic_full(source, &diagnostic)
             }
@@ -105,6 +107,7 @@ impl CompilerError {
                     span: None,
                     help: Some(format!("Please report this at {}", BUG_REPORT_URL)),
                     notes: Vec::new(),
+                    source_override: None,
                 };
                 format_diagnostic_full(source, &diagnostic)
             }
@@ -117,6 +120,7 @@ impl CompilerError {
                     span: None,
                     help: None,
                     notes: Vec::new(),
+                    source_override: None,
                 };
                 format_diagnostic_full(source, &diagnostic)
             }
@@ -129,6 +133,7 @@ impl CompilerError {
                     span: None,
                     help: None,
                     notes: Vec::new(),
+                    source_override: None,
                 };
                 format_diagnostic_full(source, &diagnostic)
             }
@@ -145,6 +150,7 @@ impl CompilerError {
                             .to_string(),
                     ),
                     notes: Vec::new(),
+                    source_override: None,
                 };
                 format_diagnostic_full(source, &diagnostic)
             }
