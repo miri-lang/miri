@@ -229,9 +229,17 @@ impl TypeChecker {
         let pre_import_global_types: HashSet<String> =
             self.global_type_definitions.keys().cloned().collect();
 
+        let old_source_override = self.current_source_override.take();
+        self.current_source_override = Some((
+            file_path.to_string_lossy().to_string(),
+            source.clone(),
+        ));
+
         for stmt in &module_ast.body {
             self.check_statement(stmt, context);
         }
+
+        self.current_source_override = old_source_override;
 
         // Register module-level alias (e.g., `use system.math as M`).
         // This must happen after the module symbols are loaded so that

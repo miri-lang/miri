@@ -9,6 +9,8 @@ use crate::error::syntax::Span;
 pub struct TypeError {
     pub kind: TypeErrorKind,
     pub span: Span,
+    /// When set, this error originates from an imported file (file_path, source_text).
+    pub source_override: Option<(String, String)>,
 }
 
 /// All possible type error variants produced by the type checker.
@@ -142,7 +144,11 @@ impl TypeErrorKind {
 impl TypeError {
     /// Creates a new type error of the given kind at the given span.
     pub fn new(kind: TypeErrorKind, span: Span) -> Self {
-        Self { kind, span }
+        Self {
+            kind,
+            span,
+            source_override: None,
+        }
     }
 
     /// Creates a custom type error with a freeform message.
@@ -150,6 +156,7 @@ impl TypeError {
         Self {
             kind: TypeErrorKind::Custom { message, help },
             span,
+            source_override: None,
         }
     }
 
@@ -176,6 +183,7 @@ impl Reportable for TypeError {
             span: Some(self.span),
             help,
             notes: Vec::new(),
+            source_override: self.source_override.clone(),
         }
     }
 }

@@ -352,6 +352,7 @@ impl Reportable for SyntaxError {
             span,
             help: props.help,
             notes: Vec::new(),
+            source_override: None,
         }
     }
 }
