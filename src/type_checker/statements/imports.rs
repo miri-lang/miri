@@ -44,7 +44,7 @@ use crate::ast::*;
 use crate::error::syntax::Span;
 use crate::lexer::Lexer;
 use crate::parser::Parser;
-use crate::type_checker::context::Context;
+use crate::type_checker::context::{Context, TypeDefinition};
 use crate::type_checker::TypeChecker;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -303,16 +303,33 @@ impl TypeChecker {
             // Both the scoped context and the flat global_type_definitions map must
             // be filtered — the type checker always falls back to the latter.
             if let Some(scope) = context.type_definitions.last_mut() {
-                scope.retain(|name, _| {
+                scope.retain(|name, def| {
                     if !pre_import_types.contains(name) && !selected_names.contains(name) {
-                        return false;
+                        // Keep types from transitively imported modules; remove
+                        // types from the directly imported module (or unknown).
+                        let def_module = match def {
+                            TypeDefinition::Class(cd) => Some(cd.module.as_str()),
+                            TypeDefinition::Trait(td) => Some(td.module.as_str()),
+                            TypeDefinition::Struct(sd) => Some(sd.module.as_str()),
+                            _ => None,
+                        };
+                        return def_module.is_some() && def_module != Some(module_name.as_str());
                     }
                     true
                 });
             }
-            self.global_type_definitions.retain(|name, _| {
+            self.global_type_definitions.retain(|name, def| {
                 if !pre_import_global_types.contains(name) && !selected_names.contains(name) {
-                    return false;
+                    // Keep types from transitively imported modules; remove
+                    // types from the directly imported module (or types without
+                    // module info like enums/aliases).
+                    let def_module = match def {
+                        TypeDefinition::Class(cd) => Some(cd.module.as_str()),
+                        TypeDefinition::Trait(td) => Some(td.module.as_str()),
+                        TypeDefinition::Struct(sd) => Some(sd.module.as_str()),
+                        _ => None,
+                    };
+                    return def_module.is_some() && def_module != Some(module_name.as_str());
                 }
                 true
             });

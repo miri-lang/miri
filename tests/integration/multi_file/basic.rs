@@ -4,6 +4,184 @@
 use super::utils::*;
 
 // ---------------------------------------------------------------------------
+// Selective imports must preserve transitive trait dependencies
+// ---------------------------------------------------------------------------
+
+/// A selective import of a class that implements a trait from another module
+/// must preserve the trait in type_definitions so vtables are generated.
+#[test]
+fn test_selective_import_preserves_transitive_trait_for_vtable() {
+    assert_project_runs_with_output(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use system.io\n",
+                    "use local.models.animal.{Dog}\n",
+                    "let d = Dog(\"Rex\")\n",
+                    "d.speak()\n",
+                ),
+            ),
+            (
+                "models/animal.mi",
+                concat!(
+                    "use system.io\n",
+                    "use local.models.speaker\n",
+                    "\n",
+                    "public class Dog implements Speaker\n",
+                    "    private let _name String\n",
+                    "\n",
+                    "    fn init(name String)\n",
+                    "        self._name = name\n",
+                    "\n",
+                    "    fn speak()\n",
+                    "        println(f\"{self._name} says woof\")\n",
+                ),
+            ),
+            (
+                "models/speaker.mi",
+                "trait Speaker\n    fn speak()\n",
+            ),
+        ],
+        "Rex says woof",
+    );
+}
+
+/// Two traits imported transitively via a class — both must survive
+/// the selective import filter.
+#[test]
+fn test_selective_import_preserves_multiple_transitive_traits() {
+    assert_project_runs_with_output(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use system.io\n",
+                    "use local.things.widget.{Widget}\n",
+                    "let w = Widget(\"btn\")\n",
+                    "println(w.label())\n",
+                ),
+            ),
+            (
+                "things/widget.mi",
+                concat!(
+                    "use local.things.named\n",
+                    "use local.things.visible\n",
+                    "\n",
+                    "public class Widget implements Named, Visible\n",
+                    "    private let _label String\n",
+                    "\n",
+                    "    fn init(label String)\n",
+                    "        self._label = label\n",
+                    "\n",
+                    "    fn label() String: self._label\n",
+                    "\n",
+                    "    fn show() bool: true\n",
+                ),
+            ),
+            ("things/named.mi", "trait Named\n    fn label() String\n"),
+            ("things/visible.mi", "trait Visible\n    fn show() bool\n"),
+        ],
+        "btn",
+    );
+}
+
+/// Selective import of a class must NOT leak sibling types from the
+/// same module (regression guard — this test existed before but only
+/// for enums; we additionally cover structs).
+#[test]
+fn test_selective_import_still_hides_sibling_struct() {
+    assert_project_compiler_error(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use local.models.car.{Car}\n",
+                    "let e = Engine(100)\n",
+                ),
+            ),
+            (
+                "models/car.mi",
+                concat!(
+                    "struct Engine\n",
+                    "    hp int\n",
+                    "\n",
+                    "struct Car\n",
+                    "    name String\n",
+                ),
+            ),
+        ],
+        "Undefined",
+    );
+}
+
+/// Module without trailing newline: trait file ends abruptly.
+#[test]
+fn test_module_without_trailing_newline() {
+    assert_project_runs_with_output(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use system.io\n",
+                    "use local.core.greeter.{Greeter}\n",
+                    "let g = Greeter()\n",
+                    "g.hello()\n",
+                ),
+            ),
+            (
+                "core/greeter.mi",
+                concat!(
+                    "use system.io\n",
+                    "use local.core.base\n",
+                    "\n",
+                    "public class Greeter implements Greetable\n",
+                    "    fn hello()\n",
+                    "        println(\"hi\")\n",
+                ),
+            ),
+            // No trailing newline!
+            ("core/base.mi", "trait Greetable\n    fn hello()"),
+        ],
+        "hi",
+    );
+}
+
+/// Deeply nested module: A selectively imports B which wildcard-imports C
+/// which defines a trait. The trait from C must still be in type_definitions
+/// when generating vtables for B's class.
+#[test]
+fn test_selective_import_deep_transitive_chain() {
+    assert_project_runs_with_output(
+        &[
+            (
+                "main.mi",
+                concat!(
+                    "use system.io\n",
+                    "use local.a.svc.{Service}\n",
+                    "let s = Service()\n",
+                    "println(f\"{s.ping()}\")\n",
+                ),
+            ),
+            (
+                "a/svc.mi",
+                concat!(
+                    "use local.a.traits.health\n",
+                    "\n",
+                    "public class Service implements Pingable\n",
+                    "    fn ping() int: 200\n",
+                ),
+            ),
+            (
+                "a/traits/health.mi",
+                "trait Pingable\n    fn ping() int\n",
+            ),
+        ],
+        "200",
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Struct types imported from local modules
 // ---------------------------------------------------------------------------
 

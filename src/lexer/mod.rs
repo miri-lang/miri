@@ -86,10 +86,33 @@ impl<'source> Lexer<'source> {
                         self.eof_handled = true;
                         let source_len = self.source.len();
 
+                        // If the file ends without a trailing newline and we
+                        // are inside an indented block, emit an ExpressionStatementEnd
+                        // before the synthetic Dedents so the parser can close
+                        // the final statement cleanly.
+                        //
+                        // Guards:
+                        //  - indent_stack > 1: avoids emitting the token for
+                        //    sub-lexers that lex a single expression (e.g.
+                        //    formatted-string interpolations).
+                        //  - previous token != Indent: avoids emitting inside an
+                        //    empty indented block (e.g. trailing whitespace at EOF).
+                        let needs_ese = self.indent_stack.len() > 1
+                            && !self.match_previous_token(Token::Indent)
+                            && self.is_expression_statement_end();
+
                         while self.indent_stack.len() > 1 {
                             self.pending_tokens_stack
                                 .push((Token::Dedent, Span::new(source_len, source_len)));
                             self.indent_stack.pop();
+                        }
+
+                        // Pushed last so it pops first (stack is LIFO).
+                        if needs_ese {
+                            self.pending_tokens_stack.push((
+                                Token::ExpressionStatementEnd,
+                                Span::new(source_len, source_len),
+                            ));
                         }
 
                         return self.pending_tokens_stack.pop().map(Ok);

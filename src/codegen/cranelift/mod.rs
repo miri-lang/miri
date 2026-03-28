@@ -251,6 +251,35 @@ impl Backend for CraneliftBackend {
         self.generate_type_drop_functions(&mut module, &mut ctx, &isa)
             .map_err(|e| CodegenError::Module(format!("drop thunk generation: {e}")))?;
 
+        // Pre-declare all user functions with correct signatures from MIR types.
+        // This prevents signature mismatches when a call site is compiled before
+        // the callee's definition (the call site would otherwise infer the
+        // signature from DFG value types which may be widened).
+        let ptr_type = isa.pointer_type();
+        let call_conv = isa.default_call_conv();
+        for (name, body) in bodies.iter() {
+            let mut sig = Signature::new(call_conv);
+            // Return type is local 0
+            if !body.local_decls.is_empty() {
+                let ret_ty = &body.local_decls[0].ty;
+                if ret_ty.kind != crate::ast::types::TypeKind::Void {
+                    sig.returns
+                        .push(AbiParam::new(translate_type(ret_ty, ptr_type)));
+                }
+            }
+            // Parameters are locals 1..=arg_count
+            for i in 1..=body.arg_count {
+                if i < body.local_decls.len() {
+                    let param_ty = &body.local_decls[i].ty;
+                    sig.params
+                        .push(AbiParam::new(translate_type(param_ty, ptr_type)));
+                }
+            }
+            module
+                .declare_function(name, Linkage::Export, &sig)
+                .map_err(|e| CodegenError::declare_function(*name, e.to_string()))?;
+        }
+
         // Compile each function
         let mut string_literals = HashMap::new();
         for (name, body) in bodies {

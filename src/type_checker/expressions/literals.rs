@@ -73,8 +73,45 @@ impl TypeChecker {
         context: &mut Context,
     ) -> Type {
         for part in parts {
-            self.infer_expression(part, context);
+            let part_type = self.infer_expression(part, context);
+            // Literal string segments are always fine; only validate interpolated expressions.
+            if !matches!(&part.node, ExpressionKind::Literal(Literal::String(_))) {
+                if !Self::can_interpolate(&part_type.kind) {
+                    self.report_error(
+                        format!(
+                            "Type '{}' cannot be used in string interpolation",
+                            part_type
+                        ),
+                        part.span,
+                    );
+                }
+            }
         }
         make_type(TypeKind::String)
+    }
+
+    /// Returns `true` if a value of this type can be converted to a string
+    /// for use in formatted string interpolation.
+    fn can_interpolate(kind: &TypeKind) -> bool {
+        matches!(
+            kind,
+            TypeKind::String
+                | TypeKind::Boolean
+                | TypeKind::Int
+                | TypeKind::I8
+                | TypeKind::I16
+                | TypeKind::I32
+                | TypeKind::I64
+                | TypeKind::I128
+                | TypeKind::U8
+                | TypeKind::U16
+                | TypeKind::U32
+                | TypeKind::U64
+                | TypeKind::U128
+                | TypeKind::Float
+                | TypeKind::F32
+                | TypeKind::F64
+                | TypeKind::Error
+        )
     }
 }

@@ -116,7 +116,9 @@ impl TypeChecker {
             LeftHandSideExpression::Identifier(id_expr) => {
                 if let ExpressionKind::Identifier(name, _) = &id_expr.node {
                     // 'self' is always mutable in class context (for constructor assignment)
-                    if name != "self" && !context.is_mutable(name) {
+                    // Only check mutability if the variable is actually defined;
+                    // undefined variables will be reported by infer_identifier below.
+                    if name != "self" && context.resolve_info(name).is_some() && !context.is_mutable(name) {
                         if context.is_constant(name) {
                             self.report_error(
                                 format!("Cannot assign to constant '{}'", name),

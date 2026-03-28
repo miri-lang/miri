@@ -28,6 +28,7 @@ fn test_windows_line_endings_crlf() {
             Token::LParen,
             Token::Int,
             Token::RParen,
+            Token::ExpressionStatementEnd,
             Token::Dedent,
         ],
     );
@@ -57,6 +58,7 @@ fn test_mixed_line_endings_lf_and_crlf() {
             Token::LParen,
             Token::Int,
             Token::RParen,
+            Token::ExpressionStatementEnd,
             Token::Dedent,
         ],
     );
@@ -83,6 +85,7 @@ fn test_tab_indentation() {
             Token::Identifier,
             Token::Assign,
             Token::Int,
+            Token::ExpressionStatementEnd,
             Token::Dedent,
         ],
     );
