@@ -169,7 +169,7 @@ impl TypeChecker {
         }
 
         // Check if it is a known type (struct/enum/alias) being used as a value (constructor/meta)
-        if self.global_type_definitions.contains_key(name) {
+        if self.is_type_visible(name) {
             return ast_factory::make_type(TypeKind::Meta(Box::new(ast_factory::make_type(
                 TypeKind::Custom(name.to_string(), None),
             ))));

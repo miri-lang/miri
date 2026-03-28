@@ -95,8 +95,8 @@ impl TypeChecker {
         let base_class_name = if let Some(base_expr) = base_class {
             match self.extract_type_name(base_expr) {
                 Ok(base_name) => {
-                    // Check base class exists
-                    if !self.global_type_definitions.contains_key(base_name) {
+                    // Check base class exists and is visible
+                    if !self.is_type_visible(base_name) {
                         self.report_error(
                             format!("Base class '{}' is not defined", base_name),
                             base_expr.span,
@@ -143,11 +143,11 @@ impl TypeChecker {
             }
         }
 
-        // Validate traits exist
+        // Validate traits exist and are visible in the current scope
         let mut trait_names = Vec::with_capacity(traits.len());
         for trait_expr in traits {
             if let Ok(trait_name) = self.extract_type_name(trait_expr) {
-                if !self.global_type_definitions.contains_key(trait_name) {
+                if !self.is_type_visible(trait_name) {
                     self.report_error(
                         format!("Trait '{}' is not defined", trait_name),
                         trait_expr.span,
@@ -624,8 +624,7 @@ impl TypeChecker {
 
         // scopes.len() == 2 because we're in [base_scope, class_scope]
         if context.scopes.len() == 2 {
-            self.global_type_definitions
-                .insert(name.clone(), TypeDefinition::Class(class_def.clone()));
+            self.register_type_definition(name.clone(), TypeDefinition::Class(class_def.clone()));
         }
         // Register class type definition so self.* lookups work (move, no clone)
         context.define_type(name.clone(), TypeDefinition::Class(class_def));

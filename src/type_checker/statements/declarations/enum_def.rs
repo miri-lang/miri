@@ -135,8 +135,7 @@ impl TypeChecker {
 
         context.define_type(name.clone(), TypeDefinition::Enum(enum_def.clone()));
         if context.scopes.len() == 1 {
-            self.global_type_definitions
-                .insert(name.clone(), TypeDefinition::Enum(enum_def));
+            self.register_type_definition(name.clone(), TypeDefinition::Enum(enum_def));
         }
 
         // Define enum type symbol
