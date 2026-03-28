@@ -93,6 +93,10 @@ pub struct TypeChecker {
     /// When set, errors are tagged with this (file_path, source_text) so that
     /// the formatter can display the correct source context for imported files.
     pub(crate) current_source_override: Option<(String, String)>,
+    /// Tracks which type names are visible to user code. Types in
+    /// `global_type_definitions` but NOT in this set are internal-only
+    /// (e.g. transitive trait dependencies kept for vtable generation).
+    pub(crate) visible_type_names: std::collections::HashSet<String>,
 }
 
 impl Default for TypeChecker {
@@ -109,6 +113,7 @@ impl TypeChecker {
     /// - Built-in functions: `print<T>`
     pub fn new() -> Self {
         let (global_scope, global_type_definitions) = builtins::initialize_builtins();
+        let visible_type_names = global_type_definitions.keys().cloned().collect();
         Self {
             types: HashMap::new(),
             errors: Vec::new(),
@@ -125,6 +130,7 @@ impl TypeChecker {
             source_dir: None,
             module_aliases: HashMap::new(),
             current_source_override: None,
+            visible_type_names,
         }
     }
 
@@ -255,7 +261,7 @@ impl TypeChecker {
 
                         // Initial registration as an empty class to resolve basic type identity.
                         // The full class check will happen later in check_statement.
-                        self.global_type_definitions.insert(
+                        self.register_type_definition(
                             name.to_string(),
                             TypeDefinition::Class(context::ClassDefinition {
                                 name: name.to_string(),
@@ -278,7 +284,7 @@ impl TypeChecker {
                             .as_ref()
                             .map(|gens| self.extract_generic_definitions(gens, context));
 
-                        self.global_type_definitions.insert(
+                        self.register_type_definition(
                             name.to_string(),
                             TypeDefinition::Struct(context::StructDefinition {
                                 fields: vec![],
@@ -296,7 +302,7 @@ impl TypeChecker {
                             .as_ref()
                             .map(|gens| self.extract_generic_definitions(gens, context));
 
-                        self.global_type_definitions.insert(
+                        self.register_type_definition(
                             name.to_string(),
                             TypeDefinition::Enum(context::EnumDefinition {
                                 variants: BTreeMap::new(),
@@ -313,7 +319,7 @@ impl TypeChecker {
                             .as_ref()
                             .map(|gens| self.extract_generic_definitions(gens, context));
 
-                        self.global_type_definitions.insert(
+                        self.register_type_definition(
                             name.to_string(),
                             TypeDefinition::Trait(context::TraitDefinition {
                                 name: name.to_string(),

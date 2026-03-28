@@ -93,7 +93,7 @@ impl TypeChecker {
         let mut parent_trait_names = Vec::with_capacity(parent_traits.len());
         for trait_expr in parent_traits {
             if let Ok(trait_name) = self.extract_type_name(trait_expr) {
-                if !self.global_type_definitions.contains_key(trait_name) {
+                if !self.is_type_visible(trait_name) {
                     self.report_error(
                         format!("Parent trait '{}' is not defined", trait_name),
                         trait_expr.span,
@@ -190,8 +190,7 @@ impl TypeChecker {
         // Register trait type definition
         context.define_type(name.clone(), TypeDefinition::Trait(trait_def.clone()));
         if context.scopes.len() == 1 {
-            self.global_type_definitions
-                .insert(name.clone(), TypeDefinition::Trait(trait_def));
+            self.register_type_definition(name.clone(), TypeDefinition::Trait(trait_def));
         }
 
         // Define trait type symbol

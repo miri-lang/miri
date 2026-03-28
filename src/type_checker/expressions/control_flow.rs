@@ -383,10 +383,7 @@ impl TypeChecker {
                     }
                 }
                 if let Pattern::Identifier(parent_name) = &**parent {
-                    let enum_def_opt = context
-                        .resolve_type_definition(parent_name)
-                        .cloned()
-                        .or_else(|| self.global_type_definitions.get(parent_name).cloned());
+                    let enum_def_opt = self.resolve_visible_type(parent_name, context).cloned();
                     if let Some(TypeDefinition::Enum(enum_def)) = enum_def_opt {
                         if !enum_def.variants.contains_key(member) {
                             self.report_error(
@@ -503,11 +500,8 @@ impl TypeChecker {
                     }
                 };
 
-                // Look up enum definition
-                let enum_def_opt = context
-                    .resolve_type_definition(&enum_name)
-                    .cloned()
-                    .or_else(|| self.global_type_definitions.get(&enum_name).cloned());
+                // Look up enum definition (must be visible in scope)
+                let enum_def_opt = self.resolve_visible_type(&enum_name, context).cloned();
                 if let Some(TypeDefinition::Enum(enum_def)) = enum_def_opt {
                     if let Some(variant_types) = enum_def.variants.get(&variant_name) {
                         // Check binding count matches

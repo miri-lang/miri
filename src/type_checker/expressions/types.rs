@@ -110,11 +110,8 @@ impl TypeChecker {
                 ExpressionKind::Identifier(variant_name, _),
             ) = (&enum_name_expr.node, &variant_name_expr.node)
             {
-                // Look up the enum definition in local then global scope
-                let enum_def_opt = context
-                    .resolve_type_definition(enum_name)
-                    .cloned()
-                    .or_else(|| self.global_type_definitions.get(enum_name).cloned());
+                // Look up the enum definition (must be visible in scope)
+                let enum_def_opt = self.resolve_visible_type(enum_name, context).cloned();
 
                 if let Some(TypeDefinition::Enum(enum_def)) = enum_def_opt {
                     if let Some(variant_types) = enum_def.variants.get(variant_name) {

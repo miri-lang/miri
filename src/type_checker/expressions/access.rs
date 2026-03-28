@@ -596,10 +596,7 @@ impl TypeChecker {
         if let Some(name) = type_name {
             // Instance member access (Struct field)
             // We need to clone the definition to avoid borrowing issues with context
-            let def_opt = context
-                .resolve_type_definition(&name)
-                .cloned()
-                .or_else(|| self.global_type_definitions.get(&name).cloned());
+            let def_opt = self.resolve_visible_type(&name, context).cloned();
 
             if let Some(TypeDefinition::Struct(def)) = def_opt {
                 if let Some((_, field_type, visibility)) =
@@ -1021,10 +1018,7 @@ impl TypeChecker {
             TypeKind::Meta(inner_type) => {
                 // Static member access (Enum variant)
                 if let TypeKind::Custom(name, _) = &inner_type.kind {
-                    let def_opt = context
-                        .resolve_type_definition(name)
-                        .cloned()
-                        .or_else(|| self.global_type_definitions.get(name).cloned());
+                    let def_opt = self.resolve_visible_type(name, context).cloned();
 
                     if let Some(TypeDefinition::Enum(def)) = def_opt {
                         if let Some(variant_types) = def.variants.get(prop_name) {

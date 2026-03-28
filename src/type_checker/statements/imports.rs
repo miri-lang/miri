@@ -221,11 +221,6 @@ impl TypeChecker {
             .iter()
             .map(|(k, v)| (k.clone(), v.module.clone()))
             .collect();
-        let pre_import_types: HashSet<String> = context
-            .type_definitions
-            .last()
-            .map(|scope| scope.keys().cloned().collect())
-            .unwrap_or_default();
         let pre_import_global_types: HashSet<String> =
             self.global_type_definitions.keys().cloned().collect();
 
@@ -300,36 +295,31 @@ impl TypeChecker {
             });
 
             // Remove type definitions added by this module that are not selected.
-            // Both the scoped context and the flat global_type_definitions map must
-            // be filtered — the type checker always falls back to the latter.
-            if let Some(scope) = context.type_definitions.last_mut() {
-                scope.retain(|name, def| {
-                    if !pre_import_types.contains(name) && !selected_names.contains(name) {
-                        // Keep types from transitively imported modules; remove
-                        // types from the directly imported module (or unknown).
-                        let def_module = match def {
-                            TypeDefinition::Class(cd) => Some(cd.module.as_str()),
-                            TypeDefinition::Trait(td) => Some(td.module.as_str()),
-                            TypeDefinition::Struct(sd) => Some(sd.module.as_str()),
-                            _ => None,
-                        };
-                        return def_module.is_some() && def_module != Some(module_name.as_str());
-                    }
-                    true
-                });
-            }
+            //
+            // Transitive types (from modules imported by the directly imported module)
+            // are kept in `global_type_definitions` because internal mechanisms like
+            // method resolution and vtable generation need them. However, they are
+            // removed from `visible_type_names` so user code cannot reference them.
             self.global_type_definitions.retain(|name, def| {
                 if !pre_import_global_types.contains(name) && !selected_names.contains(name) {
-                    // Keep types from transitively imported modules; remove
-                    // types from the directly imported module (or types without
-                    // module info like enums/aliases).
+                    // Keep types from transitively imported modules in global_type_definitions
+                    // (for method resolution / vtable) but hide them from user code.
                     let def_module = match def {
                         TypeDefinition::Class(cd) => Some(cd.module.as_str()),
                         TypeDefinition::Trait(td) => Some(td.module.as_str()),
                         TypeDefinition::Struct(sd) => Some(sd.module.as_str()),
                         _ => None,
                     };
-                    return def_module.is_some() && def_module != Some(module_name.as_str());
+                    let is_transitive =
+                        def_module.is_some() && def_module != Some(module_name.as_str());
+                    if is_transitive {
+                        // Keep in global but hide from user code
+                        self.visible_type_names.remove(name);
+                        return true;
+                    }
+                    // Remove types from the directly imported module (not selected)
+                    self.visible_type_names.remove(name);
+                    return false;
                 }
                 true
             });
