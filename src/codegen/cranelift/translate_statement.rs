@@ -253,11 +253,25 @@ impl<'a> FunctionTranslator<'a> {
                     _ => None,
                 };
 
-                // Check if it's a runtime function
-                // For now, we assume all reachable calls in MIR are either internal or runtime functions.
-                // We'll try to find it in the module imports.
-                let mut sig = Signature::new(builder.func.signature.call_conv);
+                // Translate call arguments and build the call signature.
+                //
+                // If the function was already pre-declared (user-defined functions
+                // are pre-declared with correct MIR-derived signatures), we look up
+                // the existing declaration and cast argument values to match the
+                // declared parameter types.  This avoids signature mismatches when
+                // the DFG value type differs from the declared type (e.g. u8 stored
+                // as I64 in the DFG vs I8 in the declaration).
                 let mut arg_values = Vec::new();
+
+                // Look up any pre-existing declaration for this function.
+                let predeclared_sig = func_name.as_deref().and_then(|name| {
+                    use cranelift_module::FuncOrDataId;
+                    if let Some(FuncOrDataId::Func(id)) = ctx.module.get_name(name) {
+                        Some(ctx.module.declarations().get_function_decl(id).signature.clone())
+                    } else {
+                        None
+                    }
+                });
 
                 // Runtime collection functions use pointer-sized values for element
                 // arguments to maintain a consistent FFI signature regardless of the
@@ -265,6 +279,8 @@ impl<'a> FunctionTranslator<'a> {
                 let widen_value_args = func_name
                     .as_deref()
                     .is_some_and(|n| n == rt::LIST_PUSH || n == rt::LIST_INSERT);
+
+                let mut sig = Signature::new(builder.func.signature.call_conv);
 
                 for (i, arg) in args.iter().enumerate() {
                     let val = Self::translate_operand(builder, ctx, arg, locals, type_ctx)?;
@@ -274,6 +290,27 @@ impl<'a> FunctionTranslator<'a> {
                     // (skip arg 0 which is the collection pointer)
                     let val = if widen_value_args && i > 0 && val_ty.bytes() < ptr_type.bytes() {
                         builder.ins().sextend(ptr_type, val)
+                    } else {
+                        val
+                    };
+
+                    // Cast argument to match pre-declared parameter type if needed.
+                    let val = if let Some(ref pre_sig) = predeclared_sig {
+                        if i < pre_sig.params.len() {
+                            let expected_ty = pre_sig.params[i].value_type;
+                            let actual_ty = builder.func.dfg.value_type(val);
+                            if actual_ty != expected_ty {
+                                if actual_ty.bytes() > expected_ty.bytes() {
+                                    builder.ins().ireduce(expected_ty, val)
+                                } else {
+                                    builder.ins().sextend(expected_ty, val)
+                                }
+                            } else {
+                                val
+                            }
+                        } else {
+                            val
+                        }
                     } else {
                         val
                     };

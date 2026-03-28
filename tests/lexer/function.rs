@@ -416,6 +416,7 @@ fn test_lambda_edge_cases() {
             Token::ExpressionStatementEnd,
             Token::Indent,
             Token::Int,
+            Token::ExpressionStatementEnd,
             Token::Dedent,
         ],
     );

@@ -114,6 +114,7 @@ fn test_mixed_whitespace_types() {
             Token::ExpressionStatementEnd,
             Token::Indent,
             Token::Identifier,
+            Token::ExpressionStatementEnd,
             Token::Dedent,
         ],
     );

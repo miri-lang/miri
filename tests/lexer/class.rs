@@ -253,6 +253,7 @@ fn test_class_body_indentation() {
             Token::Let,
             Token::Identifier,
             Token::Identifier,
+            Token::ExpressionStatementEnd,
             Token::Dedent,
         ],
     );
@@ -275,6 +276,7 @@ fn test_class_multiple_members_indentation() {
             Token::Identifier,
             Token::LParen,
             Token::RParen,
+            Token::ExpressionStatementEnd,
             Token::Dedent,
         ],
     );
@@ -299,6 +301,7 @@ fn test_nested_indentation_in_class() {
             Token::Identifier,
             Token::Assign,
             Token::Int,
+            Token::ExpressionStatementEnd,
             Token::Dedent,
             Token::Dedent,
         ],

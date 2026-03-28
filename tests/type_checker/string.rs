@@ -167,13 +167,14 @@ fn test_formatted_string_only_expression() {
 
 #[test]
 fn test_formatted_string_void_expression() {
-    // Void expressions are currently allowed in formatted strings
-    type_checker_test(
+    // Void expressions are rejected in formatted strings
+    type_checker_error_test(
         "
 fn void_func()
     return
 let s = f\"Void: {void_func()}\"
 ",
+        "cannot be used in string interpolation",
     );
 }
 
