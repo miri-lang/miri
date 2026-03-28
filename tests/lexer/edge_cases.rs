@@ -5,6 +5,144 @@ use miri::{error::syntax::SyntaxErrorKind, lexer::Token};
 
 use super::utils::{lexer_error_test, lexer_token_test};
 
+// ---------------------------------------------------------------------------
+// EOF without trailing newline
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_eof_no_newline_single_indent() {
+    // Single indented statement, file ends right after identifier
+    lexer_token_test(
+        "if true\n    x",
+        vec![
+            Token::If,
+            Token::True,
+            Token::ExpressionStatementEnd,
+            Token::Indent,
+            Token::Identifier,
+            Token::ExpressionStatementEnd,
+            Token::Dedent,
+        ],
+    );
+}
+
+#[test]
+fn test_eof_no_newline_double_dedent() {
+    // Two levels of indentation, file ends without newline — both dedents emitted
+    lexer_token_test(
+        "fn f()\n    if true\n        x",
+        vec![
+            Token::Fn,
+            Token::Identifier,
+            Token::LParen,
+            Token::RParen,
+            Token::ExpressionStatementEnd,
+            Token::Indent,
+            Token::If,
+            Token::True,
+            Token::ExpressionStatementEnd,
+            Token::Indent,
+            Token::Identifier,
+            Token::ExpressionStatementEnd,
+            Token::Dedent,
+            Token::Dedent,
+        ],
+    );
+}
+
+#[test]
+fn test_eof_no_newline_after_rparen() {
+    // Indented function call ending with ')' and no newline
+    lexer_token_test(
+        "fn f()\n    g(1)",
+        vec![
+            Token::Fn,
+            Token::Identifier,
+            Token::LParen,
+            Token::RParen,
+            Token::ExpressionStatementEnd,
+            Token::Indent,
+            Token::Identifier,
+            Token::LParen,
+            Token::Int,
+            Token::RParen,
+            Token::ExpressionStatementEnd,
+            Token::Dedent,
+        ],
+    );
+}
+
+#[test]
+fn test_eof_no_newline_after_string() {
+    // Indented string literal at EOF
+    lexer_token_test(
+        "fn f()\n    \"hello\"",
+        vec![
+            Token::Fn,
+            Token::Identifier,
+            Token::LParen,
+            Token::RParen,
+            Token::ExpressionStatementEnd,
+            Token::Indent,
+            Token::String,
+            Token::ExpressionStatementEnd,
+            Token::Dedent,
+        ],
+    );
+}
+
+#[test]
+fn test_eof_no_newline_flat_code() {
+    // Flat code (no indentation) ending without newline — no ESE needed
+    lexer_token_test(
+        "let x = 1",
+        vec![Token::Let, Token::Identifier, Token::Assign, Token::Int],
+    );
+}
+
+#[test]
+fn test_eof_no_newline_fstring_in_indented_block() {
+    // Formatted string inside an indented block, file ends without newline.
+    // The f-string sub-lexer must NOT inject an ExpressionStatementEnd.
+    lexer_token_test(
+        "fn f()\n    f\"{x}\"",
+        vec![
+            Token::Fn,
+            Token::Identifier,
+            Token::LParen,
+            Token::RParen,
+            Token::ExpressionStatementEnd,
+            Token::Indent,
+            Token::FormattedStringStart(Box::new(String::new())),
+            Token::Identifier,
+            Token::FormattedStringEnd(Box::new(String::new())),
+            Token::ExpressionStatementEnd,
+            Token::Dedent,
+        ],
+    );
+}
+
+#[test]
+fn test_eof_no_newline_trait_method_signature() {
+    // The exact pattern that triggered the original bug: a trait with an
+    // abstract method (no body) in a file with no trailing newline.
+    lexer_token_test(
+        "trait T\n    fn foo()",
+        vec![
+            Token::Trait,
+            Token::Identifier,
+            Token::ExpressionStatementEnd,
+            Token::Indent,
+            Token::Fn,
+            Token::Identifier,
+            Token::LParen,
+            Token::RParen,
+            Token::ExpressionStatementEnd,
+            Token::Dedent,
+        ],
+    );
+}
+
 #[test]
 fn test_very_long_identifier() {
     let mut long_id = String::from("v");

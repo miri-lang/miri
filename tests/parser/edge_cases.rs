@@ -273,6 +273,50 @@ fn test_only_whitespace() {
     assert_statement_count("   \n\n\t\t\n   ", 0);
 }
 
+// ---------------------------------------------------------------------------
+// EOF without trailing newline
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_no_trailing_newline_function_with_body() {
+    // Function with a body statement, no trailing newline
+    assert_statement_count("fn greet()\n    let x = 1", 1);
+}
+
+#[test]
+fn test_no_trailing_newline_trait_abstract_method() {
+    // Trait with abstract method signature (no body), no trailing newline.
+    // This was the exact trigger for the original parser bug.
+    assert_statement_count("trait Printable\n    fn print()", 1);
+}
+
+#[test]
+fn test_no_trailing_newline_trait_two_methods() {
+    // Multiple abstract methods in a trait, no trailing newline
+    assert_statement_count("trait Serializable\n    fn serialize() String\n    fn size() int", 1);
+}
+
+#[test]
+fn test_no_trailing_newline_class_with_field_and_method() {
+    // Class with a field and a method, no trailing newline
+    assert_statement_count(
+        "class Dog\n    let name String\n    fn bark()\n        let x = 1",
+        1,
+    );
+}
+
+#[test]
+fn test_no_trailing_newline_nested_if() {
+    // Nested control flow, file ends at the innermost level
+    assert_statement_count("if true\n    if false\n        let x = 1", 1);
+}
+
+#[test]
+fn test_no_trailing_newline_multiple_top_level() {
+    // Multiple top-level statements, last one has an indented body with no newline
+    assert_statement_count("let a = 1\nfn f()\n    let b = 2", 2);
+}
+
 #[test]
 fn test_only_comments() {
     // Tests parsing of comment-only input
