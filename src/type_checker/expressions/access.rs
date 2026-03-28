@@ -431,7 +431,7 @@ impl TypeChecker {
         // Module alias access: `M.foo` where `M` was introduced by `use X as M`.
         // Resolve `foo` directly from global_scope without treating `M` as a variable.
         if let ExpressionKind::Identifier(alias_name, _) = &obj.node {
-            if self.module_aliases.contains_key(alias_name.as_str()) {
+            if let Some(module_path) = self.module_aliases.get(alias_name.as_str()) {
                 let prop_name = if let ExpressionKind::Identifier(name, _) = &prop.node {
                     name.clone()
                 } else {
@@ -451,7 +451,6 @@ impl TypeChecker {
                     }
                     return info.ty.clone();
                 }
-                let module_path = self.module_aliases.get(alias_name).unwrap();
                 self.report_error(
                     format!("'{}' is not defined in module '{}'", prop_name, module_path),
                     span,
