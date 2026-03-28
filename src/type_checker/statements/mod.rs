@@ -253,7 +253,7 @@ impl TypeChecker {
                                 context.exit_scope();
                             }
 
-                            self.global_type_definitions.insert(
+                            self.register_type_definition(
                                 name.clone(),
                                 TypeDefinition::Alias(AliasDefinition {
                                     template: target_type,
@@ -263,7 +263,7 @@ impl TypeChecker {
                         }
                     } else if let Some(target) = target_expr {
                         // For extends/implements/includes, check for conflicts with existing types
-                        if self.global_type_definitions.contains_key(&name) {
+                        if self.is_type_visible(&name) {
                             self.report_error(
                                 format!(
                                     "Type '{}' is already defined. Cannot use 'type' statement with '{}' on an existing type.",
@@ -276,7 +276,7 @@ impl TypeChecker {
 
                         // Validate that target type exists
                         if let Ok(target_name) = self.extract_type_name(target) {
-                            if !self.global_type_definitions.contains_key(target_name) {
+                            if !self.is_type_visible(target_name) {
                                 self.report_error(
                                     format!("Unknown type '{}' in type declaration", target_name),
                                     target.span,
@@ -286,7 +286,7 @@ impl TypeChecker {
                             let target_name = target_name.to_string();
 
                             // Register new type and add hierarchy relationship
-                            self.global_type_definitions.insert(
+                            self.register_type_definition(
                                 name.clone(),
                                 TypeDefinition::Struct(StructDefinition {
                                     fields: vec![],

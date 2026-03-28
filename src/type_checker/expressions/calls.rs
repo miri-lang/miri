@@ -216,10 +216,7 @@ impl TypeChecker {
             }
             TypeKind::Meta(inner_type) => {
                 if let TypeKind::Custom(name, type_args) = &inner_type.kind {
-                    let type_def = context
-                        .resolve_type_definition(name)
-                        .cloned()
-                        .or_else(|| self.global_type_definitions.get(name).cloned());
+                    let type_def = self.resolve_visible_type(name, context).cloned();
 
                     // Check for Class constructor
                     if let Some(TypeDefinition::Class(def)) = &type_def {

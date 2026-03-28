@@ -199,6 +199,48 @@ fn estimated_type_size(
 }
 
 impl TypeChecker {
+    // ==================== Visible Type Resolution ====================
+
+    /// Registers a type definition and marks it as visible to user code.
+    ///
+    /// All type registrations should go through this method so that
+    /// `resolve_visible_type` works correctly.
+    pub(crate) fn register_type_definition(&mut self, name: String, def: TypeDefinition) {
+        self.visible_type_names.insert(name.clone());
+        self.global_type_definitions.insert(name, def);
+    }
+
+    /// Resolves a type definition that is visible from user code.
+    ///
+    /// Use this for **user-facing** name resolution: `implements`, `extends`,
+    /// type annotations, constructor calls, pattern matching, etc.
+    ///
+    /// Checks scoped generics (from context) first, then global types gated by
+    /// `visible_type_names`. For **internal** lookups where the type is already
+    /// known to exist (walking inheritance chains, vtable resolution, method
+    /// signature checking), use `global_type_definitions` directly.
+    pub(crate) fn resolve_visible_type<'a>(
+        &'a self,
+        name: &str,
+        context: &'a Context,
+    ) -> Option<&'a TypeDefinition> {
+        // Generic type parameters are scoped — they live only in context,
+        // never in global_type_definitions.
+        if let Some(def @ TypeDefinition::Generic(_)) = context.resolve_type_definition(name) {
+            return Some(def);
+        }
+        if self.visible_type_names.contains(name) {
+            self.global_type_definitions.get(name)
+        } else {
+            None
+        }
+    }
+
+    /// Returns true if the named type is visible from user code.
+    pub(crate) fn is_type_visible(&self, name: &str) -> bool {
+        self.visible_type_names.contains(name)
+    }
+
     // ==================== Error Type Helper ====================
 
     /// Creates an error type. Use this when type checking fails.
@@ -558,13 +600,8 @@ impl TypeChecker {
                 .collect()
         });
 
-        // Look up type definition
-        let def = context
-            .resolve_type_definition(name)
-            .cloned()
-            .or_else(|| self.global_type_definitions.get(name).cloned());
-
-        if let Some(def) = def {
+        // Look up type definition (user-facing: must be visible in scope)
+        if let Some(def) = self.resolve_visible_type(name, context).cloned() {
             self.validate_and_resolve_type_definition(name, def, resolved_args, expr, context)
         } else {
             self.report_unknown_type(name, expr, context);
