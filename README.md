@@ -8,9 +8,9 @@
 
 Miri is designed for agentic engineering, where humans define intent and AI fills in safe, verifiable, high-performance implementations.
 
-## Current State (v0.1.0-alpha.3)
+## Current State (v0.2.0-alpha.4)
 
-Miri is in its third Alpha release. On top of the core language from Alpha 2, this release adds full OOP support, closures, and generics monomorphization.
+Miri is in its fourth Alpha release. On top of OOP, closures, and generics from Alpha 3, this release adds a full multi-file module system with cross-module visibility, module aliasing, and robust error diagnostics.
 
 **Working Features:**
 - **Primitives & Variables**: `int`, `float`, `bool`, `String` via `let` (immutable) and `var` (mutable).
@@ -30,8 +30,13 @@ Miri is in its third Alpha release. On top of the core language from Alpha 2, th
 - **Closures**: Non-capturing and capturing lambdas compiled to native code. Captures by value; closure represented as a fat pointer `(fn_ptr, env_ptr)`.
 - **Generics**: Generic function and generic struct/class monomorphization. Specialized copies emitted per unique type instantiation.
 - **Virtual Dispatch**: Vtable generation for class hierarchies; runtime method dispatch for polymorphic variables and trait objects.
+- **Multi-File Projects**: Programs can span multiple `.mi` files. The compiler discovers, parses, and links all files in a project automatically.
+- **Module System**: `use local.*` resolves to project files, `use system.*` resolves to stdlib. Supports selective imports (`use system.io.{println}`) and module aliasing (`use system.math as M`).
+- **Cross-Module Visibility**: `public`, `private`, and `protected` modifiers are enforced across module boundaries. Private symbols are invisible to importers.
+- **Namespace Collision Detection**: Conflicting names across imports and local declarations are detected with clear error messages and suggestions.
+- **Circular Dependency Detection**: Circular import chains are detected and reported with clear diagnostics.
 
-*Note: GPU codegen, closures with capture-by-reference, and cross-module visibility are planned for upcoming milestones.*
+*Note: GPU codegen, closures with capture-by-reference, and full memory safety (Perceus+) are planned for upcoming milestones.*
 
 ## Quick Start
 
@@ -184,6 +189,40 @@ fn main()
     d.describe()
 ```
 
+### Multi-File Projects
+
+```miri
+// models/user.mi
+use system.io
+
+class User
+    public name String
+
+    fn init(n String)
+        self.name = n
+
+    public fn greet()
+        println(f"Hello, {self.name}")
+```
+
+```miri
+// main.mi
+use local.models.user
+
+fn main()
+    let u = User(n: "Alice")
+    u.greet()
+```
+
+### Module Aliasing
+
+```miri
+use system.collections.list as L
+
+fn main()
+    var items = L.List([1, 2, 3])
+```
+
 ### Option Types
 
 ```miri
@@ -221,17 +260,18 @@ match x
 Miri follows a standard compiler pipeline:
 
 ```text
-Source → Lexer → Parser → AST → Type Checker → MIR → Codegen → Object File → Linker → Executable
+Source(s) → Lexer → Parser → AST → Type Checker → MIR → Codegen → Object File → Linker → Executable
 ```
 
 The `Pipeline` struct in `src/pipeline.rs` orchestrates:
 
-1. **Frontend** — Lexing and Parsing
-2. **Script Wrapping** — Auto-wrapping top-level statements into `main` if needed
-3. **Analysis** — Type checking
-4. **Lowering** — Converting AST to MIR
-5. **Backend** — Cranelift (default) code generation
-6. **Linking** — System linker (`cc`) produces the final binary
+1. **Discovery** — Finding all `.mi` files in the project, resolving `use local.*` and `use system.*` imports
+2. **Frontend** — Lexing and Parsing (per file)
+3. **Script Wrapping** — Auto-wrapping top-level statements into `main` if needed
+4. **Analysis** — Type checking with cross-module visibility enforcement
+5. **Lowering** — Converting AST to MIR
+6. **Backend** — Cranelift (default) code generation
+7. **Linking** — System linker (`cc`) produces the final binary
 
 ### Backends
 

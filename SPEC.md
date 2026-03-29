@@ -1,6 +1,6 @@
-# Miri Language Specification (v0.1.0-alpha.3)
+# Miri Language Specification (v0.2.0-alpha.4)
 
-*This specification documents the currently implemented features of Miri v0.1.0-alpha.3.*
+*This specification documents the currently implemented features of Miri v0.2.0-alpha.4.*
 
 ---
 
@@ -18,7 +18,7 @@
 - [Collections](#collections)
 - [Option Types](#option-types)
 - [Type Aliases](#type-aliases)
-- [Imports](#imports)
+- [Imports & Modules](#imports--modules)
 - [Memory Model](#memory-model)
 - [Classes](#classes)
 - [Traits](#traits)
@@ -400,17 +400,39 @@ Aliases are transparent to the type checker and codegen — they are fully inter
 
 ---
 
-## Imports
+## Imports & Modules
+
+Miri supports multi-file projects with a module system that resolves imports, enforces visibility across module boundaries, and detects errors.
+
+### Import Syntax
 
 ```miri
-// Imports all public entities from the io module
+// Import all public entities from a module
 use system.io
 
-// Imports only the print and println functions from the io module
+// Selective import
 use system.io.{print, println}
+
+// Module aliasing
+use system.collections.list as L
+use system.{io, collections.map as M}
+```
+
+### Local Modules
+
+Files within a project are imported using the `local` prefix. The path maps directly to the file system relative to the project root.
+
+```miri
+// Imports from models/user.mi
+use local.models.user
+
+// Imports from utils/math.mi
+use local.utils.math
 ```
 
 ### Standard Library Modules
+
+Standard library modules are auto-discovered from the compiler's bundled stdlib path.
 
 | Module | Contents |
 |--------|----------|
@@ -420,6 +442,44 @@ use system.io.{print, println}
 | `system.collections.list` | List methods |
 | `system.collections.map` | Map methods |
 | `system.collections.set` | Set methods |
+
+### Cross-Module Visibility
+
+Visibility modifiers control which symbols are accessible from other modules:
+
+| Modifier | Within module | From importing module |
+|----------|--------------|----------------------|
+| `public` | Yes | Yes |
+| `private` | Yes | No |
+| `protected` | Yes (class + subclasses) | No |
+
+Top-level functions and classes are `public` by default. Fields and methods follow OOP visibility rules. Accessing a private symbol from another module produces a compile error.
+
+```miri
+// utils/helper.mi
+public fn add(a int, b int) int
+    a + b
+
+private fn internal_detail() int
+    42
+```
+
+```miri
+// main.mi
+use local.utils.helper
+
+fn main()
+    let x = add(1, 2)         // OK — add is public
+    // internal_detail()       // Error — private to its module
+```
+
+### Namespace Collision Detection
+
+Importing two modules that export the same name produces a compile error with suggestions for resolution (e.g., using aliased imports).
+
+### Circular Dependency Detection
+
+If module `a.mi` imports `b.mi` and `b.mi` imports `a.mi`, the compiler reports the circular import chain with clear diagnostics.
 
 ---
 
@@ -439,7 +499,7 @@ a = [4, 5, 6]       // old array's RC decremented, freed if zero
 
 *Note: Element-level RC (managed types inside collections) and full string ownership are deferred to a future release. See the project roadmap for details.*
 
-*Note: GPU codegen, closures with capture-by-reference (`out` closures), and cross-module visibility are planned for upcoming milestones.*
+*Note: GPU codegen, closures with capture-by-reference (`out` closures), and full memory safety (Perceus+) are planned for upcoming milestones.*
 
 ---
 
