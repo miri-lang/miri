@@ -316,3 +316,63 @@ fn main()
         "5",
     );
 }
+
+// ===== protected is invalid outside class bodies =====
+
+#[test]
+fn test_protected_enum_is_invalid_at_top_level() {
+    assert_compiler_error(
+        r#"
+protected enum Role
+    Employee
+    Manager
+    Admin
+    "#,
+        "public or private visibility",
+    );
+}
+
+#[test]
+fn test_protected_struct_is_invalid_at_top_level() {
+    assert_compiler_error(
+        r#"
+protected struct Point
+    x int
+    y int
+    "#,
+        "public or private visibility",
+    );
+}
+
+#[test]
+fn test_protected_function_is_invalid_at_top_level() {
+    assert_compiler_error(
+        r#"
+protected fn helper() int
+    42
+    "#,
+        "public or private visibility",
+    );
+}
+
+#[test]
+fn test_protected_class_is_invalid_at_top_level() {
+    assert_compiler_error(
+        r#"
+protected class Foo
+    var x int
+    "#,
+        "public or private visibility",
+    );
+}
+
+#[test]
+fn test_protected_trait_is_invalid_at_top_level() {
+    assert_compiler_error(
+        r#"
+protected trait Printable
+    fn print()
+    "#,
+        "public or private visibility",
+    );
+}

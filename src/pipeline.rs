@@ -285,6 +285,9 @@ pub struct Pipeline {
     /// Directory of the entry-point source file.  When set, the type checker
     /// uses this to resolve `local.*` module imports.
     source_dir: Option<PathBuf>,
+    /// Absolute path of the entry-point source file, used so that *all*
+    /// errors (not just those from imported modules) include a file location.
+    source_path: Option<String>,
 }
 
 impl Default for Pipeline {
@@ -295,7 +298,10 @@ impl Default for Pipeline {
 
 impl Pipeline {
     pub fn new() -> Self {
-        Self { source_dir: None }
+        Self {
+            source_dir: None,
+            source_path: None,
+        }
     }
 
     /// Configure the pipeline with the directory of the source file being
@@ -303,6 +309,18 @@ impl Pipeline {
     pub fn with_source_dir(mut self, dir: PathBuf) -> Self {
         self.source_dir = Some(dir);
         self
+    }
+
+    /// Configure the pipeline with the absolute path of the entry-point
+    /// source file.  This enables file-path display in all error messages.
+    pub fn with_source_path(mut self, path: String) -> Self {
+        self.source_path = Some(path);
+        self
+    }
+
+    /// Returns the entry-point source path, if configured.
+    pub fn source_path(&self) -> Option<&str> {
+        self.source_path.as_deref()
     }
 
     /// Build a `TypeChecker` configured with this pipeline's source directory.
@@ -355,7 +373,11 @@ impl Pipeline {
         for warning in &type_checker.warnings {
             eprintln!(
                 "{}",
-                crate::error::format::format_diagnostic_full(source, warning)
+                crate::error::format::format_diagnostic(
+                    source,
+                    warning,
+                    self.source_path.as_deref(),
+                )
             );
         }
 

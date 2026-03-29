@@ -91,6 +91,14 @@ impl ColorScheme {
 /// Color output is automatically enabled when stderr is a terminal and
 /// disabled when output is redirected to a file or pipe.
 pub fn format_diagnostic_full(source: &str, diag: &Diagnostic) -> String {
+    format_diagnostic(source, diag, None)
+}
+
+/// Formats a diagnostic with an optional fallback file path for the main
+/// source file.  When `source_path` is `Some`, errors that do *not* carry
+/// their own `source_override` (i.e. errors from the entry-point file) will
+/// display the given path in the `-->` location line.
+pub fn format_diagnostic(source: &str, diag: &Diagnostic, source_path: Option<&str>) -> String {
     let colors = ColorScheme::detect();
 
     let level_color = colors.severity_color(diag.severity);
@@ -98,10 +106,11 @@ pub fn format_diagnostic_full(source: &str, diag: &Diagnostic) -> String {
     let level = diag.severity.as_str();
     let mut output = String::new();
 
-    // Use source override if the diagnostic comes from an imported file.
+    // Use source override if the diagnostic comes from an imported file,
+    // otherwise fall back to the entry-point source path if available.
     let (effective_source, file_label) = match &diag.source_override {
         Some((path, src)) => (src.as_str(), Some(path.as_str())),
-        None => (source, None),
+        None => (source, source_path),
     };
 
     // Header: error[E0001]: Title
@@ -263,8 +272,10 @@ pub fn find_best_match<S: AsRef<str>>(target: &str, candidates: &[S]) -> Option<
         }
     }
 
-    // Threshold for suggestion: roughly 40% of the word length or max 3 edits
-    let threshold = std::cmp::max(3, target.len() / 2);
+    // Threshold for suggestion: roughly 33% of the word length, minimum 2 edits.
+    // Tighter than the old max(3, len/2) to avoid suggesting unrelated names
+    // for short identifiers (e.g. "User" no longer matches "Err").
+    let threshold = std::cmp::max(2, target.len() / 3);
     if min_distance <= threshold {
         best_candidate
     } else {

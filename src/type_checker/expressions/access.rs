@@ -65,6 +65,11 @@ impl TypeChecker {
         context: &mut Context,
     ) -> Type {
         let obj_type = self.infer_expression(obj, context);
+
+        if matches!(obj_type.kind, TypeKind::Error) {
+            return make_type(TypeKind::Error);
+        }
+
         let index_type = self.infer_expression(index, context);
 
         // Check for Range index (Slicing)
@@ -461,6 +466,12 @@ impl TypeChecker {
         }
 
         let obj_type = self.infer_expression(obj, context);
+
+        // Suppress cascade errors: if the object already has error type,
+        // silently propagate it instead of reporting "Type 'error' does not have members".
+        if matches!(obj_type.kind, TypeKind::Error) {
+            return make_type(TypeKind::Error);
+        }
 
         if let TypeKind::Tuple(element_types) = &obj_type.kind {
             if let ExpressionKind::Literal(Literal::Integer(val)) = &prop.node {

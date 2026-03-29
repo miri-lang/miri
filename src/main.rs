@@ -58,6 +58,7 @@ fn run_file(path: PathBuf, _program_args: Vec<String>, _verbose: u8) -> Result<(
     if let Some(dir) = abs_path.parent() {
         pipeline = pipeline.with_source_dir(dir.to_path_buf());
     }
+    pipeline = pipeline.with_source_path(abs_path.display().to_string());
 
     match pipeline.run(&source) {
         Ok(exit_code) => {
@@ -67,7 +68,7 @@ fn run_file(path: PathBuf, _program_args: Vec<String>, _verbose: u8) -> Result<(
             Ok(())
         }
         Err(e) => {
-            eprintln!("{}", e.report(&source));
+            eprintln!("{}", e.report_with_path(&source, pipeline.source_path()));
             std::process::exit(1);
         }
     }
@@ -89,6 +90,7 @@ fn build_file(
     if let Some(dir) = abs_path.parent() {
         pipeline = pipeline.with_source_dir(dir.to_path_buf());
     }
+    pipeline = pipeline.with_source_path(abs_path.display().to_string());
     let build_options = BuildOptions {
         out_path: out,
         release,
@@ -102,7 +104,7 @@ fn build_file(
             Ok(())
         }
         Err(e) => {
-            eprintln!("{}", e.report(&source));
+            eprintln!("{}", e.report_with_path(&source, pipeline.source_path()));
             std::process::exit(1);
         }
     }
@@ -117,12 +119,17 @@ fn check_file(path: PathBuf, _verbose: u8) -> Result<()> {
     if let Some(dir) = abs_path.parent() {
         pipeline = pipeline.with_source_dir(dir.to_path_buf());
     }
+    pipeline = pipeline.with_source_path(abs_path.display().to_string());
     match pipeline.frontend(&source) {
         Ok(result) => {
             for warning in &result.type_checker.warnings {
                 eprintln!(
                     "{}",
-                    miri::error::format::format_diagnostic_full(&source, warning)
+                    miri::error::format::format_diagnostic(
+                        &source,
+                        warning,
+                        pipeline.source_path(),
+                    )
                 );
             }
             let warning_count = result.type_checker.warnings.len();
@@ -137,7 +144,7 @@ fn check_file(path: PathBuf, _verbose: u8) -> Result<()> {
             Ok(())
         }
         Err(e) => {
-            eprintln!("{}", e.report(&source));
+            eprintln!("{}", e.report_with_path(&source, pipeline.source_path()));
             std::process::exit(1);
         }
     }
