@@ -414,8 +414,7 @@ impl TypeChecker {
                             } else {
                                 let mut found = None;
                                 let mut base = def.base_class.clone();
-                                loop {
-                                    let Some(bname) = base else { break };
+                                while let Some(bname) = base {
                                     match self.global_type_definitions.get(&bname) {
                                         Some(TypeDefinition::Class(b)) => {
                                             if let Some(m) = b.methods.get("init") {
