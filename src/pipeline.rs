@@ -574,7 +574,12 @@ impl Pipeline {
                                 method_decl.name
                             );
 
-                            let mangled = format!("{}_{}", class_name, method_decl.name);
+                            let mut mangled = String::with_capacity(
+                                class_name.len() + 1 + method_decl.name.len(),
+                            );
+                            mangled.push_str(class_name);
+                            mangled.push('_');
+                            mangled.push_str(&method_decl.name);
                             if lowered_names.contains(&mangled) {
                                 continue;
                             }
@@ -619,7 +624,12 @@ impl Pipeline {
                                 continue;
                             }
 
-                            let mangled = format!("{}_{}", trait_name, method_decl.name);
+                            let mut mangled = String::with_capacity(
+                                trait_name.len() + 1 + method_decl.name.len(),
+                            );
+                            mangled.push_str(trait_name);
+                            mangled.push('_');
+                            mangled.push_str(&method_decl.name);
                             if lowered_names.contains(&mangled) {
                                 continue;
                             }
@@ -714,7 +724,12 @@ impl Pipeline {
                                 method_decl.name
                             );
 
-                            let mangled = format!("{}_{}", class_name, method_decl.name);
+                            let mut mangled = String::with_capacity(
+                                class_name.len() + 1 + method_decl.name.len(),
+                            );
+                            mangled.push_str(class_name);
+                            mangled.push('_');
+                            mangled.push_str(&method_decl.name);
                             if lowered_names.contains(&mangled) {
                                 continue;
                             }

@@ -631,9 +631,8 @@ impl TypeChecker {
                                 .components()
                                 .filter_map(|c| c.as_os_str().to_str().map(|s| s.to_string()))
                                 .collect();
-                            if !parts.is_empty() {
-                                let last =
-                                    parts.last().unwrap().trim_end_matches(".mi").to_string();
+                            if let Some(last_part) = parts.last() {
+                                let last = last_part.trim_end_matches(".mi").to_string();
                                 let mut module_parts = parts[..parts.len() - 1].to_vec();
                                 module_parts.push(last);
                                 return Some(module_parts.join("."));
