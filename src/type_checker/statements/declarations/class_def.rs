@@ -91,16 +91,34 @@ impl TypeChecker {
             .as_ref()
             .map(|gens| self.extract_generic_definitions(gens, context));
 
-        // Validate base class exists
+        // Validate base class exists and is a class
         let base_class_name = if let Some(base_expr) = base_class {
             match self.extract_type_name(base_expr) {
                 Ok(base_name) => {
-                    // Check base class exists and is visible
                     if !self.is_type_visible(base_name) {
                         self.report_error(
                             format!("Base class '{}' is not defined", base_name),
                             base_expr.span,
                         );
+                    } else if let Some(def) = self.global_type_definitions.get(base_name) {
+                        if !matches!(def, TypeDefinition::Class(_)) {
+                            let kind = match def {
+                                TypeDefinition::Trait(_) => "a trait",
+                                TypeDefinition::Enum(_) => "an enum",
+                                TypeDefinition::Struct(_) => "a struct",
+                                TypeDefinition::Alias(_) => "a type alias",
+                                TypeDefinition::Generic(_) => "a generic type",
+                                TypeDefinition::Class(_) => unreachable!(),
+                            };
+                            self.report_error_with_help(
+                                format!("'{}' is not a class", base_name),
+                                base_expr.span,
+                                format!(
+                                    "'{}' is {} — only classes can be used with 'extends'",
+                                    base_name, kind
+                                ),
+                            );
+                        }
                     }
                     Some(base_name.to_string())
                 }
@@ -143,7 +161,7 @@ impl TypeChecker {
             }
         }
 
-        // Validate traits exist and are visible in the current scope
+        // Validate traits exist, are visible, and are actually traits
         let mut trait_names = Vec::with_capacity(traits.len());
         for trait_expr in traits {
             if let Ok(trait_name) = self.extract_type_name(trait_expr) {
@@ -152,6 +170,25 @@ impl TypeChecker {
                         format!("Trait '{}' is not defined", trait_name),
                         trait_expr.span,
                     );
+                } else if let Some(def) = self.global_type_definitions.get(trait_name) {
+                    if !matches!(def, TypeDefinition::Trait(_)) {
+                        let kind = match def {
+                            TypeDefinition::Class(_) => "a class",
+                            TypeDefinition::Enum(_) => "an enum",
+                            TypeDefinition::Struct(_) => "a struct",
+                            TypeDefinition::Alias(_) => "a type alias",
+                            TypeDefinition::Generic(_) => "a generic type",
+                            TypeDefinition::Trait(_) => unreachable!(),
+                        };
+                        self.report_error_with_help(
+                            format!("'{}' is not a trait", trait_name),
+                            trait_expr.span,
+                            format!(
+                                "'{}' is {} — only traits can be used with 'implements'",
+                                trait_name, kind
+                            ),
+                        );
+                    }
                 }
                 trait_names.push(trait_name.to_string());
             }
@@ -315,7 +352,7 @@ impl TypeChecker {
                             "Non-abstract class '{}' cannot have abstract method '{}'",
                             name, method_name
                         ),
-                        span,
+                        name_expr.span,
                     );
                 }
             }
@@ -390,7 +427,7 @@ impl TypeChecker {
 
         // Report override errors
         for error in override_errors {
-            self.report_error(error, span);
+            self.report_error(error, name_expr.span);
         }
 
         // Validate: child class init must call super.init() when parent has accessible init
@@ -444,7 +481,7 @@ impl TypeChecker {
                                 "Constructor 'init' in class '{}' must call super.init() because parent class '{}' has a constructor",
                                 name, base_name
                             ),
-                            span,
+                            name_expr.span,
                         );
                     }
                 }
@@ -482,7 +519,7 @@ impl TypeChecker {
 
                 // Report errors for missing methods
                 for error in missing_errors {
-                    self.report_error(error, span);
+                    self.report_error(error, name_expr.span);
                 }
             }
         }
@@ -594,7 +631,7 @@ impl TypeChecker {
                         "Class '{}' must implement method '{}' from trait '{}'",
                         name, method_name, origin_trait
                     ),
-                    span,
+                    name_expr.span,
                 );
             }
 
@@ -605,7 +642,7 @@ impl TypeChecker {
                         "Method '{}' in class '{}' does not match trait '{}' signature: expected {}",
                         method_name, name, trait_name, expected_sig
                     ),
-                    span,
+                    name_expr.span,
                 );
             }
         }
