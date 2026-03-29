@@ -204,14 +204,12 @@ fn test_enum_visibility_modifiers() {
         )],
     );
 
-    parser_test(
+    parser_error_test(
         "protected enum E: V",
-        vec![enum_statement(
-            identifier("E"),
-            None,
-            vec![enum_value("V", vec![])],
-            MemberVisibility::Protected,
-        )],
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "public or private visibility".to_string(),
+            found: "protected (only valid for class members)".to_string(),
+        },
     );
     parser_test(
         "private enum E: V",

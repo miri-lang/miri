@@ -176,16 +176,12 @@ impl TypeChecker {
         }
 
         let capacity =
-            context.scopes.iter().map(|s| s.len()).sum::<usize>() + self.global_scope.len() + 4;
+            context.scopes.iter().map(|s| s.len()).sum::<usize>() + self.global_scope.len();
         let mut candidates: Vec<&str> = Vec::with_capacity(capacity);
         for scope in &context.scopes {
             candidates.extend(scope.keys().map(|s| s.as_str()));
         }
         candidates.extend(self.global_scope.keys().map(|s| s.as_str()));
-        candidates.push("None");
-        candidates.push("Some");
-        candidates.push("Ok");
-        candidates.push("Err");
 
         if let Some(suggestion) = find_best_match(name, &candidates) {
             self.report_error_with_help(

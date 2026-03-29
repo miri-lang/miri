@@ -267,7 +267,13 @@ impl<'a> FunctionTranslator<'a> {
                 let predeclared_sig = func_name.as_deref().and_then(|name| {
                     use cranelift_module::FuncOrDataId;
                     if let Some(FuncOrDataId::Func(id)) = ctx.module.get_name(name) {
-                        Some(ctx.module.declarations().get_function_decl(id).signature.clone())
+                        Some(
+                            ctx.module
+                                .declarations()
+                                .get_function_decl(id)
+                                .signature
+                                .clone(),
+                        )
                     } else {
                         None
                     }

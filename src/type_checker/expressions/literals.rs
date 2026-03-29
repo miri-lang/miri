@@ -75,16 +75,16 @@ impl TypeChecker {
         for part in parts {
             let part_type = self.infer_expression(part, context);
             // Literal string segments are always fine; only validate interpolated expressions.
-            if !matches!(&part.node, ExpressionKind::Literal(Literal::String(_))) {
-                if !Self::can_interpolate(&part_type.kind) {
-                    self.report_error(
-                        format!(
-                            "Type '{}' cannot be used in string interpolation",
-                            part_type
-                        ),
-                        part.span,
-                    );
-                }
+            if !matches!(&part.node, ExpressionKind::Literal(Literal::String(_)))
+                && !Self::can_interpolate(&part_type.kind)
+            {
+                self.report_error(
+                    format!(
+                        "Type '{}' cannot be used in string interpolation",
+                        part_type
+                    ),
+                    part.span,
+                );
             }
         }
         make_type(TypeKind::String)

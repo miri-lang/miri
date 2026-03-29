@@ -2,7 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use crate::error::diagnostic::{Diagnostic, Reportable, Severity, BUG_REPORT_URL};
-use crate::error::format::format_diagnostic_full;
+use crate::error::format::format_diagnostic;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::SyntaxError;
 use crate::error::type_error::TypeError;
@@ -21,7 +21,7 @@ pub enum CompilerError {
     Parser(SyntaxError),
 
     #[error("Type Error: {0}")]
-    Type(TypeError),
+    Type(Box<TypeError>),
 
     #[error("Type Errors: {errors:?}")]
     TypeErrors {
@@ -54,106 +54,86 @@ impl CompilerError {
     /// All variants are routed through [`format_diagnostic_full`] to ensure
     /// consistent formatting and TTY-aware color output.
     pub fn report(&self, source: &str) -> String {
+        self.report_with_path(source, None)
+    }
+
+    /// Like [`report`](Self::report), but includes the entry-point file path
+    /// in error locations when no per-diagnostic `source_override` is set.
+    pub fn report_with_path(&self, source: &str, source_path: Option<&str>) -> String {
+        let fmt = |diag: &Diagnostic| format_diagnostic(source, diag, source_path);
         match self {
-            CompilerError::Lexer(e) | CompilerError::Parser(e) => {
-                format_diagnostic_full(source, &e.to_diagnostic())
-            }
-            CompilerError::Type(e) => format_diagnostic_full(source, &e.to_diagnostic()),
+            CompilerError::Lexer(e) | CompilerError::Parser(e) => fmt(&e.to_diagnostic()),
+            CompilerError::Type(e) => fmt(&e.to_diagnostic()),
             CompilerError::TypeErrors { errors, warnings } => {
-                let mut parts: Vec<String> = warnings
-                    .iter()
-                    .map(|w| format_diagnostic_full(source, w))
-                    .collect();
-                parts.extend(
-                    errors
-                        .iter()
-                        .map(|e| format_diagnostic_full(source, &e.to_diagnostic())),
-                );
+                let mut parts: Vec<String> = warnings.iter().map(&fmt).collect();
+                parts.extend(errors.iter().map(|e| fmt(&e.to_diagnostic())));
                 parts.join("\n")
             }
-            CompilerError::Lowering(e) => format_diagnostic_full(source, &e.to_diagnostic()),
-            CompilerError::Io(e) => {
-                let diagnostic = Diagnostic {
-                    severity: Severity::Error,
-                    code: None,
-                    title: "I/O Error".to_string(),
-                    message: format!("{}", e),
-                    span: None,
-                    help: None,
-                    notes: Vec::new(),
-                    source_override: None,
-                };
-                format_diagnostic_full(source, &diagnostic)
-            }
-            CompilerError::FileNotFound(path) => {
-                let diagnostic = Diagnostic {
-                    severity: Severity::Error,
-                    code: None,
-                    title: "File Not Found".to_string(),
-                    message: format!("File not found: {}", path),
-                    span: None,
-                    help: None,
-                    notes: Vec::new(),
-                    source_override: None,
-                };
-                format_diagnostic_full(source, &diagnostic)
-            }
-            CompilerError::Internal(msg) => {
-                let diagnostic = Diagnostic {
-                    severity: Severity::Error,
-                    code: None,
-                    title: "Internal Compiler Error".to_string(),
-                    message: msg.clone(),
-                    span: None,
-                    help: Some(format!("Please report this at {}", BUG_REPORT_URL)),
-                    notes: Vec::new(),
-                    source_override: None,
-                };
-                format_diagnostic_full(source, &diagnostic)
-            }
-            CompilerError::Codegen(msg) => {
-                let diagnostic = Diagnostic {
-                    severity: Severity::Error,
-                    code: None,
-                    title: "Code Generation Error".to_string(),
-                    message: msg.clone(),
-                    span: None,
-                    help: None,
-                    notes: Vec::new(),
-                    source_override: None,
-                };
-                format_diagnostic_full(source, &diagnostic)
-            }
-            CompilerError::Runtime(msg) => {
-                let diagnostic = Diagnostic {
-                    severity: Severity::Error,
-                    code: None,
-                    title: "Runtime Error".to_string(),
-                    message: msg.clone(),
-                    span: None,
-                    help: None,
-                    notes: Vec::new(),
-                    source_override: None,
-                };
-                format_diagnostic_full(source, &diagnostic)
-            }
-            CompilerError::MirVerification(msg) => {
-                let diagnostic = Diagnostic {
-                    severity: Severity::Error,
-                    code: None,
-                    title: "MIR Verification Error".to_string(),
-                    message: msg.clone(),
-                    span: None,
-                    help: Some(
-                        "This indicates a bug in MIR lowering or Perceus RC insertion. \
-                         Please report it."
-                            .to_string(),
-                    ),
-                    notes: Vec::new(),
-                    source_override: None,
-                };
-                format_diagnostic_full(source, &diagnostic)
-            }
+            CompilerError::Lowering(e) => fmt(&e.to_diagnostic()),
+            CompilerError::Io(e) => fmt(&Diagnostic {
+                severity: Severity::Error,
+                code: None,
+                title: "I/O Error".to_string(),
+                message: format!("{}", e),
+                span: None,
+                help: None,
+                notes: Vec::new(),
+                source_override: None,
+            }),
+            CompilerError::FileNotFound(path) => fmt(&Diagnostic {
+                severity: Severity::Error,
+                code: None,
+                title: "File Not Found".to_string(),
+                message: format!("File not found: {}", path),
+                span: None,
+                help: None,
+                notes: Vec::new(),
+                source_override: None,
+            }),
+            CompilerError::Internal(msg) => fmt(&Diagnostic {
+                severity: Severity::Error,
+                code: None,
+                title: "Internal Compiler Error".to_string(),
+                message: msg.clone(),
+                span: None,
+                help: Some(format!("Please report this at {}", BUG_REPORT_URL)),
+                notes: Vec::new(),
+                source_override: None,
+            }),
+            CompilerError::Codegen(msg) => fmt(&Diagnostic {
+                severity: Severity::Error,
+                code: None,
+                title: "Code Generation Error".to_string(),
+                message: msg.clone(),
+                span: None,
+                help: None,
+                notes: Vec::new(),
+                source_override: None,
+            }),
+            CompilerError::Runtime(msg) => fmt(&Diagnostic {
+                severity: Severity::Error,
+                code: None,
+                title: "Runtime Error".to_string(),
+                message: msg.clone(),
+                span: None,
+                help: None,
+                notes: Vec::new(),
+                source_override: None,
+            }),
+            CompilerError::MirVerification(msg) => fmt(&Diagnostic {
+                severity: Severity::Error,
+                code: None,
+                title: "MIR Verification Error".to_string(),
+                message: msg.clone(),
+                span: None,
+                help: Some(
+                    "This indicates a bug in MIR lowering or Perceus RC insertion. \
+                     Please report it."
+                        .to_string(),
+                ),
+                notes: Vec::new(),
+                source_override: None,
+            }),
         }
     }
 }

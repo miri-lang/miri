@@ -56,6 +56,14 @@ pub enum TypeErrorKind {
         message: String,
         help: Option<String>,
     },
+    /// A syntax/parse error that originated in an imported module, preserved
+    /// with its original error code and title rather than being downgraded to
+    /// a generic "Type Error".
+    ParseError {
+        code: &'static str,
+        title: &'static str,
+        message: String,
+    },
 }
 
 impl TypeErrorKind {
@@ -137,6 +145,16 @@ impl TypeErrorKind {
                 message: Some(message.clone()),
                 help: None,
             },
+            Self::ParseError {
+                code,
+                title,
+                message,
+            } => ErrorProperties {
+                code,
+                title,
+                message: Some(message.clone()),
+                help: None,
+            },
         }
     }
 }
@@ -147,6 +165,20 @@ impl TypeError {
         Self {
             kind,
             span,
+            source_override: None,
+        }
+    }
+
+    /// Creates a type error that preserves the code and title of a syntax error.
+    pub fn from_syntax_error(syntax_err: &crate::error::syntax::SyntaxError) -> Self {
+        let props = syntax_err.kind.properties();
+        Self {
+            kind: TypeErrorKind::ParseError {
+                code: props.code,
+                title: props.title,
+                message: props.message.unwrap_or_else(|| props.title.to_string()),
+            },
+            span: syntax_err.span,
             source_override: None,
         }
     }

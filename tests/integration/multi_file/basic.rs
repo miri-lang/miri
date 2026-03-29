@@ -38,10 +38,7 @@ fn test_selective_import_preserves_transitive_trait_for_vtable() {
                     "        println(f\"{self._name} says woof\")\n",
                 ),
             ),
-            (
-                "models/speaker.mi",
-                "trait Speaker\n    fn speak()\n",
-            ),
+            ("models/speaker.mi", "trait Speaker\n    fn speak()\n"),
         ],
         "Rex says woof",
     );
@@ -95,10 +92,7 @@ fn test_selective_import_still_hides_sibling_struct() {
         &[
             (
                 "main.mi",
-                concat!(
-                    "use local.models.car.{Car}\n",
-                    "let e = Engine(100)\n",
-                ),
+                concat!("use local.models.car.{Car}\n", "let e = Engine(100)\n",),
             ),
             (
                 "models/car.mi",
@@ -172,10 +166,7 @@ fn test_selective_import_deep_transitive_chain() {
                     "    fn ping() int: 200\n",
                 ),
             ),
-            (
-                "a/traits/health.mi",
-                "trait Pingable\n    fn ping() int\n",
-            ),
+            ("a/traits/health.mi", "trait Pingable\n    fn ping() int\n"),
         ],
         "200",
     );
