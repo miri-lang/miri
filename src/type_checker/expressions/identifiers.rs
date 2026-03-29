@@ -153,7 +153,14 @@ impl TypeChecker {
 
         if let Some(info) = info_opt {
             if !self.check_visibility(&info.visibility, &info.module) {
-                self.report_error(format!("Variable '{}' is not visible", name), span);
+                let kind = if self.global_type_definitions.contains_key(name) {
+                    "Type"
+                } else if matches!(info.ty.kind, TypeKind::Function(_)) {
+                    "Function"
+                } else {
+                    "Variable"
+                };
+                self.report_error(format!("{} '{}' is not visible", kind, name), span);
                 return ast_factory::make_type(TypeKind::Error);
             }
 
@@ -178,9 +185,9 @@ impl TypeChecker {
         // If we're inside a class method, check if the name matches a method or field
         // on the current class and suggest `self.name()` or `self.name`.
         if let Some(class_name) = &context.current_class {
-            if let Some(hint) = self.find_self_member_hint(name, class_name) {
+            if let Some((member_kind, hint)) = self.find_self_member_hint(name, class_name) {
                 self.report_error_with_help(
-                    format!("Undefined variable: {}", name),
+                    format!("Undefined {}: {}", member_kind, name),
                     span,
                     hint,
                 );
@@ -188,22 +195,37 @@ impl TypeChecker {
             }
         }
 
+        // Determine what kind of entity the user likely intended.
+        // Types that exist but aren't imported get a specific message.
+        // Names starting with uppercase are likely types.
+        // Everything else defaults to "variable".
+        let entity_kind = if self.global_type_definitions.contains_key(name) {
+            "type"
+        } else if name.starts_with(|c: char| c.is_uppercase()) {
+            "type"
+        } else {
+            "variable"
+        };
+
         let capacity =
-            context.scopes.iter().map(|s| s.len()).sum::<usize>() + self.global_scope.len();
+            context.scopes.iter().map(|s| s.len()).sum::<usize>()
+                + self.global_scope.len()
+                + self.global_type_definitions.len();
         let mut candidates: Vec<&str> = Vec::with_capacity(capacity);
         for scope in &context.scopes {
             candidates.extend(scope.keys().map(|s| s.as_str()));
         }
         candidates.extend(self.global_scope.keys().map(|s| s.as_str()));
+        candidates.extend(self.visible_type_names.iter().map(|s| s.as_str()));
 
         if let Some(suggestion) = find_best_match(name, &candidates) {
             self.report_error_with_help(
-                format!("Undefined variable: {}", name),
+                format!("Undefined {}: {}", entity_kind, name),
                 span,
                 format!("Did you mean '{}'?", suggestion),
             );
         } else {
-            self.report_error(format!("Undefined variable: {}", name), span);
+            self.report_error(format!("Undefined {}: {}", entity_kind, name), span);
         }
         ast_factory::make_type(TypeKind::Error)
     }
@@ -224,17 +246,17 @@ impl TypeChecker {
     }
 
     /// Checks if `name` matches a method or field on the given class (or its base classes).
-    /// Returns a hint like `Did you mean 'self.name()'?` if found.
-    fn find_self_member_hint(&self, name: &str, class_name: &str) -> Option<String> {
+    /// Returns `(entity_kind, hint)` — e.g. `("method", "Did you mean 'self.name()'?")`.
+    fn find_self_member_hint(&self, name: &str, class_name: &str) -> Option<(&'static str, String)> {
         let mut current = class_name.to_string();
         loop {
             let def = self.global_type_definitions.get(&current)?;
             if let TypeDefinition::Class(class_def) = def {
                 if class_def.methods.contains_key(name) {
-                    return Some(format!("Did you mean 'self.{}()'?", name));
+                    return Some(("method", format!("Did you mean 'self.{}()'?", name)));
                 }
                 if class_def.fields.iter().any(|(n, _)| n == name) {
-                    return Some(format!("Did you mean 'self.{}'?", name));
+                    return Some(("field", format!("Did you mean 'self.{}'?", name)));
                 }
                 if let Some(base) = &class_def.base_class {
                     current = base.clone();
