@@ -199,18 +199,17 @@ impl TypeChecker {
         // Types that exist but aren't imported get a specific message.
         // Names starting with uppercase are likely types.
         // Everything else defaults to "variable".
-        let entity_kind = if self.global_type_definitions.contains_key(name) {
-            "type"
-        } else if name.starts_with(|c: char| c.is_uppercase()) {
+        let entity_kind = if self.global_type_definitions.contains_key(name)
+            || name.starts_with(|c: char| c.is_uppercase())
+        {
             "type"
         } else {
             "variable"
         };
 
-        let capacity =
-            context.scopes.iter().map(|s| s.len()).sum::<usize>()
-                + self.global_scope.len()
-                + self.global_type_definitions.len();
+        let capacity = context.scopes.iter().map(|s| s.len()).sum::<usize>()
+            + self.global_scope.len()
+            + self.global_type_definitions.len();
         let mut candidates: Vec<&str> = Vec::with_capacity(capacity);
         for scope in &context.scopes {
             candidates.extend(scope.keys().map(|s| s.as_str()));
@@ -247,7 +246,11 @@ impl TypeChecker {
 
     /// Checks if `name` matches a method or field on the given class (or its base classes).
     /// Returns `(entity_kind, hint)` — e.g. `("method", "Did you mean 'self.name()'?")`.
-    fn find_self_member_hint(&self, name: &str, class_name: &str) -> Option<(&'static str, String)> {
+    fn find_self_member_hint(
+        &self,
+        name: &str,
+        class_name: &str,
+    ) -> Option<(&'static str, String)> {
         let mut current = class_name.to_string();
         loop {
             let def = self.global_type_definitions.get(&current)?;
