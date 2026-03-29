@@ -1985,7 +1985,11 @@ impl<'a> FunctionTranslator<'a> {
             if let Some(method) = cd.methods.get(method_name) {
                 // Only use this implementation if it has a body (not abstract).
                 if !method.is_abstract {
-                    return Some(format!("{}_{}", current, method_name));
+                    let mut mangled = String::with_capacity(current.len() + 1 + method_name.len());
+                    mangled.push_str(&current);
+                    mangled.push('_');
+                    mangled.push_str(method_name);
+                    return Some(mangled);
                 }
             }
             all_traits.extend(cd.traits.iter().cloned());
@@ -2004,7 +2008,12 @@ impl<'a> FunctionTranslator<'a> {
             if let Some(TypeDefinition::Trait(td)) = type_definitions.get(&t_name) {
                 if let Some(method) = td.methods.get(method_name) {
                     if !method.is_abstract {
-                        return Some(format!("{}_{}", t_name, method_name));
+                        let mut mangled =
+                            String::with_capacity(t_name.len() + 1 + method_name.len());
+                        mangled.push_str(&t_name);
+                        mangled.push('_');
+                        mangled.push_str(method_name);
+                        return Some(mangled);
                     }
                 }
                 trait_stack.extend(td.parent_traits.iter().cloned());
