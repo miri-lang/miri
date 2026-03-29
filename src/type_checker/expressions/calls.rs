@@ -405,8 +405,103 @@ impl TypeChecker {
                             );
                         }
 
-                        // Class constructors are handled via init method
-                        // For now, just return the class type
+                        // Find the applicable `init`: the class's own, or the first one
+                        // found walking up the base_class inheritance chain.
+                        // Clone everything we need before any &mut self calls.
+                        let init_method: Option<crate::type_checker::context::MethodInfo> =
+                            if let Some(m) = def.methods.get("init") {
+                                Some(m.clone())
+                            } else {
+                                let mut found = None;
+                                let mut base = def.base_class.clone();
+                                loop {
+                                    let Some(bname) = base else { break };
+                                    match self.global_type_definitions.get(&bname) {
+                                        Some(TypeDefinition::Class(b)) => {
+                                            if let Some(m) = b.methods.get("init") {
+                                                found = Some(m.clone());
+                                                break;
+                                            }
+                                            base = b.base_class.clone();
+                                        }
+                                        _ => break,
+                                    }
+                                }
+                                found
+                            };
+
+                        if let Some(init_method) = init_method {
+                            // Build a generic substitution map from the instantiation's type args.
+                            let mut generic_map = HashMap::new();
+                            if let Some(generics) = &def.generics {
+                                if let Some(targs) = type_args {
+                                    for (g, ta) in generics.iter().zip(targs.iter()) {
+                                        let concrete = self.resolve_type_expression(ta, context);
+                                        generic_map.insert(g.name.clone(), concrete);
+                                    }
+                                }
+                            }
+
+                            let mut pos_iter = positional_args.iter();
+
+                            for (param_name, param_type) in &init_method.params {
+                                let concrete_param_type = if !generic_map.is_empty() {
+                                    self.substitute_type(param_type, &generic_map)
+                                } else {
+                                    param_type.clone()
+                                };
+
+                                let (arg_expr, arg_type) = if let Some((expr, ty)) = pos_iter.next()
+                                {
+                                    (Some(*expr), Some(ty.clone()))
+                                } else if let Some((expr, ty, _)) = named_args.remove(param_name) {
+                                    (Some(&**expr), Some(ty))
+                                } else {
+                                    (None, None)
+                                };
+
+                                if let Some(arg_type) = arg_type {
+                                    if !self.are_compatible(
+                                        &concrete_param_type,
+                                        &arg_type,
+                                        context,
+                                    ) {
+                                        self.report_error(
+                                            format!(
+                                                "Type mismatch for argument '{}': expected {}, got {}",
+                                                param_name, concrete_param_type, arg_type
+                                            ),
+                                            arg_expr.map(|e| e.span).unwrap_or(span),
+                                        );
+                                    }
+                                } else {
+                                    self.report_error(
+                                        format!("Missing argument for parameter '{}'", param_name),
+                                        span,
+                                    );
+                                }
+                            }
+
+                            if pos_iter.next().is_some() {
+                                self.report_error(
+                                    format!(
+                                        "Too many arguments for '{}' constructor: expected {}, got {}",
+                                        name,
+                                        init_method.params.len(),
+                                        positional_args.len()
+                                    ),
+                                    span,
+                                );
+                            }
+
+                            for (arg_name, (_, _, arg_span)) in named_args {
+                                self.report_error(
+                                    format!("Unknown argument '{}'", arg_name),
+                                    arg_span,
+                                );
+                            }
+                        }
+
                         return make_type(TypeKind::Custom(name.clone(), type_args.clone()));
                     }
 

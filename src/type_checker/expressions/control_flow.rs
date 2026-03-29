@@ -257,7 +257,7 @@ impl TypeChecker {
         context: &mut Context,
     ) -> Type {
         let cond_type = self.infer_expression(cond_expr, context);
-        if !matches!(cond_type.kind, TypeKind::Boolean) {
+        if !matches!(cond_type.kind, TypeKind::Boolean | TypeKind::Error) {
             self.report_error(
                 format!("Conditional condition must be a boolean, got {}", cond_type),
                 cond_expr.span,

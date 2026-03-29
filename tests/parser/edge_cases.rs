@@ -293,7 +293,10 @@ fn test_no_trailing_newline_trait_abstract_method() {
 #[test]
 fn test_no_trailing_newline_trait_two_methods() {
     // Multiple abstract methods in a trait, no trailing newline
-    assert_statement_count("trait Serializable\n    fn serialize() String\n    fn size() int", 1);
+    assert_statement_count(
+        "trait Serializable\n    fn serialize() String\n    fn size() int",
+        1,
+    );
 }
 
 #[test]

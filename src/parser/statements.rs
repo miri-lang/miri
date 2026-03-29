@@ -76,9 +76,14 @@ impl<'source> Parser<'source> {
                 self.eat_token(&Token::Public)?;
                 self.class_member_statement(MemberVisibility::Public)?
             }
-            Some((Token::Protected, _)) => {
+            Some((Token::Protected, span)) => {
+                let span = *span;
                 self.eat_token(&Token::Protected)?;
-                self.class_member_statement(MemberVisibility::Protected)?
+                return Err(self.error_unexpected_token_with_span(
+                    "public or private visibility",
+                    "protected (only valid for class members)",
+                    span,
+                ));
             }
             Some((Token::Private, _)) => {
                 self.eat_token(&Token::Private)?;

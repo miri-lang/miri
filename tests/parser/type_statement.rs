@@ -149,7 +149,7 @@ fn test_protected_type_alias() {
         "protected type MyInt is int",
         &SyntaxErrorKind::UnexpectedToken {
             expected: "public or private visibility".to_string(),
-            found: "protected".to_string(),
+            found: "protected (only valid for class members)".to_string(),
         },
     );
 }

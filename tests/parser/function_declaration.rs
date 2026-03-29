@@ -414,11 +414,12 @@ fn test_error_modifier_after_func() {
 
 #[test]
 fn test_protected_function() {
-    parser_test(
+    parser_error_test(
         "protected fn my_func(): x",
-        vec![func("my_func")
-            .set_protected()
-            .build(expression_statement(identifier("x")))],
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "public or private visibility".to_string(),
+            found: "protected (only valid for class members)".to_string(),
+        },
     );
 }
 

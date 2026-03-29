@@ -382,6 +382,7 @@ fn make_enum(variants: Vec<(&str, Vec<TypeKind>)>) -> EnumDefinition {
     EnumDefinition {
         variants: map,
         generics: None,
+        module: String::new(),
     }
 }
 

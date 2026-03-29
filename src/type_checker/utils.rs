@@ -602,6 +602,17 @@ impl TypeChecker {
 
         // Look up type definition (user-facing: must be visible in scope)
         if let Some(def) = self.resolve_visible_type(name, context).cloned() {
+            // Types used purely as annotations (e.g. `private trait Foo` in a
+            // parameter position) never go through the identifier-lookup path
+            // that enforces `check_visibility`.  We close that gap here: if the
+            // type name also has a symbol-table entry (all user-defined types do)
+            // we check its top-level visibility now.
+            if let Some(sym) = self.global_scope.get(name) {
+                if !self.check_visibility(&sym.visibility, &sym.module) {
+                    self.report_error(format!("Variable '{}' is not visible", name), expr.span);
+                    return Self::error_type();
+                }
+            }
             self.validate_and_resolve_type_definition(name, def, resolved_args, expr, context)
         } else {
             self.report_unknown_type(name, expr, context);
@@ -988,6 +999,18 @@ impl TypeChecker {
     // ==================== Error Reporting ====================
 
     /// Reports a type error, deduplicating identical (message, span) pairs.
+    /// Reports a syntax error from an imported module, preserving its original
+    /// error code and title. The caller must set `current_source_override` before
+    /// calling this so the error is attributed to the correct file.
+    pub(crate) fn report_syntax_error(&mut self, syntax_err: &crate::error::syntax::SyntaxError) {
+        let mut err = crate::error::type_error::TypeError::from_syntax_error(syntax_err);
+        err.source_override = self.current_source_override.clone();
+        let key = (format!("{}", syntax_err), syntax_err.span);
+        if self.reported_errors.insert(key) {
+            self.errors.push(err);
+        }
+    }
+
     pub(crate) fn report_error(&mut self, message: String, span: Span) {
         let key = (message.clone(), span);
         if self.reported_errors.insert(key) {

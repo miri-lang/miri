@@ -307,6 +307,7 @@ impl TypeChecker {
                             TypeDefinition::Enum(context::EnumDefinition {
                                 variants: BTreeMap::new(),
                                 generics,
+                                module: self.current_module.clone(),
                             }),
                         );
                     }

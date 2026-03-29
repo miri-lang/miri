@@ -149,7 +149,11 @@ impl TypeChecker {
         };
 
         if self.loaded_modules.contains(&abs_path_str) {
-            return; // Already loaded
+            // Module already loaded — skip parsing/type-checking but restore
+            // visibility for types defined in this module.  A previous import
+            // may have hidden them (e.g. they were transitive to that importer).
+            self.restore_visibility_for_module(&path_str, &import_kind);
+            return;
         }
 
         if self.loading_stack.contains(&abs_path_str) {
@@ -196,10 +200,11 @@ impl TypeChecker {
             Ok(ast) => ast,
             Err(e) => {
                 self.loading_stack.retain(|m| m != &abs_path_str);
-                self.report_error(
-                    format!("Failed to parse module '{}': {:?}", path_str, e),
-                    path.span,
-                );
+                let old_source_override = self.current_source_override.take();
+                self.current_source_override =
+                    Some((file_path.to_string_lossy().to_string(), source.clone()));
+                self.report_syntax_error(&e);
+                self.current_source_override = old_source_override;
                 return;
             }
         };
@@ -225,10 +230,8 @@ impl TypeChecker {
             self.global_type_definitions.keys().cloned().collect();
 
         let old_source_override = self.current_source_override.take();
-        self.current_source_override = Some((
-            file_path.to_string_lossy().to_string(),
-            source.clone(),
-        ));
+        self.current_source_override =
+            Some((file_path.to_string_lossy().to_string(), source.clone()));
 
         for stmt in &module_ast.body {
             self.check_statement(stmt, context);
@@ -246,34 +249,48 @@ impl TypeChecker {
             }
         }
 
-        // 6. For selective imports, restrict visibility to only the named items.
-        // The entire module was type-checked above (needed for internal consistency),
-        // but only the explicitly listed symbols should be visible to user code.
-        if let ImportPathKind::Multi(ref items) = import_kind {
-            let selected_names: HashSet<String> = items
-                .iter()
-                .filter_map(|(expr, _alias)| {
-                    if let ExpressionKind::Identifier(name, _) = &expr.node {
-                        Some(name.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+        // 6. Restrict visibility: only symbols **defined** in the directly imported
+        //    module should become visible to the importer.  Transitive dependencies
+        //    (types/functions that the imported module itself imported) stay in the
+        //    internal stores (`global_type_definitions`, `global_scope`) — needed for
+        //    method resolution, vtable generation, etc. — but must not leak into
+        //    user-visible namespaces.
+        //
+        //    For selective imports (`use m.{A, B}`), an additional filter narrows
+        //    visibility to only the explicitly listed names.
 
-            // 7. Detect namespace collisions for selective imports: a selected
-            // name that already existed (from a prior import or local declaration)
-            // with a different source module is a conflict.
-            for sel_name in &selected_names {
+        let selected_names: Option<HashMap<String, Span>> =
+            if let ImportPathKind::Multi(ref items) = import_kind {
+                Some(
+                    items
+                        .iter()
+                        .filter_map(|(expr, _alias)| {
+                            if let ExpressionKind::Identifier(name, _) = &expr.node {
+                                Some((name.clone(), expr.span))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect(),
+                )
+            } else {
+                None
+            };
+
+        let module_name = &path_str;
+
+        // --- Detect namespace collisions ---
+        if let Some(ref selected) = selected_names {
+            for sel_name in selected.keys() {
                 if let Some(old_module) = pre_import_globals.get(sel_name) {
                     if let Some(info) = self.global_scope.get(sel_name) {
-                        if info.module == path_str {
+                        if info.module == *module_name {
                             self.report_error(
                                 format!(
                                     "Name '{}' conflicts with an existing definition from \
                                      module '{}'. Use selective imports with an alias to \
                                      disambiguate, e.g. `use {}.{{... as ...}}`.",
-                                    sel_name, old_module, path_str
+                                    sel_name, old_module, module_name
                                 ),
                                 path.span,
                             );
@@ -281,65 +298,94 @@ impl TypeChecker {
                     }
                 }
             }
-
-            // Remove symbols added by this module that are not in the selective list
-            let module_name = &path_str;
-            self.global_scope.retain(|name, info| {
-                if info.module == *module_name
-                    && !pre_import_globals.contains_key(name)
-                    && !selected_names.contains(name)
-                {
-                    return false;
-                }
-                true
-            });
-
-            // Remove type definitions added by this module that are not selected.
-            //
-            // Transitive types (from modules imported by the directly imported module)
-            // are kept in `global_type_definitions` because internal mechanisms like
-            // method resolution and vtable generation need them. However, they are
-            // removed from `visible_type_names` so user code cannot reference them.
-            self.global_type_definitions.retain(|name, def| {
-                if !pre_import_global_types.contains(name) && !selected_names.contains(name) {
-                    // Keep types from transitively imported modules in global_type_definitions
-                    // (for method resolution / vtable) but hide them from user code.
-                    let def_module = match def {
-                        TypeDefinition::Class(cd) => Some(cd.module.as_str()),
-                        TypeDefinition::Trait(td) => Some(td.module.as_str()),
-                        TypeDefinition::Struct(sd) => Some(sd.module.as_str()),
-                        _ => None,
-                    };
-                    let is_transitive =
-                        def_module.is_some() && def_module != Some(module_name.as_str());
-                    if is_transitive {
-                        // Keep in global but hide from user code
-                        self.visible_type_names.remove(name);
-                        return true;
+        } else {
+            let mut collisions: Vec<(String, String)> = Vec::new();
+            for (name, info) in &self.global_scope {
+                if info.module == *module_name {
+                    if let Some(old_module) = pre_import_globals.get(name) {
+                        if old_module != module_name {
+                            collisions.push((name.clone(), old_module.clone()));
+                        }
                     }
-                    // Remove types from the directly imported module (not selected)
-                    self.visible_type_names.remove(name);
-                    return false;
                 }
-                true
-            });
-
-            // Also clean up the context's symbol scopes
-            if let Some(scope) = context.scopes.last_mut() {
-                scope.retain(|name, info| {
-                    if info.module == *module_name
-                        && !pre_import_globals.contains_key(name)
-                        && !selected_names.contains(name)
-                    {
-                        return false;
-                    }
-                    true
-                });
             }
+            collisions.sort_by(|a, b| a.0.cmp(&b.0));
+            for (name, old_module) in collisions {
+                self.report_error(
+                    format!(
+                        "Name '{}' conflicts with an existing definition from module \
+                         '{}'. Use selective imports to avoid ambiguity, e.g. \
+                         `use {}.{{...}}`.",
+                        name, old_module, module_name
+                    ),
+                    path.span,
+                );
+            }
+        }
 
-            // Register item aliases: `use m.{add as plus}` makes `plus` available
-            // in global_scope pointing at the same type as `add`, but with
-            // `original_name = Some("add")` so MIR lowering emits the right symbol.
+        // --- Helper: should a newly-added name be visible to the importer? ---
+        let should_be_visible = |name: &str, def_module: Option<&str>| -> bool {
+            // Transitive type (defined in a different module) → never visible.
+            let is_from_this_module = def_module.is_none_or(|m| m == module_name.as_str());
+            if !is_from_this_module {
+                return false;
+            }
+            // For selective imports, additionally require the name to be listed.
+            if let Some(ref selected) = selected_names {
+                return selected.contains_key(name);
+            }
+            true
+        };
+
+        // --- Filter global_scope (function/variable symbols) ---
+        self.global_scope.retain(|name, info| {
+            if !pre_import_globals.contains_key(name) {
+                return should_be_visible(name, Some(info.module.as_str()));
+            }
+            true
+        });
+
+        // Also clean up the context's symbol scopes
+        if let Some(scope) = context.scopes.last_mut() {
+            scope.retain(|name, info| {
+                if !pre_import_globals.contains_key(name) {
+                    return should_be_visible(name, Some(info.module.as_str()));
+                }
+                true
+            });
+        }
+
+        // --- Filter type definitions ---
+        // Transitive types are kept in `global_type_definitions` (needed for method
+        // resolution and vtable generation) but hidden from user code.  Non-selected
+        // types from the direct module are removed entirely.
+        self.global_type_definitions.retain(|name, def| {
+            if !pre_import_global_types.contains(name) {
+                let def_module = match def {
+                    TypeDefinition::Class(cd) => Some(cd.module.as_str()),
+                    TypeDefinition::Trait(td) => Some(td.module.as_str()),
+                    TypeDefinition::Struct(sd) => Some(sd.module.as_str()),
+                    TypeDefinition::Enum(ed) => Some(ed.module.as_str()),
+                    _ => None,
+                };
+                if should_be_visible(name, def_module) {
+                    return true; // keep in global AND visible
+                }
+                // Transitive? Keep in global for internal use but hide.
+                let is_transitive = def_module.is_some_and(|m| m != module_name.as_str());
+                if is_transitive {
+                    self.visible_type_names.remove(name);
+                    return true;
+                }
+                // Not transitive, not visible → remove entirely.
+                self.visible_type_names.remove(name);
+                return false;
+            }
+            true
+        });
+
+        // --- Register item aliases for selective imports ---
+        if let ImportPathKind::Multi(ref items) = import_kind {
             for (name_expr, item_alias_opt) in items {
                 if let ExpressionKind::Identifier(orig_name, _) = &name_expr.node {
                     if let Some(alias_box) = item_alias_opt {
@@ -353,32 +399,43 @@ impl TypeChecker {
                     }
                 }
             }
-        } else {
-            // 7. Detect namespace collisions for wildcard imports: any name that
-            // already existed (from a prior import or local declaration) and is
-            // now overwritten by this module is a conflict.
-            let mut collisions: Vec<(String, String)> = Vec::new();
-            for (name, info) in &self.global_scope {
-                if info.module == path_str {
-                    if let Some(old_module) = pre_import_globals.get(name) {
-                        if old_module != &path_str {
-                            collisions.push((name.clone(), old_module.clone()));
-                        }
-                    }
+        }
+
+        // --- Validate that every explicitly selected name was actually exported ---
+        //
+        // After all retain and alias operations, each name in `selected_names` must
+        // resolve to either a symbol in `global_scope` (functions, variables, enum
+        // meta-symbols, class constructors, …) or a visible type definition.  If
+        // neither is true the name was never defined in the module and we report an
+        // error immediately rather than silently accepting the import.
+        if let Some(ref selected) = selected_names {
+            for (sel_name, sel_span) in selected {
+                let in_scope = self
+                    .global_scope
+                    .get(sel_name.as_str())
+                    .is_some_and(|info| info.module == *module_name);
+
+                let in_types = self
+                    .global_type_definitions
+                    .get(sel_name.as_str())
+                    .is_some_and(|def| {
+                        let def_module = match def {
+                            TypeDefinition::Class(cd) => Some(cd.module.as_str()),
+                            TypeDefinition::Trait(td) => Some(td.module.as_str()),
+                            TypeDefinition::Struct(sd) => Some(sd.module.as_str()),
+                            TypeDefinition::Enum(ed) => Some(ed.module.as_str()),
+                            _ => None,
+                        };
+                        def_module == Some(module_name.as_str())
+                    })
+                    && self.visible_type_names.contains(sel_name.as_str());
+
+                if !in_scope && !in_types {
+                    self.report_error(
+                        format!("Name '{}' not found in module '{}'", sel_name, module_name),
+                        *sel_span,
+                    );
                 }
-            }
-            // Sort for deterministic error ordering
-            collisions.sort_by(|a, b| a.0.cmp(&b.0));
-            for (name, old_module) in collisions {
-                self.report_error(
-                    format!(
-                        "Name '{}' conflicts with an existing definition from module \
-                         '{}'. Use selective imports to avoid ambiguity, e.g. \
-                         `use {}.{{...}}`.",
-                        name, old_module, path_str
-                    ),
-                    path.span,
-                );
             }
         }
 
@@ -390,6 +447,51 @@ impl TypeChecker {
         // Mark as fully loaded and remove from the in-progress stack.
         self.loading_stack.retain(|m| m != &abs_path_str);
         self.loaded_modules.insert(abs_path_str);
+    }
+
+    /// Restores visibility for types defined in an already-loaded module.
+    ///
+    /// When a module M is first loaded by module A, M's types become visible.
+    /// A's post-import filter may then hide them (they're transitive to A).
+    /// If module B later imports M directly, this method makes M's types
+    /// visible again without re-parsing or re-type-checking M.
+    fn restore_visibility_for_module(&mut self, module_path: &str, import_kind: &ImportPathKind) {
+        let selected_names: Option<HashSet<String>> =
+            if let ImportPathKind::Multi(ref items) = import_kind {
+                Some(
+                    items
+                        .iter()
+                        .filter_map(|(expr, _alias)| {
+                            if let ExpressionKind::Identifier(name, _) = &expr.node {
+                                Some(name.clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect(),
+                )
+            } else {
+                None
+            };
+
+        for (name, def) in &self.global_type_definitions {
+            let def_module = match def {
+                TypeDefinition::Class(cd) => Some(cd.module.as_str()),
+                TypeDefinition::Trait(td) => Some(td.module.as_str()),
+                TypeDefinition::Struct(sd) => Some(sd.module.as_str()),
+                TypeDefinition::Enum(ed) => Some(ed.module.as_str()),
+                _ => None,
+            };
+            if def_module == Some(module_path) {
+                if let Some(ref selected) = selected_names {
+                    if selected.contains(name.as_str()) {
+                        self.visible_type_names.insert(name.clone());
+                    }
+                } else {
+                    self.visible_type_names.insert(name.clone());
+                }
+            }
+        }
     }
 
     /// Extracts the module path string and import kind from a use-statement expression.
@@ -457,7 +559,20 @@ impl TypeChecker {
             ),
             Span::default(),
         );
+        // The prelude's purpose is to make its imports globally available.
+        // Snapshot visible types before, load the prelude, then ensure
+        // everything it made visible stays visible (the normal post-import
+        // filter would hide transitive types, but the prelude exists
+        // precisely to re-export them).
+        let pre = self.visible_type_names.clone();
         self.check_use(&path, &None, context);
+        // Re-add any types that were visible during prelude loading but
+        // hidden by the post-import filter.
+        for name in self.global_type_definitions.keys() {
+            if !pre.contains(name) && !self.visible_type_names.contains(name) {
+                self.visible_type_names.insert(name.clone());
+            }
+        }
     }
 
     /// Returns the stdlib module path that defines `type_name`, or `None` if
