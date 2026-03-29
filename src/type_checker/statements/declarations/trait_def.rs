@@ -89,7 +89,7 @@ impl TypeChecker {
             .as_ref()
             .map(|gens| self.extract_generic_definitions(gens, context));
 
-        // Validate parent traits exist
+        // Validate parent traits exist and are actually traits
         let mut parent_trait_names = Vec::with_capacity(parent_traits.len());
         for trait_expr in parent_traits {
             if let Ok(trait_name) = self.extract_type_name(trait_expr) {
@@ -98,6 +98,25 @@ impl TypeChecker {
                         format!("Parent trait '{}' is not defined", trait_name),
                         trait_expr.span,
                     );
+                } else if let Some(def) = self.global_type_definitions.get(trait_name) {
+                    if !matches!(def, TypeDefinition::Trait(_)) {
+                        let kind = match def {
+                            TypeDefinition::Class(_) => "a class",
+                            TypeDefinition::Enum(_) => "an enum",
+                            TypeDefinition::Struct(_) => "a struct",
+                            TypeDefinition::Alias(_) => "a type alias",
+                            TypeDefinition::Generic(_) => "a generic type",
+                            TypeDefinition::Trait(_) => unreachable!(),
+                        };
+                        self.report_error_with_help(
+                            format!("'{}' is not a trait", trait_name),
+                            trait_expr.span,
+                            format!(
+                                "'{}' is {} — only traits can be used with 'extends' in a trait definition",
+                                trait_name, kind
+                            ),
+                        );
+                    }
                 }
                 parent_trait_names.push(trait_name.to_string());
             }
