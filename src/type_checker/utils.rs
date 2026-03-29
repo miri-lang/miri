@@ -609,7 +609,7 @@ impl TypeChecker {
             // we check its top-level visibility now.
             if let Some(sym) = self.global_scope.get(name) {
                 if !self.check_visibility(&sym.visibility, &sym.module) {
-                    self.report_error(format!("Variable '{}' is not visible", name), expr.span);
+                    self.report_error(format!("Type '{}' is not visible", name), expr.span);
                     return Self::error_type();
                 }
             }

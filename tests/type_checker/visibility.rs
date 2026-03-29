@@ -31,7 +31,7 @@ fn test_function_visibility() {
     // Private function - not accessible
     type_checker_multi_module_error_test(
         vec![("A", "private fn foo()\n    1"), ("B", "foo()")],
-        "Variable 'foo' is not visible",
+        "Function 'foo' is not visible",
     );
 }
 
@@ -49,7 +49,7 @@ fn test_struct_visibility() {
             ("A", "private struct Point: x int, y int"),
             ("B", "let p = Point(x: 1, y: 2)"),
         ],
-        "Variable 'Point' is not visible",
+        "Type 'Point' is not visible",
     );
 }
 
@@ -67,7 +67,7 @@ fn test_enum_visibility() {
             ("A", "private enum Color: Red, Green"),
             ("B", "let c = Color.Red"),
         ],
-        "Variable 'Color' is not visible",
+        "Type 'Color' is not visible",
     );
 }
 
