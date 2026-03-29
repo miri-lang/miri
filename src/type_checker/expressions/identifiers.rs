@@ -47,7 +47,7 @@ use crate::ast::types::{Type, TypeDeclarationKind, TypeKind};
 use crate::ast::*;
 use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
-use crate::type_checker::context::Context;
+use crate::type_checker::context::{Context, TypeDefinition};
 use crate::type_checker::TypeChecker;
 
 impl TypeChecker {
@@ -175,6 +175,19 @@ impl TypeChecker {
             ))));
         }
 
+        // If we're inside a class method, check if the name matches a method or field
+        // on the current class and suggest `self.name()` or `self.name`.
+        if let Some(class_name) = &context.current_class {
+            if let Some(hint) = self.find_self_member_hint(name, class_name) {
+                self.report_error_with_help(
+                    format!("Undefined variable: {}", name),
+                    span,
+                    hint,
+                );
+                return ast_factory::make_type(TypeKind::Error);
+            }
+        }
+
         let capacity =
             context.scopes.iter().map(|s| s.len()).sum::<usize>() + self.global_scope.len();
         let mut candidates: Vec<&str> = Vec::with_capacity(capacity);
@@ -207,6 +220,30 @@ impl TypeChecker {
                 span,
             );
             ast_factory::make_type(TypeKind::Error)
+        }
+    }
+
+    /// Checks if `name` matches a method or field on the given class (or its base classes).
+    /// Returns a hint like `Did you mean 'self.name()'?` if found.
+    fn find_self_member_hint(&self, name: &str, class_name: &str) -> Option<String> {
+        let mut current = class_name.to_string();
+        loop {
+            let def = self.global_type_definitions.get(&current)?;
+            if let TypeDefinition::Class(class_def) = def {
+                if class_def.methods.contains_key(name) {
+                    return Some(format!("Did you mean 'self.{}()'?", name));
+                }
+                if class_def.fields.iter().any(|(n, _)| n == name) {
+                    return Some(format!("Did you mean 'self.{}'?", name));
+                }
+                if let Some(base) = &class_def.base_class {
+                    current = base.clone();
+                } else {
+                    return None;
+                }
+            } else {
+                return None;
+            }
         }
     }
 

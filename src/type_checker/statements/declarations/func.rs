@@ -95,17 +95,21 @@ impl TypeChecker {
             );
         }
 
-        context.define(
-            name.to_string(),
-            SymbolInfo::new(
-                func_type,
-                false,
-                false,
-                properties.visibility.clone(),
-                self.current_module.clone(),
-                None,
-            ),
-        ); // Functions are immutable
+        // Don't register class methods as bare functions — they must be
+        // called via `self.method()`, not `method()`.
+        if !context.in_class() {
+            context.define(
+                name.to_string(),
+                SymbolInfo::new(
+                    func_type,
+                    false,
+                    false,
+                    properties.visibility.clone(),
+                    self.current_module.clone(),
+                    None,
+                ),
+            );
+        }
 
         context.enter_scope();
 
