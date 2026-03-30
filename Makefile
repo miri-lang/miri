@@ -1,4 +1,4 @@
-.PHONY: build release test lint format
+.PHONY: build release test lint format clean
 
 RUNTIMES := $(patsubst %/Cargo.toml,%,$(wildcard src/runtime/*/Cargo.toml))
 
@@ -46,5 +46,14 @@ format:
 		for rt in $(RUNTIMES); do \
 			echo "Formatting $$rt"; \
 			cargo fmt --manifest-path "$$rt/Cargo.toml"; \
+		done; \
+	fi
+
+clean:
+	cargo clean
+	@if [ -n "$(RUNTIMES)" ]; then \
+		for rt in $(RUNTIMES); do \
+			echo "Cleaning $$rt"; \
+			cargo clean --manifest-path "$$rt/Cargo.toml"; \
 		done; \
 	fi
