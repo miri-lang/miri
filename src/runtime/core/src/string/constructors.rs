@@ -47,9 +47,12 @@ pub unsafe extern "C" fn miri_rt_string_from_raw(data: *const u8, len: usize) ->
 #[allow(clippy::missing_safety_doc)]
 pub unsafe extern "C" fn miri_rt_string_free(ptr: *mut MiriString) {
     if !ptr.is_null() {
-        // SAFETY: `ptr` was created via `Box::into_raw` in a constructor.
-        // `Box::from_raw` reclaims ownership; `MiriString::drop` frees the data buffer.
-        let _ = Box::from_raw(ptr);
+        // Run the MiriString destructor to free the inner data buffer.
+        // SAFETY: `ptr` is non-null and points to a valid, live MiriString.
+        std::ptr::drop_in_place(ptr);
+        // Free the RC block (`[RC][MiriString payload]`).
+        // SAFETY: `ptr` was returned by `alloc_with_rc` in `into_raw_ptr`.
+        crate::rc::free_with_rc(ptr as *mut u8, std::mem::size_of::<MiriString>());
     }
 }
 

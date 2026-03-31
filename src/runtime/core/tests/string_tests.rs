@@ -1,6 +1,11 @@
 use miri_runtime_core::string::*;
 use std::ptr;
 
+/// Helper: create a `*mut MiriString` via the FFI constructor (RC layout).
+unsafe fn make_str(s: &str) -> *mut MiriString {
+    miri_rt_string_from_raw(s.as_ptr(), s.len())
+}
+
 // ---------------------------------------------------------------------------
 // MiriString inherent methods
 // ---------------------------------------------------------------------------
@@ -86,7 +91,7 @@ fn test_ffi_string_from_raw_invalid_utf8() {
 #[test]
 fn test_ffi_string_clone() {
     unsafe {
-        let original = Box::into_raw(Box::new(MiriString::from_str("clone me")));
+        let original = make_str("clone me");
         let cloned = miri_rt_string_clone(original);
         assert_eq!((*cloned).as_str(), "clone me");
         // Verify it's a true deep copy — different pointers
@@ -119,7 +124,7 @@ fn test_ffi_free_null_is_noop() {
 #[test]
 fn test_ffi_string_len() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::from_str("hello")));
+        let s = make_str("hello");
         assert_eq!(miri_rt_string_len(s), 5);
         assert_eq!(miri_rt_string_len(ptr::null()), 0);
         miri_rt_string_free(s);
@@ -129,8 +134,8 @@ fn test_ffi_string_len() {
 #[test]
 fn test_ffi_string_is_empty() {
     unsafe {
-        let empty = Box::into_raw(Box::new(MiriString::new()));
-        let nonempty = Box::into_raw(Box::new(MiriString::from_str("x")));
+        let empty = miri_rt_string_new();
+        let nonempty = make_str("x");
         assert_eq!(miri_rt_string_is_empty(empty), 1);
         assert_eq!(miri_rt_string_is_empty(nonempty), 0);
         assert_eq!(miri_rt_string_is_empty(ptr::null()), 1);
@@ -142,9 +147,9 @@ fn test_ffi_string_is_empty() {
 #[test]
 fn test_ffi_contains() {
     unsafe {
-        let haystack = Box::into_raw(Box::new(MiriString::from_str("Hello, World!")));
-        let needle = Box::into_raw(Box::new(MiriString::from_str("World")));
-        let missing = Box::into_raw(Box::new(MiriString::from_str("xyz")));
+        let haystack = make_str("Hello, World!");
+        let needle = make_str("World");
+        let missing = make_str("xyz");
 
         assert_eq!(miri_rt_string_contains(haystack, needle), 1);
         assert_eq!(miri_rt_string_contains(haystack, missing), 0);
@@ -160,9 +165,9 @@ fn test_ffi_contains() {
 #[test]
 fn test_ffi_starts_with() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::from_str("Hello, World!")));
-        let prefix = Box::into_raw(Box::new(MiriString::from_str("Hello")));
-        let wrong = Box::into_raw(Box::new(MiriString::from_str("World")));
+        let s = make_str("Hello, World!");
+        let prefix = make_str("Hello");
+        let wrong = make_str("World");
 
         assert_eq!(miri_rt_string_starts_with(s, prefix), 1);
         assert_eq!(miri_rt_string_starts_with(s, wrong), 0);
@@ -177,9 +182,9 @@ fn test_ffi_starts_with() {
 #[test]
 fn test_ffi_ends_with() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::from_str("Hello, World!")));
-        let suffix = Box::into_raw(Box::new(MiriString::from_str("World!")));
-        let wrong = Box::into_raw(Box::new(MiriString::from_str("Hello")));
+        let s = make_str("Hello, World!");
+        let suffix = make_str("World!");
+        let wrong = make_str("Hello");
 
         assert_eq!(miri_rt_string_ends_with(s, suffix), 1);
         assert_eq!(miri_rt_string_ends_with(s, wrong), 0);
@@ -194,9 +199,9 @@ fn test_ffi_ends_with() {
 #[test]
 fn test_ffi_equals() {
     unsafe {
-        let a = Box::into_raw(Box::new(MiriString::from_str("same")));
-        let b = Box::into_raw(Box::new(MiriString::from_str("same")));
-        let c = Box::into_raw(Box::new(MiriString::from_str("different")));
+        let a = make_str("same");
+        let b = make_str("same");
+        let c = make_str("different");
 
         assert_eq!(miri_rt_string_equals(a, b), 1);
         assert_eq!(miri_rt_string_equals(a, c), 0);
@@ -212,7 +217,7 @@ fn test_ffi_equals() {
 #[test]
 fn test_ffi_string_data() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::from_str("abc")));
+        let s = make_str("abc");
         let data = miri_rt_string_data(s);
         assert!(!data.is_null());
         assert_eq!(*data, b'a');
@@ -228,8 +233,8 @@ fn test_ffi_string_data() {
 #[test]
 fn test_ffi_concat() {
     unsafe {
-        let a = Box::into_raw(Box::new(MiriString::from_str("Hello, ")));
-        let b = Box::into_raw(Box::new(MiriString::from_str("World!")));
+        let a = make_str("Hello, ");
+        let b = make_str("World!");
 
         let result = miri_rt_string_concat(a, b);
         assert_eq!((*result).as_str(), "Hello, World!");
@@ -243,7 +248,7 @@ fn test_ffi_concat() {
 #[test]
 fn test_ffi_concat_null_operands() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::from_str("hello")));
+        let s = make_str("hello");
 
         let result_left_null = miri_rt_string_concat(ptr::null(), s);
         assert_eq!((*result_left_null).as_str(), "hello");
@@ -264,7 +269,7 @@ fn test_ffi_concat_null_operands() {
 #[test]
 fn test_ffi_to_lower() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::from_str("HELLO")));
+        let s = make_str("HELLO");
         let result = miri_rt_string_to_lower(s);
         assert_eq!((*result).as_str(), "hello");
 
@@ -276,7 +281,7 @@ fn test_ffi_to_lower() {
 #[test]
 fn test_ffi_to_upper() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::from_str("hello")));
+        let s = make_str("hello");
         let result = miri_rt_string_to_upper(s);
         assert_eq!((*result).as_str(), "HELLO");
 
@@ -288,7 +293,7 @@ fn test_ffi_to_upper() {
 #[test]
 fn test_ffi_trim() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::from_str("  hello  ")));
+        let s = make_str("  hello  ");
         let result = miri_rt_string_trim(s);
         assert_eq!((*result).as_str(), "hello");
         miri_rt_string_free(s);
@@ -299,7 +304,7 @@ fn test_ffi_trim() {
 #[test]
 fn test_ffi_trim_start() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::from_str("  hello  ")));
+        let s = make_str("  hello  ");
         let result = miri_rt_string_trim_start(s);
         assert_eq!((*result).as_str(), "hello  ");
         miri_rt_string_free(s);
@@ -310,7 +315,7 @@ fn test_ffi_trim_start() {
 #[test]
 fn test_ffi_trim_end() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::from_str("  hello  ")));
+        let s = make_str("  hello  ");
         let result = miri_rt_string_trim_end(s);
         assert_eq!((*result).as_str(), "  hello");
         miri_rt_string_free(s);
@@ -321,9 +326,9 @@ fn test_ffi_trim_end() {
 #[test]
 fn test_ffi_replace() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::from_str("hello world hello")));
-        let from = Box::into_raw(Box::new(MiriString::from_str("hello")));
-        let to = Box::into_raw(Box::new(MiriString::from_str("hi")));
+        let s = make_str("hello world hello");
+        let from = make_str("hello");
+        let to = make_str("hi");
 
         let result = miri_rt_string_replace(s, from, to);
         assert_eq!((*result).as_str(), "hi world hi");
@@ -338,9 +343,9 @@ fn test_ffi_replace() {
 #[test]
 fn test_ffi_replace_empty_from_returns_copy() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::from_str("hello")));
-        let empty = Box::into_raw(Box::new(MiriString::new()));
-        let to = Box::into_raw(Box::new(MiriString::from_str("x")));
+        let s = make_str("hello");
+        let empty = miri_rt_string_new();
+        let to = make_str("x");
 
         let result = miri_rt_string_replace(s, empty, to);
         assert_eq!((*result).as_str(), "hello");
@@ -355,7 +360,7 @@ fn test_ffi_replace_empty_from_returns_copy() {
 #[test]
 fn test_ffi_substring() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::from_str("Hello, World!")));
+        let s = make_str("Hello, World!");
         let sub = miri_rt_string_substring(s, 7, 12);
         assert_eq!((*sub).as_str(), "World");
 
@@ -378,7 +383,7 @@ fn test_ffi_substring() {
 fn test_ffi_substring_unicode_boundary() {
     unsafe {
         // "café" = [99, 97, 102, 195, 169] — 'é' is 2 bytes
-        let s = Box::into_raw(Box::new(MiriString::from_str("café")));
+        let s = make_str("café");
         // Trying to slice at byte 4 (middle of 'é') should return empty
         let bad = miri_rt_string_substring(s, 0, 4);
         assert!((*bad).is_empty());
@@ -396,7 +401,7 @@ fn test_ffi_substring_unicode_boundary() {
 #[test]
 fn test_ffi_char_at() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::from_str("hello")));
+        let s = make_str("hello");
         let ch = miri_rt_string_char_at(s, 1);
         assert_eq!((*ch).as_str(), "e");
 
@@ -413,7 +418,7 @@ fn test_ffi_char_at() {
 #[test]
 fn test_ffi_char_at_unicode() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::from_str("こんにちは")));
+        let s = make_str("こんにちは");
         let ch = miri_rt_string_char_at(s, 2);
         assert_eq!((*ch).as_str(), "に");
         miri_rt_string_free(s);
@@ -424,7 +429,7 @@ fn test_ffi_char_at_unicode() {
 #[test]
 fn test_ffi_repeat() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::from_str("ab")));
+        let s = make_str("ab");
         let result = miri_rt_string_repeat(s, 3);
         assert_eq!((*result).as_str(), "ababab");
 
@@ -559,8 +564,8 @@ fn test_ffi_bool_to_string_negative() {
 #[test]
 fn test_ffi_concat_empty_strings() {
     unsafe {
-        let a = Box::into_raw(Box::new(MiriString::new()));
-        let b = Box::into_raw(Box::new(MiriString::new()));
+        let a = miri_rt_string_new();
+        let b = miri_rt_string_new();
 
         let result = miri_rt_string_concat(a, b);
         assert!((*result).is_empty());
@@ -574,8 +579,8 @@ fn test_ffi_concat_empty_strings() {
 #[test]
 fn test_ffi_concat_unicode() {
     unsafe {
-        let a = Box::into_raw(Box::new(MiriString::from_str("Hello ")));
-        let b = Box::into_raw(Box::new(MiriString::from_str("世界!")));
+        let a = make_str("Hello ");
+        let b = make_str("世界!");
 
         let result = miri_rt_string_concat(a, b);
         assert_eq!((*result).as_str(), "Hello 世界!");
@@ -589,7 +594,7 @@ fn test_ffi_concat_unicode() {
 #[test]
 fn test_ffi_to_lower_unicode() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::from_str("CAFÉ")));
+        let s = make_str("CAFÉ");
         let result = miri_rt_string_to_lower(s);
         assert_eq!((*result).as_str(), "café");
         miri_rt_string_free(s);
@@ -600,7 +605,7 @@ fn test_ffi_to_lower_unicode() {
 #[test]
 fn test_ffi_to_upper_unicode() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::from_str("café")));
+        let s = make_str("café");
         let result = miri_rt_string_to_upper(s);
         assert_eq!((*result).as_str(), "CAFÉ");
         miri_rt_string_free(s);
@@ -611,7 +616,7 @@ fn test_ffi_to_upper_unicode() {
 #[test]
 fn test_ffi_trim_tabs_and_newlines() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::from_str("\t\n hello \r\n")));
+        let s = make_str("\t\n hello \r\n");
         let result = miri_rt_string_trim(s);
         assert_eq!((*result).as_str(), "hello");
         miri_rt_string_free(s);
@@ -622,7 +627,7 @@ fn test_ffi_trim_tabs_and_newlines() {
 #[test]
 fn test_ffi_trim_all_whitespace() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::from_str("   ")));
+        let s = make_str("   ");
         let result = miri_rt_string_trim(s);
         assert!((*result).is_empty());
         miri_rt_string_free(s);
@@ -633,7 +638,7 @@ fn test_ffi_trim_all_whitespace() {
 #[test]
 fn test_ffi_trim_empty() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::new()));
+        let s = miri_rt_string_new();
         let result = miri_rt_string_trim(s);
         assert!((*result).is_empty());
         miri_rt_string_free(s);
@@ -654,8 +659,8 @@ fn test_ffi_trim_null() {
 fn test_ffi_replace_null_args() {
     unsafe {
         // Null source
-        let from = Box::into_raw(Box::new(MiriString::from_str("x")));
-        let to = Box::into_raw(Box::new(MiriString::from_str("y")));
+        let from = make_str("x");
+        let to = make_str("y");
         let result = miri_rt_string_replace(ptr::null(), from, to);
         assert!((*result).is_empty());
         miri_rt_string_free(from);
@@ -667,8 +672,8 @@ fn test_ffi_replace_null_args() {
 #[test]
 fn test_ffi_replace_null_to() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::from_str("hello world")));
-        let from = Box::into_raw(Box::new(MiriString::from_str("world")));
+        let s = make_str("hello world");
+        let from = make_str("world");
         let result = miri_rt_string_replace(s, from, ptr::null());
         assert_eq!((*result).as_str(), "hello ");
         miri_rt_string_free(s);
@@ -680,7 +685,7 @@ fn test_ffi_replace_null_to() {
 #[test]
 fn test_ffi_substring_full_range() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::from_str("hello")));
+        let s = make_str("hello");
 
         // Full string
         let full = miri_rt_string_substring(s, 0, 5);
@@ -713,7 +718,7 @@ fn test_ffi_char_at_null() {
 #[test]
 fn test_ffi_repeat_one() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::from_str("abc")));
+        let s = make_str("abc");
         let result = miri_rt_string_repeat(s, 1);
         assert_eq!((*result).as_str(), "abc");
         miri_rt_string_free(s);
@@ -733,8 +738,8 @@ fn test_ffi_repeat_null() {
 #[test]
 fn test_ffi_contains_empty_needle() {
     unsafe {
-        let haystack = Box::into_raw(Box::new(MiriString::from_str("hello")));
-        let empty = Box::into_raw(Box::new(MiriString::new()));
+        let haystack = make_str("hello");
+        let empty = miri_rt_string_new();
 
         // In Rust, "hello".contains("") is true
         assert_eq!(miri_rt_string_contains(haystack, empty), 1);
@@ -747,8 +752,8 @@ fn test_ffi_contains_empty_needle() {
 #[test]
 fn test_ffi_starts_with_empty() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::from_str("hello")));
-        let empty = Box::into_raw(Box::new(MiriString::new()));
+        let s = make_str("hello");
+        let empty = miri_rt_string_new();
 
         // "hello".starts_with("") is true in Rust
         assert_eq!(miri_rt_string_starts_with(s, empty), 1);
@@ -761,8 +766,8 @@ fn test_ffi_starts_with_empty() {
 #[test]
 fn test_ffi_ends_with_empty() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::from_str("hello")));
-        let empty = Box::into_raw(Box::new(MiriString::new()));
+        let s = make_str("hello");
+        let empty = miri_rt_string_new();
 
         assert_eq!(miri_rt_string_ends_with(s, empty), 1);
 
@@ -774,7 +779,7 @@ fn test_ffi_ends_with_empty() {
 #[test]
 fn test_ffi_equals_null_vs_empty() {
     unsafe {
-        let empty = Box::into_raw(Box::new(MiriString::new()));
+        let empty = miri_rt_string_new();
         // null treated as empty, so null == empty
         assert_eq!(miri_rt_string_equals(ptr::null(), empty), 1);
         assert_eq!(miri_rt_string_equals(empty, ptr::null()), 1);
@@ -785,7 +790,7 @@ fn test_ffi_equals_null_vs_empty() {
 #[test]
 fn test_ffi_string_char_count_ascii() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::from_str("hello")));
+        let s = make_str("hello");
         assert_eq!(miri_rt_string_char_count(s), 5);
         miri_rt_string_free(s);
     }
@@ -794,7 +799,7 @@ fn test_ffi_string_char_count_ascii() {
 #[test]
 fn test_ffi_string_char_count_empty() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::new()));
+        let s = miri_rt_string_new();
         assert_eq!(miri_rt_string_char_count(s), 0);
         assert_eq!(miri_rt_string_char_count(ptr::null()), 0);
         miri_rt_string_free(s);
@@ -804,7 +809,7 @@ fn test_ffi_string_char_count_empty() {
 #[test]
 fn test_ffi_string_char_count_emoji() {
     unsafe {
-        let s = Box::into_raw(Box::new(MiriString::from_str("Hi! 👋🌍")));
+        let s = make_str("Hi! 👋🌍");
         // 'H', 'i', '!', ' ', '👋', '🌍' = 6 chars
         assert_eq!(miri_rt_string_char_count(s), 6);
         miri_rt_string_free(s);
