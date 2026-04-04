@@ -148,7 +148,7 @@ impl MiriSet {
         let old_data = self.data;
         let old_capacity = self.capacity;
 
-        let new_capacity = old_capacity * 2;
+        let new_capacity = old_capacity.checked_mul(2).unwrap_or_else(|| std::process::abort());
         self.alloc_tables(new_capacity);
         self.len = 0;
 
@@ -176,8 +176,11 @@ impl MiriSet {
             dealloc(states, states_layout);
         }
         if !data.is_null() && capacity > 0 && elem_size > 0 {
-            let data_layout = Layout::from_size_align(capacity * elem_size, 8)
-                .unwrap_or_else(|_| std::process::abort());
+            let data_layout = Layout::from_size_align(
+                capacity.checked_mul(elem_size).unwrap_or_else(|| std::process::abort()),
+                8,
+            )
+            .unwrap_or_else(|_| std::process::abort());
             dealloc(data, data_layout);
         }
     }

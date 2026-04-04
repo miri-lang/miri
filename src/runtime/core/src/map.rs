@@ -172,9 +172,9 @@ impl MiriMap {
             return None;
         }
         let states_layout = Layout::from_size_align(capacity, 1).ok()?;
-        let keys_layout = Layout::from_size_align(capacity * key_size, 8).ok()?;
+        let keys_layout = Layout::from_size_align(capacity.checked_mul(key_size)?, 8).ok()?;
         // value_size can be 0 for value-less maps (unlikely but safe)
-        let val_total = capacity * value_size.max(1);
+        let val_total = capacity.checked_mul(value_size.max(1))?;
         let values_layout = Layout::from_size_align(val_total, 8).ok()?;
 
         let states = alloc_zeroed(states_layout);
@@ -234,7 +234,7 @@ impl MiriMap {
         let new_capacity = if self.capacity == 0 {
             INITIAL_CAPACITY
         } else {
-            self.capacity * 2
+            self.capacity.checked_mul(2).unwrap_or_else(|| std::process::abort())
         };
 
         let Some((new_states, new_keys, new_values)) =

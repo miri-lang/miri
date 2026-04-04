@@ -16,3 +16,7 @@
 **Vulnerability:** Potential Integer Overflow during capacity calculations in `free_buffers` of `src/runtime/core/src/map.rs` where `capacity * key_size` is calculated.
 **Learning:** Raw memory deallocation operations using `Layout::from_size_align` can accept incorrect wrapped-around integer values resulting in Undefined Behavior (UB) if the size overflows `usize`.
 **Prevention:** Use `checked_mul` (e.g. `capacity.checked_mul(key_size)`) to detect overflow during manual memory management operations.
+## 2024-05-27 - [Heap Buffer Overflow via Integer Overflow in Collections]
+**Vulnerability:** A potential Integer Overflow during capacity calculations in `src/runtime/core/src/map.rs` and `src/runtime/core/src/set.rs` when multiplying capacity with key/value size (`capacity * key_size`).
+**Learning:** Raw memory allocation and deallocation operations using `Layout::from_size_align` can accept incorrect wrapped-around integer values, resulting in Heap Buffer Overflows if the allocated layout is smaller than the requested bounds, or Undefined Behavior during deallocation.
+**Prevention:** Use `checked_mul` (e.g., `capacity.checked_mul(key_size)?`) to detect overflow during manual memory management operations, aborting safely if returning an error isn't feasible.
