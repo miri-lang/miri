@@ -35,13 +35,15 @@ pub(crate) fn lower_member_expr(
             if sym == "gpu_context" {
                 if let ExpressionKind::Identifier(prop_name, _) = &prop.node {
                     // Return intermediate identifier for chained access
+                    // Optimization: avoid format! overhead in hot paths
+                    let mut id_name = String::with_capacity(12 + prop_name.len());
+                    id_name.push_str("gpu_context.");
+                    id_name.push_str(prop_name);
+
                     return Ok(Operand::Constant(Box::new(Constant {
                         span: expr.span,
                         ty: Type::new(TypeKind::Void, expr.span),
-                        literal: crate::ast::literal::Literal::Identifier(format!(
-                            "gpu_context.{}",
-                            prop_name
-                        )),
+                        literal: crate::ast::literal::Literal::Identifier(id_name),
                     })));
                 }
             } else if sym.starts_with("gpu_context.") {

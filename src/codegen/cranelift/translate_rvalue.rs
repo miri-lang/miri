@@ -482,7 +482,10 @@ impl<'a> FunctionTranslator<'a> {
                     // For vtable-bearing classes, store vtable pointer at offset 0 of payload.
                     if let Some(ref class_name) = vtable_header {
                         use cranelift_module::Module;
-                        let vtable_sym = format!("__vtable_{}", class_name);
+                        // Optimization: avoid format! overhead in hot paths
+                        let mut vtable_sym = String::with_capacity(9 + class_name.len());
+                        vtable_sym.push_str("__vtable_");
+                        vtable_sym.push_str(class_name);
                         let vtable_data_id = ctx
                             .module
                             .declare_data(
