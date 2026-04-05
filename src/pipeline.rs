@@ -399,14 +399,13 @@ impl Pipeline {
 
         self.build(source, &build_opts)?;
 
-        let canonical_temp_dir = temp_dir
-            .path()
-            .canonicalize()
-            .map_err(|e| CompilerError::Codegen(format!("Failed to canonicalize temp dir: {}", e)))?;
+        let canonical_temp_dir = temp_dir.path().canonicalize().map_err(|e| {
+            CompilerError::Codegen(format!("Failed to canonicalize temp dir: {}", e))
+        })?;
 
-        let canonical_executable_path = executable_path
-            .canonicalize()
-            .map_err(|e| CompilerError::Codegen(format!("Failed to canonicalize executable path: {}", e)))?;
+        let canonical_executable_path = executable_path.canonicalize().map_err(|e| {
+            CompilerError::Codegen(format!("Failed to canonicalize executable path: {}", e))
+        })?;
 
         // Security check: Ensure the executable is strictly within the expected temporary directory
         // to prevent symlink attacks and path traversal
