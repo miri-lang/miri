@@ -1637,7 +1637,9 @@ impl<'a> FunctionTranslator<'a> {
         ptr: Value,
         ptr_type: cranelift_codegen::ir::Type,
     ) -> Result<(), String> {
-        let thunk_name = format!("__drop_{}", type_name);
+        let mut thunk_name = String::with_capacity(7 + type_name.len());
+        thunk_name.push_str("__drop_");
+        thunk_name.push_str(type_name);
         let mut sig = Signature::new(builder.func.signature.call_conv);
         sig.params.push(AbiParam::new(ptr_type));
         let func_id = ctx
@@ -1671,7 +1673,9 @@ impl<'a> FunctionTranslator<'a> {
         let ptr_size = ptr_type.bytes() as i64;
 
         // Declare the function with Export linkage so other functions can call it.
-        let func_name = format!("__drop_{}", type_name);
+        let mut func_name = String::with_capacity(7 + type_name.len());
+        func_name.push_str("__drop_");
+        func_name.push_str(type_name);
         let mut sig = Signature::new(call_conv);
         sig.params.push(AbiParam::new(ptr_type));
         let func_id = module
@@ -1921,7 +1925,9 @@ impl<'a> FunctionTranslator<'a> {
             let vtable_size = (num_slots * ptr_size as usize) as u32;
 
             // Declare the vtable data as Export (may already be declared as Import by constructors).
-            let vtable_sym = format!("__vtable_{}", class_name);
+            let mut vtable_sym = String::with_capacity(9 + class_name.len());
+            vtable_sym.push_str("__vtable_");
+            vtable_sym.push_str(class_name);
             let vtable_data_id = module
                 .declare_data(&vtable_sym, Linkage::Export, false, false)
                 .map_err(|e| format!("Failed to declare vtable {}: {}", vtable_sym, e))?;
