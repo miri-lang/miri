@@ -399,7 +399,24 @@ impl Pipeline {
 
         self.build(source, &build_opts)?;
 
-        let output = Command::new(&executable_path)
+        let canonical_temp_dir = temp_dir
+            .path()
+            .canonicalize()
+            .map_err(|e| CompilerError::Codegen(format!("Failed to canonicalize temp dir: {}", e)))?;
+
+        let canonical_executable_path = executable_path
+            .canonicalize()
+            .map_err(|e| CompilerError::Codegen(format!("Failed to canonicalize executable path: {}", e)))?;
+
+        // Security check: Ensure the executable is strictly within the expected temporary directory
+        // to prevent symlink attacks and path traversal
+        if !canonical_executable_path.starts_with(&canonical_temp_dir) {
+            return Err(CompilerError::Codegen(
+                "Security violation: executable path escapes temporary directory".to_string(),
+            ));
+        }
+
+        let output = Command::new(&canonical_executable_path)
             .output()
             .map_err(|e| CompilerError::Codegen(format!("Failed to execute program: {}", e)))?;
 
