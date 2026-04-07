@@ -482,7 +482,10 @@ impl<'a> FunctionTranslator<'a> {
                     // For vtable-bearing classes, store vtable pointer at offset 0 of payload.
                     if let Some(ref class_name) = vtable_header {
                         use cranelift_module::Module;
-                        let vtable_sym = format!("__vtable_{}", class_name);
+                        // Optimize string construction to avoid `format!` overhead
+                        let mut vtable_sym = String::with_capacity(9 + class_name.len());
+                        vtable_sym.push_str("__vtable_");
+                        vtable_sym.push_str(class_name);
                         let vtable_data_id = ctx
                             .module
                             .declare_data(
@@ -689,10 +692,19 @@ impl<'a> FunctionTranslator<'a> {
                 let symbol_name = ctx
                     .string_literals
                     .entry(s.clone())
-                    .or_insert_with(|| format!(".miri_str_{}", next_idx))
+                    .or_insert_with(|| {
+                        // Optimize string construction to avoid `format!` overhead
+                        let mut s = String::with_capacity(16);
+                        use std::fmt::Write;
+                        write!(s, ".miri_str_{}", next_idx).unwrap();
+                        s
+                    })
                     .clone();
 
-                let struct_symbol = format!("{}_struct", symbol_name);
+                // Optimize string construction to avoid `format!` overhead
+                let mut struct_symbol = String::with_capacity(symbol_name.len() + 7);
+                struct_symbol.push_str(&symbol_name);
+                struct_symbol.push_str("_struct");
                 let struct_id = ctx
                     .module
                     .declare_data(&struct_symbol, Linkage::Export, false, false)
