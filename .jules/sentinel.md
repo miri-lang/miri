@@ -16,3 +16,8 @@
 **Vulnerability:** Potential Integer Overflow during capacity calculations in `free_buffers` of `src/runtime/core/src/map.rs` where `capacity * key_size` is calculated.
 **Learning:** Raw memory deallocation operations using `Layout::from_size_align` can accept incorrect wrapped-around integer values resulting in Undefined Behavior (UB) if the size overflows `usize`.
 **Prevention:** Use `checked_mul` (e.g. `capacity.checked_mul(key_size)`) to detect overflow during manual memory management operations.
+
+## 2024-05-27 - [Symlink/Path Traversal in Temp Execution]
+**Vulnerability:** The compiler invoked built executables from a temp directory via `Command::new(executable_path)`. If `executable_path` was a relative path navigating outside the temp dir, or a symlink to another host binary, it could lead to arbitrary command execution on the host machine during the build phase.
+**Learning:** `Command::new` follows paths naively. When executing artifacts generated from untrusted source in a temporary directory, strict containment checks must be enforced.
+**Prevention:** Always use `canonicalize()` to resolve both the temporary directory and the target executable path, and perform a strict containment check (`canonical_exe.starts_with(&canonical_temp)`) to ensure the executable is genuinely contained within the safe environment before execution.

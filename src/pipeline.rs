@@ -399,7 +399,13 @@ impl Pipeline {
 
         self.build(source, &build_opts)?;
 
-        let output = Command::new(&executable_path)
+        let canonical_temp = temp_dir.path().canonicalize().map_err(|e| CompilerError::Codegen(format!("Failed to canonicalize temp dir: {}", e)))?;
+        let canonical_exe = executable_path.canonicalize().map_err(|e| CompilerError::Codegen(format!("Failed to canonicalize executable path: {}", e)))?;
+        if !canonical_exe.starts_with(&canonical_temp) {
+            return Err(CompilerError::Codegen("Access denied: executable path is outside of temp directory".to_string()));
+        }
+
+        let output = Command::new(&canonical_exe)
             .output()
             .map_err(|e| CompilerError::Codegen(format!("Failed to execute program: {}", e)))?;
 
