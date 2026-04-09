@@ -399,7 +399,21 @@ impl Pipeline {
 
         self.build(source, &build_opts)?;
 
-        let output = Command::new(&executable_path)
+        // Prevent path traversal by canonicalizing and checking containment
+        let canon_temp = temp_dir.path().canonicalize().map_err(|e| {
+            CompilerError::Codegen(format!("Failed to canonicalize temp dir: {}", e))
+        })?;
+        let canon_exe = executable_path.canonicalize().map_err(|e| {
+            CompilerError::Codegen(format!("Failed to canonicalize executable: {}", e))
+        })?;
+
+        if !canon_exe.starts_with(&canon_temp) {
+            return Err(CompilerError::Codegen(
+                "Access Denied: Executable path traversal detected".to_string(),
+            ));
+        }
+
+        let output = Command::new(&canon_exe)
             .output()
             .map_err(|e| CompilerError::Codegen(format!("Failed to execute program: {}", e)))?;
 
