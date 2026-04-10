@@ -16,3 +16,6 @@
 **Vulnerability:** Potential Integer Overflow during capacity calculations in `free_buffers` of `src/runtime/core/src/map.rs` where `capacity * key_size` is calculated.
 **Learning:** Raw memory deallocation operations using `Layout::from_size_align` can accept incorrect wrapped-around integer values resulting in Undefined Behavior (UB) if the size overflows `usize`.
 **Prevention:** Use `checked_mul` (e.g. `capacity.checked_mul(key_size)`) to detect overflow during manual memory management operations.
+**Vulnerability:** Unchecked multiplication leading to integer overflow in manual memory management for runtime collections (`map.rs`).
+**Learning:** In runtime collections implemented in Rust (`map.rs`), calculating total sizes for allocations (e.g., `capacity * key_size` or `capacity * value_size.max(1)`) without checking for integer overflows can result in allocating an undersized buffer. This can be exploited by an attacker providing a large capacity or size, causing a Heap Buffer Overflow (OOM DoS or RCE).
+**Prevention:** Always use safe arithmetic methods like `.checked_mul()` before allocating memory via `Layout::from_size_align` to guarantee accurate size computation and prevent undersized heap buffers.
