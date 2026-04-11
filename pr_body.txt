@@ -1,0 +1,5 @@
+🚨 Severity: CRITICAL
+💡 Vulnerability: Potential symlink attack and path traversal vulnerability when executing dynamically built binaries from temporary directories in `src/pipeline.rs`.
+🎯 Impact: Could allow an attacker to execute arbitrary binaries outside the designated temporary directory, leading to command injection or system compromise.
+🔧 Fix: Canonicalize both the temporary directory and executable path, and perform a containment check (`canonical_executable.starts_with(&canonical_temp)`) before invoking `Command::new`.
+✅ Verification: Tested via the standard test suite.
