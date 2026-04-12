@@ -17,3 +17,7 @@
 ## 2024-05-24 - Hot Path Symbol Mangling in MIR Lowering
 **Learning:** The MIR lowerer repeatedly constructs mangled symbols (e.g. `{Class}_{method}`, `{Class}_length`, `{Class}_init`) for generic names and method dispatches using the `format!` macro. In compiler microbenchmarks, `format!` has heavy parsing overhead and allocates more than necessary. Profiling showed that replacing `format!("{}_{}", a, b)` with `String::with_capacity` and `push_str` calls reduces time by ~80x (from 1.58s to 19ms for 10M operations).
 **Action:** When performing programmatic string concatenations in hot paths like MIR lowering, bypass `format!` entirely. Pre-calculate the exact needed capacity (`a.len() + 1 + b.len()`), allocate using `String::with_capacity()`, and build the string via sequential `.push_str()` and `.push()` calls.
+
+## 2024-05-25 - Prevent Intermediate String Allocations via Format Macro
+**Learning:** During Cranelift code generation for `thunk_name` (`__drop_{}`), `vtable_sym` (`__vtable_{}`) and `struct_symbol` (`{}_struct`), `format!` macros parsed at runtime, which allocated strings needlessly and was identified as a hot path bottleneck.
+**Action:** Replaced `format!` macros with manual string allocations using `String::with_capacity` and sequential `push_str()` additions. When creating performance-oriented code, calculating the exact required buffer capacity initially prevents heap reallocations.
