@@ -152,17 +152,17 @@ fn resolve_in_trait_hierarchy(
     trait_name: &str,
     method_name: &str,
 ) -> Option<(String, MethodInfo)> {
-    let mut to_check = vec![trait_name.to_string()];
+    let mut to_check = vec![trait_name];
     let mut visited = std::collections::HashSet::new();
     while let Some(t_name) = to_check.pop() {
-        if !visited.insert(t_name.clone()) {
+        if !visited.insert(t_name) {
             continue;
         }
-        if let Some(TypeDefinition::Trait(td)) = type_defs.get(&t_name) {
+        if let Some(TypeDefinition::Trait(td)) = type_defs.get(t_name) {
             if let Some(method_info) = td.methods.get(method_name) {
-                return Some((t_name, method_info.clone()));
+                return Some((t_name.to_string(), method_info.clone()));
             }
-            to_check.extend(td.parent_traits.iter().cloned());
+            to_check.extend(td.parent_traits.iter().map(|s| s.as_str()));
         }
     }
     None
@@ -176,19 +176,19 @@ fn resolve_trait_default_method(
     trait_name: &str,
     method_name: &str,
 ) -> Option<(String, MethodInfo)> {
-    let mut to_check = vec![trait_name.to_string()];
+    let mut to_check = vec![trait_name];
     let mut visited = std::collections::HashSet::new();
     while let Some(t_name) = to_check.pop() {
-        if !visited.insert(t_name.clone()) {
+        if !visited.insert(t_name) {
             continue;
         }
-        if let Some(TypeDefinition::Trait(td)) = type_defs.get(&t_name) {
+        if let Some(TypeDefinition::Trait(td)) = type_defs.get(t_name) {
             if let Some(method_info) = td.methods.get(method_name) {
                 if !method_info.is_abstract {
-                    return Some((t_name, method_info.clone()));
+                    return Some((t_name.to_string(), method_info.clone()));
                 }
             }
-            to_check.extend(td.parent_traits.iter().cloned());
+            to_check.extend(td.parent_traits.iter().map(|s| s.as_str()));
         }
     }
     None
