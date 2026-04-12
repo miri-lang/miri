@@ -24,15 +24,15 @@ pub fn is_managed_type(
     type_params: &HashSet<String>,
 ) -> bool {
     match kind {
-        // Collections, Options, and Tuples use heap allocation and need RC.
+        // Collections, Options, Tuples, and Strings use heap allocation and need RC.
         TypeKind::Option(_) | TypeKind::Tuple(_) => true,
         // Canonical collection variants are normalized to Custom before RC analysis.
         // Keep them here as a safety net for any residual code paths.
         TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => true,
+        // Strings are allocated via alloc_with_rc, freed via miri_rt_string_free.
+        TypeKind::String => true,
         // Explicit generic type parameters are never concrete heap objects.
         TypeKind::Generic(_, _, _) => false,
-        // Note: String is excluded — it uses Box allocation, not alloc_with_rc,
-        // so it doesn't have the [RC][payload] layout that IncRef/DecRef expect.
         TypeKind::Custom(name, args) => {
             // Exclude generic placeholders that appear as Custom types (e.g. when
             // the type checker stores Custom("T", None) for a generic param reference).

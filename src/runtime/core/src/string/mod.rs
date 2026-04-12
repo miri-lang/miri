@@ -26,13 +26,27 @@ pub use ffi::*;
 // Internal helpers shared across submodules
 // ---------------------------------------------------------------------------
 
-/// Heap-allocates a [`MiriString`] and returns a raw pointer suitable for FFI.
+/// Heap-allocates a [`MiriString`] into an RC block (`[RC=1][payload]`) and
+/// returns a pointer to the payload.
 ///
 /// The caller (Miri compiled code) is responsible for eventually freeing
 /// this pointer via [`miri_rt_string_free`].
+///
+/// Returns null if the RC allocation fails (in which case `s` is dropped
+/// in place, freeing its data buffer).
 #[inline]
 pub(crate) fn into_raw_ptr(s: MiriString) -> *mut MiriString {
-    Box::into_raw(Box::new(s))
+    let payload_size = std::mem::size_of::<MiriString>();
+    // SAFETY: payload_size is the exact size of MiriString.
+    let ptr = unsafe { crate::rc::alloc_with_rc(payload_size) as *mut MiriString };
+    if ptr.is_null() {
+        // Allocation failed; `s` drops here, freeing its data buffer.
+        return std::ptr::null_mut();
+    }
+    // Move `s` into the RC block without running its Drop impl.
+    // SAFETY: `ptr` is non-null, aligned, and points to `payload_size` zeroed bytes.
+    unsafe { std::ptr::write(ptr, s) };
+    ptr
 }
 
 /// Converts a Rust `bool` into the FFI representation used by Miri (0 or 1).
