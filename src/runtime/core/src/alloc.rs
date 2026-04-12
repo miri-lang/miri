@@ -25,6 +25,7 @@ pub mod ffi {
     use super::make_layout;
     use std::alloc;
     use std::ptr;
+    extern crate libc;
 
     /// Allocates `size` bytes of memory with the given alignment.
     ///

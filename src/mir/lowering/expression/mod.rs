@@ -121,6 +121,14 @@ pub(super) fn emit_to_string(
     match type_kind {
         TypeKind::String => {
             // Already a string — assign to a temp Local.
+            // Convert Move to Copy so that Perceus emits IncRef for the source.
+            // Both the source local and this temp are managed and will each get
+            // DecRef'd at StorageDead; without an IncRef here the RC would be
+            // decremented one extra time, causing a use-after-free.
+            let operand = match operand {
+                Operand::Move(place) => Operand::Copy(place),
+                other => other,
+            };
             let temp = ctx.push_temp(Type::new(TypeKind::String, *span), *span);
             ctx.push_statement(crate::mir::Statement {
                 kind: MirStatementKind::Assign(Place::new(temp), Rvalue::Use(operand)),

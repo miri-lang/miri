@@ -41,20 +41,18 @@ fn ensure_leak_check_registered() {
 extern "C" fn leak_check_at_exit() {
     let balance = RC_ALLOC_BALANCE.load(Ordering::SeqCst);
     if balance != 0 {
-        eprintln!("MIRI_LEAK_CHECK: leaked {balance} RC allocation(s)");
-        std::process::exit(99);
+        // Use a raw write to stderr to avoid Rust's buffered I/O flushing issues.
+        let msg = format!("MIRI_LEAK_CHECK: leaked {balance} RC allocation(s)\n");
+        unsafe {
+            libc::write(2, msg.as_ptr() as *const libc::c_void, msg.len());
+            // Use _exit to bypass atexit handlers — calling std::process::exit here
+            // would re-invoke atexit handlers recursively, causing undefined behaviour.
+            libc::_exit(99);
+        }
     }
 }
 
 /// Allocates `[RC=1][payload]` and returns a pointer to the payload.
-///
-/// The payload is zeroed. The caller can write struct fields into the
-/// returned pointer. To free, use [`free_with_rc`].
-///
-/// Returns null if allocation fails.
-///
-/// # Safety
-/// Caller must ensure `payload_size` is correct for the type being allocated.
 pub unsafe fn alloc_with_rc(payload_size: usize) -> *mut u8 {
     ensure_leak_check_registered();
 
@@ -74,22 +72,15 @@ pub unsafe fn alloc_with_rc(payload_size: usize) -> *mut u8 {
 
     RC_ALLOC_BALANCE.fetch_add(1, Ordering::SeqCst);
 
-    // Return pointer past RC header (to the payload)
     base.add(RC_HEADER_SIZE)
 }
 
 /// Frees the `[RC][payload]` block given a pointer to the payload.
-///
-/// The caller must have already cleaned up any resources owned by
-/// the payload (e.g., freeing a data buffer inside a MiriArray).
-///
-/// # Safety
-/// - `payload_ptr` must have been returned by [`alloc_with_rc`], or be null.
-/// - `payload_size` must match the size used in the corresponding `alloc_with_rc` call.
 pub unsafe fn free_with_rc(payload_ptr: *mut u8, payload_size: usize) {
     if payload_ptr.is_null() {
         return;
     }
+
     let base = payload_ptr.sub(RC_HEADER_SIZE);
     let total_size = RC_HEADER_SIZE + payload_size;
     let layout = Layout::from_size_align(total_size, 8).unwrap_or_else(|_| std::process::abort());
