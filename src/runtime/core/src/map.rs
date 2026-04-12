@@ -172,10 +172,9 @@ impl MiriMap {
             return None;
         }
         let states_layout = Layout::from_size_align(capacity, 1).ok()?;
-        let keys_total = capacity.checked_mul(key_size)?;
-        let keys_layout = Layout::from_size_align(keys_total, 8).ok()?;
+        let keys_layout = Layout::from_size_align(capacity * key_size, 8).ok()?;
         // value_size can be 0 for value-less maps (unlikely but safe)
-        let val_total = capacity.checked_mul(value_size.max(1))?;
+        let val_total = capacity * value_size.max(1);
         let values_layout = Layout::from_size_align(val_total, 8).ok()?;
 
         let states = alloc_zeroed(states_layout);
@@ -210,18 +209,23 @@ impl MiriMap {
             return;
         }
         if !states.is_null() {
-            let layout = Layout::from_size_align(capacity, 1).unwrap_or_else(|_| std::process::abort());
-            dealloc(states, layout);
+            if let Ok(layout) = Layout::from_size_align(capacity, 1) {
+                dealloc(states, layout);
+            }
         }
         if !keys.is_null() {
-            let key_total = capacity.checked_mul(key_size).unwrap_or_else(|| std::process::abort());
-            let layout = Layout::from_size_align(key_total, 8).unwrap_or_else(|_| std::process::abort());
-            dealloc(keys, layout);
+            if let Some(key_total) = capacity.checked_mul(key_size) {
+                if let Ok(layout) = Layout::from_size_align(key_total, 8) {
+                    dealloc(keys, layout);
+                }
+            }
         }
         if !values.is_null() {
-            let val_total = capacity.checked_mul(value_size.max(1)).unwrap_or_else(|| std::process::abort());
-            let layout = Layout::from_size_align(val_total, 8).unwrap_or_else(|_| std::process::abort());
-            dealloc(values, layout);
+            if let Some(val_total) = capacity.checked_mul(value_size.max(1)) {
+                if let Ok(layout) = Layout::from_size_align(val_total, 8) {
+                    dealloc(values, layout);
+                }
+            }
         }
     }
 

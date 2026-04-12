@@ -52,11 +52,7 @@ impl MiriList {
             return Self::new(elem_size);
         }
 
-        let total_size = match capacity.checked_mul(elem_size) {
-            Some(s) => s,
-            None => return Self::new(elem_size),
-        };
-        let layout = match Layout::from_size_align(total_size, 8) {
+        let layout = match Layout::from_size_align(capacity * elem_size, 8) {
             Ok(layout) => layout,
             Err(_) => return Self::new(elem_size),
         };
@@ -115,8 +111,7 @@ impl MiriList {
         let new_data = if self.data.is_null() {
             unsafe { alloc(layout) }
         } else {
-            let old_size = self.capacity.checked_mul(self.elem_size).unwrap_or_else(|| std::process::abort());
-            match Layout::from_size_align(old_size, 8) {
+            match Layout::from_size_align(self.capacity * self.elem_size, 8) {
                 Ok(old_layout) => unsafe { realloc(self.data, old_layout, new_size) },
                 Err(_) => std::process::abort(), // Abort safely rather than risking memory corruption
             }
@@ -275,10 +270,10 @@ impl MiriList {
 impl Drop for MiriList {
     fn drop(&mut self) {
         if !self.data.is_null() && self.capacity > 0 && self.elem_size > 0 {
-            let total_size = self.capacity.checked_mul(self.elem_size).unwrap_or_else(|| std::process::abort());
-            let layout = Layout::from_size_align(total_size, 8).unwrap_or_else(|_| std::process::abort());
-            unsafe {
-                dealloc(self.data, layout);
+            if let Ok(layout) = Layout::from_size_align(self.capacity * self.elem_size, 8) {
+                unsafe {
+                    dealloc(self.data, layout);
+                }
             }
         }
     }
@@ -400,11 +395,7 @@ pub unsafe extern "C" fn miri_rt_list_with_capacity(
     if list.is_null() || capacity == 0 || elem_size == 0 {
         return list;
     }
-    let total_size = match capacity.checked_mul(elem_size) {
-        Some(s) => s,
-        None => return list,
-    };
-    let layout = match Layout::from_size_align(total_size, 8) {
+    let layout = match Layout::from_size_align(capacity * elem_size, 8) {
         Ok(l) => l,
         Err(_) => return list,
     };
@@ -659,8 +650,7 @@ pub unsafe extern "C" fn miri_rt_list_free(ptr: *mut MiriList) {
     // Free internal data buffer
     let list = &*ptr;
     if !list.data.is_null() && list.capacity > 0 && list.elem_size > 0 {
-        let total_size = list.capacity.checked_mul(list.elem_size).unwrap_or_else(|| std::process::abort());
-        let layout = Layout::from_size_align(total_size, 8)
+        let layout = Layout::from_size_align(list.capacity * list.elem_size, 8)
             .unwrap_or_else(|_| std::process::abort());
         dealloc(list.data, layout);
     }
