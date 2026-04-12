@@ -76,6 +76,7 @@ pub(crate) fn lower_binary_expr(
         return Ok(ret_op);
     }
 
+    let arg_watermark = ctx.body.local_decls.len();
     let lhs_op = lower_expression(ctx, lhs, None)?;
     let rhs_op = lower_expression(ctx, rhs, None)?;
 
@@ -332,6 +333,16 @@ pub(crate) fn lower_binary_expr(
                             call_args.push(alloc);
                         }
 
+                        // Collect arg locals to drop after the call — must be done
+                        // before `call_args` is moved into the terminator.
+                        let arg_locals: Vec<crate::mir::place::Local> = call_args
+                            .iter()
+                            .filter_map(|op| match op {
+                                Operand::Copy(p) | Operand::Move(p) => Some(p.local),
+                                _ => None,
+                            })
+                            .collect();
+
                         let method_info = &class_def.methods[method_name];
                         let return_ty = method_info.return_type.clone();
 
@@ -355,6 +366,14 @@ pub(crate) fn lower_binary_expr(
                                 expr.span,
                             ));
                             ctx.set_current_block(after_eq_bb);
+
+                            // Release managed temporaries created while lowering
+                            // the call arguments (e.g. intermediate concat results).
+                            for &local in &arg_locals {
+                                if local != eq_temp {
+                                    ctx.emit_temp_drop(local, arg_watermark, expr.span);
+                                }
+                            }
 
                             let (target, ret_op) = if let Some(d) = dest {
                                 (d.clone(), Operand::Copy(d))
@@ -383,6 +402,7 @@ pub(crate) fn lower_binary_expr(
                             let p = Place::new(temp);
                             (p.clone(), Operand::Copy(p))
                         };
+                        let dest_local = destination.local;
                         let target_bb = ctx.new_basic_block();
                         ctx.set_terminator(Terminator::new(
                             TerminatorKind::Call {
@@ -394,6 +414,15 @@ pub(crate) fn lower_binary_expr(
                             expr.span,
                         ));
                         ctx.set_current_block(target_bb);
+
+                        // Release managed temporaries created while lowering
+                        // the call arguments (e.g. intermediate concat results).
+                        for &local in &arg_locals {
+                            if local != dest_local {
+                                ctx.emit_temp_drop(local, arg_watermark, expr.span);
+                            }
+                        }
+
                         return Ok(ret_op);
                     }
                 }
