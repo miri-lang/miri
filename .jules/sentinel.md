@@ -16,3 +16,7 @@
 **Vulnerability:** Potential Integer Overflow during capacity calculations in `free_buffers` of `src/runtime/core/src/map.rs` where `capacity * key_size` is calculated.
 **Learning:** Raw memory deallocation operations using `Layout::from_size_align` can accept incorrect wrapped-around integer values resulting in Undefined Behavior (UB) if the size overflows `usize`.
 **Prevention:** Use `checked_mul` (e.g. `capacity.checked_mul(key_size)`) to detect overflow during manual memory management operations.
+## 2024-05-27 - [Path Traversal in Dynamic Binary Execution]
+**Vulnerability:** Symlink attacks and path traversal vulnerabilities existed when executing dynamically built binaries from temporary directories in `src/pipeline.rs`.
+**Learning:** Checking whether a path resides within a given base directory using simple string matching or naive `starts_with` is insufficient if symbolic links or uncanonicalized relative directories (`..`) are involved. This could allow an attacker to bypass the containment check and execute an arbitrary binary via `Command::new`.
+**Prevention:** Always use `canonicalize()` on both the base directory and the target executable path to resolve symlinks and relative references *before* performing containment checks like `canonical_executable.starts_with(&canonical_temp)`.
