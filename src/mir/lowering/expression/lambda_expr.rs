@@ -131,7 +131,10 @@ pub(crate) fn lower_lambda_expr(
 
     // Generate a unique name for this lambda.
     let lambda_id = expr.id;
-    let lambda_name: std::rc::Rc<str> = format!("__lambda_{}", lambda_id).into();
+    let mut lambda_name_str = String::with_capacity(20);
+    use std::fmt::Write;
+    write!(&mut lambda_name_str, "__lambda_{}", lambda_id).unwrap();
+    let lambda_name: std::rc::Rc<str> = lambda_name_str.into();
 
     // Resolve the lambda's full function type (used as type of the closure variable).
     let lambda_ty = resolve_type(ctx.type_checker, expr);

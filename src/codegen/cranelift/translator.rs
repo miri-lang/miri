@@ -75,6 +75,8 @@ pub(crate) struct ModuleCtx<'a> {
     pub(crate) rt_set_new_id: Option<cranelift_module::FuncId>,
     pub(crate) rt_set_add_id: Option<cranelift_module::FuncId>,
     pub(crate) rt_set_free_id: Option<cranelift_module::FuncId>,
+    /// Cached FuncId for miri_rt_string_free.
+    pub(crate) rt_string_free_id: Option<cranelift_module::FuncId>,
 }
 
 /// Context for type information during translation.
@@ -187,6 +189,7 @@ impl<'a> FunctionTranslator<'a> {
             rt_set_new_id: None,
             rt_set_add_id: None,
             rt_set_free_id: None,
+            rt_string_free_id: None,
         };
         let type_ctx = TypeCtx {
             local_types: &self.local_types,
@@ -765,6 +768,30 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
+    /// Calls `miri_rt_string_free(ptr)`.
+    ///
+    /// `ptr` must be the payload pointer (past the RC header) returned by a
+    /// `miri_rt_string_*` constructor.  The runtime function runs the
+    /// `MiriString` destructor (freeing the inner data buffer) and then frees
+    /// the `[RC][payload]` block via `free_with_rc`.
+    pub(crate) fn call_rt_string_free(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        ptr: Value,
+    ) -> Result<(), String> {
+        let pt = builder.func.dfg.value_type(ptr);
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.rt_string_free_id,
+            rt::STRING_FREE,
+            &[pt],
+            &[],
+            &[ptr],
+        )?;
+        Ok(())
+    }
+
     /// Widens or narrows a value to pointer type for FFI calls.
     pub(crate) fn widen_to_ptr(
         builder: &mut FunctionBuilder,
@@ -1179,6 +1206,11 @@ impl<'a> FunctionTranslator<'a> {
                 Self::emit_decref_value(builder, ctx, &inner.kind, inner_ptr, type_ctx)?;
             }
             Self::call_libc_free(builder, ctx, header_ptr)
+        } else if kind == &TypeKind::String {
+            // String drop: run MiriString destructor (frees data buffer) then free
+            // the RC block.  miri_rt_string_free takes the payload pointer (ptr),
+            // not the header pointer — it calls free_with_rc internally.
+            Self::call_rt_string_free(builder, ctx, ptr)
         } else if let TypeKind::Custom(name, _) = kind {
             // Dispatch through the type-specific drop function, which encapsulates:
             // (1) user-defined drop hook — no-op placeholder until M5 Task 3,
@@ -1637,7 +1669,9 @@ impl<'a> FunctionTranslator<'a> {
         ptr: Value,
         ptr_type: cranelift_codegen::ir::Type,
     ) -> Result<(), String> {
-        let thunk_name = format!("__drop_{}", type_name);
+        let mut thunk_name = String::with_capacity(7 + type_name.len());
+        thunk_name.push_str("__drop_");
+        thunk_name.push_str(type_name);
         let mut sig = Signature::new(builder.func.signature.call_conv);
         sig.params.push(AbiParam::new(ptr_type));
         let func_id = ctx
@@ -1671,7 +1705,9 @@ impl<'a> FunctionTranslator<'a> {
         let ptr_size = ptr_type.bytes() as i64;
 
         // Declare the function with Export linkage so other functions can call it.
-        let func_name = format!("__drop_{}", type_name);
+        let mut func_name = String::with_capacity(7 + type_name.len());
+        func_name.push_str("__drop_");
+        func_name.push_str(type_name);
         let mut sig = Signature::new(call_conv);
         sig.params.push(AbiParam::new(ptr_type));
         let func_id = module
@@ -1716,6 +1752,7 @@ impl<'a> FunctionTranslator<'a> {
                 rt_set_new_id: None,
                 rt_set_add_id: None,
                 rt_set_free_id: None,
+                rt_string_free_id: None,
             };
             let type_ctx = TypeCtx {
                 local_types: &[],
@@ -1921,7 +1958,9 @@ impl<'a> FunctionTranslator<'a> {
             let vtable_size = (num_slots * ptr_size as usize) as u32;
 
             // Declare the vtable data as Export (may already be declared as Import by constructors).
-            let vtable_sym = format!("__vtable_{}", class_name);
+            let mut vtable_sym = String::with_capacity(9 + class_name.len());
+            vtable_sym.push_str("__vtable_");
+            vtable_sym.push_str(class_name);
             let vtable_data_id = module
                 .declare_data(&vtable_sym, Linkage::Export, false, false)
                 .map_err(|e| format!("Failed to declare vtable {}: {}", vtable_sym, e))?;
