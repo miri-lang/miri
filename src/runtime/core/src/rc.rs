@@ -53,6 +53,10 @@ extern "C" fn leak_check_at_exit() {
 }
 
 /// Allocates `[RC=1][payload]` and returns a pointer to the payload.
+///
+/// # Safety
+/// The caller must ensure that `payload_size` together with the reference count
+/// header fits in a valid memory layout.
 pub unsafe fn alloc_with_rc(payload_size: usize) -> *mut u8 {
     ensure_leak_check_registered();
 
@@ -76,6 +80,10 @@ pub unsafe fn alloc_with_rc(payload_size: usize) -> *mut u8 {
 }
 
 /// Frees the `[RC][payload]` block given a pointer to the payload.
+///
+/// # Safety
+/// `payload_ptr` must have been allocated via `alloc_with_rc` and `payload_size`
+/// must be the same as was used during allocation.
 pub unsafe fn free_with_rc(payload_ptr: *mut u8, payload_size: usize) {
     if payload_ptr.is_null() {
         return;

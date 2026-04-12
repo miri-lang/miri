@@ -129,17 +129,8 @@ impl Perceus {
         new_stmts: &mut Vec<Statement>,
     ) -> bool {
         match &stmt.kind {
-            StatementKind::Assign(lhs, rvalue) | StatementKind::Reassign(lhs, rvalue) => {
-                let is_reassign = matches!(stmt.kind, StatementKind::Reassign(_, _));
-                self.handle_assignment(
-                    ctx,
-                    stmt,
-                    lhs,
-                    rvalue,
-                    is_reassign,
-                    managed_locals,
-                    new_stmts,
-                )
+            StatementKind::Assign(..) | StatementKind::Reassign(..) => {
+                self.handle_assignment(ctx, stmt, managed_locals, new_stmts)
             }
             StatementKind::StorageDead(place) => {
                 self.handle_storage_dead(stmt, place, managed_locals, new_stmts)
@@ -153,12 +144,14 @@ impl Perceus {
         &self,
         ctx: &PerceusContext,
         stmt: &Statement,
-        lhs: &Place,
-        rvalue: &Rvalue,
-        is_reassign: bool,
         managed_locals: &std::collections::HashSet<crate::mir::Local>,
         new_stmts: &mut Vec<Statement>,
     ) -> bool {
+        let (lhs, rvalue, is_reassign) = match &stmt.kind {
+            StatementKind::Assign(lhs, rvalue) => (lhs, rvalue, false),
+            StatementKind::Reassign(lhs, rvalue) => (lhs, rvalue, true),
+            _ => return false,
+        };
         let mut changed = false;
 
         // 1. If we are copying a managed value, we must increment its reference count.
@@ -173,7 +166,7 @@ impl Perceus {
         }
         // 2. Handle specialized coercion casts that might involve managed field projections.
         else if let Rvalue::Cast(operand, target_ty) = rvalue {
-            if self.handle_cast(&*operand, target_ty, stmt.span, ctx, new_stmts) {
+            if self.handle_cast(operand, target_ty, stmt.span, ctx, new_stmts) {
                 changed = true;
             }
         }
