@@ -196,6 +196,8 @@ impl MirType {
             | MirType::Map(_, _)
             | MirType::Set(_)
             | MirType::Tuple(_) => true,
+            // String is RC-managed: allocated via alloc_with_rc, freed via miri_rt_string_free.
+            MirType::String => true,
             // Generic parameters and unknown types are never managed.
             MirType::Generic | MirType::Unknown => false,
             // Custom (user-defined) types: managed unless they are in the auto-copy
@@ -208,7 +210,7 @@ impl MirType {
                     && !type_params.contains(name.as_str())
                     && BuiltinCollectionKind::from_name(name).is_none()
             }
-            // All other types (primitives, String, …) are not managed.
+            // All other types (primitives) are not managed.
             _ => false,
         }
     }
