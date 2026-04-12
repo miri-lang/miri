@@ -17,6 +17,17 @@ use super::constructors::{lower_class_constructor, lower_struct_constructor, COL
 use super::helpers::coerce_rvalue;
 use super::{lower_expression, LoweringContext};
 
+/// Context for lowering a collection intrinsic method (push/get/index).
+struct CollectionIntrinsicCall<'a> {
+    span: &'a Span,
+    call_expr_id: usize,
+    obj: &'a Expression,
+    obj_ty: &'a Type,
+    class_name: &'a str,
+    method_name: &'a str,
+    args: &'a [Expression],
+}
+
 /// Produce a mangled function name for a generic instantiation.
 ///
 /// Example: `identity` with `[("T", int)]` → `identity__int`
@@ -449,17 +460,16 @@ fn try_lower_method_call(
     // 1. Try specialized collection optimizations: emit direct index-reads or
     // runtime intrinsic calls to avoid monomorphization conflicts and enable
     // better RC analysis.
-    if let Some(op) = try_lower_collection_intrinsic(
-        ctx,
+    let call = CollectionIntrinsicCall {
         span,
         call_expr_id,
         obj,
         obj_ty,
-        &class_name,
+        class_name: &class_name,
         method_name,
         args,
-        dest.clone(),
-    )? {
+    };
+    if let Some(op) = try_lower_collection_intrinsic(ctx, call, dest.clone())? {
         return Ok(Some(op));
     }
 
@@ -589,15 +599,18 @@ fn try_lower_method_call(
 /// element type visible at the call site.
 fn try_lower_collection_intrinsic(
     ctx: &mut LoweringContext,
-    span: &Span,
-    call_expr_id: usize,
-    obj: &Expression,
-    obj_ty: &Type,
-    class_name: &str,
-    method_name: &str,
-    args: &[Expression],
+    call: CollectionIntrinsicCall,
     dest: Option<Place>,
 ) -> Result<Option<Operand>, LoweringError> {
+    let CollectionIntrinsicCall {
+        span,
+        call_expr_id,
+        obj,
+        obj_ty,
+        class_name,
+        method_name,
+        args,
+    } = call;
     // element_at / get on List, Array, Tuple: emit a direct index-read.
     if args.len() == 1
         && matches!(method_name, "element_at" | "get")
