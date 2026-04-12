@@ -7,6 +7,8 @@
 //! types such as `String`, `List`, `Map`, `Set`, and user-defined types.
 //! It implements the "Functional But In-Place" (FBIP) strategy where possible.
 
+use crate::error::syntax::Span;
+use crate::mir::block::BasicBlockData;
 use crate::mir::optimization::OptimizationPass;
 use crate::mir::statement::{Statement, StatementKind};
 use crate::mir::types::MirType;
@@ -18,172 +20,52 @@ use crate::mir::{Body, Operand, Place, PlaceElem, Rvalue};
 /// before the assignment. For each `StorageDead` of a managed place, a `DecRef`
 /// is inserted before the storage is released.
 pub struct Perceus;
+/// Metadata context for the Perceus optimization pass.
+/// Holds immutable references to necessary fields of `Body` to satisfy the borrow checker
+/// while iterating over `basic_blocks` mutably.
+struct PerceusContext<'a> {
+    local_decls: &'a [crate::mir::LocalDecl],
+    auto_copy_types: &'a std::collections::HashSet<String>,
+    field_types: &'a std::collections::HashMap<String, Vec<crate::ast::types::Type>>,
+    type_params: &'a std::collections::HashSet<String>,
+    arg_count: usize,
+}
 
 impl OptimizationPass for Perceus {
     fn run(&mut self, body: &mut Body) -> bool {
-        let mut changed = false;
-
-        // Pre-compute which locals are managed (heap-allocated, need RC) to avoid
-        // borrow conflicts between iterating basic_blocks mutably and reading local_decls.
-        // Auto-copy custom types (structs with only primitive fields, <= 128 bytes)
-        // are excluded — they use bitwise copy and do not need RC.
-        // Locals 1..=arg_count are function parameters (borrowed, caller owns RC).
-        // Exclude them — only owned locals need IncRef/DecRef.
-        let managed_locals: std::collections::HashSet<crate::mir::Local> = body
-            .local_decls
-            .iter()
-            .enumerate()
-            .filter(|(i, decl)| {
-                *i > body.arg_count
-                    && decl
-                        .mir_ty
-                        .is_managed(&body.auto_copy_types, &body.type_params)
-            })
-            .map(|(i, _)| crate::mir::Local(i))
-            .collect();
-
+        // Step 1: Identify which variables actually need tracking (managed locals).
+        let managed_locals = self.identify_managed_locals(body);
         if managed_locals.is_empty() {
             return false;
         }
 
-        // Process each block with a single-pass rebuild to avoid O(n^2) Vec::insert.
-        for block_data in &mut body.basic_blocks {
-            let old_stmts = std::mem::take(&mut block_data.statements);
-            let mut new_stmts = Vec::with_capacity(old_stmts.len());
-            let mut block_changed = false;
+        // Step 2: Iterate through every block of code and inject RC instructions.
+        let mut changed = false;
 
-            for stmt in old_stmts {
-                match &stmt.kind {
-                    StatementKind::Assign(lhs, rvalue) | StatementKind::Reassign(lhs, rvalue) => {
-                        let is_reassign = matches!(stmt.kind, StatementKind::Reassign(_, _));
+        // Split the borrow: we need mutable access to basic_blocks, but only
+        // immutable access to the rest of the metadata.
+        let Body {
+            ref mut basic_blocks,
+            ref local_decls,
+            ref auto_copy_types,
+            ref field_types,
+            ref type_params,
+            arg_count,
+            ..
+        } = *body;
 
-                        // Insert IncRef for Copy operands (aliasing).
-                        // Move operands transfer ownership — no IncRef needed
-                        // because the source gives up its reference.
-                        if let Some(place) = get_copy_source_place(rvalue) {
-                            if is_place_managed(
-                                &place,
-                                &body.local_decls,
-                                &body.auto_copy_types,
-                                &body.field_types,
-                                &body.type_params,
-                            ) {
-                                new_stmts.push(Statement {
-                                    kind: StatementKind::IncRef(place),
-                                    span: stmt.span,
-                                });
-                                block_changed = true;
-                            } else if place
-                                .projection
-                                .iter()
-                                .any(|e| matches!(e, PlaceElem::Field(_)))
-                                && managed_locals.contains(&lhs.local)
-                            {
-                                // Fallback for field projections whose type cannot be
-                                // resolved statically by is_place_managed (e.g. enum
-                                // variant fields where the layout depends on which variant
-                                // is active). The LHS local IS managed, so Perceus will
-                                // emit DecRef at its StorageDead — emit a balancing IncRef
-                                // for the source field copy here.
-                                new_stmts.push(Statement {
-                                    kind: StatementKind::IncRef(place),
-                                    span: stmt.span,
-                                });
-                                block_changed = true;
-                            }
-                        } else if let Rvalue::Cast(operand, target_ty) = rvalue {
-                            // Handle Cast(Copy(place_with_field_projection), managed_ty):
-                            // emitted by coerce_rvalue when op.ty() returns the base local
-                            // type but the cast target is the field's actual managed type.
-                            // Guard: only fire for field projections to avoid matching
-                            // numeric casts (e.g. int→string) which have no field source.
-                            if let Operand::Copy(place) = operand.as_ref() {
-                                if place
-                                    .projection
-                                    .iter()
-                                    .any(|e| matches!(e, PlaceElem::Field(_)))
-                                    && MirType::from_type_kind(&target_ty.kind)
-                                        .is_managed(&body.auto_copy_types, &body.type_params)
-                                {
-                                    new_stmts.push(Statement {
-                                        kind: StatementKind::IncRef(place.clone()),
-                                        span: stmt.span,
-                                    });
-                                    block_changed = true;
-                                }
-                            }
-                        }
-                        // Also insert IncRef for managed operands inside Aggregates.
-                        // When a heap-allocated value is stored into a collection (Map,
-                        // List, Array, Set), the collection holds an additional reference
-                        // that must be reflected in the RC. This applies to both Copy
-                        // and Move operands: Move operands need IncRef because Perceus
-                        // will still insert DecRef at StorageDead for the source local.
-                        if let Rvalue::Aggregate(_, operands) = rvalue {
-                            for op in operands {
-                                let place = match op {
-                                    Operand::Copy(p) | Operand::Move(p) => Some(p),
-                                    _ => None,
-                                };
-                                if let Some(place) = place {
-                                    if is_place_managed(
-                                        place,
-                                        &body.local_decls,
-                                        &body.auto_copy_types,
-                                        &body.field_types,
-                                        &body.type_params,
-                                    ) {
-                                        new_stmts.push(Statement {
-                                            kind: StatementKind::IncRef(place.clone()),
-                                            span: stmt.span,
-                                        });
-                                        block_changed = true;
-                                    }
-                                }
-                            }
-                        }
-                        // For Reassign: the LHS already holds a live reference that must
-                        // be released before the new value is written.  Emit DecRef(lhs)
-                        // after any IncRef for the rhs (preserving alias-safe order) and
-                        // before the Reassign statement itself.
-                        if is_reassign
-                            && is_place_managed(
-                                lhs,
-                                &body.local_decls,
-                                &body.auto_copy_types,
-                                &body.field_types,
-                                &body.type_params,
-                            )
-                        {
-                            new_stmts.push(Statement {
-                                kind: StatementKind::DecRef(lhs.clone()),
-                                span: stmt.span,
-                            });
-                            block_changed = true;
-                        }
-                    }
-                    StatementKind::StorageDead(place) => {
-                        if managed_locals.contains(&place.local) {
-                            new_stmts.push(Statement {
-                                kind: StatementKind::DecRef(place.clone()),
-                                span: stmt.span,
-                            });
-                            block_changed = true;
-                        }
-                    }
-                    StatementKind::StorageLive(_)
-                    | StatementKind::Nop
-                    | StatementKind::IncRef(_)
-                    | StatementKind::DecRef(_)
-                    | StatementKind::Dealloc(_) => {}
-                }
-                new_stmts.push(stmt);
-            }
+        let ctx = PerceusContext {
+            local_decls,
+            auto_copy_types,
+            field_types,
+            type_params,
+            arg_count,
+        };
 
-            if block_changed {
+        for block_data in basic_blocks.iter_mut() {
+            if self.process_block(&ctx, block_data, &managed_locals) {
                 changed = true;
             }
-            block_data.statements = new_stmts;
         }
 
         changed
@@ -191,6 +73,269 @@ impl OptimizationPass for Perceus {
 
     fn name(&self) -> &'static str {
         "Perceus"
+    }
+}
+
+impl Perceus {
+    /// Identifies all locals that are managed (heap-allocated) and owned by this function.
+    ///
+    /// Excludes function parameters and "Auto-copy" types (which are small enough
+    /// to be copied byte-for-byte without reference counting).
+    fn identify_managed_locals(&self, body: &Body) -> std::collections::HashSet<crate::mir::Local> {
+        body.local_decls
+            .iter()
+            .enumerate()
+            .filter(|(i, decl)| {
+                // Indices 1..=arg_count are function parameters; they are owned by the caller.
+                *i > body.arg_count
+                    && decl
+                        .mir_ty
+                        .is_managed(&body.auto_copy_types, &body.type_params)
+            })
+            .map(|(i, _)| crate::mir::Local(i))
+            .collect()
+    }
+
+    /// Processes a single basic block, rebuilding its statement list with RC ops.
+    ///
+    /// Returns true if any new statements were inserted.
+    fn process_block(
+        &self,
+        ctx: &PerceusContext,
+        block: &mut BasicBlockData,
+        managed_locals: &std::collections::HashSet<crate::mir::Local>,
+    ) -> bool {
+        let old_stmts = std::mem::take(&mut block.statements);
+        let mut new_stmts = Vec::with_capacity(old_stmts.len());
+        let mut changed = false;
+
+        for stmt in old_stmts {
+            if self.process_statement(ctx, &stmt, managed_locals, &mut new_stmts) {
+                changed = true;
+            }
+            new_stmts.push(stmt);
+        }
+
+        block.statements = new_stmts;
+        changed
+    }
+
+    /// Dispatches a statement to the appropriate RC handler.
+    fn process_statement(
+        &self,
+        ctx: &PerceusContext,
+        stmt: &Statement,
+        managed_locals: &std::collections::HashSet<crate::mir::Local>,
+        new_stmts: &mut Vec<Statement>,
+    ) -> bool {
+        match &stmt.kind {
+            StatementKind::Assign(lhs, rvalue) | StatementKind::Reassign(lhs, rvalue) => {
+                let is_reassign = matches!(stmt.kind, StatementKind::Reassign(_, _));
+                self.handle_assignment(
+                    ctx,
+                    stmt,
+                    lhs,
+                    rvalue,
+                    is_reassign,
+                    managed_locals,
+                    new_stmts,
+                )
+            }
+            StatementKind::StorageDead(place) => {
+                self.handle_storage_dead(stmt, place, managed_locals, new_stmts)
+            }
+            _ => false,
+        }
+    }
+
+    /// Handles an assignment by adding IncRef for sources and DecRef for overwritten destinations.
+    fn handle_assignment(
+        &self,
+        ctx: &PerceusContext,
+        stmt: &Statement,
+        lhs: &Place,
+        rvalue: &Rvalue,
+        is_reassign: bool,
+        managed_locals: &std::collections::HashSet<crate::mir::Local>,
+        new_stmts: &mut Vec<Statement>,
+    ) -> bool {
+        let mut changed = false;
+
+        // 1. If we are copying a managed value, we must increment its reference count.
+        if let Some(place) = get_copy_source_place(rvalue) {
+            if self.should_incref_source(ctx, &place, lhs, managed_locals) {
+                new_stmts.push(Statement {
+                    kind: StatementKind::IncRef(place),
+                    span: stmt.span,
+                });
+                changed = true;
+            }
+        }
+        // 2. Handle specialized coercion casts that might involve managed field projections.
+        else if let Rvalue::Cast(operand, target_ty) = rvalue {
+            if self.handle_cast(&*operand, target_ty, stmt.span, ctx, new_stmts) {
+                changed = true;
+            }
+        }
+
+        // 2b. Moving from a parameter creates a new managed local that will
+        // eventually get DecRef'd at StorageDead.  Since the caller does NOT
+        // IncRef before the call (borrow semantics), the move-from-param must
+        // IncRef to keep the shared allocation alive.  Without this, the
+        // StorageDead DecRef on the destination local would prematurely free
+        // the caller's allocation.
+        if let Some(param_place) = get_move_from_param_place(rvalue, ctx.arg_count) {
+            if is_place_managed(
+                &param_place,
+                ctx.local_decls,
+                ctx.auto_copy_types,
+                ctx.field_types,
+                ctx.type_params,
+            ) {
+                new_stmts.push(Statement {
+                    kind: StatementKind::IncRef(param_place),
+                    span: stmt.span,
+                });
+                changed = true;
+            }
+        }
+
+        // 3. If we are creating a collection, increment the RC of every managed element.
+        if let Rvalue::Aggregate(_, operands) = rvalue {
+            if self.handle_aggregate(operands, stmt.span, ctx, new_stmts) {
+                changed = true;
+            }
+        }
+
+        // 4. If this is a re-assignment, we must decrement the RC of the OLD value.
+        // We do this AFTER IncRefs to handle the case where we assign something to itself.
+        if is_reassign && self.should_decref_reassign(ctx, lhs) {
+            new_stmts.push(Statement {
+                kind: StatementKind::DecRef(lhs.clone()),
+                span: stmt.span,
+            });
+            changed = true;
+        }
+
+        changed
+    }
+
+    /// Handles a storage end-of-life by decrementing the RC of managed locals.
+    fn handle_storage_dead(
+        &self,
+        stmt: &Statement,
+        place: &Place,
+        managed_locals: &std::collections::HashSet<crate::mir::Local>,
+        new_stmts: &mut Vec<Statement>,
+    ) -> bool {
+        if managed_locals.contains(&place.local) {
+            new_stmts.push(Statement {
+                kind: StatementKind::DecRef(place.clone()),
+                span: stmt.span,
+            });
+            return true;
+        }
+        false
+    }
+
+    /// Determines if a source value being copied needs an IncRef.
+    fn should_incref_source(
+        &self,
+        ctx: &PerceusContext,
+        source: &Place,
+        dest: &Place,
+        managed_locals: &std::collections::HashSet<crate::mir::Local>,
+    ) -> bool {
+        // Direct managed place?
+        if is_place_managed(
+            source,
+            ctx.local_decls,
+            ctx.auto_copy_types,
+            ctx.field_types,
+            ctx.type_params,
+        ) {
+            return true;
+        }
+
+        // Fallback for complex projections where the destination is definitely managed.
+        source
+            .projection
+            .iter()
+            .any(|e| matches!(e, PlaceElem::Field(_)))
+            && managed_locals.contains(&dest.local)
+    }
+
+    /// Handles RC for operands inside an aggregate (like a List or Map).
+    fn handle_aggregate(
+        &self,
+        operands: &[Operand],
+        span: Span,
+        ctx: &PerceusContext,
+        new_stmts: &mut Vec<Statement>,
+    ) -> bool {
+        let mut changed = false;
+        for op in operands {
+            let place = match op {
+                Operand::Copy(p) | Operand::Move(p) => Some(p),
+                _ => None,
+            };
+            if let Some(place) = place {
+                if is_place_managed(
+                    place,
+                    ctx.local_decls,
+                    ctx.auto_copy_types,
+                    ctx.field_types,
+                    ctx.type_params,
+                ) {
+                    new_stmts.push(Statement {
+                        kind: StatementKind::IncRef(place.clone()),
+                        span,
+                    });
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
+
+    /// Handles RC for cast operations.
+    fn handle_cast(
+        &self,
+        operand: &Operand,
+        target_ty: &crate::ast::types::Type,
+        span: Span,
+        ctx: &PerceusContext,
+        new_stmts: &mut Vec<Statement>,
+    ) -> bool {
+        if let Operand::Copy(place) = operand {
+            if place
+                .projection
+                .iter()
+                .any(|e| matches!(e, PlaceElem::Field(_)))
+                && MirType::from_type_kind(&target_ty.kind)
+                    .is_managed(ctx.auto_copy_types, ctx.type_params)
+            {
+                new_stmts.push(Statement {
+                    kind: StatementKind::IncRef(place.clone()),
+                    span,
+                });
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Determines if a reassignment destination needs a DecRef.
+    fn should_decref_reassign(&self, ctx: &PerceusContext, lhs: &Place) -> bool {
+        // Parameters (1..=arg_count) are caller-owned; callee must not DecRef them.
+        lhs.local.0 > ctx.arg_count
+            && is_place_managed(
+                lhs,
+                ctx.local_decls,
+                ctx.auto_copy_types,
+                ctx.field_types,
+                ctx.type_params,
+            )
     }
 }
 
@@ -203,6 +348,29 @@ fn get_copy_source_place(rvalue: &Rvalue) -> Option<Place> {
         Rvalue::Use(Operand::Copy(place)) => Some(place.clone()),
         Rvalue::Ref(place) => Some(place.clone()),
         _ => None,
+    }
+}
+
+/// Extract the source place from a Move whose source is a function parameter.
+///
+/// When a callee moves from a parameter (e.g. `_4 = move _1 as String`),
+/// it creates a new managed local that Perceus will DecRef at StorageDead.
+/// Since callers use borrow semantics (no IncRef before the call), the
+/// move must IncRef to prevent the StorageDead DecRef from prematurely
+/// freeing the caller's allocation.
+fn get_move_from_param_place(rvalue: &Rvalue, arg_count: usize) -> Option<Place> {
+    let place = match rvalue {
+        Rvalue::Use(Operand::Move(place)) => Some(place),
+        Rvalue::Cast(operand, _) => match operand.as_ref() {
+            Operand::Move(place) => Some(place),
+            _ => None,
+        },
+        _ => None,
+    }?;
+    if place.local.0 >= 1 && place.local.0 <= arg_count {
+        Some(place.clone())
+    } else {
+        None
     }
 }
 
