@@ -176,7 +176,10 @@ impl MiriSet {
             dealloc(states, states_layout);
         }
         if !data.is_null() && capacity > 0 && elem_size > 0 {
-            let data_layout = Layout::from_size_align(capacity * elem_size, 8)
+            let data_size = capacity
+                .checked_mul(elem_size)
+                .unwrap_or_else(|| std::process::abort());
+            let data_layout = Layout::from_size_align(data_size, 8)
                 .unwrap_or_else(|_| std::process::abort());
             dealloc(data, data_layout);
         }
