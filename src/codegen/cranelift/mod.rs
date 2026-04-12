@@ -303,7 +303,9 @@ impl Backend for CraneliftBackend {
         let ptr_size = ptr_type.bytes();
         for (literal, symbol_name) in string_literals {
             // 1. Define the raw bytes
-            let bytes_symbol = format!("{}_bytes", symbol_name);
+            let mut bytes_symbol = String::with_capacity(symbol_name.len() + 6);
+            bytes_symbol.push_str(&symbol_name);
+            bytes_symbol.push_str("_bytes");
             let bytes_id = module
                 .declare_data(&bytes_symbol, Linkage::Export, false, false)
                 .map_err(|e| CodegenError::Module(e.to_string()))?;
@@ -314,7 +316,9 @@ impl Backend for CraneliftBackend {
                 .map_err(|e| CodegenError::Module(e.to_string()))?;
 
             // 2. Define the MiriString struct: [RC, DataPtr, Len, Cap]
-            let struct_symbol = format!("{}_struct", symbol_name);
+            let mut struct_symbol = String::with_capacity(symbol_name.len() + 7);
+            struct_symbol.push_str(&symbol_name);
+            struct_symbol.push_str("_struct");
             let struct_id = module
                 .declare_data(&struct_symbol, Linkage::Export, false, false)
                 .map_err(|e| CodegenError::Module(e.to_string()))?;

@@ -691,7 +691,12 @@ impl<'a> FunctionTranslator<'a> {
                 let symbol_name = ctx
                     .string_literals
                     .entry(s.clone())
-                    .or_insert_with(|| format!(".miri_str_{}", next_idx))
+                    .or_insert_with(|| {
+                        use std::fmt::Write;
+                        let mut s = String::with_capacity(20);
+                        let _ = write!(s, ".miri_str_{}", next_idx);
+                        s
+                    })
                     .clone();
 
                 let mut struct_symbol = String::with_capacity(symbol_name.len() + 7);
