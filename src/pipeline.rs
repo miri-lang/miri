@@ -399,7 +399,21 @@ impl Pipeline {
 
         self.build(source, &build_opts)?;
 
-        let output = Command::new(&executable_path)
+        // Ensure canonical paths before executing to prevent traversal or symlink attacks.
+        let canonical_temp = temp_dir.path().canonicalize().map_err(|e| {
+            CompilerError::Codegen(format!("Failed to canonicalize temp dir: {}", e))
+        })?;
+        let canonical_executable = executable_path.canonicalize().map_err(|e| {
+            CompilerError::Codegen(format!("Failed to canonicalize executable path: {}", e))
+        })?;
+
+        if !canonical_executable.starts_with(&canonical_temp) {
+            return Err(CompilerError::Codegen(
+                "Access Denied: Executable path is outside the temporary directory".to_string(),
+            ));
+        }
+
+        let output = Command::new(&canonical_executable)
             .output()
             .map_err(|e| CompilerError::Codegen(format!("Failed to execute program: {}", e)))?;
 
