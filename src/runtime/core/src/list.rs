@@ -352,7 +352,11 @@ pub mod ffi {
             if ptr_val != 0 {
                 // RC is stored at ptr - RC_HEADER_SIZE (one word before the payload)
                 let rc_ptr = (ptr_val as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *mut usize;
-                *rc_ptr += 1;
+                let rc = *rc_ptr;
+                // Skip immortal objects (RC high bit set — e.g. string literals)
+                if (rc as isize) >= 0 {
+                    *rc_ptr = rc + 1;
+                }
             }
         }
         // Mark this list as holding managed (heap-allocated) elements. When elements
