@@ -752,9 +752,20 @@ fn try_lower_collection_intrinsic(
 
     // set(index, value) on List / Array: emit a direct indexed assignment.
     if args.len() == 2 && method_name == "set" && matches!(class_name, "List" | "Array") {
+        let obj_watermark = ctx.body.local_decls.len();
         let obj_op = lower_expression(ctx, obj, None)?;
+        let obj_op_src = match &obj_op {
+            Operand::Copy(p) | Operand::Move(p) => Some(p.local),
+            _ => None,
+        };
         let index_op = lower_expression(ctx, &args[0], None)?;
         let item_op = lower_expression(ctx, &args[1], None)?;
+        // Use Copy semantics so Perceus inserts IncRef; the StorageDead
+        // below provides the matching DecRef.
+        let obj_op = match obj_op {
+            Operand::Move(p) => Operand::Copy(p),
+            other => other,
+        };
         let obj_local = ctx.push_temp(obj_ty.clone(), *span);
         ctx.push_statement(crate::mir::Statement {
             kind: StatementKind::Assign(Place::new(obj_local), Rvalue::Use(obj_op)),
@@ -779,6 +790,12 @@ fn try_lower_collection_intrinsic(
             kind: StatementKind::Assign(indexed_place, Rvalue::Use(item_op)),
             span: *span,
         });
+        // Release the obj_local temp — triggers DecRef to match the IncRef above.
+        ctx.emit_temp_drop(obj_local, obj_watermark, *span);
+        // Also release the source local if it was a temp from expression lowering.
+        if let Some(src_local) = obj_op_src {
+            ctx.emit_temp_drop(src_local, obj_watermark, *span);
+        }
         return Ok(Some(Operand::Constant(Box::new(crate::mir::Constant {
             span: *span,
             ty: Type::new(TypeKind::Void, *span),
