@@ -618,13 +618,23 @@ fn try_lower_collection_intrinsic(
     {
         let obj_watermark = ctx.body.local_decls.len();
         let obj_op = lower_expression(ctx, obj, None)?;
-        let obj_op_copy_src = if let Operand::Copy(ref p) = obj_op {
-            Some(p.local)
-        } else {
-            None
+        // Track the source local for potential cleanup of expression temps.
+        let obj_op_src = match &obj_op {
+            Operand::Copy(p) | Operand::Move(p) => Some(p.local),
+            _ => None,
         };
         let index_op = lower_expression(ctx, &args[0], None)?;
 
+        // Always use Copy semantics for the assignment to obj_local.  The
+        // source local will get its own DecRef at scope exit (or, for params,
+        // won't be DecRef'd at all).  Using Copy here ensures Perceus inserts
+        // an IncRef, and the StorageDead of obj_local below provides the
+        // matching DecRef — keeping the pair balanced regardless of whether
+        // the source is a local variable or a parameter.
+        let obj_op = match obj_op {
+            Operand::Move(p) => Operand::Copy(p),
+            other => other,
+        };
         let obj_local = ctx.push_temp(obj_ty.clone(), *span);
         ctx.push_statement(crate::mir::Statement {
             kind: StatementKind::Assign(Place::new(obj_local), Rvalue::Use(obj_op)),
@@ -667,8 +677,13 @@ fn try_lower_collection_intrinsic(
             span: *span,
         });
 
-        if let Some(src_local) = obj_op_copy_src {
-            ctx.emit_temp_drop(obj_local, obj_watermark, *span);
+        // Always clean up the obj_local temp (holds the collection for indexing).
+        // The assignment above uses Copy semantics, so Perceus inserts IncRef
+        // for the copy source.  This StorageDead triggers the matching DecRef.
+        ctx.emit_temp_drop(obj_local, obj_watermark, *span);
+        // Also clean up the source local if it was a temp created during
+        // expression lowering (e.g. a function-call return value).
+        if let Some(src_local) = obj_op_src {
             ctx.emit_temp_drop(src_local, obj_watermark, *span);
         }
         return Ok(Some(op));
