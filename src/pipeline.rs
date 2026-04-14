@@ -288,6 +288,8 @@ pub struct Pipeline {
     /// Absolute path of the entry-point source file, used so that *all*
     /// errors (not just those from imported modules) include a file location.
     source_path: Option<String>,
+    /// Whether to run the MIR verification pass after RC insertion.
+    verify_mir: bool,
 }
 
 impl Default for Pipeline {
@@ -301,6 +303,7 @@ impl Pipeline {
         Self {
             source_dir: None,
             source_path: None,
+            verify_mir: false,
         }
     }
 
@@ -315,6 +318,12 @@ impl Pipeline {
     /// source file.  This enables file-path display in all error messages.
     pub fn with_source_path(mut self, path: String) -> Self {
         self.source_path = Some(path);
+        self
+    }
+
+    /// Configure whether to run the MIR verification pass after RC insertion.
+    pub fn with_verify_mir(mut self, verify: bool) -> Self {
+        self.verify_mir = verify;
         self
     }
 
@@ -1033,9 +1042,8 @@ impl Pipeline {
 
         // Optional MIR verification pass: check RC invariants after Perceus.
         // Enabled by setting the MIRI_VERIFY_MIR environment variable to any
-        // non-empty value, or by passing --verify-mir on the CLI (which sets
-        // this variable before invoking the pipeline).
-        if std::env::var("MIRI_VERIFY_MIR").is_ok() {
+        // non-empty value, or by configuring it on the Pipeline instance.
+        if self.verify_mir || std::env::var("MIRI_VERIFY_MIR").is_ok() {
             let mut all_violations = Vec::new();
             for (name, body) in &bodies {
                 let violations = mir::verify::verify_body(body);
