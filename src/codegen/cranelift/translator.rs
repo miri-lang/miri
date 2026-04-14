@@ -1142,7 +1142,7 @@ impl<'a> FunctionTranslator<'a> {
             Self::call_rt_list_free(builder, ctx, ptr)
         } else if Self::is_collection_type(kind) {
             // DecRef managed elements before freeing the array struct.
-            // MiriArray layout: [data: ptr][elem_count: ptr][elem_size: ptr]
+            // MiriArray layout: [data: ptr][elem_count: ptr][elem_size: ptr][elem_drop_fn: ptr]
             if let Some(inner_expr) = Self::collection_elem_expr(kind) {
                 if let ExpressionKind::Type(inner_ty, _) = &inner_expr.node {
                     if is_field_managed(&inner_ty.kind) {

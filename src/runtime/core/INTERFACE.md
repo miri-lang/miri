@@ -44,11 +44,13 @@ header. The RC header is at `ptr - RC_HEADER_SIZE` (8 bytes on 64-bit platforms)
 #### MiriArray (`array.rs`)
 
 ```
-[RC: usize][data: *mut u8][elem_count: usize][elem_size: usize]
+[RC: usize][data: *mut u8][elem_count: usize][elem_size: usize][elem_drop_fn: usize]
 ```
 
 `data` points to a separately-allocated zeroed buffer of `elem_count * elem_size` bytes.
-The element count is fixed at creation.
+The element count is fixed at creation. `elem_drop_fn`, when non-zero, is called on
+each element pointer (read as a pointer-sized word) when the array is freed so that
+managed elements have their RC decremented.
 
 #### MiriList (`list.rs`)
 
