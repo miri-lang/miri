@@ -14,31 +14,32 @@ use miri::pipeline::{BuildOptions, Pipeline};
 pub fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Propagate --verify-mir as an environment variable so the pipeline can
-    // check it without requiring every call site to thread a flag through.
-    if cli.verify_mir {
-        // SAFETY: single-threaded at this point (before the pipeline starts).
-        unsafe {
-            std::env::set_var("MIRI_VERIFY_MIR", "1");
-        }
-    }
-
     match cli.command {
         Some(command) => match command {
-            Commands::Run { path, program_args } => run_file(path, program_args, cli.verbose),
+            Commands::Run { path, program_args } => {
+                run_file(path, program_args, cli.verbose, cli.verify_mir)
+            }
             Commands::Build {
                 path,
                 out,
                 release,
                 opt_level,
                 cpu_backend,
-            } => build_file(path, out, release, opt_level, cpu_backend, cli.verbose),
-            Commands::Check { path } => check_file(path, cli.verbose),
+            } => build_file(
+                path,
+                out,
+                release,
+                opt_level,
+                cpu_backend,
+                cli.verbose,
+                cli.verify_mir,
+            ),
+            Commands::Check { path } => check_file(path, cli.verbose, cli.verify_mir),
             Commands::Test {
                 filter,
                 format,
                 dir,
-            } => run_tests(filter, format, dir, cli.verbose),
+            } => run_tests(filter, format, dir, cli.verbose, cli.verify_mir),
         },
         None => {
             Cli::command().print_help()?;
@@ -47,11 +48,16 @@ pub fn main() -> Result<()> {
     }
 }
 
-fn run_file(path: PathBuf, _program_args: Vec<String>, _verbose: u8) -> Result<()> {
+fn run_file(
+    path: PathBuf,
+    _program_args: Vec<String>,
+    _verbose: u8,
+    verify_mir: bool,
+) -> Result<()> {
     let source = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read file: {}", path.display()))?;
 
-    let mut pipeline = Pipeline::new();
+    let mut pipeline = Pipeline::new().with_verify_mir(verify_mir);
     // Canonicalize first so that a bare filename like "main.mi" resolves to an
     // absolute path whose parent is the working directory, not an empty path.
     let abs_path = path.canonicalize().unwrap_or_else(|_| path.clone());
@@ -81,11 +87,12 @@ fn build_file(
     opt_level: u8,
     cpu_backend: CpuBackend,
     _verbose: u8,
+    verify_mir: bool,
 ) -> Result<()> {
     let source = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read file: {}", path.display()))?;
 
-    let mut pipeline = Pipeline::new();
+    let mut pipeline = Pipeline::new().with_verify_mir(verify_mir);
     let abs_path = path.canonicalize().unwrap_or_else(|_| path.clone());
     if let Some(dir) = abs_path.parent() {
         pipeline = pipeline.with_source_dir(dir.to_path_buf());
@@ -110,11 +117,11 @@ fn build_file(
     }
 }
 
-fn check_file(path: PathBuf, _verbose: u8) -> Result<()> {
+fn check_file(path: PathBuf, _verbose: u8, verify_mir: bool) -> Result<()> {
     let source = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read file: {}", path.display()))?;
 
-    let mut pipeline = Pipeline::new();
+    let mut pipeline = Pipeline::new().with_verify_mir(verify_mir);
     let abs_path = path.canonicalize().unwrap_or_else(|_| path.clone());
     if let Some(dir) = abs_path.parent() {
         pipeline = pipeline.with_source_dir(dir.to_path_buf());
@@ -165,8 +172,14 @@ struct TestSummary {
     results: Vec<TestResult>,
 }
 
-fn run_tests(filter: Option<String>, format: TestFormat, dir: PathBuf, _verbose: u8) -> Result<()> {
-    let pipeline = Pipeline::new();
+fn run_tests(
+    filter: Option<String>,
+    format: TestFormat,
+    dir: PathBuf,
+    _verbose: u8,
+    verify_mir: bool,
+) -> Result<()> {
+    let pipeline = Pipeline::new().with_verify_mir(verify_mir);
     let mut results = Vec::new();
 
     let test_files = WalkDir::new(dir)
