@@ -1887,18 +1887,18 @@ impl<'a> FunctionTranslator<'a> {
             //   methods from "Middle" = {} (none)
             //   methods from "Base" = {"greet" at slot 0}
             //   final vtable_methods = ["greet"]
-            let mut abstract_chain: Vec<String> = Vec::new();
-            let mut current = class_name.to_string();
+            let mut abstract_chain: Vec<&str> = Vec::new();
+            let mut current: &str = class_name;
             loop {
-                match type_definitions.get(&current) {
+                match type_definitions.get(current) {
                     Some(TypeDefinition::Class(cd)) if cd.is_abstract => {
-                        abstract_chain.push(current.clone());
-                        match cd.base_class.clone() {
+                        abstract_chain.push(current);
+                        match &cd.base_class {
                             Some(base) => current = base,
                             None => break,
                         }
                     }
-                    Some(TypeDefinition::Class(cd)) => match cd.base_class.clone() {
+                    Some(TypeDefinition::Class(cd)) => match &cd.base_class {
                         Some(base) => current = base,
                         None => break,
                     },
@@ -1910,13 +1910,13 @@ impl<'a> FunctionTranslator<'a> {
             // abstract ancestor downward so that when there are conflicting names, the
             // most-derived abstract class wins (though in practice abstract classes
             // don't redeclare each other's methods).
-            let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+            let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
             let mut vtable_methods: Vec<String> = Vec::new();
             for ancestor in abstract_chain.iter().rev() {
-                if let Some(TypeDefinition::Class(cd)) = type_definitions.get(ancestor) {
+                if let Some(TypeDefinition::Class(cd)) = type_definitions.get(*ancestor) {
                     for (method_name, method_info) in &cd.methods {
-                        if !method_info.is_constructor && !seen.contains(method_name) {
-                            seen.insert(method_name.clone());
+                        if !method_info.is_constructor && !seen.contains(method_name.as_str()) {
+                            seen.insert(method_name.as_str());
                             vtable_methods.push(method_name.clone());
                         }
                     }
@@ -1927,21 +1927,19 @@ impl<'a> FunctionTranslator<'a> {
             // ancestor, appending those not already covered by the abstract chain.
             {
                 use crate::type_checker::context::collect_trait_vtable_methods;
-                let mut walk = class_name.to_string();
-                while let Some(TypeDefinition::Class(cd)) = type_definitions.get(&walk) {
-                    let base = cd.base_class.clone();
-                    let traits = cd.traits.clone();
-                    for trait_name in &traits {
+                let mut walk: &str = class_name;
+                while let Some(TypeDefinition::Class(cd)) = type_definitions.get(walk) {
+                    for trait_name in &cd.traits {
                         let trait_methods =
                             collect_trait_vtable_methods(type_definitions, trait_name);
                         for m in trait_methods {
-                            if !seen.contains(&m) {
-                                seen.insert(m.clone());
-                                vtable_methods.push(m);
+                            if !seen.contains(m) {
+                                seen.insert(m);
+                                vtable_methods.push(m.to_string());
                             }
                         }
                     }
-                    match base {
+                    match &cd.base_class {
                         Some(b) => walk = b,
                         None => break,
                     }
@@ -2018,21 +2016,21 @@ impl<'a> FunctionTranslator<'a> {
         method_name: &str,
         type_definitions: &HashMap<String, TypeDefinition>,
     ) -> Option<String> {
-        let mut current = class_name.to_string();
-        let mut all_traits: Vec<String> = Vec::new();
-        while let Some(TypeDefinition::Class(cd)) = type_definitions.get(&current) {
+        let mut current: &str = class_name;
+        let mut all_traits: Vec<&str> = Vec::new();
+        while let Some(TypeDefinition::Class(cd)) = type_definitions.get(current) {
             if let Some(method) = cd.methods.get(method_name) {
                 // Only use this implementation if it has a body (not abstract).
                 if !method.is_abstract {
                     let mut mangled = String::with_capacity(current.len() + 1 + method_name.len());
-                    mangled.push_str(&current);
+                    mangled.push_str(current);
                     mangled.push('_');
                     mangled.push_str(method_name);
                     return Some(mangled);
                 }
             }
-            all_traits.extend(cd.traits.iter().cloned());
-            match cd.base_class.clone() {
+            all_traits.extend(cd.traits.iter().map(|s| s.as_str()));
+            match &cd.base_class {
                 Some(base) => current = base,
                 None => break,
             }
@@ -2041,21 +2039,21 @@ impl<'a> FunctionTranslator<'a> {
         let mut visited = std::collections::HashSet::new();
         let mut trait_stack = all_traits;
         while let Some(t_name) = trait_stack.pop() {
-            if !visited.insert(t_name.clone()) {
+            if !visited.insert(t_name) {
                 continue;
             }
-            if let Some(TypeDefinition::Trait(td)) = type_definitions.get(&t_name) {
+            if let Some(TypeDefinition::Trait(td)) = type_definitions.get(t_name) {
                 if let Some(method) = td.methods.get(method_name) {
                     if !method.is_abstract {
                         let mut mangled =
                             String::with_capacity(t_name.len() + 1 + method_name.len());
-                        mangled.push_str(&t_name);
+                        mangled.push_str(t_name);
                         mangled.push('_');
                         mangled.push_str(method_name);
                         return Some(mangled);
                     }
                 }
-                trait_stack.extend(td.parent_traits.iter().cloned());
+                trait_stack.extend(td.parent_traits.iter().map(|s| s.as_str()));
             }
         }
         None
