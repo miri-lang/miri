@@ -31,6 +31,8 @@ pub mod rt {
     pub const ARRAY_SORT: &str = "miri_rt_array_sort";
     /// Compiler-internal: bounds-check panic helper, not declared in stdlib.
     pub const ARRAY_PANIC_OOB: &str = "miri_rt_array_panic_oob";
+    /// Compiler-internal: registers the element drop function, not in stdlib.
+    pub const ARRAY_SET_ELEM_DROP_FN: &str = "miri_rt_array_set_elem_drop_fn";
 
     // ── Tuple ─────────────────────────────────────────────────────────────────
     pub const TUPLE_LEN: &str = "miri_rt_tuple_len";

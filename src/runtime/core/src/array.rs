@@ -21,11 +21,14 @@ use crate::rc::{alloc_with_rc, free_with_rc};
 /// - `data`: Pointer to element storage
 /// - `elem_count`: Number of elements (fixed at creation)
 /// - `elem_size`: Size of each element in bytes
+/// - `elem_drop_fn`: If non-zero, called on each element pointer when the
+///   array is freed so that managed elements have their RC decremented.
 #[repr(C)]
 pub struct MiriArray {
     data: *mut u8,
     elem_count: usize,
     elem_size: usize,
+    elem_drop_fn: usize,
 }
 
 const STRUCT_SIZE: usize = std::mem::size_of::<MiriArray>();
@@ -105,6 +108,7 @@ pub mod ffi {
                     (*arr).data = ptr::null_mut();
                     (*arr).elem_count = 0;
                     (*arr).elem_size = elem_size;
+                    (*arr).elem_drop_fn = 0;
                     return arr;
                 }
             };
@@ -114,6 +118,7 @@ pub mod ffi {
                     (*arr).data = ptr::null_mut();
                     (*arr).elem_count = 0;
                     (*arr).elem_size = elem_size;
+                    (*arr).elem_drop_fn = 0;
                     return arr;
                 }
             };
@@ -125,6 +130,7 @@ pub mod ffi {
             (*arr).elem_count = 0;
         }
         (*arr).elem_size = elem_size;
+        (*arr).elem_drop_fn = 0;
 
         arr
     }
@@ -133,6 +139,10 @@ pub mod ffi {
     ///
     /// The pointer must have been returned by `miri_rt_array_new` (i.e., it
     /// points past the RC header).
+    ///
+    /// If `elem_drop_fn` is set, calls it on each element pointer (reading the
+    /// slot as a pointer-sized word) before freeing the data buffer, so that
+    /// managed elements have their RC decremented.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_array_free(ptr: *mut MiriArray) {
@@ -142,12 +152,35 @@ pub mod ffi {
         // Free internal data buffer
         let arr = &*ptr;
         if !arr.data.is_null() && arr.elem_count > 0 && arr.elem_size > 0 {
+            if arr.elem_drop_fn != 0 {
+                let drop_fn: unsafe extern "C" fn(*mut u8) = std::mem::transmute(arr.elem_drop_fn);
+                for i in 0..arr.elem_count {
+                    let slot = arr.data.add(i * arr.elem_size) as *const usize;
+                    let elem_ptr = *slot;
+                    if elem_ptr != 0 {
+                        drop_fn(elem_ptr as *mut u8);
+                    }
+                }
+            }
             let layout = Layout::from_size_align(arr.byte_len(), 8)
                 .unwrap_or_else(|_| std::process::abort());
             dealloc(arr.data, layout);
         }
         // Free the [RC][struct] block
         free_with_rc(ptr as *mut u8, STRUCT_SIZE);
+    }
+
+    /// Sets the element drop function for an array.
+    ///
+    /// When set, `miri_rt_array_free` calls `fn_ptr` on each non-null element
+    /// pointer so that managed elements (Lists, Maps, class instances) have
+    /// their RC decremented when the array is dropped.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_array_set_elem_drop_fn(ptr: *mut MiriArray, fn_ptr: usize) {
+        if !ptr.is_null() {
+            (*ptr).elem_drop_fn = fn_ptr;
+        }
     }
 
     /// Returns the number of elements in the array (fixed at creation).
@@ -723,6 +756,67 @@ mod tests {
             assert_eq!(crate::miri_rt_list_len(list), 0);
             crate::miri_rt_list_free(list);
             miri_rt_array_free(arr);
+        }
+    }
+
+    #[test]
+    fn test_array_elem_drop_fn_called_on_free() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static DROP_CALLS: AtomicUsize = AtomicUsize::new(0);
+        static LAST_PTR: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn counting_drop(p: *mut u8) {
+            DROP_CALLS.fetch_add(1, Ordering::SeqCst);
+            LAST_PTR.store(p as usize, Ordering::SeqCst);
+        }
+
+        unsafe {
+            DROP_CALLS.store(0, Ordering::SeqCst);
+            LAST_PTR.store(0, Ordering::SeqCst);
+
+            let arr = miri_rt_array_new(3, std::mem::size_of::<usize>());
+
+            // Fake element pointers; one null slot must be skipped.
+            let e0: usize = 0xAAAA_0000;
+            let e1: usize = 0; // null: should be skipped
+            let e2: usize = 0xBBBB_0000;
+            miri_rt_array_set(arr, 0, &e0 as *const usize as *const u8);
+            miri_rt_array_set(arr, 1, &e1 as *const usize as *const u8);
+            miri_rt_array_set(arr, 2, &e2 as *const usize as *const u8);
+
+            miri_rt_array_set_elem_drop_fn(arr, counting_drop as *const () as usize);
+
+            miri_rt_array_free(arr);
+
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 2);
+            assert_eq!(LAST_PTR.load(Ordering::SeqCst), 0xBBBB_0000);
+        }
+    }
+
+    #[test]
+    fn test_array_free_without_drop_fn_is_noop_for_elements() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static DROP_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn counting_drop(_p: *mut u8) {
+            DROP_CALLS.fetch_add(1, Ordering::SeqCst);
+        }
+
+        unsafe {
+            DROP_CALLS.store(0, Ordering::SeqCst);
+
+            let arr = miri_rt_array_new(2, std::mem::size_of::<usize>());
+            let e0: usize = 0xCCCC_0000;
+            let e1: usize = 0xDDDD_0000;
+            miri_rt_array_set(arr, 0, &e0 as *const usize as *const u8);
+            miri_rt_array_set(arr, 1, &e1 as *const usize as *const u8);
+
+            // Never set elem_drop_fn; defaults to 0 → no element drops.
+            miri_rt_array_free(arr);
+
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 0);
+            // Silence unused warning on counting_drop when drop_fn is 0.
+            let _ = counting_drop as unsafe extern "C" fn(*mut u8);
         }
     }
 
