@@ -52,7 +52,15 @@ fn test_lowering_error_factory_methods() {
 
     for error in errors {
         let diag = error.to_diagnostic();
-        assert!(!diag.message.is_empty(), "Message should not be empty for {:?}", error.kind);
-        assert!(diag.span.is_some(), "Span should be present for {:?}", error.kind);
+        assert!(
+            !diag.message.is_empty(),
+            "Message should not be empty for {:?}",
+            error.kind
+        );
+        assert!(
+            diag.span.is_some(),
+            "Span should be present for {:?}",
+            error.kind
+        );
     }
 }
