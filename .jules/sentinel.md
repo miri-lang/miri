@@ -20,3 +20,8 @@
 **Vulnerability:** Symlink attacks and path traversal vulnerabilities existed when executing dynamically built binaries from temporary directories in `src/pipeline.rs`.
 **Learning:** Checking whether a path resides within a given base directory using simple string matching or naive `starts_with` is insufficient if symbolic links or uncanonicalized relative directories (`..`) are involved. This could allow an attacker to bypass the containment check and execute an arbitrary binary via `Command::new`.
 **Prevention:** Always use `canonicalize()` on both the base directory and the target executable path to resolve symlinks and relative references *before* performing containment checks like `canonical_executable.starts_with(&canonical_temp)`.
+## 2025-02-16 - Safe Memory Allocation in Core Data Structures
+
+**Vulnerability:** Integer overflow causing undersized allocations and heap buffer overflows (OOM DoS) in MiriList.
+**Learning:** `capacity * elem_size` without bounds checks wrappers can lead to extremely large inputs wrapping around, producing a small layout that receives too much data during memory copies or inserts.
+**Prevention:** Always use safe arithmetic like `checked_mul` (e.g., `capacity.checked_mul(elem_size)`) and return gracefully or use safe aborts if the required size overflows before calling `Layout::from_size_align` in manual memory management code. Ensure fallback paths (like returning an empty struct) are maintained if the checked math fails.
