@@ -273,7 +273,7 @@ pub fn vtable_slot_index(
     }
     all_methods.sort();
 
-    all_methods.iter().position(|n| *n == method_name)
+    all_methods.iter().position(|&n| n == method_name)
 }
 
 /// Collect all non-constructor method names from a trait and its parent traits.
