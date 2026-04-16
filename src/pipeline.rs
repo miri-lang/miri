@@ -686,23 +686,17 @@ impl Pipeline {
         // Lower functions and class methods imported from stdlib modules
         for stmt in &result.type_checker.imported_statements {
             match &stmt.node {
-                StatementKind::FunctionDeclaration(decl) => {
-                    if !lowered_names.contains(&decl.name) {
-                        let (body, lambdas) = mir::lowering::lower_function(
-                            stmt,
-                            &result.type_checker,
-                            is_release,
-                            true,
-                        )
-                        .map_err(|e| {
-                            CompilerError::Codegen(format!("MIR lowering failed: {}", e))
-                        })?;
-                        lowered_names.insert(decl.name.clone());
-                        bodies.push((decl.name.clone(), body));
-                        for lambda in lambdas {
-                            lowered_names.insert(lambda.name.clone());
-                            bodies.push((lambda.name, lambda.body));
-                        }
+                StatementKind::FunctionDeclaration(decl) if !lowered_names.contains(&decl.name) => {
+                    let (body, lambdas) =
+                        mir::lowering::lower_function(stmt, &result.type_checker, is_release, true)
+                            .map_err(|e| {
+                                CompilerError::Codegen(format!("MIR lowering failed: {}", e))
+                            })?;
+                    lowered_names.insert(decl.name.clone());
+                    bodies.push((decl.name.clone(), body));
+                    for lambda in lambdas {
+                        lowered_names.insert(lambda.name.clone());
+                        bodies.push((lambda.name, lambda.body));
                     }
                 }
                 StatementKind::Class(class_data) => {
