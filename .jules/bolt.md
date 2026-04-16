@@ -21,3 +21,7 @@
 ## 2024-05-25 - Prevent Intermediate String Allocations via Format Macro
 **Learning:** During Cranelift code generation for `thunk_name` (`__drop_{}`), `vtable_sym` (`__vtable_{}`) and `struct_symbol` (`{}_struct`), `format!` macros parsed at runtime, which allocated strings needlessly and was identified as a hot path bottleneck.
 **Action:** Replaced `format!` macros with manual string allocations using `String::with_capacity` and sequential `push_str()` additions. When creating performance-oriented code, calculating the exact required buffer capacity initially prevents heap reallocations.
+
+## 2024-05-26 - [Eliminate String Allocations in VTable Collection]
+**Learning:** During vtable method collection in both the type checker and Cranelift translator, `String` cloning (`method_name.clone()`, `m.to_string()`) was used when building a list of method names for layout generation and lookup. This resulted in unnecessary heap allocations when these string representations were only needed for transient iteration or index finding.
+**Action:** Use `&str` instead of `String` when collecting method names into transient collections like `Vec<&str>` during vtable generation and lookup. This completely bypasses the heap allocation overhead without compromising correctness or safety.
