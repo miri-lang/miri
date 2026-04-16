@@ -108,10 +108,10 @@ impl SSABuilder {
                 match &terminator.kind {
                     TerminatorKind::Call { destination, .. }
                     | TerminatorKind::GpuLaunch { destination, .. }
-                    | TerminatorKind::VirtualCall { destination, .. } => {
-                        if destination.projection.is_empty() {
-                            self.def_sites[destination.local.0].insert(bb);
-                        }
+                    | TerminatorKind::VirtualCall { destination, .. }
+                        if destination.projection.is_empty() =>
+                    {
+                        self.def_sites[destination.local.0].insert(bb);
                     }
                     _ => {}
                 }
@@ -224,13 +224,13 @@ impl SSABuilder {
             match &mut terminator.kind {
                 TerminatorKind::Call { destination, .. }
                 | TerminatorKind::GpuLaunch { destination, .. }
-                | TerminatorKind::VirtualCall { destination, .. } => {
-                    if destination.projection.is_empty() {
-                        let new_local = self.new_version(local_decls, destination.local);
-                        let original = self.get_original_local(destination.local);
-                        destination.local = new_local;
-                        pushed_counts[original.0] += 1;
-                    }
+                | TerminatorKind::VirtualCall { destination, .. }
+                    if destination.projection.is_empty() =>
+                {
+                    let new_local = self.new_version(local_decls, destination.local);
+                    let original = self.get_original_local(destination.local);
+                    destination.local = new_local;
+                    pushed_counts[original.0] += 1;
                 }
                 _ => {}
             }

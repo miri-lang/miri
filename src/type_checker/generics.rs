@@ -35,10 +35,8 @@ impl TypeChecker {
     ) {
         match (&param_type.kind, &arg_type.kind) {
             // Direct generic match
-            (TypeKind::Generic(name, _, _), _) => {
-                if !mapping.contains_key(name) {
-                    mapping.insert(name.clone(), arg_type.clone());
-                }
+            (TypeKind::Generic(name, _, _), _) if !mapping.contains_key(name) => {
+                mapping.insert(name.clone(), arg_type.clone());
             }
 
             // Collection canonical variants are normalized to Custom before type-checking.
@@ -57,17 +55,17 @@ impl TypeChecker {
             }
 
             // Custom<Args...> matches Custom<ConcreteArgs...>
-            (TypeKind::Custom(p_name, p_args), TypeKind::Custom(a_name, a_args)) => {
-                if p_name == a_name {
-                    if let (Some(p_args), Some(a_args)) = (p_args, a_args) {
-                        if p_args.len() == a_args.len() {
-                            for (p_arg_expr, a_arg_expr) in p_args.iter().zip(a_args.iter()) {
-                                if let (Ok(p_arg), Ok(a_arg)) = (
-                                    self.extract_type_from_expression(p_arg_expr),
-                                    self.extract_type_from_expression(a_arg_expr),
-                                ) {
-                                    self.infer_generic_types(&p_arg, &a_arg, mapping);
-                                }
+            (TypeKind::Custom(p_name, p_args), TypeKind::Custom(a_name, a_args))
+                if p_name == a_name =>
+            {
+                if let (Some(p_args), Some(a_args)) = (p_args, a_args) {
+                    if p_args.len() == a_args.len() {
+                        for (p_arg_expr, a_arg_expr) in p_args.iter().zip(a_args.iter()) {
+                            if let (Ok(p_arg), Ok(a_arg)) = (
+                                self.extract_type_from_expression(p_arg_expr),
+                                self.extract_type_from_expression(a_arg_expr),
+                            ) {
+                                self.infer_generic_types(&p_arg, &a_arg, mapping);
                             }
                         }
                     }
