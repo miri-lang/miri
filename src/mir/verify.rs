@@ -122,22 +122,17 @@ pub fn verify_body(body: &Body) -> Vec<VerificationViolation> {
         let block = &body.basic_blocks[*bb_idx];
         for stmt in &block.statements {
             match &stmt.kind {
-                StatementKind::StorageLive(place) => {
-                    if managed_locals.contains(&place.local) {
-                        *storage_live_count.entry(place.local).or_default() += 1;
-                    }
+                StatementKind::StorageLive(place) if managed_locals.contains(&place.local) => {
+                    *storage_live_count.entry(place.local).or_default() += 1;
                 }
-                StatementKind::StorageDead(place) => {
-                    if managed_locals.contains(&place.local) {
-                        *storage_dead_count.entry(place.local).or_default() += 1;
-                    }
+                StatementKind::StorageDead(place) if managed_locals.contains(&place.local) => {
+                    *storage_dead_count.entry(place.local).or_default() += 1;
                 }
-                StatementKind::DecRef(place) => {
+                StatementKind::DecRef(place)
                     if managed_params.contains(&place.local)
-                        && !decref_param_violations.contains(&place.local)
-                    {
-                        decref_param_violations.push(place.local);
-                    }
+                        && !decref_param_violations.contains(&place.local) =>
+                {
+                    decref_param_violations.push(place.local);
                 }
                 _ => {}
             }
