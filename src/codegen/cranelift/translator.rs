@@ -1911,13 +1911,13 @@ impl<'a> FunctionTranslator<'a> {
             // most-derived abstract class wins (though in practice abstract classes
             // don't redeclare each other's methods).
             let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
-            let mut vtable_methods: Vec<String> = Vec::new();
+            let mut vtable_methods: Vec<&str> = Vec::new();
             for ancestor in abstract_chain.iter().rev() {
                 if let Some(TypeDefinition::Class(cd)) = type_definitions.get(*ancestor) {
                     for (method_name, method_info) in &cd.methods {
                         if !method_info.is_constructor && !seen.contains(method_name.as_str()) {
                             seen.insert(method_name.as_str());
-                            vtable_methods.push(method_name.clone());
+                            vtable_methods.push(method_name.as_str());
                         }
                     }
                 }
@@ -1935,7 +1935,7 @@ impl<'a> FunctionTranslator<'a> {
                         for m in trait_methods {
                             if !seen.contains(m) {
                                 seen.insert(m);
-                                vtable_methods.push(m.to_string());
+                                vtable_methods.push(m);
                             }
                         }
                     }
