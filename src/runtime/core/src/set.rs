@@ -98,10 +98,8 @@ impl MiriSet {
                         return idx; // duplicate found
                     }
                 }
-                SLOT_TOMBSTONE => {
-                    if first_tombstone.is_none() {
-                        first_tombstone = Some(idx);
-                    }
+                SLOT_TOMBSTONE if first_tombstone.is_none() => {
+                    first_tombstone = Some(idx);
                 }
                 _ => {}
             }
