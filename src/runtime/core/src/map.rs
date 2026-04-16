@@ -148,10 +148,8 @@ impl MiriMap {
                         return (idx, true);
                     }
                 }
-                SLOT_TOMBSTONE => {
-                    if first_tombstone.is_none() {
-                        first_tombstone = Some(idx);
-                    }
+                SLOT_TOMBSTONE if first_tombstone.is_none() => {
+                    first_tombstone = Some(idx);
                 }
                 _ => {}
             }
