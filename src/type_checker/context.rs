@@ -260,20 +260,20 @@ pub fn vtable_slot_index(
     // Collect methods from all abstract ancestors (topmost last in chain,
     // so we reverse to process topmost first), deduplicated, alphabetically sorted.
     let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
-    let mut all_methods: Vec<String> = Vec::new();
+    let mut all_methods: Vec<&str> = Vec::new();
     for ancestor in abstract_chain.iter().rev() {
         if let Some(TypeDefinition::Class(cd)) = type_defs.get(*ancestor) {
             for (name, m) in &cd.methods {
                 if !m.is_constructor && !seen.contains(name.as_str()) {
                     seen.insert(name.as_str());
-                    all_methods.push(name.clone());
+                    all_methods.push(name.as_str());
                 }
             }
         }
     }
     all_methods.sort();
 
-    all_methods.iter().position(|n| n == method_name)
+    all_methods.iter().position(|n| *n == method_name)
 }
 
 /// Collect all non-constructor method names from a trait and its parent traits.
