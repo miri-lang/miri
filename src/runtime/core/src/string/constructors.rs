@@ -56,6 +56,31 @@ pub unsafe extern "C" fn miri_rt_string_free(ptr: *mut MiriString) {
     }
 }
 
+/// Decrements the RC of a heap-allocated string; frees it if the count reaches zero.
+///
+/// This is the string analogue of `miri_rt_list_decref_element` — used as the
+/// `key_drop_fn` callback when string keys are removed from a `MiriMap`.
+///
+/// # Safety
+/// - `ptr` must be a valid `MiriString` payload pointer (past the RC header), or null.
+#[no_mangle]
+#[allow(clippy::missing_safety_doc)]
+pub unsafe extern "C" fn miri_rt_string_decref_element(ptr: *mut u8) {
+    if ptr.is_null() {
+        return;
+    }
+    let rc_ptr = (ptr as usize - crate::rc::RC_HEADER_SIZE) as *mut usize;
+    let rc = *rc_ptr;
+    // Skip immortal objects (RC stored as negative isize).
+    if (rc as isize) < 0 {
+        return;
+    }
+    *rc_ptr -= 1;
+    if *rc_ptr == 0 {
+        miri_rt_string_free(ptr as *mut MiriString);
+    }
+}
+
 /// Creates a deep copy of a `MiriString`.
 ///
 /// Returns an empty string if `ptr` is null.
