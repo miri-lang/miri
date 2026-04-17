@@ -70,7 +70,9 @@ pub(crate) struct ModuleCtx<'a> {
     pub(crate) rt_map_set_id: Option<cranelift_module::FuncId>,
     pub(crate) rt_map_free_id: Option<cranelift_module::FuncId>,
     pub(crate) rt_map_set_val_drop_fn_id: Option<cranelift_module::FuncId>,
+    pub(crate) rt_map_set_key_drop_fn_id: Option<cranelift_module::FuncId>,
     pub(crate) rt_list_decref_element_id: Option<cranelift_module::FuncId>,
+    pub(crate) rt_string_decref_element_id: Option<cranelift_module::FuncId>,
     /// Cached FuncIds for runtime set functions.
     pub(crate) rt_set_new_id: Option<cranelift_module::FuncId>,
     pub(crate) rt_set_add_id: Option<cranelift_module::FuncId>,
@@ -186,7 +188,9 @@ impl<'a> FunctionTranslator<'a> {
             rt_map_set_id: None,
             rt_map_free_id: None,
             rt_map_set_val_drop_fn_id: None,
+            rt_map_set_key_drop_fn_id: None,
             rt_list_decref_element_id: None,
+            rt_string_decref_element_id: None,
             rt_set_new_id: None,
             rt_set_add_id: None,
             rt_set_free_id: None,
@@ -693,6 +697,54 @@ impl<'a> FunctionTranslator<'a> {
             &[map_ptr, fn_ptr],
         )?;
         Ok(())
+    }
+
+    /// Calls `miri_rt_map_set_key_drop_fn(map_ptr, fn_ptr)`.
+    pub(crate) fn call_rt_map_set_key_drop_fn(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        map_ptr: Value,
+        fn_ptr: Value,
+    ) -> Result<(), String> {
+        let pt = builder.func.dfg.value_type(map_ptr);
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.rt_map_set_key_drop_fn_id,
+            rt::MAP_SET_KEY_DROP_FN,
+            &[pt, pt],
+            &[],
+            &[map_ptr, fn_ptr],
+        )?;
+        Ok(())
+    }
+
+    /// Returns the address of `miri_rt_string_decref_element` as a ptr-sized integer.
+    pub(crate) fn get_rt_string_decref_element_addr(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        ptr_type: cranelift_codegen::ir::Type,
+    ) -> Result<Value, String> {
+        let func_id = match ctx.rt_string_decref_element_id {
+            Some(id) => id,
+            None => {
+                let sig = Signature {
+                    params: vec![AbiParam::new(ptr_type)],
+                    returns: vec![],
+                    call_conv: builder.func.signature.call_conv,
+                };
+                let id = ctx
+                    .module
+                    .declare_function(rt::STRING_DECREF_ELEMENT, Linkage::Import, &sig)
+                    .map_err(|e| {
+                        format!("Failed to declare {}: {}", rt::STRING_DECREF_ELEMENT, e)
+                    })?;
+                ctx.rt_string_decref_element_id = Some(id);
+                id
+            }
+        };
+        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+        Ok(builder.ins().func_addr(ptr_type, local_func))
     }
 
     /// Calls `miri_rt_list_set_elem_drop_fn(list_ptr, fn_ptr)`.
@@ -1770,7 +1822,9 @@ impl<'a> FunctionTranslator<'a> {
                 rt_map_set_id: None,
                 rt_map_free_id: None,
                 rt_map_set_val_drop_fn_id: None,
+                rt_map_set_key_drop_fn_id: None,
                 rt_list_decref_element_id: None,
+                rt_string_decref_element_id: None,
                 rt_set_new_id: None,
                 rt_set_add_id: None,
                 rt_set_free_id: None,

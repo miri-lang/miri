@@ -332,6 +332,20 @@ impl<'a> FunctionTranslator<'a> {
                                 )?;
                             }
 
+                            // If keys are strings (key_kind == 1), register the string decref
+                            // callback so that remove/clear/free properly DecRef string keys.
+                            if key_kind == 1 {
+                                let drop_fn_addr = Self::get_rt_string_decref_element_addr(
+                                    builder, ctx, ptr_type,
+                                )?;
+                                Self::call_rt_map_set_key_drop_fn(
+                                    builder,
+                                    ctx,
+                                    map_ptr,
+                                    drop_fn_addr,
+                                )?;
+                            }
+
                             // Insert each key-value pair
                             for chunk in translated.chunks(2) {
                                 if chunk.len() == 2 {

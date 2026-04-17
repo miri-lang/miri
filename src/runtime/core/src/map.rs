@@ -41,6 +41,9 @@ const LOAD_FACTOR_DEN: usize = 4;
 ///   removed by a mutation operation (`remove`, `clear`, or `set` overwriting an
 ///   existing key). Allows managed values (Lists, Maps, etc.) to have their RC
 ///   decremented on removal. Set via `miri_rt_map_set_val_drop_fn`.
+/// - `key_drop_fn`: If non-zero, called on each key pointer when that entry is
+///   discarded by `remove`, `clear`, or `free`. Allows managed keys (e.g. strings)
+///   to have their RC decremented when removed. Set via `miri_rt_map_set_key_drop_fn`.
 #[repr(C)]
 pub struct MiriMap {
     states: *mut u8,
@@ -54,6 +57,9 @@ pub struct MiriMap {
     /// Drop function for managed values: `fn(val_ptr: *mut u8)`.
     /// Zero means values are plain (no RC management on removal).
     val_drop_fn: usize,
+    /// Drop function for managed keys: `fn(key_ptr: *mut u8)`.
+    /// Zero means keys are plain (no RC management on removal).
+    key_drop_fn: usize,
 }
 
 const STRUCT_SIZE: usize = std::mem::size_of::<MiriMap>();
@@ -287,6 +293,16 @@ impl MiriMap {
                 drop_fn(old_val_ptr as *mut u8);
             }
         }
+        // If the key already exists and keys are managed, DecRef the old key pointer
+        // before the new one is written into the slot (the new key is IncRef'd by Perceus).
+        if found && self.key_drop_fn != 0 && self.key_size > 0 {
+            let drop_fn: unsafe extern "C" fn(*mut u8) = std::mem::transmute(self.key_drop_fn);
+            let old_key_addr = self.keys.add(idx * self.key_size) as *const usize;
+            let old_key_ptr = *old_key_addr;
+            if old_key_ptr != 0 {
+                drop_fn(old_key_ptr as *mut u8);
+            }
+        }
 
         let dest_key = self.keys.add(idx * self.key_size);
         let dest_value = self.values.add(idx * self.value_size);
@@ -344,6 +360,15 @@ impl MiriMap {
                     drop_fn(val_ptr as *mut u8);
                 }
             }
+            // DecRef the key being removed if managed.
+            if self.key_drop_fn != 0 && self.key_size > 0 {
+                let drop_fn: unsafe extern "C" fn(*mut u8) = std::mem::transmute(self.key_drop_fn);
+                let key_addr = self.keys.add(idx * self.key_size) as *const usize;
+                let key_ptr = *key_addr;
+                if key_ptr != 0 {
+                    drop_fn(key_ptr as *mut u8);
+                }
+            }
             *self.states.add(idx) = SLOT_TOMBSTONE;
             self.len -= 1;
             true
@@ -376,6 +401,20 @@ impl MiriMap {
                             let val_ptr = *val_addr;
                             if val_ptr != 0 {
                                 drop_fn(val_ptr as *mut u8);
+                            }
+                        }
+                    }
+                }
+                // DecRef all managed keys before zeroing states.
+                if self.key_drop_fn != 0 && self.key_size > 0 {
+                    let drop_fn: unsafe extern "C" fn(*mut u8) =
+                        std::mem::transmute(self.key_drop_fn);
+                    for i in 0..self.capacity {
+                        if *self.states.add(i) == SLOT_OCCUPIED {
+                            let key_addr = self.keys.add(i * self.key_size) as *const usize;
+                            let key_ptr = *key_addr;
+                            if key_ptr != 0 {
+                                drop_fn(key_ptr as *mut u8);
                             }
                         }
                     }
@@ -437,6 +476,7 @@ pub mod ffi {
         (*map).value_size = value_size;
         (*map).key_kind = key_kind;
         (*map).val_drop_fn = 0;
+        (*map).key_drop_fn = 0;
         map
     }
 
@@ -573,6 +613,19 @@ pub mod ffi {
         }
     }
 
+    /// Sets the drop function for managed keys.
+    ///
+    /// When non-zero, this function is called with the key pointer whenever an
+    /// entry is discarded by `remove`, `clear`, or `free`.
+    /// Must be called after `miri_rt_map_new` when keys are heap-allocated (e.g. String).
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_map_set_key_drop_fn(ptr: *mut MiriMap, fn_ptr: usize) {
+        if !ptr.is_null() {
+            (*ptr).key_drop_fn = fn_ptr;
+        }
+    }
+
     /// Returns the key at the nth occupied slot (0-based sequential index).
     ///
     /// This enables iteration over map keys via `element_at`.
@@ -630,8 +683,21 @@ pub mod ffi {
         if ptr.is_null() {
             return;
         }
-        // Free internal tables
         let map = &*ptr;
+        // DecRef all managed keys before freeing backing storage.
+        if map.key_drop_fn != 0 && !map.states.is_null() && map.capacity > 0 {
+            let drop_fn: unsafe extern "C" fn(*mut u8) = std::mem::transmute(map.key_drop_fn);
+            for i in 0..map.capacity {
+                if *map.states.add(i) == SLOT_OCCUPIED {
+                    let key_addr = map.keys.add(i * map.key_size) as *const usize;
+                    let key_ptr = *key_addr;
+                    if key_ptr != 0 {
+                        drop_fn(key_ptr as *mut u8);
+                    }
+                }
+            }
+        }
+        // Free internal tables
         MiriMap::free_tables(
             map.states,
             map.keys,
@@ -1078,6 +1144,145 @@ mod tests {
             }
 
             miri_rt_map_free(map);
+        }
+    }
+
+    #[test]
+    fn test_map_key_drop_fn_called_on_remove() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static DROP_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn counting_drop(_p: *mut u8) {
+            DROP_CALLS.fetch_add(1, Ordering::SeqCst);
+        }
+
+        unsafe {
+            DROP_CALLS.store(0, Ordering::SeqCst);
+
+            let map = miri_rt_map_new(8, 8, 0);
+            miri_rt_map_set_key_drop_fn(map, counting_drop as *const () as usize);
+
+            miri_rt_map_set(map, 0xAAAA_0000, 1);
+            miri_rt_map_set(map, 0xBBBB_0000, 2);
+
+            // Remove one key: drop fn fires once.
+            assert_eq!(miri_rt_map_remove(map, 0xAAAA_0000), 1);
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 1);
+
+            // Remove non-existent key: no extra drop.
+            assert_eq!(miri_rt_map_remove(map, 0xCCCC_0000), 0);
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 1);
+
+            // Free remaining map — one more drop for the remaining key.
+            miri_rt_map_free(map);
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 2);
+        }
+    }
+
+    #[test]
+    fn test_map_key_drop_fn_called_on_clear() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static DROP_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn counting_drop(_p: *mut u8) {
+            DROP_CALLS.fetch_add(1, Ordering::SeqCst);
+        }
+
+        unsafe {
+            DROP_CALLS.store(0, Ordering::SeqCst);
+
+            let map = miri_rt_map_new(8, 8, 0);
+            miri_rt_map_set_key_drop_fn(map, counting_drop as *const () as usize);
+
+            miri_rt_map_set(map, 0xAAAA_0000, 1);
+            miri_rt_map_set(map, 0xBBBB_0000, 2);
+            miri_rt_map_set(map, 0xCCCC_0000, 3);
+
+            miri_rt_map_clear(map);
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 3);
+            assert_eq!(miri_rt_map_len(map), 0);
+
+            // Free empty map: no extra drops.
+            miri_rt_map_free(map);
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 3);
+        }
+    }
+
+    #[test]
+    fn test_map_key_drop_fn_called_on_free() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static DROP_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn counting_drop(_p: *mut u8) {
+            DROP_CALLS.fetch_add(1, Ordering::SeqCst);
+        }
+
+        unsafe {
+            DROP_CALLS.store(0, Ordering::SeqCst);
+
+            let map = miri_rt_map_new(8, 8, 0);
+            miri_rt_map_set_key_drop_fn(map, counting_drop as *const () as usize);
+
+            miri_rt_map_set(map, 0xAAAA_0000, 1);
+            miri_rt_map_set(map, 0xBBBB_0000, 2);
+
+            miri_rt_map_free(map);
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 2);
+        }
+    }
+
+    #[test]
+    fn test_map_key_drop_fn_not_called_without_setting() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static DROP_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn counting_drop(_p: *mut u8) {
+            DROP_CALLS.fetch_add(1, Ordering::SeqCst);
+        }
+
+        unsafe {
+            DROP_CALLS.store(0, Ordering::SeqCst);
+
+            let map = miri_rt_map_new(8, 8, 0);
+            // Intentionally do NOT set key_drop_fn.
+            miri_rt_map_set(map, 0xAAAA_0000, 1);
+            miri_rt_map_set(map, 0xBBBB_0000, 2);
+
+            miri_rt_map_remove(map, 0xAAAA_0000);
+            miri_rt_map_clear(map);
+            miri_rt_map_free(map);
+
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 0);
+            let _ = counting_drop as unsafe extern "C" fn(*mut u8);
+        }
+    }
+
+    #[test]
+    fn test_map_key_drop_fn_called_on_overwrite() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static DROP_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn counting_drop(_p: *mut u8) {
+            DROP_CALLS.fetch_add(1, Ordering::SeqCst);
+        }
+
+        unsafe {
+            DROP_CALLS.store(0, Ordering::SeqCst);
+
+            let map = miri_rt_map_new(8, 8, 0);
+            miri_rt_map_set_key_drop_fn(map, counting_drop as *const () as usize);
+
+            // First insert: no old key → no drop.
+            miri_rt_map_set(map, 0xAAAA_0000, 1);
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 0);
+
+            // Overwrite same key: old key must be dropped once.
+            miri_rt_map_set(map, 0xAAAA_0000, 2);
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 1);
+
+            // Free the map: one remaining key drop.
+            miri_rt_map_free(map);
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 2);
         }
     }
 }
