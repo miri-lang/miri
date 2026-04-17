@@ -75,6 +75,8 @@ pub mod rt {
     pub const MAP_GET_CHECKED: &str = "miri_rt_map_get_checked";
     /// Compiler-internal: registers the value drop function, not in stdlib.
     pub const MAP_SET_VAL_DROP_FN: &str = "miri_rt_map_set_val_drop_fn";
+    /// Compiler-internal: registers the key drop function, not in stdlib.
+    pub const MAP_SET_KEY_DROP_FN: &str = "miri_rt_map_set_key_drop_fn";
 
     // ── Set ──────────────────────────────────────────────────────────────────
     pub const SET_NEW: &str = "miri_rt_set_new";
@@ -99,6 +101,8 @@ pub mod rt {
     // ── String ────────────────────────────────────────────────────────────────
     pub const STRING_NEW: &str = "miri_rt_string_new";
     pub const STRING_FREE: &str = "miri_rt_string_free";
+    /// Compiler-internal: RC-decrementing drop callback for string map keys.
+    pub const STRING_DECREF_ELEMENT: &str = "miri_rt_string_decref_element";
     pub const STRING_LEN: &str = "miri_rt_string_len";
     pub const STRING_CHAR_COUNT: &str = "miri_rt_string_char_count";
     pub const STRING_IS_EMPTY: &str = "miri_rt_string_is_empty";
@@ -176,6 +180,7 @@ pub mod rt {
         MAP_VALUE_AT,
         MAP_GET_CHECKED,
         MAP_SET_VAL_DROP_FN,
+        MAP_SET_KEY_DROP_FN,
         // Set
         SET_NEW,
         SET_FREE,
@@ -196,6 +201,7 @@ pub mod rt {
         // String
         STRING_NEW,
         STRING_FREE,
+        STRING_DECREF_ELEMENT,
         STRING_LEN,
         STRING_CHAR_COUNT,
         STRING_IS_EMPTY,
