@@ -351,6 +351,31 @@ impl<'a> FunctionTranslator<'a> {
                                 Self::call_rt_set_add(builder, ctx, set_ptr, widened)?;
                             }
 
+                            // If elements are managed Lists, register a drop fn so that
+                            // remove/clear/free properly DecRef removed elements.
+                            let elems_are_managed_lists = !operands.is_empty()
+                                && {
+                                    let first_op = &operands[0];
+                                    match first_op {
+                                        Operand::Copy(place) | Operand::Move(place) => {
+                                            let kind = &type_ctx.local_types[place.local.0].kind;
+                                            matches!(kind, TypeKind::List(_))
+                                                || matches!(kind, TypeKind::Custom(n, Some(_)) if BuiltinCollectionKind::from_name(n) == Some(BuiltinCollectionKind::List))
+                                        }
+                                        _ => false,
+                                    }
+                                };
+                            if elems_are_managed_lists {
+                                let drop_fn_addr =
+                                    Self::get_rt_list_decref_element_addr(builder, ctx, ptr_type)?;
+                                Self::call_rt_set_set_elem_drop_fn(
+                                    builder,
+                                    ctx,
+                                    set_ptr,
+                                    drop_fn_addr,
+                                )?;
+                            }
+
                             Ok(set_ptr)
                         }
                         _ => unreachable!(),

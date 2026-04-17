@@ -40,6 +40,7 @@ use miri_runtime_core::{
 use miri_runtime_core::{
     miri_rt_set_add, miri_rt_set_clear, miri_rt_set_contains, miri_rt_set_element_at,
     miri_rt_set_free, miri_rt_set_is_empty, miri_rt_set_len, miri_rt_set_new, miri_rt_set_remove,
+    miri_rt_set_set_elem_drop_fn,
 };
 
 // -----------------------------------------------------------------------
@@ -257,6 +258,12 @@ fn test_set_ffi_abi() {
         // Null safety
         assert_eq!(miri_rt_set_len(std::ptr::null()), 0);
         miri_rt_set_free(std::ptr::null_mut());
+
+        // miri_rt_set_set_elem_drop_fn: null-safe and callable
+        miri_rt_set_set_elem_drop_fn(std::ptr::null_mut(), 0); // must not crash
+        let set2 = miri_rt_set_new(8);
+        miri_rt_set_set_elem_drop_fn(set2, 0);
+        miri_rt_set_free(set2);
     }
 }
 

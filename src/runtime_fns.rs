@@ -86,6 +86,8 @@ pub mod rt {
     pub const SET_CLEAR: &str = "miri_rt_set_clear";
     pub const SET_IS_EMPTY: &str = "miri_rt_set_is_empty";
     pub const SET_ELEMENT_AT: &str = "miri_rt_set_element_at";
+    /// Compiler-internal: registers the element drop function, not in stdlib.
+    pub const SET_SET_ELEM_DROP_FN: &str = "miri_rt_set_set_elem_drop_fn";
 
     // ── IO ───────────────────────────────────────────────────────────────────
     pub const PRINT: &str = "miri_rt_print";
@@ -184,6 +186,7 @@ pub mod rt {
         SET_CLEAR,
         SET_IS_EMPTY,
         SET_ELEMENT_AT,
+        SET_SET_ELEM_DROP_FN,
         // IO
         PRINT,
         PRINTLN,
