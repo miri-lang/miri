@@ -61,6 +61,7 @@ pub(crate) struct ModuleCtx<'a> {
     pub(crate) rt_array_new_id: Option<cranelift_module::FuncId>,
     pub(crate) rt_array_free_id: Option<cranelift_module::FuncId>,
     pub(crate) rt_array_panic_oob_id: Option<cranelift_module::FuncId>,
+    pub(crate) rt_array_set_elem_drop_fn_id: Option<cranelift_module::FuncId>,
     pub(crate) rt_list_new_id: Option<cranelift_module::FuncId>,
     pub(crate) rt_list_push_id: Option<cranelift_module::FuncId>,
     pub(crate) rt_list_free_id: Option<cranelift_module::FuncId>,
@@ -180,6 +181,7 @@ impl<'a> FunctionTranslator<'a> {
             rt_array_new_id: None,
             rt_array_free_id: None,
             rt_array_panic_oob_id: None,
+            rt_array_set_elem_drop_fn_id: None,
             rt_list_new_id: None,
             rt_list_push_id: None,
             rt_list_free_id: None,
@@ -536,6 +538,26 @@ impl<'a> FunctionTranslator<'a> {
             &[pt],
             &[],
             &[ptr],
+        )?;
+        Ok(())
+    }
+
+    /// Calls `miri_rt_array_set_elem_drop_fn(array_ptr, fn_ptr)`.
+    pub(crate) fn call_rt_array_set_elem_drop_fn(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        array_ptr: Value,
+        fn_ptr: Value,
+    ) -> Result<(), String> {
+        let pt = builder.func.dfg.value_type(array_ptr);
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.rt_array_set_elem_drop_fn_id,
+            rt::ARRAY_SET_ELEM_DROP_FN,
+            &[pt, pt],
+            &[],
+            &[array_ptr, fn_ptr],
         )?;
         Ok(())
     }
@@ -1814,6 +1836,7 @@ impl<'a> FunctionTranslator<'a> {
                 rt_array_new_id: None,
                 rt_array_free_id: None,
                 rt_array_panic_oob_id: None,
+                rt_array_set_elem_drop_fn_id: None,
                 rt_list_new_id: None,
                 rt_list_push_id: None,
                 rt_list_free_id: None,

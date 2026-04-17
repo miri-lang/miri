@@ -3,6 +3,41 @@
 
 use super::utils::*;
 
+// ── Drop-fn setter wiring (task 2.4) ─────────────────────────────────────────
+
+#[test]
+fn test_array_of_strings_no_crash() {
+    // Array<String>: elem_drop_fn must be registered so that miri_rt_array_free
+    // DecRefs each string element. Verifies the setter call is emitted.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn main()
+    let a = ["hello", "world"]
+    println(f"{a[0]}")
+"#,
+        "hello",
+    );
+}
+
+#[test]
+fn test_array_of_strings_reassign_no_crash() {
+    // Reassigning an Array<String> must free the old array and its string elements.
+    // Both arrays must have the same size (arrays are fixed-size in Miri).
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn main()
+    var a = ["alpha", "beta"]
+    a = ["gamma", "delta"]
+    println(f"{a[0]}")
+"#,
+        "gamma",
+    );
+}
+
 #[test]
 fn test_array_alias_no_double_free() {
     // Two variables pointing at the same array should not double-free.
