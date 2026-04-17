@@ -219,6 +219,19 @@ impl<'a> FunctionTranslator<'a> {
                                 }
                             }
 
+                            // If elements are managed strings, register a drop fn so
+                            // that miri_rt_array_free properly DecRefs each element.
+                            if let Some(drop_fn_addr) = Self::resolve_elem_drop_fn(
+                                builder, ctx, operands, type_ctx, ptr_type,
+                            )? {
+                                Self::call_rt_array_set_elem_drop_fn(
+                                    builder,
+                                    ctx,
+                                    array_ptr,
+                                    drop_fn_addr,
+                                )?;
+                            }
+
                             Ok(array_ptr)
                         }
                         AggregateKind::List => {
@@ -238,30 +251,48 @@ impl<'a> FunctionTranslator<'a> {
                                 Self::call_rt_list_push(builder, ctx, list_ptr, widened)?;
                             }
 
-                            // If elements are managed Lists, set the drop function so that
-                            // mutation operations (clear, remove_at, remove) properly DecRef
-                            // removed elements. Mirrors the same pattern used for Map values.
-                            let elems_are_managed_lists = !operands.is_empty()
-                                && {
-                                    let first_op = &operands[0];
-                                    match first_op {
-                                        Operand::Copy(place) | Operand::Move(place) => {
-                                            let kind = &type_ctx.local_types[place.local.0].kind;
-                                            matches!(kind, TypeKind::List(_))
-                                                || matches!(kind, TypeKind::Custom(n, Some(_)) if BuiltinCollectionKind::from_name(n) == Some(BuiltinCollectionKind::List))
-                                        }
-                                        _ => false,
+                            // If elements are managed, set elem_drop_fn so that mutation
+                            // operations (clear, remove_at, remove) properly DecRef them.
+                            if let Some(first_op) = operands.first() {
+                                match Self::first_operand_kind(first_op, type_ctx) {
+                                    Some(TypeKind::String) => {
+                                        let drop_fn_addr = Self::get_rt_string_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_list_set_elem_drop_fn(
+                                            builder,
+                                            ctx,
+                                            list_ptr,
+                                            drop_fn_addr,
+                                        )?;
                                     }
-                                };
-                            if elems_are_managed_lists {
-                                let drop_fn_addr =
-                                    Self::get_rt_list_decref_element_addr(builder, ctx, ptr_type)?;
-                                Self::call_rt_list_set_elem_drop_fn(
-                                    builder,
-                                    ctx,
-                                    list_ptr,
-                                    drop_fn_addr,
-                                )?;
+                                    Some(TypeKind::List(_)) => {
+                                        let drop_fn_addr = Self::get_rt_list_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_list_set_elem_drop_fn(
+                                            builder,
+                                            ctx,
+                                            list_ptr,
+                                            drop_fn_addr,
+                                        )?;
+                                    }
+                                    Some(TypeKind::Custom(n, Some(_)))
+                                        if BuiltinCollectionKind::from_name(n)
+                                            == Some(BuiltinCollectionKind::List) =>
+                                    {
+                                        let drop_fn_addr = Self::get_rt_list_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_list_set_elem_drop_fn(
+                                            builder,
+                                            ctx,
+                                            list_ptr,
+                                            drop_fn_addr,
+                                        )?;
+                                    }
+                                    _ => {}
+                                }
                             }
 
                             Ok(list_ptr)
@@ -280,14 +311,11 @@ impl<'a> FunctionTranslator<'a> {
                                 ptr_size as i64
                             };
                             // Determine key_kind: 1 for string keys, 0 for value keys.
-                            // Map literal keys are always constants, so we check the first key's type.
                             let key_kind = if !operands.is_empty() {
-                                if let Operand::Constant(c) = &operands[0] {
-                                    if matches!(c.ty.kind, TypeKind::String) {
-                                        1i64
-                                    } else {
-                                        0i64
-                                    }
+                                let first_key_kind =
+                                    Self::first_operand_kind(&operands[0], type_ctx);
+                                if matches!(first_key_kind, Some(TypeKind::String)) {
+                                    1i64
                                 } else {
                                     0i64
                                 }
@@ -309,27 +337,47 @@ impl<'a> FunctionTranslator<'a> {
 
                             // If values are managed Lists, set the drop function so that
                             // map mutations (remove, clear, set overwrite) properly DecRef them.
-                            let val_is_managed_list = operands.len() >= 2
-                                && {
-                                    let val_op = &operands[1];
-                                    match val_op {
-                                        Operand::Copy(place) | Operand::Move(place) => {
-                                            let kind = &type_ctx.local_types[place.local.0].kind;
-                                            matches!(kind, TypeKind::List(_))
-                                                || matches!(kind, TypeKind::Custom(n, Some(_)) if BuiltinCollectionKind::from_name(n) == Some(BuiltinCollectionKind::List))
-                                        }
-                                        _ => false,
+                            if operands.len() >= 2 {
+                                let val_op = &operands[1];
+                                match Self::first_operand_kind(val_op, type_ctx) {
+                                    Some(TypeKind::String) => {
+                                        let drop_fn_addr = Self::get_rt_string_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_map_set_val_drop_fn(
+                                            builder,
+                                            ctx,
+                                            map_ptr,
+                                            drop_fn_addr,
+                                        )?;
                                     }
-                                };
-                            if val_is_managed_list {
-                                let drop_fn_addr =
-                                    Self::get_rt_list_decref_element_addr(builder, ctx, ptr_type)?;
-                                Self::call_rt_map_set_val_drop_fn(
-                                    builder,
-                                    ctx,
-                                    map_ptr,
-                                    drop_fn_addr,
-                                )?;
+                                    Some(TypeKind::List(_)) => {
+                                        let drop_fn_addr = Self::get_rt_list_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_map_set_val_drop_fn(
+                                            builder,
+                                            ctx,
+                                            map_ptr,
+                                            drop_fn_addr,
+                                        )?;
+                                    }
+                                    Some(TypeKind::Custom(n, Some(_)))
+                                        if BuiltinCollectionKind::from_name(n)
+                                            == Some(BuiltinCollectionKind::List) =>
+                                    {
+                                        let drop_fn_addr = Self::get_rt_list_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_map_set_val_drop_fn(
+                                            builder,
+                                            ctx,
+                                            map_ptr,
+                                            drop_fn_addr,
+                                        )?;
+                                    }
+                                    _ => {}
+                                }
                             }
 
                             // If keys are strings (key_kind == 1), register the string decref
@@ -365,29 +413,48 @@ impl<'a> FunctionTranslator<'a> {
                                 Self::call_rt_set_add(builder, ctx, set_ptr, widened)?;
                             }
 
-                            // If elements are managed Lists, register a drop fn so that
+                            // If elements are managed, register a drop fn so that
                             // remove/clear/free properly DecRef removed elements.
-                            let elems_are_managed_lists = !operands.is_empty()
-                                && {
-                                    let first_op = &operands[0];
-                                    match first_op {
-                                        Operand::Copy(place) | Operand::Move(place) => {
-                                            let kind = &type_ctx.local_types[place.local.0].kind;
-                                            matches!(kind, TypeKind::List(_))
-                                                || matches!(kind, TypeKind::Custom(n, Some(_)) if BuiltinCollectionKind::from_name(n) == Some(BuiltinCollectionKind::List))
-                                        }
-                                        _ => false,
+                            if let Some(first_op) = operands.first() {
+                                match Self::first_operand_kind(first_op, type_ctx) {
+                                    Some(TypeKind::String) => {
+                                        let drop_fn_addr = Self::get_rt_string_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_set_set_elem_drop_fn(
+                                            builder,
+                                            ctx,
+                                            set_ptr,
+                                            drop_fn_addr,
+                                        )?;
                                     }
-                                };
-                            if elems_are_managed_lists {
-                                let drop_fn_addr =
-                                    Self::get_rt_list_decref_element_addr(builder, ctx, ptr_type)?;
-                                Self::call_rt_set_set_elem_drop_fn(
-                                    builder,
-                                    ctx,
-                                    set_ptr,
-                                    drop_fn_addr,
-                                )?;
+                                    Some(TypeKind::List(_)) => {
+                                        let drop_fn_addr = Self::get_rt_list_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_set_set_elem_drop_fn(
+                                            builder,
+                                            ctx,
+                                            set_ptr,
+                                            drop_fn_addr,
+                                        )?;
+                                    }
+                                    Some(TypeKind::Custom(n, Some(_)))
+                                        if BuiltinCollectionKind::from_name(n)
+                                            == Some(BuiltinCollectionKind::List) =>
+                                    {
+                                        let drop_fn_addr = Self::get_rt_list_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_set_set_elem_drop_fn(
+                                            builder,
+                                            ctx,
+                                            set_ptr,
+                                            drop_fn_addr,
+                                        )?;
+                                    }
+                                    _ => {}
+                                }
                             }
 
                             Ok(set_ptr)
@@ -899,6 +966,52 @@ impl<'a> FunctionTranslator<'a> {
         }
 
         Ok(payload_ptr)
+    }
+
+    /// Returns the `TypeKind` of a single operand, consulting either the constant's
+    /// type or the local variable's declared type.
+    fn first_operand_kind<'op>(
+        operand: &'op Operand,
+        type_ctx: &'op TypeCtx,
+    ) -> Option<&'op TypeKind> {
+        match operand {
+            Operand::Copy(place) | Operand::Move(place) => {
+                Some(&type_ctx.local_types[place.local.0].kind)
+            }
+            Operand::Constant(c) => Some(&c.ty.kind),
+        }
+    }
+
+    /// Returns the address of the appropriate element-drop function for an Array whose
+    /// first element is `operands[0]`, or `None` if elements are unmanaged.
+    ///
+    /// Only `String` is handled here.  List/Custom elements are intentionally excluded:
+    /// `[...]` array literals inside `List([...])` constructors are compiler-generated
+    /// temporaries whose elements are already owned by the outer List.  Setting
+    /// `elem_drop_fn` on those temporaries would cause a double-free.  Support for
+    /// `Array<List<T>>` and other managed-element arrays is a follow-up task.
+    fn resolve_elem_drop_fn(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        operands: &[Operand],
+        type_ctx: &TypeCtx,
+        ptr_type: cranelift_codegen::ir::Type,
+    ) -> Result<Option<Value>, String> {
+        let first_op = match operands.first() {
+            Some(op) => op,
+            None => return Ok(None),
+        };
+        let kind = match Self::first_operand_kind(first_op, type_ctx) {
+            Some(k) => k,
+            None => return Ok(None),
+        };
+        match kind {
+            TypeKind::String => {
+                let addr = Self::get_rt_string_decref_element_addr(builder, ctx, ptr_type)?;
+                Ok(Some(addr))
+            }
+            _ => Ok(None),
+        }
     }
 
     /// Translate a binary operation.

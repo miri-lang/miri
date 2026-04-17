@@ -147,6 +147,7 @@ pub mod rt {
         ARRAY_SET_VAL,
         ARRAY_SORT,
         ARRAY_PANIC_OOB,
+        ARRAY_SET_ELEM_DROP_FN,
         // Tuple
         TUPLE_LEN,
         // List

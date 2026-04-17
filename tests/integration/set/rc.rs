@@ -3,6 +3,43 @@
 
 use super::utils::*;
 
+// ── Drop-fn setter wiring for Set<String> (task 2.4) ─────────────────────────
+
+#[test]
+fn test_set_of_strings_remove_no_crash() {
+    // Set<String>: elem_drop_fn must be set so that remove() properly DecRefs
+    // the string element instead of leaking it.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.set
+
+fn main()
+    var s = {"hello", "world", "foo"}
+    s.remove("world")
+    println(f"{s.length()}")
+"#,
+        "2",
+    );
+}
+
+#[test]
+fn test_set_of_strings_clear_no_crash() {
+    // Set<String>: clear() must DecRef all string elements via elem_drop_fn.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.set
+
+fn main()
+    var s = {"a", "b", "c"}
+    s.clear()
+    println(f"{s.length()}")
+"#,
+        "0",
+    );
+}
+
 #[test]
 fn test_set_alias_no_double_free() {
     assert_runs(

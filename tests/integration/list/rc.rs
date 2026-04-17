@@ -3,6 +3,60 @@
 
 use super::utils::*;
 
+// ── Drop-fn setter wiring (task 2.4) ─────────────────────────────────────────
+
+#[test]
+fn test_list_of_strings_clear_no_crash() {
+    // List<String>: elem_drop_fn must be set so that clear() properly DecRefs
+    // each string element instead of leaking them.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    var l = List(["hello", "world", "foo"])
+    l.clear()
+    println(f"{l.length()}")
+"#,
+        "0",
+    );
+}
+
+#[test]
+fn test_list_of_strings_remove_no_crash() {
+    // remove_at on a List<String> must call the elem_drop_fn on the removed element.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    var l = List(["a", "b", "c"])
+    l.remove_at(1)
+    println(f"{l.length()}")
+"#,
+        "2",
+    );
+}
+
+#[test]
+fn test_list_of_strings_out_of_scope_no_crash() {
+    // A List<String> going out of scope must free string elements without crashing.
+    assert_runs(
+        r#"
+use system.collections.list
+
+fn make() [String]
+    List(["x", "y", "z"])
+
+fn main()
+    let _ = make()
+    // list goes out of scope here, strings freed
+"#,
+    );
+}
+
 #[test]
 fn test_list_alias_no_double_free() {
     assert_runs(
