@@ -29,6 +29,7 @@ const LOAD_FACTOR_DEN: usize = 4;
 /// - `states`: pointer to slot state array (EMPTY/OCCUPIED/TOMBSTONE)
 /// - `capacity`: total number of slots
 /// - `elem_size`: size of each element in bytes
+/// - `elem_drop_fn`: if non-zero, called on each element when removed/freed
 ///
 /// The first two fields (`data`, `len`) match MiriList/MiriArray layout so
 /// that `Rvalue::Len` and `element_at` use the same offsets.
@@ -39,6 +40,7 @@ pub struct MiriSet {
     states: *mut u8,
     capacity: usize,
     elem_size: usize,
+    elem_drop_fn: usize,
 }
 
 const STRUCT_SIZE: usize = std::mem::size_of::<MiriSet>();
@@ -198,16 +200,6 @@ impl MiriSet {
         self.len += 1;
         true
     }
-
-    unsafe fn remove_elem(&mut self, elem: *const u8) -> bool {
-        if let Some(idx) = self.find_slot(elem) {
-            *self.states.add(idx) = SLOT_TOMBSTONE;
-            self.len -= 1;
-            true
-        } else {
-            false
-        }
-    }
 }
 
 // =============================================================================
@@ -235,7 +227,21 @@ pub mod ffi {
         (*set).states = ptr::null_mut();
         (*set).capacity = 0;
         (*set).elem_size = elem_size;
+        (*set).elem_drop_fn = 0;
         set
+    }
+
+    /// Sets the element drop function for a set.
+    ///
+    /// When set, `miri_rt_set_free`, `miri_rt_set_remove`, and `miri_rt_set_clear`
+    /// call `fn_ptr` on each non-null element pointer so that managed elements
+    /// have their RC decremented when removed or freed.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_set_set_elem_drop_fn(ptr: *mut MiriSet, fn_ptr: usize) {
+        if !ptr.is_null() {
+            (*ptr).elem_drop_fn = fn_ptr;
+        }
     }
 
     /// Returns the number of elements in the set.
@@ -305,7 +311,18 @@ pub mod ffi {
             return 0;
         }
         let set = &mut *ptr;
-        if set.remove_elem(&elem as *const usize as *const u8) {
+        if let Some(idx) = set.find_slot(&elem as *const usize as *const u8) {
+            if set.elem_drop_fn != 0 {
+                let slot = set.data.add(idx * set.elem_size) as *const usize;
+                let elem_ptr = *slot;
+                if elem_ptr != 0 {
+                    let drop_fn: unsafe extern "C" fn(*mut u8) =
+                        std::mem::transmute(set.elem_drop_fn);
+                    drop_fn(elem_ptr as *mut u8);
+                }
+            }
+            *set.states.add(idx) = SLOT_TOMBSTONE;
+            set.len -= 1;
             1
         } else {
             0
@@ -321,6 +338,18 @@ pub mod ffi {
         }
         let set = &mut *ptr;
         if !set.states.is_null() && set.capacity > 0 {
+            if set.elem_drop_fn != 0 {
+                let drop_fn: unsafe extern "C" fn(*mut u8) = std::mem::transmute(set.elem_drop_fn);
+                for i in 0..set.capacity {
+                    if *set.states.add(i) == SLOT_OCCUPIED {
+                        let slot = set.data.add(i * set.elem_size) as *const usize;
+                        let elem_ptr = *slot;
+                        if elem_ptr != 0 {
+                            drop_fn(elem_ptr as *mut u8);
+                        }
+                    }
+                }
+            }
             ptr::write_bytes(set.states, 0, set.capacity);
         }
         set.len = 0;
@@ -353,6 +382,8 @@ pub mod ffi {
     /// Frees a set and all its backing storage.
     ///
     /// The pointer must have been returned by `miri_rt_set_new` (points past RC header).
+    /// If `elem_drop_fn` is set, calls it on each occupied element pointer before
+    /// freeing the data buffer so that managed elements have their RC decremented.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_set_free(ptr: *mut MiriSet) {
@@ -360,6 +391,18 @@ pub mod ffi {
             return;
         }
         let set = &*ptr;
+        if set.elem_drop_fn != 0 && !set.states.is_null() && set.capacity > 0 {
+            let drop_fn: unsafe extern "C" fn(*mut u8) = std::mem::transmute(set.elem_drop_fn);
+            for i in 0..set.capacity {
+                if *set.states.add(i) == SLOT_OCCUPIED {
+                    let slot = set.data.add(i * set.elem_size) as *const usize;
+                    let elem_ptr = *slot;
+                    if elem_ptr != 0 {
+                        drop_fn(elem_ptr as *mut u8);
+                    }
+                }
+            }
+        }
         MiriSet::free_tables(set.states, set.data, set.capacity, set.elem_size);
         free_with_rc(ptr as *mut u8, STRUCT_SIZE);
     }
@@ -599,6 +642,115 @@ mod tests {
             assert_eq!(miri_rt_set_element_at(std::ptr::null(), 0), 0);
             miri_rt_set_clear(std::ptr::null_mut()); // must not crash
             miri_rt_set_free(std::ptr::null_mut()); // must not crash
+        }
+    }
+
+    #[test]
+    fn test_set_elem_drop_fn_called_on_free() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static DROP_CALLS_FREE: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn counting_drop_free(_p: *mut u8) {
+            DROP_CALLS_FREE.fetch_add(1, Ordering::SeqCst);
+        }
+
+        unsafe {
+            DROP_CALLS_FREE.store(0, Ordering::SeqCst);
+
+            let set = miri_rt_set_new(8);
+            miri_rt_set_set_elem_drop_fn(set, counting_drop_free as *const () as usize);
+
+            miri_rt_set_add(set, 0xAAAA_0000);
+            miri_rt_set_add(set, 0xBBBB_0000);
+
+            miri_rt_set_free(set);
+
+            assert_eq!(DROP_CALLS_FREE.load(Ordering::SeqCst), 2);
+        }
+    }
+
+    #[test]
+    fn test_set_elem_drop_fn_called_on_remove() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static DROP_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn counting_drop(_p: *mut u8) {
+            DROP_CALLS.fetch_add(1, Ordering::SeqCst);
+        }
+
+        unsafe {
+            DROP_CALLS.store(0, Ordering::SeqCst);
+
+            let set = miri_rt_set_new(8);
+            miri_rt_set_set_elem_drop_fn(set, counting_drop as *const () as usize);
+
+            miri_rt_set_add(set, 0xAAAA_0000);
+            miri_rt_set_add(set, 0xBBBB_0000);
+
+            // Remove one element: drop fn should fire once.
+            assert_eq!(miri_rt_set_remove(set, 0xAAAA_0000), 1);
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 1);
+
+            // Remove non-existent: no extra drop.
+            assert_eq!(miri_rt_set_remove(set, 0xCCCC_0000), 0);
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 1);
+
+            // Free remaining — one more drop.
+            miri_rt_set_free(set);
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 2);
+        }
+    }
+
+    #[test]
+    fn test_set_elem_drop_fn_called_on_clear() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static DROP_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn counting_drop(_p: *mut u8) {
+            DROP_CALLS.fetch_add(1, Ordering::SeqCst);
+        }
+
+        unsafe {
+            DROP_CALLS.store(0, Ordering::SeqCst);
+
+            let set = miri_rt_set_new(8);
+            miri_rt_set_set_elem_drop_fn(set, counting_drop as *const () as usize);
+
+            miri_rt_set_add(set, 0xAAAA_0000);
+            miri_rt_set_add(set, 0xBBBB_0000);
+            miri_rt_set_add(set, 0xCCCC_0000);
+
+            miri_rt_set_clear(set);
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 3);
+            assert_eq!(miri_rt_set_len(set), 0);
+
+            // Free empty set: no extra drops.
+            miri_rt_set_free(set);
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 3);
+        }
+    }
+
+    #[test]
+    fn test_set_free_without_drop_fn_is_noop_for_elements() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static DROP_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn counting_drop(_p: *mut u8) {
+            DROP_CALLS.fetch_add(1, Ordering::SeqCst);
+        }
+
+        unsafe {
+            DROP_CALLS.store(0, Ordering::SeqCst);
+
+            let set = miri_rt_set_new(8);
+            miri_rt_set_add(set, 0xAAAA_0000);
+            miri_rt_set_add(set, 0xBBBB_0000);
+
+            // Never set elem_drop_fn — no element drops on free.
+            miri_rt_set_free(set);
+
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 0);
+            let _ = counting_drop as unsafe extern "C" fn(*mut u8);
         }
     }
 
