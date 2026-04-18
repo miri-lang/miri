@@ -1,5 +1,6 @@
+use crate::ast::expression::ExpressionKind;
 use crate::ast::literal::Literal;
-use crate::ast::types::TypeKind;
+use crate::ast::types::{BuiltinCollectionKind, TypeKind};
 use crate::codegen::cranelift::translator::{FunctionTranslator, ModuleCtx, TypeCtx};
 use crate::codegen::cranelift::types::translate_type;
 use crate::mir::{
@@ -332,6 +333,10 @@ impl<'a> FunctionTranslator<'a> {
                     sig.returns.push(AbiParam::new(cl_dest_ty));
                 }
 
+                // Pre-compute flag before consuming func_name in the match.
+                let is_list_from_managed =
+                    func_name.as_deref() == Some(rt::LIST_NEW_FROM_MANAGED_ARRAY);
+
                 if let Some(func_name) = func_name {
                     // Direct call to a named symbol.
                     let func_id = ctx
@@ -341,12 +346,52 @@ impl<'a> FunctionTranslator<'a> {
                     let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
                     let call = builder.ins().call(local_func, &arg_values);
 
-                    if dest_ty.kind != TypeKind::Void {
+                    let maybe_result = if dest_ty.kind != TypeKind::Void {
                         let result = builder.inst_results(call)[0];
                         let dest_var = locals.get(&destination.local).ok_or_else(|| {
                             format!("Unknown call destination local: {:?}", destination.local)
                         })?;
                         builder.def_var(*dest_var, result);
+                        Some(result)
+                    } else {
+                        None
+                    };
+
+                    // After miri_rt_list_new_from_managed_array, that runtime sets
+                    // elem_drop_fn = miri_rt_list_decref_element for all managed types.
+                    // Override with __decref_TypeName when elements are user-defined classes.
+                    if is_list_from_managed {
+                        if let (Some(list_ptr), Some(array_arg)) = (maybe_result, args.first()) {
+                            let array_kind = match array_arg {
+                                Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => {
+                                    Some(&type_ctx.local_types[p.local.0].kind)
+                                }
+                                _ => None,
+                            };
+                            if let Some(array_kind) = array_kind {
+                                if let Some(elem_expr) =
+                                    FunctionTranslator::collection_elem_expr(array_kind)
+                                {
+                                    if let ExpressionKind::Type(inner_ty, _) = &elem_expr.node {
+                                        if let TypeKind::Custom(type_name, _) = &inner_ty.kind {
+                                            if BuiltinCollectionKind::from_name(type_name).is_none()
+                                            {
+                                                let decref_addr =
+                                                    FunctionTranslator::get_custom_decref_thunk_addr(
+                                                        builder, ctx, type_name, ptr_type,
+                                                    )?;
+                                                FunctionTranslator::call_rt_list_set_elem_drop_fn(
+                                                    builder,
+                                                    ctx,
+                                                    list_ptr,
+                                                    decref_addr,
+                                                )?;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 } else {
                     // Indirect call through a closure struct.

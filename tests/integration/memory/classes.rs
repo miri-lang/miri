@@ -254,3 +254,68 @@ fn main()
         "5",
     );
 }
+
+// ── Custom elem_drop_fn — collection mutation ops (task 2.4b) ─────────────────
+
+#[test]
+fn test_set_of_class_instances_clear_no_crash() {
+    // Set<Widget>: __decref_Widget must be set as elem_drop_fn so that clear()
+    // properly DecRefs each instance.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.set
+use system.collections.list
+
+class Widget
+    var id int
+
+fn main()
+    var ws = {Widget(id: 1), Widget(id: 2), Widget(id: 3)}
+    ws.clear()
+    println(f"{ws.length()}")
+"#,
+        "0",
+    );
+}
+
+#[test]
+fn test_map_value_custom_remove_no_crash() {
+    // Map<String, Config>: __decref_Config must be set as val_drop_fn so that
+    // remove() properly DecRefs the removed value.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.map
+
+class Config
+    var level int
+
+fn main()
+    var m = {"a": Config(level: 1), "b": Config(level: 2)}
+    m.remove("a")
+    println(f"{m.length()}")
+"#,
+        "1",
+    );
+}
+
+#[test]
+fn test_map_value_custom_clear_no_crash() {
+    // Map<String, Config>: clear() must DecRef all values via val_drop_fn.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.map
+
+class Config
+    var level int
+
+fn main()
+    var m = {"x": Config(level: 10), "y": Config(level: 20)}
+    m.clear()
+    println(f"{m.length()}")
+"#,
+        "0",
+    );
+}

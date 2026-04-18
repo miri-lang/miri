@@ -3,6 +3,72 @@
 
 use super::utils::*;
 
+// ── Custom elem_drop_fn (task 2.4b) ──────────────────────────────────────────
+
+#[test]
+fn test_list_of_custom_clear_no_crash() {
+    // List<Point>: __decref_Point must be set as elem_drop_fn so that clear()
+    // properly DecRefs each Point instance instead of leaking it.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+class Point
+    var x int
+    var y int
+
+fn main()
+    var pts = List([Point(x: 1, y: 2), Point(x: 3, y: 4)])
+    pts.clear()
+    println(f"{pts.length()}")
+"#,
+        "0",
+    );
+}
+
+#[test]
+fn test_list_of_custom_remove_at_no_crash() {
+    // remove_at on List<Point> must call __decref_Point on the removed element.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+class Item
+    var value int
+
+fn main()
+    var items = List([Item(value: 10), Item(value: 20), Item(value: 30)])
+    items.remove_at(1)
+    println(f"{items.length()}")
+"#,
+        "2",
+    );
+}
+
+#[test]
+fn test_list_of_custom_aliased_element_outlives_clear() {
+    // Pull an element reference before clearing the list; element must survive
+    // (RC still > 0) while the rest are freed.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+class Node
+    var id int
+
+fn main()
+    var nodes = List([Node(id: 1), Node(id: 2), Node(id: 3)])
+    let kept = nodes.element_at(0)
+    nodes.clear()
+    println(f"{kept.id}")
+"#,
+        "1",
+    );
+}
+
 // ── Drop-fn setter wiring (task 2.4) ─────────────────────────────────────────
 
 #[test]

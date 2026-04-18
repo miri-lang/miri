@@ -464,7 +464,10 @@ impl CraneliftBackend {
         ctx: &mut Context,
         isa: &Arc<dyn TargetIsa>,
     ) -> Result<(), String> {
-        // Collect all managed, non-generic concrete types and sort for deterministic output.
+        // Collect all non-generic concrete Struct/Class/Enum types and sort for
+        // deterministic output.  We include types without managed fields so that
+        // __decref_TypeName can be generated for them — it is needed as elem_drop_fn
+        // when such types are stored in a List, Set, or Map.
         let mut managed_names: Vec<&str> = self
             .type_definitions
             .iter()
@@ -479,11 +482,7 @@ impl CraneliftBackend {
                 if has_generics {
                     return None;
                 }
-                if FunctionTranslator::has_managed_fields(name, &self.type_definitions) {
-                    Some(name.as_str())
-                } else {
-                    None
-                }
+                Some(name.as_str())
             })
             .collect();
         managed_names.sort_unstable();
