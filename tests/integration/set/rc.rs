@@ -40,6 +40,26 @@ fn main()
     );
 }
 
+// ── Set<int> baseline cleanup (task 2.5) ─────────────────────────────────────
+
+#[test]
+fn test_set_int_clear_no_crash() {
+    // Set<int>: no managed elements — clear() is the baseline path with no
+    // elem_drop_fn.  Verifies the set itself is freed without crashing.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.set
+
+fn main()
+    var s = {10, 20, 30, 40}
+    s.clear()
+    println(f"{s.length()}")
+"#,
+        "0",
+    );
+}
+
 #[test]
 fn test_set_alias_no_double_free() {
     assert_runs(

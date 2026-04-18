@@ -60,6 +60,47 @@ fn main()
     );
 }
 
+// ── Map<String, List<int>> scope-exit cleanup (task 2.5) ─────────────────────
+
+#[test]
+fn test_map_string_list_values_scope_exit_no_crash() {
+    // Map<String, List<int>>: on scope exit both key_drop_fn and val_drop_fn
+    // must fire — string keys DecRef'd, list values DecRef'd.
+    assert_runs(
+        r#"
+use system.collections.map
+use system.collections.list
+
+fn make()
+    let m = {"a": List([1, 2, 3]), "b": List([4, 5])}
+    // m goes out of scope — keys and list values must be freed
+
+fn main()
+    make()
+    make()
+"#,
+    );
+}
+
+#[test]
+fn test_map_string_list_values_clear_no_crash() {
+    // clear() on Map<String, List<int>> must DecRef both string keys and list
+    // values via key_drop_fn / val_drop_fn before the map goes out of scope.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.map
+use system.collections.list
+
+fn main()
+    var m = {"x": List([10, 20]), "y": List([30])}
+    m.clear()
+    println(f"{m.length()}")
+"#,
+        "0",
+    );
+}
+
 #[test]
 fn test_map_alias_no_double_free() {
     assert_runs(
