@@ -985,11 +985,15 @@ impl<'a> FunctionTranslator<'a> {
     /// Returns the address of the appropriate element-drop function for an Array whose
     /// first element is `operands[0]`, or `None` if elements are unmanaged.
     ///
-    /// Only `String` is handled here.  List/Custom elements are intentionally excluded:
-    /// `[...]` array literals inside `List([...])` constructors are compiler-generated
-    /// temporaries whose elements are already owned by the outer List.  Setting
-    /// `elem_drop_fn` on those temporaries would cause a double-free.  Support for
-    /// `Array<List<T>>` and other managed-element arrays is a follow-up task.
+    /// Only `String` is handled here.  For all other managed element types
+    /// (List, Array, custom), scope-exit cleanup is handled by the inline
+    /// `emit_managed_elements_drop_loop` generated inside `emit_type_drop`.
+    /// Adding `elem_drop_fn` on top of the inline loop would cause double-free
+    /// for any non-immortal managed type (string literals are immortal so both
+    /// paths are no-ops for them, which is why String works safely here).
+    ///
+    /// Array mutation operations (e.g. `set`) do not call `elem_drop_fn`, so
+    /// there is no mutation-path reason to add it for non-String elements either.
     fn resolve_elem_drop_fn(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
