@@ -69,6 +69,28 @@ fn main()
     );
 }
 
+// ── List<List<int>> scope-exit cleanup (task 2.5) ────────────────────────────
+
+#[test]
+fn test_list_of_lists_out_of_scope_no_crash() {
+    // List<List<int>> going out of scope must DecRef each inner list.
+    // Different from array/rc.rs which tests the Array<List<T>> constructor
+    // path; this exercises standalone List<List<int>> scope exit.
+    assert_runs(
+        r#"
+use system.collections.list
+
+fn make()
+    let outer = List([List([1, 2]), List([3, 4]), List([5])])
+    // outer goes out of scope — inner lists must be DecRef'd
+
+fn main()
+    make()
+    make()
+"#,
+    );
+}
+
 // ── Drop-fn setter wiring (task 2.4) ─────────────────────────────────────────
 
 #[test]

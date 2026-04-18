@@ -76,6 +76,28 @@ fn main()
     );
 }
 
+// ── Array<String> scope-exit cleanup (task 2.5) ──────────────────────────────
+
+#[test]
+fn test_array_of_strings_out_of_scope_no_crash() {
+    // Array<String> going out of scope inside a function must DecRef all string
+    // elements via the inline elem-drop loop.  If the loop is missing, the
+    // strings would leak; if it fires twice, they would double-free and crash.
+    assert_runs(
+        r#"
+use system.collections.array
+
+fn make_strings()
+    let a = ["one", "two", "three"]
+    // a goes out of scope here — strings must be DecRef'd
+
+fn main()
+    make_strings()
+    make_strings()
+"#,
+    );
+}
+
 // ── Drop-fn setter wiring (task 2.4) ─────────────────────────────────────────
 
 #[test]
