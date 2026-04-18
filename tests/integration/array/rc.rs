@@ -3,6 +3,79 @@
 
 use super::utils::*;
 
+// ── Array<List<T>> elem_drop_fn (task 2.4a) ──────────────────────────────────
+
+#[test]
+fn test_array_of_lists_no_crash() {
+    // Array<List<int>>: elem_drop_fn must be set so that miri_rt_array_free
+    // DecRefs each inner list.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    let a = [List([1, 2]), List([3, 4])]
+    println(f"{a[0][0]}")
+"#,
+        "1",
+    );
+}
+
+#[test]
+fn test_array_of_lists_reassign_no_crash() {
+    // Reassigning an Array<List<int>> must free the old array and DecRef each
+    // inner list.  Without elem_drop_fn the old inner lists would leak; with a
+    // buggy double-free they would crash.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    var a = [List([1, 2]), List([3, 4])]
+    a = [List([5, 6]), List([7, 8])]
+    println(f"{a[0][0]}")
+"#,
+        "5",
+    );
+}
+
+#[test]
+fn test_list_of_lists_no_double_free() {
+    // List([List([...])]) — the temp array inside the List constructor must NOT
+    // cause a double-free.  LIST_NEW_FROM_MANAGED_ARRAY IncRefs each element;
+    // the temp array's elem_drop_fn provides the matching DecRef.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    let outer = List([List([1, 2, 3])])
+    println(f"{outer[0][0]}")
+"#,
+        "1",
+    );
+}
+
+#[test]
+fn test_list_of_lists_reassign_no_crash() {
+    // Reassign a List<List<int>>; old inner list must be properly DecRef'd.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    var outer = List([List([1, 2])])
+    outer = List([List([3, 4])])
+    println(f"{outer[0][1]}")
+"#,
+        "4",
+    );
+}
+
 // ── Drop-fn setter wiring (task 2.4) ─────────────────────────────────────────
 
 #[test]

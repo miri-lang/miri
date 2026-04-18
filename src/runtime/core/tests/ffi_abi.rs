@@ -19,7 +19,8 @@ use miri_runtime_core::{miri_alloc, miri_alloc_zeroed, miri_free, miri_realloc};
 use miri_runtime_core::{
     miri_rt_array_clone, miri_rt_array_data, miri_rt_array_fill, miri_rt_array_free,
     miri_rt_array_get, miri_rt_array_get_mut, miri_rt_array_len, miri_rt_array_new,
-    miri_rt_array_set, miri_rt_array_set_val, miri_rt_array_sort, miri_rt_array_to_list,
+    miri_rt_array_set, miri_rt_array_set_elem_drop_fn, miri_rt_array_set_val, miri_rt_array_sort,
+    miri_rt_array_to_list,
 };
 
 // -----------------------------------------------------------------------
@@ -49,8 +50,8 @@ use miri_runtime_core::{
 use miri_runtime_core::{
     miri_rt_map_clear, miri_rt_map_contains_key, miri_rt_map_free, miri_rt_map_get,
     miri_rt_map_get_checked, miri_rt_map_is_empty, miri_rt_map_key_at, miri_rt_map_len,
-    miri_rt_map_new, miri_rt_map_remove, miri_rt_map_set, miri_rt_map_set_val_drop_fn,
-    miri_rt_map_value_at,
+    miri_rt_map_new, miri_rt_map_remove, miri_rt_map_set, miri_rt_map_set_key_drop_fn,
+    miri_rt_map_set_val_drop_fn, miri_rt_map_value_at,
 };
 
 // -----------------------------------------------------------------------
@@ -59,11 +60,12 @@ use miri_runtime_core::{
 use miri_runtime_core::{
     miri_rt_bool_to_string, miri_rt_float_to_string, miri_rt_int_to_string, miri_rt_string_char_at,
     miri_rt_string_char_count, miri_rt_string_clone, miri_rt_string_concat,
-    miri_rt_string_contains, miri_rt_string_data, miri_rt_string_ends_with, miri_rt_string_equals,
-    miri_rt_string_free, miri_rt_string_from_raw, miri_rt_string_is_empty, miri_rt_string_len,
-    miri_rt_string_new, miri_rt_string_repeat, miri_rt_string_replace, miri_rt_string_starts_with,
-    miri_rt_string_substring, miri_rt_string_to_lower, miri_rt_string_to_upper,
-    miri_rt_string_trim, miri_rt_string_trim_end, miri_rt_string_trim_start,
+    miri_rt_string_contains, miri_rt_string_data, miri_rt_string_decref_element,
+    miri_rt_string_ends_with, miri_rt_string_equals, miri_rt_string_free, miri_rt_string_from_raw,
+    miri_rt_string_is_empty, miri_rt_string_len, miri_rt_string_new, miri_rt_string_repeat,
+    miri_rt_string_replace, miri_rt_string_starts_with, miri_rt_string_substring,
+    miri_rt_string_to_lower, miri_rt_string_to_upper, miri_rt_string_trim, miri_rt_string_trim_end,
+    miri_rt_string_trim_start,
 };
 
 // -----------------------------------------------------------------------
@@ -148,6 +150,12 @@ fn test_array_ffi_abi() {
         miri_rt_array_fill(arr, &val as *const usize as *const u8);
 
         miri_rt_array_free(arr);
+
+        // miri_rt_array_set_elem_drop_fn: null-safe and callable
+        miri_rt_array_set_elem_drop_fn(std::ptr::null_mut(), 0);
+        let arr2 = miri_rt_array_new(2, 8);
+        miri_rt_array_set_elem_drop_fn(arr2, 0);
+        miri_rt_array_free(arr2);
 
         // Null safety
         assert_eq!(miri_rt_array_len(std::ptr::null()), 0);
@@ -293,6 +301,7 @@ fn test_map_ffi_abi() {
         assert!(v == 100 || v == 200);
 
         miri_rt_map_set_val_drop_fn(map, 0);
+        miri_rt_map_set_key_drop_fn(map, 0);
 
         assert_eq!(miri_rt_map_remove(map, 1), 1);
         assert_eq!(miri_rt_map_len(map), 1);
@@ -397,6 +406,10 @@ fn test_string_ffi_abi() {
         let bool_s = miri_rt_bool_to_string(1);
         assert!(!bool_s.is_null());
         miri_rt_string_free(bool_s);
+
+        // miri_rt_string_decref_element: null-safe and callable; immortal strings
+        // (RC high-bit set as negative isize) must not be freed.
+        miri_rt_string_decref_element(std::ptr::null_mut()); // null → no-op
 
         // Null safety
         assert_eq!(miri_rt_string_len(std::ptr::null()), 0);
