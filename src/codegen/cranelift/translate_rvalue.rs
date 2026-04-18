@@ -219,19 +219,6 @@ impl<'a> FunctionTranslator<'a> {
                                 }
                             }
 
-                            // If elements are managed strings, register a drop fn so
-                            // that miri_rt_array_free properly DecRefs each element.
-                            if let Some(drop_fn_addr) = Self::resolve_elem_drop_fn(
-                                builder, ctx, operands, type_ctx, ptr_type,
-                            )? {
-                                Self::call_rt_array_set_elem_drop_fn(
-                                    builder,
-                                    ctx,
-                                    array_ptr,
-                                    drop_fn_addr,
-                                )?;
-                            }
-
                             Ok(array_ptr)
                         }
                         AggregateKind::List => {
@@ -283,6 +270,19 @@ impl<'a> FunctionTranslator<'a> {
                                     {
                                         let drop_fn_addr = Self::get_rt_list_decref_element_addr(
                                             builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_list_set_elem_drop_fn(
+                                            builder,
+                                            ctx,
+                                            list_ptr,
+                                            drop_fn_addr,
+                                        )?;
+                                    }
+                                    Some(TypeKind::Custom(n, _))
+                                        if BuiltinCollectionKind::from_name(n).is_none() =>
+                                    {
+                                        let drop_fn_addr = Self::get_custom_decref_thunk_addr(
+                                            builder, ctx, n, ptr_type,
                                         )?;
                                         Self::call_rt_list_set_elem_drop_fn(
                                             builder,
@@ -376,6 +376,19 @@ impl<'a> FunctionTranslator<'a> {
                                             drop_fn_addr,
                                         )?;
                                     }
+                                    Some(TypeKind::Custom(n, _))
+                                        if BuiltinCollectionKind::from_name(n).is_none() =>
+                                    {
+                                        let drop_fn_addr = Self::get_custom_decref_thunk_addr(
+                                            builder, ctx, n, ptr_type,
+                                        )?;
+                                        Self::call_rt_map_set_val_drop_fn(
+                                            builder,
+                                            ctx,
+                                            map_ptr,
+                                            drop_fn_addr,
+                                        )?;
+                                    }
                                     _ => {}
                                 }
                             }
@@ -445,6 +458,19 @@ impl<'a> FunctionTranslator<'a> {
                                     {
                                         let drop_fn_addr = Self::get_rt_list_decref_element_addr(
                                             builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_set_set_elem_drop_fn(
+                                            builder,
+                                            ctx,
+                                            set_ptr,
+                                            drop_fn_addr,
+                                        )?;
+                                    }
+                                    Some(TypeKind::Custom(n, _))
+                                        if BuiltinCollectionKind::from_name(n).is_none() =>
+                                    {
+                                        let drop_fn_addr = Self::get_custom_decref_thunk_addr(
+                                            builder, ctx, n, ptr_type,
                                         )?;
                                         Self::call_rt_set_set_elem_drop_fn(
                                             builder,
@@ -979,42 +1005,6 @@ impl<'a> FunctionTranslator<'a> {
                 Some(&type_ctx.local_types[place.local.0].kind)
             }
             Operand::Constant(c) => Some(&c.ty.kind),
-        }
-    }
-
-    /// Returns the address of the appropriate element-drop function for an Array whose
-    /// first element is `operands[0]`, or `None` if elements are unmanaged.
-    ///
-    /// Only `String` is handled here.  For all other managed element types
-    /// (List, Array, custom), scope-exit cleanup is handled by the inline
-    /// `emit_managed_elements_drop_loop` generated inside `emit_type_drop`.
-    /// Adding `elem_drop_fn` on top of the inline loop would cause double-free
-    /// for any non-immortal managed type (string literals are immortal so both
-    /// paths are no-ops for them, which is why String works safely here).
-    ///
-    /// Array mutation operations (e.g. `set`) do not call `elem_drop_fn`, so
-    /// there is no mutation-path reason to add it for non-String elements either.
-    fn resolve_elem_drop_fn(
-        builder: &mut FunctionBuilder,
-        ctx: &mut ModuleCtx,
-        operands: &[Operand],
-        type_ctx: &TypeCtx,
-        ptr_type: cranelift_codegen::ir::Type,
-    ) -> Result<Option<Value>, String> {
-        let first_op = match operands.first() {
-            Some(op) => op,
-            None => return Ok(None),
-        };
-        let kind = match Self::first_operand_kind(first_op, type_ctx) {
-            Some(k) => k,
-            None => return Ok(None),
-        };
-        match kind {
-            TypeKind::String => {
-                let addr = Self::get_rt_string_decref_element_addr(builder, ctx, ptr_type)?;
-                Ok(Some(addr))
-            }
-            _ => Ok(None),
         }
     }
 

@@ -112,6 +112,24 @@ fn main()
 }
 
 #[test]
+fn test_array_of_nonimmmortal_strings_no_double_free() {
+    // Array<String> with dynamically-created (non-immortal) strings must not
+    // double-free: the inline elem-drop loop in emit_type_drop is sufficient;
+    // setting elem_drop_fn on top would cause use-after-free when RC hits zero.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn main()
+    let s = "hel" + "lo"
+    let arr = [s, "world"]
+    println(f"{arr[0]}")
+"#,
+        "hello",
+    );
+}
+
+#[test]
 fn test_array_alias_no_double_free() {
     // Two variables pointing at the same array should not double-free.
     // RC is incremented on alias, decremented when each goes out of scope.
