@@ -693,10 +693,16 @@ fn try_lower_collection_intrinsic(
     if args.len() == 1 && method_name == "push" && class_name == "List" {
         let obj_op = lower_expression(ctx, obj, None)?;
         let item_op = lower_expression(ctx, &args[0], None)?;
-        let item_ty = item_op.ty(&ctx.body).clone();
+        // Force Copy semantics so Perceus emits IncRef for managed sources.
+        // The original local's StorageDead provides the matching DecRef.
+        let item_copy = match item_op {
+            Operand::Move(p) => Operand::Copy(p),
+            other => other,
+        };
+        let item_ty = item_copy.ty(&ctx.body).clone();
         let item_local = ctx.push_temp(item_ty, args[0].span);
         ctx.push_statement(crate::mir::Statement {
-            kind: StatementKind::Assign(Place::new(item_local), Rvalue::Use(item_op)),
+            kind: StatementKind::Assign(Place::new(item_local), Rvalue::Use(item_copy)),
             span: args[0].span,
         });
         let func_op = Operand::Constant(Box::new(crate::mir::Constant {
@@ -724,10 +730,15 @@ fn try_lower_collection_intrinsic(
         let obj_op = lower_expression(ctx, obj, None)?;
         let index_op = lower_expression(ctx, &args[0], None)?;
         let item_op = lower_expression(ctx, &args[1], None)?;
-        let item_ty = item_op.ty(&ctx.body).clone();
+        // Force Copy semantics so Perceus emits IncRef for managed sources.
+        let item_copy = match item_op {
+            Operand::Move(p) => Operand::Copy(p),
+            other => other,
+        };
+        let item_ty = item_copy.ty(&ctx.body).clone();
         let item_local = ctx.push_temp(item_ty, args[1].span);
         ctx.push_statement(crate::mir::Statement {
-            kind: StatementKind::Assign(Place::new(item_local), Rvalue::Use(item_op)),
+            kind: StatementKind::Assign(Place::new(item_local), Rvalue::Use(item_copy)),
             span: args[1].span,
         });
         let func_op = Operand::Constant(Box::new(crate::mir::Constant {
@@ -761,8 +772,12 @@ fn try_lower_collection_intrinsic(
         let index_op = lower_expression(ctx, &args[0], None)?;
         let item_op = lower_expression(ctx, &args[1], None)?;
         // Use Copy semantics so Perceus inserts IncRef; the StorageDead
-        // below provides the matching DecRef.
+        // provides the matching DecRef.
         let obj_op = match obj_op {
+            Operand::Move(p) => Operand::Copy(p),
+            other => other,
+        };
+        let item_op = match item_op {
             Operand::Move(p) => Operand::Copy(p),
             other => other,
         };

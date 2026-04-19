@@ -142,3 +142,53 @@ fn main()
         "1",
     );
 }
+
+// ── Map index-write incref for managed elements (task 3.1) ───────────────────
+
+#[test]
+fn test_map_index_write_managed_val_incref() {
+    // m["k"] = managed_val — after the local val goes out of scope the map must
+    // still hold a valid reference (IncRef'd at write time).
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.map
+
+fn make_map() Map<String, String>
+    let v = "wor" + "ld"
+    var m = {"hello": "placeholder"}
+    m["hello"] = v
+    return m
+    // v goes out of scope — map must still own "world" (non-immortal concat string)
+
+fn main()
+    let m = make_map()
+    println(m["hello"])
+"#,
+        "world",
+    );
+}
+
+#[test]
+fn test_map_index_write_managed_key_incref() {
+    // m[key_var] = 42 — after the local key goes out of scope the map must still
+    // hold a valid key pointer (IncRef'd at write time via key_drop_fn).
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.map
+
+fn make_map() Map<String, int>
+    let k = "my" + "key"
+    var m = {"placeholder": 0}
+    m[k] = 99
+    return m
+    // k goes out of scope — map must still have "mykey" as a key (non-immortal)
+
+fn main()
+    let m = make_map()
+    println(f"{m.length()}")
+"#,
+        "2",
+    );
+}

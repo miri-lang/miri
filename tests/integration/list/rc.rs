@@ -223,3 +223,53 @@ println(f\"{l2[3]}\")
         "4\n40",
     );
 }
+
+// ── Push/insert incref for managed elements (task 3.1) ───────────────────────
+
+#[test]
+fn test_list_push_managed_val_incref() {
+    // push a managed String variable; after the local goes out of scope the list
+    // must still hold a valid reference (IncRef'd at push time).
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn push_string() [String]
+    let s = "hel" + "lo"
+    var l = List(["first"])
+    l.push(s)
+    return l
+    // s goes out of scope here — list must still own "hello"
+
+fn main()
+    let l = push_string()
+    println(l[1])
+"#,
+        "hello",
+    );
+}
+
+#[test]
+fn test_list_insert_managed_val_incref() {
+    // insert a managed String variable at index 0; after local goes out of scope
+    // the list must still hold a valid reference.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn insert_string() [String]
+    let s = "wor" + "ld"
+    var l = List(["first"])
+    l.insert(0, s)
+    return l
+    // s goes out of scope here
+
+fn main()
+    let l = insert_string()
+    println(l[0])
+"#,
+        "world",
+    );
+}
