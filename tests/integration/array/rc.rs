@@ -228,3 +228,52 @@ fn main()
         "hi",
     );
 }
+
+// ── Direct index write RC correctness ────────────────────────────────────────
+
+#[test]
+fn test_array_index_write_managed_no_leak() {
+    // a[i] = new_val (direct index write syntax) must use Copy semantics so that
+    // Perceus IncRefs the source before storing.  Without this the statement-level
+    // result-temp DecRef would free the just-stored allocation, leaving a dangling
+    // pointer in the slot.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.array
+
+fn main()
+    var a = ["seed"]
+    var i = 0
+    while i < 100
+        a[0] = "x" + "y"
+        i = i + 1
+    println(a[0])
+"#,
+        "xy",
+    );
+}
+
+// ── Set/overwrite decref old value (task 3.2) ────────────────────────────────
+
+#[test]
+fn test_array_set_overwrite_managed_no_leak() {
+    // array.set(i, new_val) must DecRef the old managed element. Overwriting the
+    // same slot 100 times with fresh concat strings would exhaust memory / crash
+    // if the old RC is never decremented.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.array
+
+fn main()
+    var a = ["seed"]
+    var i = 0
+    while i < 100
+        a.set(0, "x" + "y")
+        i = i + 1
+    println(a[0])
+"#,
+        "xy",
+    );
+}

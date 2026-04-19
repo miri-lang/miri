@@ -1746,15 +1746,92 @@ impl<'a> FunctionTranslator<'a> {
 
         builder.switch_to_block(cont_block);
 
-        // Compute element address and store
+        // Compute element address
         let elem_size_val = builder.ins().iconst(ptr_type, elem_size);
         let byte_offset = builder.ins().imul(idx_val, elem_size_val);
         let elem_addr = builder.ins().iadd(data_ptr, byte_offset);
+        // DecRef the old managed element before overwriting
+        Self::emit_managed_elem_decref(builder, ctx, elem_addr, elem_type_kind, ptr_type)?;
         builder.ins().store(MemFlags::new(), value, elem_addr, 0);
 
         builder.seal_block(panic_block);
         builder.seal_block(cont_block);
 
+        Ok(())
+    }
+
+    /// Decrements the RC of the existing element at `elem_addr` when the element
+    /// type is a managed heap object (String, List, or user-defined class).
+    ///
+    /// Called by `translate_collection_index_write` before the new value is stored
+    /// so that overwriting an existing slot does not leak the old value.
+    fn emit_managed_elem_decref(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        elem_addr: Value,
+        elem_type_kind: &TypeKind,
+        ptr_type: cl_types::Type,
+    ) -> Result<(), String> {
+        match elem_type_kind {
+            TypeKind::String => {
+                let old_val = builder.ins().load(ptr_type, MemFlags::new(), elem_addr, 0);
+                Self::call_cached_func(
+                    builder,
+                    ctx.module,
+                    &mut ctx.rt_string_decref_element_id,
+                    rt::STRING_DECREF_ELEMENT,
+                    &[ptr_type],
+                    &[],
+                    &[old_val],
+                )?;
+            }
+            TypeKind::List(_) => {
+                let old_val = builder.ins().load(ptr_type, MemFlags::new(), elem_addr, 0);
+                Self::call_cached_func(
+                    builder,
+                    ctx.module,
+                    &mut ctx.rt_list_decref_element_id,
+                    rt::LIST_DECREF_ELEMENT,
+                    &[ptr_type],
+                    &[],
+                    &[old_val],
+                )?;
+            }
+            TypeKind::Custom(name, _) => {
+                match BuiltinCollectionKind::from_name(name) {
+                    Some(BuiltinCollectionKind::List) => {
+                        let old_val = builder.ins().load(ptr_type, MemFlags::new(), elem_addr, 0);
+                        Self::call_cached_func(
+                            builder,
+                            ctx.module,
+                            &mut ctx.rt_list_decref_element_id,
+                            rt::LIST_DECREF_ELEMENT,
+                            &[ptr_type],
+                            &[],
+                            &[old_val],
+                        )?;
+                    }
+                    None => {
+                        // User-defined class
+                        let decref_name = format!("__decref_{name}");
+                        let old_val = builder.ins().load(ptr_type, MemFlags::new(), elem_addr, 0);
+                        let sig = cranelift_codegen::ir::Signature {
+                            params: vec![AbiParam::new(ptr_type)],
+                            returns: vec![],
+                            call_conv: builder.func.signature.call_conv,
+                        };
+                        let func_id = ctx
+                            .module
+                            .declare_function(&decref_name, Linkage::Import, &sig)
+                            .map_err(|e| format!("Failed to declare {decref_name}: {e}"))?;
+                        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+                        builder.ins().call(local_func, &[old_val]);
+                    }
+                    Some(_) => {} // Array/Map/Set as elements: not yet handled
+                }
+            }
+            _ => {} // Primitive types need no decref
+        }
         Ok(())
     }
 

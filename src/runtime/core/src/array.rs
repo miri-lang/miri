@@ -227,6 +227,9 @@ pub mod ffi {
 
     /// Sets the element at the given index.
     ///
+    /// If `elem_drop_fn` is set, calls it on the old element pointer before
+    /// overwriting so that managed elements have their RC decremented.
+    ///
     /// Returns true (1) if successful, false (0) if the index is out of bounds.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
@@ -241,6 +244,14 @@ pub mod ffi {
         let arr = &*ptr;
         if index >= arr.elem_count || arr.data.is_null() {
             return 0;
+        }
+        if arr.elem_drop_fn != 0 {
+            let drop_fn: unsafe extern "C" fn(*mut u8) = std::mem::transmute(arr.elem_drop_fn);
+            let slot = arr.data.add(index * arr.elem_size) as *const usize;
+            let old_ptr = *slot;
+            if old_ptr != 0 {
+                drop_fn(old_ptr as *mut u8);
+            }
         }
         let dest = arr.data.add(index * arr.elem_size);
         ptr::copy_nonoverlapping(elem, dest, arr.elem_size);
