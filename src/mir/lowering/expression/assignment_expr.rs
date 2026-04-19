@@ -338,6 +338,31 @@ pub(crate) fn lower_assignment_expr(
                         let obj_op = lower_expression(ctx, obj, None)?;
                         let key_op = lower_expression(ctx, idx, None)?;
 
+                        // Donate managed val/key references to the map by emitting
+                        // explicit IncRef statements. The original locals' StorageDead
+                        // will emit the matching DecRef, leaving RC=1 in the map.
+                        let val_ty = val.ty(&ctx.body).clone();
+                        if ctx.is_perceus_managed(&val_ty.kind) {
+                            if let Operand::Copy(place) | Operand::Move(place) = &val {
+                                ctx.push_statement(crate::mir::Statement {
+                                    kind: MirStatementKind::IncRef(place.clone()),
+                                    span: expr.span,
+                                });
+                            }
+                        }
+                        let val_arg = val.clone();
+
+                        let key_ty = key_op.ty(&ctx.body).clone();
+                        if ctx.is_perceus_managed(&key_ty.kind) {
+                            if let Operand::Copy(place) | Operand::Move(place) = &key_op {
+                                ctx.push_statement(crate::mir::Statement {
+                                    kind: MirStatementKind::IncRef(place.clone()),
+                                    span: expr.span,
+                                });
+                            }
+                        }
+                        let key_arg = key_op;
+
                         let func_op = Operand::Constant(Box::new(crate::mir::Constant {
                             span: expr.span,
                             ty: Type::new(TypeKind::Identifier, expr.span),
@@ -353,7 +378,7 @@ pub(crate) fn lower_assignment_expr(
                         ctx.set_terminator(crate::mir::Terminator::new(
                             crate::mir::TerminatorKind::Call {
                                 func: func_op,
-                                args: vec![obj_op, key_op, val.clone()],
+                                args: vec![obj_op, key_arg, val_arg],
                                 destination: Place::new(dummy_dest),
                                 target: Some(target_bb),
                             },
@@ -361,14 +386,24 @@ pub(crate) fn lower_assignment_expr(
                         ));
                         ctx.set_current_block(target_bb);
 
+                        // Convert Move→Copy so lower_statement's result-temp
+                        // creates a neutral IncRef/DecRef pair rather than a bare
+                        // DecRef that would consume the RC donated to the map.
+                        let ret_val = match val {
+                            Operand::Move(p) => Operand::Copy(p),
+                            other => other,
+                        };
                         if let Some(d) = dest {
                             ctx.push_statement(crate::mir::Statement {
-                                kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(val.clone())),
+                                kind: MirStatementKind::Assign(
+                                    d.clone(),
+                                    Rvalue::Use(ret_val.clone()),
+                                ),
                                 span: expr.span,
                             });
                             return Ok(Operand::Copy(d));
                         } else {
-                            return Ok(val);
+                            return Ok(ret_val);
                         }
                     }
                 }

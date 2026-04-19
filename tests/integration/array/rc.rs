@@ -202,3 +202,29 @@ fn main()
         "60",
     );
 }
+
+// ── Array.set incref for managed elements (task 3.1) ─────────────────────────
+
+#[test]
+fn test_array_set_managed_val_incref() {
+    // array.set with a managed String variable; after the local goes out of scope
+    // the array must still hold a valid reference (IncRef'd at set time).
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.array
+
+fn set_string() [String; 2]
+    let s = "h" + "i"
+    var a = ["", ""]
+    a.set(0, s)
+    return a
+    // s goes out of scope — array must still own "hi"
+
+fn main()
+    let a = set_string()
+    println(a[0])
+"#,
+        "hi",
+    );
+}
