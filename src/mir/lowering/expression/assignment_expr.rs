@@ -443,6 +443,16 @@ pub(crate) fn lower_assignment_expr(
                 let mut target_place = obj_place;
                 target_place.projection.push(PlaceElem::Index(index_local));
 
+                // Convert Move→Copy for managed values so that Perceus inserts an
+                // IncRef and the slot gets its own reference.  Without this, a
+                // Move would leave the source RC untouched while lower_statement's
+                // result-temp DecRef would free the just-stored allocation.
+                // The pattern mirrors the map index-write case above.
+                let val = match val {
+                    Operand::Move(p) => Operand::Copy(p),
+                    other => other,
+                };
+
                 // Handle simple assignment vs compound assignment
                 match op {
                     crate::ast::operator::AssignmentOp::Assign => {
