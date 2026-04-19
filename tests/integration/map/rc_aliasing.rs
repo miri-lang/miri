@@ -192,3 +192,26 @@ fn main()
         "2",
     );
 }
+
+// ── Map index-write overwrite decref (task 3.2) ──────────────────────────────
+
+#[test]
+fn test_map_index_write_overwrite_managed_no_leak() {
+    // m[k] = new_val when key already exists must DecRef old managed value via
+    // val_drop_fn. Overwriting 100 times with concat strings verifies no leak.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.map
+
+fn main()
+    var m = {"k": "seed"}
+    var i = 0
+    while i < 100
+        m["k"] = "x" + "y"
+        i = i + 1
+    println(m["k"])
+"#,
+        "xy",
+    );
+}

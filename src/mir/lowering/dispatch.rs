@@ -771,6 +771,13 @@ fn try_lower_collection_intrinsic(
         };
         let index_op = lower_expression(ctx, &args[0], None)?;
         let item_op = lower_expression(ctx, &args[1], None)?;
+        // Capture the item source local before converting Move→Copy so we can
+        // emit StorageDead for it after the assignment.  This gives Perceus the
+        // matching DecRef for the IncRef it inserts for the Copy use below.
+        let item_op_src = match &item_op {
+            Operand::Copy(p) | Operand::Move(p) => Some(p.local),
+            _ => None,
+        };
         // Use Copy semantics so Perceus inserts IncRef; the StorageDead
         // provides the matching DecRef.
         let obj_op = match obj_op {
@@ -807,9 +814,16 @@ fn try_lower_collection_intrinsic(
         });
         // Release the obj_local temp — triggers DecRef to match the IncRef above.
         ctx.emit_temp_drop(obj_local, obj_watermark, *span);
-        // Also release the source local if it was a temp from expression lowering.
+        // Release the obj source local if it was a fresh temp from expression lowering.
         if let Some(src_local) = obj_op_src {
             ctx.emit_temp_drop(src_local, obj_watermark, *span);
+        }
+        // Release the item source local so Perceus inserts the matching DecRef for
+        // the IncRef it inserted when the Copy was used in the indexed assignment.
+        // Without this, a concat result (e.g. "x"+"y") would have RC=2 after the
+        // assignment instead of RC=1, leaking on every subsequent overwrite.
+        if let Some(item_src) = item_op_src {
+            ctx.emit_temp_drop(item_src, obj_watermark, *span);
         }
         return Ok(Some(Operand::Constant(Box::new(crate::mir::Constant {
             span: *span,

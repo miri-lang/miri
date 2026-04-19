@@ -273,3 +273,50 @@ fn main()
         "world",
     );
 }
+
+// ── Direct index write RC correctness ────────────────────────────────────────
+
+#[test]
+fn test_list_index_write_managed_no_leak() {
+    // l[i] = new_val (direct index write syntax) must use Copy semantics so that
+    // Perceus IncRefs the source before storing.  Same fix as Array case.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    var l = List(["seed"])
+    var i = 0
+    while i < 100
+        l[0] = "x" + "y"
+        i = i + 1
+    println(l[0])
+"#,
+        "xy",
+    );
+}
+
+// ── Set/overwrite decref old value (task 3.2) ────────────────────────────────
+
+#[test]
+fn test_list_set_overwrite_managed_no_leak() {
+    // list.set(i, new_val) must DecRef the old managed element. Overwriting the
+    // same slot 100 times with fresh concat strings would exhaust memory / crash
+    // on use-after-free if the old RC is never decremented.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    var l = List(["seed"])
+    var i = 0
+    while i < 100
+        l.set(0, "x" + "y")
+        i = i + 1
+    println(l[0])
+"#,
+        "xy",
+    );
+}

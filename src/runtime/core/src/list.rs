@@ -523,6 +523,9 @@ pub mod ffi {
 
     /// Sets the element at the given index.
     /// Returns true (1) if successful, false (0) if the index was out of bounds.
+    ///
+    /// If `elem_drop_fn` is set, calls it on the old element pointer before
+    /// overwriting so that managed elements have their RC decremented.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_set(ptr: *mut MiriList, index: usize, val: usize) -> u8 {
@@ -530,6 +533,17 @@ pub mod ffi {
             return 0;
         }
         let list = &mut *ptr;
+        if index >= list.len {
+            return 0;
+        }
+        if list.elem_drop_fn != 0 {
+            let drop_fn: unsafe extern "C" fn(*mut u8) = std::mem::transmute(list.elem_drop_fn);
+            let slot = list.data.add(index * list.elem_size) as *const usize;
+            let old_ptr = *slot;
+            if old_ptr != 0 {
+                drop_fn(old_ptr as *mut u8);
+            }
+        }
         if list.set(index, &val as *const usize as *const u8) {
             1
         } else {
