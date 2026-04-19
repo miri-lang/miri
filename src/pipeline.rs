@@ -879,7 +879,11 @@ impl Pipeline {
                                     if cd.methods.contains_key(md.name.as_str()) {
                                         continue;
                                     }
-                                    let mangled = format!("{}_{}", class_name, md.name);
+                                    let mut mangled =
+                                        String::with_capacity(class_name.len() + 1 + md.name.len());
+                                    mangled.push_str(class_name);
+                                    mangled.push('_');
+                                    mangled.push_str(&md.name);
                                     if lowered_names.contains(&mangled) {
                                         continue;
                                     }

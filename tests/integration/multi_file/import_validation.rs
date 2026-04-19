@@ -130,7 +130,7 @@ fn test_selective_import_nonexistent_constant_errors() {
         &[
             (
                 "main.mi",
-                concat!("use local.config.settings.{REAL_LIMIT, FAKE_LIMIT}\n",),
+                "use local.config.settings.{REAL_LIMIT, FAKE_LIMIT}\n",
             ),
             ("config/settings.mi", "const REAL_LIMIT int = 100\n"),
         ],

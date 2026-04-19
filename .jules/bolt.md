@@ -25,3 +25,7 @@
 ## 2024-05-26 - [Eliminate String Allocations in VTable Collection]
 **Learning:** During vtable method collection in both the type checker and Cranelift translator, `String` cloning (`method_name.clone()`, `m.to_string()`) was used when building a list of method names for layout generation and lookup. This resulted in unnecessary heap allocations when these string representations were only needed for transient iteration or index finding.
 **Action:** Use `&str` instead of `String` when collecting method names into transient collections like `Vec<&str>` during vtable generation and lookup. This completely bypasses the heap allocation overhead without compromising correctness or safety.
+
+## 2024-05-27 - [Avoid String Macro Formatting in MIR Mangling]
+**Learning:** In the MIR lowerer, mangling strings with `format!("{}_{}", class_name, md.name)` is a performance bottleneck since `format!` parses the format string at runtime and may cause intermediate allocations.
+**Action:** Replace `format!` macros with manual string allocation using `String::with_capacity` and `push_str()` when constructing short, repeated mangled symbols.
