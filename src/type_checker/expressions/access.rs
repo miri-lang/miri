@@ -830,14 +830,14 @@ impl TypeChecker {
 
                         if let Some(TypeDefinition::Class(class_def)) = search_def {
                             for trait_name in &class_def.traits {
-                                let mut to_check = vec![trait_name.clone()];
+                                let mut to_check = vec![trait_name.as_str()];
                                 let mut visited = std::collections::HashSet::new();
                                 while let Some(t_name) = to_check.pop() {
-                                    if !visited.insert(t_name.clone()) {
+                                    if !visited.insert(t_name) {
                                         continue;
                                     }
                                     if let Some(TypeDefinition::Trait(t_def)) =
-                                        self.global_type_definitions.get(&t_name).cloned()
+                                        self.global_type_definitions.get(t_name)
                                     {
                                         if let Some(method_info) = t_def.methods.get(prop_name) {
                                             if !method_info.is_abstract {
@@ -873,7 +873,7 @@ impl TypeChecker {
                                                 )));
                                             }
                                         }
-                                        to_check.extend(t_def.parent_traits.iter().cloned());
+                                        to_check.extend(t_def.parent_traits.iter().map(|s| s.as_str()));
                                     }
                                 }
                             }
@@ -929,17 +929,17 @@ impl TypeChecker {
                 // Trait-typed variable: look up the method in the trait's method table
                 // (and recursively in parent traits). This enables polymorphic dispatch
                 // through a trait-typed variable: `let x MyTrait = ConcreteImpl()`.
-                let mut to_check = vec![name.clone()];
+                let mut to_check = vec![name.as_str()];
                 let mut visited = std::collections::HashSet::new();
                 while let Some(t_name) = to_check.pop() {
-                    if !visited.insert(t_name.clone()) {
+                    if !visited.insert(t_name) {
                         continue;
                     }
-                    let t_def_opt = if t_name == name {
-                        Some(trait_def.clone())
+                    let t_def_opt: Option<&crate::type_checker::context::TraitDefinition> = if t_name == name {
+                        Some(&trait_def)
                     } else {
-                        match self.global_type_definitions.get(&t_name) {
-                            Some(TypeDefinition::Trait(d)) => Some(d.clone()),
+                        match self.global_type_definitions.get(t_name) {
+                            Some(TypeDefinition::Trait(d)) => Some(d),
                             _ => None,
                         }
                     };
@@ -971,29 +971,28 @@ impl TypeChecker {
                                 return_type: return_type_expr,
                             })));
                         }
-                        to_check.extend(t_def.parent_traits.iter().cloned());
+                        to_check.extend(t_def.parent_traits.iter().map(|s: &String| s.as_str()));
                     }
                 }
                 // Method not found in any trait
-                let all_methods: Vec<String> = {
+                let all_methods: Vec<&str> = {
                     let mut methods = Vec::new();
-                    let mut all_to_check = vec![name.clone()];
+                    let mut all_to_check = vec![name.as_str()];
                     let mut all_visited = std::collections::HashSet::new();
                     while let Some(t_name) = all_to_check.pop() {
-                        if !all_visited.insert(t_name.clone()) {
+                        if !all_visited.insert(t_name) {
                             continue;
                         }
                         if let Some(TypeDefinition::Trait(td)) =
-                            self.global_type_definitions.get(&t_name)
+                            self.global_type_definitions.get(t_name)
                         {
-                            methods.extend(td.methods.keys().cloned());
-                            all_to_check.extend(td.parent_traits.iter().cloned());
+                            methods.extend(td.methods.keys().map(|s| s.as_str()));
+                            all_to_check.extend(td.parent_traits.iter().map(|s| s.as_str()));
                         }
                     }
                     methods
                 };
-                let candidate_refs: Vec<&str> = all_methods.iter().map(|s| s.as_str()).collect();
-                if let Some(suggestion) = find_best_match(prop_name, &candidate_refs) {
+                if let Some(suggestion) = find_best_match(prop_name, &all_methods) {
                     self.report_error_with_help(
                         format!("Trait '{}' has no method '{}'", name, prop_name),
                         span,
