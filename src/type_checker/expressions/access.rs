@@ -873,7 +873,8 @@ impl TypeChecker {
                                                 )));
                                             }
                                         }
-                                        to_check.extend(t_def.parent_traits.iter().map(|s| s.as_str()));
+                                        to_check
+                                            .extend(t_def.parent_traits.iter().map(|s| s.as_str()));
                                     }
                                 }
                             }
@@ -935,14 +936,15 @@ impl TypeChecker {
                     if !visited.insert(t_name) {
                         continue;
                     }
-                    let t_def_opt: Option<&crate::type_checker::context::TraitDefinition> = if t_name == name {
-                        Some(&trait_def)
-                    } else {
-                        match self.global_type_definitions.get(t_name) {
-                            Some(TypeDefinition::Trait(d)) => Some(d),
-                            _ => None,
-                        }
-                    };
+                    let t_def_opt: Option<&crate::type_checker::context::TraitDefinition> =
+                        if t_name == name {
+                            Some(&trait_def)
+                        } else {
+                            match self.global_type_definitions.get(t_name) {
+                                Some(TypeDefinition::Trait(d)) => Some(d),
+                                _ => None,
+                            }
+                        };
                     if let Some(t_def) = t_def_opt {
                         if let Some(method_info) = t_def.methods.get(prop_name) {
                             let params: Vec<Parameter> = method_info
