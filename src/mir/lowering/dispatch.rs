@@ -691,10 +691,17 @@ fn try_lower_collection_intrinsic(
 
     // push(item) on List: emit miri_rt_list_push directly.
     if args.len() == 1 && method_name == "push" && class_name == "List" {
+        let item_watermark = ctx.body.local_decls.len();
         let obj_op = lower_expression(ctx, obj, None)?;
         let item_op = lower_expression(ctx, &args[0], None)?;
+        // Capture the source local before Move→Copy conversion so we can emit
+        // StorageDead for fresh temps after the call.  This gives Perceus the
+        // DecRef that balances the IncRef it inserts for the Copy use below.
+        let item_op_src = match &item_op {
+            Operand::Copy(p) | Operand::Move(p) => Some(p.local),
+            _ => None,
+        };
         // Force Copy semantics so Perceus emits IncRef for managed sources.
-        // The original local's StorageDead provides the matching DecRef.
         let item_copy = match item_op {
             Operand::Move(p) => Operand::Copy(p),
             other => other,
@@ -722,14 +729,27 @@ fn try_lower_collection_intrinsic(
             *span,
         ));
         ctx.set_current_block(target_bb);
+        // Release the source local if it was a fresh temp (e.g. a literal or
+        // function-call result).  Perceus then inserts the DecRef that balances
+        // the IncRef from the Copy in the Assign above, leaving the list with
+        // exactly one reference to the pushed element.
+        if let Some(src) = item_op_src {
+            ctx.emit_temp_drop(src, item_watermark, args[0].span);
+        }
         return Ok(Some(Operand::Copy(Place::new(dummy_dest))));
     }
 
     // insert(index, item) on List: emit miri_rt_list_insert directly.
     if args.len() == 2 && method_name == "insert" && class_name == "List" {
+        let item_watermark = ctx.body.local_decls.len();
         let obj_op = lower_expression(ctx, obj, None)?;
         let index_op = lower_expression(ctx, &args[0], None)?;
         let item_op = lower_expression(ctx, &args[1], None)?;
+        // Capture the source local before Move→Copy conversion.
+        let item_op_src = match &item_op {
+            Operand::Copy(p) | Operand::Move(p) => Some(p.local),
+            _ => None,
+        };
         // Force Copy semantics so Perceus emits IncRef for managed sources.
         let item_copy = match item_op {
             Operand::Move(p) => Operand::Copy(p),
@@ -758,6 +778,9 @@ fn try_lower_collection_intrinsic(
             *span,
         ));
         ctx.set_current_block(target_bb);
+        if let Some(src) = item_op_src {
+            ctx.emit_temp_drop(src, item_watermark, args[1].span);
+        }
         return Ok(Some(Operand::Copy(Place::new(result_temp))));
     }
 

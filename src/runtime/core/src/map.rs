@@ -709,6 +709,32 @@ pub mod ffi {
         // Free the [RC][struct] block
         free_with_rc(ptr as *mut u8, STRUCT_SIZE);
     }
+
+    /// Decrements the RC of a managed Map element and frees it if RC reaches zero.
+    ///
+    /// Used as a direct decref callback when an Array slot is overwritten
+    /// (e.g., `arr[i] = new_map` where the element type is a Map).
+    ///
+    /// LIMITATION: Calls `miri_rt_map_free` directly. `miri_rt_map_free` does
+    /// handle managed map values via the inline codegen drop loop, so one level
+    /// of nesting is handled. The normal drop path (scope exit) handles all
+    /// levels via inline codegen loops regardless.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_map_decref_element(ptr: *mut u8) {
+        if ptr.is_null() {
+            return;
+        }
+        let rc_ptr = (ptr as usize - crate::rc::RC_HEADER_SIZE) as *mut usize;
+        let rc = *rc_ptr;
+        if (rc as isize) < 0 {
+            return;
+        }
+        *rc_ptr -= 1;
+        if *rc_ptr == 0 {
+            miri_rt_map_free(ptr as *mut MiriMap);
+        }
+    }
 } // pub mod ffi
 
 // =============================================================================

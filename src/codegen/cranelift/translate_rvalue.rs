@@ -291,6 +291,81 @@ impl<'a> FunctionTranslator<'a> {
                                             drop_fn_addr,
                                         )?;
                                     }
+                                    Some(TypeKind::Array(_, _)) => {
+                                        let drop_fn_addr = Self::get_rt_array_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_list_set_elem_drop_fn(
+                                            builder,
+                                            ctx,
+                                            list_ptr,
+                                            drop_fn_addr,
+                                        )?;
+                                    }
+                                    Some(TypeKind::Set(_)) => {
+                                        let drop_fn_addr = Self::get_rt_set_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_list_set_elem_drop_fn(
+                                            builder,
+                                            ctx,
+                                            list_ptr,
+                                            drop_fn_addr,
+                                        )?;
+                                    }
+                                    Some(TypeKind::Map(_, _)) => {
+                                        let drop_fn_addr = Self::get_rt_map_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_list_set_elem_drop_fn(
+                                            builder,
+                                            ctx,
+                                            list_ptr,
+                                            drop_fn_addr,
+                                        )?;
+                                    }
+                                    Some(TypeKind::Custom(n, Some(_)))
+                                        if BuiltinCollectionKind::from_name(n)
+                                            == Some(BuiltinCollectionKind::Array) =>
+                                    {
+                                        let drop_fn_addr = Self::get_rt_array_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_list_set_elem_drop_fn(
+                                            builder,
+                                            ctx,
+                                            list_ptr,
+                                            drop_fn_addr,
+                                        )?;
+                                    }
+                                    Some(TypeKind::Custom(n, Some(_)))
+                                        if BuiltinCollectionKind::from_name(n)
+                                            == Some(BuiltinCollectionKind::Set) =>
+                                    {
+                                        let drop_fn_addr = Self::get_rt_set_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_list_set_elem_drop_fn(
+                                            builder,
+                                            ctx,
+                                            list_ptr,
+                                            drop_fn_addr,
+                                        )?;
+                                    }
+                                    Some(TypeKind::Custom(n, Some(_)))
+                                        if BuiltinCollectionKind::from_name(n)
+                                            == Some(BuiltinCollectionKind::Map) =>
+                                    {
+                                        let drop_fn_addr = Self::get_rt_map_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_list_set_elem_drop_fn(
+                                            builder,
+                                            ctx,
+                                            list_ptr,
+                                            drop_fn_addr,
+                                        )?;
+                                    }
                                     _ => {}
                                 }
                             }
@@ -389,6 +464,81 @@ impl<'a> FunctionTranslator<'a> {
                                             drop_fn_addr,
                                         )?;
                                     }
+                                    Some(TypeKind::Array(_, _)) => {
+                                        let drop_fn_addr = Self::get_rt_array_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_map_set_val_drop_fn(
+                                            builder,
+                                            ctx,
+                                            map_ptr,
+                                            drop_fn_addr,
+                                        )?;
+                                    }
+                                    Some(TypeKind::Set(_)) => {
+                                        let drop_fn_addr = Self::get_rt_set_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_map_set_val_drop_fn(
+                                            builder,
+                                            ctx,
+                                            map_ptr,
+                                            drop_fn_addr,
+                                        )?;
+                                    }
+                                    Some(TypeKind::Map(_, _)) => {
+                                        let drop_fn_addr = Self::get_rt_map_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_map_set_val_drop_fn(
+                                            builder,
+                                            ctx,
+                                            map_ptr,
+                                            drop_fn_addr,
+                                        )?;
+                                    }
+                                    Some(TypeKind::Custom(n, Some(_)))
+                                        if BuiltinCollectionKind::from_name(n)
+                                            == Some(BuiltinCollectionKind::Array) =>
+                                    {
+                                        let drop_fn_addr = Self::get_rt_array_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_map_set_val_drop_fn(
+                                            builder,
+                                            ctx,
+                                            map_ptr,
+                                            drop_fn_addr,
+                                        )?;
+                                    }
+                                    Some(TypeKind::Custom(n, Some(_)))
+                                        if BuiltinCollectionKind::from_name(n)
+                                            == Some(BuiltinCollectionKind::Set) =>
+                                    {
+                                        let drop_fn_addr = Self::get_rt_set_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_map_set_val_drop_fn(
+                                            builder,
+                                            ctx,
+                                            map_ptr,
+                                            drop_fn_addr,
+                                        )?;
+                                    }
+                                    Some(TypeKind::Custom(n, Some(_)))
+                                        if BuiltinCollectionKind::from_name(n)
+                                            == Some(BuiltinCollectionKind::Map) =>
+                                    {
+                                        let drop_fn_addr = Self::get_rt_map_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_map_set_val_drop_fn(
+                                            builder,
+                                            ctx,
+                                            map_ptr,
+                                            drop_fn_addr,
+                                        )?;
+                                    }
                                     _ => {}
                                 }
                             }
@@ -471,6 +621,81 @@ impl<'a> FunctionTranslator<'a> {
                                     {
                                         let drop_fn_addr = Self::get_custom_decref_thunk_addr(
                                             builder, ctx, n, ptr_type,
+                                        )?;
+                                        Self::call_rt_set_set_elem_drop_fn(
+                                            builder,
+                                            ctx,
+                                            set_ptr,
+                                            drop_fn_addr,
+                                        )?;
+                                    }
+                                    Some(TypeKind::Array(_, _)) => {
+                                        let drop_fn_addr = Self::get_rt_array_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_set_set_elem_drop_fn(
+                                            builder,
+                                            ctx,
+                                            set_ptr,
+                                            drop_fn_addr,
+                                        )?;
+                                    }
+                                    Some(TypeKind::Set(_)) => {
+                                        let drop_fn_addr = Self::get_rt_set_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_set_set_elem_drop_fn(
+                                            builder,
+                                            ctx,
+                                            set_ptr,
+                                            drop_fn_addr,
+                                        )?;
+                                    }
+                                    Some(TypeKind::Map(_, _)) => {
+                                        let drop_fn_addr = Self::get_rt_map_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_set_set_elem_drop_fn(
+                                            builder,
+                                            ctx,
+                                            set_ptr,
+                                            drop_fn_addr,
+                                        )?;
+                                    }
+                                    Some(TypeKind::Custom(n, Some(_)))
+                                        if BuiltinCollectionKind::from_name(n)
+                                            == Some(BuiltinCollectionKind::Array) =>
+                                    {
+                                        let drop_fn_addr = Self::get_rt_array_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_set_set_elem_drop_fn(
+                                            builder,
+                                            ctx,
+                                            set_ptr,
+                                            drop_fn_addr,
+                                        )?;
+                                    }
+                                    Some(TypeKind::Custom(n, Some(_)))
+                                        if BuiltinCollectionKind::from_name(n)
+                                            == Some(BuiltinCollectionKind::Set) =>
+                                    {
+                                        let drop_fn_addr = Self::get_rt_set_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?;
+                                        Self::call_rt_set_set_elem_drop_fn(
+                                            builder,
+                                            ctx,
+                                            set_ptr,
+                                            drop_fn_addr,
+                                        )?;
+                                    }
+                                    Some(TypeKind::Custom(n, Some(_)))
+                                        if BuiltinCollectionKind::from_name(n)
+                                            == Some(BuiltinCollectionKind::Map) =>
+                                    {
+                                        let drop_fn_addr = Self::get_rt_map_decref_element_addr(
+                                            builder, ctx, ptr_type,
                                         )?;
                                         Self::call_rt_set_set_elem_drop_fn(
                                             builder,

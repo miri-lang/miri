@@ -120,3 +120,28 @@ println(f"{s2.length()}")
         "true\n2",
     );
 }
+
+// ── Nested collection elem_drop_fn ───────────────────────────────────────────
+
+#[test]
+fn test_set_of_lists_clear_no_leak() {
+    // Set<List<int>>: elem_drop_fn must be miri_rt_list_decref_element so that
+    // clear() properly DecRefs each inner list.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+use system.collections.set
+
+fn main()
+    var s = {List([1, 2]), List([3, 4])}
+    var i = 0
+    while i < 50
+        s.clear()
+        s.add(List([5, 6]))
+        i = i + 1
+    println(f"{s.length()}")
+"#,
+        "1",
+    );
+}

@@ -215,3 +215,48 @@ fn main()
         "xy",
     );
 }
+
+// ── Nested collection val_drop_fn ────────────────────────────────────────────
+
+#[test]
+fn test_map_of_arrays_remove_no_leak() {
+    // Map<String, Array<int>>: val_drop_fn must be miri_rt_array_decref_element
+    // so that remove() properly DecRefs the inner array.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn main()
+    var m = {"x": [1, 2, 3]}
+    var i = 0
+    while i < 50
+        m["x"] = [4, 5, 6]
+        i = i + 1
+    let v = m["x"]
+    println(f"{v[0]}")
+"#,
+        "4",
+    );
+}
+
+#[test]
+fn test_map_of_maps_remove_no_leak() {
+    // Map<String, Map<String,int>>: val_drop_fn must be miri_rt_map_decref_element
+    // so that overwriting a key properly DecRefs the old inner map.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn main()
+    var m = {"x": {"a": 1}}
+    var i = 0
+    while i < 50
+        m["x"] = {"b": 2}
+        i = i + 1
+    let inner = m["x"]
+    let val = inner["b"]
+    println(f"{val}")
+"#,
+        "2",
+    );
+}

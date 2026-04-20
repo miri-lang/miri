@@ -102,8 +102,8 @@ fn main()
 
 #[test]
 fn test_array_of_strings_no_crash() {
-    // Array<String>: elem_drop_fn must be registered so that miri_rt_array_free
-    // DecRefs each string element. Verifies the setter call is emitted.
+    // Array<String>: the inline element-drop loop in emit_type_drop must DecRef
+    // each string element when the array goes out of scope.
     assert_runs_with_output(
         r#"
 use system.io
@@ -251,6 +251,78 @@ fn main()
     println(a[0])
 "#,
         "xy",
+    );
+}
+
+// ── Nested collection index-write decref ─────────────────────────────────────
+
+#[test]
+fn test_array_of_arrays_index_write_no_leak() {
+    // Array<Array<int>>: overwriting outer[0] via direct index write must DecRef
+    // the old inner array. Running 100 iterations leaks without the fix.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn main()
+    let a = [1, 2]
+    let b = [3, 4]
+    var outer = [a, b]
+    var i = 0
+    while i < 100
+        let new_inner = [5, 6]
+        outer[0] = new_inner
+        i = i + 1
+    println(f"{outer[0][0]}")
+"#,
+        "5",
+    );
+}
+
+#[test]
+fn test_array_of_sets_index_write_no_leak() {
+    // Array<Set<int>>: overwriting outer[0] must DecRef the old inner set.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.set
+
+fn main()
+    let s1 = {1, 2}
+    let s2 = {3, 4}
+    var outer = [s1, s2]
+    var i = 0
+    while i < 100
+        let new_set = {5, 6}
+        outer[0] = new_set
+        i = i + 1
+    println(f"{outer[0].length()}")
+"#,
+        "2",
+    );
+}
+
+#[test]
+fn test_array_of_maps_index_write_no_leak() {
+    // Array<Map<String,int>>: overwriting outer[0] must DecRef the old inner map.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn main()
+    let m1 = {"a": 1}
+    let m2 = {"b": 2}
+    var outer = [m1, m2]
+    var i = 0
+    while i < 100
+        let new_map = {"c": 3}
+        outer[0] = new_map
+        i = i + 1
+    let result = outer[0]
+    let val = result["c"]
+    println(f"{val}")
+"#,
+        "3",
     );
 }
 
