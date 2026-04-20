@@ -154,7 +154,7 @@ fn test_color_scheme_detect() {
     // However, we can at least verify it returns a valid scheme (either colored or plain).
     let scheme = ColorScheme::detect();
     let is_colored = scheme.red == "\x1b[31m";
-    let is_plain = scheme.red == "";
+    let is_plain = scheme.red.is_empty();
     assert!(
         is_colored || is_plain,
         "detect() should return either a colored or plain scheme"
