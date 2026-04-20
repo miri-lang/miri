@@ -373,20 +373,69 @@ impl<'a> FunctionTranslator<'a> {
                                     FunctionTranslator::collection_elem_expr(array_kind)
                                 {
                                     if let ExpressionKind::Type(inner_ty, _) = &elem_expr.node {
-                                        if let TypeKind::Custom(type_name, _) = &inner_ty.kind {
-                                            if BuiltinCollectionKind::from_name(type_name).is_none()
-                                            {
-                                                let decref_addr =
-                                                    FunctionTranslator::get_custom_decref_thunk_addr(
-                                                        builder, ctx, type_name, ptr_type,
-                                                    )?;
-                                                FunctionTranslator::call_rt_list_set_elem_drop_fn(
-                                                    builder,
-                                                    ctx,
-                                                    list_ptr,
-                                                    decref_addr,
-                                                )?;
+                                        // The runtime unconditionally sets elem_drop_fn =
+                                        // miri_rt_list_decref_element for all managed types.
+                                        // Override here for non-List managed element types so that
+                                        // clear/remove_at call the correct decref function.
+                                        let decref_addr_opt: Option<
+                                            Result<cranelift_codegen::ir::Value, String>,
+                                        > = match &inner_ty.kind {
+                                            TypeKind::Array(_, _) => {
+                                                Some(FunctionTranslator::get_rt_array_decref_element_addr(
+                                                    builder, ctx, ptr_type,
+                                                ))
                                             }
+                                            TypeKind::Set(_) => {
+                                                Some(FunctionTranslator::get_rt_set_decref_element_addr(
+                                                    builder, ctx, ptr_type,
+                                                ))
+                                            }
+                                            TypeKind::Map(_, _) => {
+                                                Some(FunctionTranslator::get_rt_map_decref_element_addr(
+                                                    builder, ctx, ptr_type,
+                                                ))
+                                            }
+                                            TypeKind::Custom(type_name, Some(_))
+                                                if BuiltinCollectionKind::from_name(type_name)
+                                                    == Some(BuiltinCollectionKind::Array) =>
+                                            {
+                                                Some(FunctionTranslator::get_rt_array_decref_element_addr(
+                                                    builder, ctx, ptr_type,
+                                                ))
+                                            }
+                                            TypeKind::Custom(type_name, Some(_))
+                                                if BuiltinCollectionKind::from_name(type_name)
+                                                    == Some(BuiltinCollectionKind::Set) =>
+                                            {
+                                                Some(FunctionTranslator::get_rt_set_decref_element_addr(
+                                                    builder, ctx, ptr_type,
+                                                ))
+                                            }
+                                            TypeKind::Custom(type_name, Some(_))
+                                                if BuiltinCollectionKind::from_name(type_name)
+                                                    == Some(BuiltinCollectionKind::Map) =>
+                                            {
+                                                Some(FunctionTranslator::get_rt_map_decref_element_addr(
+                                                    builder, ctx, ptr_type,
+                                                ))
+                                            }
+                                            TypeKind::Custom(type_name, _)
+                                                if BuiltinCollectionKind::from_name(type_name)
+                                                    .is_none() =>
+                                            {
+                                                Some(FunctionTranslator::get_custom_decref_thunk_addr(
+                                                    builder, ctx, type_name, ptr_type,
+                                                ))
+                                            }
+                                            _ => None,
+                                        };
+                                        if let Some(decref_addr) = decref_addr_opt {
+                                            FunctionTranslator::call_rt_list_set_elem_drop_fn(
+                                                builder,
+                                                ctx,
+                                                list_ptr,
+                                                decref_addr?,
+                                            )?;
                                         }
                                     }
                                 }

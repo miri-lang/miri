@@ -17,10 +17,10 @@ use miri_runtime_core::{miri_alloc, miri_alloc_zeroed, miri_free, miri_realloc};
 // array
 // -----------------------------------------------------------------------
 use miri_runtime_core::{
-    miri_rt_array_clone, miri_rt_array_data, miri_rt_array_fill, miri_rt_array_free,
-    miri_rt_array_get, miri_rt_array_get_mut, miri_rt_array_len, miri_rt_array_new,
-    miri_rt_array_set, miri_rt_array_set_elem_drop_fn, miri_rt_array_set_val, miri_rt_array_sort,
-    miri_rt_array_to_list,
+    miri_rt_array_clone, miri_rt_array_data, miri_rt_array_decref_element, miri_rt_array_fill,
+    miri_rt_array_free, miri_rt_array_get, miri_rt_array_get_mut, miri_rt_array_len,
+    miri_rt_array_new, miri_rt_array_set, miri_rt_array_set_elem_drop_fn, miri_rt_array_set_val,
+    miri_rt_array_sort, miri_rt_array_to_list,
 };
 
 // -----------------------------------------------------------------------
@@ -39,19 +39,19 @@ use miri_runtime_core::{
 // set
 // -----------------------------------------------------------------------
 use miri_runtime_core::{
-    miri_rt_set_add, miri_rt_set_clear, miri_rt_set_contains, miri_rt_set_element_at,
-    miri_rt_set_free, miri_rt_set_is_empty, miri_rt_set_len, miri_rt_set_new, miri_rt_set_remove,
-    miri_rt_set_set_elem_drop_fn,
+    miri_rt_set_add, miri_rt_set_clear, miri_rt_set_contains, miri_rt_set_decref_element,
+    miri_rt_set_element_at, miri_rt_set_free, miri_rt_set_is_empty, miri_rt_set_len,
+    miri_rt_set_new, miri_rt_set_remove, miri_rt_set_set_elem_drop_fn,
 };
 
 // -----------------------------------------------------------------------
 // map
 // -----------------------------------------------------------------------
 use miri_runtime_core::{
-    miri_rt_map_clear, miri_rt_map_contains_key, miri_rt_map_free, miri_rt_map_get,
-    miri_rt_map_get_checked, miri_rt_map_is_empty, miri_rt_map_key_at, miri_rt_map_len,
-    miri_rt_map_new, miri_rt_map_remove, miri_rt_map_set, miri_rt_map_set_key_drop_fn,
-    miri_rt_map_set_val_drop_fn, miri_rt_map_value_at,
+    miri_rt_map_clear, miri_rt_map_contains_key, miri_rt_map_decref_element, miri_rt_map_free,
+    miri_rt_map_get, miri_rt_map_get_checked, miri_rt_map_is_empty, miri_rt_map_key_at,
+    miri_rt_map_len, miri_rt_map_new, miri_rt_map_remove, miri_rt_map_set,
+    miri_rt_map_set_key_drop_fn, miri_rt_map_set_val_drop_fn, miri_rt_map_value_at,
 };
 
 // -----------------------------------------------------------------------
@@ -156,6 +156,10 @@ fn test_array_ffi_abi() {
         let arr2 = miri_rt_array_new(2, 8);
         miri_rt_array_set_elem_drop_fn(arr2, 0);
         miri_rt_array_free(arr2);
+
+        // miri_rt_array_decref_element: null-safe; a live array with RC=1 must
+        // be freed (not double-freed) when its RC is decremented to zero.
+        miri_rt_array_decref_element(std::ptr::null_mut());
 
         // Null safety
         assert_eq!(miri_rt_array_len(std::ptr::null()), 0);
@@ -272,6 +276,9 @@ fn test_set_ffi_abi() {
         let set2 = miri_rt_set_new(8);
         miri_rt_set_set_elem_drop_fn(set2, 0);
         miri_rt_set_free(set2);
+
+        // miri_rt_set_decref_element: null-safe
+        miri_rt_set_decref_element(std::ptr::null_mut());
     }
 }
 
@@ -314,6 +321,9 @@ fn test_map_ffi_abi() {
         // Null safety
         assert_eq!(miri_rt_map_len(std::ptr::null()), 0);
         miri_rt_map_free(std::ptr::null_mut());
+
+        // miri_rt_map_decref_element: null-safe
+        miri_rt_map_decref_element(std::ptr::null_mut());
     }
 }
 

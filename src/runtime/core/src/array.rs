@@ -170,6 +170,33 @@ pub mod ffi {
         free_with_rc(ptr as *mut u8, STRUCT_SIZE);
     }
 
+    /// Decrements the RC of a managed Array element and frees it if RC reaches zero.
+    ///
+    /// Used as a direct decref callback when an Array slot is overwritten
+    /// (e.g., `arr[i] = new_array` where the element type is itself an Array).
+    ///
+    /// LIMITATION: Calls `miri_rt_array_free` directly, which does not invoke
+    /// `elem_drop_fn` recursively. Mutation operations on collections whose
+    /// elements are Arrays of managed values will not fully release inner
+    /// references. The normal drop path (variables going out of scope) handles
+    /// all levels via the codegen's inline element-drop loops.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_array_decref_element(ptr: *mut u8) {
+        if ptr.is_null() {
+            return;
+        }
+        let rc_ptr = (ptr as usize - crate::rc::RC_HEADER_SIZE) as *mut usize;
+        let rc = *rc_ptr;
+        if (rc as isize) < 0 {
+            return;
+        }
+        *rc_ptr -= 1;
+        if *rc_ptr == 0 {
+            miri_rt_array_free(ptr as *mut MiriArray);
+        }
+    }
+
     /// Sets the element drop function for an array.
     ///
     /// When set, `miri_rt_array_free` calls `fn_ptr` on each non-null element

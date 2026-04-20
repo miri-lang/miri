@@ -73,6 +73,9 @@ pub(crate) struct ModuleCtx<'a> {
     pub(crate) rt_map_set_key_drop_fn_id: Option<cranelift_module::FuncId>,
     pub(crate) rt_list_decref_element_id: Option<cranelift_module::FuncId>,
     pub(crate) rt_string_decref_element_id: Option<cranelift_module::FuncId>,
+    pub(crate) rt_array_decref_element_id: Option<cranelift_module::FuncId>,
+    pub(crate) rt_set_decref_element_id: Option<cranelift_module::FuncId>,
+    pub(crate) rt_map_decref_element_id: Option<cranelift_module::FuncId>,
     /// Cached FuncIds for runtime set functions.
     pub(crate) rt_set_new_id: Option<cranelift_module::FuncId>,
     pub(crate) rt_set_add_id: Option<cranelift_module::FuncId>,
@@ -191,6 +194,9 @@ impl<'a> FunctionTranslator<'a> {
             rt_map_set_key_drop_fn_id: None,
             rt_list_decref_element_id: None,
             rt_string_decref_element_id: None,
+            rt_array_decref_element_id: None,
+            rt_set_decref_element_id: None,
+            rt_map_decref_element_id: None,
             rt_set_new_id: None,
             rt_set_add_id: None,
             rt_set_free_id: None,
@@ -414,6 +420,11 @@ impl<'a> FunctionTranslator<'a> {
                 .ok_or_else(|| format!("Unknown local: {:?}", place.local))?;
             let mut addr = builder.use_var(*var);
 
+            // Track the collection type at the current projection depth so that
+            // translate_collection_index_write receives the correct base type when
+            // there are multiple Index projections (e.g. `nested[1][0] = 99`).
+            let mut current_type: &Type = local_types[place.local.0];
+
             // Navigate through all but the last projection
             for proj in &place.projection[..place.projection.len() - 1] {
                 match proj {
@@ -421,9 +432,12 @@ impl<'a> FunctionTranslator<'a> {
                         addr = builder.ins().load(ptr_type, MemFlags::new(), addr, 0);
                     }
                     PlaceElem::Field(idx) => {
-                        let base_type = &local_types[place.local.0];
-                        let (offset, _) =
-                            layout::field_layout(&base_type.kind, *idx, type_definitions, ptr_type);
+                        let (offset, _) = layout::field_layout(
+                            &current_type.kind,
+                            *idx,
+                            type_definitions,
+                            ptr_type,
+                        );
                         addr = builder.ins().iadd_imm(addr, offset as i64);
                     }
                     PlaceElem::Index(local) => {
@@ -433,10 +447,20 @@ impl<'a> FunctionTranslator<'a> {
                             .get(local)
                             .ok_or_else(|| format!("Unknown index local: {:?}", local))?;
                         let idx_val = builder.use_var(*idx_var);
-                        let base_type = &local_types[place.local.0];
                         addr = Self::translate_collection_index_read(
-                            builder, ctx, addr, idx_val, base_type, type_ctx,
+                            builder,
+                            ctx,
+                            addr,
+                            idx_val,
+                            current_type,
+                            type_ctx,
                         )?;
+                        // Advance to the element type for the next projection level.
+                        if let Some(elem_type) =
+                            Self::resolve_collection_elem_type_as_type(current_type)
+                        {
+                            current_type = elem_type;
+                        }
                     }
                 }
             }
@@ -450,9 +474,8 @@ impl<'a> FunctionTranslator<'a> {
                     builder.ins().store(MemFlags::new(), value, addr, 0);
                 }
                 PlaceElem::Field(idx) => {
-                    let base_type = &local_types[place.local.0];
                     let (offset, _) =
-                        layout::field_layout(&base_type.kind, *idx, type_definitions, ptr_type);
+                        layout::field_layout(&current_type.kind, *idx, type_definitions, ptr_type);
                     builder.ins().store(MemFlags::new(), value, addr, offset);
                 }
                 PlaceElem::Index(local) => {
@@ -460,9 +483,14 @@ impl<'a> FunctionTranslator<'a> {
                         .get(local)
                         .ok_or_else(|| format!("Unknown index local: {:?}", local))?;
                     let idx_val = builder.use_var(*idx_var);
-                    let base_type = &local_types[place.local.0];
                     Self::translate_collection_index_write(
-                        builder, ctx, addr, idx_val, value, base_type, type_ctx,
+                        builder,
+                        ctx,
+                        addr,
+                        idx_val,
+                        value,
+                        current_type,
+                        type_ctx,
                     )?;
                 }
             }
@@ -747,6 +775,86 @@ impl<'a> FunctionTranslator<'a> {
         Ok(builder.ins().func_addr(ptr_type, local_func))
     }
 
+    /// Returns the address of `miri_rt_array_decref_element` as a ptr-sized integer.
+    pub(crate) fn get_rt_array_decref_element_addr(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        ptr_type: cranelift_codegen::ir::Type,
+    ) -> Result<Value, String> {
+        let func_id = match ctx.rt_array_decref_element_id {
+            Some(id) => id,
+            None => {
+                let sig = Signature {
+                    params: vec![AbiParam::new(ptr_type)],
+                    returns: vec![],
+                    call_conv: builder.func.signature.call_conv,
+                };
+                let id = ctx
+                    .module
+                    .declare_function(rt::ARRAY_DECREF_ELEMENT, Linkage::Import, &sig)
+                    .map_err(|e| {
+                        format!("Failed to declare {}: {}", rt::ARRAY_DECREF_ELEMENT, e)
+                    })?;
+                ctx.rt_array_decref_element_id = Some(id);
+                id
+            }
+        };
+        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+        Ok(builder.ins().func_addr(ptr_type, local_func))
+    }
+
+    /// Returns the address of `miri_rt_set_decref_element` as a ptr-sized integer.
+    pub(crate) fn get_rt_set_decref_element_addr(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        ptr_type: cranelift_codegen::ir::Type,
+    ) -> Result<Value, String> {
+        let func_id = match ctx.rt_set_decref_element_id {
+            Some(id) => id,
+            None => {
+                let sig = Signature {
+                    params: vec![AbiParam::new(ptr_type)],
+                    returns: vec![],
+                    call_conv: builder.func.signature.call_conv,
+                };
+                let id = ctx
+                    .module
+                    .declare_function(rt::SET_DECREF_ELEMENT, Linkage::Import, &sig)
+                    .map_err(|e| format!("Failed to declare {}: {}", rt::SET_DECREF_ELEMENT, e))?;
+                ctx.rt_set_decref_element_id = Some(id);
+                id
+            }
+        };
+        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+        Ok(builder.ins().func_addr(ptr_type, local_func))
+    }
+
+    /// Returns the address of `miri_rt_map_decref_element` as a ptr-sized integer.
+    pub(crate) fn get_rt_map_decref_element_addr(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        ptr_type: cranelift_codegen::ir::Type,
+    ) -> Result<Value, String> {
+        let func_id = match ctx.rt_map_decref_element_id {
+            Some(id) => id,
+            None => {
+                let sig = Signature {
+                    params: vec![AbiParam::new(ptr_type)],
+                    returns: vec![],
+                    call_conv: builder.func.signature.call_conv,
+                };
+                let id = ctx
+                    .module
+                    .declare_function(rt::MAP_DECREF_ELEMENT, Linkage::Import, &sig)
+                    .map_err(|e| format!("Failed to declare {}: {}", rt::MAP_DECREF_ELEMENT, e))?;
+                ctx.rt_map_decref_element_id = Some(id);
+                id
+            }
+        };
+        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+        Ok(builder.ins().func_addr(ptr_type, local_func))
+    }
+
     /// Returns the address of `__decref_{type_name}` as a ptr-sized integer.
     ///
     /// Used as `elem_drop_fn` for List/Set/Map holding custom-type elements.
@@ -951,6 +1059,37 @@ impl<'a> FunctionTranslator<'a> {
                 }
             }
             _ => &TypeKind::Int,
+        }
+    }
+
+    /// Returns the element `Type` of a collection type (Array or List), or `None`.
+    ///
+    /// Unlike `resolve_collection_elem_type` which returns `&TypeKind`, this returns
+    /// the full `&Type` so callers can chain through multiple projection levels.
+    pub(crate) fn resolve_collection_elem_type_as_type(base_type: &Type) -> Option<&Type> {
+        match &base_type.kind {
+            TypeKind::Array(elem_ty_expr, _) | TypeKind::List(elem_ty_expr) => {
+                if let ExpressionKind::Type(ty, _) = &elem_ty_expr.node {
+                    Some(ty.as_ref())
+                } else {
+                    None
+                }
+            }
+            TypeKind::Custom(name, Some(args))
+                if matches!(
+                    BuiltinCollectionKind::from_name(name),
+                    Some(BuiltinCollectionKind::Array | BuiltinCollectionKind::List)
+                ) =>
+            {
+                args.first().and_then(|arg| {
+                    if let ExpressionKind::Type(ty, _) = &arg.node {
+                        Some(ty.as_ref())
+                    } else {
+                        None
+                    }
+                })
+            }
+            _ => None,
         }
     }
 
@@ -1761,7 +1900,7 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Decrements the RC of the existing element at `elem_addr` when the element
-    /// type is a managed heap object (String, List, or user-defined class).
+    /// type is a managed heap object (String, List, Array, Set, Map, or user-defined class).
     ///
     /// Called by `translate_collection_index_write` before the new value is stored
     /// so that overwriting an existing slot does not leak the old value.
@@ -1797,6 +1936,43 @@ impl<'a> FunctionTranslator<'a> {
                     &[old_val],
                 )?;
             }
+            // Parser-form variants (normalized before codegen, but be safe)
+            TypeKind::Array(_, _) => {
+                let old_val = builder.ins().load(ptr_type, MemFlags::new(), elem_addr, 0);
+                Self::call_cached_func(
+                    builder,
+                    ctx.module,
+                    &mut ctx.rt_array_decref_element_id,
+                    rt::ARRAY_DECREF_ELEMENT,
+                    &[ptr_type],
+                    &[],
+                    &[old_val],
+                )?;
+            }
+            TypeKind::Set(_) => {
+                let old_val = builder.ins().load(ptr_type, MemFlags::new(), elem_addr, 0);
+                Self::call_cached_func(
+                    builder,
+                    ctx.module,
+                    &mut ctx.rt_set_decref_element_id,
+                    rt::SET_DECREF_ELEMENT,
+                    &[ptr_type],
+                    &[],
+                    &[old_val],
+                )?;
+            }
+            TypeKind::Map(_, _) => {
+                let old_val = builder.ins().load(ptr_type, MemFlags::new(), elem_addr, 0);
+                Self::call_cached_func(
+                    builder,
+                    ctx.module,
+                    &mut ctx.rt_map_decref_element_id,
+                    rt::MAP_DECREF_ELEMENT,
+                    &[ptr_type],
+                    &[],
+                    &[old_val],
+                )?;
+            }
             TypeKind::Custom(name, _) => {
                 match BuiltinCollectionKind::from_name(name) {
                     Some(BuiltinCollectionKind::List) => {
@@ -1806,6 +1982,42 @@ impl<'a> FunctionTranslator<'a> {
                             ctx.module,
                             &mut ctx.rt_list_decref_element_id,
                             rt::LIST_DECREF_ELEMENT,
+                            &[ptr_type],
+                            &[],
+                            &[old_val],
+                        )?;
+                    }
+                    Some(BuiltinCollectionKind::Array) => {
+                        let old_val = builder.ins().load(ptr_type, MemFlags::new(), elem_addr, 0);
+                        Self::call_cached_func(
+                            builder,
+                            ctx.module,
+                            &mut ctx.rt_array_decref_element_id,
+                            rt::ARRAY_DECREF_ELEMENT,
+                            &[ptr_type],
+                            &[],
+                            &[old_val],
+                        )?;
+                    }
+                    Some(BuiltinCollectionKind::Set) => {
+                        let old_val = builder.ins().load(ptr_type, MemFlags::new(), elem_addr, 0);
+                        Self::call_cached_func(
+                            builder,
+                            ctx.module,
+                            &mut ctx.rt_set_decref_element_id,
+                            rt::SET_DECREF_ELEMENT,
+                            &[ptr_type],
+                            &[],
+                            &[old_val],
+                        )?;
+                    }
+                    Some(BuiltinCollectionKind::Map) => {
+                        let old_val = builder.ins().load(ptr_type, MemFlags::new(), elem_addr, 0);
+                        Self::call_cached_func(
+                            builder,
+                            ctx.module,
+                            &mut ctx.rt_map_decref_element_id,
+                            rt::MAP_DECREF_ELEMENT,
                             &[ptr_type],
                             &[],
                             &[old_val],
@@ -1827,7 +2039,6 @@ impl<'a> FunctionTranslator<'a> {
                         let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
                         builder.ins().call(local_func, &[old_val]);
                     }
-                    Some(_) => {} // Array/Map/Set as elements: not yet handled
                 }
             }
             _ => {} // Primitive types need no decref
@@ -1930,6 +2141,9 @@ impl<'a> FunctionTranslator<'a> {
                 rt_map_set_key_drop_fn_id: None,
                 rt_list_decref_element_id: None,
                 rt_string_decref_element_id: None,
+                rt_array_decref_element_id: None,
+                rt_set_decref_element_id: None,
+                rt_map_decref_element_id: None,
                 rt_set_new_id: None,
                 rt_set_add_id: None,
                 rt_set_free_id: None,
