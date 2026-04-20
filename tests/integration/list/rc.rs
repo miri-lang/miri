@@ -320,3 +320,72 @@ fn main()
         "xy",
     );
 }
+
+// ── Nested collection elem_drop_fn (follow-up to task 3.2) ───────────────────
+
+#[test]
+fn test_list_of_arrays_clear_no_leak() {
+    // List<Array<int>>: elem_drop_fn must be miri_rt_array_decref_element so that
+    // clear() properly DecRefs each inner array.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    var lst = List([[1, 2, 3], [4, 5, 6]])
+    var i = 0
+    while i < 50
+        lst.push([7, 8, 9])
+        lst.clear()
+        i = i + 1
+    println(f"{lst.length()}")
+"#,
+        "0",
+    );
+}
+
+#[test]
+fn test_list_of_maps_clear_no_leak() {
+    // List<Map<String,int>>: elem_drop_fn must be miri_rt_map_decref_element so
+    // that clear() properly DecRefs each inner map.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    var lst = List([{"a": 1}, {"b": 2}])
+    var i = 0
+    while i < 50
+        lst.push({"c": 3})
+        lst.clear()
+        i = i + 1
+    println(f"{lst.length()}")
+"#,
+        "0",
+    );
+}
+
+#[test]
+fn test_list_of_sets_clear_no_leak() {
+    // List<Set<int>>: elem_drop_fn must be miri_rt_set_decref_element so that
+    // clear() properly DecRefs each inner set.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+use system.collections.set
+
+fn main()
+    var lst = List([{1, 2}, {3, 4}])
+    var i = 0
+    while i < 50
+        lst.push({5, 6})
+        lst.clear()
+        i = i + 1
+    println(f"{lst.length()}")
+"#,
+        "0",
+    );
+}

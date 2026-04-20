@@ -406,6 +406,32 @@ pub mod ffi {
         MiriSet::free_tables(set.states, set.data, set.capacity, set.elem_size);
         free_with_rc(ptr as *mut u8, STRUCT_SIZE);
     }
+
+    /// Decrements the RC of a managed Set element and frees it if RC reaches zero.
+    ///
+    /// Used as a direct decref callback when an Array slot is overwritten
+    /// (e.g., `arr[i] = new_set` where the element type is a Set).
+    ///
+    /// LIMITATION: Calls `miri_rt_set_free` directly. If the Set itself has
+    /// managed elements, those are handled via `elem_drop_fn` inside
+    /// `miri_rt_set_free`. The normal drop path (scope exit) handles all
+    /// nesting levels via inline codegen loops.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_set_decref_element(ptr: *mut u8) {
+        if ptr.is_null() {
+            return;
+        }
+        let rc_ptr = (ptr as usize - crate::rc::RC_HEADER_SIZE) as *mut usize;
+        let rc = *rc_ptr;
+        if (rc as isize) < 0 {
+            return;
+        }
+        *rc_ptr -= 1;
+        if *rc_ptr == 0 {
+            miri_rt_set_free(ptr as *mut MiriSet);
+        }
+    }
 } // pub mod ffi
 
 // =============================================================================

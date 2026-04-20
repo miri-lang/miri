@@ -31,6 +31,8 @@ pub mod rt {
     pub const ARRAY_SORT: &str = "miri_rt_array_sort";
     /// Compiler-internal: bounds-check panic helper, not declared in stdlib.
     pub const ARRAY_PANIC_OOB: &str = "miri_rt_array_panic_oob";
+    /// Compiler-internal: decrements the RC of an array element, not in stdlib.
+    pub const ARRAY_DECREF_ELEMENT: &str = "miri_rt_array_decref_element";
 
     // ── Tuple ─────────────────────────────────────────────────────────────────
     pub const TUPLE_LEN: &str = "miri_rt_tuple_len";
@@ -75,6 +77,8 @@ pub mod rt {
     pub const MAP_SET_VAL_DROP_FN: &str = "miri_rt_map_set_val_drop_fn";
     /// Compiler-internal: registers the key drop function, not in stdlib.
     pub const MAP_SET_KEY_DROP_FN: &str = "miri_rt_map_set_key_drop_fn";
+    /// Compiler-internal: decrements the RC of a map element, not in stdlib.
+    pub const MAP_DECREF_ELEMENT: &str = "miri_rt_map_decref_element";
 
     // ── Set ──────────────────────────────────────────────────────────────────
     pub const SET_NEW: &str = "miri_rt_set_new";
@@ -88,6 +92,8 @@ pub mod rt {
     pub const SET_ELEMENT_AT: &str = "miri_rt_set_element_at";
     /// Compiler-internal: registers the element drop function, not in stdlib.
     pub const SET_SET_ELEM_DROP_FN: &str = "miri_rt_set_set_elem_drop_fn";
+    /// Compiler-internal: decrements the RC of a set element, not in stdlib.
+    pub const SET_DECREF_ELEMENT: &str = "miri_rt_set_decref_element";
 
     // ── IO ───────────────────────────────────────────────────────────────────
     pub const PRINT: &str = "miri_rt_print";
@@ -145,6 +151,7 @@ pub mod rt {
         ARRAY_SET_VAL,
         ARRAY_SORT,
         ARRAY_PANIC_OOB,
+        ARRAY_DECREF_ELEMENT,
         // Tuple
         TUPLE_LEN,
         // List
@@ -179,6 +186,7 @@ pub mod rt {
         MAP_GET_CHECKED,
         MAP_SET_VAL_DROP_FN,
         MAP_SET_KEY_DROP_FN,
+        MAP_DECREF_ELEMENT,
         // Set
         SET_NEW,
         SET_FREE,
@@ -190,6 +198,7 @@ pub mod rt {
         SET_IS_EMPTY,
         SET_ELEMENT_AT,
         SET_SET_ELEM_DROP_FN,
+        SET_DECREF_ELEMENT,
         // IO
         PRINT,
         PRINTLN,
