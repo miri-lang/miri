@@ -206,6 +206,62 @@ fn main()
     );
 }
 
+// ── Phase 4 verification tests (M2 Known Limitation #4) ─────────────────────
+
+#[test]
+fn test_array_reassign_old_freed_no_leak() {
+    // Perceus StatementKind::Reassign emits DecRef for the old value.
+    // var x = [1,2,3]; x = [4,5,6] — old array must be freed, new value printed.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn main()
+    var x = [1, 2, 3]
+    x = [4, 5, 6]
+    println(f"{x[0]}")
+"#,
+        "4",
+    );
+}
+
+#[test]
+fn test_for_range_loop_list_per_iter_no_leak() {
+    // 100 intermediate Lists created in a for-range loop must all be freed at
+    // iteration end.  Leak check fails if any escapes.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    for i in 0..100
+        var x = List([i])
+    println("ok")
+"#,
+        "ok",
+    );
+}
+
+#[test]
+fn test_string_multiple_reassignments_no_leak() {
+    // Each reassignment must DecRef the previous string.
+    // var s = "hello"; s = "world"; s = "!" — two old strings freed, final printed.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.string
+
+fn main()
+    var s = "hello"
+    s = "world"
+    s = "!"
+    println(s)
+"#,
+        "!",
+    );
+}
+
 #[test]
 fn test_reassign_to_alias_of_self_no_double_free() {
     // x = x: IncRef before DecRef of old, net change zero, no premature free.
