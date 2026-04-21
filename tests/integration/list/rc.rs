@@ -389,3 +389,27 @@ fn main()
         "0",
     );
 }
+
+// ── Task 3.3: Clear decref all elements ─────────────────────────────────────
+
+#[test]
+fn test_list_of_100_strings_clear_no_leak() {
+    // List<String>: push 100 non-immortal (concatenated) strings then clear().
+    // MIRI_LEAK_CHECK=1 catches any string that was not DecRef'd by elem_drop_fn.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    var l = List<String>()
+    var i = 0
+    while i < 100
+        l.push("pre" + "fix")
+        i = i + 1
+    l.clear()
+    println(f"{l.length()}")
+"#,
+        "0",
+    );
+}
