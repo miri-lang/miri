@@ -29,3 +29,7 @@
 ## 2024-05-27 - [Avoid String Macro Formatting in MIR Mangling]
 **Learning:** In the MIR lowerer, mangling strings with `format!("{}_{}", class_name, md.name)` is a performance bottleneck since `format!` parses the format string at runtime and may cause intermediate allocations.
 **Action:** Replace `format!` macros with manual string allocation using `String::with_capacity` and `push_str()` when constructing short, repeated mangled symbols.
+
+## 2024-05-28 - [Avoid Deep Cloning TypeDefinitions in Type Checker]
+**Learning:** During expression type checking, especially in `infer_member` (access.rs), the compiler frequently needs to look up fields or methods in class/struct definitions. Previously, it cloned the entire `TypeDefinition` node (which contains all methods, fields, and generic data) via `self.resolve_visible_type().cloned()`, causing numerous deep heap allocations for every member access operation. This was a massive overhead in the type checking hot path.
+**Action:** When resolving types for read-only lookups (like member existence checks), remove `.cloned()` and use reference borrows (`&TypeDefinition`) instead. Only clone the small specific items extracted (like a single field's `Type`) if required. For walking inheritance chains, keep a mutable reference `let mut search_class_def = def;` instead of re-cloning the parent structures.
