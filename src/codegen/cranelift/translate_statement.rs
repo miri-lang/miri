@@ -4,8 +4,8 @@ use crate::ast::types::{BuiltinCollectionKind, TypeKind};
 use crate::codegen::cranelift::translator::{FunctionTranslator, ModuleCtx, TypeCtx};
 use crate::codegen::cranelift::types::translate_type;
 use crate::mir::{
-    BasicBlock, Body, Local, Operand, Place, PlaceElem, Statement, StatementKind, Terminator,
-    TerminatorKind,
+    AggregateKind, BasicBlock, Body, Local, Operand, Place, PlaceElem, Rvalue, Statement,
+    StatementKind, Terminator, TerminatorKind,
 };
 use crate::runtime_fns::rt;
 use cranelift_codegen::ir::{
@@ -150,6 +150,25 @@ impl<'a> FunctionTranslator<'a> {
                 }
 
                 Self::assign_to_place(builder, ctx, place, value, locals, type_ctx)?;
+
+                // After constructing an empty Set<T>(), set elem_drop_fn from the
+                // destination type. translate_rvalue has no operands to inspect for
+                // this path, so we derive the element type from the assignment target.
+                if let Rvalue::Aggregate(AggregateKind::Set, ops) = rvalue {
+                    if ops.is_empty() {
+                        if let Some(elem_expr) = FunctionTranslator::set_elem_expr(&dest_ty.kind) {
+                            if let ExpressionKind::Type(elem_ty, _) = &elem_expr.node {
+                                FunctionTranslator::emit_set_drop_fn_for_elem_kind(
+                                    builder,
+                                    ctx,
+                                    &elem_ty.kind,
+                                    value,
+                                    ptr_type,
+                                )?;
+                            }
+                        }
+                    }
+                }
             }
             StatementKind::Nop => {
                 // Nothing to do
@@ -333,9 +352,12 @@ impl<'a> FunctionTranslator<'a> {
                     sig.returns.push(AbiParam::new(cl_dest_ty));
                 }
 
-                // Pre-compute flag before consuming func_name in the match.
+                // Pre-compute flags before consuming func_name in the match.
                 let is_list_from_managed =
                     func_name.as_deref() == Some(rt::LIST_NEW_FROM_MANAGED_ARRAY);
+                // Empty List<T>() constructor: elem_drop_fn must be set from the
+                // destination type because there are no operands to inspect.
+                let is_list_new_empty = func_name.as_deref() == Some(rt::LIST_NEW);
 
                 if let Some(func_name) = func_name {
                     // Direct call to a named symbol.
@@ -438,6 +460,27 @@ impl<'a> FunctionTranslator<'a> {
                                             )?;
                                         }
                                     }
+                                }
+                            }
+                        }
+                    }
+
+                    // After miri_rt_list_new (empty List<T>() constructor), set elem_drop_fn
+                    // from the destination type. translate_rvalue has no operands to inspect
+                    // for this path, so we must derive the element type from the call site type.
+                    if is_list_new_empty {
+                        if let Some(list_ptr) = maybe_result {
+                            if let Some(elem_expr) =
+                                FunctionTranslator::collection_elem_expr(&dest_ty.kind)
+                            {
+                                if let ExpressionKind::Type(elem_ty, _) = &elem_expr.node {
+                                    FunctionTranslator::emit_list_drop_fn_for_elem_kind(
+                                        builder,
+                                        ctx,
+                                        &elem_ty.kind,
+                                        list_ptr,
+                                        ptr_type,
+                                    )?;
                                 }
                             }
                         }

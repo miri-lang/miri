@@ -145,3 +145,28 @@ fn main()
         "1",
     );
 }
+
+// ── Task 3.3: Empty Set<T>() constructor sets elem_drop_fn ───────────────────
+
+#[test]
+fn test_empty_set_of_strings_add_clear_no_leak() {
+    // Set<String>() empty constructor: elem_drop_fn must be set from the
+    // destination type so that clear() properly DecRefs added elements.
+    // MIRI_LEAK_CHECK=1 catches any string not DecRef'd by elem_drop_fn.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.set
+
+fn main()
+    var s = Set<String>()
+    var i = 0
+    while i < 100
+        s.add("pre" + "fix")
+        s.clear()
+        i = i + 1
+    println(f"{s.length()}")
+"#,
+        "0",
+    );
+}

@@ -900,6 +900,153 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
+    /// Sets `elem_drop_fn` on `list_ptr` based on the declared element type.
+    ///
+    /// Used when an empty `List<T>()` aggregate is assigned: there are no operands
+    /// for `translate_rvalue` to inspect, so the caller provides the element kind
+    /// extracted from the assignment target's type annotation.
+    pub(crate) fn emit_list_drop_fn_for_elem_kind(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        elem_kind: &TypeKind,
+        list_ptr: Value,
+        ptr_type: cranelift_codegen::ir::Type,
+    ) -> Result<(), String> {
+        let drop_fn_addr = match elem_kind {
+            TypeKind::String => Some(Self::get_rt_string_decref_element_addr(
+                builder, ctx, ptr_type,
+            )?),
+            TypeKind::List(_) => Some(Self::get_rt_list_decref_element_addr(
+                builder, ctx, ptr_type,
+            )?),
+            TypeKind::Array(_, _) => Some(Self::get_rt_array_decref_element_addr(
+                builder, ctx, ptr_type,
+            )?),
+            TypeKind::Set(_) => Some(Self::get_rt_set_decref_element_addr(
+                builder, ctx, ptr_type,
+            )?),
+            TypeKind::Map(_, _) => Some(Self::get_rt_map_decref_element_addr(
+                builder, ctx, ptr_type,
+            )?),
+            TypeKind::Custom(n, Some(_))
+                if BuiltinCollectionKind::from_name(n) == Some(BuiltinCollectionKind::List) =>
+            {
+                Some(Self::get_rt_list_decref_element_addr(
+                    builder, ctx, ptr_type,
+                )?)
+            }
+            TypeKind::Custom(n, Some(_))
+                if BuiltinCollectionKind::from_name(n) == Some(BuiltinCollectionKind::Array) =>
+            {
+                Some(Self::get_rt_array_decref_element_addr(
+                    builder, ctx, ptr_type,
+                )?)
+            }
+            TypeKind::Custom(n, Some(_))
+                if BuiltinCollectionKind::from_name(n) == Some(BuiltinCollectionKind::Set) =>
+            {
+                Some(Self::get_rt_set_decref_element_addr(
+                    builder, ctx, ptr_type,
+                )?)
+            }
+            TypeKind::Custom(n, Some(_))
+                if BuiltinCollectionKind::from_name(n) == Some(BuiltinCollectionKind::Map) =>
+            {
+                Some(Self::get_rt_map_decref_element_addr(
+                    builder, ctx, ptr_type,
+                )?)
+            }
+            TypeKind::Custom(n, _) if BuiltinCollectionKind::from_name(n).is_none() => Some(
+                Self::get_custom_decref_thunk_addr(builder, ctx, n, ptr_type)?,
+            ),
+            _ => None,
+        };
+        if let Some(addr) = drop_fn_addr {
+            Self::call_rt_list_set_elem_drop_fn(builder, ctx, list_ptr, addr)?;
+        }
+        Ok(())
+    }
+
+    /// Extracts the element expression from a Set TypeKind.
+    pub(crate) fn set_elem_expr(kind: &TypeKind) -> Option<&crate::ast::expression::Expression> {
+        match kind {
+            TypeKind::Set(e) => Some(e),
+            TypeKind::Custom(name, Some(args))
+                if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Set) =>
+            {
+                args.first()
+            }
+            _ => None,
+        }
+    }
+
+    /// Sets `elem_drop_fn` on `set_ptr` based on the declared element type.
+    ///
+    /// Used when an empty `Set<T>()` aggregate is assigned: there are no operands
+    /// for `translate_rvalue` to inspect, so the caller provides the element kind
+    /// extracted from the assignment target's type annotation.
+    pub(crate) fn emit_set_drop_fn_for_elem_kind(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        elem_kind: &TypeKind,
+        set_ptr: Value,
+        ptr_type: cranelift_codegen::ir::Type,
+    ) -> Result<(), String> {
+        let drop_fn_addr = match elem_kind {
+            TypeKind::String => Some(Self::get_rt_string_decref_element_addr(
+                builder, ctx, ptr_type,
+            )?),
+            TypeKind::List(_) => Some(Self::get_rt_list_decref_element_addr(
+                builder, ctx, ptr_type,
+            )?),
+            TypeKind::Array(_, _) => Some(Self::get_rt_array_decref_element_addr(
+                builder, ctx, ptr_type,
+            )?),
+            TypeKind::Set(_) => Some(Self::get_rt_set_decref_element_addr(
+                builder, ctx, ptr_type,
+            )?),
+            TypeKind::Map(_, _) => Some(Self::get_rt_map_decref_element_addr(
+                builder, ctx, ptr_type,
+            )?),
+            TypeKind::Custom(n, Some(_))
+                if BuiltinCollectionKind::from_name(n) == Some(BuiltinCollectionKind::List) =>
+            {
+                Some(Self::get_rt_list_decref_element_addr(
+                    builder, ctx, ptr_type,
+                )?)
+            }
+            TypeKind::Custom(n, Some(_))
+                if BuiltinCollectionKind::from_name(n) == Some(BuiltinCollectionKind::Array) =>
+            {
+                Some(Self::get_rt_array_decref_element_addr(
+                    builder, ctx, ptr_type,
+                )?)
+            }
+            TypeKind::Custom(n, Some(_))
+                if BuiltinCollectionKind::from_name(n) == Some(BuiltinCollectionKind::Set) =>
+            {
+                Some(Self::get_rt_set_decref_element_addr(
+                    builder, ctx, ptr_type,
+                )?)
+            }
+            TypeKind::Custom(n, Some(_))
+                if BuiltinCollectionKind::from_name(n) == Some(BuiltinCollectionKind::Map) =>
+            {
+                Some(Self::get_rt_map_decref_element_addr(
+                    builder, ctx, ptr_type,
+                )?)
+            }
+            TypeKind::Custom(n, _) if BuiltinCollectionKind::from_name(n).is_none() => Some(
+                Self::get_custom_decref_thunk_addr(builder, ctx, n, ptr_type)?,
+            ),
+            _ => None,
+        };
+        if let Some(addr) = drop_fn_addr {
+            Self::call_rt_set_set_elem_drop_fn(builder, ctx, set_ptr, addr)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn call_rt_set_new(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
