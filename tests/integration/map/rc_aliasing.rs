@@ -260,3 +260,30 @@ fn main()
         "2",
     );
 }
+
+// ── Task 3.3: Clear decref all elements ─────────────────────────────────────
+
+#[test]
+fn test_map_100_string_keys_clear_no_leak() {
+    // Map<String, int>: insert entries with non-immortal (concatenated) string keys,
+    // then call clear(). MIRI_LEAK_CHECK=1 catches any key not DecRef'd by key_drop_fn.
+    // Runs 100 iterations alternating two distinct non-immortal keys to ensure both
+    // are DecRef'd on each clear() cycle.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.map
+
+fn main()
+    var total = 0
+    var i = 0
+    while i < 100
+        var m = {"a" + "a": 1, "b" + "b": 2, "c" + "c": 3, "d" + "d": 4, "e" + "e": 5}
+        total = total + m.length()
+        m.clear()
+        i = i + 1
+    println(f"{total}")
+"#,
+        "500",
+    );
+}
