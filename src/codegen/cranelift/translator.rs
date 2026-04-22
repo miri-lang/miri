@@ -866,7 +866,9 @@ impl<'a> FunctionTranslator<'a> {
         type_name: &str,
         ptr_type: cranelift_codegen::ir::Type,
     ) -> Result<Value, String> {
-        let decref_name = format!("__decref_{type_name}");
+        let mut decref_name = String::with_capacity(9 + type_name.len());
+        decref_name.push_str("__decref_");
+        decref_name.push_str(type_name);
         let sig = Signature {
             params: vec![AbiParam::new(ptr_type)],
             returns: vec![],
@@ -2172,7 +2174,9 @@ impl<'a> FunctionTranslator<'a> {
                     }
                     None => {
                         // User-defined class
-                        let decref_name = format!("__decref_{name}");
+                        let mut decref_name = String::with_capacity(9 + name.len());
+                        decref_name.push_str("__decref_");
+                        decref_name.push_str(name);
                         let old_val = builder.ins().load(ptr_type, MemFlags::new(), elem_addr, 0);
                         let sig = cranelift_codegen::ir::Signature {
                             params: vec![AbiParam::new(ptr_type)],
@@ -2352,7 +2356,9 @@ impl<'a> FunctionTranslator<'a> {
         let call_conv = isa.default_call_conv();
         let ptr_size = ptr_type.bytes() as i64;
 
-        let decref_name = format!("__decref_{type_name}");
+        let mut decref_name = String::with_capacity(9 + type_name.len());
+        decref_name.push_str("__decref_");
+        decref_name.push_str(type_name);
         let mut sig = Signature::new(call_conv);
         sig.params.push(AbiParam::new(ptr_type));
         let func_id = module
@@ -2428,7 +2434,9 @@ impl<'a> FunctionTranslator<'a> {
             // Call __drop_TypeName(ptr) when RC hits zero
             builder.switch_to_block(free_block);
             builder.seal_block(free_block);
-            let drop_name = format!("__drop_{type_name}");
+            let mut drop_name = String::with_capacity(7 + type_name.len());
+            drop_name.push_str("__drop_");
+            drop_name.push_str(type_name);
             let drop_func_id = module
                 .declare_function(&drop_name, Linkage::Import, &sig)
                 .map_err(|e| format!("Failed to declare {drop_name} in decref: {e}"))?;
