@@ -304,6 +304,9 @@ pub mod ffi {
     }
 
     /// Fills all elements with the given value.
+    ///
+    /// If `elem_drop_fn` is set, calls it on each old non-null element pointer
+    /// before overwriting so that managed elements have their RC decremented.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_array_fill(ptr: *mut MiriArray, elem: *const u8) {
@@ -313,6 +316,16 @@ pub mod ffi {
         let arr = &*ptr;
         if arr.data.is_null() {
             return;
+        }
+        if arr.elem_drop_fn != 0 {
+            let drop_fn: unsafe extern "C" fn(*mut u8) = std::mem::transmute(arr.elem_drop_fn);
+            for i in 0..arr.elem_count {
+                let slot = arr.data.add(i * arr.elem_size) as *const usize;
+                let old_ptr = *slot;
+                if old_ptr != 0 {
+                    drop_fn(old_ptr as *mut u8);
+                }
+            }
         }
         for i in 0..arr.elem_count {
             let dest = arr.data.add(i * arr.elem_size);
@@ -855,6 +868,75 @@ mod tests {
             assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 0);
             // Silence unused warning on counting_drop when drop_fn is 0.
             let _ = counting_drop as unsafe extern "C" fn(*mut u8);
+        }
+    }
+
+    #[test]
+    fn test_array_fill_decrefs_old_elements() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static DROP_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn counting_drop(_p: *mut u8) {
+            DROP_CALLS.fetch_add(1, Ordering::SeqCst);
+        }
+
+        unsafe {
+            DROP_CALLS.store(0, Ordering::SeqCst);
+
+            let arr = miri_rt_array_new(3, std::mem::size_of::<usize>());
+
+            // Populate with fake managed pointers (one null slot).
+            let e0: usize = 0xAAAA_0000;
+            let e1: usize = 0;
+            let e2: usize = 0xBBBB_0000;
+            miri_rt_array_set(arr, 0, &e0 as *const usize as *const u8);
+            miri_rt_array_set(arr, 1, &e1 as *const usize as *const u8);
+            miri_rt_array_set(arr, 2, &e2 as *const usize as *const u8);
+
+            // Install drop_fn only after populating, so set() doesn't fire it on zeroed slots.
+            miri_rt_array_set_elem_drop_fn(arr, counting_drop as *const () as usize);
+
+            let new_val: usize = 0xCCCC_0000;
+            miri_rt_array_fill(arr, &new_val as *const usize as *const u8);
+
+            // Two non-null old elements must have been dropped; the null slot is skipped.
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 2);
+
+            // Clear drop_fn so free doesn't touch the fake new_val pointers.
+            miri_rt_array_set_elem_drop_fn(arr, 0);
+            miri_rt_array_free(arr);
+        }
+    }
+
+    #[test]
+    fn test_array_fill_without_drop_fn_does_not_call_it() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static DROP_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn counting_drop(_p: *mut u8) {
+            DROP_CALLS.fetch_add(1, Ordering::SeqCst);
+        }
+
+        unsafe {
+            DROP_CALLS.store(0, Ordering::SeqCst);
+
+            let arr = miri_rt_array_new(2, std::mem::size_of::<i32>());
+            let old = 7i32;
+            miri_rt_array_set(arr, 0, &old as *const i32 as *const u8);
+            miri_rt_array_set(arr, 1, &old as *const i32 as *const u8);
+
+            // No drop_fn installed — fill must not invoke anything.
+            let new_val = 99i32;
+            miri_rt_array_fill(arr, &new_val as *const i32 as *const u8);
+
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 0);
+            let _ = counting_drop as unsafe extern "C" fn(*mut u8);
+
+            for i in 0..2 {
+                assert_eq!(*(miri_rt_array_get(arr, i) as *const i32), 99);
+            }
+
+            miri_rt_array_free(arr);
         }
     }
 

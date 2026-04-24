@@ -624,15 +624,14 @@ pub mod ffi {
 
     /// Decrements the RC of a managed List element and frees it if RC reaches zero.
     ///
-    /// Used as the `elem_drop_fn` for `List<List<...>>` collections so that
-    /// `clear()` and `remove_at()` correctly release inner list references.
-    ///
-    /// LIMITATION: Calls `miri_rt_list_free` directly, which does not invoke
-    /// `elem_drop_fn` recursively. This means mutation operations on lists whose
-    /// elements are themselves lists of managed values (three or more levels of
-    /// nesting) will not fully release inner references. The normal drop path
-    /// (variables going out of scope) handles all levels via the codegen's inline
-    /// element-drop loops and is unaffected by this function.
+    /// Used as `elem_drop_fn` by outer collections (Array, List, Set, Map) when
+    /// they remove or overwrite a List-typed element at runtime (e.g. clear,
+    /// remove, or element overwrite).  Unlike the Perceus scope-exit path — which
+    /// emits an inline codegen loop to DecRef managed elements before calling
+    /// `miri_rt_list_free` — this runtime callback has no such loop.  We therefore
+    /// call `elem_drop_fn` on every live element here, before delegating to
+    /// `miri_rt_list_free`, so that managed elements (e.g. List, Set, Map) nested
+    /// inside the element list are correctly DecRef'd and never leaked.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_decref_element(ptr: *mut u8) {
@@ -647,6 +646,20 @@ pub mod ffi {
         }
         *rc_ptr -= 1;
         if *rc_ptr == 0 {
+            // DecRef managed elements before freeing.  The Perceus inline codegen
+            // loop handles this for scope-exit drops; here we must do it ourselves.
+            let list = ptr as *mut MiriList;
+            if (*list).elem_drop_fn != 0 && (*list).elem_size > 0 && !(*list).data.is_null() {
+                let drop_fn: unsafe extern "C" fn(*mut u8) =
+                    std::mem::transmute((*list).elem_drop_fn);
+                for i in 0..(*list).len {
+                    let slot = (*list).data.add(i * (*list).elem_size) as *const usize;
+                    let elem_ptr = *slot;
+                    if elem_ptr != 0 {
+                        drop_fn(elem_ptr as *mut u8);
+                    }
+                }
+            }
             miri_rt_list_free(ptr as *mut MiriList);
         }
     }
@@ -1386,6 +1399,96 @@ mod tests {
             assert_eq!(*rc_ptr, 1, "RC should be 1 after creation");
 
             miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_list_elem_drop_fn_called_on_decref_element() {
+        // miri_rt_list_decref_element is the runtime callback used as elem_drop_fn
+        // by outer collections.  When RC -> 0 it must call elem_drop_fn on every
+        // live element before freeing, mirroring what the Perceus inline codegen
+        // loop does during scope-exit drops.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static DROP_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn counting_drop(_p: *mut u8) {
+            DROP_CALLS.fetch_add(1, Ordering::SeqCst);
+        }
+
+        unsafe {
+            DROP_CALLS.store(0, Ordering::SeqCst);
+
+            let list = miri_rt_list_new(std::mem::size_of::<usize>());
+            miri_rt_list_push(list, 0xAAAA_0000);
+            miri_rt_list_push(list, 0xBBBB_0000);
+            miri_rt_list_push(list, 0xCCCC_0000);
+
+            // Install drop_fn only after populating, so mutation paths above
+            // don't fire it on fresh slots.
+            miri_rt_list_set_elem_drop_fn(list, counting_drop as *const () as usize);
+
+            // miri_rt_list_decref_element decrements RC (1 -> 0) and must call
+            // elem_drop_fn once per live element.
+            miri_rt_list_decref_element(list as *mut u8);
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 3);
+        }
+    }
+
+    #[test]
+    fn test_list_elem_drop_fn_not_called_on_shared_decref() {
+        // When RC > 1, miri_rt_list_decref_element should decrement RC but NOT
+        // call elem_drop_fn -- the list is still alive.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static DROP_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn counting_drop(_p: *mut u8) {
+            DROP_CALLS.fetch_add(1, Ordering::SeqCst);
+        }
+
+        unsafe {
+            DROP_CALLS.store(0, Ordering::SeqCst);
+
+            let list = miri_rt_list_new(std::mem::size_of::<usize>());
+            miri_rt_list_push(list, 0xAAAA_0000);
+            miri_rt_list_push(list, 0xBBBB_0000);
+            miri_rt_list_set_elem_drop_fn(list, counting_drop as *const () as usize);
+
+            // Bump RC to 2 manually.
+            let rc_ptr = (list as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *mut usize;
+            *rc_ptr = 2;
+
+            // First decref: RC 2 -> 1.  Must NOT call elem_drop_fn.
+            miri_rt_list_decref_element(list as *mut u8);
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 0);
+            assert_eq!(*rc_ptr, 1);
+
+            // Second decref: RC 1 -> 0.  Must call elem_drop_fn for each element.
+            miri_rt_list_decref_element(list as *mut u8);
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 2);
+        }
+    }
+
+    #[test]
+    fn test_list_elem_drop_fn_not_called_without_setting() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static DROP_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn counting_drop(_p: *mut u8) {
+            DROP_CALLS.fetch_add(1, Ordering::SeqCst);
+        }
+
+        unsafe {
+            DROP_CALLS.store(0, Ordering::SeqCst);
+
+            let list = miri_rt_list_new(std::mem::size_of::<usize>());
+            // Intentionally do NOT set elem_drop_fn.
+            miri_rt_list_push(list, 0xAAAA_0000);
+            miri_rt_list_push(list, 0xBBBB_0000);
+
+            miri_rt_list_decref_element(list as *mut u8); // RC 1 -> 0, frees list
+
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 0);
+            let _ = counting_drop as unsafe extern "C" fn(*mut u8);
         }
     }
 }
