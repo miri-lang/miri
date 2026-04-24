@@ -712,13 +712,14 @@ pub mod ffi {
 
     /// Decrements the RC of a managed Map element and frees it if RC reaches zero.
     ///
-    /// Used as a direct decref callback when an Array slot is overwritten
-    /// (e.g., `arr[i] = new_map` where the element type is a Map).
-    ///
-    /// LIMITATION: Calls `miri_rt_map_free` directly. `miri_rt_map_free` does
-    /// handle managed map values via the inline codegen drop loop, so one level
-    /// of nesting is handled. The normal drop path (scope exit) handles all
-    /// levels via inline codegen loops regardless.
+    /// Used as `elem_drop_fn` / `val_drop_fn` by outer collections (Array, List, Set,
+    /// Map) when they remove or overwrite a Map-typed element at runtime (e.g. clear,
+    /// remove, or element overwrite).  Unlike the Perceus scope-exit path — which
+    /// emits an inline codegen loop to DecRef managed values before calling
+    /// `miri_rt_map_free` — this runtime callback has no such loop.  We therefore
+    /// call `val_drop_fn` on every occupied slot here, before delegating to
+    /// `miri_rt_map_free`, so that managed values (e.g. List, Set, Map) nested
+    /// inside the element map are correctly DecRef'd and never leaked.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_map_decref_element(ptr: *mut u8) {
@@ -732,6 +733,26 @@ pub mod ffi {
         }
         *rc_ptr -= 1;
         if *rc_ptr == 0 {
+            // DecRef managed values before freeing.  The Perceus inline codegen
+            // loop handles this for scope-exit drops; here we must do it ourselves.
+            let map = ptr as *mut MiriMap;
+            if (*map).val_drop_fn != 0
+                && (*map).value_size > 0
+                && !(*map).states.is_null()
+                && (*map).capacity > 0
+            {
+                let drop_fn: unsafe extern "C" fn(*mut u8) =
+                    std::mem::transmute((*map).val_drop_fn);
+                for i in 0..(*map).capacity {
+                    if *(*map).states.add(i) == SLOT_OCCUPIED {
+                        let val_addr = (*map).values.add(i * (*map).value_size) as *const usize;
+                        let val_ptr = *val_addr;
+                        if val_ptr != 0 {
+                            drop_fn(val_ptr as *mut u8);
+                        }
+                    }
+                }
+            }
             miri_rt_map_free(ptr as *mut MiriMap);
         }
     }
@@ -1170,6 +1191,158 @@ mod tests {
             }
 
             miri_rt_map_free(map);
+        }
+    }
+
+    #[test]
+    fn test_map_val_drop_fn_called_on_decref_element() {
+        // miri_rt_map_decref_element is the runtime callback used as elem_drop_fn
+        // or val_drop_fn by outer collections.  When RC → 0 it must call val_drop_fn
+        // on every occupied slot before freeing, mirroring what the Perceus inline
+        // codegen loop does during scope-exit drops.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static DROP_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn counting_drop(_p: *mut u8) {
+            DROP_CALLS.fetch_add(1, Ordering::SeqCst);
+        }
+
+        unsafe {
+            DROP_CALLS.store(0, Ordering::SeqCst);
+
+            let map = miri_rt_map_new(8, 8, 0);
+            miri_rt_map_set_val_drop_fn(map, counting_drop as *const () as usize);
+
+            miri_rt_map_set(map, 1, 0xAAAA_0000);
+            miri_rt_map_set(map, 2, 0xBBBB_0000);
+
+            // miri_rt_map_decref_element decrements RC (1 → 0) and must call
+            // val_drop_fn once per occupied slot.
+            miri_rt_map_decref_element(map as *mut u8);
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 2);
+        }
+    }
+
+    #[test]
+    fn test_map_val_drop_fn_called_on_clear() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static DROP_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn counting_drop(_p: *mut u8) {
+            DROP_CALLS.fetch_add(1, Ordering::SeqCst);
+        }
+
+        unsafe {
+            DROP_CALLS.store(0, Ordering::SeqCst);
+
+            let map = miri_rt_map_new(8, 8, 0);
+            miri_rt_map_set_val_drop_fn(map, counting_drop as *const () as usize);
+
+            miri_rt_map_set(map, 1, 0xAAAA_0000);
+            miri_rt_map_set(map, 2, 0xBBBB_0000);
+            miri_rt_map_set(map, 3, 0xCCCC_0000);
+
+            miri_rt_map_clear(map);
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 3);
+            assert_eq!(miri_rt_map_len(map), 0);
+
+            // Free the now-empty map: no extra drops.
+            miri_rt_map_free(map);
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 3);
+        }
+    }
+
+    #[test]
+    fn test_map_val_drop_fn_called_on_overwrite() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static DROP_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn counting_drop(_p: *mut u8) {
+            DROP_CALLS.fetch_add(1, Ordering::SeqCst);
+        }
+
+        unsafe {
+            DROP_CALLS.store(0, Ordering::SeqCst);
+
+            let map = miri_rt_map_new(8, 8, 0);
+            miri_rt_map_set_val_drop_fn(map, counting_drop as *const () as usize);
+
+            // First insert: no old value → no drop.
+            miri_rt_map_set(map, 1, 0xAAAA_0000);
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 0);
+
+            // Overwrite same key: old value must be dropped once.
+            miri_rt_map_set(map, 1, 0xBBBB_0000);
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 1);
+
+            // miri_rt_map_free does NOT call val_drop_fn — the Perceus inline
+            // codegen loop handles values at scope exit.  Only the mutation
+            // operations (set overwrite, remove, clear, decref_element) call it.
+            miri_rt_map_free(map);
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[test]
+    fn test_map_val_drop_fn_not_called_on_shared_decref() {
+        // When RC > 1, miri_rt_map_decref_element should decrement RC but NOT
+        // call val_drop_fn — the map is still alive.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static DROP_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn counting_drop(_p: *mut u8) {
+            DROP_CALLS.fetch_add(1, Ordering::SeqCst);
+        }
+
+        unsafe {
+            DROP_CALLS.store(0, Ordering::SeqCst);
+
+            let map = miri_rt_map_new(8, 8, 0);
+            miri_rt_map_set_val_drop_fn(map, counting_drop as *const () as usize);
+
+            miri_rt_map_set(map, 1, 0xAAAA_0000);
+            miri_rt_map_set(map, 2, 0xBBBB_0000);
+
+            // Bump RC to 2 manually.
+            let rc_ptr = (map as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *mut usize;
+            *rc_ptr = 2;
+
+            // First decref: RC 2 → 1. Must NOT call val_drop_fn.
+            miri_rt_map_decref_element(map as *mut u8);
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 0);
+            assert_eq!(*rc_ptr, 1);
+
+            // Second decref: RC 1 → 0. Must call val_drop_fn for each occupied slot.
+            miri_rt_map_decref_element(map as *mut u8);
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 2);
+        }
+    }
+
+    #[test]
+    fn test_map_val_drop_fn_not_called_without_setting() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static DROP_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn counting_drop(_p: *mut u8) {
+            DROP_CALLS.fetch_add(1, Ordering::SeqCst);
+        }
+
+        unsafe {
+            DROP_CALLS.store(0, Ordering::SeqCst);
+
+            let map = miri_rt_map_new(8, 8, 0);
+            // Intentionally do NOT set val_drop_fn.
+            miri_rt_map_set(map, 1, 0xAAAA_0000);
+            miri_rt_map_set(map, 2, 0xBBBB_0000);
+
+            miri_rt_map_remove(map, 1);
+            miri_rt_map_clear(map);
+            // Re-populate and use decref_element path too.
+            miri_rt_map_set(map, 3, 0xCCCC_0000);
+            miri_rt_map_decref_element(map as *mut u8); // RC 1 → 0, frees map
+
+            assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 0);
+            let _ = counting_drop as unsafe extern "C" fn(*mut u8);
         }
     }
 
