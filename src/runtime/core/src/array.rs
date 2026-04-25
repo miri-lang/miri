@@ -345,7 +345,10 @@ pub mod ffi {
         }
         let src = &*ptr;
         let new_arr = miri_rt_array_new(src.elem_count, src.elem_size);
-        if !new_arr.is_null() && !src.data.is_null() && !(*new_arr).data.is_null() {
+        if new_arr.is_null() {
+            return new_arr;
+        }
+        if !src.data.is_null() && !(*new_arr).data.is_null() {
             ptr::copy_nonoverlapping(src.data, (*new_arr).data, src.byte_len());
         }
         if src.elem_drop_fn != 0 {
