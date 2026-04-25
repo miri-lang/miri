@@ -391,30 +391,38 @@ impl MiriMap {
     pub fn clear(&mut self) {
         if self.capacity > 0 && !self.states.is_null() {
             unsafe {
-                // DecRef all managed values before zeroing states.
-                if self.val_drop_fn != 0 && self.value_size > 0 {
-                    let drop_fn: unsafe extern "C" fn(*mut u8) =
-                        std::mem::transmute(self.val_drop_fn);
+                let val_drop: Option<unsafe extern "C" fn(*mut u8)> =
+                    if self.val_drop_fn != 0 && self.value_size > 0 {
+                        Some(std::mem::transmute::<usize, unsafe extern "C" fn(*mut u8)>(
+                            self.val_drop_fn,
+                        ))
+                    } else {
+                        None
+                    };
+                let key_drop: Option<unsafe extern "C" fn(*mut u8)> =
+                    if self.key_drop_fn != 0 && self.key_size > 0 {
+                        Some(std::mem::transmute::<usize, unsafe extern "C" fn(*mut u8)>(
+                            self.key_drop_fn,
+                        ))
+                    } else {
+                        None
+                    };
+                if val_drop.is_some() || key_drop.is_some() {
                     for i in 0..self.capacity {
                         if *self.states.add(i) == SLOT_OCCUPIED {
-                            let val_addr = self.values.add(i * self.value_size) as *const usize;
-                            let val_ptr = *val_addr;
-                            if val_ptr != 0 {
-                                drop_fn(val_ptr as *mut u8);
+                            if let Some(drop_fn) = val_drop {
+                                let val_addr = self.values.add(i * self.value_size) as *const usize;
+                                let val_ptr = *val_addr;
+                                if val_ptr != 0 {
+                                    drop_fn(val_ptr as *mut u8);
+                                }
                             }
-                        }
-                    }
-                }
-                // DecRef all managed keys before zeroing states.
-                if self.key_drop_fn != 0 && self.key_size > 0 {
-                    let drop_fn: unsafe extern "C" fn(*mut u8) =
-                        std::mem::transmute(self.key_drop_fn);
-                    for i in 0..self.capacity {
-                        if *self.states.add(i) == SLOT_OCCUPIED {
-                            let key_addr = self.keys.add(i * self.key_size) as *const usize;
-                            let key_ptr = *key_addr;
-                            if key_ptr != 0 {
-                                drop_fn(key_ptr as *mut u8);
+                            if let Some(drop_fn) = key_drop {
+                                let key_addr = self.keys.add(i * self.key_size) as *const usize;
+                                let key_ptr = *key_addr;
+                                if key_ptr != 0 {
+                                    drop_fn(key_ptr as *mut u8);
+                                }
                             }
                         }
                     }
@@ -1482,6 +1490,50 @@ mod tests {
             // Free the map: one remaining key drop.
             miri_rt_map_free(map);
             assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 2);
+        }
+    }
+
+    #[test]
+    fn test_map_clear_calls_both_drop_fns() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static VAL_DROPS: AtomicUsize = AtomicUsize::new(0);
+        static KEY_DROPS: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn val_drop(_p: *mut u8) {
+            VAL_DROPS.fetch_add(1, Ordering::SeqCst);
+        }
+        unsafe extern "C" fn key_drop(_p: *mut u8) {
+            KEY_DROPS.fetch_add(1, Ordering::SeqCst);
+        }
+
+        unsafe {
+            VAL_DROPS.store(0, Ordering::SeqCst);
+            KEY_DROPS.store(0, Ordering::SeqCst);
+
+            let map = miri_rt_map_new(8, 8, 0);
+            miri_rt_map_set_val_drop_fn(map, val_drop as *const () as usize);
+            miri_rt_map_set_key_drop_fn(map, key_drop as *const () as usize);
+
+            miri_rt_map_set(map, 0xAAAA_0000, 0x1111_0000);
+            miri_rt_map_set(map, 0xBBBB_0000, 0x2222_0000);
+            miri_rt_map_set(map, 0xCCCC_0000, 0x3333_0000);
+
+            miri_rt_map_clear(map);
+            assert_eq!(
+                VAL_DROPS.load(Ordering::SeqCst),
+                3,
+                "val_drop_fn must fire once per slot"
+            );
+            assert_eq!(
+                KEY_DROPS.load(Ordering::SeqCst),
+                3,
+                "key_drop_fn must fire once per slot"
+            );
+            assert_eq!(miri_rt_map_len(map), 0);
+
+            miri_rt_map_free(map);
+            assert_eq!(VAL_DROPS.load(Ordering::SeqCst), 3);
+            assert_eq!(KEY_DROPS.load(Ordering::SeqCst), 3);
         }
     }
 }
