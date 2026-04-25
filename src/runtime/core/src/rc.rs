@@ -79,6 +79,24 @@ pub unsafe fn alloc_with_rc(payload_size: usize) -> *mut u8 {
     base.add(RC_HEADER_SIZE)
 }
 
+/// Increments the RC of a managed heap object.
+///
+/// `ptr` must point to the payload (past the RC header). Immortal objects
+/// (RC stored as a negative `isize`) are skipped silently.
+///
+/// # Safety
+/// `ptr` must have been allocated via `alloc_with_rc`.
+pub unsafe fn incref(ptr: *mut u8) {
+    if ptr.is_null() {
+        return;
+    }
+    let rc_ptr = (ptr as usize - RC_HEADER_SIZE) as *mut usize;
+    let rc = *rc_ptr;
+    if (rc as isize) >= 0 {
+        *rc_ptr = rc + 1;
+    }
+}
+
 /// Frees the `[RC][payload]` block given a pointer to the payload.
 ///
 /// # Safety

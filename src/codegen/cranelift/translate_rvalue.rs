@@ -219,6 +219,101 @@ impl<'a> FunctionTranslator<'a> {
                                 }
                             }
 
+                            // Set elem_drop_fn so that mutation operations on outer
+                            // collections (clear, remove, overwrite) correctly DecRef
+                            // managed elements.  The scope-exit path (emit_type_drop)
+                            // zeros this field after its own inline drop loop, so
+                            // miri_rt_array_free never double-frees.
+                            //
+                            // Only inspect non-projected operands: `first_operand_kind`
+                            // returns the LOCAL's declared type, which is wrong for field
+                            // projections (e.g. `child.value` where `child: Tree` has type
+                            // Tree, not the field type `int`).  Skipping projected operands
+                            // is safe — it leaves elem_drop_fn null for those arrays, which
+                            // merely preserves the pre-existing behaviour for that case.
+                            let first_op_direct_kind: Option<&TypeKind> =
+                                operands.first().and_then(|op| match op {
+                                    Operand::Copy(p) | Operand::Move(p)
+                                        if p.projection.is_empty() =>
+                                    {
+                                        Some(&type_ctx.local_types[p.local.0].kind)
+                                    }
+                                    Operand::Constant(c) => Some(&c.ty.kind),
+                                    _ => None,
+                                });
+                            if let Some(elem_kind) = first_op_direct_kind {
+                                let drop_fn_addr_opt: Option<Value> = match elem_kind {
+                                    TypeKind::String => {
+                                        Some(Self::get_rt_string_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?)
+                                    }
+                                    TypeKind::List(_) => {
+                                        Some(Self::get_rt_list_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?)
+                                    }
+                                    TypeKind::Custom(n, Some(_))
+                                        if BuiltinCollectionKind::from_name(n)
+                                            == Some(BuiltinCollectionKind::List) =>
+                                    {
+                                        Some(Self::get_rt_list_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?)
+                                    }
+                                    TypeKind::Array(_, _) => {
+                                        Some(Self::get_rt_array_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?)
+                                    }
+                                    TypeKind::Custom(n, Some(_))
+                                        if BuiltinCollectionKind::from_name(n)
+                                            == Some(BuiltinCollectionKind::Array) =>
+                                    {
+                                        Some(Self::get_rt_array_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?)
+                                    }
+                                    TypeKind::Set(_) => Some(Self::get_rt_set_decref_element_addr(
+                                        builder, ctx, ptr_type,
+                                    )?),
+                                    TypeKind::Custom(n, Some(_))
+                                        if BuiltinCollectionKind::from_name(n)
+                                            == Some(BuiltinCollectionKind::Set) =>
+                                    {
+                                        Some(Self::get_rt_set_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?)
+                                    }
+                                    TypeKind::Map(_, _) => {
+                                        Some(Self::get_rt_map_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?)
+                                    }
+                                    TypeKind::Custom(n, Some(_))
+                                        if BuiltinCollectionKind::from_name(n)
+                                            == Some(BuiltinCollectionKind::Map) =>
+                                    {
+                                        Some(Self::get_rt_map_decref_element_addr(
+                                            builder, ctx, ptr_type,
+                                        )?)
+                                    }
+                                    TypeKind::Custom(n, _)
+                                        if BuiltinCollectionKind::from_name(n).is_none() =>
+                                    {
+                                        Some(Self::get_custom_decref_thunk_addr(
+                                            builder, ctx, n, ptr_type,
+                                        )?)
+                                    }
+                                    _ => None,
+                                };
+                                if let Some(addr) = drop_fn_addr_opt {
+                                    Self::call_rt_array_set_elem_drop_fn(
+                                        builder, ctx, array_ptr, addr,
+                                    )?;
+                                }
+                            }
+
                             Ok(array_ptr)
                         }
                         AggregateKind::List => {

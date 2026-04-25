@@ -74,6 +74,7 @@ pub(crate) struct ModuleCtx<'a> {
     pub(crate) rt_list_decref_element_id: Option<cranelift_module::FuncId>,
     pub(crate) rt_string_decref_element_id: Option<cranelift_module::FuncId>,
     pub(crate) rt_array_decref_element_id: Option<cranelift_module::FuncId>,
+    pub(crate) rt_array_set_elem_drop_fn_id: Option<cranelift_module::FuncId>,
     pub(crate) rt_set_decref_element_id: Option<cranelift_module::FuncId>,
     pub(crate) rt_map_decref_element_id: Option<cranelift_module::FuncId>,
     /// Cached FuncIds for runtime set functions.
@@ -195,6 +196,7 @@ impl<'a> FunctionTranslator<'a> {
             rt_list_decref_element_id: None,
             rt_string_decref_element_id: None,
             rt_array_decref_element_id: None,
+            rt_array_set_elem_drop_fn_id: None,
             rt_set_decref_element_id: None,
             rt_map_decref_element_id: None,
             rt_set_new_id: None,
@@ -900,6 +902,26 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
+    /// Calls `miri_rt_array_set_elem_drop_fn(array_ptr, fn_ptr)`.
+    pub(crate) fn call_rt_array_set_elem_drop_fn(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        array_ptr: Value,
+        fn_ptr: Value,
+    ) -> Result<(), String> {
+        let pt = builder.func.dfg.value_type(array_ptr);
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.rt_array_set_elem_drop_fn_id,
+            rt::ARRAY_SET_ELEM_DROP_FN,
+            &[pt, pt],
+            &[],
+            &[array_ptr, fn_ptr],
+        )?;
+        Ok(())
+    }
+
     /// Sets `elem_drop_fn` on `list_ptr` based on the declared element type.
     ///
     /// Used when an empty `List<T>()` aggregate is assigned: there are no operands
@@ -1545,6 +1567,13 @@ impl<'a> FunctionTranslator<'a> {
                             &inner_ty.kind,
                             type_ctx,
                         )?;
+                        // Zero elem_drop_fn so miri_rt_array_free does not call it a
+                        // second time on the elements that the inline loop just dropped.
+                        // elem_drop_fn is the fourth field: offset = 3 * ptr_size.
+                        let zero = builder.ins().iconst(ptr_type, 0);
+                        builder
+                            .ins()
+                            .store(MemFlags::new(), zero, ptr, 3 * ptr_size);
                     }
                 }
             }
@@ -2289,6 +2318,7 @@ impl<'a> FunctionTranslator<'a> {
                 rt_list_decref_element_id: None,
                 rt_string_decref_element_id: None,
                 rt_array_decref_element_id: None,
+                rt_array_set_elem_drop_fn_id: None,
                 rt_set_decref_element_id: None,
                 rt_map_decref_element_id: None,
                 rt_set_new_id: None,

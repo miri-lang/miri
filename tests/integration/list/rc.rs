@@ -390,6 +390,31 @@ fn main()
     );
 }
 
+// ── List<Array<managed>> – inner elem_drop_fn must chain ──────────────────────
+
+#[test]
+fn test_list_of_arrays_of_strings_clear_no_leak() {
+    // List<Array<String>>: when clear() fires miri_rt_array_decref_element on each
+    // inner array, that in turn calls miri_rt_array_free which invokes the array's
+    // own elem_drop_fn (string_decref_element) on every string.  All three levels
+    // must be released with no leak.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    var i = 0
+    while i < 50
+        var lst = List([["pre" + "fix", "a" + "b"], ["x" + "y", "p" + "q"]])
+        lst.clear()
+        i = i + 1
+    println("ok")
+"#,
+        "ok",
+    );
+}
+
 // ── Task 3.3: Clear decref all elements ─────────────────────────────────────
 
 #[test]
