@@ -415,6 +415,74 @@ fn main()
     );
 }
 
+// ── Task 4.1.5: List<collection> mutation elem_drop_fn chain ─────────────────
+
+#[test]
+fn test_list_of_lists_set_method_frees_old() {
+    // list.set(i, new_list) must call elem_drop_fn (miri_rt_list_decref_element)
+    // on the displaced inner list before overwriting the slot.
+    // Without elem_drop_fn the old inner list leaks; 100 iterations stress-tests this.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    var i = 0
+    while i < 100
+        var l = List([List([1, 2, 3]), List([4, 5, 6])])
+        l.set(0, List([99]))
+        l.set(1, List([88]))
+        i = i + 1
+    println("ok")
+"#,
+        "ok",
+    );
+}
+
+#[test]
+fn test_list_of_lists_set_preserves_aliased_element() {
+    // Reading slot 0 into a local IncRefs the inner list (RC=2).
+    // Calling set(0, …) via elem_drop_fn decrements back to RC=1.
+    // The alias must remain readable — double-decref would crash on length().
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    let inner = List([1, 2, 3])
+    var l = List([inner, List([99])])
+    l.set(0, List([7, 8]))
+    println(f"{inner.length()}")
+"#,
+        "3",
+    );
+}
+
+#[test]
+fn test_list_of_arrays_of_lists_remove_at_no_leak() {
+    // List<Array<List<int>>>: remove_at calls miri_rt_array_decref_element on the
+    // removed array; that in turn calls miri_rt_array_free which chains through the
+    // array's elem_drop_fn (miri_rt_list_decref_element) to free inner lists.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    var i = 0
+    while i < 50
+        var outer = List([[List([1, 2]), List([3, 4])], [List([5, 6]), List([7, 8])]])
+        outer.remove_at(0)
+        outer.remove_at(0)
+        i = i + 1
+    println("ok")
+"#,
+        "ok",
+    );
+}
+
 // ── Task 3.3: Clear decref all elements ─────────────────────────────────────
 
 #[test]

@@ -258,3 +258,170 @@ fn main()
         "2",
     );
 }
+
+// ── Task 4.1.5: Nested collection mutation drops (elem_drop_fn chain) ─────────
+
+#[test]
+fn test_array_of_lists_set_method_no_leak() {
+    // Array<List<int>>.set(i, new_list) must call miri_rt_list_decref_element on
+    // the old list.  Without elem_drop_fn set on the array the old inner list
+    // would leak; with a buggy double-decref the slot's RC would hit 0 while the
+    // local alias still lives, causing a use-after-free crash.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.array
+use system.collections.list
+
+fn main()
+    var i = 0
+    while i < 100
+        var arr = [List([1, 2]), List([3, 4])]
+        arr.set(0, List([99]))
+        i = i + 1
+    println("ok")
+"#,
+        "ok",
+    );
+}
+
+#[test]
+fn test_array_of_lists_set_preserves_alias() {
+    // Verifies RC accounting: reading slot 0 into a local before calling set()
+    // should IncRef it (Perceus).  The set() call via elem_drop_fn decrements
+    // once — net result RC=1 on the alias, which must remain readable.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.array
+use system.collections.list
+
+fn main()
+    let inner = List([1, 2, 3])
+    var arr = [inner, List([99])]
+    arr.set(0, List([7, 8]))
+    println(f"{inner.length()}")
+"#,
+        "3",
+    );
+}
+
+#[test]
+fn test_list_of_lists_set_method_no_leak() {
+    // List<List<int>>.set(i, new_list) must call elem_drop_fn (miri_rt_list_decref_element)
+    // on the old inner list so it is properly released.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    var i = 0
+    while i < 100
+        var l = List([List([1, 2]), List([3, 4])])
+        l.set(0, List([99]))
+        l.set(1, List([88]))
+        i = i + 1
+    println("ok")
+"#,
+        "ok",
+    );
+}
+
+#[test]
+fn test_list_of_lists_remove_at_loop_no_leak() {
+    // Each iteration creates a List<List<int>> then clears it via remove_at.
+    // elem_drop_fn on the outer list must DecRef each removed inner list.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    var i = 0
+    while i < 50
+        var l = List([List([1, 2]), List([3, 4]), List([5, 6])])
+        l.remove_at(0)
+        l.remove_at(0)
+        l.remove_at(0)
+        i = i + 1
+    println("ok")
+"#,
+        "ok",
+    );
+}
+
+#[test]
+fn test_list_of_arrays_remove_at_no_leak() {
+    // List<Array<int>>: remove_at must call miri_rt_array_decref_element on each
+    // removed inner array.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    var i = 0
+    while i < 50
+        var l = List([[1, 2], [3, 4], [5, 6]])
+        l.remove_at(0)
+        l.remove_at(0)
+        l.remove_at(0)
+        i = i + 1
+    println("ok")
+"#,
+        "ok",
+    );
+}
+
+#[test]
+fn test_list_of_sets_remove_at_no_leak() {
+    // List<Set<int>>: remove_at must call miri_rt_set_decref_element on each
+    // removed inner set.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+use system.collections.set
+
+fn main()
+    var i = 0
+    while i < 50
+        var l = List([{1, 2}, {3, 4}, {5, 6}])
+        l.remove_at(0)
+        l.remove_at(0)
+        l.remove_at(0)
+        i = i + 1
+    println("ok")
+"#,
+        "ok",
+    );
+}
+
+#[test]
+fn test_array_of_lists_scope_exit_and_mutation_combined() {
+    // Exercises both RC paths for Array<List<T>>:
+    // 1) Runtime mutation path: array.set() calls elem_drop_fn.
+    // 2) Scope-exit path: inline drop loop + elem_drop_fn zeroed before free.
+    // If both paths fire on the same element, RC hits 0 twice → use-after-free crash.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.array
+use system.collections.list
+
+fn do_work()
+    var arr = [List([1, 2]), List([3, 4])]
+    arr.set(0, List([10, 20]))
+    arr.set(1, List([30, 40]))
+
+fn main()
+    var i = 0
+    while i < 100
+        do_work()
+        i = i + 1
+    println("ok")
+"#,
+        "ok",
+    );
+}
