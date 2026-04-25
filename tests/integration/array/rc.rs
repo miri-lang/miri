@@ -326,6 +326,52 @@ fn main()
     );
 }
 
+// ── Task 4.1.5: Array<collection> set() mutation elem_drop_fn chain ──────────
+
+#[test]
+fn test_array_of_lists_set_method_frees_old() {
+    // array.set(i, new_list) must invoke elem_drop_fn (miri_rt_list_decref_element)
+    // on the displaced inner list. 100 iterations leak without the fix.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.array
+use system.collections.list
+
+fn main()
+    var a = [List([1, 2]), List([3, 4])]
+    var i = 0
+    while i < 100
+        a.set(0, List([5, 6]))
+        a.set(1, List([7, 8]))
+        i = i + 1
+    println(f"{a[0][0]}")
+"#,
+        "5",
+    );
+}
+
+#[test]
+fn test_array_of_lists_set_preserves_aliased_element() {
+    // Read slot 0 into a local (Perceus IncRefs it to RC=2), then overwrite the
+    // slot via set() (elem_drop_fn decrements to RC=1).  The local must still be
+    // readable — a double-decref would free it and crash here.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.array
+use system.collections.list
+
+fn main()
+    let inner = List([10, 20, 30])
+    var arr = [inner, List([0])]
+    arr.set(0, List([99]))
+    println(f"{inner.length()}")
+"#,
+        "3",
+    );
+}
+
 // ── Set/overwrite decref old value (task 3.2) ────────────────────────────────
 
 #[test]
