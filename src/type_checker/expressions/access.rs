@@ -605,8 +605,7 @@ impl TypeChecker {
 
         if let Some(name) = type_name {
             // Instance member access (Struct field)
-            // We need to clone the definition to avoid borrowing issues with context
-            let def_opt = self.resolve_visible_type(&name, context).cloned();
+            let def_opt = self.resolve_visible_type(&name, context);
 
             if let Some(TypeDefinition::Struct(def)) = def_opt {
                 if let Some((_, field_type, visibility)) =
@@ -653,7 +652,7 @@ impl TypeChecker {
                 }
             } else if let Some(TypeDefinition::Class(def)) = def_opt {
                 // Walk up the inheritance chain to find the member
-                let mut search_class_def = def.clone();
+                let mut search_class_def = def;
 
                 loop {
                     // Substitute generic parameters if present.
@@ -801,8 +800,7 @@ impl TypeChecker {
                     if let Some(base_class_name) = &search_class_def.base_class {
                         let base_def_opt = context
                             .resolve_type_definition(base_class_name)
-                            .cloned()
-                            .or_else(|| self.global_type_definitions.get(base_class_name).cloned());
+                            .or_else(|| self.global_type_definitions.get(base_class_name));
 
                         if let Some(TypeDefinition::Class(base_def)) = base_def_opt {
                             search_class_def = base_def;
@@ -821,12 +819,7 @@ impl TypeChecker {
                     'trait_search: loop {
                         let search_def = context
                             .resolve_type_definition(&search_class_name)
-                            .cloned()
-                            .or_else(|| {
-                                self.global_type_definitions
-                                    .get(&search_class_name)
-                                    .cloned()
-                            });
+                            .or_else(|| self.global_type_definitions.get(&search_class_name));
 
                         if let Some(TypeDefinition::Class(class_def)) = search_def {
                             for trait_name in &class_def.traits {
@@ -888,32 +881,26 @@ impl TypeChecker {
                 }
 
                 // Collect all candidates from the class hierarchy for suggestions
-                let mut candidates: Vec<String> = Vec::new();
-                let mut collect_class_name = name.clone();
+                let mut candidates: Vec<&str> = Vec::new();
+                let mut collect_class_name = name.as_str();
                 loop {
                     let collect_def_opt = context
-                        .resolve_type_definition(&collect_class_name)
-                        .cloned()
-                        .or_else(|| {
-                            self.global_type_definitions
-                                .get(&collect_class_name)
-                                .cloned()
-                        });
+                        .resolve_type_definition(collect_class_name)
+                        .or_else(|| self.global_type_definitions.get(collect_class_name));
 
                     if let Some(TypeDefinition::Class(collect_def)) = collect_def_opt {
-                        candidates.extend(collect_def.fields.iter().map(|(n, _)| n.clone()));
-                        candidates.extend(collect_def.methods.keys().cloned());
+                        candidates.extend(collect_def.fields.iter().map(|(n, _)| n.as_str()));
+                        candidates.extend(collect_def.methods.keys().map(|k| k.as_str()));
 
                         if let Some(base_name) = &collect_def.base_class {
-                            collect_class_name = base_name.clone();
+                            collect_class_name = base_name.as_str();
                             continue;
                         }
                     }
                     break;
                 }
 
-                let candidate_refs: Vec<&str> = candidates.iter().map(|s| s.as_str()).collect();
-                if let Some(suggestion) = find_best_match(prop_name, &candidate_refs) {
+                if let Some(suggestion) = find_best_match(prop_name, &candidates) {
                     self.report_error_with_help(
                         format!("Type '{}' has no field or method '{}'", name, prop_name),
                         span,
@@ -938,7 +925,7 @@ impl TypeChecker {
                     }
                     let t_def_opt: Option<&crate::type_checker::context::TraitDefinition> =
                         if t_name == name {
-                            Some(&trait_def)
+                            Some(trait_def)
                         } else {
                             match self.global_type_definitions.get(t_name) {
                                 Some(TypeDefinition::Trait(d)) => Some(d),
@@ -978,7 +965,7 @@ impl TypeChecker {
                 }
                 // Method not found in any trait
                 let all_methods: Vec<&str> = {
-                    let mut methods = Vec::new();
+                    let mut methods: Vec<&str> = Vec::new();
                     let mut all_to_check = vec![name.as_str()];
                     let mut all_visited = std::collections::HashSet::new();
                     while let Some(t_name) = all_to_check.pop() {
@@ -1029,7 +1016,7 @@ impl TypeChecker {
             TypeKind::Meta(inner_type) => {
                 // Static member access (Enum variant)
                 if let TypeKind::Custom(name, _) = &inner_type.kind {
-                    let def_opt = self.resolve_visible_type(name, context).cloned();
+                    let def_opt = self.resolve_visible_type(name, context);
 
                     if let Some(TypeDefinition::Enum(def)) = def_opt {
                         if let Some(variant_types) = def.variants.get(prop_name) {
