@@ -674,6 +674,10 @@ pub mod ffi {
     }
 
     /// Clones a list.
+    ///
+    /// If `elem_drop_fn` is set, copies it to the clone and IncRefs every
+    /// non-null element pointer so both collections hold independent RC=1
+    /// references — preventing a double-free when either collection is dropped.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_clone(ptr: *const MiriList) -> *mut MiriList {
@@ -690,6 +694,19 @@ pub mod ffi {
         if !src.data.is_null() && src.len > 0 && !(*list).data.is_null() {
             ptr::copy_nonoverlapping(src.data, (*list).data, src.len * src.elem_size);
             (*list).len = src.len;
+        }
+
+        if src.elem_drop_fn != 0 {
+            (*list).elem_drop_fn = src.elem_drop_fn;
+            if !src.data.is_null() && src.len > 0 && src.elem_size > 0 {
+                for i in 0..src.len {
+                    let slot = src.data.add(i * src.elem_size) as *const usize;
+                    let ptr_val = *slot;
+                    if ptr_val != 0 {
+                        crate::rc::incref(ptr_val as *mut u8);
+                    }
+                }
+            }
         }
 
         list
@@ -1273,6 +1290,48 @@ mod tests {
 
             miri_rt_list_free(list);
             miri_rt_list_free(cloned);
+        }
+    }
+
+    #[test]
+    fn test_list_clone_managed_elements_increfs_rc() {
+        // Verify that cloning a list whose elements are RC-managed pointers
+        // IncRefs each element so the clone and the original hold independent
+        // RC=1 references — preventing a double-free on destruction.
+        //
+        // miri_rt_list_free is a raw dealloc that does NOT invoke elem_drop_fn
+        // (that's Perceus's job at scope exit, or miri_rt_list_decref_element
+        // when the list is itself an element of another collection). So we use
+        // miri_rt_list_decref_element here to simulate the real drop path.
+        unsafe {
+            // Create two managed inner lists (RC=1 each).
+            let elem0 = miri_rt_list_new(std::mem::size_of::<i32>());
+            let elem1 = miri_rt_list_new(std::mem::size_of::<i32>());
+
+            let rc_ptr0 = (elem0 as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *mut usize;
+            let rc_ptr1 = (elem1 as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *mut usize;
+            assert_eq!(*rc_ptr0, 1);
+            assert_eq!(*rc_ptr1, 1);
+
+            // Build outer list of pointer-sized elements.
+            let list = miri_rt_list_new(std::mem::size_of::<usize>());
+            miri_rt_list_push(list, elem0 as usize);
+            miri_rt_list_push(list, elem1 as usize);
+            miri_rt_list_set_elem_drop_fn(list, miri_rt_list_decref_element as *const () as usize);
+
+            // Clone: elements must be IncRef'd → RC=2.
+            let cloned = miri_rt_list_clone(list);
+            assert_eq!(*rc_ptr0, 2, "elem0 RC should be 2 after clone");
+            assert_eq!(*rc_ptr1, 2, "elem1 RC should be 2 after clone");
+
+            // Drop clone via decref_element (mirrors the Perceus outer-collection path).
+            // clone RC: 1→0 → calls elem_drop_fn on each element → elem0/1 RC: 2→1.
+            miri_rt_list_decref_element(cloned as *mut u8);
+            assert_eq!(*rc_ptr0, 1, "elem0 RC should be 1 after dropping clone");
+            assert_eq!(*rc_ptr1, 1, "elem1 RC should be 1 after dropping clone");
+
+            // Drop original: list RC: 1→0 → elem0/1 RC: 1→0 → inner lists freed.
+            miri_rt_list_decref_element(list as *mut u8);
         }
     }
 

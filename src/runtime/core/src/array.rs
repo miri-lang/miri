@@ -175,11 +175,10 @@ pub mod ffi {
     /// Used as a direct decref callback when an Array slot is overwritten
     /// (e.g., `arr[i] = new_array` where the element type is itself an Array).
     ///
-    /// LIMITATION: Calls `miri_rt_array_free` directly, which does not invoke
-    /// `elem_drop_fn` recursively. Mutation operations on collections whose
-    /// elements are Arrays of managed values will not fully release inner
-    /// references. The normal drop path (variables going out of scope) handles
-    /// all levels via the codegen's inline element-drop loops.
+    /// Calls `miri_rt_array_free`, which invokes `elem_drop_fn` on every
+    /// non-null element before freeing the backing buffer.  Managed elements
+    /// nested inside the array (e.g. `Array<String>` or `Array<List<int>>`)
+    /// are therefore correctly DecRef'd at any nesting depth.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_array_decref_element(ptr: *mut u8) {
@@ -334,6 +333,10 @@ pub mod ffi {
     }
 
     /// Returns a clone of the array.
+    ///
+    /// If `elem_drop_fn` is set, copies it to the clone and IncRefs every
+    /// non-null element pointer so both collections hold independent RC=1
+    /// references — preventing a double-free when either collection is dropped.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_array_clone(ptr: *const MiriArray) -> *mut MiriArray {
@@ -344,6 +347,18 @@ pub mod ffi {
         let new_arr = miri_rt_array_new(src.elem_count, src.elem_size);
         if !new_arr.is_null() && !src.data.is_null() && !(*new_arr).data.is_null() {
             ptr::copy_nonoverlapping(src.data, (*new_arr).data, src.byte_len());
+        }
+        if src.elem_drop_fn != 0 {
+            (*new_arr).elem_drop_fn = src.elem_drop_fn;
+            if !src.data.is_null() && src.elem_count > 0 && src.elem_size > 0 {
+                for i in 0..src.elem_count {
+                    let slot = src.data.add(i * src.elem_size) as *const usize;
+                    let ptr_val = *slot;
+                    if ptr_val != 0 {
+                        crate::rc::incref(ptr_val as *mut u8);
+                    }
+                }
+            }
         }
         new_arr
     }
@@ -547,6 +562,47 @@ mod tests {
 
             miri_rt_array_free(arr);
             miri_rt_array_free(cloned);
+        }
+    }
+
+    #[test]
+    fn test_array_clone_managed_elements_increfs_rc() {
+        // Verify that cloning an array whose elements are RC-managed pointers
+        // IncRefs each element so the clone and the original both hold RC=1
+        // references independently, preventing a double-free on destruction.
+        unsafe {
+            // Create two managed inner lists that will serve as elements.
+            let elem0 = crate::miri_rt_list_new(std::mem::size_of::<i32>());
+            let elem1 = crate::miri_rt_list_new(std::mem::size_of::<i32>());
+
+            // Both elements start at RC=1.
+            let rc_ptr0 = (elem0 as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *const usize;
+            let rc_ptr1 = (elem1 as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *const usize;
+            assert_eq!(*rc_ptr0, 1);
+            assert_eq!(*rc_ptr1, 1);
+
+            // Build an outer array of pointer-sized elements.
+            let arr = miri_rt_array_new(2, std::mem::size_of::<usize>());
+            miri_rt_array_set(arr, 0, &(elem0 as usize) as *const usize as *const u8);
+            miri_rt_array_set(arr, 1, &(elem1 as usize) as *const usize as *const u8);
+            miri_rt_array_set_elem_drop_fn(
+                arr,
+                crate::miri_rt_list_decref_element as *const () as usize,
+            );
+
+            // Clone the outer array.  Elements must be IncRef'd → RC=2.
+            let cloned = miri_rt_array_clone(arr);
+            assert_eq!(*rc_ptr0, 2, "elem0 RC should be 2 after clone");
+            assert_eq!(*rc_ptr1, 2, "elem1 RC should be 2 after clone");
+
+            // Freeing the clone decrements each element: RC=1.
+            miri_rt_array_free(cloned);
+            assert_eq!(*rc_ptr0, 1, "elem0 RC should be 1 after freeing clone");
+            assert_eq!(*rc_ptr1, 1, "elem1 RC should be 1 after freeing clone");
+
+            // Freeing the original decrements to 0 and the inner lists are freed.
+            // (If this double-freed, the process would abort or corrupt memory.)
+            miri_rt_array_free(arr);
         }
     }
 
