@@ -1,0 +1,9 @@
+⚡ Bolt: Eliminate deep clones of TypeDefinition in Type Checker
+
+💡 What: Removed `.cloned()` calls in `src/type_checker/expressions/access.rs` during member access resolution. Modified the type checker to use borrowed references (`&TypeDefinition`) for retrieving class, struct, enum, and trait definitions from the environment context instead of creating deep, owned copies of the entire AST nodes.
+
+🎯 Why: During expression type checking, especially in `infer_member`, the compiler needs to frequently look up fields or methods in class/struct definitions. Previously, it cloned the entire `TypeDefinition` node (which recursively clones all methods, fields, and generic constraint data) via `self.resolve_visible_type().cloned()`. This was a major overhead and created thousands of needless heap allocations per compilation pass, as the type definition was only being read to check if a specific member existed.
+
+📊 Impact: Reduces heap allocations and overall latency in the type checker's hot path by avoiding deep AST cloning during standard member access (`obj.field` or `obj.method()`).
+
+🔬 Measurement: Verify the improvement by running a large Miri script with extensive class instantiations and method calls, and observing reduced memory usage and faster compile times.
