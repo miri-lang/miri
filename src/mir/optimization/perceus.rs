@@ -28,6 +28,10 @@ struct PerceusContext<'a> {
     auto_copy_types: &'a std::collections::HashSet<String>,
     field_types: &'a std::collections::HashMap<String, Vec<crate::ast::types::Type>>,
     type_params: &'a std::collections::HashSet<String>,
+    /// Maps each closure local to the ordered AST types of its captured variables.
+    /// Used to emit `DecRef(closure.field(i))` for each managed capture at StorageDead.
+    closure_capture_types:
+        &'a std::collections::HashMap<crate::mir::Local, Vec<crate::ast::types::Type>>,
     arg_count: usize,
 }
 
@@ -50,6 +54,7 @@ impl OptimizationPass for Perceus {
             ref auto_copy_types,
             ref field_types,
             ref type_params,
+            ref closure_capture_types,
             arg_count,
             ..
         } = *body;
@@ -59,6 +64,7 @@ impl OptimizationPass for Perceus {
             auto_copy_types,
             field_types,
             type_params,
+            closure_capture_types,
             arg_count,
         };
 
@@ -133,7 +139,7 @@ impl Perceus {
                 self.handle_assignment(ctx, stmt, managed_locals, new_stmts)
             }
             StatementKind::StorageDead(place) => {
-                self.handle_storage_dead(stmt, place, managed_locals, new_stmts)
+                self.handle_storage_dead(ctx, stmt, place, managed_locals, new_stmts)
             }
             _ => false,
         }
@@ -184,6 +190,7 @@ impl Perceus {
                 ctx.auto_copy_types,
                 ctx.field_types,
                 ctx.type_params,
+                ctx.closure_capture_types,
             ) {
                 new_stmts.push(Statement {
                     kind: StatementKind::IncRef(param_place),
@@ -214,13 +221,44 @@ impl Perceus {
     }
 
     /// Handles a storage end-of-life by decrementing the RC of managed locals.
+    ///
+    /// For closure locals, also emits `DecRef(closure.field(i))` for each managed
+    /// captured value BEFORE decrementing the closure struct's own RC. This ensures
+    /// that captured managed values (List, String, class instances, …) are released
+    /// when the closure goes out of scope, preventing reference-count leaks.
     fn handle_storage_dead(
         &self,
+        ctx: &PerceusContext,
         stmt: &Statement,
         place: &Place,
         managed_locals: &std::collections::HashSet<crate::mir::Local>,
         new_stmts: &mut Vec<Statement>,
     ) -> bool {
+        let mut changed = false;
+
+        // For closure locals: DecRef each managed captured field first.
+        // `closure_capture_types` maps closure locals to their captured AST types
+        // in the same order as they were packed into the closure struct.
+        // Field index i corresponds to capture i (fn_ptr is at index 0 of the
+        // struct's raw layout, so codegen loads cap_i at payload_ptr+(i+1)*ptr_size).
+        if let Some(cap_types) = ctx.closure_capture_types.get(&place.local) {
+            for (i, cap_ty) in cap_types.iter().enumerate() {
+                if crate::mir::types::MirType::from_type_kind(&cap_ty.kind)
+                    .is_managed(ctx.auto_copy_types, ctx.type_params)
+                {
+                    let cap_place = Place {
+                        local: place.local,
+                        projection: vec![PlaceElem::Field(i)],
+                    };
+                    new_stmts.push(Statement {
+                        kind: StatementKind::DecRef(cap_place),
+                        span: stmt.span,
+                    });
+                    changed = true;
+                }
+            }
+        }
+
         if managed_locals.contains(&place.local) {
             new_stmts.push(Statement {
                 kind: StatementKind::DecRef(place.clone()),
@@ -228,7 +266,7 @@ impl Perceus {
             });
             return true;
         }
-        false
+        changed
     }
 
     /// Determines if a source value being copied needs an IncRef.
@@ -246,6 +284,7 @@ impl Perceus {
             ctx.auto_copy_types,
             ctx.field_types,
             ctx.type_params,
+            ctx.closure_capture_types,
         ) {
             return true;
         }
@@ -279,6 +318,7 @@ impl Perceus {
                     ctx.auto_copy_types,
                     ctx.field_types,
                     ctx.type_params,
+                    ctx.closure_capture_types,
                 ) {
                     new_stmts.push(Statement {
                         kind: StatementKind::IncRef(place.clone()),
@@ -328,6 +368,7 @@ impl Perceus {
                 ctx.auto_copy_types,
                 ctx.field_types,
                 ctx.type_params,
+                ctx.closure_capture_types,
             )
     }
 }
@@ -373,6 +414,8 @@ fn get_move_from_param_place(rvalue: &Rvalue, arg_count: usize) -> Option<Place>
 /// - `Option<T>` — `Field(0)` yields the inner `T`
 /// - `Tuple(T0, T1, ...)` — `Field(i)` yields `Ti`
 /// - Custom struct/class types — `Field(i)` is resolved via `field_types`
+/// - Closure locals — `Field(i)` yields the type of captured variable `i`,
+///   looked up from `closure_capture_types` using the root local index
 ///
 /// Enum `Field(i)` projections cannot be resolved here (the field type depends on
 /// which variant is active), so the Perceus main loop falls back to checking
@@ -387,6 +430,10 @@ fn is_place_managed(
     auto_copy_types: &std::collections::HashSet<String>,
     field_types: &std::collections::HashMap<String, Vec<crate::ast::types::Type>>,
     type_params: &std::collections::HashSet<String>,
+    closure_capture_types: &std::collections::HashMap<
+        crate::mir::Local,
+        Vec<crate::ast::types::Type>,
+    >,
 ) -> bool {
     // Start from the MIR-level resolved type of the base local.
     let mut current: MirType = local_decls[place.local.0].mir_ty.clone();
@@ -416,6 +463,18 @@ fn is_place_managed(
                 // MIR-level field_types map — we reuse the existing one that holds `Type`.
                 MirType::Custom(name) => {
                     match field_types.get(name.as_str()).and_then(|fs| fs.get(*i)) {
+                        Some(ty) => MirType::from_type_kind(&ty.kind),
+                        None => return false,
+                    }
+                }
+                // Closure.Field(i) → the type of captured variable i.
+                // Capture types are indexed by the root local because a closure
+                // is always a single-level projection (never nested).
+                MirType::Function => {
+                    match closure_capture_types
+                        .get(&place.local)
+                        .and_then(|caps| caps.get(*i))
+                    {
                         Some(ty) => MirType::from_type_kind(&ty.kind),
                         None => return false,
                     }
