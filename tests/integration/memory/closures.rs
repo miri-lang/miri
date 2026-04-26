@@ -5,15 +5,11 @@
 // A lambda that captures a managed value must IncRef it on creation and
 // DecRef it when the lambda itself is dropped.
 //
-// Currently WORKING:
+// Covered cases:
 //   - Primitive captures (int, float, bool) — copy semantics, no RC needed
 //   - String captures — pointer capture with correct RC
-//   - Class captures where all fields are primitives
-//
-// Currently NOT WORKING (tracked in PLAN.md — Milestone 5, Task 0e):
-//   - Lambda capture of List/Map/Set/Array — the closure environment does not
-//     DecRef the captured collection when the lambda drops, causing a leak.
-//     Tests for these patterns are present but marked #[ignore].
+//   - Class captures (primitive fields and List fields)
+//   - List captures — closure env DecRefs captured List on drop (fixed in Milestone 5 Task 5.1)
 
 use super::super::utils::*;
 
@@ -96,15 +92,12 @@ fn main()
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-//  Known-failing captures (Milestone 5 Task 0e — lambda env does not DecRef collections)
-//  These tests are #[ignore]d so they document the expected behavior without
-//  blocking CI.  Remove #[ignore] once Milestone 5 Task 0e lands.
+//  Collection captures (Milestone 5 Task 0e — now fixed)
 // ────────────────────────────────────────────────────────────────────────────
 
 /// Lambda capturing a List; the List must not be freed while the lambda is live,
 /// and must be freed exactly once after both the lambda and outer binding drop.
 #[test]
-#[ignore = "lambda capture of List leaks: closure env does not DecRef on drop (Milestone 5 Task 0e)"]
 fn test_lambda_captures_list_no_leak() {
     assert_runs_with_output(
         r#"
@@ -122,7 +115,6 @@ fn main()
 
 /// Lambda called multiple times; the captured List must not be double-freed.
 #[test]
-#[ignore = "lambda capture of List leaks: closure env does not DecRef on drop (Milestone 5 Task 0e)"]
 fn test_lambda_called_multiple_times_no_leak() {
     assert_runs_with_output(
         r#"
@@ -142,7 +134,6 @@ fn main()
 
 /// Lambda captures two managed Lists; both must be freed when the lambda drops.
 #[test]
-#[ignore = "lambda capture of List leaks: closure env does not DecRef on drop (Milestone 5 Task 0e)"]
 fn test_lambda_captures_two_lists_no_leak() {
     assert_runs_with_output(
         r#"
@@ -161,7 +152,6 @@ fn main()
 
 /// Lambda created fresh inside a loop, capturing the same outer List each time.
 #[test]
-#[ignore = "lambda capture of List leaks: closure env does not DecRef on drop (Milestone 5 Task 0e)"]
 fn test_lambda_created_in_loop_no_accumulation() {
     assert_runs_with_output(
         r#"
@@ -183,7 +173,6 @@ fn main()
 
 /// Lambda passed as argument to a higher-order function, captures a List.
 #[test]
-#[ignore = "lambda capture of List leaks: closure env does not DecRef on drop (Milestone 5 Task 0e)"]
 fn test_lambda_passed_as_arg_captures_list_no_leak() {
     assert_runs_with_output(
         r#"
@@ -204,7 +193,6 @@ fn main()
 
 /// Lambda captures a class with a managed List field.
 #[test]
-#[ignore = "lambda capture of class-with-list-field leaks: closure env does not DecRef on drop (Milestone 5 Task 0e)"]
 fn test_lambda_captures_class_with_list_field_no_leak() {
     assert_runs_with_output(
         r#"
@@ -224,10 +212,48 @@ fn main()
     );
 }
 
+/// Mutable closure var reassigned from a capturing closure to a non-capturing one.
+/// The stale `closure_capture_types` entry for the original local must not cause
+/// a spurious DecRef on the new closure's payload (which has no captures).
+#[test]
+fn test_closure_var_reassigned_capturing_to_non_capturing() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    let data = List([1, 2, 3])
+    var f = fn() int: data.length()
+    f = fn() int: 99
+    println(f"{f()}")
+"#,
+        "99",
+    );
+}
+
+/// Mutable closure var reassigned from a non-capturing closure to a capturing one.
+/// Ensures the new captures are correctly tracked and freed on drop.
+#[test]
+fn test_closure_var_reassigned_non_capturing_to_capturing() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    let data = List([10, 20, 30])
+    var f = fn() int: 42
+    f = fn() int: data.length()
+    println(f"{f()}")
+"#,
+        "3",
+    );
+}
+
 /// Two independent lambdas each capture the same List; dropping both lambdas
 /// must not double-free the List.
 #[test]
-#[ignore = "lambda capture of List leaks: closure env does not DecRef on drop (Milestone 5 Task 0e)"]
 fn test_two_lambdas_capture_same_list_no_double_free() {
     assert_runs_with_output(
         r#"
@@ -235,9 +261,9 @@ use system.io
 use system.collections.list
 
 fn main()
-    let shared = List([7, 8, 9])
-    let f1 = fn() int: shared.length()
-    let f2 = fn() int: shared.length()
+    let pool = List([7, 8, 9])
+    let f1 = fn() int: pool.length()
+    let f2 = fn() int: pool.length()
     println(f"{f1() + f2()}")
 "#,
         "6",

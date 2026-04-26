@@ -632,6 +632,14 @@ impl<'a> FunctionTranslator<'a> {
                                 _ => TypeKind::Error,
                             }
                         }
+                        // Closure env field: capture `idx` is looked up in the
+                        // per-closure capture-type table stored in the TypeCtx.
+                        TypeKind::Function(_) => type_ctx
+                            .closure_capture_ast_types
+                            .get(&place.local)
+                            .and_then(|caps| caps.get(*idx))
+                            .map(|ty| ty.kind.clone())
+                            .unwrap_or(TypeKind::Error),
                         _ => TypeKind::Error,
                     };
                 }

@@ -57,6 +57,53 @@ pub(crate) fn lower_assignment_expr(
                                 };
 
                                 if let Some(rhs_place) = rhs_place {
+                                    // For closure reassignment: emit DecRef for each
+                                    // managed capture of the OLD closure before overwriting
+                                    // the variable, then sync closure_capture_types so
+                                    // Perceus's StorageDead handler sees the NEW captures.
+                                    if matches!(lhs_ty.kind, TypeKind::Function(_)) {
+                                        if let Some(old_caps) =
+                                            ctx.body.closure_capture_types.get(&local).cloned()
+                                        {
+                                            for (cap_idx, cap_ty) in old_caps.iter().enumerate() {
+                                                if crate::mir::types::MirType::from_type_kind(
+                                                    &cap_ty.kind,
+                                                )
+                                                .is_managed(
+                                                    &ctx.body.auto_copy_types,
+                                                    &ctx.body.type_params,
+                                                ) {
+                                                    ctx.push_statement(crate::mir::Statement {
+                                                        kind: MirStatementKind::DecRef(Place {
+                                                            local,
+                                                            projection: vec![PlaceElem::Field(
+                                                                cap_idx,
+                                                            )],
+                                                        }),
+                                                        span: expr.span,
+                                                    });
+                                                }
+                                            }
+                                        }
+                                        // Sync closure_capture_types from the rhs temp to the
+                                        // lhs variable so Perceus emits the correct capture
+                                        // DecRefs at StorageDead(lhs).
+                                        match ctx
+                                            .body
+                                            .closure_capture_types
+                                            .remove(&rhs_place.local)
+                                        {
+                                            Some(new_caps) => {
+                                                ctx.body
+                                                    .closure_capture_types
+                                                    .insert(local, new_caps);
+                                            }
+                                            None => {
+                                                ctx.body.closure_capture_types.remove(&local);
+                                            }
+                                        }
+                                    }
+
                                     ctx.push_statement(crate::mir::Statement {
                                         kind: MirStatementKind::Reassign(
                                             Place::new(local),

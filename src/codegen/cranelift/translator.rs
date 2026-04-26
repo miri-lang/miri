@@ -91,6 +91,10 @@ pub(crate) struct TypeCtx<'a> {
     pub(crate) local_types: &'a [&'a Type],
     pub(crate) type_definitions: &'a HashMap<String, TypeDefinition>,
     pub(crate) ptr_type: cl_types::Type,
+    /// Maps each closure local to the ordered AST types of its captured variables.
+    /// Used by `read_place` and `resolve_projected_type_kind` to translate
+    /// `Field(i)` projections on closure locals into the correct capture type.
+    pub(crate) closure_capture_ast_types: &'a HashMap<crate::mir::Local, Vec<Type>>,
 }
 
 impl<'a> FunctionTranslator<'a> {
@@ -209,6 +213,7 @@ impl<'a> FunctionTranslator<'a> {
             local_types: &self.local_types,
             type_definitions: self.type_definitions,
             ptr_type: self.ptr_type,
+            closure_capture_ast_types: &body.closure_capture_types,
         };
 
         // Translate each basic block
@@ -330,9 +335,18 @@ impl<'a> FunctionTranslator<'a> {
                 }
                 PlaceElem::Field(idx) => {
                     let base_type = &local_types[place.local.0];
-                    let (offset, field_ty) =
-                        layout::field_layout(&base_type.kind, *idx, type_definitions, ptr_type);
-                    value = builder.ins().load(field_ty, MemFlags::new(), value, offset);
+                    if matches!(base_type.kind, TypeKind::Function(_)) {
+                        // Closure env field: capture `idx` lives at
+                        // payload_ptr + (idx+1)*ptr_size (slot 0 is fn_ptr).
+                        let offset = (*idx as i64 + 1) * ptr_type.bytes() as i64;
+                        value = builder
+                            .ins()
+                            .load(ptr_type, MemFlags::new(), value, offset as i32);
+                    } else {
+                        let (offset, field_ty) =
+                            layout::field_layout(&base_type.kind, *idx, type_definitions, ptr_type);
+                        value = builder.ins().load(field_ty, MemFlags::new(), value, offset);
+                    }
                 }
                 PlaceElem::Index(local) => {
                     let idx_var = locals
@@ -2331,10 +2345,12 @@ impl<'a> FunctionTranslator<'a> {
                 rt_set_set_elem_drop_fn_id: None,
                 rt_string_free_id: None,
             };
+            let empty_captures = HashMap::new();
             let type_ctx = TypeCtx {
                 local_types: &[],
                 type_definitions,
                 ptr_type,
+                closure_capture_ast_types: &empty_captures,
             };
 
             // Step 1: User-defined drop hook (no-op placeholder for M5 Task 3).

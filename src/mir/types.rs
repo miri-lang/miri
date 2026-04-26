@@ -79,6 +79,11 @@ pub enum MirType {
     /// RC management decisions.
     Custom(String),
 
+    /// A heap-allocated closure (function value with a captured environment).
+    /// Closure structs are RC-managed: [malloc_ptr][RC][fn_ptr][cap0][cap1]...
+    /// The closure local holds `payload_ptr` (the word past the RC header).
+    Function,
+
     /// An unresolved generic type parameter (e.g. `T`, `K`, `V`).
     /// Generic parameters are never concrete heap objects, so this variant is
     /// never managed.
@@ -134,7 +139,9 @@ impl MirType {
             TypeKind::Option(inner) => MirType::Option(Box::new(Self::from_type_kind(&inner.kind))),
             TypeKind::Future(inner) => MirType::Future(Box::new(Self::from_expr(inner))),
             // Generic type parameters — never concrete managed types.
-            TypeKind::Generic(_, _, _) | TypeKind::Function(_) => MirType::Generic,
+            TypeKind::Generic(_, _, _) => MirType::Generic,
+            // Closures are heap-allocated and RC-managed.
+            TypeKind::Function(_) => MirType::Function,
             TypeKind::Custom(name, args) => {
                 // After normalization, builtin collections are Custom("List"/"Array"/...).
                 // Map them back to the corresponding MirType collection variant, but only
@@ -198,6 +205,8 @@ impl MirType {
             | MirType::Tuple(_) => true,
             // String is RC-managed: allocated via alloc_with_rc, freed via miri_rt_string_free.
             MirType::String => true,
+            // Closures are heap-allocated via alloc_with_rc and must be RC-tracked.
+            MirType::Function => true,
             // Generic parameters and unknown types are never managed.
             MirType::Generic | MirType::Unknown => false,
             // Custom (user-defined) types: managed unless they are in the auto-copy
