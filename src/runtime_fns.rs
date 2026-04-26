@@ -23,6 +23,14 @@
 
 /// Constants for all `miri_rt_*` runtime symbols.
 pub mod rt {
+    // ── Closure ──────────────────────────────────────────────────────────────
+    /// Compiler-internal: increments CLOSURE_ALLOC_BALANCE on closure malloc, not in stdlib.
+    pub const CLOSURE_ALLOC_TRACK: &str = "miri_rt_closure_alloc_track";
+    /// Compiler-internal: decrements CLOSURE_ALLOC_BALANCE on closure free, not in stdlib.
+    pub const CLOSURE_FREE_TRACK: &str = "miri_rt_closure_free_track";
+    /// Test-only: simulates a closure leak to verify the MIRI_LEAK_CHECK detector.
+    pub const CLOSURE_SIMULATE_LEAK: &str = "miri_rt_test_simulate_closure_leak";
+
     // ── Array ────────────────────────────────────────────────────────────────
     pub const ARRAY_NEW: &str = "miri_rt_array_new";
     pub const ARRAY_FREE: &str = "miri_rt_array_free";
@@ -146,6 +154,10 @@ pub mod rt {
     //   (a) every `runtime "core" fn` in a stdlib `.mi` file has an entry, and
     //   (b) every entry is exported from the compiled runtime library.
     pub const ALL: &[&str] = &[
+        // Closure (compiler-internal + test-only)
+        CLOSURE_ALLOC_TRACK,
+        CLOSURE_FREE_TRACK,
+        CLOSURE_SIMULATE_LEAK,
         // Array
         ARRAY_NEW,
         ARRAY_FREE,

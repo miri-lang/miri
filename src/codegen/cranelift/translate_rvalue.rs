@@ -1244,6 +1244,10 @@ impl<'a> FunctionTranslator<'a> {
         let trap_code = TrapCode::user(2).expect("valid user trap code");
         builder.ins().trapnz(is_null, trap_code);
 
+        // Record the closure allocation in CLOSURE_ALLOC_BALANCE so the
+        // MIRI_LEAK_CHECK atexit handler can detect closure-only leaks.
+        Self::call_rt_closure_alloc_track(builder, ctx)?;
+
         // Store malloc_ptr at offset 0 (so free() can recover the original pointer).
         builder.ins().store(MemFlags::new(), raw_ptr, raw_ptr, 0);
 

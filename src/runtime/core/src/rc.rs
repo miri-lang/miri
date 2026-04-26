@@ -17,9 +17,16 @@ use std::sync::atomic::{AtomicIsize, Ordering};
 /// Matches `ptr_type.bytes()` in the Cranelift codegen.
 pub const RC_HEADER_SIZE: usize = std::mem::size_of::<usize>();
 
-/// Global counter: incremented on alloc, decremented on free.
-/// A non-zero value at exit indicates a memory leak (positive) or double-free (negative).
+/// Global counter for RC-tracked heap objects (strings, lists, arrays, classes, …).
+/// Incremented on alloc, decremented on free. Non-zero at exit → leak or double-free.
 static RC_ALLOC_BALANCE: AtomicIsize = AtomicIsize::new(0);
+
+/// Global counter for closure heap allocations.
+///
+/// Closures use `libc::malloc` directly (not `alloc_with_rc`) because their layout
+/// has an extra `malloc_ptr` header word. This separate counter lets the leak-check
+/// atexit handler catch closure-only leaks that `RC_ALLOC_BALANCE` would miss.
+static CLOSURE_ALLOC_BALANCE: AtomicIsize = AtomicIsize::new(0);
 
 /// Registers an `atexit` handler that checks the allocation balance.
 /// Called once on first allocation. Prints a diagnostic to stderr if
@@ -39,10 +46,19 @@ fn ensure_leak_check_registered() {
 
 /// Called at process exit to report any leaked allocations.
 extern "C" fn leak_check_at_exit() {
-    let balance = RC_ALLOC_BALANCE.load(Ordering::SeqCst);
-    if balance != 0 {
+    let rc_balance = RC_ALLOC_BALANCE.load(Ordering::SeqCst);
+    let cl_balance = CLOSURE_ALLOC_BALANCE.load(Ordering::SeqCst);
+    if rc_balance != 0 || cl_balance != 0 {
         // Use a raw write to stderr to avoid Rust's buffered I/O flushing issues.
-        let msg = format!("MIRI_LEAK_CHECK: leaked {balance} RC allocation(s)\n");
+        let msg = if rc_balance != 0 && cl_balance != 0 {
+            format!(
+                "MIRI_LEAK_CHECK: leaked {rc_balance} RC allocation(s) and {cl_balance} closure allocation(s)\n"
+            )
+        } else if rc_balance != 0 {
+            format!("MIRI_LEAK_CHECK: leaked {rc_balance} RC allocation(s)\n")
+        } else {
+            format!("MIRI_LEAK_CHECK: leaked {cl_balance} closure allocation(s)\n")
+        };
         unsafe {
             libc::write(2, msg.as_ptr() as *const libc::c_void, msg.len());
             // Use _exit to bypass atexit handlers — calling std::process::exit here
@@ -113,4 +129,89 @@ pub unsafe fn free_with_rc(payload_ptr: *mut u8, payload_size: usize) {
     dealloc(base, layout);
 
     RC_ALLOC_BALANCE.fetch_sub(1, Ordering::SeqCst);
+}
+
+/// Records that a closure heap allocation has been made.
+///
+/// Called by compiled Miri code immediately after `libc::malloc` allocates a
+/// closure struct. Registers the `atexit` leak-check handler on the first call.
+///
+/// # Safety
+/// Must be matched by exactly one call to `miri_rt_closure_free_track` when the
+/// closure is freed.
+#[no_mangle]
+pub unsafe extern "C" fn miri_rt_closure_alloc_track() {
+    ensure_leak_check_registered();
+    CLOSURE_ALLOC_BALANCE.fetch_add(1, Ordering::SeqCst);
+}
+
+/// Records that a closure heap allocation has been freed.
+///
+/// Called by compiled Miri code immediately before `libc::free` releases a
+/// closure struct whose RC has reached zero.
+///
+/// # Safety
+/// Must be called exactly once per matching `miri_rt_closure_alloc_track` call.
+#[no_mangle]
+pub unsafe extern "C" fn miri_rt_closure_free_track() {
+    CLOSURE_ALLOC_BALANCE.fetch_sub(1, Ordering::SeqCst);
+}
+
+/// Simulates a closure memory leak for testing the MIRI_LEAK_CHECK detector.
+///
+/// Increments `CLOSURE_ALLOC_BALANCE` by one without allocating a closure,
+/// causing the atexit leak-check handler to report a spurious leak. Use this
+/// from `system.testing` to write E2E tests that verify the detector fires.
+///
+/// # Safety
+/// This function is for testing only. It intentionally unbalances the leak
+/// counter; calling it in production code will produce a false leak report.
+#[no_mangle]
+pub unsafe extern "C" fn miri_rt_test_simulate_closure_leak() {
+    ensure_leak_check_registered();
+    CLOSURE_ALLOC_BALANCE.fetch_add(1, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn closure_alloc_track_increments_balance() {
+        let before = CLOSURE_ALLOC_BALANCE.load(Ordering::SeqCst);
+        unsafe { miri_rt_closure_alloc_track() };
+        let after = CLOSURE_ALLOC_BALANCE.load(Ordering::SeqCst);
+        assert_eq!(
+            after,
+            before + 1,
+            "alloc_track must increment CLOSURE_ALLOC_BALANCE"
+        );
+        // Restore balance so other tests are unaffected.
+        unsafe { miri_rt_closure_free_track() };
+    }
+
+    #[test]
+    fn closure_free_track_decrements_balance() {
+        let before = CLOSURE_ALLOC_BALANCE.load(Ordering::SeqCst);
+        unsafe { miri_rt_closure_alloc_track() };
+        unsafe { miri_rt_closure_free_track() };
+        let after = CLOSURE_ALLOC_BALANCE.load(Ordering::SeqCst);
+        assert_eq!(
+            after, before,
+            "balanced alloc+free must leave CLOSURE_ALLOC_BALANCE unchanged"
+        );
+    }
+
+    #[test]
+    fn unmatched_alloc_leaves_nonzero_balance() {
+        let before = CLOSURE_ALLOC_BALANCE.load(Ordering::SeqCst);
+        unsafe { miri_rt_closure_alloc_track() };
+        let mid = CLOSURE_ALLOC_BALANCE.load(Ordering::SeqCst);
+        assert_ne!(
+            mid, before,
+            "unmatched alloc_track must leave a non-zero residual"
+        );
+        // Restore.
+        unsafe { miri_rt_closure_free_track() };
+    }
 }
