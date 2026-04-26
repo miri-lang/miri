@@ -138,6 +138,37 @@ pub fn assert_runtime_error(code: &str, expected_error: &str) {
     }
 }
 
+/// Assert that the code compiles and runs, and the process exits with a
+/// MIRI_LEAK_CHECK leak message in stderr containing `expected_fragment`.
+///
+/// Use this to verify that the leak detector fires for specific leak scenarios
+/// (e.g. calling `system.testing.simulate_closure_leak()`).
+pub fn assert_leak_detected(code: &str, expected_fragment: &str) {
+    let result = miri_run(code);
+
+    if result.success {
+        panic!(
+            "Expected a MIRI_LEAK_CHECK leak message, but the program exited successfully.\nOutput:\n{}",
+            result.output()
+        );
+    }
+
+    if !result.stderr.contains("MIRI_LEAK_CHECK:") {
+        panic!(
+            "Expected a MIRI_LEAK_CHECK message in stderr, but got:\n{}",
+            result.output()
+        );
+    }
+
+    if !result.stderr.contains(expected_fragment) {
+        panic!(
+            "Expected leak message fragment '{}' not found in stderr:\n{}",
+            expected_fragment,
+            result.output()
+        );
+    }
+}
+
 /// Assert that the code compiles but crashes at runtime (non-zero exit code or signal).
 ///
 /// This is used for cases like hardware traps (e.g. division by zero on AArch64)
