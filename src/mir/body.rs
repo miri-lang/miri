@@ -57,6 +57,12 @@ pub struct Body {
     /// Populated from the function's explicit generics and from `TypeKind::Generic`
     /// names found in parameter/return types (captures class-level generics too).
     pub type_params: HashSet<String>,
+    /// Maps each closure local to the ordered AST types of its captured variables.
+    /// Populated by `lower_lambda_expr` after capture pruning.
+    /// Used by Perceus to emit per-capture DecRef at StorageDead, and by codegen
+    /// to resolve `Field(i)` projections on closure locals.
+    /// Only present when the closure has at least one capture.
+    pub closure_capture_types: HashMap<Local, Vec<Type>>,
 }
 
 impl Body {
@@ -75,6 +81,7 @@ impl Body {
             field_types: HashMap::new(),
             env_capture_locals: Vec::new(),
             type_params: HashSet::new(),
+            closure_capture_types: HashMap::new(),
         }
     }
 

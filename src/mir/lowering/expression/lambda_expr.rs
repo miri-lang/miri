@@ -239,6 +239,14 @@ pub(crate) fn lower_lambda_expr(
         // include it in env_capture_locals or in the closure aggregate operands.
     }
 
+    // ── Record capture types in the outer body for Perceus / codegen ────
+    // Stored as AST Type so both Perceus (via MirType::from_type_kind) and
+    // codegen (via TypeKind) can use the same source of truth.
+    let capture_ast_types: Vec<Type> = captures
+        .iter()
+        .map(|cap| ctx.body.local_decls[cap.outer_local.0].ty.clone())
+        .collect();
+
     // ── Register the lambda ─────────────────────────────────────────────
     let lambda_info = LambdaInfo {
         name: lambda_name.to_string(),
@@ -267,6 +275,20 @@ pub(crate) fn lower_lambda_expr(
         ),
         span: expr.span,
     });
+
+    // Register the capture types against the closure local so Perceus and
+    // codegen can emit / translate DecRef(closure.field(i)) correctly.
+    // Always update (insert or remove) so that re-assigning a `var` closure
+    // to a capture-free closure clears any stale entry from the previous
+    // assignment — a stale entry would cause a spurious DecRef of the new
+    // closure's payload at StorageDead.
+    if capture_ast_types.is_empty() {
+        ctx.body.closure_capture_types.remove(&target.local);
+    } else {
+        ctx.body
+            .closure_capture_types
+            .insert(target.local, capture_ast_types);
+    }
 
     Ok(Operand::Copy(target))
 }

@@ -31,6 +31,8 @@ pub fn is_managed_type(
         TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => true,
         // Strings are allocated via alloc_with_rc, freed via miri_rt_string_free.
         TypeKind::String => true,
+        // Closures/lambdas are heap-allocated via closure_alloc and reference-counted.
+        TypeKind::Function(_) => true,
         // Explicit generic type parameters are never concrete heap objects.
         TypeKind::Generic(_, _, _) => false,
         TypeKind::Custom(name, args) => {
