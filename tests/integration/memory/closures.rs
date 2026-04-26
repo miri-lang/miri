@@ -251,6 +251,83 @@ fn main()
     );
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+//  Closure allocation tracking (Milestone 5 Task 5.4)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Verifies that closure allocations are counted in CLOSURE_ALLOC_BALANCE and
+/// properly balanced by closure frees: a simple closure that is created and
+/// dropped must leave the counter at zero, or the MIRI_LEAK_CHECK atexit handler
+/// would fire and this test would fail with "Memory leak detected".
+///
+/// This is the positive half of the 5.4 acceptance criterion: the tracking is
+/// in place AND does not produce false positives on correct code.
+#[test]
+fn test_closure_alloc_tracked_no_false_positive() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn main()
+    let f = fn() int: 42
+    println(f"{f()}")
+"#,
+        "42",
+    );
+}
+
+/// E2E: a simulated closure leak (via `system.testing.simulate_closure_leak`)
+/// must cause the MIRI_LEAK_CHECK atexit handler to fire and exit non-zero with
+/// the "leaked N closure allocation(s)" message.
+///
+/// This is the negative half of the 5.4 acceptance criterion: the tracking
+/// correctly catches an imbalanced closure counter at process exit.
+#[test]
+fn test_closure_leak_detector_fires() {
+    assert_leak_detected(
+        r#"
+use system.testing
+
+fn main()
+    simulate_closure_leak()
+"#,
+        "leaked 1 closure allocation(s)",
+    );
+}
+
+/// Two simulated leaks must report a count of 2.
+#[test]
+fn test_closure_leak_detector_reports_count() {
+    assert_leak_detected(
+        r#"
+use system.testing
+
+fn main()
+    simulate_closure_leak()
+    simulate_closure_leak()
+"#,
+        "leaked 2 closure allocation(s)",
+    );
+}
+
+/// Same with a capturing closure to verify that both the closure struct and its
+/// captured managed value remain balanced across the full alloc → use → drop cycle.
+#[test]
+fn test_capturing_closure_alloc_tracked_no_false_positive() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    let items = List([1, 2, 3])
+    let f = fn() int: items.length()
+    println(f"{f()}")
+"#,
+        "3",
+    );
+}
+
 /// Two independent lambdas each capture the same List; dropping both lambdas
 /// must not double-free the List.
 #[test]

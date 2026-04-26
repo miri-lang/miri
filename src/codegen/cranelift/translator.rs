@@ -84,6 +84,10 @@ pub(crate) struct ModuleCtx<'a> {
     pub(crate) rt_set_set_elem_drop_fn_id: Option<cranelift_module::FuncId>,
     /// Cached FuncId for miri_rt_string_free.
     pub(crate) rt_string_free_id: Option<cranelift_module::FuncId>,
+    /// Cached FuncId for miri_rt_closure_alloc_track.
+    pub(crate) rt_closure_alloc_track_id: Option<cranelift_module::FuncId>,
+    /// Cached FuncId for miri_rt_closure_free_track.
+    pub(crate) rt_closure_free_track_id: Option<cranelift_module::FuncId>,
 }
 
 /// Context for type information during translation.
@@ -208,6 +212,8 @@ impl<'a> FunctionTranslator<'a> {
             rt_set_free_id: None,
             rt_set_set_elem_drop_fn_id: None,
             rt_string_free_id: None,
+            rt_closure_alloc_track_id: None,
+            rt_closure_free_track_id: None,
         };
         let type_ctx = TypeCtx {
             local_types: &self.local_types,
@@ -1184,6 +1190,42 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
+    /// Calls `miri_rt_closure_alloc_track()` to record a closure malloc in
+    /// `CLOSURE_ALLOC_BALANCE`. Must be matched by `call_rt_closure_free_track`.
+    pub(crate) fn call_rt_closure_alloc_track(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+    ) -> Result<(), String> {
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.rt_closure_alloc_track_id,
+            rt::CLOSURE_ALLOC_TRACK,
+            &[],
+            &[],
+            &[],
+        )?;
+        Ok(())
+    }
+
+    /// Calls `miri_rt_closure_free_track()` to record a closure free in
+    /// `CLOSURE_ALLOC_BALANCE`. Must follow a matching `call_rt_closure_alloc_track`.
+    pub(crate) fn call_rt_closure_free_track(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+    ) -> Result<(), String> {
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.rt_closure_free_track_id,
+            rt::CLOSURE_FREE_TRACK,
+            &[],
+            &[],
+            &[],
+        )?;
+        Ok(())
+    }
+
     /// Widens or narrows a value to pointer type for FFI calls.
     pub(crate) fn widen_to_ptr(
         builder: &mut FunctionBuilder,
@@ -1656,6 +1698,13 @@ impl<'a> FunctionTranslator<'a> {
             } else {
                 Self::call_libc_free(builder, ctx, header_ptr)
             }
+        } else if matches!(kind, TypeKind::Function(_)) {
+            // Closure drop: decrement CLOSURE_ALLOC_BALANCE before freeing.
+            // Closure layout: [malloc_ptr][RC=1][fn_ptr][cap0]...
+            // `header_ptr` points to the RC word; call_libc_free loads malloc_ptr
+            // from (header_ptr - ptr_size) = raw_ptr and passes it to free().
+            Self::call_rt_closure_free_track(builder, ctx)?;
+            Self::call_libc_free(builder, ctx, header_ptr)
         } else {
             Self::call_libc_free(builder, ctx, header_ptr)
         }
@@ -2344,6 +2393,8 @@ impl<'a> FunctionTranslator<'a> {
                 rt_set_free_id: None,
                 rt_set_set_elem_drop_fn_id: None,
                 rt_string_free_id: None,
+                rt_closure_alloc_track_id: None,
+                rt_closure_free_track_id: None,
             };
             let empty_captures = HashMap::new();
             let type_ctx = TypeCtx {
