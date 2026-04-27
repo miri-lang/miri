@@ -1,7 +1,8 @@
 use system.ops
 use system.collections.collection
+use system.memory
 
-public class List<T> extends Collection<T> implements Iterable
+public class List<T> extends Collection<T> implements Iterable, Cloneable
 
     runtime "core" fn miri_rt_list_new(elem_size int) Self
     runtime "core" fn miri_rt_list_free(l Self)
@@ -14,6 +15,7 @@ public class List<T> extends Collection<T> implements Iterable
     runtime "core" fn miri_rt_list_clear(l Self)
     runtime "core" fn miri_rt_list_reverse(l Self)
     runtime "core" fn miri_rt_list_sort(l Self)
+    runtime "core" fn miri_rt_list_clone(l Self) List<T>
 
     /// Returns the number of elements in the list.
     public fn length() int: miri_rt_list_len(self)
@@ -72,4 +74,8 @@ public class List<T> extends Collection<T> implements Iterable
 
     /// Returns the index of the last element, or -1 if empty.
     public fn last_index() int: self.length() - 1
+
+    /// Returns a deep copy of this list.
+    public fn clone() List<T>
+        return miri_rt_list_clone(self)
 

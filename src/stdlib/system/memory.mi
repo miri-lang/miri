@@ -1,0 +1,20 @@
+/// Memory management traits for Miri.
+///
+/// Defines the Cloneable trait for types that support deep copying.
+///
+/// Types implementing `Cloneable` guarantee that `clone()` returns an
+/// independent copy: mutations to the original do not affect the clone
+/// and vice versa.
+
+/// Enables creating a deep copy of a value.
+///
+/// The returned clone is fully independent of the original.
+/// Managed fields (String, List, Array, Set, Map) are recursively cloned;
+/// primitive fields (int, bool, float) are bitwise-copied.
+///
+/// Example:
+///     use system.memory
+///     let a = "hello"
+///     let b = a.clone()   // b is a separate copy
+public trait Cloneable
+    public fn clone() Self

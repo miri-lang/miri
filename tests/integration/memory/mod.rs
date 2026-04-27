@@ -3,6 +3,7 @@
 
 pub mod aliasing;
 pub mod classes;
+pub mod cloneable;
 pub mod closures;
 pub mod collections;
 pub mod edge_cases;
