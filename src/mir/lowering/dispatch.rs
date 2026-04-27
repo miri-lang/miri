@@ -907,6 +907,10 @@ fn lower_direct_call(
     args: &[Expression],
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
+    // Record the watermark before lowering the callee expression so we can
+    // detect and drop any managed temp it creates (e.g. the closure struct
+    // returned by `make_counter(...)` in `make_counter(...)()` chains).
+    let func_watermark = ctx.body.local_decls.len();
     let mut func_op = lower_expression(ctx, func, None)?;
 
     // Mangle generic function names.
@@ -1022,6 +1026,7 @@ fn lower_direct_call(
     };
 
     let target_bb = ctx.new_basic_block();
+    let func_op_for_drop = func_op.clone();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
             func: func_op,
@@ -1039,21 +1044,18 @@ fn lower_direct_call(
         if let Operand::Copy(place) | Operand::Move(place) = arg_op {
             if place.local != dest_local {
                 ctx.emit_temp_drop(place.local, arg_watermark, *span);
-                // // Perceus now inserts IncRef for managed Copy args, and the
-                // // corresponding DecRef happens at the arg's own StorageDead.
-                // // Only emit_temp_drop for UNmanaged args (scalars, etc.).
-                // let is_managed = ctx
-                //     .body
-                //     .local_decls
-                //     .get(place.local.0)
-                //     .map(|d| {
-                //         d.mir_ty
-                //             .is_managed(&ctx.body.auto_copy_types, &ctx.body.type_params)
-                //     })
-                //     .unwrap_or(false);
-                // if !is_managed {
-                //     ctx.emit_temp_drop(place.local, arg_watermark, *span);
-                // }
+            }
+        }
+    }
+
+    // For indirect calls (closure calls), also drop any managed temp that was
+    // created while lowering the callee expression.  This handles chains like
+    // `make_counter(...)()` where `make_counter(...)` returns a closure into a
+    // temp that is used as the callee and never otherwise dropped.
+    if is_indirect_call {
+        if let Operand::Copy(place) | Operand::Move(place) = &func_op_for_drop {
+            if place.local != dest_local {
+                ctx.emit_temp_drop(place.local, func_watermark, *span);
             }
         }
     }

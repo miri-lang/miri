@@ -48,7 +48,8 @@ pub struct Body {
     /// whether the projected field is a managed type.
     pub field_types: HashMap<String, Vec<Type>>,
     /// For closure/lambda bodies: the list of locals that hold captured values.
-    /// Entry `i` should be loaded from `env_ptr + (i+1) * ptr_size` at function entry.
+    /// Entry `i` is loaded from `env_ptr + (i+2) * ptr_size` at function entry.
+    /// (slot 0 = fn_ptr, slot 1 = destructor_ptr, slots 2+ = captures)
     /// Empty for non-closure functions.
     pub env_capture_locals: Vec<Local>,
     /// Names of generic type parameters in scope for this function body.

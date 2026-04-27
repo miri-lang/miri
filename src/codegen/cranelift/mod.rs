@@ -251,6 +251,30 @@ impl Backend for CraneliftBackend {
         self.generate_type_drop_functions(&mut module, &mut ctx, &isa)
             .map_err(|e| CodegenError::Module(format!("drop thunk generation: {e}")))?;
 
+        // Generate `__dtor_{lambda_name}` destructors for lambda bodies that have
+        // managed captures. These must be defined before user functions so that
+        // translate_closure_aggregate can reference them via Linkage::Import.
+        for (name, body) in bodies.iter() {
+            if !body.env_capture_locals.is_empty() {
+                let has_managed = body.env_capture_locals.iter().any(|&cap_local| {
+                    crate::codegen::cranelift::translator::is_capture_managed(
+                        &body.local_decls[cap_local.0].ty.kind,
+                    )
+                });
+                if has_managed {
+                    FunctionTranslator::generate_closure_destructor(
+                        &mut module,
+                        &mut ctx,
+                        &isa,
+                        name,
+                        body,
+                        &self.type_definitions,
+                    )
+                    .map_err(|e| CodegenError::Module(format!("closure dtor generation: {e}")))?;
+                }
+            }
+        }
+
         // Pre-declare all user functions with correct signatures from MIR types.
         // This prevents signature mismatches when a call site is compiled before
         // the callee's definition (the call site would otherwise infer the
