@@ -407,6 +407,41 @@ pub mod ffi {
         free_with_rc(ptr as *mut u8, STRUCT_SIZE);
     }
 
+    /// Returns a shallow clone of the set with independent RC ownership.
+    ///
+    /// All occupied elements are re-inserted into a fresh set. If `elem_drop_fn`
+    /// is set, each element pointer is IncRef'd so both the original and the clone
+    /// hold independent RC=1 references — preventing a double-free when either
+    /// collection is dropped.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_set_clone(ptr: *const MiriSet) -> *mut MiriSet {
+        if ptr.is_null() {
+            return miri_rt_set_new(0);
+        }
+        let src = &*ptr;
+        let new_set = miri_rt_set_new(src.elem_size);
+        if new_set.is_null() {
+            return new_set;
+        }
+        (*new_set).elem_drop_fn = src.elem_drop_fn;
+        if !src.states.is_null() && src.capacity > 0 && src.elem_size > 0 {
+            for i in 0..src.capacity {
+                if *src.states.add(i) == SLOT_OCCUPIED {
+                    let elem = src.data.add(i * src.elem_size);
+                    (*new_set).insert(elem);
+                    if src.elem_drop_fn != 0 {
+                        let ptr_val = *(elem as *const usize);
+                        if ptr_val != 0 {
+                            crate::rc::incref(ptr_val as *mut u8);
+                        }
+                    }
+                }
+            }
+        }
+        new_set
+    }
+
     /// Decrements the RC of a managed Set element and frees it if RC reaches zero.
     ///
     /// Used as a direct decref callback when an Array slot is overwritten

@@ -37,6 +37,7 @@ pub mod rt {
     pub const ARRAY_LEN: &str = "miri_rt_array_len";
     pub const ARRAY_SET_VAL: &str = "miri_rt_array_set_val";
     pub const ARRAY_SORT: &str = "miri_rt_array_sort";
+    pub const ARRAY_CLONE: &str = "miri_rt_array_clone";
     /// Compiler-internal: bounds-check panic helper, not declared in stdlib.
     pub const ARRAY_PANIC_OOB: &str = "miri_rt_array_panic_oob";
     /// Compiler-internal: decrements the RC of an array element, not in stdlib.
@@ -88,6 +89,7 @@ pub mod rt {
     pub const MAP_SET_VAL_DROP_FN: &str = "miri_rt_map_set_val_drop_fn";
     /// Compiler-internal: registers the key drop function, not in stdlib.
     pub const MAP_SET_KEY_DROP_FN: &str = "miri_rt_map_set_key_drop_fn";
+    pub const MAP_CLONE: &str = "miri_rt_map_clone";
     /// Compiler-internal: decrements the RC of a map element, not in stdlib.
     pub const MAP_DECREF_ELEMENT: &str = "miri_rt_map_decref_element";
 
@@ -101,6 +103,7 @@ pub mod rt {
     pub const SET_CLEAR: &str = "miri_rt_set_clear";
     pub const SET_IS_EMPTY: &str = "miri_rt_set_is_empty";
     pub const SET_ELEMENT_AT: &str = "miri_rt_set_element_at";
+    pub const SET_CLONE: &str = "miri_rt_set_clone";
     /// Compiler-internal: registers the element drop function, not in stdlib.
     pub const SET_SET_ELEM_DROP_FN: &str = "miri_rt_set_set_elem_drop_fn";
     /// Compiler-internal: decrements the RC of a set element, not in stdlib.
@@ -165,6 +168,7 @@ pub mod rt {
         ARRAY_LEN,
         ARRAY_SET_VAL,
         ARRAY_SORT,
+        ARRAY_CLONE,
         ARRAY_PANIC_OOB,
         ARRAY_DECREF_ELEMENT,
         ARRAY_SET_ELEM_DROP_FN,
@@ -200,6 +204,7 @@ pub mod rt {
         MAP_CLEAR,
         MAP_KEY_AT,
         MAP_VALUE_AT,
+        MAP_CLONE,
         MAP_GET_CHECKED,
         MAP_SET_VAL_DROP_FN,
         MAP_SET_KEY_DROP_FN,
@@ -214,6 +219,7 @@ pub mod rt {
         SET_CLEAR,
         SET_IS_EMPTY,
         SET_ELEMENT_AT,
+        SET_CLONE,
         SET_SET_ELEM_DROP_FN,
         SET_DECREF_ELEMENT,
         // IO

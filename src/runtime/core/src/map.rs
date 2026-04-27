@@ -718,6 +718,49 @@ pub mod ffi {
         free_with_rc(ptr as *mut u8, STRUCT_SIZE);
     }
 
+    /// Returns a shallow clone of the map with independent RC ownership.
+    ///
+    /// All occupied key-value pairs are re-inserted into a fresh map. If
+    /// `key_drop_fn` or `val_drop_fn` are set, the corresponding managed
+    /// pointers are IncRef'd so both the original and the clone hold independent
+    /// RC=1 references — preventing a double-free when either map is dropped.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_map_clone(ptr: *const MiriMap) -> *mut MiriMap {
+        if ptr.is_null() {
+            return miri_rt_map_new(0, 0, 0);
+        }
+        let src = &*ptr;
+        let new_map = miri_rt_map_new(src.key_size, src.value_size, src.key_kind);
+        if new_map.is_null() {
+            return new_map;
+        }
+        (*new_map).val_drop_fn = src.val_drop_fn;
+        (*new_map).key_drop_fn = src.key_drop_fn;
+        if !src.states.is_null() && src.capacity > 0 {
+            for i in 0..src.capacity {
+                if *src.states.add(i) == SLOT_OCCUPIED {
+                    let key = src.keys.add(i * src.key_size);
+                    let val = src.values.add(i * src.value_size.max(1));
+                    (*new_map).set(key, val);
+                    if src.key_drop_fn != 0 && src.key_size > 0 {
+                        let key_ptr = *(key as *const usize);
+                        if key_ptr != 0 {
+                            crate::rc::incref(key_ptr as *mut u8);
+                        }
+                    }
+                    if src.val_drop_fn != 0 && src.value_size > 0 {
+                        let val_ptr = *(val as *const usize);
+                        if val_ptr != 0 {
+                            crate::rc::incref(val_ptr as *mut u8);
+                        }
+                    }
+                }
+            }
+        }
+        new_map
+    }
+
     /// Decrements the RC of a managed Map element and frees it if RC reaches zero.
     ///
     /// Used as `elem_drop_fn` / `val_drop_fn` by outer collections (Array, List, Set,
