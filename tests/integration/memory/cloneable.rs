@@ -199,6 +199,279 @@ println(f"{c.length()}")
 }
 
 // ─────────────────────────────────────────────
+// Array satisfies Cloneable
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_array_clone_produces_copy() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.memory
+use system.collections.array
+
+let a = [1, 2, 3]
+let b = a.clone()
+println(f"{b[0]}")
+println(f"{b[1]}")
+println(f"{b[2]}")
+"#,
+        "1\n2\n3",
+    );
+}
+
+#[test]
+fn test_array_clone_is_independent() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.memory
+use system.collections.array
+
+let a = [10, 20, 30]
+let b = a.clone()
+println(f"{a.length()}")
+println(f"{b.length()}")
+"#,
+        "3\n3",
+    );
+}
+
+#[test]
+fn test_array_clone_no_leak() {
+    assert_runs(
+        r#"
+use system.io
+use system.memory
+use system.collections.array
+
+let a = [1, 2, 3]
+let b = a.clone()
+println(f"{b.length()}")
+"#,
+    );
+}
+
+// ─────────────────────────────────────────────
+// Set satisfies Cloneable
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_set_clone_produces_copy() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.memory
+use system.collections.set
+
+var s = {1, 2, 3}
+let c = s.clone()
+println(f"{c.length()}")
+"#,
+        "3",
+    );
+}
+
+#[test]
+fn test_set_clone_is_independent() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.memory
+use system.collections.set
+
+var s = {10, 20}
+let c = s.clone()
+s.add(30)
+println(f"{c.length()}")
+"#,
+        "2",
+    );
+}
+
+#[test]
+fn test_set_clone_no_leak() {
+    assert_runs(
+        r#"
+use system.io
+use system.memory
+use system.collections.set
+
+var s = {1, 2, 3}
+let c = s.clone()
+println(f"{c.length()}")
+"#,
+    );
+}
+
+// ─────────────────────────────────────────────
+// Map satisfies Cloneable
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_map_clone_produces_copy() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.memory
+use system.collections.map
+
+let m = {"a": 1, "b": 2}
+let c = m.clone()
+println(f"{c.length()}")
+"#,
+        "2",
+    );
+}
+
+#[test]
+fn test_map_clone_is_independent() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.memory
+use system.collections.map
+
+var m = {"x": 10}
+let c = m.clone()
+m.set("y", 20)
+println(f"{c.length()}")
+"#,
+        "1",
+    );
+}
+
+#[test]
+fn test_map_clone_no_leak() {
+    assert_runs(
+        r#"
+use system.io
+use system.memory
+use system.collections.map
+
+let m = {"a": 1, "b": 2}
+let c = m.clone()
+println(f"{c.length()}")
+"#,
+    );
+}
+
+// ─────────────────────────────────────────────
+// Set<String>: exercises elem_drop_fn IncRef path in miri_rt_set_clone
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_set_string_clone_no_leak() {
+    assert_runs(
+        r#"
+use system.io
+use system.memory
+use system.collections.set
+
+var s = {"alpha", "beta", "gamma"}
+let c = s.clone()
+println(f"{c.length()}")
+"#,
+    );
+}
+
+#[test]
+fn test_set_string_clone_is_independent() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.memory
+use system.collections.set
+
+var s = {"hello", "world"}
+let c = s.clone()
+s.add("extra")
+println(f"{c.length()}")
+"#,
+        "2",
+    );
+}
+
+// ─────────────────────────────────────────────
+// Map<String, String>: exercises key_drop_fn + val_drop_fn IncRef paths
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_map_string_string_clone_no_leak() {
+    assert_runs(
+        r#"
+use system.io
+use system.memory
+use system.collections.map
+
+let m = {"a": "alpha", "b": "beta"}
+let c = m.clone()
+println(f"{c.length()}")
+"#,
+    );
+}
+
+#[test]
+fn test_map_string_string_clone_is_independent() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.memory
+use system.collections.map
+
+var m = {"x": "one"}
+let c = m.clone()
+m.set("y", "two")
+println(f"{c.length()}")
+"#,
+        "1",
+    );
+}
+
+// ─────────────────────────────────────────────
+// Type checker: Array, Set, Map satisfy Cloneable
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_array_implements_cloneable() {
+    assert_type_checks(
+        r#"
+use system.memory
+use system.collections.array
+
+let a = [1, 2, 3]
+let b = a.clone()
+"#,
+    );
+}
+
+#[test]
+fn test_set_implements_cloneable() {
+    assert_type_checks(
+        r#"
+use system.memory
+use system.collections.set
+
+var s = {1, 2, 3}
+let c = s.clone()
+"#,
+    );
+}
+
+#[test]
+fn test_map_implements_cloneable() {
+    assert_type_checks(
+        r#"
+use system.memory
+use system.collections.map
+
+let m = {"a": 1}
+let c = m.clone()
+"#,
+    );
+}
+
+// ─────────────────────────────────────────────
 // Error: missing clone() prevents implementing Cloneable
 // ─────────────────────────────────────────────
 

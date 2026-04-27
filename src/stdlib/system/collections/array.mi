@@ -1,5 +1,6 @@
 use system.ops
 use system.collections.collection
+use system.memory
 
 /// A fixed-size array with elements of a single type.
 ///
@@ -15,13 +16,14 @@ use system.collections.collection
 ///     for x in a
 ///         println(f"{x}")
 
-public class Array<T, Size> extends Collection<T> implements Iterable
+public class Array<T, Size> extends Collection<T> implements Iterable, Cloneable
 
     runtime "core" fn miri_rt_array_new(count int, elem_size int) Self
     runtime "core" fn miri_rt_array_free(a Self)
     runtime "core" fn miri_rt_array_sort(a Self)
     runtime "core" fn miri_rt_array_len(a Self) int
     runtime "core" fn miri_rt_array_set_val(a Self, index int, value T) bool
+    runtime "core" fn miri_rt_array_clone(a Self) Array<T, Size>
 
     /// Returns the number of elements in the array (always equals Size).
     public fn length() int: miri_rt_array_len(self)
@@ -49,3 +51,7 @@ public class Array<T, Size> extends Collection<T> implements Iterable
             self[j] = temp
             i += 1
             j -= 1
+
+    /// Returns a deep copy of this array.
+    public fn clone() Array<T, Size>
+        return miri_rt_array_clone(self)

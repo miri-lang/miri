@@ -1,6 +1,7 @@
 use system.ops
+use system.memory
 
-public class Set<T> implements Iterable
+public class Set<T> implements Iterable, Cloneable
 
     runtime "core" fn miri_rt_set_new(elem_size int) Self
     runtime "core" fn miri_rt_set_free(s Self)
@@ -11,6 +12,7 @@ public class Set<T> implements Iterable
     runtime "core" fn miri_rt_set_clear(s Self)
     runtime "core" fn miri_rt_set_is_empty(s Self) bool
     runtime "core" fn miri_rt_set_element_at(s Self, index int) T
+    runtime "core" fn miri_rt_set_clone(s Self) Set<T>
 
     /// Returns the number of unique elements in the set.
     public fn length() int: miri_rt_set_len(self)
@@ -34,3 +36,7 @@ public class Set<T> implements Iterable
 
     /// Returns true if the set has no elements.
     public fn is_empty() bool: miri_rt_set_is_empty(self)
+
+    /// Returns a deep copy of this set.
+    public fn clone() Set<T>
+        return miri_rt_set_clone(self)
