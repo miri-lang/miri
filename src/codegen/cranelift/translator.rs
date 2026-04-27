@@ -230,13 +230,14 @@ impl<'a> FunctionTranslator<'a> {
             // For closure bodies: load captured values from env_ptr (Local 1) at the
             // START of the entry block. This must run AFTER switch_to_block so the block
             // is in Pristine (Empty) state — Cranelift disallows switching to Partial blocks.
-            // env_capture_locals[i] is loaded from env_ptr + (i+1)*ptr_size.
+            // Closure layout: payload[0]=fn_ptr, payload[1]=dtor_ptr, payload[2+i]=cap_i.
+            // env_capture_locals[i] is loaded from env_ptr + (i+2)*ptr_size.
             if idx == 0 && !body.env_capture_locals.is_empty() {
                 let env_ptr_var = locals[&Local(1)];
                 let env_ptr_val = builder.use_var(env_ptr_var);
 
                 for (i, &cap_local) in body.env_capture_locals.iter().enumerate() {
-                    let offset = (i + 1) as i64 * self.ptr_type.bytes() as i64;
+                    let offset = (i + 2) as i64 * self.ptr_type.bytes() as i64;
                     let cap_ptr = builder.ins().iadd_imm(env_ptr_val, offset);
                     let cap_cl_type =
                         translate_type(&body.local_decls[cap_local.0].ty, self.ptr_type);
@@ -343,8 +344,8 @@ impl<'a> FunctionTranslator<'a> {
                     let base_type = &local_types[place.local.0];
                     if matches!(base_type.kind, TypeKind::Function(_)) {
                         // Closure env field: capture `idx` lives at
-                        // payload_ptr + (idx+1)*ptr_size (slot 0 is fn_ptr).
-                        let offset = (*idx as i64 + 1) * ptr_type.bytes() as i64;
+                        // payload_ptr + (idx+2)*ptr_size (slot 0=fn_ptr, slot 1=dtor_ptr).
+                        let offset = (*idx as i64 + 2) * ptr_type.bytes() as i64;
                         value = builder
                             .ins()
                             .load(ptr_type, MemFlags::new(), value, offset as i32);
@@ -1699,10 +1700,38 @@ impl<'a> FunctionTranslator<'a> {
                 Self::call_libc_free(builder, ctx, header_ptr)
             }
         } else if matches!(kind, TypeKind::Function(_)) {
-            // Closure drop: decrement CLOSURE_ALLOC_BALANCE before freeing.
-            // Closure layout: [malloc_ptr][RC=1][fn_ptr][cap0]...
-            // `header_ptr` points to the RC word; call_libc_free loads malloc_ptr
-            // from (header_ptr - ptr_size) = raw_ptr and passes it to free().
+            // Closure drop.
+            // Layout: payload[0]=fn_ptr, payload[1]=dtor_ptr, payload[2+i]=cap_i.
+            // If dtor_ptr is non-null, call it to DecRef all managed captures.
+            let ptr_type = type_ctx.ptr_type;
+            let ptr_size = ptr_type.bytes() as i64;
+            let dtor_ptr = builder
+                .ins()
+                .load(ptr_type, MemFlags::new(), ptr, ptr_size as i32);
+            let null = builder.ins().iconst(ptr_type, 0);
+            let is_null = builder.ins().icmp(
+                cranelift_codegen::ir::condcodes::IntCC::Equal,
+                dtor_ptr,
+                null,
+            );
+            let dtor_block = builder.create_block();
+            let after_dtor = builder.create_block();
+            builder
+                .ins()
+                .brif(is_null, after_dtor, &[], dtor_block, &[]);
+            builder.switch_to_block(dtor_block);
+            builder.seal_block(dtor_block);
+            let mut dtor_sig =
+                cranelift_codegen::ir::Signature::new(builder.func.signature.call_conv);
+            dtor_sig
+                .params
+                .push(cranelift_codegen::ir::AbiParam::new(ptr_type));
+            let dtor_sig_ref = builder.import_signature(dtor_sig);
+            builder.ins().call_indirect(dtor_sig_ref, dtor_ptr, &[ptr]);
+            builder.ins().jump(after_dtor, &[]);
+            builder.switch_to_block(after_dtor);
+            builder.seal_block(after_dtor);
+            // Decrement balance counter and free the closure struct.
             Self::call_rt_closure_free_track(builder, ctx)?;
             Self::call_libc_free(builder, ctx, header_ptr)
         } else {
@@ -2831,6 +2860,124 @@ impl<'a> FunctionTranslator<'a> {
         None
     }
 
+    /// Generates `__dtor_{lambda_name}(env_ptr)` for a lambda that has managed captures.
+    ///
+    /// The destructor DecRefs every managed capture stored in the closure env,
+    /// enabling correct cleanup when a closure is dropped in a scope that does not
+    /// have compile-time knowledge of the capture types (e.g., after being returned
+    /// from a function). Called by `emit_type_drop` when the closure RC reaches 0.
+    ///
+    /// Closure layout:  payload[0]=fn_ptr  payload[1]=dtor_ptr  payload[2+i]=cap_i
+    pub(crate) fn generate_closure_destructor(
+        module: &mut ObjectModule,
+        ctx: &mut cranelift_codegen::Context,
+        isa: &Arc<dyn TargetIsa>,
+        lambda_name: &str,
+        body: &Body,
+        type_definitions: &HashMap<String, TypeDefinition>,
+    ) -> Result<(), String> {
+        let ptr_type = isa.pointer_type();
+        let call_conv = isa.default_call_conv();
+        let ptr_size = ptr_type.bytes() as i64;
+
+        let dtor_name = format!("__dtor_{}", lambda_name);
+        let mut sig = Signature::new(call_conv);
+        sig.params.push(AbiParam::new(ptr_type));
+
+        let func_id = module
+            .declare_function(&dtor_name, Linkage::Export, &sig)
+            .map_err(|e| format!("Failed to declare {dtor_name}: {e}"))?;
+
+        ctx.func = cranelift_codegen::ir::Function::with_name_signature(
+            cranelift_codegen::ir::UserFuncName::user(0, func_id.as_u32()),
+            sig,
+        );
+
+        let mut builder_ctx = FunctionBuilderContext::new();
+        {
+            let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
+
+            let entry_block = builder.create_block();
+            builder.append_block_params_for_function_params(entry_block);
+            builder.switch_to_block(entry_block);
+            builder.seal_block(entry_block);
+
+            let env_ptr = builder.block_params(entry_block)[0];
+
+            let mut string_literals = HashMap::new();
+            let mut module_ctx = ModuleCtx {
+                module,
+                string_literals: &mut string_literals,
+                malloc_func_id: None,
+                free_func_id: None,
+                rt_array_new_id: None,
+                rt_array_free_id: None,
+                rt_array_panic_oob_id: None,
+                rt_list_new_id: None,
+                rt_list_push_id: None,
+                rt_list_free_id: None,
+                rt_list_set_elem_drop_fn_id: None,
+                rt_map_new_id: None,
+                rt_map_set_id: None,
+                rt_map_free_id: None,
+                rt_map_set_val_drop_fn_id: None,
+                rt_map_set_key_drop_fn_id: None,
+                rt_list_decref_element_id: None,
+                rt_string_decref_element_id: None,
+                rt_array_decref_element_id: None,
+                rt_array_set_elem_drop_fn_id: None,
+                rt_set_decref_element_id: None,
+                rt_map_decref_element_id: None,
+                rt_set_new_id: None,
+                rt_set_add_id: None,
+                rt_set_free_id: None,
+                rt_set_set_elem_drop_fn_id: None,
+                rt_string_free_id: None,
+                rt_closure_alloc_track_id: None,
+                rt_closure_free_track_id: None,
+            };
+            let empty_captures = HashMap::new();
+            let type_ctx = TypeCtx {
+                local_types: &[],
+                type_definitions,
+                ptr_type,
+                closure_capture_ast_types: &empty_captures,
+            };
+
+            // DecRef each managed capture.  captures are at env_ptr + (2+i)*ptr_size.
+            for (i, &cap_local) in body.env_capture_locals.iter().enumerate() {
+                let cap_ty = &body.local_decls[cap_local.0].ty;
+                if is_capture_managed(&cap_ty.kind) {
+                    let offset = (2 + i as i64) * ptr_size;
+                    let cap_ptr = builder.ins().load(
+                        ptr_type,
+                        cranelift_codegen::ir::MemFlags::new(),
+                        env_ptr,
+                        offset as i32,
+                    );
+                    Self::emit_decref_value(
+                        &mut builder,
+                        &mut module_ctx,
+                        &cap_ty.kind,
+                        cap_ptr,
+                        &type_ctx,
+                    )?;
+                }
+            }
+
+            builder.ins().return_(&[]);
+            builder.seal_all_blocks();
+            builder.finalize();
+        }
+
+        module
+            .define_function(func_id, ctx)
+            .map_err(|e| format!("Failed to define {dtor_name}: {e}"))?;
+
+        ctx.clear();
+        Ok(())
+    }
+
     /// Returns true if a named Custom type has at least one managed field.
     ///
     /// Used to decide whether to call `__drop_TypeName` (when there are managed
@@ -2870,4 +3017,10 @@ fn is_field_managed(kind: &TypeKind) -> bool {
             | TypeKind::Tuple(_)
             | TypeKind::Custom(_, _)
     )
+}
+
+/// Returns true if a closure capture type is managed and needs DecRef when the closure drops.
+/// Like `is_field_managed` but also includes `Function` (closures can capture other closures).
+pub(crate) fn is_capture_managed(kind: &TypeKind) -> bool {
+    matches!(kind, TypeKind::Function(_)) || is_field_managed(kind)
 }

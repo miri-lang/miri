@@ -38,10 +38,21 @@ struct PerceusContext<'a> {
 impl OptimizationPass for Perceus {
     fn run(&mut self, body: &mut Body) -> bool {
         // Step 1: Identify which variables actually need tracking (managed locals).
+        //
+        // NOTE: We do NOT exit early when managed_locals is empty. Even when there
+        // are no non-parameter managed locals, a closure aggregate may capture a
+        // managed parameter (e.g. `fn make_counter(items [int]) fn() int`). In that
+        // case `handle_aggregate` must still IncRef the parameter; it uses
+        // `is_place_managed` rather than `managed_locals`, so it works correctly.
+        // Exiting early when managed_locals is empty would skip that IncRef, causing
+        // the parameter's RC to remain at 1 while the closure holds a dangling ref.
+        //
+        // Per-capture DecRef at StorageDead is intentionally OMITTED: captured
+        // managed values are released by the runtime destructor (`__dtor_{lambda}`)
+        // stored in the closure struct.  This works for both local and cross-function
+        // closures and eliminates the double-free that would occur if both the
+        // destructor and Perceus decremented the same capture on drop.
         let managed_locals = self.identify_managed_locals(body);
-        if managed_locals.is_empty() {
-            return false;
-        }
 
         // Step 2: Iterate through every block of code and inject RC instructions.
         let mut changed = false;
@@ -222,43 +233,17 @@ impl Perceus {
 
     /// Handles a storage end-of-life by decrementing the RC of managed locals.
     ///
-    /// For closure locals, also emits `DecRef(closure.field(i))` for each managed
-    /// captured value BEFORE decrementing the closure struct's own RC. This ensures
-    /// that captured managed values (List, String, class instances, …) are released
-    /// when the closure goes out of scope, preventing reference-count leaks.
+    /// Managed captures inside closure locals are now DecRef'd by the runtime
+    /// destructor (`__dtor_{lambda_name}`) when the closure RC reaches zero, so
+    /// Perceus no longer needs to emit per-field DecRefs for closure locals.
     fn handle_storage_dead(
         &self,
-        ctx: &PerceusContext,
+        _ctx: &PerceusContext,
         stmt: &Statement,
         place: &Place,
         managed_locals: &std::collections::HashSet<crate::mir::Local>,
         new_stmts: &mut Vec<Statement>,
     ) -> bool {
-        let mut changed = false;
-
-        // For closure locals: DecRef each managed captured field first.
-        // `closure_capture_types` maps closure locals to their captured AST types
-        // in the same order as they were packed into the closure struct.
-        // Field index i corresponds to capture i (fn_ptr is at index 0 of the
-        // struct's raw layout, so codegen loads cap_i at payload_ptr+(i+1)*ptr_size).
-        if let Some(cap_types) = ctx.closure_capture_types.get(&place.local) {
-            for (i, cap_ty) in cap_types.iter().enumerate() {
-                if crate::mir::types::MirType::from_type_kind(&cap_ty.kind)
-                    .is_managed(ctx.auto_copy_types, ctx.type_params)
-                {
-                    let cap_place = Place {
-                        local: place.local,
-                        projection: vec![PlaceElem::Field(i)],
-                    };
-                    new_stmts.push(Statement {
-                        kind: StatementKind::DecRef(cap_place),
-                        span: stmt.span,
-                    });
-                    changed = true;
-                }
-            }
-        }
-
         if managed_locals.contains(&place.local) {
             new_stmts.push(Statement {
                 kind: StatementKind::DecRef(place.clone()),
@@ -266,7 +251,7 @@ impl Perceus {
             });
             return true;
         }
-        changed
+        false
     }
 
     /// Determines if a source value being copied needs an IncRef.

@@ -487,7 +487,7 @@ impl<'a> FunctionTranslator<'a> {
                     }
                 } else {
                     // Indirect call through a closure struct.
-                    // Layout: payload_ptr[0] = fn_ptr, payload_ptr[ptr_size..] = captures.
+                    // Layout: payload[0]=fn_ptr, payload[1]=dtor_ptr, payload[2+i]=cap_i.
                     let closure_ptr =
                         Self::translate_operand(builder, ctx, func, locals, type_ctx)?;
 

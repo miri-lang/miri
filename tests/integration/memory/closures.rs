@@ -328,6 +328,136 @@ fn main()
     );
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+//  Closure returned from a function (Milestone 5 Task 5.5)
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Closure created inside a function and returned to the caller.
+/// The captured List must survive the creator's scope exit (IncRef at capture)
+/// and be freed exactly once when the returned closure is dropped by the caller.
+#[test]
+fn test_closure_returned_from_function() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn make_counter(items [int]) fn() int
+    fn() int: items.length()
+
+fn main()
+    let result = make_counter(List([1, 2, 3]))()
+    println(f"{result}")
+"#,
+        "3",
+    );
+}
+
+/// Return a closure that captures a locally-created List (not a parameter).
+#[test]
+fn test_closure_returned_captures_local_list() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn make_counter() fn() int
+    let items = List([1, 2, 3])
+    fn() int: items.length()
+
+fn main()
+    let counter = make_counter()
+    let result = counter()
+    println(f"{result}")
+"#,
+        "3",
+    );
+}
+
+/// Return a non-capturing closure from a function.
+#[test]
+fn test_closure_returned_no_capture() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn make_fn() fn() int
+    fn() int: 42
+
+fn main()
+    let f = make_fn()
+    let result = f()
+    println(f"{result}")
+"#,
+        "42",
+    );
+}
+
+/// Return a closure that captures a primitive parameter.
+#[test]
+fn test_closure_returned_captures_int_param() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn make_adder(n int) fn() int
+    fn() int: n + 1
+
+fn main()
+    let f = make_adder(10)
+    let result = f()
+    println(f"{result}")
+"#,
+        "11",
+    );
+}
+
+/// Debug: check list length inside make_counter vs after.
+#[test]
+fn test_debug_list_param_capture_length() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn make_counter(items [int]) fn() int
+    println(f"inside:{items.length()}")
+    fn() int: items.length()
+
+fn main()
+    let counter = make_counter(List([1, 2, 3]))
+    let result = counter()
+    println(f"outside:{result}")
+"#,
+        "inside:3\noutside:3",
+    );
+}
+
+/// Closure captures a class instance that has a managed (List) field.
+/// When the closure drops, the class's RC must reach 0 and the List field
+/// must be freed via the drop thunk — not just via a bare libc::free.
+#[test]
+fn test_closure_captures_class_with_list_field() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+class Counter
+    items [int]
+
+fn make_reader(c Counter) fn() int
+    fn() int: c.items.length()
+
+fn main()
+    let c = Counter(List([10, 20, 30]))
+    let reader = make_reader(c)
+    println(f"{reader()}")
+"#,
+        "3",
+    );
+}
+
 /// Two independent lambdas each capture the same List; dropping both lambdas
 /// must not double-free the List.
 #[test]
