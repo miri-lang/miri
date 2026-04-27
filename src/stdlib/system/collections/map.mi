@@ -1,6 +1,7 @@
 use system.ops
+use system.memory
 
-public class Map<K, V> implements Iterable
+public class Map<K, V> implements Iterable, Cloneable
 
     runtime "core" fn miri_rt_map_new(key_size int, value_size int, key_kind int) Self
     runtime "core" fn miri_rt_map_free(m Self)
@@ -13,6 +14,7 @@ public class Map<K, V> implements Iterable
     runtime "core" fn miri_rt_map_clear(m Self)
     runtime "core" fn miri_rt_map_key_at(m Self, index int) K
     runtime "core" fn miri_rt_map_value_at(m Self, index int) V
+    runtime "core" fn miri_rt_map_clone(m Self) Map<K, V>
 
     /// Returns the number of key-value pairs in the map.
     public fn length() int: miri_rt_map_len(self)
@@ -47,3 +49,7 @@ public class Map<K, V> implements Iterable
 
     /// Returns true if the map has no entries.
     public fn is_empty() bool: miri_rt_map_is_empty(self)
+
+    /// Returns a deep copy of this map.
+    public fn clone() Map<K, V>
+        return miri_rt_map_clone(self)
