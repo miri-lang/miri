@@ -29,7 +29,8 @@ struct PerceusContext<'a> {
     field_types: &'a std::collections::HashMap<String, Vec<crate::ast::types::Type>>,
     type_params: &'a std::collections::HashSet<String>,
     /// Maps each closure local to the ordered AST types of its captured variables.
-    /// Used to emit `DecRef(closure.field(i))` for each managed capture at StorageDead.
+    /// Used by `is_place_managed` to resolve `closure.Field(i)` projections so that
+    /// `handle_aggregate` can IncRef managed captures when building a closure aggregate.
     closure_capture_types:
         &'a std::collections::HashMap<crate::mir::Local, Vec<crate::ast::types::Type>>,
     arg_count: usize,
