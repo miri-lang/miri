@@ -588,10 +588,13 @@ impl TypeChecker {
                         // Self in trait resolves to Custom(trait_name, None).
                         // The class type is either Custom(class_name, None), String,
                         // or a generic type parameter (e.g. T in List<T>).
+                        // Generic classes (e.g. List<T>) may express Self as
+                        // Custom(class_name, Some([T])); match by base name.
                         if *trait_ty == trait_self_kind {
                             return *class_ty == class_type_kind
                                 || (name == "String" && *class_ty == TypeKind::String)
-                                || matches!(class_ty, TypeKind::Generic(..));
+                                || matches!(class_ty, TypeKind::Generic(..))
+                                || matches!(class_ty, TypeKind::Custom(cn, _) if cn == &name);
                         }
                         false
                     };

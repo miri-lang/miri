@@ -60,6 +60,7 @@ pub mod rt {
     pub const LIST_REVERSE: &str = "miri_rt_list_reverse";
     pub const LIST_SORT: &str = "miri_rt_list_sort";
     pub const LIST_IS_EMPTY: &str = "miri_rt_list_is_empty";
+    pub const LIST_CLONE: &str = "miri_rt_list_clone";
     /// Compiler-internal: constructs a list from a raw pointer, not in stdlib.
     pub const LIST_NEW_FROM_RAW: &str = "miri_rt_list_new_from_raw";
     /// Compiler-internal: constructs a list from a managed array, not in stdlib.
@@ -182,6 +183,7 @@ pub mod rt {
         LIST_REVERSE,
         LIST_SORT,
         LIST_IS_EMPTY,
+        LIST_CLONE,
         LIST_NEW_FROM_RAW,
         LIST_NEW_FROM_MANAGED_ARRAY,
         LIST_DECREF_ELEMENT,

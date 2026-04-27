@@ -1,10 +1,11 @@
 use system.ops
+use system.memory
 
 /// A UTF-8 encoded string type.
 ///
 /// Strings in Miri are immutable sequences of Unicode characters.
 /// All operations that modify a string return a new string instance.
-public class String implements Equatable, Addable, Multiplicable, Iterable
+public class String implements Equatable, Addable, Multiplicable, Iterable, Cloneable
 
     // =========================================================================
     // Intrinsic function declarations
@@ -143,6 +144,6 @@ public class String implements Equatable, Addable, Multiplicable, Iterable
     // =========================================================================
 
     /// Returns a clone of this string.
-    fn clone() String
+    public fn clone() String
         return miri_rt_string_clone(self)
 
