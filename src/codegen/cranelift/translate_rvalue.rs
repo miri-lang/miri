@@ -1230,9 +1230,10 @@ impl<'a> FunctionTranslator<'a> {
         // Compute total allocation size:
         //   2 * ptr_size  (header: malloc_ptr + RC)
         // + ptr_size       (fn_ptr slot)
+        // + ptr_size       (destructor_ptr slot — null if no managed captures)
         // + ptr_size * N   (one ptr-size slot per capture)
         let n_captures = capture_vals.len();
-        let total_size = (2 + 1 + n_captures as i64) * ptr_size;
+        let total_size = (2 + 1 + 1 + n_captures as i64) * ptr_size;
         let size_val = builder.ins().iconst(ptr_type, total_size);
 
         // Allocate raw memory.
@@ -1300,7 +1301,40 @@ impl<'a> FunctionTranslator<'a> {
         // Store fn_ptr at payload[0] (offset 0 from payload_ptr).
         builder.ins().store(MemFlags::new(), fn_ptr, payload_ptr, 0);
 
-        // Store each captured value in its slot (widened to ptr_size).
+        // Store destructor_ptr at payload[1] (offset ptr_size).
+        // The destructor DecRefs all managed captures when the closure RC hits 0,
+        // ensuring correctness even when the closure escapes its creation scope.
+        // Null if no captures are managed (no RC work needed on drop).
+        let dtor_val = {
+            let has_managed = capture_ops.iter().any(|op| match op {
+                Operand::Copy(p) | Operand::Move(p) => {
+                    let kind = &type_ctx.local_types[p.local.0].kind;
+                    super::translator::is_capture_managed(kind)
+                }
+                _ => false,
+            });
+            if has_managed {
+                let dtor_name = format!("__dtor_{}", lambda_name);
+                let mut dtor_sig = cranelift_codegen::ir::Signature::new(call_conv);
+                dtor_sig
+                    .params
+                    .push(cranelift_codegen::ir::AbiParam::new(ptr_type));
+                let dtor_id = ctx
+                    .module
+                    .declare_function(&dtor_name, cranelift_module::Linkage::Import, &dtor_sig)
+                    .map_err(|e| format!("Error declaring dtor {}: {}", dtor_name, e))?;
+                let dtor_ref = ctx.module.declare_func_in_func(dtor_id, builder.func);
+                builder.ins().func_addr(ptr_type, dtor_ref)
+            } else {
+                builder.ins().iconst(ptr_type, 0)
+            }
+        };
+        builder
+            .ins()
+            .store(MemFlags::new(), dtor_val, payload_ptr, ptr_size as i32);
+
+        // Store each captured value starting at payload[2].
+        // Layout: payload[0]=fn_ptr, payload[1]=dtor_ptr, payload[2+i]=cap_i
         for (i, val) in capture_vals.into_iter().enumerate() {
             let val_ty = builder.func.dfg.value_type(val);
             let widened =
@@ -1309,7 +1343,7 @@ impl<'a> FunctionTranslator<'a> {
                 } else {
                     val
                 };
-            let offset = (1 + i as i32) * ptr_size as i32;
+            let offset = (2 + i as i32) * ptr_size as i32;
             builder
                 .ins()
                 .store(MemFlags::new(), widened, payload_ptr, offset);
