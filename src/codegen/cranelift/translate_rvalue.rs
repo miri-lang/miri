@@ -312,6 +312,27 @@ impl<'a> FunctionTranslator<'a> {
                                         builder, ctx, array_ptr, addr,
                                     )?;
                                 }
+                                // For custom class elements that implement Cloneable,
+                                // also set elem_clone_fn so that array.clone() produces
+                                // independent copies rather than shared IncRef'd pointers.
+                                if let Some(TypeKind::Custom(n, _)) = first_op_direct_kind {
+                                    if BuiltinCollectionKind::from_name(n).is_none()
+                                        && Self::class_implements_cloneable(
+                                            n,
+                                            type_ctx.type_definitions,
+                                        )
+                                    {
+                                        let clone_fn_addr = Self::get_custom_clone_thunk_addr(
+                                            builder, ctx, n, ptr_type,
+                                        )?;
+                                        Self::call_rt_array_set_elem_clone_fn(
+                                            builder,
+                                            ctx,
+                                            array_ptr,
+                                            clone_fn_addr,
+                                        )?;
+                                    }
+                                }
                             }
 
                             Ok(array_ptr)
@@ -385,6 +406,20 @@ impl<'a> FunctionTranslator<'a> {
                                             list_ptr,
                                             drop_fn_addr,
                                         )?;
+                                        if Self::class_implements_cloneable(
+                                            n,
+                                            type_ctx.type_definitions,
+                                        ) {
+                                            let clone_fn_addr = Self::get_custom_clone_thunk_addr(
+                                                builder, ctx, n, ptr_type,
+                                            )?;
+                                            Self::call_rt_list_set_elem_clone_fn(
+                                                builder,
+                                                ctx,
+                                                list_ptr,
+                                                clone_fn_addr,
+                                            )?;
+                                        }
                                     }
                                     Some(TypeKind::Array(_, _)) => {
                                         let drop_fn_addr = Self::get_rt_array_decref_element_addr(
@@ -723,6 +758,20 @@ impl<'a> FunctionTranslator<'a> {
                                             set_ptr,
                                             drop_fn_addr,
                                         )?;
+                                        if Self::class_implements_cloneable(
+                                            n,
+                                            type_ctx.type_definitions,
+                                        ) {
+                                            let clone_fn_addr = Self::get_custom_clone_thunk_addr(
+                                                builder, ctx, n, ptr_type,
+                                            )?;
+                                            Self::call_rt_set_set_elem_clone_fn(
+                                                builder,
+                                                ctx,
+                                                set_ptr,
+                                                clone_fn_addr,
+                                            )?;
+                                        }
                                     }
                                     Some(TypeKind::Array(_, _)) => {
                                         let drop_fn_addr = Self::get_rt_array_decref_element_addr(

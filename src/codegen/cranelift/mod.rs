@@ -519,6 +519,13 @@ impl CraneliftBackend {
                 type_name,
                 &self.type_definitions,
             )?;
+            FunctionTranslator::generate_clone_function(
+                module,
+                ctx,
+                isa,
+                type_name,
+                &self.type_definitions,
+            )?;
         }
         Ok(())
     }

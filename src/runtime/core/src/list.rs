@@ -23,6 +23,10 @@ use crate::rc::{alloc_with_rc, free_with_rc};
 ///   removed by a mutation operation (`clear`, `remove_at`). Allows managed elements
 ///   (Lists, Maps, class instances) to have their RC decremented on removal.
 ///   Set by `miri_rt_list_new_from_managed_array` when elements are heap-allocated.
+/// - `elem_clone_fn`: If non-zero, called on each element pointer during
+///   `miri_rt_list_clone` to produce a deep copy instead of an IncRef.
+///   Signature: `fn(*mut u8) -> *mut u8`. Must only be set for user-defined class
+///   elements that implement `Cloneable`.
 #[repr(C)]
 pub struct MiriList {
     data: *mut u8,
@@ -32,6 +36,9 @@ pub struct MiriList {
     /// Drop function for managed elements: `fn(elem_ptr: *mut u8)`.
     /// Zero means elements are plain values (no RC management on removal).
     elem_drop_fn: usize,
+    /// Clone function for managed elements: `fn(*mut u8) -> *mut u8`.
+    /// When non-zero, `miri_rt_list_clone` calls this instead of IncRef-ing.
+    elem_clone_fn: usize,
 }
 
 impl MiriList {
@@ -43,6 +50,7 @@ impl MiriList {
             capacity: 0,
             elem_size,
             elem_drop_fn: 0,
+            elem_clone_fn: 0,
         }
     }
 
@@ -72,6 +80,7 @@ impl MiriList {
             capacity,
             elem_size,
             elem_drop_fn: 0,
+            elem_clone_fn: 0,
         }
     }
 
@@ -622,6 +631,18 @@ pub mod ffi {
         }
     }
 
+    /// Sets the `elem_clone_fn` callback for this list.
+    ///
+    /// When non-zero, `miri_rt_list_clone` calls this function on each element
+    /// to obtain a deep copy instead of IncRef-ing the pointer.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_set_elem_clone_fn(ptr: *mut MiriList, fn_ptr: usize) {
+        if !ptr.is_null() {
+            (*ptr).elem_clone_fn = fn_ptr;
+        }
+    }
+
     /// Decrements the RC of a managed List element and frees it if RC reaches zero.
     ///
     /// Used as `elem_drop_fn` by outer collections (Array, List, Set, Map) when
@@ -675,9 +696,10 @@ pub mod ffi {
 
     /// Clones a list.
     ///
-    /// If `elem_drop_fn` is set, copies it to the clone and IncRefs every
-    /// non-null element pointer so both collections hold independent RC=1
-    /// references — preventing a double-free when either collection is dropped.
+    /// If `elem_clone_fn` is set, calls it on each non-null element pointer to
+    /// produce an independent deep copy (the clone owns fresh allocations).
+    /// Otherwise, if `elem_drop_fn` is set, IncRefs every non-null element so
+    /// both collections hold valid RC references — the existing shallow-clone path.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_list_clone(ptr: *const MiriList) -> *mut MiriList {
@@ -696,15 +718,26 @@ pub mod ffi {
             (*list).len = src.len;
         }
 
-        if src.elem_drop_fn != 0 {
-            (*list).elem_drop_fn = src.elem_drop_fn;
-            if !src.data.is_null() && src.len > 0 && src.elem_size > 0 {
-                for i in 0..src.len {
-                    let slot = src.data.add(i * src.elem_size) as *const usize;
-                    let ptr_val = *slot;
-                    if ptr_val != 0 {
-                        crate::rc::incref(ptr_val as *mut u8);
-                    }
+        (*list).elem_drop_fn = src.elem_drop_fn;
+        (*list).elem_clone_fn = src.elem_clone_fn;
+
+        if src.elem_clone_fn != 0 && !src.data.is_null() && src.len > 0 && src.elem_size > 0 {
+            let clone_fn: unsafe extern "C" fn(*mut u8) -> *mut u8 =
+                std::mem::transmute(src.elem_clone_fn);
+            for i in 0..src.len {
+                let slot = (*list).data.add(i * src.elem_size) as *mut usize;
+                let ptr_val = *slot;
+                if ptr_val != 0 {
+                    let new_elem = clone_fn(ptr_val as *mut u8);
+                    *slot = new_elem as usize;
+                }
+            }
+        } else if src.elem_drop_fn != 0 && !src.data.is_null() && src.len > 0 && src.elem_size > 0 {
+            for i in 0..src.len {
+                let slot = src.data.add(i * src.elem_size) as *const usize;
+                let ptr_val = *slot;
+                if ptr_val != 0 {
+                    crate::rc::incref(ptr_val as *mut u8);
                 }
             }
         }

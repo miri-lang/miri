@@ -459,6 +459,28 @@ impl<'a> FunctionTranslator<'a> {
                                                 decref_addr?,
                                             )?;
                                         }
+                                        if let TypeKind::Custom(type_name, _) = &inner_ty.kind {
+                                            if BuiltinCollectionKind::from_name(type_name).is_none()
+                                                && FunctionTranslator::class_implements_cloneable(
+                                                    type_name,
+                                                    type_ctx.type_definitions,
+                                                )
+                                            {
+                                                let clone_fn_addr =
+                                                    FunctionTranslator::get_custom_clone_thunk_addr(
+                                                        builder,
+                                                        ctx,
+                                                        type_name,
+                                                        ptr_type,
+                                                    )?;
+                                                FunctionTranslator::call_rt_list_set_elem_clone_fn(
+                                                    builder,
+                                                    ctx,
+                                                    list_ptr,
+                                                    clone_fn_addr,
+                                                )?;
+                                            }
+                                        }
                                     }
                                 }
                             }

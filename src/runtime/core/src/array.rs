@@ -23,12 +23,17 @@ use crate::rc::{alloc_with_rc, free_with_rc};
 /// - `elem_size`: Size of each element in bytes
 /// - `elem_drop_fn`: If non-zero, called on each element pointer when the
 ///   array is freed so that managed elements have their RC decremented.
+/// - `elem_clone_fn`: If non-zero, called on each element pointer during
+///   `miri_rt_array_clone` to produce a deep copy instead of an IncRef.
+///   Signature: `fn(*mut u8) -> *mut u8`. Must only be set for user-defined
+///   class elements that implement `Cloneable`.
 #[repr(C)]
 pub struct MiriArray {
     data: *mut u8,
     elem_count: usize,
     elem_size: usize,
     elem_drop_fn: usize,
+    elem_clone_fn: usize,
 }
 
 const STRUCT_SIZE: usize = std::mem::size_of::<MiriArray>();
@@ -109,6 +114,7 @@ pub mod ffi {
                     (*arr).elem_count = 0;
                     (*arr).elem_size = elem_size;
                     (*arr).elem_drop_fn = 0;
+                    (*arr).elem_clone_fn = 0;
                     return arr;
                 }
             };
@@ -119,6 +125,7 @@ pub mod ffi {
                     (*arr).elem_count = 0;
                     (*arr).elem_size = elem_size;
                     (*arr).elem_drop_fn = 0;
+                    (*arr).elem_clone_fn = 0;
                     return arr;
                 }
             };
@@ -131,6 +138,7 @@ pub mod ffi {
         }
         (*arr).elem_size = elem_size;
         (*arr).elem_drop_fn = 0;
+        (*arr).elem_clone_fn = 0;
 
         arr
     }
@@ -206,6 +214,18 @@ pub mod ffi {
     pub unsafe extern "C" fn miri_rt_array_set_elem_drop_fn(ptr: *mut MiriArray, fn_ptr: usize) {
         if !ptr.is_null() {
             (*ptr).elem_drop_fn = fn_ptr;
+        }
+    }
+
+    /// Sets the `elem_clone_fn` callback for this array.
+    ///
+    /// When non-zero, `miri_rt_array_clone` calls this function on each element
+    /// to obtain a deep copy instead of IncRef-ing the pointer.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_array_set_elem_clone_fn(ptr: *mut MiriArray, fn_ptr: usize) {
+        if !ptr.is_null() {
+            (*ptr).elem_clone_fn = fn_ptr;
         }
     }
 
@@ -334,9 +354,10 @@ pub mod ffi {
 
     /// Returns a clone of the array.
     ///
-    /// If `elem_drop_fn` is set, copies it to the clone and IncRefs every
-    /// non-null element pointer so both collections hold independent RC=1
-    /// references — preventing a double-free when either collection is dropped.
+    /// If `elem_clone_fn` is set, calls it on each non-null element pointer to
+    /// produce an independent deep copy (the clone owns fresh allocations).
+    /// Otherwise, if `elem_drop_fn` is set, IncRefs every non-null element so
+    /// both collections hold valid RC references — the existing shallow-clone path.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_array_clone(ptr: *const MiriArray) -> *mut MiriArray {
@@ -351,15 +372,30 @@ pub mod ffi {
         if !src.data.is_null() && !(*new_arr).data.is_null() {
             ptr::copy_nonoverlapping(src.data, (*new_arr).data, src.byte_len());
         }
-        if src.elem_drop_fn != 0 {
-            (*new_arr).elem_drop_fn = src.elem_drop_fn;
-            if !src.data.is_null() && src.elem_count > 0 && src.elem_size > 0 {
-                for i in 0..src.elem_count {
-                    let slot = src.data.add(i * src.elem_size) as *const usize;
-                    let ptr_val = *slot;
-                    if ptr_val != 0 {
-                        crate::rc::incref(ptr_val as *mut u8);
-                    }
+        (*new_arr).elem_drop_fn = src.elem_drop_fn;
+        (*new_arr).elem_clone_fn = src.elem_clone_fn;
+        if src.elem_clone_fn != 0 && !src.data.is_null() && src.elem_count > 0 && src.elem_size > 0
+        {
+            let clone_fn: unsafe extern "C" fn(*mut u8) -> *mut u8 =
+                std::mem::transmute(src.elem_clone_fn);
+            for i in 0..src.elem_count {
+                let slot = (*new_arr).data.add(i * src.elem_size) as *mut usize;
+                let ptr_val = *slot;
+                if ptr_val != 0 {
+                    let new_elem = clone_fn(ptr_val as *mut u8);
+                    *slot = new_elem as usize;
+                }
+            }
+        } else if src.elem_drop_fn != 0
+            && !src.data.is_null()
+            && src.elem_count > 0
+            && src.elem_size > 0
+        {
+            for i in 0..src.elem_count {
+                let slot = src.data.add(i * src.elem_size) as *const usize;
+                let ptr_val = *slot;
+                if ptr_val != 0 {
+                    crate::rc::incref(ptr_val as *mut u8);
                 }
             }
         }

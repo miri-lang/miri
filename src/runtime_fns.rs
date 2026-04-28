@@ -44,6 +44,8 @@ pub mod rt {
     pub const ARRAY_DECREF_ELEMENT: &str = "miri_rt_array_decref_element";
     /// Compiler-internal: registers the element drop function on an array, not in stdlib.
     pub const ARRAY_SET_ELEM_DROP_FN: &str = "miri_rt_array_set_elem_drop_fn";
+    /// Compiler-internal: registers the element clone function on an array, not in stdlib.
+    pub const ARRAY_SET_ELEM_CLONE_FN: &str = "miri_rt_array_set_elem_clone_fn";
 
     // ── Tuple ─────────────────────────────────────────────────────────────────
     pub const TUPLE_LEN: &str = "miri_rt_tuple_len";
@@ -70,6 +72,8 @@ pub mod rt {
     pub const LIST_DECREF_ELEMENT: &str = "miri_rt_list_decref_element";
     /// Compiler-internal: registers the element drop function, not in stdlib.
     pub const LIST_SET_ELEM_DROP_FN: &str = "miri_rt_list_set_elem_drop_fn";
+    /// Compiler-internal: registers the element clone function, not in stdlib.
+    pub const LIST_SET_ELEM_CLONE_FN: &str = "miri_rt_list_set_elem_clone_fn";
 
     // ── Map ──────────────────────────────────────────────────────────────────
     pub const MAP_NEW: &str = "miri_rt_map_new";
@@ -106,6 +110,8 @@ pub mod rt {
     pub const SET_CLONE: &str = "miri_rt_set_clone";
     /// Compiler-internal: registers the element drop function, not in stdlib.
     pub const SET_SET_ELEM_DROP_FN: &str = "miri_rt_set_set_elem_drop_fn";
+    /// Compiler-internal: registers the element clone function, not in stdlib.
+    pub const SET_SET_ELEM_CLONE_FN: &str = "miri_rt_set_set_elem_clone_fn";
     /// Compiler-internal: decrements the RC of a set element, not in stdlib.
     pub const SET_DECREF_ELEMENT: &str = "miri_rt_set_decref_element";
 
@@ -172,6 +178,7 @@ pub mod rt {
         ARRAY_PANIC_OOB,
         ARRAY_DECREF_ELEMENT,
         ARRAY_SET_ELEM_DROP_FN,
+        ARRAY_SET_ELEM_CLONE_FN,
         // Tuple
         TUPLE_LEN,
         // List
@@ -192,6 +199,7 @@ pub mod rt {
         LIST_NEW_FROM_MANAGED_ARRAY,
         LIST_DECREF_ELEMENT,
         LIST_SET_ELEM_DROP_FN,
+        LIST_SET_ELEM_CLONE_FN,
         // Map
         MAP_NEW,
         MAP_FREE,
@@ -221,6 +229,7 @@ pub mod rt {
         SET_ELEMENT_AT,
         SET_CLONE,
         SET_SET_ELEM_DROP_FN,
+        SET_SET_ELEM_CLONE_FN,
         SET_DECREF_ELEMENT,
         // IO
         PRINT,
