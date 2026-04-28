@@ -50,6 +50,11 @@ public class Map<K, V> implements Iterable, Cloneable
     /// Returns true if the map has no entries.
     public fn is_empty() bool: miri_rt_map_is_empty(self)
 
-    /// Returns a deep copy of this map.
+    /// Returns a clone of this map with independent structural ownership.
+    ///
+    /// Adding or removing keys in the clone does not affect the original and vice versa.
+    /// Primitive values (int, bool, float) and strings are effectively independent.
+    /// Managed object values (custom class instances) are shared by reference count;
+    /// deep cloning of Cloneable map values is not yet implemented.
     public fn clone() Map<K, V>
         return miri_rt_map_clone(self)
