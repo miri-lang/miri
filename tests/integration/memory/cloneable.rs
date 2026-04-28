@@ -472,6 +472,102 @@ let c = m.clone()
 }
 
 // ─────────────────────────────────────────────
+// Deep clone of Array/List<custom class>: task 6.2a
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_array_of_custom_objects_clone_is_deep() {
+    // After cloning an array of custom objects, mutating an element of the clone
+    // must NOT affect the original. Without elem_clone_fn (shallow clone), both
+    // arrays share the same Point allocations, and p.x = 99 would corrupt a[0].
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.memory
+use system.collections.array
+
+class Point implements Cloneable
+    var x int
+    var y int
+
+    fn init(x int, y int)
+        self.x = x
+        self.y = y
+
+    public fn clone() Point
+        return Point(self.x, self.y)
+
+let a = [Point(1, 2), Point(3, 4)]
+let b = a.clone()
+var p = b[0]
+p.x = 99
+println(f"{a[0].x}")
+"#,
+        "1",
+    );
+}
+
+#[test]
+fn test_array_of_custom_objects_clone_no_leak() {
+    // Cloning an Array<Point> must not leak or double-free: both arrays and all
+    // Point objects must be freed when they go out of scope.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.memory
+use system.collections.array
+
+class Point implements Cloneable
+    var x int
+    var y int
+
+    fn init(x int, y int)
+        self.x = x
+        self.y = y
+
+    public fn clone() Point
+        return Point(self.x, self.y)
+
+fn main()
+    let a = [Point(1, 2), Point(3, 4)]
+    let b = a.clone()
+    println(f"{b[0].x}")
+"#,
+        "1",
+    );
+}
+
+#[test]
+fn test_list_of_custom_objects_clone_is_deep() {
+    // Same independence test for List<Point>.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.memory
+use system.collections.list
+
+class Point implements Cloneable
+    var x int
+    var y int
+
+    fn init(x int, y int)
+        self.x = x
+        self.y = y
+
+    public fn clone() Point
+        return Point(self.x, self.y)
+
+let lst = List([Point(10, 20), Point(30, 40)])
+let copy = lst.clone()
+var p = copy[0]
+p.x = 99
+println(f"{lst[0].x}")
+"#,
+        "10",
+    );
+}
+
+// ─────────────────────────────────────────────
 // Error: missing clone() prevents implementing Cloneable
 // ─────────────────────────────────────────────
 

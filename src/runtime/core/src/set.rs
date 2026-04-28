@@ -30,6 +30,8 @@ const LOAD_FACTOR_DEN: usize = 4;
 /// - `capacity`: total number of slots
 /// - `elem_size`: size of each element in bytes
 /// - `elem_drop_fn`: if non-zero, called on each element when removed/freed
+/// - `elem_clone_fn`: if non-zero, called on each element during clone to
+///   produce a deep copy. Signature: `fn(*mut u8) -> *mut u8`.
 ///
 /// The first two fields (`data`, `len`) match MiriList/MiriArray layout so
 /// that `Rvalue::Len` and `element_at` use the same offsets.
@@ -41,6 +43,7 @@ pub struct MiriSet {
     capacity: usize,
     elem_size: usize,
     elem_drop_fn: usize,
+    elem_clone_fn: usize,
 }
 
 const STRUCT_SIZE: usize = std::mem::size_of::<MiriSet>();
@@ -228,6 +231,7 @@ pub mod ffi {
         (*set).capacity = 0;
         (*set).elem_size = elem_size;
         (*set).elem_drop_fn = 0;
+        (*set).elem_clone_fn = 0;
         set
     }
 
@@ -241,6 +245,18 @@ pub mod ffi {
     pub unsafe extern "C" fn miri_rt_set_set_elem_drop_fn(ptr: *mut MiriSet, fn_ptr: usize) {
         if !ptr.is_null() {
             (*ptr).elem_drop_fn = fn_ptr;
+        }
+    }
+
+    /// Sets the `elem_clone_fn` callback for this set.
+    ///
+    /// When non-zero, `miri_rt_set_clone` calls this function on each element
+    /// to obtain a deep copy instead of IncRef-ing the pointer.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_set_set_elem_clone_fn(ptr: *mut MiriSet, fn_ptr: usize) {
+        if !ptr.is_null() {
+            (*ptr).elem_clone_fn = fn_ptr;
         }
     }
 
@@ -407,12 +423,12 @@ pub mod ffi {
         free_with_rc(ptr as *mut u8, STRUCT_SIZE);
     }
 
-    /// Returns a shallow clone of the set with independent RC ownership.
+    /// Returns a clone of the set with independent element ownership.
     ///
-    /// All occupied elements are re-inserted into a fresh set. If `elem_drop_fn`
-    /// is set, each element pointer is IncRef'd so both the original and the clone
-    /// hold independent RC=1 references — preventing a double-free when either
-    /// collection is dropped.
+    /// All occupied elements are re-inserted into a fresh set.
+    /// If `elem_clone_fn` is set, calls it on each element to obtain a deep copy.
+    /// Otherwise, if `elem_drop_fn` is set, IncRefs each element pointer so both
+    /// sets hold valid RC references — the existing shallow-clone path.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_set_clone(ptr: *const MiriSet) -> *mut MiriSet {
@@ -425,15 +441,30 @@ pub mod ffi {
             return new_set;
         }
         (*new_set).elem_drop_fn = src.elem_drop_fn;
+        (*new_set).elem_clone_fn = src.elem_clone_fn;
         if !src.states.is_null() && src.capacity > 0 && src.elem_size > 0 {
             for i in 0..src.capacity {
                 if *src.states.add(i) == SLOT_OCCUPIED {
                     let elem = src.data.add(i * src.elem_size);
-                    (*new_set).insert(elem);
-                    if src.elem_drop_fn != 0 {
+                    if src.elem_clone_fn != 0 {
                         let ptr_val = *(elem as *const usize);
                         if ptr_val != 0 {
-                            crate::rc::incref(ptr_val as *mut u8);
+                            let clone_fn: unsafe extern "C" fn(*mut u8) -> *mut u8 =
+                                std::mem::transmute(src.elem_clone_fn);
+                            let new_ptr = clone_fn(ptr_val as *mut u8) as usize;
+                            // elem_size is ptr-sized for class elements; insert the new pointer
+                            let slot_ptr = &new_ptr as *const usize as *const u8;
+                            (*new_set).insert(slot_ptr);
+                        } else {
+                            (*new_set).insert(elem);
+                        }
+                    } else {
+                        (*new_set).insert(elem);
+                        if src.elem_drop_fn != 0 {
+                            let ptr_val = *(elem as *const usize);
+                            if ptr_val != 0 {
+                                crate::rc::incref(ptr_val as *mut u8);
+                            }
                         }
                     }
                 }
