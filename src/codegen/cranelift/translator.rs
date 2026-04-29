@@ -1184,6 +1184,51 @@ impl<'a> FunctionTranslator<'a> {
         Ok(())
     }
 
+    /// Sets `elem_clone_fn` on `list_ptr` when the element type is a Cloneable
+    /// custom class. Mirrors `emit_list_drop_fn_for_elem_kind` but for the clone
+    /// side. Called on the empty-constructor path where `translate_rvalue` has no
+    /// operands to inspect.
+    pub(crate) fn emit_list_clone_fn_for_elem_kind(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        elem_kind: &TypeKind,
+        list_ptr: Value,
+        ptr_type: cranelift_codegen::ir::Type,
+        type_definitions: &HashMap<String, TypeDefinition>,
+    ) -> Result<(), String> {
+        if let TypeKind::Custom(n, _) = elem_kind {
+            if BuiltinCollectionKind::from_name(n).is_none()
+                && Self::class_implements_cloneable(n, type_definitions)
+            {
+                let clone_fn_addr = Self::get_custom_clone_thunk_addr(builder, ctx, n, ptr_type)?;
+                Self::call_rt_list_set_elem_clone_fn(builder, ctx, list_ptr, clone_fn_addr)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Sets `elem_clone_fn` on `set_ptr` when the element type is a Cloneable
+    /// custom class. Mirrors `emit_set_drop_fn_for_elem_kind` but for the clone
+    /// side.
+    pub(crate) fn emit_set_clone_fn_for_elem_kind(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        elem_kind: &TypeKind,
+        set_ptr: Value,
+        ptr_type: cranelift_codegen::ir::Type,
+        type_definitions: &HashMap<String, TypeDefinition>,
+    ) -> Result<(), String> {
+        if let TypeKind::Custom(n, _) = elem_kind {
+            if BuiltinCollectionKind::from_name(n).is_none()
+                && Self::class_implements_cloneable(n, type_definitions)
+            {
+                let clone_fn_addr = Self::get_custom_clone_thunk_addr(builder, ctx, n, ptr_type)?;
+                Self::call_rt_set_set_elem_clone_fn(builder, ctx, set_ptr, clone_fn_addr)?;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn call_rt_set_new(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,

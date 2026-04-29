@@ -151,9 +151,10 @@ impl<'a> FunctionTranslator<'a> {
 
                 Self::assign_to_place(builder, ctx, place, value, locals, type_ctx)?;
 
-                // After constructing an empty Set<T>(), set elem_drop_fn from the
-                // destination type. translate_rvalue has no operands to inspect for
-                // this path, so we derive the element type from the assignment target.
+                // After constructing an empty Set<T>(), set elem_drop_fn and
+                // elem_clone_fn from the destination type. translate_rvalue has no
+                // operands to inspect for this path, so we derive the element type
+                // from the assignment target's type annotation.
                 if let Rvalue::Aggregate(AggregateKind::Set, ops) = rvalue {
                     if ops.is_empty() {
                         if let Some(elem_expr) = FunctionTranslator::set_elem_expr(&dest_ty.kind) {
@@ -164,6 +165,14 @@ impl<'a> FunctionTranslator<'a> {
                                     &elem_ty.kind,
                                     value,
                                     ptr_type,
+                                )?;
+                                FunctionTranslator::emit_set_clone_fn_for_elem_kind(
+                                    builder,
+                                    ctx,
+                                    &elem_ty.kind,
+                                    value,
+                                    ptr_type,
+                                    type_ctx.type_definitions,
                                 )?;
                             }
                         }
@@ -488,8 +497,9 @@ impl<'a> FunctionTranslator<'a> {
                     }
 
                     // After miri_rt_list_new (empty List<T>() constructor), set elem_drop_fn
-                    // from the destination type. translate_rvalue has no operands to inspect
-                    // for this path, so we must derive the element type from the call site type.
+                    // and elem_clone_fn from the destination type. translate_rvalue has no
+                    // operands to inspect for this path, so we derive the element type from
+                    // the assignment target's type annotation.
                     if is_list_new_empty {
                         if let Some(list_ptr) = maybe_result {
                             if let Some(elem_expr) =
@@ -502,6 +512,14 @@ impl<'a> FunctionTranslator<'a> {
                                         &elem_ty.kind,
                                         list_ptr,
                                         ptr_type,
+                                    )?;
+                                    FunctionTranslator::emit_list_clone_fn_for_elem_kind(
+                                        builder,
+                                        ctx,
+                                        &elem_ty.kind,
+                                        list_ptr,
+                                        ptr_type,
+                                        type_ctx.type_definitions,
                                     )?;
                                 }
                             }

@@ -568,6 +568,135 @@ println(f"{lst[0].x}")
 }
 
 // ─────────────────────────────────────────────
+// Empty-constructor List<T> / Set<T> clone: task 6.2b
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_empty_constructor_list_of_custom_objects_clone_is_deep() {
+    // List<Point>() takes the empty-constructor path (miri_rt_list_new).
+    // elem_clone_fn must be wired so that .clone() deep-copies elements.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.memory
+use system.collections.list
+
+class Point implements Cloneable
+    var x int
+    var y int
+
+    fn init(x int, y int)
+        self.x = x
+        self.y = y
+
+    public fn clone() Point
+        return Point(self.x, self.y)
+
+var l = List<Point>()
+l.push(Point(1, 2))
+let m = l.clone()
+var p = m[0]
+p.x = 99
+println(f"{l[0].x}")
+"#,
+        "1",
+    );
+}
+
+#[test]
+fn test_empty_constructor_list_of_custom_objects_clone_no_leak() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.memory
+use system.collections.list
+
+class Point implements Cloneable
+    var x int
+    var y int
+
+    fn init(x int, y int)
+        self.x = x
+        self.y = y
+
+    public fn clone() Point
+        return Point(self.x, self.y)
+
+var l = List<Point>()
+l.push(Point(3, 4))
+let m = l.clone()
+println(f"{m[0].x}")
+"#,
+        "3",
+    );
+}
+
+// ─────────────────────────────────────────────
+// Deep clone of Set<custom class>: task 6.2a/6.2b
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_set_of_custom_objects_clone_no_leak() {
+    // Non-empty {Point(...)} Set literal path. elem_clone_fn is wired in
+    // translate_rvalue.rs. Verify no RC leak or double-free on clone + drop.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.memory
+use system.collections.set
+
+class Point implements Cloneable
+    var x int
+    var y int
+
+    fn init(x int, y int)
+        self.x = x
+        self.y = y
+
+    public fn clone() Point
+        return Point(self.x, self.y)
+
+fn main()
+    var s = {Point(7, 8)}
+    let c = s.clone()
+    println(f"{c.length()}")
+"#,
+        "1",
+    );
+}
+
+#[test]
+fn test_empty_constructor_set_of_custom_objects_clone_no_leak() {
+    // Set<Point>() empty-constructor path. emit_set_clone_fn_for_elem_kind must
+    // wire elem_clone_fn so that .clone() deep-copies elements without leaking.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.memory
+use system.collections.set
+
+class Point implements Cloneable
+    var x int
+    var y int
+
+    fn init(x int, y int)
+        self.x = x
+        self.y = y
+
+    public fn clone() Point
+        return Point(self.x, self.y)
+
+fn main()
+    var s = Set<Point>()
+    s.add(Point(3, 4))
+    let c = s.clone()
+    println(f"{c.length()}")
+"#,
+        "1",
+    );
+}
+
+// ─────────────────────────────────────────────
 // Error: missing clone() prevents implementing Cloneable
 // ─────────────────────────────────────────────
 

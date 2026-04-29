@@ -411,6 +411,7 @@ pub mod ffi {
         (*list).capacity = 0;
         (*list).elem_size = elem_size;
         (*list).elem_drop_fn = 0;
+        (*list).elem_clone_fn = 0;
         list
     }
 
