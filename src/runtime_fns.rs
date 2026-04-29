@@ -93,6 +93,8 @@ pub mod rt {
     pub const MAP_SET_VAL_DROP_FN: &str = "miri_rt_map_set_val_drop_fn";
     /// Compiler-internal: registers the key drop function, not in stdlib.
     pub const MAP_SET_KEY_DROP_FN: &str = "miri_rt_map_set_key_drop_fn";
+    /// Compiler-internal: registers the value clone function, not in stdlib.
+    pub const MAP_SET_VAL_CLONE_FN: &str = "miri_rt_map_set_val_clone_fn";
     pub const MAP_CLONE: &str = "miri_rt_map_clone";
     /// Compiler-internal: decrements the RC of a map element, not in stdlib.
     pub const MAP_DECREF_ELEMENT: &str = "miri_rt_map_decref_element";
@@ -216,6 +218,7 @@ pub mod rt {
         MAP_GET_CHECKED,
         MAP_SET_VAL_DROP_FN,
         MAP_SET_KEY_DROP_FN,
+        MAP_SET_VAL_CLONE_FN,
         MAP_DECREF_ELEMENT,
         // Set
         SET_NEW,

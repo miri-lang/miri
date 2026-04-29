@@ -53,8 +53,7 @@ public class Map<K, V> implements Iterable, Cloneable
     /// Returns a clone of this map with independent structural ownership.
     ///
     /// Adding or removing keys in the clone does not affect the original and vice versa.
-    /// Primitive values (int, bool, float) and strings are effectively independent.
-    /// Managed object values (custom class instances) are shared by reference count;
-    /// deep cloning of Cloneable map values is not yet implemented.
+    /// Primitive values (int, bool, float) and strings are independent copies.
+    /// Custom class values that implement Cloneable are deep-copied via their clone() method.
     public fn clone() Map<K, V>
         return miri_rt_map_clone(self)

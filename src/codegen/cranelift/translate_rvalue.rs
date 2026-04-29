@@ -593,6 +593,20 @@ impl<'a> FunctionTranslator<'a> {
                                             map_ptr,
                                             drop_fn_addr,
                                         )?;
+                                        if Self::class_implements_cloneable(
+                                            n,
+                                            type_ctx.type_definitions,
+                                        ) {
+                                            let clone_fn_addr = Self::get_custom_clone_thunk_addr(
+                                                builder, ctx, n, ptr_type,
+                                            )?;
+                                            Self::call_rt_map_set_val_clone_fn(
+                                                builder,
+                                                ctx,
+                                                map_ptr,
+                                                clone_fn_addr,
+                                            )?;
+                                        }
                                     }
                                     Some(TypeKind::Array(_, _)) => {
                                         let drop_fn_addr = Self::get_rt_array_decref_element_addr(
