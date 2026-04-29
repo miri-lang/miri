@@ -85,6 +85,7 @@ pub(crate) struct ModuleCtx<'a> {
     pub(crate) rt_array_set_elem_clone_fn_id: Option<cranelift_module::FuncId>,
     pub(crate) rt_list_set_elem_clone_fn_id: Option<cranelift_module::FuncId>,
     pub(crate) rt_set_set_elem_clone_fn_id: Option<cranelift_module::FuncId>,
+    pub(crate) rt_map_set_val_clone_fn_id: Option<cranelift_module::FuncId>,
     /// Cached FuncId for miri_rt_string_free.
     pub(crate) rt_string_free_id: Option<cranelift_module::FuncId>,
     /// Cached FuncId for miri_rt_closure_alloc_track.
@@ -217,6 +218,7 @@ impl<'a> FunctionTranslator<'a> {
             rt_array_set_elem_clone_fn_id: None,
             rt_list_set_elem_clone_fn_id: None,
             rt_set_set_elem_clone_fn_id: None,
+            rt_map_set_val_clone_fn_id: None,
             rt_string_free_id: None,
             rt_closure_alloc_track_id: None,
             rt_closure_free_track_id: None,
@@ -1033,6 +1035,26 @@ impl<'a> FunctionTranslator<'a> {
             &[pt, pt],
             &[],
             &[set_ptr, fn_ptr],
+        )?;
+        Ok(())
+    }
+
+    /// Calls `miri_rt_map_set_val_clone_fn(map_ptr, fn_ptr)`.
+    pub(crate) fn call_rt_map_set_val_clone_fn(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        map_ptr: Value,
+        fn_ptr: Value,
+    ) -> Result<(), String> {
+        let pt = builder.func.dfg.value_type(map_ptr);
+        Self::call_cached_func(
+            builder,
+            ctx.module,
+            &mut ctx.rt_map_set_val_clone_fn_id,
+            rt::MAP_SET_VAL_CLONE_FN,
+            &[pt, pt],
+            &[],
+            &[map_ptr, fn_ptr],
         )?;
         Ok(())
     }
@@ -2561,6 +2583,7 @@ impl<'a> FunctionTranslator<'a> {
                 rt_array_set_elem_clone_fn_id: None,
                 rt_list_set_elem_clone_fn_id: None,
                 rt_set_set_elem_clone_fn_id: None,
+                rt_map_set_val_clone_fn_id: None,
                 rt_string_free_id: None,
                 rt_closure_alloc_track_id: None,
                 rt_closure_free_track_id: None,
@@ -3228,6 +3251,7 @@ impl<'a> FunctionTranslator<'a> {
                 rt_array_set_elem_clone_fn_id: None,
                 rt_list_set_elem_clone_fn_id: None,
                 rt_set_set_elem_clone_fn_id: None,
+                rt_map_set_val_clone_fn_id: None,
                 rt_string_free_id: None,
                 rt_closure_alloc_track_id: None,
                 rt_closure_free_track_id: None,
