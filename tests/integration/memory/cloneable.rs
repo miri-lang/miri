@@ -697,6 +697,71 @@ fn main()
 }
 
 // ─────────────────────────────────────────────
+// Deep clone of Map<String, custom class>: task 6.2c
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_map_of_custom_objects_clone_is_deep() {
+    // Cloning a Map<String, Point> must deep-copy the values: mutating an entry
+    // of the clone must NOT affect the original map.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.memory
+use system.collections.map
+
+class Point implements Cloneable
+    var x int
+    var y int
+
+    fn init(x int, y int)
+        self.x = x
+        self.y = y
+
+    public fn clone() Point
+        return Point(self.x, self.y)
+
+let m = {"a": Point(1, 2)}
+let n = m.clone()
+var p = n["a"]
+p.x = 99
+let orig = m["a"]
+println(f"{orig.x}")
+"#,
+        "1",
+    );
+}
+
+#[test]
+fn test_map_of_custom_objects_clone_no_leak() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.memory
+use system.collections.map
+
+class Point implements Cloneable
+    var x int
+    var y int
+
+    fn init(x int, y int)
+        self.x = x
+        self.y = y
+
+    public fn clone() Point
+        return Point(self.x, self.y)
+
+fn main()
+    let m = {"a": Point(3, 4)}
+    let n = m.clone()
+    let entry = n["a"]
+    println(f"{entry.x}")
+"#,
+        "3",
+    );
+}
+
+// ─────────────────────────────────────────────
 // Error: missing clone() prevents implementing Cloneable
 // ─────────────────────────────────────────────
 

@@ -60,6 +60,10 @@ pub struct MiriMap {
     /// Drop function for managed keys: `fn(key_ptr: *mut u8)`.
     /// Zero means keys are plain (no RC management on removal).
     key_drop_fn: usize,
+    /// Clone function for Cloneable values: `fn(val_ptr: *mut u8) -> *mut u8`.
+    /// When non-zero, `miri_rt_map_clone` calls this per entry to produce an
+    /// independent deep copy instead of IncRef-ing the shared pointer.
+    val_clone_fn: usize,
 }
 
 const STRUCT_SIZE: usize = std::mem::size_of::<MiriMap>();
@@ -485,6 +489,7 @@ pub mod ffi {
         (*map).key_kind = key_kind;
         (*map).val_drop_fn = 0;
         (*map).key_drop_fn = 0;
+        (*map).val_clone_fn = 0;
         map
     }
 
@@ -634,6 +639,19 @@ pub mod ffi {
         }
     }
 
+    /// Sets the clone function for Cloneable values.
+    ///
+    /// When non-zero, `miri_rt_map_clone` calls this function on each value pointer
+    /// to produce an independent deep copy instead of IncRef-ing the shared pointer.
+    /// Must be called after `miri_rt_map_new` when values are Cloneable objects.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_map_set_val_clone_fn(ptr: *mut MiriMap, fn_ptr: usize) {
+        if !ptr.is_null() {
+            (*ptr).val_clone_fn = fn_ptr;
+        }
+    }
+
     /// Returns the key at the nth occupied slot (0-based sequential index).
     ///
     /// This enables iteration over map keys via `element_at`.
@@ -737,22 +755,39 @@ pub mod ffi {
         }
         (*new_map).val_drop_fn = src.val_drop_fn;
         (*new_map).key_drop_fn = src.key_drop_fn;
+        (*new_map).val_clone_fn = src.val_clone_fn;
         if !src.states.is_null() && src.capacity > 0 {
             for i in 0..src.capacity {
                 if *src.states.add(i) == SLOT_OCCUPIED {
                     let key = src.keys.add(i * src.key_size);
                     let val = src.values.add(i * src.value_size.max(1));
-                    (*new_map).set(key, val);
+
+                    if src.val_clone_fn != 0 && src.value_size > 0 {
+                        // Deep clone: call clone fn to produce an independent copy,
+                        // then insert the new pointer instead of IncRef-ing the original.
+                        let clone_fn: unsafe extern "C" fn(*mut u8) -> *mut u8 =
+                            std::mem::transmute(src.val_clone_fn);
+                        let src_val_ptr = *(val as *const usize);
+                        let new_val_ptr = if src_val_ptr != 0 {
+                            clone_fn(src_val_ptr as *mut u8) as usize
+                        } else {
+                            0usize
+                        };
+                        (*new_map).set(key, &new_val_ptr as *const usize as *const u8);
+                    } else {
+                        (*new_map).set(key, val);
+                        if src.val_drop_fn != 0 && src.value_size > 0 {
+                            let val_ptr = *(val as *const usize);
+                            if val_ptr != 0 {
+                                crate::rc::incref(val_ptr as *mut u8);
+                            }
+                        }
+                    }
+
                     if src.key_drop_fn != 0 && src.key_size > 0 {
                         let key_ptr = *(key as *const usize);
                         if key_ptr != 0 {
                             crate::rc::incref(key_ptr as *mut u8);
-                        }
-                    }
-                    if src.val_drop_fn != 0 && src.value_size > 0 {
-                        let val_ptr = *(val as *const usize);
-                        if val_ptr != 0 {
-                            crate::rc::incref(val_ptr as *mut u8);
                         }
                     }
                 }
