@@ -69,7 +69,7 @@ println(f"{c[0]}")
 println(f"{c[1]}")
 println(f"{c[2]}")
 "#,
-        "1",
+        "1\n2\n3",
     );
 }
 
@@ -758,6 +758,116 @@ fn main()
     println(f"{entry.x}")
 "#,
         "3",
+    );
+}
+
+// ─────────────────────────────────────────────
+// 6.3: push to clone does not affect original
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_list_clone_push_to_clone_does_not_affect_original() {
+    // Plan 6.3 exact example: clone a list, push to the clone,
+    // original must still have its original length.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.memory
+use system.collections.list
+
+var a = List<int>([1, 2, 3])
+var b = a.clone()
+b.push(4)
+println(f"{a.length()}")
+"#,
+        "3",
+    );
+}
+
+// ─────────────────────────────────────────────
+// 6.3: struct with managed (List) field — deep copy, independent lifecycle
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_struct_managed_list_field_clone_is_deep() {
+    // Bag.clone() deep-copies its List field. Pushing to the clone's list
+    // must NOT change the original's list length.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.memory
+use system.collections.list
+
+class Bag implements Cloneable
+    var items [int]
+
+    fn init(items [int])
+        self.items = items
+
+    public fn clone() Bag
+        return Bag(self.items.clone())
+
+var a = Bag(List([1, 2, 3]))
+var b = a.clone()
+b.items.push(4)
+println(f"{a.items.length()}")
+"#,
+        "3",
+    );
+}
+
+#[test]
+fn test_struct_managed_list_field_clone_no_leak() {
+    // Both the original and the clone must be freed without leaks.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.memory
+use system.collections.list
+
+class Bag implements Cloneable
+    var items [int]
+
+    fn init(items [int])
+        self.items = items
+
+    public fn clone() Bag
+        return Bag(self.items.clone())
+
+fn main()
+    var a = Bag(List([1, 2]))
+    let b = a.clone()
+    println(f"{b.items.length()}")
+"#,
+        "2",
+    );
+}
+
+#[test]
+fn test_struct_string_field_clone_no_double_free() {
+    // Clone of a struct with a String field must deep-copy the String so
+    // both the original and the clone have independent RC lifecycles.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.memory
+
+class Tagged implements Cloneable
+    var tag String
+
+    fn init(tag String)
+        self.tag = tag
+
+    public fn clone() Tagged
+        return Tagged(self.tag.clone())
+
+fn main()
+    let a = Tagged("hello")
+    let b = a.clone()
+    println(a.tag)
+    println(b.tag)
+"#,
+        "hello\nhello",
     );
 }
 
