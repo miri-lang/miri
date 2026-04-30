@@ -89,6 +89,21 @@ impl<'a> UseAfterMoveChecker<'a> {
                 for decl in decls {
                     if let Some(init) = &decl.initializer {
                         self.check_expr(init, consumed);
+                        // §7.5: assignment of a resource type is a move — mark the
+                        // source identifier consumed regardless of scope.
+                        if let ExpressionKind::Identifier(src, _) = &init.node {
+                            if let Some(ty) = self.types.get(&init.id) {
+                                if is_resource(&ty.kind, self.type_definitions) {
+                                    consumed.insert(
+                                        src.clone(),
+                                        ConsumedInfo {
+                                            by_fn: format!("assignment to '{}'", decl.name),
+                                            at_span: init.span,
+                                        },
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -332,16 +347,16 @@ impl<'a> UseAfterMoveChecker<'a> {
         consumed: &mut HashMap<String, ConsumedInfo>,
     ) {
         match &arg.node {
-            ExpressionKind::Identifier(name, _) => {
-                if !consumed.contains_key(name.as_str()) && self.should_consume_expr(arg) {
-                    consumed.insert(
-                        name.clone(),
-                        ConsumedInfo {
-                            by_fn: fn_name.to_string(),
-                            at_span: arg.span,
-                        },
-                    );
-                }
+            ExpressionKind::Identifier(name, _)
+                if !consumed.contains_key(name.as_str()) && self.should_consume_expr(arg) =>
+            {
+                consumed.insert(
+                    name.clone(),
+                    ConsumedInfo {
+                        by_fn: fn_name.to_string(),
+                        at_span: arg.span,
+                    },
+                );
             }
             ExpressionKind::NamedArgument(_, val) => {
                 if let ExpressionKind::Identifier(name, _) = &val.node {
