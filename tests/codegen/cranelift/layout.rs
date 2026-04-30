@@ -216,6 +216,7 @@ fn make_struct(fields: Vec<(&str, TypeKind)>) -> StructDefinition {
             })
             .collect(),
         generics: None,
+        has_drop: false,
         module: String::new(),
     }
 }
@@ -520,6 +521,7 @@ fn test_class_is_pointer_sized() {
             methods: BTreeMap::new(),
             module: String::new(),
             is_abstract: false,
+            has_drop: false,
         }),
     );
 
@@ -568,6 +570,7 @@ fn test_class_field_layout_uses_pointer_slots() {
             methods: BTreeMap::new(),
             module: String::new(),
             is_abstract: false,
+            has_drop: false,
         }),
     );
 

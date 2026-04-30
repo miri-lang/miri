@@ -224,6 +224,16 @@ impl<'source> Parser<'source> {
 
         let typ = match self.type_expression()? {
             Some(typ) => Box::new(typ),
+            None if name == "self" => {
+                // `fn drop(self)` — bare self with no type annotation.
+                // Synthesize a `Self` type so the type checker can resolve it.
+                Box::new(crate::ast::factory::type_expr_non_null(
+                    crate::ast::factory::make_type(crate::ast::types::TypeKind::Custom(
+                        "Self".to_string(),
+                        None,
+                    )),
+                ))
+            }
             None => {
                 // Miri doesn't support untyped parameters
                 return Err(self.error_missing_type_expression());

@@ -47,12 +47,23 @@ use crate::type_checker::context::{
 };
 use crate::type_checker::TypeChecker;
 
+/// Returns true if a function declaration statement is `fn drop(self)`.
+fn is_drop_method(stmt: &Statement) -> bool {
+    if let StatementKind::FunctionDeclaration(decl) = &stmt.node {
+        if decl.name == "drop" && decl.params.len() == 1 && decl.params[0].name == "self" {
+            return true;
+        }
+    }
+    false
+}
+
 impl TypeChecker {
     pub(crate) fn check_struct(
         &mut self,
         name_expr: &Expression,
         generics: &Option<Vec<Expression>>,
         fields: &[Expression],
+        methods: &[Statement],
         visibility: &MemberVisibility,
         context: &mut Context,
     ) {
@@ -135,6 +146,8 @@ impl TypeChecker {
             }
         }
 
+        let has_drop = methods.iter().any(is_drop_method);
+
         let struct_def = StructDefinition {
             fields: fields_vec,
             generics: if generic_defs.is_empty() {
@@ -142,6 +155,7 @@ impl TypeChecker {
             } else {
                 Some(generic_defs)
             },
+            has_drop,
             module: self.current_module.clone(),
         };
 

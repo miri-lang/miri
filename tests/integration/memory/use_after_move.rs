@@ -361,3 +361,108 @@ println(f"{x.length()}")
         "consumed",
     );
 }
+
+// ─────────────────────────────────────────────
+// §7.4: Resource type consumed twice in function body → error
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_resource_consumed_twice_in_function_body() {
+    assert_compiler_error(
+        r#"
+use system.io
+
+struct Conn
+    handle int
+    fn drop(self)
+        return
+
+fn sink(c Conn)
+    return
+
+fn handle(c Conn)
+    sink(c)
+    sink(c)
+
+handle(Conn(handle: 1))
+"#,
+        "consumed",
+    );
+}
+
+// ─────────────────────────────────────────────
+// §7.4: Managed-type function body — no error (no resource type)
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_managed_type_not_consumed_in_function_body() {
+    assert_runs(
+        r#"
+use system.io
+use system.collections.list
+
+fn step(l [int])
+    return
+
+fn process(l [int])
+    step(l)
+    step(l)
+
+process(List([1, 2, 3]))
+println("ok")
+"#,
+    );
+}
+
+// ─────────────────────────────────────────────
+// §7.4: Resource consumed at top level → error (unchanged from §7.1)
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_resource_consumed_at_top_level_error() {
+    assert_compiler_error(
+        r#"
+use system.io
+
+struct Res
+    x int
+    fn drop(self)
+        return
+
+fn sink(r Res)
+    return
+
+let r = Res(x: 1)
+sink(r)
+sink(r)
+"#,
+        "consumed",
+    );
+}
+
+// ─────────────────────────────────────────────
+// §7.4: Resource consumed once in function body → ok
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_resource_consumed_once_in_function_body_ok() {
+    assert_runs(
+        r#"
+use system.io
+
+struct Res
+    x int
+    fn drop(self)
+        return
+
+fn sink(r Res)
+    return
+
+fn process(r Res)
+    sink(r)
+
+process(Res(x: 1))
+println("ok")
+"#,
+    );
+}

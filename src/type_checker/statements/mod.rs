@@ -93,8 +93,8 @@ impl TypeChecker {
                 },
                 context,
             ),
-            StatementKind::Struct(name, generics, fields, vis) => {
-                self.check_struct(name, generics, fields, vis, context)
+            StatementKind::Struct(name, generics, fields, methods, vis) => {
+                self.check_struct(name, generics, fields, methods, vis, context)
             }
             StatementKind::Enum(name, generics, variants, vis) => {
                 self.check_enum(name, generics, variants, vis, context)
@@ -291,6 +291,7 @@ impl TypeChecker {
                                 TypeDefinition::Struct(StructDefinition {
                                     fields: vec![],
                                     generics: None,
+                                    has_drop: false,
                                     module: self.current_module.clone(),
                                 }),
                             );

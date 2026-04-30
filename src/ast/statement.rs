@@ -120,10 +120,12 @@ pub enum StatementKind {
     ),
 
     /// A struct declaration.
+    /// (name, generics, fields, methods, visibility)
     Struct(
         Box<Expression>,
         Option<Vec<Expression>>,
         Vec<Expression>,
+        Vec<Statement>,
         MemberVisibility,
     ),
 
