@@ -244,3 +244,120 @@ println(f"{x.length()}")
         "consumed",
     );
 }
+
+// ─────────────────────────────────────────────
+// Map<String, int>: use after move → error
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_map_use_after_move_error() {
+    assert_compiler_error(
+        r#"
+use system.io
+use system.collections.map
+
+fn consume(m Map<String, int>)
+    return
+
+let m = {"a": 1, "b": 2}
+consume(m)
+println(f"{m.length()}")
+"#,
+        "consumed",
+    );
+}
+
+// ─────────────────────────────────────────────
+// Set<int>: use after move → error
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_set_use_after_move_error() {
+    assert_compiler_error(
+        r#"
+use system.io
+use system.collections.set
+
+fn consume(s Set<int>)
+    return
+
+let s = {1, 2, 3}
+consume(s)
+println(f"{s.length()}")
+"#,
+        "consumed",
+    );
+}
+
+// ─────────────────────────────────────────────
+// If branch: consume only in then-branch → no error after if
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_consume_in_then_branch_only_not_flagged_after_if() {
+    assert_runs(
+        r#"
+use system.io
+use system.collections.list
+
+fn process(x [int])
+    return
+
+var flag = true
+let x = List([1, 2, 3])
+if flag
+    process(x)
+println("ok")
+"#,
+    );
+}
+
+// ─────────────────────────────────────────────
+// If/else: consume only in then-branch → else branch must not see x as consumed
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_else_branch_not_poisoned_by_then_consume() {
+    assert_runs(
+        r#"
+use system.io
+use system.collections.list
+
+fn process(x [int])
+    return
+
+var flag = true
+let x = List([1, 2, 3])
+if flag
+    process(x)
+else
+    println(f"{x.length()}")
+"#,
+    );
+}
+
+// ─────────────────────────────────────────────
+// If/else: consume in BOTH branches → use after if is an error
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_consume_in_both_branches_is_consumed_after_if() {
+    assert_compiler_error(
+        r#"
+use system.io
+use system.collections.list
+
+fn process(x [int])
+    return
+
+var flag = true
+let x = List([1, 2, 3])
+if flag
+    process(x)
+else
+    process(x)
+println(f"{x.length()}")
+"#,
+        "consumed",
+    );
+}
