@@ -37,6 +37,7 @@ pub mod expressions;
 mod generics;
 mod operators;
 pub mod statements;
+pub mod use_after_move;
 pub mod utils;
 
 use context::{Context, SymbolInfo, TypeDefinition, TypeRelation};
@@ -203,6 +204,17 @@ impl TypeChecker {
             } else {
                 self.check_statement(statement, &mut context);
             }
+        }
+
+        // Pass 3: use-after-move analysis — runs only when type checking is clean
+        // so that we don't emit spurious "consumed" errors on top of type errors.
+        if self.errors.is_empty() {
+            let uam_errors = use_after_move::UseAfterMoveChecker::new(
+                &self.types,
+                &self.global_type_definitions,
+            )
+            .check_program(program);
+            self.errors.extend(uam_errors);
         }
 
         if self.errors.is_empty() {
