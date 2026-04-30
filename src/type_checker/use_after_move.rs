@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use super::context::TypeDefinition;
 use super::utils::is_auto_copy;
 
+#[derive(Clone)]
 struct ConsumedInfo {
     by_fn: String,
     #[allow(dead_code)]
@@ -87,10 +88,23 @@ impl<'a> UseAfterMoveChecker<'a> {
 
             StatementKind::If(cond, then, else_, _) => {
                 self.check_expr(cond, consumed);
-                self.check_stmt(then, consumed);
+
+                // Each branch gets a snapshot of the pre-branch consumed state so
+                // that consuming in the then-branch doesn't poison the else-branch
+                // or vice-versa.  After the if: only variables consumed in BOTH
+                // branches are "definitely consumed".
+                let mut then_consumed = consumed.clone();
+                self.check_stmt(then, &mut then_consumed);
+
+                let mut else_consumed = consumed.clone();
                 if let Some(e) = else_ {
-                    self.check_stmt(e, consumed);
+                    self.check_stmt(e, &mut else_consumed);
                 }
+
+                *consumed = then_consumed
+                    .into_iter()
+                    .filter(|(k, _)| else_consumed.contains_key(k))
+                    .collect();
             }
 
             StatementKind::While(cond, body, _) => {
@@ -230,11 +244,31 @@ impl<'a> UseAfterMoveChecker<'a> {
 
             ExpressionKind::Match(scrutinee, branches) => {
                 self.check_expr(scrutinee, consumed);
+
+                // Each arm is an independent execution path.  A variable is
+                // "definitely consumed" after a match only if it is consumed in
+                // every arm; otherwise we conservatively leave it alive.
+                let pre_consumed = consumed.clone();
+                let mut intersection: Option<HashMap<String, ConsumedInfo>> = None;
+
                 for branch in branches {
+                    let mut arm_consumed = pre_consumed.clone();
                     if let Some(guard) = &branch.guard {
-                        self.check_expr(guard, consumed);
+                        self.check_expr(guard, &mut arm_consumed);
                     }
-                    self.check_stmt(&branch.body, consumed);
+                    self.check_stmt(&branch.body, &mut arm_consumed);
+
+                    intersection = Some(match intersection.take() {
+                        None => arm_consumed,
+                        Some(acc) => acc
+                            .into_iter()
+                            .filter(|(k, _)| arm_consumed.contains_key(k))
+                            .collect(),
+                    });
+                }
+
+                if let Some(result) = intersection {
+                    *consumed = result;
                 }
             }
 
