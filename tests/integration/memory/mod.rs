@@ -16,3 +16,4 @@ pub mod match_arms;
 pub mod nested_calls;
 pub mod reassignment;
 pub mod temporaries;
+pub mod use_after_move;
