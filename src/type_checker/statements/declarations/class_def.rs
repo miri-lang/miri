@@ -651,6 +651,9 @@ impl TypeChecker {
         }
 
         // Create and register class definition BEFORE checking method bodies
+        let has_drop = methods
+            .get("drop")
+            .is_some_and(|m| m.params.len() == 1 && m.params[0].0 == "self");
         let class_def = ClassDefinition {
             name: name.clone(),
             generics: generic_defs,
@@ -660,6 +663,7 @@ impl TypeChecker {
             methods,
             module: self.current_module.clone(),
             is_abstract,
+            has_drop,
         };
 
         // scopes.len() == 2 because we're in [base_scope, class_scope]

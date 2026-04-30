@@ -85,6 +85,8 @@ pub struct StructDefinition {
     pub fields: Vec<(String, Type, MemberVisibility)>,
     pub generics: Option<Vec<GenericDefinition>>,
     pub module: String,
+    /// True if this struct defines `fn drop(self)` (makes it a resource type).
+    pub has_drop: bool,
 }
 
 /// Definition of an enum type.
@@ -145,6 +147,8 @@ pub struct ClassDefinition {
     pub module: String,
     /// Whether this class is abstract.
     pub is_abstract: bool,
+    /// True if this class defines `fn drop(self)` (makes it a resource type).
+    pub has_drop: bool,
 }
 
 /// Definition of a trait type.

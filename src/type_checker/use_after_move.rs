@@ -19,7 +19,7 @@ use crate::error::type_error::{TypeError, TypeErrorKind};
 use std::collections::HashMap;
 
 use super::context::TypeDefinition;
-use super::utils::is_auto_copy;
+use super::utils::{is_auto_copy, is_resource};
 
 #[derive(Clone)]
 struct ConsumedInfo {
@@ -32,6 +32,9 @@ pub struct UseAfterMoveChecker<'a> {
     types: &'a HashMap<usize, Type>,
     type_definitions: &'a HashMap<String, TypeDefinition>,
     errors: Vec<TypeError>,
+    /// True when analysis is inside a function body (vs. top-level script code).
+    /// Resource types are always tracked. Managed types are only tracked at top level.
+    in_function_body: bool,
 }
 
 impl<'a> UseAfterMoveChecker<'a> {
@@ -43,6 +46,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             types,
             type_definitions,
             errors: vec![],
+            in_function_body: false,
         }
     }
 
@@ -57,10 +61,19 @@ impl<'a> UseAfterMoveChecker<'a> {
 
     fn check_stmt(&mut self, stmt: &Statement, consumed: &mut HashMap<String, ConsumedInfo>) {
         match &stmt.node {
-            // Function bodies are not analyzed: read-only recursive algorithms naturally pass
-            // the same managed value to multiple calls, which would produce false positives.
-            // Use-after-move analysis applies to top-level (script-style) code only.
-            StatementKind::FunctionDeclaration(_) => {}
+            // Analyze function bodies with resource-only tracking: managed types are never
+            // flagged inside function bodies (read-only recursive algorithms pass the same
+            // managed value to multiple calls without consuming it). Only resource types
+            // (those defining `fn drop(self)`) are tracked.
+            StatementKind::FunctionDeclaration(decl) => {
+                if let Some(body) = &decl.body {
+                    let prev = self.in_function_body;
+                    self.in_function_body = true;
+                    let mut fn_consumed: HashMap<String, ConsumedInfo> = HashMap::new();
+                    self.check_stmt(body, &mut fn_consumed);
+                    self.in_function_body = prev;
+                }
+            }
 
             StatementKind::Block(stmts) => {
                 for s in stmts {
@@ -124,7 +137,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             | StatementKind::Use(_, _)
             | StatementKind::Type(_, _)
             | StatementKind::Enum(_, _, _, _)
-            | StatementKind::Struct(_, _, _, _)
+            | StatementKind::Struct(_, _, _, _, _)
             | StatementKind::Class(_)
             | StatementKind::Trait(_, _, _, _, _)
             | StatementKind::RuntimeFunctionDeclaration(_, _, _, _) => {}
@@ -308,7 +321,10 @@ impl<'a> UseAfterMoveChecker<'a> {
     }
 
     /// If `arg` is a plain `Identifier` (or a `NamedArgument` wrapping one) that refers
-    /// to a managed-type variable not already consumed, mark it as consumed by `fn_name`.
+    /// to a variable that should be consumed, mark it as consumed by `fn_name`.
+    ///
+    /// At top level: any managed type is consumed (existing §7.1 behaviour).
+    /// Inside a function body: only resource types (those with `fn drop(self)`) are consumed.
     fn maybe_consume_arg(
         &self,
         arg: &Expression,
@@ -317,7 +333,7 @@ impl<'a> UseAfterMoveChecker<'a> {
     ) {
         match &arg.node {
             ExpressionKind::Identifier(name, _) => {
-                if !consumed.contains_key(name.as_str()) && self.is_managed_expr(arg) {
+                if !consumed.contains_key(name.as_str()) && self.should_consume_expr(arg) {
                     consumed.insert(
                         name.clone(),
                         ConsumedInfo {
@@ -329,7 +345,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             }
             ExpressionKind::NamedArgument(_, val) => {
                 if let ExpressionKind::Identifier(name, _) = &val.node {
-                    if !consumed.contains_key(name.as_str()) && self.is_managed_expr(val) {
+                    if !consumed.contains_key(name.as_str()) && self.should_consume_expr(val) {
                         consumed.insert(
                             name.clone(),
                             ConsumedInfo {
@@ -344,11 +360,22 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
     }
 
-    fn is_managed_expr(&self, expr: &Expression) -> bool {
+    /// Returns true if passing this expression should consume it.
+    ///
+    /// Rule:
+    /// - Resource types (`fn drop(self)` present): always consumed, at all call sites.
+    /// - Other managed (non-auto-copy) types: consumed only at top level (§7.1 behaviour).
+    /// - Inside a function body: only resource types are consumed.
+    fn should_consume_expr(&self, expr: &Expression) -> bool {
         if let Some(ty) = self.types.get(&expr.id) {
-            !is_auto_copy(&ty.kind, self.type_definitions)
+            if is_resource(&ty.kind, self.type_definitions) {
+                true
+            } else if self.in_function_body {
+                false
+            } else {
+                !is_auto_copy(&ty.kind, self.type_definitions)
+            }
         } else {
-            // Unknown type — conservative: don't flag as managed to avoid false positives.
             false
         }
     }

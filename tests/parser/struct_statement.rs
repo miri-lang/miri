@@ -2,10 +2,11 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use super::utils::{parser_error_test, parser_test, run_parser_error_tests};
+use miri::ast::common::{FunctionProperties, Parameter};
 use miri::ast::factory::{
-    generic_type, generic_type_with_kind, identifier, struct_member, struct_statement, type_bool,
-    type_custom, type_expr_non_null, type_expr_option, type_float, type_int, type_list, type_map,
-    type_string,
+    block, function_declaration, generic_type, generic_type_with_kind, identifier, parameter,
+    return_statement, struct_member, struct_statement, type_bool, type_custom, type_expr_non_null,
+    type_expr_option, type_float, type_int, type_list, type_map, type_string,
 };
 use miri::ast::types::TypeDeclarationKind;
 use miri::ast::MemberVisibility;
@@ -24,6 +25,7 @@ struct Point: x int, y int
                 struct_member("x", type_expr_non_null(type_int())),
                 struct_member("y", type_expr_non_null(type_int())),
             ],
+            vec![],
             MemberVisibility::Public,
         )],
     );
@@ -44,6 +46,7 @@ struct Point
                 struct_member("x", type_expr_non_null(type_int())),
                 struct_member("y", type_expr_non_null(type_int())),
             ],
+            vec![],
             MemberVisibility::Public,
         )],
     );
@@ -69,6 +72,7 @@ struct UserProfile
                     type_expr_non_null(type_map(type_string(), type_bool())),
                 ),
             ],
+            vec![],
             MemberVisibility::Public,
         )],
     );
@@ -82,6 +86,7 @@ fn test_struct_with_single_member() {
             identifier("Wrapper"),
             None,
             vec![struct_member("value", type_expr_non_null(type_float()))],
+            vec![],
             MemberVisibility::Public,
         )],
     );
@@ -137,6 +142,7 @@ fn test_private_struct() {
             identifier("Point"),
             None,
             vec![struct_member("x", type_expr_non_null(type_int()))],
+            vec![],
             MemberVisibility::Private,
         )],
     );
@@ -153,6 +159,7 @@ fn test_generic_struct() {
                 "value",
                 type_expr_option(type_custom("T", None)),
             )],
+            vec![],
             MemberVisibility::Public,
         )],
     );
@@ -169,6 +176,7 @@ fn test_struct_with_multiple_generic_parameters() {
                 struct_member("key", type_expr_non_null(type_custom("K", None))),
                 struct_member("value", type_expr_non_null(type_custom("V", None))),
             ],
+            vec![],
             MemberVisibility::Public,
         )],
     );
@@ -189,6 +197,7 @@ fn test_generic_struct_with_constraint() {
                 "value",
                 type_expr_non_null(type_custom("T", None)),
             )],
+            vec![],
             MemberVisibility::Public,
         )],
     );
@@ -208,6 +217,7 @@ fn test_struct_with_nested_generic_member() {
                     Some(vec![type_expr_non_null(type_custom("T", None))]),
                 ))),
             )],
+            vec![],
             MemberVisibility::Public,
         )],
     );
@@ -225,5 +235,74 @@ struct Empty
 ",
         ],
         &SyntaxErrorKind::MissingStructMembers,
+    );
+}
+
+#[test]
+fn test_struct_with_drop_method() {
+    let self_param = parameter(
+        "self".into(),
+        type_expr_non_null(type_custom("Self", None)),
+        None,
+        None,
+    );
+    parser_test(
+        "
+struct Conn
+    handle int
+    fn drop(self)
+        return
+",
+        vec![struct_statement(
+            identifier("Conn"),
+            None,
+            vec![struct_member("handle", type_expr_non_null(type_int()))],
+            vec![function_declaration(
+                "drop",
+                None,
+                vec![self_param],
+                None,
+                block(vec![return_statement(None)]),
+                FunctionProperties {
+                    visibility: MemberVisibility::Public,
+                    ..Default::default()
+                },
+            )],
+            MemberVisibility::Public,
+        )],
+    );
+}
+
+#[test]
+fn test_struct_with_only_method_no_fields() {
+    let self_param = parameter(
+        "self".into(),
+        type_expr_non_null(type_custom("Self", None)),
+        None,
+        None,
+    );
+    parser_test(
+        "
+struct Token
+    fn drop(self)
+        return
+",
+        vec![struct_statement(
+            identifier("Token"),
+            None,
+            vec![],
+            vec![function_declaration(
+                "drop",
+                None,
+                vec![self_param],
+                None,
+                block(vec![return_statement(None)]),
+                FunctionProperties {
+                    visibility: MemberVisibility::Public,
+                    ..Default::default()
+                },
+            )],
+            MemberVisibility::Public,
+        )],
     );
 }

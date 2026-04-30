@@ -18,6 +18,57 @@ use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
 use crate::error::type_error::TypeError;
 
+/// Determines whether a type is a resource — i.e., it defines `fn drop(self)` or
+/// transitively contains a field whose type is a resource.
+///
+/// Resource types are subject to use-after-move tracking inside function bodies.
+/// Managed types (String, List, collections, RC'd classes) are NOT resources.
+pub fn is_resource(
+    kind: &TypeKind,
+    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+) -> bool {
+    is_resource_inner(
+        kind,
+        type_definitions,
+        &mut std::collections::HashSet::new(),
+    )
+}
+
+fn is_resource_inner<'a>(
+    kind: &'a TypeKind,
+    type_definitions: &'a std::collections::HashMap<String, TypeDefinition>,
+    visited: &mut std::collections::HashSet<&'a str>,
+) -> bool {
+    match kind {
+        TypeKind::Custom(name, _) => {
+            if !visited.insert(name.as_str()) {
+                return false;
+            }
+            match type_definitions.get(name) {
+                Some(TypeDefinition::Struct(def)) => {
+                    if def.has_drop {
+                        return true;
+                    }
+                    // Transitively check fields
+                    def.fields
+                        .iter()
+                        .any(|(_, ty, _)| is_resource_inner(&ty.kind, type_definitions, visited))
+                }
+                Some(TypeDefinition::Class(def)) => {
+                    if def.has_drop {
+                        return true;
+                    }
+                    def.fields
+                        .iter()
+                        .any(|(_, fi)| is_resource_inner(&fi.ty.kind, type_definitions, visited))
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
 /// Determines whether a type is auto-copy given available type definitions.
 ///
 /// A type is auto-copy when:

@@ -53,6 +53,7 @@ fn register_gpu_types(types: &mut HashMap<String, TypeDefinition>) {
             ("z".to_string(), int_type(), MemberVisibility::Public),
         ],
         generics: None,
+        has_drop: false,
         module: "std".to_string(),
     });
     types.insert("Dim3".to_string(), dim3_def);
@@ -85,6 +86,7 @@ fn register_gpu_types(types: &mut HashMap<String, TypeDefinition>) {
                 ),
             ],
             generics: None,
+            has_drop: false,
             module: "std".to_string(),
         }),
     );
@@ -95,6 +97,7 @@ fn register_gpu_types(types: &mut HashMap<String, TypeDefinition>) {
         TypeDefinition::Struct(StructDefinition {
             fields: vec![],
             generics: None,
+            has_drop: false,
             module: "std".to_string(),
         }),
     );
@@ -112,6 +115,7 @@ fn register_async_types(types: &mut HashMap<String, TypeDefinition>) {
                 constraint: None,
                 kind: TypeDeclarationKind::None,
             }]),
+            has_drop: false,
             module: "std".to_string(),
         }),
     );

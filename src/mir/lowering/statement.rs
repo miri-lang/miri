@@ -139,7 +139,7 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
         StatementKind::For(decls, iterable, body) => {
             lower_for(ctx, &stmt.span, decls, iterable, body)?;
         }
-        StatementKind::Struct(name_expr, _generics, _members, _vis) => {
+        StatementKind::Struct(name_expr, _generics, _members, _methods, _vis) => {
             // Lower struct declaration by looking up the type definition from type checker
             if let ExpressionKind::Identifier(name, _) = &name_expr.node {
                 if let Some(TypeDefinition::Struct(def)) =

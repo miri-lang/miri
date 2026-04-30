@@ -120,7 +120,7 @@ fn normalize_stmt(stmt: &mut Statement) {
             }
         }
 
-        StatementKind::Struct(name, generics, fields, _) => {
+        StatementKind::Struct(name, generics, fields, methods, _) => {
             normalize_expr(name);
             if let Some(gens) = generics {
                 for g in gens.iter_mut() {
@@ -129,6 +129,9 @@ fn normalize_stmt(stmt: &mut Statement) {
             }
             for f in fields.iter_mut() {
                 normalize_expr(f);
+            }
+            for m in methods.iter_mut() {
+                normalize_stmt(m);
             }
         }
 
