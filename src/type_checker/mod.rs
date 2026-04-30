@@ -284,12 +284,13 @@ impl TypeChecker {
                                 methods: BTreeMap::new(),
                                 module: self.current_module.clone(),
                                 is_abstract: class_data.is_abstract,
+                                has_drop: false,
                             }),
                         );
                     }
                 }
             }
-            StatementKind::Struct(name_expr, generics_expr, _, _) => {
+            StatementKind::Struct(name_expr, generics_expr, _, _, _) => {
                 if let Ok(name) = self.extract_type_name(name_expr) {
                     if !self.global_type_definitions.contains_key(name) {
                         let generics = generics_expr
@@ -301,6 +302,7 @@ impl TypeChecker {
                             TypeDefinition::Struct(context::StructDefinition {
                                 fields: vec![],
                                 generics,
+                                has_drop: false,
                                 module: self.current_module.clone(),
                             }),
                         );

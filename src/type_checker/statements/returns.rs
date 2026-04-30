@@ -95,7 +95,7 @@ pub(crate) fn check_returns(stmt: &Statement) -> ReturnStatus {
         | StatementKind::Break
         | StatementKind::Continue
         | StatementKind::FunctionDeclaration(_)
-        | StatementKind::Struct(_, _, _, _)
+        | StatementKind::Struct(_, _, _, _, _)
         | StatementKind::Enum(_, _, _, _)
         | StatementKind::Class(_)
         | StatementKind::Trait(_, _, _, _, _)

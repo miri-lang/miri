@@ -986,12 +986,14 @@ pub fn struct_statement(
     name: Expression,
     generic_types: Option<Vec<Expression>>,
     members: Vec<Expression>,
+    methods: Vec<Statement>,
     visibility: MemberVisibility,
 ) -> Statement {
     stmt(StatementKind::Struct(
         Box::new(name),
         generic_types,
         members,
+        methods,
         visibility,
     ))
 }
