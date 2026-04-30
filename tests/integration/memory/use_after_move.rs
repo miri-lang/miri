@@ -466,3 +466,136 @@ println("ok")
 "#,
     );
 }
+
+// ─────────────────────────────────────────────
+// §7.5: Resource alias then use → error
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_resource_alias_then_use_error() {
+    assert_compiler_error(
+        r#"
+use system.io
+
+struct Conn
+    handle int
+    fn drop(self)
+        return
+
+fn archive(c Conn)
+    return
+
+fn log_conn(c Conn)
+    return
+
+let c = Conn(handle: 1)
+var a = c
+archive(a)
+log_conn(c)
+"#,
+        "consumed",
+    );
+}
+
+// ─────────────────────────────────────────────
+// §7.5: Resource alias then use inside function body → error
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_resource_alias_then_use_in_function_body_error() {
+    assert_compiler_error(
+        r#"
+use system.io
+
+struct Conn
+    handle int
+    fn drop(self)
+        return
+
+fn sink(c Conn)
+    return
+
+fn handle_conn(c Conn)
+    var alias = c
+    sink(c)
+
+handle_conn(Conn(handle: 1))
+"#,
+        "consumed",
+    );
+}
+
+// ─────────────────────────────────────────────
+// §7.5: Managed-type alias still compiles cleanly (deferred to §12.5)
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_managed_alias_compiles_cleanly() {
+    assert_runs(
+        r#"
+use system.io
+use system.collections.list
+
+let xs = List([1, 2, 3])
+var ys = xs
+println(f"{xs.length()}")
+"#,
+    );
+}
+
+// ─────────────────────────────────────────────
+// §7.5: Re-assignment revives a consumed resource alias
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_resource_alias_reassignment_revives() {
+    assert_runs(
+        r#"
+use system.io
+
+struct Conn
+    handle int
+    fn drop(self)
+        return
+
+fn sink(c Conn)
+    return
+
+var a = Conn(handle: 1)
+var b = a
+sink(b)
+a = Conn(handle: 2)
+sink(a)
+println("ok")
+"#,
+    );
+}
+
+// ─────────────────────────────────────────────
+// §7.4: Conservative if-without-else: resource consumed only in then-branch
+// is NOT flagged after the if (sound but incomplete — we can't prove the
+// branch always executes, so we leave the variable as "potentially live").
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_resource_conditional_consume_no_else_compiles() {
+    assert_runs(
+        r#"
+use system.io
+
+struct Conn
+    handle int
+    fn drop(self)
+        return
+
+fn sink(c Conn)
+    return
+
+let cond = true
+let c = Conn(handle: 1)
+if cond
+    sink(c)
+println("ok")
+"#,
+    );
+}
