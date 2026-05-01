@@ -51,6 +51,7 @@ When writing tests or standard library code, remember Miri's syntax:
 - **Matching**: Exhaustive `match` is mandatory. Do not use `_` for domain-critical enums.
 - **Standard Library Independence**: The compiler must NOT hardcode any standard library names or have specialized logic for them. Treat them like user code.
 - **Separation of Concerns**: `struct` for data, `trait` for behavior. Avoid "God Objects".
+- **Comments**: Keep comments up-to-date with the code. Remove obsolete comments. Don't add comments that mention phases or tasks from planning documents. Ensure copyright headers are present.
 
 ---
 
