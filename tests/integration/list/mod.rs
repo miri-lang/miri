@@ -4,6 +4,7 @@
 pub use crate::integration::utils;
 
 pub mod construction;
+pub mod cow;
 pub mod edge_cases;
 pub mod errors;
 pub mod indexing_iteration;

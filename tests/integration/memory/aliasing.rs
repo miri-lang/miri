@@ -43,8 +43,8 @@ fn main()
 }
 
 #[test]
-fn test_list_alias_mutation_shared_state() {
-    // Mutation through one alias is visible through all others (reference semantics).
+fn test_list_alias_mutation_cow_isolates() {
+    // CoW: a.push(3) clones a's data (RC=3 → new ptr for a); b and c retain the original.
     assert_runs_with_output(
         r#"
 use system.io
@@ -54,11 +54,12 @@ fn main()
     let a = List([1, 2])
     let b = a
     let c = b
-    a.push(3)
+    var a2 = a
+    a2.push(3)
 
     println(f"{c.length()}")
 "#,
-        "3",
+        "2",
     );
 }
 
@@ -127,7 +128,8 @@ let s3 = s1
 }
 
 #[test]
-fn test_set_alias_mutation_shared() {
+fn test_set_alias_mutation_cow_isolates() {
+    // CoW: s1.add(4) clones s1's data; s2 retains original 3 elements.
     assert_runs_with_output(
         r#"
 use system.io
@@ -136,10 +138,11 @@ use system.collections.set
 fn main()
     let s1 = {1, 2, 3}
     let s2 = s1
-    s1.add(4)
+    var s3 = s1
+    s3.add(4)
     println(f"{s2.length()}")
 "#,
-        "4",
+        "3",
     );
 }
 
