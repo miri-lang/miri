@@ -40,3 +40,30 @@ l.set(5, 99)
 ",
     );
 }
+
+#[test]
+fn list_constructor_rejects_set_arg() {
+    // `List(<set>)` previously type-checked but crashed at runtime (SIGBUS) because
+    // lowering treated the set pointer as a raw array. The type checker now
+    // rejects any non-array argument.
+    assert_compiler_error(
+        "
+use system.collections.list
+
+let l = List({1, 2, 3})
+",
+        "List(...) expects an array literal argument",
+    );
+}
+
+#[test]
+fn list_constructor_rejects_scalar_arg() {
+    assert_compiler_error(
+        "
+use system.collections.list
+
+let l = List(42)
+",
+        "List(...) expects an array literal argument",
+    );
+}

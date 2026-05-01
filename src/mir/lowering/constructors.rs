@@ -510,16 +510,25 @@ pub(crate) fn lower_list_constructor(
     Ok(result_op)
 }
 
-/// Lowers a `Map()` constructor call.
+/// Lowers a `Map()` / `Map(<map-literal>)` constructor call.
 ///
-/// Maps are always constructed empty; entries are inserted via method calls.
+/// Two forms are supported:
+/// - `Map()` / `Map<K, V>()` — allocates an empty map.
+/// - `Map({"a": 1, "b": 2})` — delegates to the map-literal lowering so the
+///   resulting map is populated with the literal's entries (RC handled there).
 pub(crate) fn lower_map_constructor(
     ctx: &mut LoweringContext,
     span: &Span,
     call_expr_id: usize,
-    _args: &[Expression],
+    args: &[Expression],
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
+    if let Some(arg) = args.first() {
+        if matches!(&arg.node, ExpressionKind::Map(_)) {
+            return lower_expression(ctx, arg, dest);
+        }
+    }
+
     let return_ty = if let Some(call_ty) = ctx.type_checker.get_type(call_expr_id) {
         call_ty.clone()
     } else {
@@ -545,17 +554,25 @@ pub(crate) fn lower_map_constructor(
     Ok(result_op)
 }
 
-/// Lowers a `Set()` constructor call (set literal syntax `{1, 2, 3}` is handled
-/// separately; this handles the explicit `Set()` empty constructor form).
+/// Lowers a `Set()` / `Set(<set-literal>)` constructor call.
 ///
-/// Sets are always constructed empty; elements are added via method calls.
+/// Two forms are supported:
+/// - `Set()` / `Set<T>()` — allocates an empty set.
+/// - `Set({1, 2, 3})` — delegates to the set-literal lowering so the resulting
+///   set is populated with the literal's elements (RC handled there).
 pub(crate) fn lower_set_constructor(
     ctx: &mut LoweringContext,
     span: &Span,
     call_expr_id: usize,
-    _args: &[Expression],
+    args: &[Expression],
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
+    if let Some(arg) = args.first() {
+        if matches!(&arg.node, ExpressionKind::Set(_)) {
+            return lower_expression(ctx, arg, dest);
+        }
+    }
+
     let return_ty = if let Some(call_ty) = ctx.type_checker.get_type(call_expr_id) {
         call_ty.clone()
     } else {

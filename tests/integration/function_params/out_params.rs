@@ -3,6 +3,51 @@
 
 use super::utils::*;
 
+// ─── Type-checker error cases ─────────────────────────────────────────────
+
+#[test]
+fn test_out_param_immutable_var_rejected() {
+    assert_compiler_error(
+        r#"
+fn inc(x out int)
+    x = x + 1
+
+let n = 5
+inc(n)
+"#,
+        "immutable",
+    );
+}
+
+#[test]
+fn test_out_param_literal_rejected() {
+    assert_compiler_error(
+        r#"
+fn inc(x out int)
+    x = x + 1
+
+inc(5)
+"#,
+        "non-variable expression",
+    );
+}
+
+#[test]
+fn test_out_param_same_var_twice_rejected() {
+    assert_compiler_error(
+        r#"
+fn swap(a out int, b out int)
+    let tmp = a
+    a = b
+    b = tmp
+
+var x = 1
+swap(x, x)
+"#,
+        "same variable passed twice",
+    );
+}
+
 // ─── Codegen tests (AC 8.3) ───────────────────────────────────────────────
 
 #[test]
@@ -126,5 +171,24 @@ fn main()
     println(f"{f}")
 "#,
         "true",
+    );
+}
+
+#[test]
+fn test_out_param_float_writeback() {
+    // f32 out param — exercises the float stack-slot path in codegen.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn double(x out f32)
+    x = x * 2.0
+
+fn main()
+    var n = 3.5
+    double(n)
+    println(f"{n}")
+"#,
+        "7.0",
     );
 }
