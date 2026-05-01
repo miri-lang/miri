@@ -220,5 +220,151 @@ fn main()
     );
 }
 
-// Custom drop: currently not supported by the language.
-// When a destructor hook (`fn drop()`) is added, add tests here.
+// ── User-defined drop hook (§9.3) ────────────────────────────────────────────
+
+#[test]
+fn test_user_drop_hook_called_at_scope_exit() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+struct Res
+    handle int
+    fn drop(self)
+        println("dropped")
+
+fn main()
+    let r = Res(handle: 42)
+"#,
+        "dropped",
+    );
+}
+
+#[test]
+fn test_user_drop_hook_called_before_parent_returns() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+struct Token
+    id int
+    fn drop(self)
+        println("token gone")
+
+fn use_token()
+    let t = Token(id: 1)
+    println("using")
+
+fn main()
+    use_token()
+    println("after")
+"#,
+        "using\ntoken gone\nafter",
+    );
+}
+
+#[test]
+fn test_user_drop_hook_multiple_fields_access() {
+    // Drop hook can use self fields (via self.x pattern if supported),
+    // but here we just verify the hook is called even when struct has multiple fields.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+struct Handle
+    fd int
+    flags int
+    fn drop(self)
+        println("handle closed")
+
+fn main()
+    let h = Handle(fd: 3, flags: 0)
+    println("opened")
+"#,
+        "opened\nhandle closed",
+    );
+}
+
+// ── §9.4: Scope-exit warning for unconsumed resources ────────────────────────
+
+#[test]
+fn test_scope_exit_warning_emitted_for_unconsumed_resource() {
+    assert_compiler_warning(
+        r#"
+use system.io
+
+struct Conn
+    handle int
+    fn drop(self)
+        return
+
+fn main()
+    let conn = Conn(handle: 1)
+    println("working")
+"#,
+        "resource 'conn' of type 'Conn' was not consumed before scope exit",
+    );
+}
+
+#[test]
+fn test_scope_exit_warning_suppressed_when_resource_consumed() {
+    // Passing to a consuming function suppresses the warning.
+    assert_type_checks(
+        r#"
+use system.io
+
+struct Conn
+    handle int
+    fn drop(self)
+        return
+
+fn sink(c Conn)
+    return
+
+fn main()
+    let conn = Conn(handle: 1)
+    sink(conn)
+"#,
+    );
+}
+
+#[test]
+fn test_scope_exit_warning_in_nested_scope() {
+    // Resource declared inside a helper function warns at function exit.
+    assert_compiler_warning(
+        r#"
+use system.io
+
+struct Token
+    id int
+    fn drop(self)
+        return
+
+fn use_token()
+    let t = Token(id: 1)
+    println("using")
+
+fn main()
+    use_token()
+"#,
+        "resource 't' of type 'Token' was not consumed before scope exit",
+    );
+}
+
+#[test]
+fn test_scope_exit_no_warning_for_non_resource_struct() {
+    // Structs without fn drop are not resource types — no warning.
+    assert_type_checks(
+        r#"
+use system.io
+
+struct Point
+    x int
+    y int
+
+fn main()
+    let p = Point(x: 1, y: 2)
+    println(f"{p.x}")
+"#,
+    );
+}
