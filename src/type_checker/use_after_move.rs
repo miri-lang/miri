@@ -16,6 +16,7 @@ use crate::ast::expression::{ExpressionKind, LeftHandSideExpression};
 use crate::ast::statement::StatementKind;
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::*;
+use crate::error::diagnostic::{Diagnostic, Severity};
 use crate::error::syntax::Span;
 use crate::error::type_error::{TypeError, TypeErrorKind};
 use std::collections::HashMap;
@@ -34,6 +35,7 @@ pub struct UseAfterMoveChecker<'a> {
     types: &'a HashMap<usize, Type>,
     type_definitions: &'a HashMap<String, TypeDefinition>,
     errors: Vec<TypeError>,
+    warnings: Vec<Diagnostic>,
     /// True when analysis is inside a function body (vs. top-level script code).
     /// Resource types are always tracked. Managed types are only tracked at top level.
     in_function_body: bool,
@@ -48,17 +50,16 @@ impl<'a> UseAfterMoveChecker<'a> {
             types,
             type_definitions,
             errors: vec![],
+            warnings: vec![],
             in_function_body: false,
         }
     }
 
-    /// Runs the analysis on a complete program and returns any detected errors.
-    pub fn check_program(mut self, program: &Program) -> Vec<TypeError> {
+    /// Runs the analysis on a complete program and returns detected errors and warnings.
+    pub fn check_program(mut self, program: &Program) -> (Vec<TypeError>, Vec<Diagnostic>) {
         let mut consumed: HashMap<String, ConsumedInfo> = HashMap::new();
-        for stmt in &program.body {
-            self.check_stmt(stmt, &mut consumed);
-        }
-        self.errors
+        self.check_block(&program.body, &mut consumed);
+        (self.errors, self.warnings)
     }
 
     fn check_stmt(&mut self, stmt: &Statement, consumed: &mut HashMap<String, ConsumedInfo>) {
@@ -78,9 +79,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             }
 
             StatementKind::Block(stmts) => {
-                for s in stmts {
-                    self.check_stmt(s, consumed);
-                }
+                self.check_block(stmts, consumed);
             }
 
             StatementKind::Expression(expr) => {
@@ -158,6 +157,68 @@ impl<'a> UseAfterMoveChecker<'a> {
             | StatementKind::Class(_)
             | StatementKind::Trait(_, _, _, _, _)
             | StatementKind::RuntimeFunctionDeclaration(_, _, _, _) => {}
+        }
+    }
+
+    /// Processes a block's statement list with scope-exit warning for unconsumed resource vars.
+    ///
+    /// Variables declared at THIS block level (direct `StatementKind::Variable` stmts) are
+    /// tracked. If a resource-typed variable is still live at the end of the block, a W0004
+    /// warning is emitted — the drop hook still runs via RC.
+    fn check_block(&mut self, stmts: &[Statement], consumed: &mut HashMap<String, ConsumedInfo>) {
+        // Collect resource vars declared at this scope level (not in nested blocks).
+        let mut scope_resources: Vec<(String, String, Span)> = Vec::new(); // (var_name, type_name, decl_span)
+
+        for s in stmts {
+            if let StatementKind::Variable(decls, _) = &s.node {
+                for decl in decls {
+                    if let Some(init) = &decl.initializer {
+                        if let Some(ty) = self.types.get(&init.id) {
+                            if is_resource(&ty.kind, self.type_definitions) {
+                                if let Some(type_name) = Self::resource_type_name(&ty.kind) {
+                                    scope_resources.push((
+                                        decl.name.clone(),
+                                        type_name.to_string(),
+                                        s.span,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            self.check_stmt(s, consumed);
+        }
+
+        // At scope exit, warn for resource vars not explicitly consumed.
+        for (var_name, type_name, span) in &scope_resources {
+            if !consumed.contains_key(var_name.as_str()) {
+                self.warnings.push(Diagnostic {
+                    severity: Severity::Warning,
+                    code: Some("W0004"),
+                    title: "resource not consumed at scope exit".to_string(),
+                    message: format!(
+                        "resource '{}' of type '{}' was not consumed before scope exit",
+                        var_name, type_name
+                    ),
+                    span: Some(*span),
+                    help: Some(
+                        "pass the resource to a consuming function or call its drop method"
+                            .to_string(),
+                    ),
+                    notes: Vec::new(),
+                    source_override: None,
+                });
+            }
+        }
+    }
+
+    /// Extracts the type name from a `Custom` type kind.
+    fn resource_type_name(kind: &TypeKind) -> Option<&str> {
+        if let TypeKind::Custom(name, _) = kind {
+            Some(name.as_str())
+        } else {
+            None
         }
     }
 

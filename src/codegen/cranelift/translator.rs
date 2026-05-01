@@ -1918,13 +1918,16 @@ impl<'a> FunctionTranslator<'a> {
             Self::call_rt_string_free(builder, ctx, ptr)
         } else if let TypeKind::Custom(name, _) = kind {
             // Dispatch through the type-specific drop function, which encapsulates:
-            // (1) user-defined drop hook — no-op placeholder until M5 Task 3,
+            // (1) user-defined drop hook (if the type defines fn drop(self)),
             // (2) recursive DecRef of all managed fields,
             // (3) freeing the RC allocation.
             //
-            // For types with no managed fields we skip the thunk and free directly,
-            // since their drop function would be a no-op aside from the free.
-            if Self::has_managed_fields(name, type_ctx.type_definitions) {
+            // The thunk is required whenever there are managed fields OR a user drop
+            // hook — skipping it for types with no managed fields is only safe when
+            // there is also no user-defined destructor to invoke.
+            let needs_thunk = Self::has_managed_fields(name, type_ctx.type_definitions)
+                || Self::type_has_user_drop(name, type_ctx.type_definitions);
+            if needs_thunk {
                 Self::call_drop_thunk(builder, ctx, name, ptr, type_ctx.ptr_type)
             } else {
                 Self::call_libc_free(builder, ctx, header_ptr)
@@ -2669,7 +2672,30 @@ impl<'a> FunctionTranslator<'a> {
                 out_param_ptr_vars: &empty_out_ptr_vars,
             };
 
-            // Step 1: User-defined drop hook (no-op placeholder for M5 Task 3).
+            // Step 1: Call the user-defined `fn drop(self)` if the type defines one.
+            let type_has_drop = match type_definitions.get(type_name) {
+                Some(TypeDefinition::Struct(sd)) => sd.has_drop,
+                Some(TypeDefinition::Class(cd)) => cd.has_drop,
+                _ => false,
+            };
+            if type_has_drop {
+                let mut user_drop_name = String::with_capacity(type_name.len() + 5);
+                user_drop_name.push_str(type_name);
+                user_drop_name.push_str("_drop");
+                // ABI mirrors lower_class_method: (self: ptr, allocator: ptr) -> void
+                let mut user_sig = Signature::new(call_conv);
+                user_sig.params.push(AbiParam::new(ptr_type)); // self
+                user_sig.params.push(AbiParam::new(ptr_type)); // allocator (0 = no GPU context)
+                let user_drop_id = module_ctx
+                    .module
+                    .declare_function(&user_drop_name, Linkage::Import, &user_sig)
+                    .map_err(|e| format!("Failed to declare {user_drop_name}: {e}"))?;
+                let local_user_drop = module_ctx
+                    .module
+                    .declare_func_in_func(user_drop_id, builder.func);
+                let zero = builder.ins().iconst(ptr_type, 0);
+                builder.ins().call(local_user_drop, &[ptr, zero]);
+            }
 
             // Step 2: DecRef all managed fields.
             Self::emit_struct_drop(&mut builder, &mut module_ctx, type_name, ptr, &type_ctx)?;
@@ -3377,6 +3403,18 @@ impl<'a> FunctionTranslator<'a> {
     ///
     /// Used to decide whether to call `__drop_TypeName` (when there are managed
     /// fields to clean up) or just `libc::free` (when all fields are primitives).
+    /// Returns true if the type defines `fn drop(self)` (user-controlled teardown).
+    pub(crate) fn type_has_user_drop(
+        name: &str,
+        type_defs: &HashMap<String, TypeDefinition>,
+    ) -> bool {
+        match type_defs.get(name) {
+            Some(TypeDefinition::Struct(def)) => def.has_drop,
+            Some(TypeDefinition::Class(def)) => def.has_drop,
+            _ => false,
+        }
+    }
+
     pub(crate) fn has_managed_fields(
         name: &str,
         type_defs: &HashMap<String, TypeDefinition>,

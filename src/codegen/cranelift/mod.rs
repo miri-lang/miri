@@ -485,12 +485,12 @@ impl CraneliftBackend {
     /// form the foundation of the Perceus RC destructor pipeline:
     ///
     ///   RC reaches 0 → call `__drop_TypeName(ptr)`
-    ///     → (1) user-defined drop hook (no-op placeholder for M5 Task 3)
+    ///     → (1) user-defined `fn drop(self)` hook (if the type defines one)
     ///     → (2) recursively DecRef all managed fields
     ///     → (3) free the RC allocation
     ///
-    /// Types with no managed fields do not get a thunk; their drop path calls
-    /// `libc::free` directly from `emit_type_drop`.
+    /// Types with no managed fields and no user drop hook skip the thunk; their
+    /// drop path calls `libc::free` directly from `emit_type_drop`.
     fn generate_type_drop_functions(
         &self,
         module: &mut ObjectModule,

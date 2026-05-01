@@ -157,6 +157,11 @@ fn is_auto_copy_inner<'a>(
 
             match type_definitions.get(name) {
                 Some(TypeDefinition::Struct(struct_def)) => {
+                    // Resource types (fn drop) are never auto-copy — they must be RC-managed
+                    // so the drop hook fires at scope exit.
+                    if struct_def.has_drop {
+                        return false;
+                    }
                     // All fields must be auto-copy and total size <= threshold
                     let all_fields_copy = struct_def.fields.iter().all(|(_, field_ty, _)| {
                         is_auto_copy_inner(&field_ty.kind, type_definitions, visited)
