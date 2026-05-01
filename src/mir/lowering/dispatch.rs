@@ -494,6 +494,25 @@ fn try_lower_method_call(
             lower_expression(ctx, obj, None)?
         };
 
+        // CoW check: emit miri_rt_{list,set,map}_cow before any mutation that goes
+        // through general method dispatch (pop, remove, remove_at, clear, sort,
+        // reverse for List; add, remove, clear for Set; set, remove, clear for Map).
+        let self_op = if is_collection_mutation_method(&class_name, method_name) {
+            let cow_fn = match class_name.as_str() {
+                "List" => rt::LIST_COW,
+                "Set" => rt::SET_COW,
+                "Map" => rt::MAP_COW,
+                _ => "",
+            };
+            if !cow_fn.is_empty() {
+                emit_cow_check(ctx, self_op, obj_ty, cow_fn, *span)
+            } else {
+                self_op
+            }
+        } else {
+            self_op
+        };
+
         // Track the receiver local for Perceus-compatible temporary drop.
         let obj_temp_local = if let Operand::Copy(ref p) = self_op {
             Some(p.local)
@@ -592,6 +611,72 @@ fn try_lower_method_call(
     }
 
     Ok(None)
+}
+
+/// Emit a Copy-on-Write check before a mutation operation on a collection local.
+///
+/// If the receiver is a simple local variable (`Move` with no projection), emits a call to
+/// `cow_fn_name` that returns either the same pointer (RC ≤ 1 → no copy) or a fresh exclusive
+/// clone (RC > 1 → clone + decrement old RC). The result is stored back into the receiver local
+/// so the subsequent mutation operates on an exclusively-owned collection.
+///
+/// `Assign` (not `Reassign`) is used for the write-back so Perceus does not DecRef the old
+/// value; `Move` is used for the cow_result so Perceus does not IncRef it. No `StorageDead` is
+/// emitted for the cow_result temp — its ownership is transferred to self_local.
+fn emit_cow_check(
+    ctx: &mut LoweringContext,
+    obj_op: Operand,
+    obj_ty: &Type,
+    cow_fn_name: &str,
+    span: Span,
+) -> Operand {
+    let self_local = match &obj_op {
+        Operand::Move(p) if p.projection.is_empty() => p.local,
+        _ => return obj_op,
+    };
+    let cow_result = ctx.push_temp(obj_ty.clone(), span);
+    let cow_fn = Operand::Constant(Box::new(crate::mir::Constant {
+        span,
+        ty: Type::new(TypeKind::Identifier, span),
+        literal: crate::ast::literal::Literal::Identifier(cow_fn_name.to_string()),
+    }));
+    let cow_target = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func: cow_fn,
+            args: vec![Operand::Move(Place::new(self_local))],
+            out_args: Vec::new(),
+            destination: Place::new(cow_result),
+            target: Some(cow_target),
+        },
+        span,
+    ));
+    ctx.set_current_block(cow_target);
+    // Write the (possibly-new) pointer back into the receiver local.
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(
+            Place::new(self_local),
+            Rvalue::Use(Operand::Move(Place::new(cow_result))),
+        ),
+        span,
+    });
+    Operand::Move(Place::new(self_local))
+}
+
+/// True when `method_name` on `class_name` mutates the collection's data.
+///
+/// Methods handled by `try_lower_collection_intrinsic` (push, insert, set on List) are
+/// excluded here — they receive the CoW check inline in that function.
+fn is_collection_mutation_method(class_name: &str, method_name: &str) -> bool {
+    match class_name {
+        "List" => matches!(
+            method_name,
+            "pop" | "remove" | "remove_at" | "clear" | "sort" | "reverse"
+        ),
+        "Set" => matches!(method_name, "add" | "remove" | "clear"),
+        "Map" => matches!(method_name, "set" | "remove" | "clear"),
+        _ => false,
+    }
 }
 
 /// Lower optimized collection methods directly to MIR instructions or intrinsics.
@@ -695,6 +780,7 @@ fn try_lower_collection_intrinsic(
     if args.len() == 1 && method_name == "push" && class_name == "List" {
         let item_watermark = ctx.body.local_decls.len();
         let obj_op = lower_expression(ctx, obj, None)?;
+        let obj_op = emit_cow_check(ctx, obj_op, obj_ty, rt::LIST_COW, *span);
         let item_op = lower_expression(ctx, &args[0], None)?;
         // Capture the source local before Move→Copy conversion so we can emit
         // StorageDead for fresh temps after the call.  This gives Perceus the
@@ -746,6 +832,7 @@ fn try_lower_collection_intrinsic(
     if args.len() == 2 && method_name == "insert" && class_name == "List" {
         let item_watermark = ctx.body.local_decls.len();
         let obj_op = lower_expression(ctx, obj, None)?;
+        let obj_op = emit_cow_check(ctx, obj_op, obj_ty, rt::LIST_COW, *span);
         let index_op = lower_expression(ctx, &args[0], None)?;
         let item_op = lower_expression(ctx, &args[1], None)?;
         // Capture the source local before Move→Copy conversion.
@@ -792,6 +879,12 @@ fn try_lower_collection_intrinsic(
     if args.len() == 2 && method_name == "set" && matches!(class_name, "List" | "Array") {
         let obj_watermark = ctx.body.local_decls.len();
         let obj_op = lower_expression(ctx, obj, None)?;
+        // CoW only for List (Arrays are fixed-size and share no aliasing semantics here).
+        let obj_op = if class_name == "List" {
+            emit_cow_check(ctx, obj_op, obj_ty, rt::LIST_COW, *span)
+        } else {
+            obj_op
+        };
         let obj_op_src = match &obj_op {
             Operand::Copy(p) | Operand::Move(p) => Some(p.local),
             _ => None,

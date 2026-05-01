@@ -473,6 +473,28 @@ pub mod ffi {
         new_set
     }
 
+    /// Copy-on-Write check: if the set has more than one owner, produce an
+    /// independent clone and decrement the old RC. Returns the (possibly new)
+    /// pointer that the caller should now use.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_set_cow(ptr: *mut MiriSet) -> *mut MiriSet {
+        if ptr.is_null() {
+            return ptr;
+        }
+        let rc_ptr = (ptr as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *mut usize;
+        let rc = *rc_ptr;
+        if (rc as isize) < 0 || rc <= 1 {
+            return ptr;
+        }
+        let new_ptr = miri_rt_set_clone(ptr);
+        if new_ptr.is_null() {
+            return ptr;
+        }
+        *rc_ptr -= 1;
+        new_ptr
+    }
+
     /// Decrements the RC of a managed Set element and frees it if RC reaches zero.
     ///
     /// Used as a direct decref callback when an Array slot is overwritten

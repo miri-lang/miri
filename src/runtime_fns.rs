@@ -64,6 +64,8 @@ pub mod rt {
     pub const LIST_SORT: &str = "miri_rt_list_sort";
     pub const LIST_IS_EMPTY: &str = "miri_rt_list_is_empty";
     pub const LIST_CLONE: &str = "miri_rt_list_clone";
+    /// Compiler-internal: Copy-on-Write check before mutation, not in stdlib.
+    pub const LIST_COW: &str = "miri_rt_list_cow";
     /// Compiler-internal: constructs a list from a raw pointer, not in stdlib.
     pub const LIST_NEW_FROM_RAW: &str = "miri_rt_list_new_from_raw";
     /// Compiler-internal: constructs a list from a managed array, not in stdlib.
@@ -96,6 +98,8 @@ pub mod rt {
     /// Compiler-internal: registers the value clone function, not in stdlib.
     pub const MAP_SET_VAL_CLONE_FN: &str = "miri_rt_map_set_val_clone_fn";
     pub const MAP_CLONE: &str = "miri_rt_map_clone";
+    /// Compiler-internal: Copy-on-Write check before mutation, not in stdlib.
+    pub const MAP_COW: &str = "miri_rt_map_cow";
     /// Compiler-internal: decrements the RC of a map element, not in stdlib.
     pub const MAP_DECREF_ELEMENT: &str = "miri_rt_map_decref_element";
 
@@ -110,6 +114,8 @@ pub mod rt {
     pub const SET_IS_EMPTY: &str = "miri_rt_set_is_empty";
     pub const SET_ELEMENT_AT: &str = "miri_rt_set_element_at";
     pub const SET_CLONE: &str = "miri_rt_set_clone";
+    /// Compiler-internal: Copy-on-Write check before mutation, not in stdlib.
+    pub const SET_COW: &str = "miri_rt_set_cow";
     /// Compiler-internal: registers the element drop function, not in stdlib.
     pub const SET_SET_ELEM_DROP_FN: &str = "miri_rt_set_set_elem_drop_fn";
     /// Compiler-internal: registers the element clone function, not in stdlib.
@@ -197,6 +203,7 @@ pub mod rt {
         LIST_SORT,
         LIST_IS_EMPTY,
         LIST_CLONE,
+        LIST_COW,
         LIST_NEW_FROM_RAW,
         LIST_NEW_FROM_MANAGED_ARRAY,
         LIST_DECREF_ELEMENT,
@@ -215,6 +222,7 @@ pub mod rt {
         MAP_KEY_AT,
         MAP_VALUE_AT,
         MAP_CLONE,
+        MAP_COW,
         MAP_GET_CHECKED,
         MAP_SET_VAL_DROP_FN,
         MAP_SET_KEY_DROP_FN,
@@ -231,6 +239,7 @@ pub mod rt {
         SET_IS_EMPTY,
         SET_ELEMENT_AT,
         SET_CLONE,
+        SET_COW,
         SET_SET_ELEM_DROP_FN,
         SET_SET_ELEM_CLONE_FN,
         SET_DECREF_ELEMENT,

@@ -104,20 +104,55 @@ fn main()
 }
 
 #[test]
-fn test_set_aliasing_mutation() {
+fn test_set_cow_add_isolates_original() {
+    // CoW: s2 shares s1's data until s2.add mutates → s1 must be unchanged.
     assert_runs_with_output(
         r#"
 use system.io
 use system.collections.set
 var s1 = {1}
-let s2 = s1
+var s2 = s1
 
-// Mutate through s1, s2 should see the change
-s1.add(2)
-println(f"{s2.contains(2)}")
-println(f"{s2.length()}")
+s2.add(2)
+println(f"{s1.contains(2)}")
+println(f"{s1.length()}")
 "#,
-        "true\n2",
+        "false\n1",
+    );
+}
+
+#[test]
+fn test_set_cow_remove_isolates_original() {
+    // CoW: s2.remove triggers a clone — s1 must retain the removed element.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.set
+var s1 = {1, 2, 3}
+var s2 = s1
+
+s2.remove(2)
+println(f"{s1.contains(2)}")
+println(f"{s1.length()}")
+"#,
+        "true\n3",
+    );
+}
+
+#[test]
+fn test_set_cow_clear_isolates_original() {
+    // CoW: s2.clear clones s1's data — s1 must be unaffected.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.set
+var s1 = {1, 2, 3}
+var s2 = s1
+
+s2.clear()
+println(f"{s1.length()}")
+"#,
+        "3",
     );
 }
 
