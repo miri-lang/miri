@@ -104,7 +104,8 @@ pub fn lower_function(
     ctx.body
         .new_local(LocalDecl::new(ret_ty.clone(), ast_func.span));
 
-    // Lower parameters
+    // Lower parameters and record out-param flags.
+    ctx.body.out_params = params.iter().map(|p| p.is_out).collect();
     for param in params.iter() {
         let param_ty = resolve_type(tc, &param.typ);
         ctx.push_param(param.name.clone(), param_ty, param.typ.span);
@@ -200,7 +201,8 @@ pub fn lower_generic_instantiation(
     ctx.body
         .new_local(LocalDecl::new(ret_ty.clone(), ast_func.span));
 
-    // Lower parameters with generic substitution
+    // Lower parameters with generic substitution and record out-param flags.
+    ctx.body.out_params = params.iter().map(|p| p.is_out).collect();
     for param in params.iter() {
         let param_ty = apply_generic_sub(&resolve_type(tc, &param.typ), subs);
         ctx.push_param(param.name.clone(), param_ty, param.typ.span);

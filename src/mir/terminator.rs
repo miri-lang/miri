@@ -148,6 +148,7 @@ impl fmt::Display for Terminator {
                 args,
                 destination,
                 target,
+                ..
             } => {
                 write!(f, "{} = {}(", destination, func)?;
                 if let Some((first, rest)) = args.split_first() {
@@ -230,6 +231,9 @@ pub enum TerminatorKind {
     Call {
         func: Operand,
         args: Vec<Operand>,
+        /// Which arguments are `out` parameters. `out_args[i]` is true when
+        /// the callee's i-th parameter is declared `out`. Empty means none.
+        out_args: Vec<bool>,
         destination: Place,
         target: Option<BasicBlock>,
     },

@@ -226,6 +226,7 @@ fn emit_runtime_to_string(
         TerminatorKind::Call {
             func: func_op,
             args,
+            out_args: Vec::new(),
             destination: Place::new(result),
             target: Some(target_bb),
         },

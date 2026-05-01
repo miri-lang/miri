@@ -208,6 +208,7 @@ pub fn lower_class_constructor(
             crate::mir::TerminatorKind::Call {
                 func: func_op,
                 args: call_args.clone(),
+                out_args: Vec::new(),
                 destination: Place::new(void_dest),
                 target: Some(target_bb),
             },
@@ -453,6 +454,7 @@ pub(crate) fn lower_list_constructor(
             TerminatorKind::Call {
                 func: func_op,
                 args: vec![array_op, len_op, size_op],
+                out_args: Vec::new(),
                 destination: destination.clone(),
                 target: Some(target_bb),
             },
@@ -496,6 +498,7 @@ pub(crate) fn lower_list_constructor(
             TerminatorKind::Call {
                 func: func_op,
                 args: vec![size_op],
+                out_args: Vec::new(),
                 destination: destination.clone(),
                 target: Some(target_bb),
             },
