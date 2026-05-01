@@ -321,6 +321,7 @@ fn try_lower_module_alias_call(
                     TerminatorKind::Call {
                         func: func_op,
                         args: arg_ops,
+                        out_args: Vec::new(),
                         destination,
                         target: Some(target_bb),
                     },
@@ -577,6 +578,7 @@ fn try_lower_method_call(
             TerminatorKind::Call {
                 func: func_op,
                 args: call_args,
+                out_args: Vec::new(),
                 destination,
                 target: Some(target_bb),
             },
@@ -723,6 +725,7 @@ fn try_lower_collection_intrinsic(
             TerminatorKind::Call {
                 func: func_op,
                 args: vec![obj_op, Operand::Copy(Place::new(item_local))],
+                out_args: Vec::new(),
                 destination: Place::new(dummy_dest),
                 target: Some(target_bb),
             },
@@ -772,6 +775,7 @@ fn try_lower_collection_intrinsic(
             TerminatorKind::Call {
                 func: func_op,
                 args: vec![obj_op, index_op, Operand::Copy(Place::new(item_local))],
+                out_args: Vec::new(),
                 destination: Place::new(result_temp),
                 target: Some(target_bb),
             },
@@ -1027,10 +1031,22 @@ fn lower_direct_call(
 
     let target_bb = ctx.new_basic_block();
     let func_op_for_drop = func_op.clone();
+    // Build out_args flags from param_types (empty vec if no param info or generic).
+    let out_args: Vec<bool> = if let Some(params) = &param_types {
+        arg_ops
+            .iter()
+            .enumerate()
+            .map(|(i, _)| params.get(i).is_some_and(|p| p.is_out))
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Call {
             func: func_op,
             args: arg_ops.clone(),
+            out_args,
             destination: destination.clone(),
             target: Some(target_bb),
         },

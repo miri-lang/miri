@@ -426,6 +426,7 @@ pub(crate) fn lower_assignment_expr(
                             crate::mir::TerminatorKind::Call {
                                 func: func_op,
                                 args: vec![obj_op, key_arg, val_arg],
+                                out_args: Vec::new(),
                                 destination: Place::new(dummy_dest),
                                 target: Some(target_bb),
                             },

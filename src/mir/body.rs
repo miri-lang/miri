@@ -64,6 +64,11 @@ pub struct Body {
     /// to resolve `Field(i)` projections on closure locals.
     /// Only present when the closure has at least one capture.
     pub closure_capture_types: HashMap<Local, Vec<Type>>,
+    /// Which parameters (indexed 1..=arg_count) are `out` parameters.
+    /// `out_params[i-1] == true` means parameter `_i` was declared `out`.
+    /// Populated by MIR lowering from `Parameter::is_out`.
+    /// Used by codegen to emit pointer ABI for scalar out params (copy-in/copy-out).
+    pub out_params: Vec<bool>,
 }
 
 impl Body {
@@ -83,6 +88,7 @@ impl Body {
             env_capture_locals: Vec::new(),
             type_params: HashSet::new(),
             closure_capture_types: HashMap::new(),
+            out_params: Vec::new(),
         }
     }
 

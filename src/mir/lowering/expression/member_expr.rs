@@ -369,6 +369,7 @@ pub(crate) fn lower_member_expr(
                             TerminatorKind::Call {
                                 func: func_op,
                                 args: call_args,
+                                out_args: Vec::new(),
                                 destination,
                                 target: Some(target_bb),
                             },

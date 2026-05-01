@@ -103,6 +103,34 @@ pub(crate) struct TypeCtx<'a> {
     /// Used by `read_place` and `resolve_projected_type_kind` to translate
     /// `Field(i)` projections on closure locals into the correct capture type.
     pub(crate) closure_capture_ast_types: &'a HashMap<crate::mir::Local, Vec<Type>>,
+    /// For scalar `out` parameters: maps each param Local to the Cranelift Variable
+    /// that holds the incoming pointer. Used by the Return terminator to write back.
+    pub(crate) out_param_ptr_vars: &'a HashMap<Local, Variable>,
+}
+
+/// Returns true when a type requires pointer-passing for `out` semantics.
+///
+/// Managed heap types (List, String, custom classes, etc.) are already pointers;
+/// their mutations are visible to callers without extra indirection.
+/// Primitive scalars (int, bool, floats) are passed by value and need a pointer
+/// so that callee modifications propagate back.
+pub(crate) fn needs_out_pointer(kind: &TypeKind) -> bool {
+    matches!(
+        kind,
+        TypeKind::Int
+            | TypeKind::I8
+            | TypeKind::U8
+            | TypeKind::I16
+            | TypeKind::U16
+            | TypeKind::I32
+            | TypeKind::U32
+            | TypeKind::I64
+            | TypeKind::U64
+            | TypeKind::F32
+            | TypeKind::F64
+            | TypeKind::Float
+            | TypeKind::Boolean
+    )
 }
 
 impl<'a> FunctionTranslator<'a> {
@@ -173,16 +201,34 @@ impl<'a> FunctionTranslator<'a> {
             }
         }
 
+        // For scalar out params: maps each param Local to its incoming pointer Variable.
+        let mut out_param_ptr_vars: HashMap<Local, Variable> = HashMap::new();
+
         // Switch to entry block and set up parameters
         if let Some(&entry_block) = blocks.get(&BasicBlock(0)) {
             builder.switch_to_block(entry_block);
 
-            // Assign parameters to local variables
-            let params: Vec<Value> = builder.block_params(entry_block).to_vec();
-            for (i, param) in params.into_iter().enumerate() {
+            // Assign parameters to local variables.
+            // Scalar out params arrive as pointers — save the pointer, load the value.
+            let params_vec: Vec<Value> = builder.block_params(entry_block).to_vec();
+            for (i, param_val) in params_vec.into_iter().enumerate() {
                 let local = Local(i + 1); // Parameters start at local 1
-                if let Some(&var) = locals.get(&local) {
-                    builder.def_var(var, param);
+                let is_scalar_out = i < body.out_params.len()
+                    && body.out_params[i]
+                    && body
+                        .local_decls
+                        .get(local.0)
+                        .is_some_and(|d| needs_out_pointer(&d.ty.kind));
+                if is_scalar_out {
+                    // param_val is the caller's stack-slot address (ptr_type).
+                    // Save the pointer for writeback at Return; load the initial value
+                    // in the main loop AFTER switch_to_block to keep the entry block
+                    // Pristine (Cranelift requires Pristine/Filled before switch_to_block).
+                    let ptr_var = builder.declare_var(self.ptr_type);
+                    builder.def_var(ptr_var, param_val);
+                    out_param_ptr_vars.insert(local, ptr_var);
+                } else if let Some(&var) = locals.get(&local) {
+                    builder.def_var(var, param_val);
                 }
             }
         }
@@ -228,12 +274,28 @@ impl<'a> FunctionTranslator<'a> {
             type_definitions: self.type_definitions,
             ptr_type: self.ptr_type,
             closure_capture_ast_types: &body.closure_capture_types,
+            out_param_ptr_vars: &out_param_ptr_vars,
         };
 
         // Translate each basic block
         for (idx, block_data) in body.basic_blocks.iter().enumerate() {
             let block = blocks[&BasicBlock(idx)];
             builder.switch_to_block(block);
+
+            // Load initial scalar values for out params from their caller-provided pointers.
+            // Deferred here (instead of the early setup) so the entry block stays Pristine
+            // until switch_to_block — Cranelift requires Pristine/Filled before switching.
+            if idx == 0 {
+                for (&out_local, &ptr_var) in &out_param_ptr_vars {
+                    let ptr = builder.use_var(ptr_var);
+                    let val_cl_type =
+                        translate_type(&body.local_decls[out_local.0].ty, self.ptr_type);
+                    let val = builder.ins().load(val_cl_type, MemFlags::new(), ptr, 0);
+                    if let Some(&var) = locals.get(&out_local) {
+                        builder.def_var(var, val);
+                    }
+                }
+            }
 
             // For closure bodies: load captured values from env_ptr (Local 1) at the
             // START of the entry block. This must run AFTER switch_to_block so the block
@@ -319,7 +381,14 @@ impl<'a> FunctionTranslator<'a> {
         for i in 1..=body.arg_count {
             if i < body.local_decls.len() {
                 let param_ty = &body.local_decls[i].ty;
-                let cl_type = translate_type(param_ty, self.ptr_type);
+                // Scalar out params are passed as pointers (copy-in/copy-out ABI).
+                let cl_type = if body.out_params.get(i - 1).copied().unwrap_or(false)
+                    && needs_out_pointer(&param_ty.kind)
+                {
+                    self.ptr_type
+                } else {
+                    translate_type(param_ty, self.ptr_type)
+                };
                 self.func.signature.params.push(AbiParam::new(cl_type));
             }
         }
@@ -2589,11 +2658,13 @@ impl<'a> FunctionTranslator<'a> {
                 rt_closure_free_track_id: None,
             };
             let empty_captures = HashMap::new();
+            let empty_out_ptr_vars = HashMap::new();
             let type_ctx = TypeCtx {
                 local_types: &[],
                 type_definitions,
                 ptr_type,
                 closure_capture_ast_types: &empty_captures,
+                out_param_ptr_vars: &empty_out_ptr_vars,
             };
 
             // Step 1: User-defined drop hook (no-op placeholder for M5 Task 3).
@@ -3257,11 +3328,13 @@ impl<'a> FunctionTranslator<'a> {
                 rt_closure_free_track_id: None,
             };
             let empty_captures = HashMap::new();
+            let empty_out_ptr_vars = HashMap::new();
             let type_ctx = TypeCtx {
                 local_types: &[],
                 type_definitions,
                 ptr_type,
                 closure_capture_ast_types: &empty_captures,
+                out_param_ptr_vars: &empty_out_ptr_vars,
             };
 
             // DecRef each managed capture.  captures are at env_ptr + (2+i)*ptr_size.
