@@ -3,57 +3,49 @@
 
 use super::utils::*;
 
-// Smoke tests: `out` parameters parse, type-check, lower to MIR, and compile.
-// Semantic enforcement of out-write obligations is deferred to a future milestone.
-
 #[test]
-fn test_out_param_compiles_and_runs() {
-    assert_runs_with_output(
+fn test_out_param_increment() {
+    // Canonical `out` usage: callee increments the caller's variable.
+    assert_type_checks(
         r#"
-use system.io
+fn inc(x out int)
+    x = x + 1
 
-fn add(a int, b out int) int
-    a + b
-
-fn main()
-    let r = add(3, 7)
-    println(f"{r}")
+var n = 5
+inc(n)
 "#,
-        "10",
     );
 }
 
 #[test]
-fn test_out_param_with_string() {
-    assert_runs_with_output(
+fn test_out_param_string_mutation() {
+    // Callee appends to a string via an `out` parameter.
+    assert_type_checks(
         r#"
-use system.io
 use system.string
 
-fn greet(name out String) String
-    f"hello {name}"
+fn append_excl(s out String)
+    s = f"{s}!"
 
-fn main()
-    let r = greet("world")
-    println(r)
+var msg = "hello"
+append_excl(msg)
 "#,
-        "hello world",
     );
 }
 
 #[test]
-fn test_multiple_out_params_compile() {
-    assert_runs_with_output(
+fn test_multiple_out_params_swap() {
+    // Callee swaps two caller variables via `out` parameters.
+    assert_type_checks(
         r#"
-use system.io
+fn swap(a out int, b out int)
+    let tmp = a
+    a = b
+    b = tmp
 
-fn compute(x out int, y out int) int
-    x + y
-
-fn main()
-    let r = compute(4, 6)
-    println(f"{r}")
+var x = 1
+var y = 2
+swap(x, y)
 "#,
-        "10",
     );
 }

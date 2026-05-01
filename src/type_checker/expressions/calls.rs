@@ -103,6 +103,8 @@ impl TypeChecker {
                 }
 
                 let mut pos_iter = positional_args.iter();
+                let mut seen_out_vars: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
 
                 for param in &func_data.params {
                     let param_type = self.resolve_type_expression(&param.typ, context);
@@ -126,7 +128,54 @@ impl TypeChecker {
                             param_type.clone()
                         };
 
-                        if !self.are_compatible(&concrete_param_type, &arg_type, context) {
+                        if param.is_out {
+                            let arg_span = arg_expr.map(|e| e.span).unwrap_or(span);
+                            match arg_expr.map(|e| &e.node) {
+                                Some(ExpressionKind::Identifier(var_name, _)) => {
+                                    if !context.is_mutable(var_name) {
+                                        self.report_error(
+                                            format!(
+                                                "expected mutable variable for 'out' parameter '{}': '{}' is immutable (declare with 'var')",
+                                                param.name, var_name
+                                            ),
+                                            arg_span,
+                                        );
+                                    }
+                                    if !seen_out_vars.insert(var_name.clone()) {
+                                        self.report_error(
+                                            format!(
+                                                "same variable passed twice as 'out': '{}' appears more than once",
+                                                var_name
+                                            ),
+                                            arg_span,
+                                        );
+                                    }
+                                }
+                                Some(_) => {
+                                    self.report_error(
+                                        format!(
+                                            "expected mutable variable for 'out' parameter '{}', but got a non-variable expression",
+                                            param.name
+                                        ),
+                                        arg_span,
+                                    );
+                                }
+                                None => {}
+                            }
+
+                            let exact_match = matches!(concrete_param_type.kind, TypeKind::Error)
+                                || matches!(arg_type.kind, TypeKind::Error)
+                                || concrete_param_type == arg_type;
+                            if !exact_match {
+                                self.report_error(
+                                    format!(
+                                        "Type mismatch for argument '{}': expected {}, got {}",
+                                        param.name, concrete_param_type, arg_type
+                                    ),
+                                    arg_expr.map(|e| e.span).unwrap_or(span),
+                                );
+                            }
+                        } else if !self.are_compatible(&concrete_param_type, &arg_type, context) {
                             self.report_error(
                                 format!(
                                     "Type mismatch for argument '{}': expected {}, got {}",
