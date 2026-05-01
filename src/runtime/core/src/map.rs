@@ -803,6 +803,28 @@ pub mod ffi {
     /// remove, or element overwrite).  Unlike the Perceus scope-exit path — which
     /// emits an inline codegen loop to DecRef managed values before calling
     /// `miri_rt_map_free` — this runtime callback has no such loop.  We therefore
+    /// Copy-on-Write check: if the map has more than one owner, produce an
+    /// independent clone and decrement the old RC. Returns the (possibly new)
+    /// pointer that the caller should now use.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_map_cow(ptr: *mut MiriMap) -> *mut MiriMap {
+        if ptr.is_null() {
+            return ptr;
+        }
+        let rc_ptr = (ptr as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *mut usize;
+        let rc = *rc_ptr;
+        if (rc as isize) < 0 || rc <= 1 {
+            return ptr;
+        }
+        let new_ptr = miri_rt_map_clone(ptr);
+        if new_ptr.is_null() {
+            return ptr;
+        }
+        *rc_ptr -= 1;
+        new_ptr
+    }
+
     /// call `val_drop_fn` on every occupied slot here, before delegating to
     /// `miri_rt_map_free`, so that managed values (e.g. List, Set, Map) nested
     /// inside the element map are correctly DecRef'd and never leaked.

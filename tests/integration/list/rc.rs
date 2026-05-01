@@ -208,19 +208,19 @@ fn main()
 }
 
 #[test]
-fn list_reference_semantics_mutation() {
+fn list_value_semantics_push_isolates_original() {
+    // CoW: l1 and l2 share data until l1.push mutates l1 → l2 must be unchanged.
     assert_runs_with_output(
         "
 use system.io
 use system.collections.list
 
 let l1 = List([10, 20, 30])
-let l2 = l1
-l1.push(40)
-println(f\"{l2.length()}\")
-println(f\"{l2[3]}\")
+var l2 = l1
+l2.push(40)
+println(f\"{l1.length()}\")
 ",
-        "4\n40",
+        "3",
     );
 }
 

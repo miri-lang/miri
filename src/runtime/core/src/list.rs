@@ -746,6 +746,33 @@ pub mod ffi {
         list
     }
 
+    /// Copy-on-Write check: if the list has more than one owner, produce an
+    /// independent clone and decrement the old RC. Returns the (possibly new)
+    /// pointer that the caller should now use.
+    ///
+    /// Invariant: the caller must treat the returned pointer as freshly owned
+    /// (RC=1). The old pointer's RC is decremented inside this function and
+    /// must not be used again by the caller.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_list_cow(ptr: *mut MiriList) -> *mut MiriList {
+        if ptr.is_null() {
+            return ptr;
+        }
+        let rc_ptr = (ptr as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *mut usize;
+        let rc = *rc_ptr;
+        // Negative RC means immortal — never copy.
+        if (rc as isize) < 0 || rc <= 1 {
+            return ptr;
+        }
+        let new_ptr = miri_rt_list_clone(ptr);
+        if new_ptr.is_null() {
+            return ptr;
+        }
+        *rc_ptr -= 1;
+        new_ptr
+    }
+
     /// Frees a list and its backing storage.
     ///
     /// The pointer must have been returned by `miri_rt_list_new` (i.e., it

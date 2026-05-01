@@ -143,6 +143,66 @@ fn main()
     );
 }
 
+// ── Phase 10: Copy-on-Write value semantics ───────────────────────────────────
+
+#[test]
+fn test_map_cow_set_isolates_original() {
+    // CoW: m2 shares m1's data until m2.set mutates → m1 must be unchanged.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.map
+
+fn main()
+    let m1 = {"a": 1, "b": 2}
+    var m2 = m1
+    m2.set("c", 3)
+    println(f"{m1.length()}")
+    let has_c = m1.contains_key("c")
+    println(f"{has_c}")
+"#,
+        "2\nfalse",
+    );
+}
+
+#[test]
+fn test_map_cow_remove_isolates_original() {
+    // remove triggers CoW — original key must remain.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.map
+
+fn main()
+    let m1 = {"a": 1, "b": 2}
+    var m2 = m1
+    m2.remove("a")
+    println(f"{m1.length()}")
+    let has_a = m1.contains_key("a")
+    println(f"{has_a}")
+"#,
+        "2\ntrue",
+    );
+}
+
+#[test]
+fn test_map_cow_clear_isolates_original() {
+    // clear triggers CoW — original must be unaffected.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.map
+
+fn main()
+    let m1 = {"a": 1, "b": 2}
+    var m2 = m1
+    m2.clear()
+    println(f"{m1.length()}")
+"#,
+        "2",
+    );
+}
+
 // ── Map index-write incref for managed elements (task 3.1) ───────────────────
 
 #[test]
