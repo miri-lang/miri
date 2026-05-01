@@ -86,6 +86,7 @@ To work efficiently and hit fewer roadblocks:
 3. **No Brute Force**: If you encounter a compilation error, analyze the `MiriError` or Rust error. Don't just `sed` the code.
 4. **Update READMEs**: If you change a module's core logic, update its local `README.md`.
 5. **Temporary Files**: Use `/tmp/` for scripts or backups.
+6. **Follow-up Changes**: When you discover a follow-up that's not part of the current scope. always add it to the `notes/PLAN.md` file where appropriate. Don't just list them without recording.
 
 ---
 

@@ -307,7 +307,10 @@ impl TypeChecker {
                                 }
                             }
 
-                            // Infer element type from the argument (expected to be an array)
+                            // Element type must come from an Array or List literal.
+                            // Other arg shapes (Set, scalar, struct, etc.) used to type-check
+                            // here and crash at runtime because lowering treats the operand as
+                            // raw element data; reject them explicitly instead.
                             if let Some((_, arg_type)) = positional_args.first() {
                                 let elem_type = match &arg_type.kind {
                                     TypeKind::Custom(cname, Some(cargs))
@@ -320,7 +323,16 @@ impl TypeChecker {
                                     {
                                         self.resolve_type_expression(&cargs[0], context)
                                     }
-                                    _ => arg_type.clone(),
+                                    _ => {
+                                        self.report_error(
+                                            format!(
+                                                "List(...) expects an array literal argument, got '{}'. Use 'List<T>()' for an empty list or 'List([...])' to convert an array",
+                                                arg_type
+                                            ),
+                                            span,
+                                        );
+                                        return make_type(TypeKind::Error);
+                                    }
                                 };
                                 return make_type(TypeKind::Custom(
                                     "List".to_string(),
@@ -360,8 +372,18 @@ impl TypeChecker {
                                     return make_type(TypeKind::Error);
                                 }
                             }
-                            // No type args: infer from positional arg if it's a map literal
-                            if let Some((_, arg_type)) = positional_args.first() {
+                            // Map(<map-literal>) populates the map from the literal.
+                            // Lowering delegates to the map-literal lowering, so the arg
+                            // must be a literal expression — accepting an arbitrary value
+                            // of Map type would silently produce an empty map.
+                            if let Some((arg_expr, arg_type)) = positional_args.first() {
+                                if !matches!(&arg_expr.node, ExpressionKind::Map(_)) {
+                                    self.report_error(
+                                        "Map(...) only accepts a map literal argument like '{\"key\": value}'. Use 'Map<K, V>()' for an empty map".to_string(),
+                                        span,
+                                    );
+                                    return make_type(TypeKind::Error);
+                                }
                                 if let TypeKind::Custom(cname, Some(cargs)) = &arg_type.kind {
                                     if BuiltinCollectionKind::from_name(cname.as_str())
                                         == Some(BuiltinCollectionKind::Map)
@@ -402,8 +424,18 @@ impl TypeChecker {
                                     return make_type(TypeKind::Error);
                                 }
                             }
-                            // No type args: infer from positional arg if it's a set literal
-                            if let Some((_, arg_type)) = positional_args.first() {
+                            // Set(<set-literal>) populates the set from the literal.
+                            // Lowering delegates to the set-literal lowering, so the arg
+                            // must be a literal expression — accepting an arbitrary value
+                            // of Set type would silently produce an empty set.
+                            if let Some((arg_expr, arg_type)) = positional_args.first() {
+                                if !matches!(&arg_expr.node, ExpressionKind::Set(_)) {
+                                    self.report_error(
+                                        "Set(...) only accepts a set literal argument like '{1, 2, 3}'. Use 'Set<T>()' for an empty set".to_string(),
+                                        span,
+                                    );
+                                    return make_type(TypeKind::Error);
+                                }
                                 if let TypeKind::Custom(cname, Some(cargs)) = &arg_type.kind {
                                     if BuiltinCollectionKind::from_name(cname.as_str())
                                         == Some(BuiltinCollectionKind::Set)

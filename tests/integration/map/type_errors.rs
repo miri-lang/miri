@@ -24,3 +24,18 @@ fn get(m map<String, int>) int
         "",
     );
 }
+
+#[test]
+fn map_constructor_rejects_non_literal_arg() {
+    // `Map(non-literal)` is not supported because lowering delegates to the map-literal
+    // lowering. Passing an arbitrary value of `Map<K, V>` would silently produce an empty map.
+    assert_compiler_error(
+        r#"
+use system.collections.map
+
+let other = {"a": 1}
+let m = Map(other)
+"#,
+        "only accepts a map literal",
+    );
+}

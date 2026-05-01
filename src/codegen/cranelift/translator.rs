@@ -126,6 +126,8 @@ pub(crate) fn needs_out_pointer(kind: &TypeKind) -> bool {
             | TypeKind::U32
             | TypeKind::I64
             | TypeKind::U64
+            | TypeKind::I128
+            | TypeKind::U128
             | TypeKind::F32
             | TypeKind::F64
             | TypeKind::Float
