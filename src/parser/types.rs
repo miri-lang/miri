@@ -173,6 +173,7 @@ impl<'source> Parser<'source> {
                                 typ: Box::new(param_type),
                                 guard: None,
                                 default_value: None,
+                                is_out: false,
                             });
                         } else {
                             // Unnamed parameter
@@ -181,6 +182,7 @@ impl<'source> Parser<'source> {
                                 typ: Box::new(first_type_expr),
                                 guard: None,
                                 default_value: None,
+                                is_out: false,
                             });
                         }
 
@@ -297,6 +299,7 @@ impl<'source> Parser<'source> {
                                 typ: Box::new(typ),
                                 guard: None,
                                 default_value: None,
+                                is_out: false,
                             });
                         } else {
                             return Err(self.error_missing_type_expression());

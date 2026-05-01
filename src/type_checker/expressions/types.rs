@@ -270,6 +270,7 @@ impl TypeChecker {
                                 typ: Box::new(self.create_type_expression(new_p_type)),
                                 guard: p.guard.clone(),
                                 default_value: p.default_value.clone(),
+                                is_out: p.is_out,
                             });
                         }
 

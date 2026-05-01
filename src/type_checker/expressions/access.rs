@@ -590,12 +590,14 @@ impl TypeChecker {
                             typ: dim3_expr.clone(),
                             guard: None,
                             default_value: None,
+                            is_out: false,
                         },
                         Parameter {
                             name: "block".to_string(),
                             typ: dim3_expr,
                             guard: None,
                             default_value: None,
+                            is_out: false,
                         },
                     ],
                     return_type: Some(Box::new(ast_factory::type_expr_non_null(future_void_type))),
@@ -773,6 +775,7 @@ impl TypeChecker {
                                     typ: Box::new(self.create_type_expression(substituted_ty)),
                                     guard: None,
                                     default_value: None,
+                                    is_out: false,
                                 }
                             })
                             .collect();
@@ -845,6 +848,7 @@ impl TypeChecker {
                                                         ),
                                                         guard: None,
                                                         default_value: None,
+                                                        is_out: false,
                                                     })
                                                     .collect();
                                                 let return_type_expr = if matches!(
@@ -942,6 +946,7 @@ impl TypeChecker {
                                     typ: Box::new(self.create_type_expression(ty.clone())),
                                     guard: None,
                                     default_value: None,
+                                    is_out: false,
                                 })
                                 .collect();
                             let return_type_expr =
@@ -1073,6 +1078,7 @@ impl TypeChecker {
                                         typ: Box::new(self.create_type_expression(t.clone())),
                                         guard: None,
                                         default_value: None,
+                                        is_out: false,
                                     })
                                     .collect();
                                 make_type(TypeKind::Function(Box::new(FunctionTypeData {

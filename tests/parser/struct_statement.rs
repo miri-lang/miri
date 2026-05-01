@@ -2,7 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use super::utils::{parser_error_test, parser_test, run_parser_error_tests};
-use miri::ast::common::{FunctionProperties, Parameter};
+use miri::ast::common::FunctionProperties;
 use miri::ast::factory::{
     block, function_declaration, generic_type, generic_type_with_kind, identifier, parameter,
     return_statement, struct_member, struct_statement, type_bool, type_custom, type_expr_non_null,

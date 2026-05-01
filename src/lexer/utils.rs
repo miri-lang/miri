@@ -48,6 +48,7 @@ pub fn token_to_string(token: &Token) -> Cow<'static, str> {
         Token::QuestionMark => "?".into(),
         Token::QuestionQuestion => "??".into(),
         Token::Tilde => "~".into(),
+        Token::Out => "out".into(),
         Token::ExpressionStatementEnd => "end of expression".into(),
         Token::String => "string".into(),
         Token::SingleQuotedString => "string".into(),
