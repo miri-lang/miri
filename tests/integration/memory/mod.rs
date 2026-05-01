@@ -14,6 +14,7 @@ pub mod generics;
 pub mod loops;
 pub mod match_arms;
 pub mod nested_calls;
+pub mod out_parameter;
 pub mod reassignment;
 pub mod temporaries;
 pub mod use_after_move;

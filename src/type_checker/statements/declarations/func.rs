@@ -153,14 +153,13 @@ impl TypeChecker {
                 param.name.clone(),
                 SymbolInfo::new(
                     param_type,
-                    false,
+                    param.is_out,
                     false,
                     MemberVisibility::Public,
                     self.current_module.clone(),
                     None,
                 ),
             );
-            // Parameters are immutable by default
 
             if let Some(guard) = &param.guard {
                 if let ExpressionKind::Guard(op, right) = &guard.node {

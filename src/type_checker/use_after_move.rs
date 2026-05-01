@@ -14,7 +14,7 @@
 
 use crate::ast::expression::{ExpressionKind, LeftHandSideExpression};
 use crate::ast::statement::StatementKind;
-use crate::ast::types::Type;
+use crate::ast::types::{Type, TypeKind};
 use crate::ast::*;
 use crate::error::syntax::Span;
 use crate::error::type_error::{TypeError, TypeErrorKind};
@@ -190,10 +190,37 @@ impl<'a> UseAfterMoveChecker<'a> {
                     self.check_expr(arg, consumed);
                 }
 
-                // After checking, mark direct Identifier (or NamedArgument wrapping one)
-                // as consumed if the variable is a managed type.
+                // Resolve the function's parameter list so we can skip consuming
+                // variables passed to `out` params — the callee writes to those,
+                // so the caller's variable remains live after the call.
+                let params: &[Parameter] = self
+                    .types
+                    .get(&callee.id)
+                    .and_then(|ty| {
+                        if let TypeKind::Function(fd) = &ty.kind {
+                            Some(fd.params.as_slice())
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(&[]);
+
+                let mut pos_idx = 0usize;
                 for arg in args {
-                    self.maybe_consume_arg(arg, &fn_name, consumed);
+                    let is_out = match &arg.node {
+                        ExpressionKind::NamedArgument(name, _) => params
+                            .iter()
+                            .find(|p| &p.name == name)
+                            .is_some_and(|p| p.is_out),
+                        _ => {
+                            let out = params.get(pos_idx).is_some_and(|p| p.is_out);
+                            pos_idx += 1;
+                            out
+                        }
+                    };
+                    if !is_out {
+                        self.maybe_consume_arg(arg, &fn_name, consumed);
+                    }
                 }
             }
 
