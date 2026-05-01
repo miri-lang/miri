@@ -572,6 +572,84 @@ println("ok")
 }
 
 // ─────────────────────────────────────────────
+// §9.2: Resource type passed to function → use-after error with exact message
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_resource_passed_to_fn_consumed_error() {
+    assert_compiler_error(
+        r#"
+use system.io
+
+struct Conn
+    handle int
+    fn drop(self)
+        return
+
+fn process(c Conn)
+    return
+
+let c = Conn(handle: 1)
+process(c)
+println(f"{c.handle}")
+"#,
+        "'c' was consumed by 'process'",
+    );
+}
+
+// ─────────────────────────────────────────────
+// §9.2: Resource consumed inside function body → error on second use
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_resource_consumed_in_body_second_use_error() {
+    assert_compiler_error(
+        r#"
+use system.io
+
+struct Conn
+    handle int
+    fn drop(self)
+        return
+
+fn sink(c Conn)
+    return
+
+fn process(c Conn)
+    sink(c)
+    println(f"{c.handle}")
+
+process(Conn(handle: 1))
+"#,
+        "'c' was consumed by 'sink'",
+    );
+}
+
+// ─────────────────────────────────────────────
+// §9.2: Managed type passed inside function body → no error (not a resource)
+// ─────────────────────────────────────────────
+
+#[test]
+fn test_managed_type_in_function_body_no_error() {
+    assert_runs(
+        r#"
+use system.io
+use system.collections.list
+
+fn helper(items [int])
+    return
+
+fn process(items [int])
+    helper(items)
+    helper(items)
+
+process(List([1, 2, 3]))
+println("ok")
+"#,
+    );
+}
+
+// ─────────────────────────────────────────────
 // §7.4: Conservative if-without-else: resource consumed only in then-branch
 // is NOT flagged after the if (sound but incomplete — we can't prove the
 // branch always executes, so we leave the variable as "potentially live").
