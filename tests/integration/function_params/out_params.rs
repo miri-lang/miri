@@ -3,6 +3,66 @@
 
 use super::utils::*;
 
+// ─── Codegen tests (AC 8.3) ───────────────────────────────────────────────
+
+#[test]
+fn test_out_param_int_writeback() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn inc(x out int)
+    x = x + 1
+
+fn main()
+    var n = 5
+    inc(n)
+    println(f"{n}")
+"#,
+        "6",
+    );
+}
+
+#[test]
+fn test_out_param_list_push() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn append(list out [int])
+    list.push(99)
+
+fn main()
+    var l = List([1, 2])
+    append(l)
+    println(f"{l[0]} {l[1]} {l[2]}")
+"#,
+        "1 2 99",
+    );
+}
+
+#[test]
+fn test_out_param_int_multiple() {
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn swap(a out int, b out int)
+    let tmp = a
+    a = b
+    b = tmp
+
+fn main()
+    var x = 10
+    var y = 20
+    swap(x, y)
+    println(f"{x} {y}")
+"#,
+        "20 10",
+    );
+}
+
 #[test]
 fn test_out_param_increment() {
     // Canonical `out` usage: callee increments the caller's variable.
@@ -47,5 +107,24 @@ var x = 1
 var y = 2
 swap(x, y)
 "#,
+    );
+}
+
+#[test]
+fn test_out_param_bool_writeback() {
+    // Bool maps to i8 in Cranelift — exercises a distinct scalar path from i64.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+fn toggle(flag out bool)
+    flag = not flag
+
+fn main()
+    var f = false
+    toggle(f)
+    println(f"{f}")
+"#,
+        "true",
     );
 }

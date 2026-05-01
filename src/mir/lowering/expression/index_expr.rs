@@ -142,6 +142,7 @@ fn lower_map_index_read(
         TerminatorKind::Call {
             func: func_op,
             args: vec![obj_op, key_op],
+            out_args: Vec::new(),
             destination,
             target: Some(target_bb),
         },

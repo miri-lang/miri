@@ -13,6 +13,7 @@ mod translator;
 mod types;
 
 use crate::codegen::backend::{ArtifactFormat, Backend, CompiledArtifact};
+use crate::codegen::cranelift::translator::needs_out_pointer;
 use crate::error::CodegenError;
 use crate::mir::Body;
 use crate::type_checker::context::TypeDefinition;
@@ -291,12 +292,20 @@ impl Backend for CraneliftBackend {
                         .push(AbiParam::new(translate_type(ret_ty, ptr_type)));
                 }
             }
-            // Parameters are locals 1..=arg_count
+            // Parameters are locals 1..=arg_count.
+            // Scalar `out` params use ptr_type (copy-in/copy-out ABI) — must match
+            // the signature built in FunctionTranslator::build_signature.
             for i in 1..=body.arg_count {
                 if i < body.local_decls.len() {
                     let param_ty = &body.local_decls[i].ty;
-                    sig.params
-                        .push(AbiParam::new(translate_type(param_ty, ptr_type)));
+                    let cl_type = if body.out_params.get(i - 1).copied().unwrap_or(false)
+                        && needs_out_pointer(&param_ty.kind)
+                    {
+                        ptr_type
+                    } else {
+                        translate_type(param_ty, ptr_type)
+                    };
+                    sig.params.push(AbiParam::new(cl_type));
                 }
             }
             module

@@ -440,6 +440,7 @@ fn lower_for_over_iterable(
                     }
                     args
                 },
+                out_args: Vec::new(),
                 destination: Place::new(len_temp),
                 target: Some(after_len_bb),
             },
@@ -518,6 +519,7 @@ fn lower_for_over_iterable(
                     }
                     args
                 },
+                out_args: Vec::new(),
                 destination: Place::new(loop_var),
                 target: Some(after_elem_bb),
             },
@@ -562,6 +564,7 @@ fn lower_for_over_iterable(
                         }
                         args
                     },
+                    out_args: Vec::new(),
                     destination: Place::new(idx_local),
                     target: Some(after_val_bb),
                 },

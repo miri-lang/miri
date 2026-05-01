@@ -1,7 +1,9 @@
 use crate::ast::expression::ExpressionKind;
 use crate::ast::literal::Literal;
 use crate::ast::types::{BuiltinCollectionKind, TypeKind};
-use crate::codegen::cranelift::translator::{FunctionTranslator, ModuleCtx, TypeCtx};
+use crate::codegen::cranelift::translator::{
+    needs_out_pointer, FunctionTranslator, ModuleCtx, TypeCtx,
+};
 use crate::codegen::cranelift::types::translate_type;
 use crate::mir::{
     AggregateKind, BasicBlock, Body, Local, Operand, Place, PlaceElem, Rvalue, Statement,
@@ -9,7 +11,8 @@ use crate::mir::{
 };
 use crate::runtime_fns::rt;
 use cranelift_codegen::ir::{
-    condcodes::IntCC, AbiParam, Block, InstBuilder, MemFlags, Signature, TrapCode,
+    condcodes::IntCC, AbiParam, Block, InstBuilder, MemFlags, Signature, StackSlotData,
+    StackSlotKind, TrapCode,
 };
 use cranelift_frontend::{FunctionBuilder, Variable};
 use cranelift_module::{Linkage, Module};
@@ -201,6 +204,14 @@ impl<'a> FunctionTranslator<'a> {
         let ptr_type = type_ctx.ptr_type;
         match &terminator.kind {
             TerminatorKind::Return => {
+                // Write back scalar out params through their caller-provided pointers.
+                for (&param_local, &ptr_var) in type_ctx.out_param_ptr_vars {
+                    let ptr = builder.use_var(ptr_var);
+                    if let Some(&val_var) = locals.get(&param_local) {
+                        let val = builder.use_var(val_var);
+                        builder.ins().store(MemFlags::new(), val, ptr, 0);
+                    }
+                }
                 // Return the value in local 0 (return place)
                 if let Some(&var) = locals.get(&Local(0)) {
                     let ret_ty = &body.local_decls[0].ty;
@@ -270,6 +281,7 @@ impl<'a> FunctionTranslator<'a> {
             TerminatorKind::Call {
                 func,
                 args,
+                out_args,
                 destination,
                 target,
             } => {
@@ -317,6 +329,9 @@ impl<'a> FunctionTranslator<'a> {
 
                 let mut sig = Signature::new(builder.func.signature.call_conv);
 
+                // Tracks (slot_addr, local) pairs for scalar out-param writeback after the call.
+                let mut out_arg_slots: Vec<(cranelift_codegen::ir::Value, Local)> = Vec::new();
+
                 for (i, arg) in args.iter().enumerate() {
                     let val = Self::translate_operand(builder, ctx, arg, locals, type_ctx)?;
                     let val_ty = builder.func.dfg.value_type(val);
@@ -329,16 +344,48 @@ impl<'a> FunctionTranslator<'a> {
                         val
                     };
 
-                    // Cast argument to match pre-declared parameter type if needed.
-                    let val = if let Some(ref pre_sig) = predeclared_sig {
-                        if i < pre_sig.params.len() {
-                            let expected_ty = pre_sig.params[i].value_type;
-                            let actual_ty = builder.func.dfg.value_type(val);
-                            if actual_ty != expected_ty {
-                                if actual_ty.bytes() > expected_ty.bytes() {
-                                    builder.ins().ireduce(expected_ty, val)
+                    // For scalar `out` params: allocate a stack slot, store the current value,
+                    // and pass the slot address. The predeclared sig already uses ptr_type here,
+                    // so we skip the normal cast-to-predeclared path for these args.
+                    let is_scalar_out = out_args.get(i).copied().unwrap_or(false) && {
+                        match arg {
+                            Operand::Copy(p) | Operand::Move(p) => {
+                                p.projection.is_empty()
+                                    && needs_out_pointer(&type_ctx.local_types[p.local.0].kind)
+                            }
+                            _ => false,
+                        }
+                    };
+
+                    let val = if is_scalar_out {
+                        let local = match arg {
+                            Operand::Copy(p) | Operand::Move(p) => p.local,
+                            _ => unreachable!(),
+                        };
+                        let cur_val_ty = builder.func.dfg.value_type(val);
+                        let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                            StackSlotKind::ExplicitSlot,
+                            cur_val_ty.bytes(),
+                            cur_val_ty.bytes().trailing_zeros() as u8,
+                        ));
+                        let addr = builder.ins().stack_addr(ptr_type, slot, 0);
+                        builder.ins().store(MemFlags::new(), val, addr, 0);
+                        out_arg_slots.push((addr, local));
+                        addr
+                    } else {
+                        // Cast argument to match pre-declared parameter type if needed.
+                        if let Some(ref pre_sig) = predeclared_sig {
+                            if i < pre_sig.params.len() {
+                                let expected_ty = pre_sig.params[i].value_type;
+                                let actual_ty = builder.func.dfg.value_type(val);
+                                if actual_ty != expected_ty {
+                                    if actual_ty.bytes() > expected_ty.bytes() {
+                                        builder.ins().ireduce(expected_ty, val)
+                                    } else {
+                                        builder.ins().sextend(expected_ty, val)
+                                    }
                                 } else {
-                                    builder.ins().sextend(expected_ty, val)
+                                    val
                                 }
                             } else {
                                 val
@@ -346,8 +393,6 @@ impl<'a> FunctionTranslator<'a> {
                         } else {
                             val
                         }
-                    } else {
-                        val
                     };
 
                     arg_values.push(val);
@@ -555,6 +600,15 @@ impl<'a> FunctionTranslator<'a> {
                             format!("Unknown call destination local: {:?}", destination.local)
                         })?;
                         builder.def_var(*dest_var, result);
+                    }
+                }
+
+                // Load updated values back from out-arg stack slots into caller locals.
+                for (addr, local) in &out_arg_slots {
+                    if let Some(&var) = locals.get(local) {
+                        let local_ty = translate_type(type_ctx.local_types[local.0], ptr_type);
+                        let loaded = builder.ins().load(local_ty, MemFlags::new(), *addr, 0);
+                        builder.def_var(var, loaded);
                     }
                 }
 

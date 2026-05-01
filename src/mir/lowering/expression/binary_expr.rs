@@ -66,6 +66,7 @@ pub(crate) fn lower_binary_expr(
             TerminatorKind::Call {
                 func: contains_fn,
                 args: vec![rhs_op, lhs_op], // (collection, element)
+                out_args: Vec::new(),
                 destination,
                 target: Some(target_bb),
             },
@@ -360,6 +361,7 @@ pub(crate) fn lower_binary_expr(
                                 TerminatorKind::Call {
                                     func: func_op,
                                     args: call_args,
+                                    out_args: Vec::new(),
                                     destination: Place::new(eq_temp),
                                     target: Some(after_eq_bb),
                                 },
@@ -408,6 +410,7 @@ pub(crate) fn lower_binary_expr(
                             TerminatorKind::Call {
                                 func: func_op,
                                 args: call_args,
+                                out_args: Vec::new(),
                                 destination,
                                 target: Some(target_bb),
                             },
