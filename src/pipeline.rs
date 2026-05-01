@@ -679,6 +679,56 @@ impl Pipeline {
                         }
                     }
                 }
+                StatementKind::Struct(name_expr, _generics, _fields, methods, _vis) => {
+                    // Compile struct methods with bodies as `StructName_methodName`.
+                    // Use lower_function (not lower_class_method) because struct methods
+                    // declare `self` explicitly in their param list, so lower_class_method
+                    // would double-add it. lower_function treats `self` as a regular param
+                    // with synthesized type Custom("Self") which Perceus skips RC-tracking.
+                    let struct_name = if let ExpressionKind::Identifier(name, _) = &name_expr.node {
+                        name.as_str()
+                    } else {
+                        continue;
+                    };
+
+                    for method_stmt in methods {
+                        if let StatementKind::FunctionDeclaration(method_decl) = &method_stmt.node {
+                            if method_decl.body.is_none() {
+                                continue;
+                            }
+
+                            let mut mangled = String::with_capacity(
+                                struct_name.len() + 1 + method_decl.name.len(),
+                            );
+                            mangled.push_str(struct_name);
+                            mangled.push('_');
+                            mangled.push_str(&method_decl.name);
+                            if lowered_names.contains(&mangled) {
+                                continue;
+                            }
+
+                            let (mir_body, lambdas) = mir::lowering::lower_function(
+                                method_stmt,
+                                &result.type_checker,
+                                is_release,
+                                true,
+                            )
+                            .map_err(|e| {
+                                CompilerError::Codegen(format!(
+                                    "MIR lowering failed for {}: {}",
+                                    mangled, e
+                                ))
+                            })?;
+
+                            lowered_names.insert(mangled.clone());
+                            bodies.push((mangled, mir_body));
+                            for lambda in lambdas {
+                                lowered_names.insert(lambda.name.clone());
+                                bodies.push((lambda.name, lambda.body));
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }
