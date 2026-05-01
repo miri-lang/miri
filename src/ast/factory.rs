@@ -681,6 +681,23 @@ pub fn parameter(
         typ: Box::new(typ),
         guard,
         default_value,
+        is_out: false,
+    }
+}
+
+/// Creates an `out` function parameter.
+pub fn out_parameter(
+    name: String,
+    typ: Expression,
+    guard: Option<Box<Expression>>,
+    default_value: Option<Box<Expression>>,
+) -> Parameter {
+    Parameter {
+        name,
+        typ: Box::new(typ),
+        guard,
+        default_value,
+        is_out: true,
     }
 }
 

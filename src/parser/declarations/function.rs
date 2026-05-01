@@ -222,6 +222,13 @@ impl<'source> Parser<'source> {
     pub(crate) fn parameter(&mut self) -> Result<Parameter, SyntaxError> {
         let name = self.parse_simple_identifier()?;
 
+        let is_out = if self.match_lookahead_type(|t| matches!(t, Token::Out)) {
+            self.eat_token(&Token::Out)?;
+            true
+        } else {
+            false
+        };
+
         let typ = match self.type_expression()? {
             Some(typ) => Box::new(typ),
             None if name == "self" => {
@@ -258,6 +265,7 @@ impl<'source> Parser<'source> {
             typ,
             guard,
             default_value,
+            is_out,
         })
     }
 

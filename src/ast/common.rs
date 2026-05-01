@@ -28,6 +28,7 @@ pub struct Parameter {
     pub typ: Box<Expression>,
     pub guard: Option<Box<Expression>>,
     pub default_value: Option<Box<Expression>>,
+    pub is_out: bool,
 }
 
 /// Known runtime targets for runtime function declarations.

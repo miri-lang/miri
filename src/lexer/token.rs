@@ -118,6 +118,8 @@ pub enum Token {
     Local,
     #[token("abstract")]
     Abstract,
+    #[token("out")]
+    Out,
     #[token("runtime")]
     Runtime,
 
