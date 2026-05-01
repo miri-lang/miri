@@ -25,3 +25,18 @@ println(f"{s.length()}")
         "does not have members",
     );
 }
+
+#[test]
+fn test_set_constructor_rejects_non_literal_arg() {
+    // `Set(non-literal)` is not supported because lowering delegates to the set-literal
+    // lowering. Passing an arbitrary value of `Set<T>` would silently produce an empty set.
+    assert_compiler_error(
+        "
+use system.collections.set
+
+let other = {1, 2, 3}
+let s = Set(other)
+",
+        "only accepts a set literal",
+    );
+}
