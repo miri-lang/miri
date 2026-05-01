@@ -8,5 +8,6 @@ pub mod enums;
 pub mod floats;
 pub mod integers;
 pub mod mixed;
+pub mod out_params;
 pub mod strings;
 pub mod structs;

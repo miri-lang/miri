@@ -457,6 +457,7 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
                             typ: p.typ.clone(),
                             guard: p.guard.clone(),
                             default_value: p.default_value.clone(),
+                            is_out: p.is_out,
                         })
                         .collect(),
                     return_type: ret_type_expr.clone(),

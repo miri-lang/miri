@@ -3,12 +3,14 @@
 
 //! Use-after-move analysis for the Miri type checker.
 //!
-//! Tracks which variables have been "consumed" (passed as arguments to a
-//! function call) and emits a compile-time error if a consumed managed-type
-//! variable is subsequently accessed.
+//! Tracks which variables have been "consumed" and emits a compile-time error
+//! if a consumed variable is subsequently accessed. A variable is consumed by:
+//! - Passing it as an argument to a function call (§7.1)
+//! - Assigning it to another variable when the type is a resource (§7.5)
 //!
 //! Auto-copy types (size ≤ 128 bytes, all-primitive fields) are always copied
-//! and are never flagged.
+//! and are never flagged. Resource types (`fn drop(self)` defined) are always
+//! tracked; other managed types are only tracked at top-level scope.
 
 use crate::ast::expression::{ExpressionKind, LeftHandSideExpression};
 use crate::ast::statement::StatementKind;

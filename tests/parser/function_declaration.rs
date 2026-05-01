@@ -2,13 +2,15 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use super::utils::{parser_error_test, parser_test};
+use miri::ast::factory::lhs_identifier;
 use miri::ast::factory::{
-    binary, block, boolean_literal, empty_statement, expression_statement, func, generic_type,
-    generic_type_with_kind, guard, identifier, int_literal_expression, parameter, return_statement,
-    type_bool, type_custom, type_expr_non_null, type_int, type_list, type_string,
+    assign, binary, block, boolean_literal, empty_statement, expression_statement, func,
+    generic_type, generic_type_with_kind, guard, identifier, int_literal_expression, out_parameter,
+    parameter, return_statement, type_bool, type_custom, type_expr_non_null, type_int, type_list,
+    type_string,
 };
 use miri::ast::types::TypeDeclarationKind;
-use miri::ast::{opt_expr, BinaryOp, GuardOp};
+use miri::ast::{opt_expr, AssignmentOp, BinaryOp, GuardOp};
 use miri::error::syntax::SyntaxErrorKind;
 
 #[test]
@@ -658,5 +660,95 @@ fn manyParams(a int, b int, c int, d int, e int)
                 parameter("e".into(), type_expr_non_null(type_int()), None, None),
             ])
             .build(block(vec![expression_statement(identifier("a"))]))],
+    );
+}
+
+// ===== out parameter tests =====
+
+#[test]
+fn test_function_out_parameter() {
+    parser_test(
+        "
+fn foo(x out int): x
+",
+        vec![func("foo")
+            .params(vec![out_parameter(
+                "x".into(),
+                type_expr_non_null(type_int()),
+                None,
+                None,
+            )])
+            .build(expression_statement(identifier("x")))],
+    );
+}
+
+#[test]
+fn test_function_out_parameter_with_assignment_body() {
+    parser_test(
+        "
+fn foo(x out int): x = x + 1
+",
+        vec![func("foo")
+            .params(vec![out_parameter(
+                "x".into(),
+                type_expr_non_null(type_int()),
+                None,
+                None,
+            )])
+            .build(expression_statement(assign(
+                lhs_identifier("x"),
+                AssignmentOp::Assign,
+                binary(identifier("x"), BinaryOp::Add, int_literal_expression(1)),
+            )))],
+    );
+}
+
+#[test]
+fn test_function_mixed_out_and_regular_params() {
+    parser_test(
+        "
+fn update(a int, b out int)
+    a
+",
+        vec![func("update")
+            .params(vec![
+                parameter("a".into(), type_expr_non_null(type_int()), None, None),
+                out_parameter("b".into(), type_expr_non_null(type_int()), None, None),
+            ])
+            .build(block(vec![expression_statement(identifier("a"))]))],
+    );
+}
+
+#[test]
+fn test_function_multiple_out_params() {
+    parser_test(
+        "
+fn swap(a out int, b out int)
+    a
+",
+        vec![func("swap")
+            .params(vec![
+                out_parameter("a".into(), type_expr_non_null(type_int()), None, None),
+                out_parameter("b".into(), type_expr_non_null(type_int()), None, None),
+            ])
+            .build(block(vec![expression_statement(identifier("a"))]))],
+    );
+}
+
+#[test]
+fn test_error_out_parameter_missing_type() {
+    // `out` with no following type should produce MissingTypeExpression
+    parser_error_test("fn foo(x out)", &SyntaxErrorKind::MissingTypeExpression);
+}
+
+#[test]
+fn test_error_out_used_as_parameter_name() {
+    // `out` used in place of a parameter name is not an identifier
+    parser_error_test(
+        "fn foo(out int)",
+        &SyntaxErrorKind::UnexpectedToken {
+            expected: "identifier".to_string(),
+            found: "out".to_string(),
+        },
     );
 }

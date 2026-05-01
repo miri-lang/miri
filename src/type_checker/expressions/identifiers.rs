@@ -84,6 +84,7 @@ impl TypeChecker {
                     typ: Box::new(t_expr),
                     guard: None,
                     default_value: None,
+                    is_out: false,
                 }],
                 return_type: Some(Box::new(ast_factory::type_expr_non_null(return_type))),
             })));
@@ -110,6 +111,7 @@ impl TypeChecker {
                     typ: Box::new(t_expr),
                     guard: None,
                     default_value: None,
+                    is_out: false,
                 }],
                 return_type: Some(Box::new(ast_factory::type_expr_non_null(return_type))),
             })));
@@ -136,6 +138,7 @@ impl TypeChecker {
                     typ: Box::new(e_expr),
                     guard: None,
                     default_value: None,
+                    is_out: false,
                 }],
                 return_type: Some(Box::new(ast_factory::type_expr_non_null(return_type))),
             })));
