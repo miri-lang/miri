@@ -69,6 +69,10 @@ pub struct Body {
     /// Populated by MIR lowering from `Parameter::is_out`.
     /// Used by codegen to emit pointer ABI for scalar out params (copy-in/copy-out).
     pub out_params: Vec<bool>,
+    /// Names of custom types that define a `fn drop(self)` method (resource types).
+    /// Populated by MIR lowering from the type checker's struct/class definitions.
+    /// Used by RC elision to avoid removing DecRef operations that trigger destructors.
+    pub has_drop_types: HashSet<String>,
 }
 
 impl Body {
@@ -89,6 +93,7 @@ impl Body {
             type_params: HashSet::new(),
             closure_capture_types: HashMap::new(),
             out_params: Vec::new(),
+            has_drop_types: HashSet::new(),
         }
     }
 

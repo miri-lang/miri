@@ -1088,6 +1088,12 @@ impl Pipeline {
             mir::optimization::insert_rc(body);
         }
 
+        // Elide redundant IncRef/DecRef pairs identified by the RC elision pass.
+        // This runs after Perceus to remove pairs that are provably net-zero.
+        for (_name, body) in &mut bodies {
+            mir::optimization::elide_rc(body);
+        }
+
         // Optional MIR verification pass: check RC invariants after Perceus.
         // Enabled by setting the MIRI_VERIFY_MIR environment variable to any
         // non-empty value, or by configuring it on the Pipeline instance.
@@ -1111,7 +1117,7 @@ impl Pipeline {
         Ok(bodies)
     }
 
-    /// Get MIR as a string for debugging purposes.
+    /// Get MIR as a string for debugging purposes (pre-RC).
     pub fn get_mir(&self, source: &str) -> Result<String, CompilerError> {
         let pipeline_result = self.frontend_script(source)?;
         let mir_bodies = self.lower_to_mir(&pipeline_result, false)?;
@@ -1121,6 +1127,25 @@ impl Pipeline {
             output.push_str(&format!("=== MIR for {} ===\n{}\n\n", name, body));
         }
         Ok(output)
+    }
+
+    /// Get MIR bodies after Perceus RC insertion and RC elision, for test inspection.
+    ///
+    /// Returns the lowered and optimised bodies (including RC operations) so that
+    /// tests can verify the RC elision pass removed expected IncRef/DecRef pairs.
+    pub fn get_mir_bodies_with_rc(
+        &self,
+        source: &str,
+    ) -> Result<Vec<(String, crate::mir::Body)>, CompilerError> {
+        let pipeline_result = self.frontend_script(source)?;
+        let mut bodies = self.lower_to_mir(&pipeline_result, false)?;
+        for (_name, body) in &mut bodies {
+            mir::optimization::insert_rc(body);
+        }
+        for (_name, body) in &mut bodies {
+            mir::optimization::elide_rc(body);
+        }
+        Ok(bodies)
     }
 
     /// Link an object file to an executable using the system linker.
