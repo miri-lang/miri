@@ -32,7 +32,7 @@ use crate::ast::{literal::Literal, types::*, MemberVisibility};
 use crate::error::syntax::Span;
 use std::collections::{BTreeMap, HashMap};
 
-use super::escape_analysis::{EscapeSummary, FunctionId};
+use super::escape_analysis::{load_ffi_summaries, EscapeSummary, FunctionId};
 
 /// Represents information about a symbol (variable, function, etc.) in the scope.
 #[derive(Debug, Clone)]
@@ -351,7 +351,7 @@ impl Context {
             current_class: None,
             current_base_class: None,
             current_class_type: None,
-            escape_summaries: HashMap::new(),
+            escape_summaries: load_ffi_summaries(),
         }
     }
 

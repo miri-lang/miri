@@ -1,0 +1,90 @@
+# Escape summaries for FFI-only runtime functions (§12.0.2).
+#
+# Each key is the symbol name as it appears in `runtime "core" fn` declarations
+# in stdlib .mi files.  The type-checker embeds this file at compile time and
+# loads it once during Context initialisation.
+#
+# Fields (all optional, default to empty):
+#   direct_escapes    — 0-based parameter indices that unconditionally escape
+#                       (stored in a collection, returned, or captured).
+#   return_aliases    — 0-based parameter indices aliased by the return value.
+#   conditional_escapes — array of { param, via_fn_param, callee_param } tables
+#                       for the higher-order case (§12.0.1).
+#
+# Parameters that are raw pointers to the collection itself (param 0 for all
+# mutators below) are NOT listed — they are unmanaged and escape analysis
+# tracks only Miri-level managed types.
+
+# ── Collection mutators ────────────────────────────────────────────────────────
+# These store their element argument inside the collection; the element escapes.
+
+[miri_rt_list_push]
+# push(ptr *MiriList, val usize) — val (param 1) is stored in the list
+direct_escapes = [1]
+
+[miri_rt_list_insert]
+# insert(ptr *MiriList, index usize, val usize) — val (param 2) is stored
+direct_escapes = [2]
+
+[miri_rt_list_set]
+# set(ptr *MiriList, index usize, val usize) — val (param 2) replaces an element
+direct_escapes = [2]
+
+[miri_rt_map_set]
+# set(ptr *MiriMap, key usize, value usize) — key (param 1) and value (param 2)
+# are both stored in the map
+direct_escapes = [1, 2]
+
+[miri_rt_set_add]
+# add(ptr *MiriSet, elem usize) — elem (param 1) is stored in the set
+direct_escapes = [1]
+
+# ── Collection read-only accessors ────────────────────────────────────────────
+# These take a managed-type key/element param but only read it for comparison;
+# they do NOT store the argument. Explicit empty entries prevent the conservative
+# "all managed params escape" fallback from triggering false positives when
+# §12.1 is wired in.
+
+[miri_rt_map_get]
+# get(ptr *MiriMap, key usize) usize — key (param 1) is only compared, not stored
+direct_escapes = []
+
+[miri_rt_map_contains_key]
+# contains_key(ptr *MiriMap, key usize) bool — key (param 1) is only compared
+direct_escapes = []
+
+[miri_rt_map_remove]
+# remove(ptr *MiriMap, key usize) bool — key (param 1) used for lookup/removal, not stored
+direct_escapes = []
+
+[miri_rt_set_contains]
+# contains(ptr *MiriSet, elem usize) bool — elem (param 1) is only compared
+direct_escapes = []
+
+[miri_rt_set_remove]
+# remove(ptr *MiriSet, elem usize) bool — elem (param 1) used for removal, not stored
+direct_escapes = []
+
+# ── Array mutator ─────────────────────────────────────────────────────────────
+# miri_rt_array_set_val stores the value argument into the array; it escapes.
+
+[miri_rt_array_set_val]
+# set_val(ptr *MiriArray, index usize, val usize) u8 — val (param 2) is stored
+direct_escapes = [2]
+
+# ── IO sinks ──────────────────────────────────────────────────────────────────
+# These read their argument but do not store it; no parameters escape.
+# Explicit entries are required so the analysis does not fall back to the
+# conservative "all managed params escape" default for unknown FFI functions.
+
+[miri_rt_print]
+direct_escapes = []
+
+[miri_rt_println]
+direct_escapes = []
+
+[miri_rt_eprint]
+direct_escapes = []
+
+[miri_rt_eprintln]
+direct_escapes = []
