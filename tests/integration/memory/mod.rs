@@ -8,6 +8,7 @@ pub mod closures;
 pub mod collections;
 pub mod edge_cases;
 pub mod enums;
+pub mod escape_analysis;
 pub mod field_projections;
 pub mod functions;
 pub mod generics;

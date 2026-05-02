@@ -32,6 +32,8 @@ use crate::ast::{literal::Literal, types::*, MemberVisibility};
 use crate::error::syntax::Span;
 use std::collections::{BTreeMap, HashMap};
 
+use super::escape_analysis::{EscapeSummary, FunctionId};
+
 /// Represents information about a symbol (variable, function, etc.) in the scope.
 #[derive(Debug, Clone)]
 pub struct SymbolInfo {
@@ -329,6 +331,10 @@ pub struct Context {
     pub current_base_class: Option<String>,
     /// The type of the current class (for self expression type inference).
     pub current_class_type: Option<Type>,
+    /// Escape summaries for all functions analyzed so far (§12.0.1).
+    /// Keyed by qualified function name (`"fn_name"` or `"ClassName_method"`).
+    /// Populated during escape analysis (§12.1); empty until then.
+    pub escape_summaries: HashMap<FunctionId, EscapeSummary>,
 }
 
 impl Context {
@@ -345,6 +351,7 @@ impl Context {
             current_class: None,
             current_base_class: None,
             current_class_type: None,
+            escape_summaries: HashMap::new(),
         }
     }
 
