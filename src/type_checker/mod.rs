@@ -33,6 +33,7 @@ use std::path::PathBuf;
 mod builtins;
 mod compatibility;
 pub mod context;
+pub mod escape_analysis;
 pub mod expressions;
 mod generics;
 mod operators;
