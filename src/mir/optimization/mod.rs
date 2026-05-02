@@ -37,6 +37,7 @@ pub mod constant_propagation;
 pub mod copy_propagation;
 pub mod dead_code;
 pub mod perceus;
+pub mod rc_elision;
 pub mod simplify_cfg;
 
 use crate::mir::Body;
@@ -44,6 +45,8 @@ use constant_propagation::ConstantPropagation;
 use copy_propagation::CopyPropagation;
 use dead_code::DeadCodeElimination;
 use perceus::Perceus;
+use rc_elision::RcElision;
+pub use rc_elision::{count_all_rc_ops, count_rc_ops};
 use simplify_cfg::SimplifyCfg;
 
 /// Defines an optimization pass for MIR transformations.
@@ -137,4 +140,19 @@ pub fn optimize(body: &mut Body) {
 /// * `body` - The MIR function body to annotate with RC operations (mutated in place)
 pub fn insert_rc(body: &mut Body) {
     Perceus.run(body);
+}
+
+/// Remove redundant IncRef/DecRef pairs from the MIR body.
+///
+/// Must be called after [`insert_rc`]. Runs the RC elision pass which removes
+/// balanced `(IncRef(src), DecRef(dest))` pairs where `dest = Copy(src)` flows
+/// linearly with no aliasing hazards.
+///
+/// This pass is idempotent: running it twice produces the same result.
+///
+/// # Arguments
+///
+/// * `body` - The MIR function body already annotated with RC operations
+pub fn elide_rc(body: &mut Body) {
+    RcElision.run(body);
 }
