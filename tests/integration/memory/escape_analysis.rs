@@ -8,6 +8,161 @@ use super::super::utils::*;
 // use-after-move errors (regression guard for Phase 12 escape analysis).
 // ─────────────────────────────────────────────────────────────────────────────
 
+// §12.0.3 — Method / self semantics
+// ─────────────────────────────────────────────────────────────────────────────
+// Method calls on concrete classes must not falsely consume managed receivers or
+// arguments when no escape summary is present for the method (no §12.1 summary
+// computed yet). Virtual dispatch and inherited methods must likewise not generate
+// false positives.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_method_receiver_not_consumed_without_summary() {
+    // Calling a read-only method on a class instance multiple times must NOT
+    // consume the receiver when no escape summary marks self as escaping.
+    assert_runs(
+        r#"
+use system.io
+
+class Square
+    var side int
+    fn init(s int)
+        self.side = s
+    fn area() int
+        return self.side * self.side
+
+fn measure_twice(sq Square)
+    let a = sq.area()
+    let b = sq.area()
+    println(f"{a} {b}")
+
+let sq = Square(s: 4)
+measure_twice(sq)
+"#,
+    );
+}
+
+#[test]
+fn test_method_arg_not_consumed_without_summary() {
+    // Passing a managed argument to a method that only reads it must NOT
+    // consume the argument variable (no escape summary for the method).
+    assert_runs(
+        r#"
+use system.io
+use system.collections.list
+
+class Lens
+    var scale int
+    fn init(s int)
+        self.scale = s
+    fn peek(items [int]) int
+        return items.length() * self.scale
+
+fn measure_twice(lens Lens, items [int])
+    let a = lens.peek(items)
+    let b = lens.peek(items)
+    println(f"{a} {b}")
+
+let lens = Lens(s: 2)
+let xs = List([1, 2, 3])
+measure_twice(lens, xs)
+"#,
+    );
+}
+
+#[test]
+fn test_inherited_method_receiver_not_consumed() {
+    // Calling an inherited method (defined on the base class) multiple times
+    // must not consume the receiver — the lookup walks the base_class chain.
+    assert_runs(
+        r#"
+use system.io
+
+class Base
+    var x int
+    fn init(v int)
+        self.x = v
+    fn read() int
+        return self.x
+
+class Child extends Base
+    var label String
+    fn init(v int, lbl String)
+        super.init(v)
+        self.label = lbl
+
+fn use_child(c Child)
+    let a = c.read()
+    let b = c.read()
+    println(f"{a} {b}")
+
+let c = Child(v: 42, lbl: "hi")
+use_child(c)
+"#,
+    );
+}
+
+#[test]
+fn test_trait_receiver_not_consumed_without_implementer_summary() {
+    // When the receiver has a trait type and no implementer escape summaries
+    // are present, virtual dispatch must NOT falsely consume the receiver.
+    assert_runs(
+        r#"
+use system.io
+
+trait Measurable
+    fn size() int
+
+class Rect implements Measurable
+    var w int
+    var h int
+    fn init(w int, h int)
+        self.w = w
+        self.h = h
+    fn size() int
+        return self.w * self.h
+
+fn measure_twice(m Measurable)
+    let a = m.size()
+    let b = m.size()
+    println(f"{a} {b}")
+
+let r = Rect(w: 3, h: 4)
+measure_twice(r)
+"#,
+    );
+}
+
+#[test]
+fn test_method_chain_no_false_consume() {
+    // Chaining multiple read-only method calls on the same receiver must not
+    // consume the receiver between calls.
+    assert_runs(
+        r#"
+use system.io
+
+class Stats
+    var min int
+    var max int
+    fn init(lo int, hi int)
+        self.min = lo
+        self.max = hi
+    fn lo() int
+        return self.min
+    fn hi() int
+        return self.max
+    fn range() int
+        return self.max - self.min
+
+fn report(s Stats)
+    println(f"{s.lo()} {s.hi()} {s.range()}")
+
+let s = Stats(lo: 2, hi: 10)
+report(s)
+"#,
+    );
+}
+
 #[test]
 fn test_managed_param_passed_to_readonly_fn_no_error() {
     // Passing a list to a function that only reads it must never be flagged.

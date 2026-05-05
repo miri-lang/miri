@@ -213,6 +213,7 @@ impl TypeChecker {
             let (uam_errors, uam_warnings) = use_after_move::UseAfterMoveChecker::new(
                 &self.types,
                 &self.global_type_definitions,
+                &context.escape_summaries,
             )
             .check_program(program);
             self.errors.extend(uam_errors);
