@@ -22,6 +22,7 @@ use crate::error::type_error::{TypeError, TypeErrorKind};
 use std::collections::HashMap;
 
 use super::context::TypeDefinition;
+use super::escape_analysis::{EscapeSummary, FunctionId};
 use super::utils::{is_auto_copy, is_resource};
 
 #[derive(Clone)]
@@ -34,6 +35,9 @@ struct ConsumedInfo {
 pub struct UseAfterMoveChecker<'a> {
     types: &'a HashMap<usize, Type>,
     type_definitions: &'a HashMap<String, TypeDefinition>,
+    /// Escape summaries keyed by `FunctionId` (`"fn_name"` or `"ClassName_method"`).
+    /// Pre-populated with FFI summaries (§12.0.2); user-method summaries added by §12.1.
+    escape_summaries: &'a HashMap<FunctionId, EscapeSummary>,
     errors: Vec<TypeError>,
     warnings: Vec<Diagnostic>,
     /// True when analysis is inside a function body (vs. top-level script code).
@@ -45,10 +49,12 @@ impl<'a> UseAfterMoveChecker<'a> {
     pub fn new(
         types: &'a HashMap<usize, Type>,
         type_definitions: &'a HashMap<String, TypeDefinition>,
+        escape_summaries: &'a HashMap<FunctionId, EscapeSummary>,
     ) -> Self {
         Self {
             types,
             type_definitions,
+            escape_summaries,
             errors: vec![],
             warnings: vec![],
             in_function_body: false,
@@ -243,6 +249,10 @@ impl<'a> UseAfterMoveChecker<'a> {
             ExpressionKind::Call(callee, args) => {
                 let fn_name = self.extract_callee_name(callee);
 
+                // §12.0.3: extract the method escape summary (owned) before any
+                // mutable borrow of self so the borrow checker stays happy.
+                let method_summary: Option<EscapeSummary> = self.extract_method_summary(callee);
+
                 // Check callee for consumed uses (handles method receiver via Member).
                 self.check_expr(callee, consumed);
 
@@ -266,21 +276,62 @@ impl<'a> UseAfterMoveChecker<'a> {
                     })
                     .unwrap_or(&[]);
 
-                let mut pos_idx = 0usize;
-                for arg in args {
-                    let is_out = match &arg.node {
-                        ExpressionKind::NamedArgument(name, _) => params
-                            .iter()
-                            .find(|p| &p.name == name)
-                            .is_some_and(|p| p.is_out),
-                        _ => {
-                            let out = params.get(pos_idx).is_some_and(|p| p.is_out);
-                            pos_idx += 1;
-                            out
+                if let Some(ref summary) = method_summary {
+                    // §12.0.3 static / virtual path: apply escape summary.
+                    // param 0 = self (receiver); params 1..N = explicit args.
+                    if summary.directly_escapes(0) {
+                        if let ExpressionKind::Member(obj_expr, _) = &callee.node {
+                            self.maybe_consume_arg(obj_expr, &fn_name, consumed);
                         }
-                    };
-                    if !is_out {
-                        self.maybe_consume_arg(arg, &fn_name, consumed);
+                    }
+                    // Track both the out-param index (into `params`, self-free)
+                    // and the escape-summary index (1-based, shifted for self at 0).
+                    let mut pos_idx = 0usize;
+                    for arg in args {
+                        let (is_out, escape_idx) = match &arg.node {
+                            ExpressionKind::NamedArgument(name, _) => {
+                                let out = params
+                                    .iter()
+                                    .find(|p| &p.name == name)
+                                    .is_some_and(|p| p.is_out);
+                                // Named arg: position in params + 1 for self offset.
+                                let eidx = params
+                                    .iter()
+                                    .position(|p| &p.name == name)
+                                    .map(|i| i + 1)
+                                    .unwrap_or(usize::MAX);
+                                (out, eidx)
+                            }
+                            _ => {
+                                let out = params.get(pos_idx).is_some_and(|p| p.is_out);
+                                let eidx = pos_idx + 1; // +1 because self is param 0
+                                pos_idx += 1;
+                                (out, eidx)
+                            }
+                        };
+                        if !is_out && summary.directly_escapes(escape_idx) {
+                            self.maybe_consume_arg(arg, &fn_name, consumed);
+                        }
+                    }
+                } else {
+                    // Free function call, or method call with no summary available:
+                    // fall back to the existing should_consume_expr logic.
+                    let mut pos_idx = 0usize;
+                    for arg in args {
+                        let is_out = match &arg.node {
+                            ExpressionKind::NamedArgument(name, _) => params
+                                .iter()
+                                .find(|p| &p.name == name)
+                                .is_some_and(|p| p.is_out),
+                            _ => {
+                                let out = params.get(pos_idx).is_some_and(|p| p.is_out);
+                                pos_idx += 1;
+                                out
+                            }
+                        };
+                        if !is_out {
+                            self.maybe_consume_arg(arg, &fn_name, consumed);
+                        }
                     }
                 }
             }
@@ -496,6 +547,140 @@ impl<'a> UseAfterMoveChecker<'a> {
                 }
             }
             _ => "<function>".to_string(),
+        }
+    }
+
+    // ── §12.0.3 Method / self semantics ──────────────────────────────────────
+
+    /// Look up the escape summary for a static method call on `class_name`.
+    ///
+    /// Walks the `base_class` chain so that inherited methods are found in the
+    /// defining class's summary, not the static type's (§12.0.3 inherited rule).
+    fn lookup_static_method_summary(
+        &self,
+        class_name: &str,
+        method_name: &str,
+    ) -> Option<&EscapeSummary> {
+        let key = format!("{class_name}_{method_name}");
+        if let Some(s) = self.escape_summaries.get(&key) {
+            return Some(s);
+        }
+        // Walk base_class chain for inherited methods.
+        let mut current = class_name;
+        loop {
+            match self.type_definitions.get(current) {
+                Some(TypeDefinition::Class(cd)) => match &cd.base_class {
+                    Some(base) => {
+                        let base_key = format!("{base}_{method_name}");
+                        if let Some(s) = self.escape_summaries.get(&base_key) {
+                            return Some(s);
+                        }
+                        current = base.as_str();
+                    }
+                    None => return None,
+                },
+                _ => return None,
+            }
+        }
+    }
+
+    /// Build a joined escape summary for a virtual / trait-dispatch method call.
+    ///
+    /// Collects all concrete classes that implement `trait_or_abstract` (directly
+    /// or via inheritance) and unions their escape summaries (§12.0.3 virtual rule).
+    ///
+    /// Returns `None` when no implementers are visible — the caller falls back to
+    /// the "every managed param escapes" conservative treatment per §12.0.6.
+    fn join_virtual_summaries(
+        &self,
+        trait_or_abstract: &str,
+        method_name: &str,
+    ) -> Option<EscapeSummary> {
+        let mut joined = EscapeSummary::default();
+        let mut any_found = false;
+
+        for (class_name, td) in self.type_definitions {
+            let TypeDefinition::Class(cd) = td else {
+                continue;
+            };
+            // Include concrete implementers only.
+            if cd.is_abstract {
+                continue;
+            }
+            let implements_trait = cd.traits.iter().any(|t| t == trait_or_abstract);
+            let inherits_abstract =
+                !implements_trait && self.class_extends(class_name, trait_or_abstract);
+            if !implements_trait && !inherits_abstract {
+                continue;
+            }
+            if let Some(s) = self.lookup_static_method_summary(class_name, method_name) {
+                joined
+                    .direct_escapes
+                    .extend(s.direct_escapes.iter().copied());
+                joined
+                    .return_aliases
+                    .extend(s.return_aliases.iter().copied());
+                joined
+                    .conditional_escapes
+                    .extend(s.conditional_escapes.iter().cloned());
+                any_found = true;
+            }
+        }
+
+        if any_found {
+            Some(joined)
+        } else {
+            None
+        }
+    }
+
+    /// Returns `true` if `class_name` has `ancestor` anywhere in its `base_class` chain.
+    fn class_extends(&self, class_name: &str, ancestor: &str) -> bool {
+        let mut current = class_name;
+        loop {
+            if current == ancestor {
+                return true;
+            }
+            match self.type_definitions.get(current) {
+                Some(TypeDefinition::Class(cd)) => match &cd.base_class {
+                    Some(base) => current = base.as_str(),
+                    None => return false,
+                },
+                _ => return false,
+            }
+        }
+    }
+
+    /// If `callee` is a method call (`Member(receiver, method_name)`), looks up
+    /// and returns the applicable escape summary for the method.
+    ///
+    /// Returns `None` when the callee is a free function, the receiver type is
+    /// unresolved, or no summary is present for the method yet.
+    fn extract_method_summary(&self, callee: &Expression) -> Option<EscapeSummary> {
+        let ExpressionKind::Member(obj_expr, method_expr) = &callee.node else {
+            return None;
+        };
+        let ExpressionKind::Identifier(method_name, _) = &method_expr.node else {
+            return None;
+        };
+        let receiver_ty = self.types.get(&obj_expr.id)?;
+        let TypeKind::Custom(type_name, _) = &receiver_ty.kind else {
+            return None;
+        };
+
+        match self.type_definitions.get(type_name.as_str()) {
+            Some(TypeDefinition::Trait(_)) => self.join_virtual_summaries(type_name, method_name),
+            Some(TypeDefinition::Class(cd)) if cd.is_abstract => {
+                self.join_virtual_summaries(type_name, method_name)
+            }
+            Some(TypeDefinition::Class(_)) => self
+                .lookup_static_method_summary(type_name, method_name)
+                .cloned(),
+            Some(TypeDefinition::Struct(_))
+            | Some(TypeDefinition::Enum(_))
+            | Some(TypeDefinition::Generic(_))
+            | Some(TypeDefinition::Alias(_))
+            | None => None,
         }
     }
 }
