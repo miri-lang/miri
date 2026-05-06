@@ -23,6 +23,18 @@ use crate::error::type_error::TypeError;
 ///
 /// Resource types are subject to use-after-move tracking inside function bodies.
 /// Managed types (String, List, collections, RC'd classes) are NOT resources.
+///
+/// # Generics (§12.0.4)
+///
+/// Generic type parameters are classified by their constraint:
+/// - `T` (no bound) or `T extends ManagedClass` → not a resource (managed-typed
+///   unknown; escape analysis applies).
+/// - `T extends ResourceClass` (the bound class itself defines `fn drop` or
+///   transitively contains a resource) → resource (strict-consume rule).
+///
+/// This makes the §7.4 dispatch structural rather than nominal: every
+/// monomorphization of a resource-bounded generic inherits the resource
+/// classification from the bound, with no per-monomorphization re-analysis.
 pub fn is_resource(
     kind: &TypeKind,
     type_definitions: &std::collections::HashMap<String, TypeDefinition>,
@@ -65,6 +77,11 @@ fn is_resource_inner<'a>(
                 _ => false,
             }
         }
+        // §12.0.4: a generic parameter is a resource iff its bound is a resource.
+        // No bound (or non-resource bound) → managed-typed unknown.
+        TypeKind::Generic(_, constraint, _) => constraint
+            .as_ref()
+            .is_some_and(|c| is_resource_inner(&c.kind, type_definitions, visited)),
         _ => false,
     }
 }
@@ -1155,5 +1172,114 @@ impl TypeChecker {
             | TypeKind::Map(_, _) => false,
             _ => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::factory::make_type;
+    use crate::ast::types::TypeDeclarationKind;
+    use crate::type_checker::context::{
+        ClassDefinition, FieldInfo, MethodInfo, StructDefinition, TraitDefinition,
+    };
+    use std::collections::{BTreeMap, HashMap};
+
+    fn struct_def(has_drop: bool) -> TypeDefinition {
+        TypeDefinition::Struct(StructDefinition {
+            fields: vec![],
+            generics: None,
+            module: "test".to_string(),
+            has_drop,
+        })
+    }
+
+    fn class_def(has_drop: bool) -> TypeDefinition {
+        TypeDefinition::Class(ClassDefinition {
+            name: "C".to_string(),
+            generics: None,
+            base_class: None,
+            traits: vec![],
+            fields: vec![] as Vec<(String, FieldInfo)>,
+            methods: BTreeMap::<String, MethodInfo>::new(),
+            module: "test".to_string(),
+            is_abstract: false,
+            has_drop,
+        })
+    }
+
+    fn trait_def() -> TypeDefinition {
+        TypeDefinition::Trait(TraitDefinition {
+            name: "T".to_string(),
+            generics: None,
+            parent_traits: vec![],
+            methods: BTreeMap::<String, MethodInfo>::new(),
+            module: "test".to_string(),
+        })
+    }
+
+    // §12.0.4: generic-parameter classification by constraint.
+
+    #[test]
+    fn unbounded_generic_is_not_resource() {
+        let defs: HashMap<String, TypeDefinition> = HashMap::new();
+        let g = TypeKind::Generic("T".to_string(), None, TypeDeclarationKind::None);
+        assert!(!is_resource(&g, &defs));
+    }
+
+    #[test]
+    fn generic_bounded_by_managed_class_is_not_resource() {
+        let mut defs = HashMap::new();
+        defs.insert("Greeter".to_string(), class_def(false));
+        let bound = make_type(TypeKind::Custom("Greeter".to_string(), None));
+        let g = TypeKind::Generic(
+            "T".to_string(),
+            Some(Box::new(bound)),
+            TypeDeclarationKind::Extends,
+        );
+        assert!(!is_resource(&g, &defs));
+    }
+
+    #[test]
+    fn generic_bounded_by_resource_class_is_resource() {
+        let mut defs = HashMap::new();
+        defs.insert("Conn".to_string(), class_def(true));
+        let bound = make_type(TypeKind::Custom("Conn".to_string(), None));
+        let g = TypeKind::Generic(
+            "T".to_string(),
+            Some(Box::new(bound)),
+            TypeDeclarationKind::Extends,
+        );
+        assert!(is_resource(&g, &defs));
+    }
+
+    #[test]
+    fn generic_bounded_by_resource_struct_is_resource() {
+        let mut defs = HashMap::new();
+        defs.insert("Handle".to_string(), struct_def(true));
+        let bound = make_type(TypeKind::Custom("Handle".to_string(), None));
+        let g = TypeKind::Generic(
+            "T".to_string(),
+            Some(Box::new(bound)),
+            TypeDeclarationKind::Extends,
+        );
+        assert!(is_resource(&g, &defs));
+    }
+
+    #[test]
+    fn generic_bounded_by_trait_is_not_resource() {
+        // Traits have no `has_drop` axis today, so a trait-bounded generic is
+        // managed-typed by §12.0.4.  If a future feature attaches resource
+        // semantics to a trait, this test will fail and §12.0.4 must be
+        // revisited per its closing note.
+        let mut defs = HashMap::new();
+        defs.insert("Drawable".to_string(), trait_def());
+        let bound = make_type(TypeKind::Custom("Drawable".to_string(), None));
+        let g = TypeKind::Generic(
+            "T".to_string(),
+            Some(Box::new(bound)),
+            TypeDeclarationKind::Implements,
+        );
+        assert!(!is_resource(&g, &defs));
     }
 }

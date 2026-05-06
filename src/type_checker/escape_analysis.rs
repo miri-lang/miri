@@ -34,6 +34,31 @@
 //! are hand-authored in `src/runtime/core/escape_summaries.toml` and loaded
 //! at startup via [`load_ffi_summaries`].  The TOML is embedded into the
 //! compiler binary with `include_str!`.
+//!
+//! # Generics strategy (§12.0.4)
+//!
+//! Escape analysis runs at type-check time, **pre-monomorphization**, and
+//! treats every generic parameter as a typed unknown:
+//!
+//! - **Managed-bounded or unbounded generics** (`T`, `T extends ManagedClass`,
+//!   `T implements SomeTrait`) flow through the same managed-type pathway as
+//!   concrete heap types — escape summaries are computed once on the generic
+//!   form and apply to every monomorphization.
+//! - **Resource-bounded generics** (`T extends ResourceClass` where the bound
+//!   class itself defines `fn drop`) inherit the §7.4 strict-consume rule from
+//!   the bound; no escape analysis applies.  This bifurcation is implemented
+//!   by [`super::utils::is_resource`], which descends into a generic
+//!   parameter's constraint when classifying it.
+//!
+//! No per-monomorphization re-analysis is required.  Monomorphization
+//! specialises *types*, not the call graph; escape rules are structural, so a
+//! parameter that escapes for the generic form escapes for every
+//! monomorphization, and a parameter that does not escape for the generic
+//! form does not escape for any monomorphization.
+//!
+//! If a future feature breaks this invariant — for example, trait-based
+//! fn-valued generics or generic higher-order combinators with type-class-
+//! style dispatch — §12.0.4 must be revisited.
 
 use std::collections::{BTreeSet, HashMap};
 

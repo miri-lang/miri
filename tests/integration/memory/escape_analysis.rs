@@ -283,3 +283,122 @@ use_twice(c)
         "consumed",
     );
 }
+
+// §12.0.4 — Generics strategy
+// ─────────────────────────────────────────────────────────────────────────────
+// Escape analysis runs pre-monomorphization, treating generic parameters as
+// typed unknowns:
+//   - A managed-bounded (or unbounded) generic param `T` is analyzed exactly
+//     like a concrete managed type — escape rules are structural, not nominal.
+//   - A resource-bounded generic param `T extends ResourceClass` keeps the
+//     §7.4 strict-consume rule.
+//   - Per-monomorphization re-analysis is not required: the same generic
+//     function instantiated with two concrete types must not re-trigger errors.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_unbounded_generic_param_not_consumed_in_fn_body() {
+    // An unbounded generic param `T` is a managed-typed unknown — passing it
+    // to a read-only helper twice inside a fn body must not be flagged.
+    assert_runs(
+        r#"
+use system.io
+
+fn pass_through<T>(x T)
+    return
+
+fn use_twice<T>(x T)
+    pass_through(x)
+    pass_through(x)
+
+use_twice(42)
+println("ok")
+"#,
+    );
+}
+
+#[test]
+fn test_managed_bounded_generic_not_consumed_in_fn_body() {
+    // A class-bounded generic where the class is NOT a resource (no fn drop)
+    // must follow the managed-type pathway — no false-positive consume inside
+    // a function body.
+    assert_runs(
+        r#"
+use system.io
+
+class Greeter
+    var name String
+    fn init(n String)
+        self.name = n
+    fn hello() String
+        return self.name
+
+fn pass_through<T extends Greeter>(x T)
+    return
+
+fn use_twice<T extends Greeter>(x T)
+    pass_through(x)
+    pass_through(x)
+
+let g = Greeter(n: "world")
+use_twice(g)
+println("ok")
+"#,
+    );
+}
+
+#[test]
+fn test_resource_bounded_generic_strict_consume_in_fn_body() {
+    // A generic param bounded by a resource class (`fn drop(self)` defined)
+    // must trigger the §7.4 strict-consume rule even inside a function body.
+    assert_compiler_error(
+        r#"
+use system.io
+
+class Conn
+    var host String
+    fn init(h String)
+        self.host = h
+    fn drop(self)
+        println("closed")
+
+fn sink<T extends Conn>(x T)
+    return
+
+fn use_twice<T extends Conn>(x T)
+    sink(x)
+    sink(x)
+
+let c = Conn(h: "db.local")
+use_twice(c)
+"#,
+        "consumed",
+    );
+}
+
+#[test]
+fn test_generic_function_two_monomorphizations_no_re_analysis() {
+    // The same generic function instantiated with two different concrete
+    // managed types must not re-trigger escape analysis. Per §12.0.4,
+    // monomorphization specialises *types*, not the call graph — if the
+    // generic version is clean, every monomorphization is clean.
+    assert_runs(
+        r#"
+use system.io
+use system.collections.list
+
+fn pass_through<T>(x T)
+    return
+
+fn use_twice<T>(x T)
+    pass_through(x)
+    pass_through(x)
+
+let xs = List([1, 2, 3])
+let ys = List(["a", "b"])
+use_twice(xs)
+use_twice(ys)
+println("ok")
+"#,
+    );
+}
