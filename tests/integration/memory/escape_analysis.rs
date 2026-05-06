@@ -377,6 +377,71 @@ use_twice(c)
 }
 
 #[test]
+fn test_resource_bounded_generic_assignment_is_a_move() {
+    // §7.5: assignment `var b = a` where `a` has a resource-bounded generic
+    // type must consume `a`.  This exercises the StatementKind::Variable arm
+    // in use_after_move.rs that calls is_resource directly.
+    assert_compiler_error(
+        r#"
+use system.io
+
+class Conn
+    var host String
+    fn init(h String)
+        self.host = h
+    fn drop(self)
+        println("closed")
+
+fn sink<T extends Conn>(x T)
+    return
+
+fn move_then_use<T extends Conn>(a T)
+    var b = a
+    sink(a)
+
+let c = Conn(h: "db.local")
+move_then_use(c)
+"#,
+        "consumed",
+    );
+}
+
+#[test]
+fn test_resource_bounded_generic_method_arg_strict_consume() {
+    // Resource-bounded generic passed to a method argument must strict-consume,
+    // mirroring §7.4 behaviour for concrete resource types in method-call context.
+    // The method `Logger.drain` takes a Conn directly; the caller funnels its
+    // own resource-bounded generic param into it.
+    assert_compiler_error(
+        r#"
+use system.io
+
+class Conn
+    var host String
+    fn init(h String)
+        self.host = h
+    fn drop(self)
+        println("closed")
+
+class Logger
+    fn init()
+        return
+    fn drain(x Conn)
+        return
+
+fn use_twice<T extends Conn>(log Logger, x T)
+    log.drain(x)
+    log.drain(x)
+
+let c = Conn(h: "db.local")
+let l = Logger()
+use_twice(l, c)
+"#,
+        "consumed",
+    );
+}
+
+#[test]
 fn test_generic_function_two_monomorphizations_no_re_analysis() {
     // The same generic function instantiated with two different concrete
     // managed types must not re-trigger escape analysis. Per §12.0.4,
