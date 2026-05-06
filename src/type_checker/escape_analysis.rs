@@ -16,9 +16,9 @@
 //! - **`direct_escapes`** — parameter indices that unconditionally escape.
 //! - **`conditional_escapes`** — parameters that escape *iff* a fn-typed
 //!   parameter has a specific callee-parameter in its own escape set (the
-//!   higher-order case, §12.0.1).
+//!   higher-order case).
 //! - **`return_aliases`** — parameters whose heap is aliased by the return
-//!   value (§12.0.5).  At a call site, if the return value itself escapes,
+//!   value.  At a call site, if the return value itself escapes,
 //!   these parameters are also treated as escaping.
 //!
 //! # Key used in [`super::context::Context::escape_summaries`]
@@ -28,14 +28,14 @@
 //! `"Cache_store"`).  This matches the mangling convention used throughout
 //! MIR lowering.
 //!
-//! # FFI summaries (§12.0.2)
+//! # FFI summaries
 //!
 //! Escape summaries for `runtime "core" fn` declarations (FFI-only, no body)
 //! are hand-authored in `src/runtime/core/escape_summaries.toml` and loaded
 //! at startup via [`load_ffi_summaries`].  The TOML is embedded into the
 //! compiler binary with `include_str!`.
 //!
-//! # Generics strategy (§12.0.4)
+//! # Generics strategy
 //!
 //! Escape analysis runs at type-check time, **pre-monomorphization**, and
 //! treats every generic parameter as a typed unknown:
@@ -45,7 +45,7 @@
 //!   concrete heap types — escape summaries are computed once on the generic
 //!   form and apply to every monomorphization.
 //! - **Resource-bounded generics** (`T extends ResourceClass` where the bound
-//!   class itself defines `fn drop`) inherit the §7.4 strict-consume rule from
+//!   class itself defines `fn drop`) inherit the strict-consume rule from
 //!   the bound; no escape analysis applies.  This bifurcation is implemented
 //!   by [`super::utils::is_resource`], which descends into a generic
 //!   parameter's constraint when classifying it.
@@ -58,7 +58,7 @@
 //!
 //! If a future feature breaks this invariant — for example, trait-based
 //! fn-valued generics or generic higher-order combinators with type-class-
-//! style dispatch — §12.0.4 must be revisited.
+//! style dispatch — this strategy may need revisiting.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -101,18 +101,17 @@ pub struct ConditionalEscape {
 /// Escape summary for a single function.
 ///
 /// Computed bottom-up over the call graph by the escape analysis pass
-/// (`src/type_checker/escape_analysis.rs`, §12.1).  Hand-authored entries
-/// for FFI-only declarations live in `src/runtime/core/escape_summaries.toml`
-/// (§12.0.2).
+/// (`src/type_checker/escape_analysis.rs`).  Hand-authored entries
+/// for FFI-only declarations live in `src/runtime/core/escape_summaries.toml`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EscapeSummary {
     /// Parameters that unconditionally escape (returned, stored, captured,
     /// or passed to a definitely-escaping callee).
     pub direct_escapes: BTreeSet<ParamIndex>,
-    /// Parameters whose escape depends on a fn-typed argument (§12.0.1).
+    /// Parameters whose escape depends on a fn-typed argument.
     pub conditional_escapes: Vec<ConditionalEscape>,
     /// Parameters aliased by the return value — if the caller lets the return
-    /// value escape, these params escape too (§12.0.5).
+    /// value escape, these params escape too.
     pub return_aliases: BTreeSet<ParamIndex>,
 }
 
@@ -130,25 +129,25 @@ impl EscapeSummary {
     }
 }
 
-// ── §12.0.5 Value-flow rule for return / aggregate escape ─────────────────────
+// ── Value-flow rule for return / aggregate escape ─────────────────────────────
 
 /// Per-function contribution computed by [`analyze_return_value`] when walking a
 /// `return` expression: which parameters escape via the return value, split into
 /// direct-consume and return-alias axes.
 ///
-/// Per §12.0.5, parameter `p` "escapes via return" iff a value `v` is part of
+/// Parameter `p` "escapes via return" iff a value `v` is part of
 /// the return expression's value and `v` either *is* `p` or aliases `p`'s heap.
 /// The two axes capture the same value-flow phenomenon from two angles:
 ///
 /// - `direct_escapes` — `p` is consumed at this function's call site (the
-///   caller cannot use `p` again).  This populates §12.1 rule 1's contribution
-///   to the overall summary's `direct_escapes`.
+///   caller cannot use `p` again).  This contributes to
+///   the overall summary's `direct_escapes`.
 /// - `return_aliases` — the return value's heap aliases `p`'s heap; a caller
 ///   that lets this function's return escape must also treat `p` as escaping.
 ///   This populates the summary's `return_aliases`.
 ///
 /// The two sets are not redundant: a parameter consumed by a callee inside the
-/// return expression (rule 5: `return f(p)` where `f` consumes 0) is in
+/// return expression (`return f(p)` where `f` consumes its param 0) is in
 /// `direct_escapes` but not in `return_aliases` — `f`'s sink retains `p`, but
 /// the value flowing into our return is `f`'s independent return value, which
 /// does not alias `p`'s heap.
@@ -163,9 +162,9 @@ pub struct ReturnFlow {
     pub return_aliases: BTreeSet<ParamIndex>,
 }
 
-/// Computes a `ReturnFlow` for a function's return expression per §12.0.5.
+/// Computes a `ReturnFlow` for a function's return expression.
 ///
-/// This implements the value-flow rule that §12.1 rule 1 references when
+/// This implements the value-flow rule used when
 /// determining whether a parameter belongs in the function's
 /// [`EscapeSummary::direct_escapes`] (and, as a separate axis, its
 /// [`EscapeSummary::return_aliases`]).
@@ -182,11 +181,11 @@ pub struct ReturnFlow {
 /// - `type_definitions` — needed by [`is_auto_copy`] to classify struct/enum
 ///   types; passed through to the predicate.
 /// - `escape_summaries` — known callee summaries (FFI sidecar entries plus any
-///   summaries §12.1 has already computed for callees in the current SCC).
+///   summaries already computed for callees in the current SCC).
 ///   Looked up by free-function name and `ClassName_method` for direct method
 ///   calls.
 ///
-/// # Rule cases (§12.0.5)
+/// # Rule cases
 ///
 /// 1. `return p` → both sets contain `p`.
 /// 2. Aggregate construction (`return [p]`, `Pair(p, q)`, `{k: p}`,
@@ -206,9 +205,10 @@ pub struct ReturnFlow {
 ///
 /// # Out of scope
 ///
-/// This analyzer implements *only* §12.1 rule 1.  Rules 2 (field-store), 3
-/// (closure-capture into a returned closure), and 4 (transitive call passing,
-/// independent of the return position) live in §12.1's full body walk.
+/// This analyzer handles the core value-flow rule for return expressions.
+/// Field-store side effects, closure-capture into a returned closure, and
+/// transitive call passing independent of the return position are handled
+/// elsewhere in the escape analysis pass.
 pub fn analyze_return_value(
     return_expr: &Expression,
     params: &[Parameter],
@@ -235,7 +235,7 @@ struct ReturnFlowAnalyzer<'a> {
 }
 
 impl<'a> ReturnFlowAnalyzer<'a> {
-    /// Walks `expr` recording §12.0.5 flow into `flow`.
+    /// Walks `expr` recording escape flow into `flow`.
     ///
     /// `aliases_return` is the alias-context: `true` iff this expression's
     /// value is part of the return value's heap-alias structure (i.e.,
@@ -295,8 +295,7 @@ impl<'a> ReturnFlowAnalyzer<'a> {
                 self.classify(obj, alias_through, flow);
                 // The index value (e.g. `i` in `p[i]`) does not flow into the
                 // returned element; its own subexpressions can still carry
-                // consuming side-effects via rule 5/7 callees, but that is
-                // §12.1's territory — for §12.0.5 we only walk it with
+                // consuming side-effects via callee calls, but we only walk it with
                 // alias_return=false to avoid double-counting.
                 self.classify(idx_expr, false, flow);
             }
@@ -326,8 +325,8 @@ impl<'a> ReturnFlowAnalyzer<'a> {
                 }
             }
             ExpressionKind::Block(_, final_expr) => {
-                // Statement effects in a return-position block belong to §12.1's
-                // full body walk; only the trailing expression contributes to
+                // Statement effects in a return-position block are handled
+                // elsewhere; only the trailing expression contributes to
                 // the return value's heap aliasing.
                 self.classify(final_expr, aliases_return, flow);
             }
@@ -369,8 +368,8 @@ impl<'a> ReturnFlowAnalyzer<'a> {
                 self.classify(rhs, aliases_return, flow);
             }
 
-            // Lambda capture — §12.1 rule 3, not rule 1.  Closures returned
-            // verbatim are handled at the §12.1 body-walk level.
+            // Lambda capture — handled separately.  Closures returned
+            // verbatim are handled at a higher level.
             ExpressionKind::Lambda(_) => {}
 
             // Leaves that produce no value-flow into a managed return:
@@ -432,10 +431,10 @@ impl<'a> ReturnFlowAnalyzer<'a> {
             }
         } else {
             // No summary available — this analyzer alone cannot decide whether
-            // the call propagates flow.  §12.1's full body walk handles the
-            // §12.0.6 dynamic-fn fallback ("every managed param escapes") for
-            // unresolved callees.  Per the §12.0.5 scope (rule 1 only), we
-            // recurse without propagating alias context: nested rule-1 patterns
+            // the call propagates flow.  The escape analysis pass handles
+            // the conservative fallback ("every managed param escapes") for
+            // unresolved callees.  For value-flow purposes, we
+            // recurse without propagating alias context: nested patterns
             // inside arg expressions still get classified, but we make no
             // claim about the call's own return value.
             if let Some(obj) = receiver {
@@ -511,11 +510,9 @@ impl<'a> ReturnFlowAnalyzer<'a> {
     /// identifier or a direct (non-virtual) method call on a concrete class.
     ///
     /// Inheritance walks for inherited methods and trait/abstract joins live
-    /// in `super::use_after_move` (§12.0.3) — those paths need the type
-    /// definitions and are exercised by §12.0.3's own tests.  For §12.0.5's
-    /// value-flow rule we keep the lookup focused on the literal-callee cases
-    /// the rule's wording covers (`return f(p)`); virtual joining is folded
-    /// in by §12.1 when it consults this analyzer.
+    /// elsewhere and need the type definitions.  This analyzer
+    /// focuses on the literal-callee cases (`return f(p)`); virtual joining
+    /// is folded in by the broader escape analysis when it consults this analyzer.
     fn resolve_callee_summary(&self, callee: &Expression) -> Option<EscapeSummary> {
         match &callee.node {
             ExpressionKind::Identifier(name, _) => {
@@ -562,7 +559,7 @@ impl From<TomlSummaryEntry> for EscapeSummary {
 }
 
 /// Loads the hand-authored FFI escape summaries from the embedded TOML sidecar
-/// (`src/runtime/core/escape_summaries.toml`, §12.0.2).
+/// (`src/runtime/core/escape_summaries.toml`).
 ///
 /// The TOML is embedded at compile time; no filesystem access occurs at
 /// runtime.  Returns an empty map if parsing fails (panics via `debug_assert!`
@@ -640,7 +637,7 @@ mod tests {
         assert_ne!(a, b);
     }
 
-    // ── FFI summary loading tests (§12.0.2) ───────────────────────────────────
+    // ── FFI summary loading tests ────────────────────────────────────────────────
 
     #[test]
     fn load_ffi_summaries_parses_without_panic() {
@@ -759,11 +756,11 @@ mod tests {
         }
     }
 
-    // ── §12.0.5 Value-flow rule: analyze_return_value ─────────────────────────
+    // ── Value-flow rule: analyze_return_value ───────────────────────────────────
     //
-    // These tests cover each of the 7 enumerated rule cases in §12.0.5 by
+    // These tests cover each of the 7 enumerated rule cases by
     // hand-building small return expressions and the supporting types map.
-    // They exercise the analyzer in isolation; integration with §12.1's
+    // They exercise the analyzer in isolation; integration with the
     // call-graph fixpoint is deferred.
 
     use crate::ast::expression::{Expression, ExpressionKind};
@@ -1110,11 +1107,11 @@ mod tests {
 
     // ── Bonus coverage: behaviour at unresolved callees ────────────────────────
     //
-    // Per §12.0.6 the conservative policy ("every managed param escapes") is
-    // §12.1's responsibility, not §12.0.5's.  In isolation, the analyzer makes
-    // no escape claim for an unresolved callee — it simply does not propagate
-    // the alias context.  This guard pins that behaviour so §12.1 has a known
-    // baseline to layer §12.0.6 on top of.
+    // The conservative policy ("every managed param escapes") for unresolved
+    // callees is the escape analysis pass's responsibility, not this value-flow
+    // analyzer's.  In isolation, the analyzer makes no escape claim for an
+    // unresolved callee — it simply does not propagate the alias context.
+    // This guard pins that behaviour so the pass has a known baseline.
 
     #[test]
     fn unresolved_callee_makes_no_escape_claim() {
@@ -1129,7 +1126,7 @@ mod tests {
 
         assert!(
             flow.direct_escapes.is_empty(),
-            "§12.0.5 alone does not enforce §12.0.6's conservative default"
+            "the value-flow analyzer alone does not enforce the conservative default for unresolved callees"
         );
         assert!(flow.return_aliases.is_empty());
     }

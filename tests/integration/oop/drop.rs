@@ -220,7 +220,7 @@ fn main()
     );
 }
 
-// ── User-defined drop hook (§9.3) ────────────────────────────────────────────
+// ── User-defined drop hook ──────────────────────────────────────────────────────
 
 #[test]
 fn test_user_drop_hook_called_at_scope_exit() {
@@ -285,7 +285,7 @@ fn main()
     );
 }
 
-// ── §9.4: Scope-exit warning for unconsumed resources ────────────────────────
+// ── Scope-exit warning for unconsumed resources ─────────────────────────────────
 
 #[test]
 fn test_scope_exit_warning_emitted_for_unconsumed_resource() {

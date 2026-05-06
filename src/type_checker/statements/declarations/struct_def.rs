@@ -148,7 +148,7 @@ impl TypeChecker {
 
         let has_drop = methods.iter().any(is_drop_method);
         // TODO: type-check method bodies once struct method dispatch is implemented.
-        // For now, fn drop(self) is treated purely as a resource-type marker (§7.4).
+        // For now, fn drop(self) is treated purely as a resource-type marker.
 
         let struct_def = StructDefinition {
             fields: fields_vec,
