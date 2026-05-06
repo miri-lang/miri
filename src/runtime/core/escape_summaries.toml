@@ -1,4 +1,4 @@
-# Escape summaries for FFI-only runtime functions (§12.0.2).
+# Escape summaries for FFI-only runtime functions.
 #
 # Each key is the symbol name as it appears in `runtime "core" fn` declarations
 # in stdlib .mi files.  The type-checker embeds this file at compile time and
@@ -9,7 +9,7 @@
 #                       (stored in a collection, returned, or captured).
 #   return_aliases    — 0-based parameter indices aliased by the return value.
 #   conditional_escapes — array of { param, via_fn_param, callee_param } tables
-#                       for the higher-order case (§12.0.1).
+#                       for the higher-order case.
 #
 # Parameters that are raw pointers to the collection itself (param 0 for all
 # mutators below) are NOT listed — they are unmanaged and escape analysis
@@ -42,8 +42,7 @@ direct_escapes = [1]
 # ── Collection read-only accessors ────────────────────────────────────────────
 # These take a managed-type key/element param but only read it for comparison;
 # they do NOT store the argument. Explicit empty entries prevent the conservative
-# "all managed params escape" fallback from triggering false positives when
-# §12.1 is wired in.
+# "all managed params escape" fallback from triggering false positives.
 
 [miri_rt_map_get]
 # get(ptr *MiriMap, key usize) usize — key (param 1) is only compared, not stored

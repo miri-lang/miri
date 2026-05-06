@@ -24,7 +24,7 @@ use crate::error::type_error::TypeError;
 /// Resource types are subject to use-after-move tracking inside function bodies.
 /// Managed types (String, List, collections, RC'd classes) are NOT resources.
 ///
-/// # Generics (§12.0.4)
+/// # Generics
 ///
 /// Generic type parameters are classified by their constraint:
 /// - `T` (no bound) or `T extends ManagedClass` → not a resource (managed-typed
@@ -32,7 +32,7 @@ use crate::error::type_error::TypeError;
 /// - `T extends ResourceClass` (the bound class itself defines `fn drop` or
 ///   transitively contains a resource) → resource (strict-consume rule).
 ///
-/// This makes the §7.4 dispatch structural rather than nominal: every
+/// This makes the dispatch structural rather than nominal: every
 /// monomorphization of a resource-bounded generic inherits the resource
 /// classification from the bound, with no per-monomorphization re-analysis.
 pub fn is_resource(
@@ -77,7 +77,7 @@ fn is_resource_inner<'a>(
                 _ => false,
             }
         }
-        // §12.0.4: a generic parameter is a resource iff its bound is a resource.
+        // A generic parameter is a resource iff its bound is a resource.
         // No bound (or non-resource bound) → managed-typed unknown.
         TypeKind::Generic(_, constraint, _) => constraint
             .as_ref()
@@ -1218,7 +1218,7 @@ mod tests {
         })
     }
 
-    // §12.0.4: generic-parameter classification by constraint.
+    // Generic-parameter classification by constraint.
 
     #[test]
     fn unbounded_generic_is_not_resource() {
@@ -1269,9 +1269,9 @@ mod tests {
     #[test]
     fn generic_bounded_by_trait_is_not_resource() {
         // Traits have no `has_drop` axis today, so a trait-bounded generic is
-        // managed-typed by §12.0.4.  If a future feature attaches resource
-        // semantics to a trait, this test will fail and §12.0.4 must be
-        // revisited per its closing note.
+        // managed-typed.  If a future feature attaches resource
+        // semantics to a trait, this test will fail and the classification
+        // strategy must be revisited.
         let mut defs = HashMap::new();
         defs.insert("Drawable".to_string(), trait_def());
         let bound = make_type(TypeKind::Custom("Drawable".to_string(), None));

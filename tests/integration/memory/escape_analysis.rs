@@ -8,12 +8,11 @@ use super::super::utils::*;
 // use-after-move errors (regression guard for Phase 12 escape analysis).
 // ─────────────────────────────────────────────────────────────────────────────
 
-// §12.0.3 — Method / self semantics
+// Method / self semantics
 // ─────────────────────────────────────────────────────────────────────────────
 // Method calls on concrete classes must not falsely consume managed receivers or
-// arguments when no escape summary is present for the method (no §12.1 summary
-// computed yet). Virtual dispatch and inherited methods must likewise not generate
-// false positives.
+// arguments when no escape summary is present for the method. Virtual dispatch
+// and inherited methods must likewise not generate false positives.
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -284,14 +283,14 @@ use_twice(c)
     );
 }
 
-// §12.0.4 — Generics strategy
+// Generics strategy
 // ─────────────────────────────────────────────────────────────────────────────
 // Escape analysis runs pre-monomorphization, treating generic parameters as
 // typed unknowns:
 //   - A managed-bounded (or unbounded) generic param `T` is analyzed exactly
 //     like a concrete managed type — escape rules are structural, not nominal.
 //   - A resource-bounded generic param `T extends ResourceClass` keeps the
-//     §7.4 strict-consume rule.
+//     strict-consume rule.
 //   - Per-monomorphization re-analysis is not required: the same generic
 //     function instantiated with two concrete types must not re-trigger errors.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -350,7 +349,7 @@ println("ok")
 #[test]
 fn test_resource_bounded_generic_strict_consume_in_fn_body() {
     // A generic param bounded by a resource class (`fn drop(self)` defined)
-    // must trigger the §7.4 strict-consume rule even inside a function body.
+    // must trigger the strict-consume rule even inside a function body.
     assert_compiler_error(
         r#"
 use system.io
@@ -378,7 +377,7 @@ use_twice(c)
 
 #[test]
 fn test_resource_bounded_generic_assignment_is_a_move() {
-    // §7.5: assignment `var b = a` where `a` has a resource-bounded generic
+    // Assignment `var b = a` where `a` has a resource-bounded generic
     // type must consume `a`.  This exercises the StatementKind::Variable arm
     // in use_after_move.rs that calls is_resource directly.
     assert_compiler_error(
@@ -409,7 +408,7 @@ move_then_use(c)
 #[test]
 fn test_resource_bounded_generic_method_arg_strict_consume() {
     // Resource-bounded generic passed to a method argument must strict-consume,
-    // mirroring §7.4 behaviour for concrete resource types in method-call context.
+    // mirroring the standard behaviour for concrete resource types in method-call context.
     // The method `Logger.drain` takes a Conn directly; the caller funnels its
     // own resource-bounded generic param into it.
     assert_compiler_error(
@@ -444,9 +443,9 @@ use_twice(l, c)
 #[test]
 fn test_generic_function_two_monomorphizations_no_re_analysis() {
     // The same generic function instantiated with two different concrete
-    // managed types must not re-trigger escape analysis. Per §12.0.4,
-    // monomorphization specialises *types*, not the call graph — if the
-    // generic version is clean, every monomorphization is clean.
+    // managed types must not re-trigger escape analysis. Monomorphization
+    // specialises *types*, not the call graph — if the generic version is
+    // clean, every monomorphization is clean.
     assert_runs(
         r#"
 use system.io

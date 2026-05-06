@@ -5,8 +5,8 @@
 //!
 //! Tracks which variables have been "consumed" and emits a compile-time error
 //! if a consumed variable is subsequently accessed. A variable is consumed by:
-//! - Passing it as an argument to a function call (§7.1)
-//! - Assigning it to another variable when the type is a resource (§7.5)
+//! - Passing it as an argument to a function call
+//! - Assigning it to another variable when the type is a resource
 //!
 //! Auto-copy types (size ≤ 128 bytes, all-primitive fields) are always copied
 //! and are never flagged. Resource types (`fn drop(self)` defined) are always
@@ -37,19 +37,19 @@ pub struct UseAfterMoveChecker<'a> {
     types: &'a HashMap<usize, Type>,
     type_definitions: &'a HashMap<String, TypeDefinition>,
     /// Escape summaries keyed by `FunctionId` (`"fn_name"` or `"ClassName_method"`).
-    /// Pre-populated with FFI summaries (§12.0.2); user-method summaries added by §12.1.
+    /// Pre-populated with FFI summaries; user-method summaries added during analysis.
     escape_summaries: &'a HashMap<FunctionId, EscapeSummary>,
     errors: Vec<TypeError>,
     warnings: Vec<Diagnostic>,
     /// True when analysis is inside a function body (vs. top-level script code).
     /// Resource types are always tracked. Managed types are only tracked at top level.
     in_function_body: bool,
-    /// Names currently bound as parameters or `let`/`var` locals.  Used by the
-    /// §12.0.6 dynamic-fn detector to distinguish a literal callee identifier
-    /// (a free function declared at module scope — never re-bound, so absent
-    /// here) from a dynamic fn-value bound to a name (let-bound, parameter,
-    /// re-assigned).  A `Call` whose callee identifier is in this set is a
-    /// dynamic call and consumes every managed-typed argument.
+    /// Names currently bound as parameters or `let`/`var` locals.  Used to
+    /// distinguish a literal callee identifier (a free function declared at
+    /// module scope — never re-bound, so absent here) from a dynamic fn-value
+    /// bound to a name (let-bound, parameter, re-assigned).  A `Call` whose
+    /// callee identifier is in this set is a dynamic call and consumes every
+    /// managed-typed argument.
     ///
     /// The set is snapshotted on entry to a function body and restored on exit
     /// so an inner function does not see its caller's bindings.
@@ -91,11 +91,11 @@ impl<'a> UseAfterMoveChecker<'a> {
                     let prev_in_fn = self.in_function_body;
                     let prev_bindings = std::mem::take(&mut self.fn_bindings);
                     self.in_function_body = true;
-                    // Parameters are bindings inside the body — by §12.0.6, a
-                    // call whose callee identifier matches a parameter name is
-                    // dynamic.  We add every parameter name; whether the param
-                    // is fn-typed is checked at the call site (an Identifier
-                    // callee that isn't fn-typed wouldn't type-check anyway).
+                    // Parameters are bindings inside the body — a call whose
+                    // callee identifier matches a parameter name is dynamic.
+                    // We add every parameter name; whether the param is fn-typed
+                    // is checked at the call site (an Identifier callee that
+                    // isn't fn-typed wouldn't type-check anyway).
                     for p in &decl.params {
                         self.fn_bindings.insert(p.name.clone());
                     }
@@ -118,7 +118,7 @@ impl<'a> UseAfterMoveChecker<'a> {
                 for decl in decls {
                     if let Some(init) = &decl.initializer {
                         self.check_expr(init, consumed);
-                        // §7.5: assignment of a resource type is a move — mark the
+                        // Assignment of a resource type is a move — mark the
                         // source identifier consumed regardless of scope.
                         if let ExpressionKind::Identifier(src, _) = &init.node {
                             if let Some(ty) = self.types.get(&init.id) {
@@ -134,7 +134,7 @@ impl<'a> UseAfterMoveChecker<'a> {
                             }
                         }
                     }
-                    // §12.0.6: every let/var local is a binding — its callee form
+                    // Every let/var local is a binding — its callee form
                     // (`name(...)`) is a dynamic-fn call, never a literal.
                     self.fn_bindings.insert(decl.name.clone());
                 }
@@ -174,11 +174,11 @@ impl<'a> UseAfterMoveChecker<'a> {
 
             StatementKind::For(decls, iter, body) => {
                 self.check_expr(iter, consumed);
-                // §12.0.6: the loop pattern variable is a binding inside the
-                // body — `for f in fns: f(items)` must classify `f` as a
-                // dynamic-fn callee.  Snapshot/restore so the binding does not
-                // leak past the loop and accidentally over-consume calls to a
-                // shadowed top-level fn after the loop exits.
+                // The loop pattern variable is a binding inside the body —
+                // `for f in fns: f(items)` must classify `f` as a dynamic-fn
+                // callee.  Snapshot/restore so the binding does not leak past
+                // the loop and accidentally over-consume calls to a shadowed
+                // top-level fn after the loop exits.
                 let prev_bindings = self.fn_bindings.clone();
                 for d in decls {
                     self.fn_bindings.insert(d.name.clone());
@@ -258,7 +258,7 @@ impl<'a> UseAfterMoveChecker<'a> {
     ///
     /// Returns the nominal name for `Custom` types and the parameter name for
     /// `Generic` types (so a resource-bounded generic local appears in the
-    /// warning as `type 'T'`, per §12.0.4).
+    /// warning as `type 'T'`).
     fn resource_type_name(kind: &TypeKind) -> Option<&str> {
         match kind {
             TypeKind::Custom(name, _) => Some(name.as_str()),
@@ -288,11 +288,11 @@ impl<'a> UseAfterMoveChecker<'a> {
             ExpressionKind::Call(callee, args) => {
                 let fn_name = self.extract_callee_name(callee);
 
-                // §12.0.3: extract the method escape summary (owned) before any
+                // Extract the method escape summary (owned) before any
                 // mutable borrow of self so the borrow checker stays happy.
                 let method_summary: Option<EscapeSummary> = self.extract_method_summary(callee);
 
-                // §12.0.6: classify the callee.  A literal callee is a free-fn
+                // Classify the callee.  A literal callee is a free-fn
                 // identifier (declared at module scope, not in `fn_bindings`) or
                 // a method member access.  Anything else — let-bound, branch,
                 // returned-from-fn, parameter — is a dynamic fn-value, and the
@@ -324,8 +324,7 @@ impl<'a> UseAfterMoveChecker<'a> {
                     .unwrap_or(&[]);
 
                 if let Some(ref summary) = method_summary {
-                    // §12.0.3 static / virtual path: apply escape summary.
-                    // param 0 = self (receiver); params 1..N = explicit args.
+                    // Apply escape summary. param 0 = self (receiver); params 1..N = explicit args.
                     if summary.directly_escapes(0) {
                         if let ExpressionKind::Member(obj_expr, _) = &callee.node {
                             self.maybe_consume_arg(obj_expr, &fn_name, consumed);
@@ -361,13 +360,12 @@ impl<'a> UseAfterMoveChecker<'a> {
                         }
                     }
                 } else if is_dynamic_fn {
-                    // §12.0.6 dynamic fn-valued callee: every managed-typed arg
+                    // Dynamic fn-valued callee: every managed-typed arg
                     // is conservatively treated as escaping ("via dynamic fn
                     // parameter `f`"), regardless of whether we are at top
                     // level or inside a function body.  Resource args are
-                    // already always-consume per §7.4 so the predicate below
-                    // accepts both managed and resource — only auto-copy types
-                    // are exempt.
+                    // always consumed, so the predicate below accepts both
+                    // managed and resource — only auto-copy types are exempt.
                     let sink = format!("dynamic fn '{fn_name}'");
                     let mut pos_idx = 0usize;
                     for arg in args {
@@ -495,7 +493,7 @@ impl<'a> UseAfterMoveChecker<'a> {
 
                 for branch in branches {
                     let mut arm_consumed = pre_consumed.clone();
-                    // §12.0.6: pattern bindings in this arm (`case Some(g): ...`)
+                    // Pattern bindings in this arm (`case Some(g): ...`)
                     // are locals — calling them is a dynamic-fn dispatch.  Add
                     // each branch's pattern-bound names to `fn_bindings` for the
                     // arm body, then restore so they do not leak across arms or
@@ -537,11 +535,10 @@ impl<'a> UseAfterMoveChecker<'a> {
 
             ExpressionKind::Lambda(lambda) => {
                 // Lambda body gets its own consumed map (captures are borrowed, not consumed).
-                // §12.0.6: lambda parameters are bindings inside the body — an
-                // fn-typed lambda parameter called as `g(items)` must be
-                // classified as a dynamic-fn callee.  Snapshot/restore so the
-                // params do not leak into the surrounding scope after the
-                // lambda expression is evaluated.
+                // Lambda parameters are bindings inside the body — an fn-typed
+                // lambda parameter called as `g(items)` must be classified as a
+                // dynamic-fn callee.  Snapshot/restore so the params do not leak
+                // into the surrounding scope after the lambda expression is evaluated.
                 let prev_bindings = self.fn_bindings.clone();
                 for p in &lambda.params {
                     self.fn_bindings.insert(p.name.clone());
@@ -572,7 +569,7 @@ impl<'a> UseAfterMoveChecker<'a> {
     /// If `arg` is a plain `Identifier` (or a `NamedArgument` wrapping one) that refers
     /// to a variable that should be consumed, mark it as consumed by `fn_name`.
     ///
-    /// At top level: any managed type is consumed (existing §7.1 behaviour).
+    /// At top level: any managed type is consumed.
     /// Inside a function body: only resource types (those with `fn drop(self)`) are consumed.
     fn maybe_consume_arg(
         &self,
@@ -613,7 +610,7 @@ impl<'a> UseAfterMoveChecker<'a> {
     ///
     /// Rule:
     /// - Resource types (`fn drop(self)` present): always consumed, at all call sites.
-    /// - Other managed (non-auto-copy) types: consumed only at top level (§7.1 behaviour).
+    /// - Other managed (non-auto-copy) types: consumed only at top level.
     /// - Inside a function body: only resource types are consumed.
     fn should_consume_expr(&self, expr: &Expression) -> bool {
         if let Some(ty) = self.types.get(&expr.id) {
@@ -629,8 +626,8 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
     }
 
-    /// §12.0.6 dynamic-fn fallback: at a call site whose callee is a dynamic
-    /// fn-value, every non-auto-copy argument is consumed regardless of scope.
+    /// Dynamic-fn fallback: at a call site whose callee is a dynamic fn-value,
+    /// every non-auto-copy argument is consumed regardless of scope.
     /// Mirrors `maybe_consume_arg` but uses the broader "any managed type"
     /// predicate (since the conservative rule says "all managed-type params
     /// escape", not just resources).
@@ -669,7 +666,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         );
     }
 
-    /// §12.0.6: Collect every identifier name introduced by a match pattern,
+    /// Collect every identifier name introduced by a match pattern,
     /// adding it to `out` (the running `fn_bindings` set).  Recurses through
     /// `Tuple` and `EnumVariant` payloads.  `Member` patterns describe a
     /// *path* (`Color.Red`) — only their inner sub-pattern can introduce
@@ -689,7 +686,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
     }
 
-    /// §12.0.6 dynamic-fn classifier — see `fn_bindings` field doc.
+    /// Dynamic-fn classifier — see `fn_bindings` field doc.
     ///
     /// Returns `true` when `callee` is a fn-typed value that the type checker
     /// cannot resolve to a literal callee name:
@@ -703,12 +700,12 @@ impl<'a> UseAfterMoveChecker<'a> {
     ///
     /// Free functions declared at module scope (`fn foo(...)`) are never
     /// re-bound as locals, so their identifier callees are absent from
-    /// `fn_bindings` and treated as literal — preserving §7.4 behaviour for
+    /// `fn_bindings` and treated as literal — preserving standard behaviour for
     /// the in-function-body managed-arg path.
     fn is_dynamic_fn_callee(&self, callee: &Expression) -> bool {
         match &callee.node {
             ExpressionKind::Identifier(name, _) => self.fn_bindings.contains(name.as_str()),
-            // Method calls dispatch through the §12.0.3 path; they are literal.
+            // Method calls are handled elsewhere; they are literal callees.
             ExpressionKind::Member(_, _) => false,
             // Any other callee shape produces an fn-value at runtime — dynamic.
             ExpressionKind::Conditional(_, _, _, _)
@@ -735,12 +732,12 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
     }
 
-    // ── §12.0.3 Method / self semantics ──────────────────────────────────────
+    // ── Method / self semantics ─────────────────────────────────────────────────
 
     /// Look up the escape summary for a static method call on `class_name`.
     ///
     /// Walks the `base_class` chain so that inherited methods are found in the
-    /// defining class's summary, not the static type's (§12.0.3 inherited rule).
+    /// defining class's summary, not the static type's.
     fn lookup_static_method_summary(
         &self,
         class_name: &str,
@@ -772,10 +769,10 @@ impl<'a> UseAfterMoveChecker<'a> {
     /// Build a joined escape summary for a virtual / trait-dispatch method call.
     ///
     /// Collects all concrete classes that implement `trait_or_abstract` (directly
-    /// or via inheritance) and unions their escape summaries (§12.0.3 virtual rule).
+    /// or via inheritance) and unions their escape summaries.
     ///
     /// Returns `None` when no implementers are visible — the caller falls back to
-    /// the "every managed param escapes" conservative treatment per §12.0.6.
+    /// the "every managed param escapes" conservative treatment.
     fn join_virtual_summaries(
         &self,
         trait_or_abstract: &str,
