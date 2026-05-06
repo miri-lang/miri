@@ -362,10 +362,6 @@ println(f"{x.length()}")
     );
 }
 
-// ─────────────────────────────────────────────
-// §7.4: Resource type consumed twice in function body → error
-// ─────────────────────────────────────────────
-
 #[test]
 fn test_resource_consumed_twice_in_function_body() {
     assert_compiler_error(
@@ -390,10 +386,6 @@ handle(Conn(handle: 1))
     );
 }
 
-// ─────────────────────────────────────────────
-// §7.4: Managed-type function body — no error (no resource type)
-// ─────────────────────────────────────────────
-
 #[test]
 fn test_managed_type_not_consumed_in_function_body() {
     assert_runs(
@@ -413,10 +405,6 @@ println("ok")
 "#,
     );
 }
-
-// ─────────────────────────────────────────────
-// §7.4: Resource consumed at top level → error (unchanged from §7.1)
-// ─────────────────────────────────────────────
 
 #[test]
 fn test_resource_consumed_at_top_level_error() {
@@ -440,10 +428,6 @@ sink(r)
     );
 }
 
-// ─────────────────────────────────────────────
-// §7.4: Resource consumed once in function body → ok
-// ─────────────────────────────────────────────
-
 #[test]
 fn test_resource_consumed_once_in_function_body_ok() {
     assert_runs(
@@ -466,10 +450,6 @@ println("ok")
 "#,
     );
 }
-
-// ─────────────────────────────────────────────
-// §7.5: Resource alias then use → error
-// ─────────────────────────────────────────────
 
 #[test]
 fn test_resource_alias_then_use_error() {
@@ -497,10 +477,6 @@ log_conn(c)
     );
 }
 
-// ─────────────────────────────────────────────
-// §7.5: Resource alias then use inside function body → error
-// ─────────────────────────────────────────────
-
 #[test]
 fn test_resource_alias_then_use_in_function_body_error() {
     assert_compiler_error(
@@ -525,10 +501,6 @@ handle_conn(Conn(handle: 1))
     );
 }
 
-// ─────────────────────────────────────────────
-// §7.5: Managed-type alias still compiles cleanly (deferred to §12.5)
-// ─────────────────────────────────────────────
-
 #[test]
 fn test_managed_alias_compiles_cleanly() {
     assert_runs(
@@ -542,10 +514,6 @@ println(f"{xs.length()}")
 "#,
     );
 }
-
-// ─────────────────────────────────────────────
-// §7.5: Re-assignment revives a consumed resource alias
-// ─────────────────────────────────────────────
 
 #[test]
 fn test_resource_alias_reassignment_revives() {
@@ -571,10 +539,6 @@ println("ok")
     );
 }
 
-// ─────────────────────────────────────────────
-// §9.2: Resource type passed to function → use-after error with exact message
-// ─────────────────────────────────────────────
-
 #[test]
 fn test_resource_passed_to_fn_consumed_error() {
     assert_compiler_error(
@@ -596,10 +560,6 @@ println(f"{c.handle}")
         "'c' was consumed by 'process'",
     );
 }
-
-// ─────────────────────────────────────────────
-// §9.2: Resource consumed inside function body → error on second use
-// ─────────────────────────────────────────────
 
 #[test]
 fn test_resource_consumed_in_body_second_use_error() {
@@ -625,10 +585,6 @@ process(Conn(handle: 1))
     );
 }
 
-// ─────────────────────────────────────────────
-// §9.2: Managed type passed inside function body → no error (not a resource)
-// ─────────────────────────────────────────────
-
 #[test]
 fn test_managed_type_in_function_body_no_error() {
     assert_runs(
@@ -649,12 +605,6 @@ println("ok")
     );
 }
 
-// ─────────────────────────────────────────────
-// §7.4: Conservative if-without-else: resource consumed only in then-branch
-// is NOT flagged after the if (sound but incomplete — we can't prove the
-// branch always executes, so we leave the variable as "potentially live").
-// ─────────────────────────────────────────────
-
 #[test]
 fn test_resource_conditional_consume_no_else_compiles() {
     assert_runs(
@@ -674,6 +624,163 @@ let c = Conn(handle: 1)
 if cond
     sink(c)
 println("ok")
+"#,
+    );
+}
+
+#[test]
+fn test_dynamic_fn_param_callee_consumes_managed_arg() {
+    assert_compiler_error(
+        r#"
+use system.io
+use system.collections.list
+
+fn apply(items [int], f fn(xs [int]) int)
+    f(items)
+    println(f"{items.length()}")
+
+apply(List([1, 2, 3]), fn(xs [int]) int: xs.length())
+"#,
+        "consumed",
+    );
+}
+
+#[test]
+fn test_dynamic_fn_param_diagnostic_names_dynamic_fn() {
+    // The sink description must mention the dynamic-fn fallback so that the
+    assert_compiler_error(
+        r#"
+use system.io
+use system.collections.list
+
+fn apply(items [int], f fn(xs [int]) int)
+    f(items)
+    println(f"{items.length()}")
+
+apply(List([1, 2, 3]), fn(xs [int]) int: xs.length())
+"#,
+        "dynamic fn",
+    );
+}
+
+#[test]
+fn test_dynamic_fn_let_bound_branch_consumes_managed_arg() {
+    assert_compiler_error(
+        r#"
+use system.io
+use system.collections.list
+
+fn save(xs [int]) int
+    return xs.length()
+
+fn noop(xs [int]) int
+    return 0
+
+fn process(items [int], cond bool)
+    let target = if cond: save else: noop
+    target(items)
+    println(f"{items.length()}")
+
+process(List([1, 2, 3]), true)
+"#,
+        "consumed",
+    );
+}
+
+#[test]
+fn test_dynamic_fn_param_clone_workaround_compiles() {
+    assert_runs(
+        r#"
+use system.io
+use system.memory
+use system.collections.list
+
+fn apply(items [int], f fn(xs [int]) int)
+    f(items.clone())
+    println(f"{items.length()}")
+
+apply(List([1, 2, 3]), fn(xs [int]) int: xs.length())
+"#,
+    );
+}
+
+#[test]
+fn test_literal_free_fn_does_not_trigger_dynamic_fallback() {
+    assert_runs(
+        r#"
+use system.io
+use system.collections.list
+
+fn helper(xs [int])
+    return
+
+fn process(items [int])
+    helper(items)
+    println(f"{items.length()}")
+
+process(List([1, 2, 3]))
+"#,
+    );
+}
+
+#[test]
+fn test_dynamic_fn_lambda_param_callee_consumes_managed_arg() {
+    assert_compiler_error(
+        r#"
+use system.io
+use system.collections.list
+
+fn run()
+    let h = fn(g fn(xs [int]) int, items [int]) int
+        let r = g(items)
+        let unused = items.length()
+        return r
+    let _ = h(fn(xs [int]) int: xs.length(), List([1, 2, 3]))
+
+run()
+"#,
+        "consumed",
+    );
+}
+
+#[test]
+fn test_dynamic_fn_for_loop_pattern_callee_consumes_managed_arg() {
+    assert_compiler_error(
+        r#"
+use system.io
+use system.collections.list
+
+fn run(fns [fn(xs [int]) int], items [int])
+    for f in fns
+        let _ = f(items)
+    let _ = items.length()
+
+run(List<fn(xs [int]) int>(), List([1, 2, 3]))
+"#,
+        "consumed",
+    );
+}
+
+#[test]
+fn test_dynamic_fn_for_loop_does_not_leak_binding_past_loop() {
+    // After the for loop exits, `helper` should resolve back to the free fn —
+    // the loop variable `helper` must not stay in `fn_bindings` and force
+    // calls to the free `helper` to be classified as dynamic.
+    assert_runs(
+        r#"
+use system.io
+use system.collections.list
+
+fn helper(xs [int])
+    return
+
+fn run(fns [fn(xs [int]) int], items [int])
+    for helper in fns
+        let _ = helper(items.clone())
+    helper(items)
+    println(f"{items.length()}")
+
+run(List<fn(xs [int]) int>(), List([1, 2, 3]))
 "#,
     );
 }
