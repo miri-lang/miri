@@ -331,9 +331,9 @@ pub struct Context {
     pub current_base_class: Option<String>,
     /// The type of the current class (for self expression type inference).
     pub current_class_type: Option<Type>,
-    /// Escape summaries for all functions analyzed so far (§12.0.1).
+    /// Escape summaries for all functions analyzed so far.
     /// Keyed by qualified function name (`"fn_name"` or `"ClassName_method"`).
-    /// Populated during escape analysis (§12.1); empty until then.
+    /// Populated during escape analysis; empty until then.
     pub escape_summaries: HashMap<FunctionId, EscapeSummary>,
 }
 
