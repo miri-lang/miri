@@ -219,12 +219,16 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
     }
 
-    /// Extracts the type name from a `Custom` type kind.
+    /// Extracts a display name for the resource type used in the W0004 warning.
+    ///
+    /// Returns the nominal name for `Custom` types and the parameter name for
+    /// `Generic` types (so a resource-bounded generic local appears in the
+    /// warning as `type 'T'`, per §12.0.4).
     fn resource_type_name(kind: &TypeKind) -> Option<&str> {
-        if let TypeKind::Custom(name, _) = kind {
-            Some(name.as_str())
-        } else {
-            None
+        match kind {
+            TypeKind::Custom(name, _) => Some(name.as_str()),
+            TypeKind::Generic(name, _, _) => Some(name.as_str()),
+            _ => None,
         }
     }
 
