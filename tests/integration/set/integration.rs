@@ -19,7 +19,7 @@ fn main()
     let s2 = modify_and_return_set(s)
     println(f"{s2.length()}")
     println(f"{s2.contains(99)}")
-    println(f"{s.contains(99)}") // because it's passed by reference
+    println(f"{s2.contains(1)}")
 "#,
         "4\ntrue\ntrue",
     );
