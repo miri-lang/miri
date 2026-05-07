@@ -60,12 +60,12 @@
 //! fn-valued generics or generic higher-order combinators with type-class-
 //! style dispatch — this strategy may need revisiting.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use serde::Deserialize;
 
 use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::statement::StatementKind;
+use crate::ast::statement::{Statement, StatementKind};
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::Parameter;
 
@@ -577,6 +577,740 @@ pub fn load_ffi_summaries() -> HashMap<FunctionId, EscapeSummary> {
             // In debug mode, surface the error so it is caught early.
             debug_assert!(false, "failed to parse escape_summaries.toml: {e}");
             HashMap::new()
+        }
+    }
+}
+
+// ── Whole-program escape analysis pass ───────────────────────────────────────
+
+/// Captures a function's parameter list (with `self` at index 0 for methods)
+/// and a reference to its body.
+struct FunctionDef<'a> {
+    params: Vec<Parameter>,
+    body: &'a Statement,
+}
+
+/// Computes escape summaries for every user-defined function in `stmts`,
+/// merges them with the pre-loaded `ffi_summaries`, and returns the combined
+/// map.  Analysis is bottom-up over the call graph (Tarjan SCC + fixpoint
+/// within each SCC).
+///
+/// Only user functions whose bodies are visible in `stmts` are analysed.
+/// Stdlib declarations are represented by their FFI summaries in `ffi_summaries`.
+pub fn compute_escape_summaries(
+    stmts: &[Statement],
+    types: &HashMap<usize, Type>,
+    type_definitions: &HashMap<String, super::context::TypeDefinition>,
+    ffi_summaries: HashMap<FunctionId, EscapeSummary>,
+) -> HashMap<FunctionId, EscapeSummary> {
+    let mut summaries = ffi_summaries;
+
+    // Step 1: collect all user function definitions.
+    let mut fn_defs: HashMap<FunctionId, FunctionDef<'_>> = HashMap::new();
+    collect_function_defs(stmts, &mut fn_defs, None);
+
+    if fn_defs.is_empty() {
+        return summaries;
+    }
+
+    // Step 2: build a call graph over known user functions.
+    let call_graph = build_call_graph(&fn_defs, types);
+
+    // Step 3: Tarjan SCC — returns SCCs with leaf SCCs first (bottom-up order).
+    let fn_ids: Vec<FunctionId> = fn_defs.keys().cloned().collect();
+    let sccs = tarjan_sccs(&fn_ids, &call_graph);
+
+    // Step 4: process each SCC in order, fixpointing within the SCC.
+    for scc in &sccs {
+        loop {
+            let mut changed = false;
+            for fn_id in scc {
+                let Some(def) = fn_defs.get(fn_id.as_str()) else {
+                    continue;
+                };
+                let new_summary =
+                    compute_one_summary(&def.params, def.body, types, type_definitions, &summaries);
+                let old = summaries.get(fn_id.as_str()).cloned().unwrap_or_default();
+                if new_summary != old {
+                    summaries.insert(fn_id.clone(), new_summary);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+    }
+
+    summaries
+}
+
+// ── Function definition collection ───────────────────────────────────────────
+
+fn collect_function_defs<'a>(
+    stmts: &'a [Statement],
+    fn_defs: &mut HashMap<FunctionId, FunctionDef<'a>>,
+    class_name: Option<&str>,
+) {
+    for stmt in stmts {
+        match &stmt.node {
+            StatementKind::FunctionDeclaration(decl) if decl.body.is_some() => {
+                let fn_id = match class_name {
+                    Some(cls) => format!("{cls}_{}", decl.name),
+                    None => decl.name.clone(),
+                };
+                let params = match class_name {
+                    Some(_) => {
+                        let mut p = vec![synthetic_self_param()];
+                        p.extend_from_slice(&decl.params);
+                        p
+                    }
+                    None => decl.params.clone(),
+                };
+                fn_defs.insert(
+                    fn_id,
+                    FunctionDef {
+                        params,
+                        body: decl.body.as_deref().unwrap(),
+                    },
+                );
+            }
+            StatementKind::Class(cd) => {
+                if let Some(cls) = extract_name_from_expr(&cd.name) {
+                    collect_function_defs(&cd.body, fn_defs, Some(&cls.clone()));
+                }
+            }
+            StatementKind::Struct(name_expr, _, _, methods, _) => {
+                if let Some(s) = extract_name_from_expr(name_expr) {
+                    collect_function_defs(methods, fn_defs, Some(&s.clone()));
+                }
+            }
+            StatementKind::Block(stmts) => {
+                collect_function_defs(stmts, fn_defs, class_name);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Creates a synthetic `self` parameter used as index-0 in method param lists.
+fn synthetic_self_param() -> Parameter {
+    use crate::ast::factory::{expr_with_span, make_type};
+    use crate::error::syntax::Span;
+    Parameter {
+        name: "self".to_string(),
+        typ: Box::new(expr_with_span(
+            ExpressionKind::Type(Box::new(make_type(TypeKind::Void)), false),
+            Span::new(0, 0),
+        )),
+        guard: None,
+        default_value: None,
+        is_out: false,
+    }
+}
+
+/// Extracts a plain class/struct name string from a declaration name expression.
+fn extract_name_from_expr(expr: &Expression) -> Option<String> {
+    match &expr.node {
+        ExpressionKind::Identifier(name, _) => Some(name.clone()),
+        ExpressionKind::TypeDeclaration(inner, _, _, _) => {
+            if let ExpressionKind::Identifier(name, _) = &inner.node {
+                Some(name.clone())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+// ── Call-graph construction ───────────────────────────────────────────────────
+
+/// Builds a call graph over the known user function IDs.  An edge `f → g`
+/// exists when function `f`'s body contains a call that resolves to `g`.
+/// Only edges to other user functions (present in `fn_defs`) are recorded;
+/// edges to FFI or unknown functions are not needed here (their summaries are
+/// already in the `summaries` map and consulted directly during summary
+/// computation).
+fn build_call_graph<'a>(
+    fn_defs: &HashMap<FunctionId, FunctionDef<'a>>,
+    types: &HashMap<usize, Type>,
+) -> HashMap<FunctionId, Vec<FunctionId>> {
+    let known: HashSet<&str> = fn_defs.keys().map(String::as_str).collect();
+    let mut graph: HashMap<FunctionId, Vec<FunctionId>> = HashMap::new();
+
+    for (fn_id, def) in fn_defs {
+        let mut callees: Vec<FunctionId> = Vec::new();
+        collect_callees_from_stmt(def.body, types, &known, &mut callees);
+        // Deduplicate (a callee may appear multiple times).
+        callees.sort_unstable();
+        callees.dedup();
+        graph.insert(fn_id.clone(), callees);
+    }
+
+    graph
+}
+
+fn collect_callees_from_stmt(
+    stmt: &Statement,
+    types: &HashMap<usize, Type>,
+    known: &HashSet<&str>,
+    out: &mut Vec<FunctionId>,
+) {
+    match &stmt.node {
+        StatementKind::Block(stmts) => {
+            for s in stmts {
+                collect_callees_from_stmt(s, types, known, out);
+            }
+        }
+        StatementKind::Expression(e) => {
+            collect_callees_from_expr(e, types, known, out);
+        }
+        StatementKind::Return(Some(e)) => {
+            collect_callees_from_expr(e, types, known, out);
+        }
+        StatementKind::Variable(decls, _) => {
+            for d in decls {
+                if let Some(init) = &d.initializer {
+                    collect_callees_from_expr(init, types, known, out);
+                }
+            }
+        }
+        StatementKind::If(cond, then, else_, _) => {
+            collect_callees_from_expr(cond, types, known, out);
+            collect_callees_from_stmt(then, types, known, out);
+            if let Some(e) = else_ {
+                collect_callees_from_stmt(e, types, known, out);
+            }
+        }
+        StatementKind::While(cond, body, _) => {
+            collect_callees_from_expr(cond, types, known, out);
+            collect_callees_from_stmt(body, types, known, out);
+        }
+        StatementKind::For(_, iter, body) => {
+            collect_callees_from_expr(iter, types, known, out);
+            collect_callees_from_stmt(body, types, known, out);
+        }
+        StatementKind::FunctionDeclaration(_) => {}
+        _ => {}
+    }
+}
+
+fn collect_callees_from_expr(
+    expr: &Expression,
+    types: &HashMap<usize, Type>,
+    known: &HashSet<&str>,
+    out: &mut Vec<FunctionId>,
+) {
+    match &expr.node {
+        ExpressionKind::Call(callee, args) => {
+            match &callee.node {
+                ExpressionKind::Identifier(name, _) if known.contains(name.as_str()) => {
+                    out.push(name.clone());
+                }
+                ExpressionKind::Member(obj, method_expr) => {
+                    if let ExpressionKind::Identifier(method, _) = &method_expr.node {
+                        if let Some(ty) = types.get(&obj.id) {
+                            if let TypeKind::Custom(class, _) = &ty.kind {
+                                let key = format!("{class}_{method}");
+                                if known.contains(key.as_str()) {
+                                    out.push(key);
+                                }
+                            }
+                        }
+                    }
+                    collect_callees_from_expr(obj, types, known, out);
+                }
+                _ => {
+                    collect_callees_from_expr(callee, types, known, out);
+                }
+            }
+            for a in args {
+                collect_callees_from_expr(a, types, known, out);
+            }
+        }
+        ExpressionKind::Binary(l, _, r) | ExpressionKind::Logical(l, _, r) => {
+            collect_callees_from_expr(l, types, known, out);
+            collect_callees_from_expr(r, types, known, out);
+        }
+        ExpressionKind::Unary(_, e) | ExpressionKind::Guard(_, e) => {
+            collect_callees_from_expr(e, types, known, out);
+        }
+        ExpressionKind::Index(obj, idx) => {
+            collect_callees_from_expr(obj, types, known, out);
+            collect_callees_from_expr(idx, types, known, out);
+        }
+        ExpressionKind::Member(obj, _) => collect_callees_from_expr(obj, types, known, out),
+        ExpressionKind::Conditional(then, cond, else_, _) => {
+            collect_callees_from_expr(cond, types, known, out);
+            collect_callees_from_expr(then, types, known, out);
+            if let Some(e) = else_ {
+                collect_callees_from_expr(e, types, known, out);
+            }
+        }
+        ExpressionKind::Block(stmts, e) => {
+            for s in stmts {
+                collect_callees_from_stmt(s, types, known, out);
+            }
+            collect_callees_from_expr(e, types, known, out);
+        }
+        ExpressionKind::Match(sc, branches) => {
+            collect_callees_from_expr(sc, types, known, out);
+            for b in branches {
+                if let Some(g) = &b.guard {
+                    collect_callees_from_expr(g, types, known, out);
+                }
+                collect_callees_from_stmt(&b.body, types, known, out);
+            }
+        }
+        ExpressionKind::List(elems) | ExpressionKind::Set(elems) | ExpressionKind::Tuple(elems) => {
+            for e in elems {
+                collect_callees_from_expr(e, types, known, out);
+            }
+        }
+        ExpressionKind::Array(elems, _) => {
+            for e in elems {
+                collect_callees_from_expr(e, types, known, out);
+            }
+        }
+        ExpressionKind::Map(pairs) => {
+            for (k, v) in pairs {
+                collect_callees_from_expr(k, types, known, out);
+                collect_callees_from_expr(v, types, known, out);
+            }
+        }
+        ExpressionKind::EnumValue(_, vals) => {
+            for v in vals {
+                collect_callees_from_expr(v, types, known, out);
+            }
+        }
+        ExpressionKind::Assignment(_, _, rhs) => collect_callees_from_expr(rhs, types, known, out),
+        ExpressionKind::NamedArgument(_, val) => collect_callees_from_expr(val, types, known, out),
+        ExpressionKind::FormattedString(parts) => {
+            for p in parts {
+                collect_callees_from_expr(p, types, known, out);
+            }
+        }
+        ExpressionKind::Range(start, end_, _) => {
+            collect_callees_from_expr(start, types, known, out);
+            if let Some(e) = end_ {
+                collect_callees_from_expr(e, types, known, out);
+            }
+        }
+        ExpressionKind::Lambda(_)
+        | ExpressionKind::Identifier(_, _)
+        | ExpressionKind::Literal(_)
+        | ExpressionKind::Type(_, _)
+        | ExpressionKind::GenericType(_, _, _)
+        | ExpressionKind::TypeDeclaration(_, _, _, _)
+        | ExpressionKind::StructMember(_, _)
+        | ExpressionKind::ImportPath(_, _)
+        | ExpressionKind::Super => {}
+    }
+}
+
+// ── Tarjan SCC ────────────────────────────────────────────────────────────────
+
+/// Returns SCCs in topological order with leaf SCCs (no outgoing cross-SCC
+/// edges) first.  This is the natural output order of Tarjan's algorithm.
+fn tarjan_sccs(
+    nodes: &[FunctionId],
+    edges: &HashMap<FunctionId, Vec<FunctionId>>,
+) -> Vec<Vec<FunctionId>> {
+    let mut index = 0usize;
+    let mut stack: Vec<FunctionId> = Vec::new();
+    let mut on_stack: HashSet<FunctionId> = HashSet::new();
+    let mut indices: HashMap<FunctionId, usize> = HashMap::new();
+    let mut lowlinks: HashMap<FunctionId, usize> = HashMap::new();
+    let mut sccs: Vec<Vec<FunctionId>> = Vec::new();
+
+    for node in nodes {
+        if !indices.contains_key(node) {
+            tarjan_visit(
+                node,
+                edges,
+                &mut index,
+                &mut stack,
+                &mut on_stack,
+                &mut indices,
+                &mut lowlinks,
+                &mut sccs,
+            );
+        }
+    }
+
+    sccs
+}
+
+#[allow(clippy::too_many_arguments)]
+fn tarjan_visit(
+    v: &FunctionId,
+    edges: &HashMap<FunctionId, Vec<FunctionId>>,
+    index: &mut usize,
+    stack: &mut Vec<FunctionId>,
+    on_stack: &mut HashSet<FunctionId>,
+    indices: &mut HashMap<FunctionId, usize>,
+    lowlinks: &mut HashMap<FunctionId, usize>,
+    sccs: &mut Vec<Vec<FunctionId>>,
+) {
+    indices.insert(v.clone(), *index);
+    lowlinks.insert(v.clone(), *index);
+    *index += 1;
+    stack.push(v.clone());
+    on_stack.insert(v.clone());
+
+    if let Some(neighbors) = edges.get(v) {
+        for w in neighbors {
+            if !indices.contains_key(w) {
+                tarjan_visit(w, edges, index, stack, on_stack, indices, lowlinks, sccs);
+                let w_low = *lowlinks.get(w).unwrap();
+                let v_low = lowlinks.get_mut(v).unwrap();
+                *v_low = (*v_low).min(w_low);
+            } else if on_stack.contains(w) {
+                let w_idx = *indices.get(w).unwrap();
+                let v_low = lowlinks.get_mut(v).unwrap();
+                *v_low = (*v_low).min(w_idx);
+            }
+        }
+    }
+
+    if lowlinks[v] == indices[v] {
+        let mut scc = Vec::new();
+        loop {
+            let w = stack.pop().unwrap();
+            on_stack.remove(&w);
+            let done = w == *v;
+            scc.push(w);
+            if done {
+                break;
+            }
+        }
+        sccs.push(scc);
+    }
+}
+
+// ── Per-function summary computation ─────────────────────────────────────────
+
+/// Computes the escape summary for a single function given the current state of
+/// the summaries map (which may contain partial results for the same SCC).
+fn compute_one_summary(
+    params: &[Parameter],
+    body: &Statement,
+    types: &HashMap<usize, Type>,
+    type_defs: &HashMap<String, super::context::TypeDefinition>,
+    summaries: &HashMap<FunctionId, EscapeSummary>,
+) -> EscapeSummary {
+    let mut direct_escapes = BTreeSet::new();
+    let mut return_aliases = BTreeSet::new();
+
+    walk_stmt_for_escapes(
+        body,
+        params,
+        types,
+        type_defs,
+        summaries,
+        &mut direct_escapes,
+        &mut return_aliases,
+    );
+
+    EscapeSummary {
+        direct_escapes,
+        conditional_escapes: vec![],
+        return_aliases,
+    }
+}
+
+/// Walks a statement recursively, accumulating escape evidence.
+///
+/// - `Return(Some(e))` → delegates to `analyze_return_value` (rules 1–7).
+/// - Other statements → recurses and calls `walk_expr_for_rule4` on
+///   expressions that appear in non-return position (rule 4: free-function
+///   call sites whose callee summary marks an argument as escaping).
+fn walk_stmt_for_escapes(
+    stmt: &Statement,
+    params: &[Parameter],
+    types: &HashMap<usize, Type>,
+    type_defs: &HashMap<String, super::context::TypeDefinition>,
+    summaries: &HashMap<FunctionId, EscapeSummary>,
+    direct_escapes: &mut BTreeSet<ParamIndex>,
+    return_aliases: &mut BTreeSet<ParamIndex>,
+) {
+    match &stmt.node {
+        StatementKind::Return(Some(e)) => {
+            let flow = analyze_return_value(e, params, types, type_defs, summaries);
+            direct_escapes.extend(flow.direct_escapes);
+            return_aliases.extend(flow.return_aliases);
+        }
+        StatementKind::Return(None)
+        | StatementKind::Break
+        | StatementKind::Continue
+        | StatementKind::Empty => {}
+
+        StatementKind::Block(stmts) => {
+            for s in stmts {
+                walk_stmt_for_escapes(
+                    s,
+                    params,
+                    types,
+                    type_defs,
+                    summaries,
+                    direct_escapes,
+                    return_aliases,
+                );
+            }
+        }
+        StatementKind::Expression(e) => {
+            walk_expr_for_rule4(e, params, summaries, direct_escapes);
+        }
+        StatementKind::Variable(decls, _) => {
+            for d in decls {
+                if let Some(init) = &d.initializer {
+                    walk_expr_for_rule4(init, params, summaries, direct_escapes);
+                }
+            }
+        }
+        StatementKind::If(cond, then, else_, _) => {
+            walk_expr_for_rule4(cond, params, summaries, direct_escapes);
+            walk_stmt_for_escapes(
+                then,
+                params,
+                types,
+                type_defs,
+                summaries,
+                direct_escapes,
+                return_aliases,
+            );
+            if let Some(e) = else_ {
+                walk_stmt_for_escapes(
+                    e,
+                    params,
+                    types,
+                    type_defs,
+                    summaries,
+                    direct_escapes,
+                    return_aliases,
+                );
+            }
+        }
+        StatementKind::While(cond, body, _) => {
+            walk_expr_for_rule4(cond, params, summaries, direct_escapes);
+            walk_stmt_for_escapes(
+                body,
+                params,
+                types,
+                type_defs,
+                summaries,
+                direct_escapes,
+                return_aliases,
+            );
+        }
+        StatementKind::For(_, iter, body) => {
+            walk_expr_for_rule4(iter, params, summaries, direct_escapes);
+            walk_stmt_for_escapes(
+                body,
+                params,
+                types,
+                type_defs,
+                summaries,
+                direct_escapes,
+                return_aliases,
+            );
+        }
+        // Nested function declarations have their own param lists; skip.
+        StatementKind::FunctionDeclaration(_) => {}
+        StatementKind::Use(_, _)
+        | StatementKind::Type(_, _)
+        | StatementKind::Enum(_, _, _, _)
+        | StatementKind::Struct(_, _, _, _, _)
+        | StatementKind::Class(_)
+        | StatementKind::Trait(_, _, _, _, _)
+        | StatementKind::RuntimeFunctionDeclaration(_, _, _, _) => {}
+    }
+}
+
+/// Statement-level companion to [`walk_expr_for_rule4`]: visits every
+/// expression sub-statement that could contain a rule-4 call site.  Used to
+/// walk match-branch bodies and block-expression statement lists, which are
+/// statements rather than expressions.
+fn walk_stmt_for_rule4(
+    stmt: &Statement,
+    params: &[Parameter],
+    summaries: &HashMap<FunctionId, EscapeSummary>,
+    direct_escapes: &mut BTreeSet<ParamIndex>,
+) {
+    match &stmt.node {
+        StatementKind::Block(stmts) => {
+            for s in stmts {
+                walk_stmt_for_rule4(s, params, summaries, direct_escapes);
+            }
+        }
+        StatementKind::Expression(e) => {
+            walk_expr_for_rule4(e, params, summaries, direct_escapes);
+        }
+        StatementKind::Return(Some(e)) => {
+            walk_expr_for_rule4(e, params, summaries, direct_escapes);
+        }
+        StatementKind::Variable(decls, _) => {
+            for d in decls {
+                if let Some(init) = &d.initializer {
+                    walk_expr_for_rule4(init, params, summaries, direct_escapes);
+                }
+            }
+        }
+        StatementKind::If(cond, then, else_, _) => {
+            walk_expr_for_rule4(cond, params, summaries, direct_escapes);
+            walk_stmt_for_rule4(then, params, summaries, direct_escapes);
+            if let Some(e) = else_ {
+                walk_stmt_for_rule4(e, params, summaries, direct_escapes);
+            }
+        }
+        StatementKind::While(cond, body, _) => {
+            walk_expr_for_rule4(cond, params, summaries, direct_escapes);
+            walk_stmt_for_rule4(body, params, summaries, direct_escapes);
+        }
+        StatementKind::For(_, iter, body) => {
+            walk_expr_for_rule4(iter, params, summaries, direct_escapes);
+            walk_stmt_for_rule4(body, params, summaries, direct_escapes);
+        }
+        _ => {}
+    }
+}
+
+/// Walks an expression for rule-4 escape evidence: when the expression
+/// contains a call to a **free function** (not a method call) whose escape
+/// summary marks argument slot `i` as `directly_escapes`, and the argument at
+/// slot `i` is an identifier naming one of our parameters, we add that
+/// parameter's index to `direct_escapes`.
+///
+/// Method calls are intentionally excluded to avoid false positives in cases
+/// where the receiver is a local variable that does not itself escape the
+/// function (e.g. `trash.push(items)` where `trash` is a local list).
+fn walk_expr_for_rule4(
+    expr: &Expression,
+    params: &[Parameter],
+    summaries: &HashMap<FunctionId, EscapeSummary>,
+    direct_escapes: &mut BTreeSet<ParamIndex>,
+) {
+    match &expr.node {
+        ExpressionKind::Call(callee, args) => {
+            // Rule 4 for FREE function calls only.
+            if let ExpressionKind::Identifier(name, _) = &callee.node {
+                if let Some(summary) = summaries.get(name.as_str()) {
+                    for (i, arg) in args.iter().enumerate() {
+                        if summary.directly_escapes(i) {
+                            apply_rule4_to_arg(arg, i, params, direct_escapes);
+                        }
+                    }
+                }
+            }
+            // Recurse into callee and args regardless (nested calls matter too).
+            walk_expr_for_rule4(callee, params, summaries, direct_escapes);
+            for a in args {
+                walk_expr_for_rule4(a, params, summaries, direct_escapes);
+            }
+        }
+
+        ExpressionKind::Binary(l, _, r) | ExpressionKind::Logical(l, _, r) => {
+            walk_expr_for_rule4(l, params, summaries, direct_escapes);
+            walk_expr_for_rule4(r, params, summaries, direct_escapes);
+        }
+        ExpressionKind::Unary(_, e) | ExpressionKind::Guard(_, e) => {
+            walk_expr_for_rule4(e, params, summaries, direct_escapes);
+        }
+        ExpressionKind::Index(obj, idx) => {
+            walk_expr_for_rule4(obj, params, summaries, direct_escapes);
+            walk_expr_for_rule4(idx, params, summaries, direct_escapes);
+        }
+        ExpressionKind::Member(obj, _) => {
+            walk_expr_for_rule4(obj, params, summaries, direct_escapes);
+        }
+        ExpressionKind::Conditional(then, cond, else_, _) => {
+            walk_expr_for_rule4(cond, params, summaries, direct_escapes);
+            walk_expr_for_rule4(then, params, summaries, direct_escapes);
+            if let Some(e) = else_ {
+                walk_expr_for_rule4(e, params, summaries, direct_escapes);
+            }
+        }
+        ExpressionKind::Block(stmts, e) => {
+            for s in stmts {
+                walk_stmt_for_rule4(s, params, summaries, direct_escapes);
+            }
+            walk_expr_for_rule4(e, params, summaries, direct_escapes);
+        }
+        ExpressionKind::Match(sc, branches) => {
+            walk_expr_for_rule4(sc, params, summaries, direct_escapes);
+            for b in branches {
+                if let Some(g) = &b.guard {
+                    walk_expr_for_rule4(g, params, summaries, direct_escapes);
+                }
+                walk_stmt_for_rule4(b.body.as_ref(), params, summaries, direct_escapes);
+            }
+        }
+        ExpressionKind::List(elems) | ExpressionKind::Set(elems) | ExpressionKind::Tuple(elems) => {
+            for e in elems {
+                walk_expr_for_rule4(e, params, summaries, direct_escapes);
+            }
+        }
+        ExpressionKind::Array(elems, _) => {
+            for e in elems {
+                walk_expr_for_rule4(e, params, summaries, direct_escapes);
+            }
+        }
+        ExpressionKind::Map(pairs) => {
+            for (k, v) in pairs {
+                walk_expr_for_rule4(k, params, summaries, direct_escapes);
+                walk_expr_for_rule4(v, params, summaries, direct_escapes);
+            }
+        }
+        ExpressionKind::EnumValue(_, vals) => {
+            for v in vals {
+                walk_expr_for_rule4(v, params, summaries, direct_escapes);
+            }
+        }
+        ExpressionKind::Assignment(_, _, rhs) => {
+            walk_expr_for_rule4(rhs, params, summaries, direct_escapes);
+        }
+        ExpressionKind::NamedArgument(_, val) => {
+            walk_expr_for_rule4(val, params, summaries, direct_escapes);
+        }
+        ExpressionKind::FormattedString(parts) => {
+            for p in parts {
+                walk_expr_for_rule4(p, params, summaries, direct_escapes);
+            }
+        }
+        ExpressionKind::Range(start, end_, _) => {
+            walk_expr_for_rule4(start, params, summaries, direct_escapes);
+            if let Some(e) = end_ {
+                walk_expr_for_rule4(e, params, summaries, direct_escapes);
+            }
+        }
+        ExpressionKind::Lambda(_)
+        | ExpressionKind::Identifier(_, _)
+        | ExpressionKind::Literal(_)
+        | ExpressionKind::Type(_, _)
+        | ExpressionKind::GenericType(_, _, _)
+        | ExpressionKind::TypeDeclaration(_, _, _, _)
+        | ExpressionKind::StructMember(_, _)
+        | ExpressionKind::ImportPath(_, _)
+        | ExpressionKind::Super => {}
+    }
+}
+
+/// If `arg` (or its `NamedArgument` wrapper) is a bare identifier that names
+/// one of `params`, adds that parameter's index to `direct_escapes`.
+fn apply_rule4_to_arg(
+    arg: &Expression,
+    _summary_idx: ParamIndex,
+    params: &[Parameter],
+    direct_escapes: &mut BTreeSet<ParamIndex>,
+) {
+    let inner = match &arg.node {
+        ExpressionKind::NamedArgument(_, val) => val.as_ref(),
+        _ => arg,
+    };
+    if let ExpressionKind::Identifier(name, _) = &inner.node {
+        if let Some(idx) = params.iter().position(|p| p.name == *name) {
+            direct_escapes.insert(idx);
         }
     }
 }

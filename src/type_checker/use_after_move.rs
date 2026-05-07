@@ -292,13 +292,34 @@ impl<'a> UseAfterMoveChecker<'a> {
                 // mutable borrow of self so the borrow checker stays happy.
                 let method_summary: Option<EscapeSummary> = self.extract_method_summary(callee);
 
+                // Inside a function body, also look up a free-function summary
+                // by literal callee name.  This enables escape-summary-driven
+                // consume for user functions whose summaries were computed by
+                // the §12.1 escape analysis pass.  At top level we preserve the
+                // existing broad-consume behaviour (§12.5 defers top-level CoW).
+                let free_fn_summary: Option<EscapeSummary> =
+                    if self.in_function_body && method_summary.is_none() {
+                        match &callee.node {
+                            ExpressionKind::Identifier(name, _)
+                                if !self.fn_bindings.contains(name.as_str()) =>
+                            {
+                                self.escape_summaries.get(name.as_str()).cloned()
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
+
                 // Classify the callee.  A literal callee is a free-fn
                 // identifier (declared at module scope, not in `fn_bindings`) or
                 // a method member access.  Anything else — let-bound, branch,
                 // returned-from-fn, parameter — is a dynamic fn-value, and the
                 // dynamic-fn fallback below treats every managed-typed argument
                 // as escaping.
-                let is_dynamic_fn = method_summary.is_none() && self.is_dynamic_fn_callee(callee);
+                let is_dynamic_fn = method_summary.is_none()
+                    && free_fn_summary.is_none()
+                    && self.is_dynamic_fn_callee(callee);
 
                 // Check callee for consumed uses (handles method receiver via Member).
                 self.check_expr(callee, consumed);
@@ -325,9 +346,12 @@ impl<'a> UseAfterMoveChecker<'a> {
 
                 if let Some(ref summary) = method_summary {
                     // Apply escape summary. param 0 = self (receiver); params 1..N = explicit args.
+                    // Use consume_arg_dynamic (bypasses in_function_body gate) because
+                    // the summary is the authoritative source — if the callee escapes
+                    // an argument, we must consume it even inside a fn body.
                     if summary.directly_escapes(0) {
                         if let ExpressionKind::Member(obj_expr, _) = &callee.node {
-                            self.maybe_consume_arg(obj_expr, &fn_name, consumed);
+                            self.consume_arg_dynamic(obj_expr, &fn_name, consumed);
                         }
                     }
                     // Track both the out-param index (into `params`, self-free)
@@ -356,7 +380,35 @@ impl<'a> UseAfterMoveChecker<'a> {
                             }
                         };
                         if !is_out && summary.directly_escapes(escape_idx) {
-                            self.maybe_consume_arg(arg, &fn_name, consumed);
+                            self.consume_arg_dynamic(arg, &fn_name, consumed);
+                        }
+                    }
+                } else if let Some(ref summary) = free_fn_summary {
+                    // Free function with a computed escape summary: apply it.
+                    // Params start at index 0 (no self offset).
+                    let mut pos_idx = 0usize;
+                    for arg in args {
+                        let (is_out, escape_idx) = match &arg.node {
+                            ExpressionKind::NamedArgument(name, _) => {
+                                let out = params
+                                    .iter()
+                                    .find(|p| &p.name == name)
+                                    .is_some_and(|p| p.is_out);
+                                let eidx = params
+                                    .iter()
+                                    .position(|p| &p.name == name)
+                                    .unwrap_or(usize::MAX);
+                                (out, eidx)
+                            }
+                            _ => {
+                                let out = params.get(pos_idx).is_some_and(|p| p.is_out);
+                                let eidx = pos_idx;
+                                pos_idx += 1;
+                                (out, eidx)
+                            }
+                        };
+                        if !is_out && summary.directly_escapes(escape_idx) {
+                            self.consume_arg_dynamic(arg, &fn_name, consumed);
                         }
                     }
                 } else if is_dynamic_fn {
@@ -385,8 +437,10 @@ impl<'a> UseAfterMoveChecker<'a> {
                         }
                     }
                 } else {
-                    // Free function call, or method call with no summary available:
-                    // fall back to the existing should_consume_expr logic.
+                    // Free function call with no computed escape summary, or
+                    // method call with no summary available: fall back to the
+                    // existing should_consume_expr logic (manages top-level
+                    // broad-consume vs in-function-body no-consume).
                     let mut pos_idx = 0usize;
                     for arg in args {
                         let is_out = match &arg.node {

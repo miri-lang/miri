@@ -466,3 +466,260 @@ println("ok")
 "#,
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §12.1 — Escape summaries on function definitions
+//
+// The escape analysis pass computes a summary for every user function that
+// records which parameters escape the function (are returned, or passed to
+// another escaping callee).  The use-after-move checker then uses those
+// summaries inside function bodies to decide when to consume an argument.
+//
+// Positive tests: the pass detects escape → consumed error inside fn body.
+// Negative tests: no false positives — pure-borrow functions and recursive
+// functions do NOT trigger a consume.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Positive: single-hop escape via return expression ─────────────────────────
+// A function that returns its managed parameter has direct_escapes = {0}.
+// Calling it inside a function body must consume the caller's variable.
+
+#[test]
+fn test_single_hop_escape_via_return_consumes_arg() {
+    assert_compiler_error(
+        r#"
+use system.io
+use system.collections.list
+
+fn pass_through(xs [int]) [int]
+    return xs
+
+fn check(xs [int])
+    let ys = pass_through(xs)
+    println(f"{ys.length()} {xs.length()}")
+
+let data = List([1, 2, 3])
+check(data)
+"#,
+        "consumed",
+    );
+}
+
+// ── Positive: two-hop escape via return chain ─────────────────────────────────
+// wrap_through calls pass_through which returns its arg; the return_aliases
+// axis propagates transitively so wrap_through also escapes param 0.
+
+#[test]
+fn test_two_hop_escape_via_return_chain_consumes_arg() {
+    assert_compiler_error(
+        r#"
+use system.io
+use system.collections.list
+
+fn pass_through(xs [int]) [int]
+    return xs
+
+fn wrap_through(xs [int]) [int]
+    return pass_through(xs)
+
+fn check(xs [int])
+    let ys = wrap_through(xs)
+    println(f"{ys.length()} {xs.length()}")
+
+let data = List([1, 2, 3])
+check(data)
+"#,
+        "consumed",
+    );
+}
+
+// ── Positive: escape via non-return call (rule 4) ─────────────────────────────
+// sink calls pass_through in statement position (not return); param xs still
+// flows into pass_through which has direct_escapes = {0}.  The escape
+// analysis detects this via the non-return call site walker.
+
+#[test]
+fn test_escape_via_non_return_call_site_consumes_arg() {
+    assert_compiler_error(
+        r#"
+use system.io
+use system.collections.list
+
+fn pass_through(xs [int]) [int]
+    return xs
+
+fn sink(xs [int])
+    let _ys = pass_through(xs)
+
+fn check(xs [int])
+    sink(xs)
+    println(f"{xs.length()}")
+
+let data = List([1, 2, 3])
+check(data)
+"#,
+        "consumed",
+    );
+}
+
+// ── Negative: pure-borrow function does not consume ────────────────────────────
+// A function that only reads the list (returns int) has an empty escape
+// summary; calling it must NOT consume the argument inside a function body.
+
+#[test]
+fn test_pure_borrow_summary_no_consume() {
+    assert_runs(
+        r#"
+use system.io
+use system.collections.list
+
+fn count(xs [int]) int
+    return xs.length()
+
+fn use_twice(xs [int])
+    let a = count(xs)
+    let b = count(xs)
+    println(f"{a} {b}")
+
+let data = List([1, 2, 3])
+use_twice(data)
+"#,
+    );
+}
+
+// ── Negative: recursive function with no escape ────────────────────────────────
+// A self-recursive function that only reads the list does not escape its arg.
+// The fixpoint must terminate with an empty summary.
+
+#[test]
+fn test_recursive_fn_no_false_positive() {
+    assert_runs(
+        r#"
+use system.io
+use system.collections.list
+
+fn sum_n(xs [int], n int) int
+    if n <= 0
+        return 0
+    return xs.element_at(n - 1) + sum_n(xs, n - 1)
+
+let data = List([10, 20, 30])
+let total = sum_n(data, 3)
+println(f"{total}")
+println(f"{data.length()}")
+"#,
+    );
+}
+
+// ── Negative: mutually recursive SCC with no escape ───────────────────────────
+// Two functions that call each other but never store/return the managed arg.
+// The SCC fixpoint must converge to empty summaries for both.
+
+#[test]
+fn test_mutual_scc_no_false_positive() {
+    assert_runs(
+        r#"
+use system.io
+use system.collections.list
+
+fn count_from_a(xs [int], i int) int
+    if i >= xs.length()
+        return 0
+    return xs.element_at(i) + count_from_b(xs, i + 1)
+
+fn count_from_b(xs [int], i int) int
+    if i >= xs.length()
+        return 0
+    return xs.element_at(i) + count_from_a(xs, i + 1)
+
+let data = List([1, 2, 3, 4])
+let a = count_from_a(data, 0)
+let b = count_from_b(data, 0)
+println(f"{a} {b}")
+println(f"{data.length()}")
+"#,
+    );
+}
+
+// ── Negative: method calls on the arg do not consume (pure-borrow methods) ─────
+// Calling read-only methods on a managed param inside a helper chain must not
+// trigger false-positive consumed errors after escape summaries are computed.
+
+#[test]
+fn test_method_calls_on_param_no_false_consume_with_summaries() {
+    assert_runs(
+        r#"
+use system.io
+use system.collections.list
+
+fn describe(xs [int]) int
+    return xs.length()
+
+fn report(xs [int])
+    let a = describe(xs)
+    let b = describe(xs)
+    println(f"len={a} again={b}")
+
+let data = List([5, 6, 7])
+report(data)
+"#,
+    );
+}
+
+// ── Positive: escape via call inside match arm body (rule 4) ──────────────────
+// pass_through returns its arg (direct_escapes = {0}).  sink_in_match passes
+// xs to pass_through inside a match arm; rule 4 must therefore mark xs as
+// escaping from sink_in_match.  A caller that invokes sink_in_match and then
+// tries to use its argument must see a "consumed" error.
+
+#[test]
+fn test_escape_via_call_in_match_arm_consumes_arg() {
+    assert_compiler_error(
+        r#"
+use system.io
+use system.collections.list
+
+fn pass_through(xs [int]) [int]
+    return xs
+
+fn sink_in_match(xs [int], n int)
+    let _ = match n
+        0: pass_through(xs).length()
+        _: 0
+
+fn caller(xs [int])
+    sink_in_match(xs, 1)
+    println(f"{xs.length()}")
+
+let data = List([1, 2, 3])
+caller(data)
+"#,
+        "consumed",
+    );
+}
+
+// ── Negative: pure-borrow call inside match arm does not consume ──────────────
+// count only reads xs (empty summary).  A caller that invokes inspect and then
+// reads xs must NOT see a consumed error.
+
+#[test]
+fn test_pure_borrow_in_match_arm_no_consume() {
+    assert_runs(
+        r#"
+use system.io
+use system.collections.list
+
+fn count(xs [int]) int
+    return xs.length()
+
+fn inspect(xs [int], n int)
+    match n
+        0: println(f"zero: {count(xs)}")
+        _: println(f"other: {count(xs)}")
+    println(f"still alive: {xs.length()}")
+
+let data = List([10, 20])
+inspect(data, 0)
+"#,
+    );
+}

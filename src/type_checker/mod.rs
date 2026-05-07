@@ -207,6 +207,19 @@ impl TypeChecker {
             }
         }
 
+        // Pass 2.5: compute escape summaries for all user-defined functions.
+        // Must run after type checking (we need the `self.types` map) and
+        // before use-after-move (which consults the summaries).
+        if self.errors.is_empty() {
+            let ffi_summaries = std::mem::take(&mut context.escape_summaries);
+            context.escape_summaries = escape_analysis::compute_escape_summaries(
+                &program.body,
+                &self.types,
+                &self.global_type_definitions,
+                ffi_summaries,
+            );
+        }
+
         // Pass 3: use-after-move analysis — runs only when type checking is clean
         // so that we don't emit spurious "consumed" errors on top of type errors.
         if self.errors.is_empty() {
