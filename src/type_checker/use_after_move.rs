@@ -23,7 +23,7 @@ use crate::error::type_error::{TypeError, TypeErrorKind};
 use std::collections::{HashMap, HashSet};
 
 use super::context::TypeDefinition;
-use super::escape_analysis::{EscapeSummary, FunctionId};
+use super::escape_analysis::{EscapeNextHop, EscapeSummary, FunctionId};
 use super::utils::{is_auto_copy, is_resource};
 
 #[derive(Clone)]
@@ -31,6 +31,8 @@ struct ConsumedInfo {
     by_fn: String,
     #[allow(dead_code)]
     at_span: Span,
+    /// "consumed because:" chain lines, empty when no chain was computed.
+    chain: Vec<String>,
 }
 
 pub struct UseAfterMoveChecker<'a> {
@@ -128,6 +130,7 @@ impl<'a> UseAfterMoveChecker<'a> {
                                         ConsumedInfo {
                                             by_fn: format!("assignment to '{}'", decl.name),
                                             at_span: init.span,
+                                            chain: vec![],
                                         },
                                     );
                                 }
@@ -271,11 +274,16 @@ impl<'a> UseAfterMoveChecker<'a> {
         match &expr.node {
             ExpressionKind::Identifier(name, _) => {
                 if let Some(info) = consumed.get(name.as_str()) {
+                    let chain_section = if info.chain.is_empty() {
+                        String::new()
+                    } else {
+                        format!("\n  consumed because:\n{}", info.chain.join("\n"))
+                    };
                     self.errors.push(TypeError {
                         kind: TypeErrorKind::Custom {
                             message: format!(
-                                "'{}' was consumed by '{}' and cannot be used again; call .clone() to make a copy",
-                                name, info.by_fn
+                                "'{}' was consumed by '{}' and cannot be used again{}\n  fix: call .clone() to keep your copy independent",
+                                name, info.by_fn, chain_section
                             ),
                             help: None,
                         },
@@ -287,6 +295,11 @@ impl<'a> UseAfterMoveChecker<'a> {
 
             ExpressionKind::Call(callee, args) => {
                 let fn_name = self.extract_callee_name(callee);
+
+                // For method calls, compute the qualified key ("ClassName_method") used
+                // both as the chain-lookup key in escape_summaries and as the display name
+                // in the "consumed by" message (more informative than just "method").
+                let method_chain_key: Option<String> = self.extract_method_chain_key(callee);
 
                 // Extract the method escape summary (owned) before any
                 // mutable borrow of self so the borrow checker stays happy.
@@ -349,9 +362,12 @@ impl<'a> UseAfterMoveChecker<'a> {
                     // Use consume_arg_dynamic (bypasses in_function_body gate) because
                     // the summary is the authoritative source — if the callee escapes
                     // an argument, we must consume it even inside a fn body.
+                    // Use the qualified name ("ClassName_method") so build_chain can find
+                    // the escape summary for chain-following diagnostics.
+                    let method_sink = method_chain_key.as_deref().unwrap_or(&fn_name);
                     if summary.directly_escapes(0) {
                         if let ExpressionKind::Member(obj_expr, _) = &callee.node {
-                            self.consume_arg_dynamic(obj_expr, &fn_name, consumed);
+                            self.consume_arg_dynamic(obj_expr, method_sink, 0, consumed);
                         }
                     }
                     // Track both the out-param index (into `params`, self-free)
@@ -380,7 +396,7 @@ impl<'a> UseAfterMoveChecker<'a> {
                             }
                         };
                         if !is_out && summary.directly_escapes(escape_idx) {
-                            self.consume_arg_dynamic(arg, &fn_name, consumed);
+                            self.consume_arg_dynamic(arg, method_sink, escape_idx, consumed);
                         }
                     }
                 } else if let Some(ref summary) = free_fn_summary {
@@ -408,7 +424,7 @@ impl<'a> UseAfterMoveChecker<'a> {
                             }
                         };
                         if !is_out && summary.directly_escapes(escape_idx) {
-                            self.consume_arg_dynamic(arg, &fn_name, consumed);
+                            self.consume_arg_dynamic(arg, &fn_name, escape_idx, consumed);
                         }
                     }
                 } else if is_dynamic_fn {
@@ -421,19 +437,24 @@ impl<'a> UseAfterMoveChecker<'a> {
                     let sink = format!("dynamic fn '{fn_name}'");
                     let mut pos_idx = 0usize;
                     for arg in args {
-                        let is_out = match &arg.node {
-                            ExpressionKind::NamedArgument(name, _) => params
-                                .iter()
-                                .find(|p| &p.name == name)
-                                .is_some_and(|p| p.is_out),
+                        let (is_out, param_idx) = match &arg.node {
+                            ExpressionKind::NamedArgument(name, _) => {
+                                let out = params
+                                    .iter()
+                                    .find(|p| &p.name == name)
+                                    .is_some_and(|p| p.is_out);
+                                let pidx = params.iter().position(|p| &p.name == name).unwrap_or(0);
+                                (out, pidx)
+                            }
                             _ => {
                                 let out = params.get(pos_idx).is_some_and(|p| p.is_out);
+                                let pidx = pos_idx;
                                 pos_idx += 1;
-                                out
+                                (out, pidx)
                             }
                         };
                         if !is_out {
-                            self.consume_arg_dynamic(arg, &sink, consumed);
+                            self.consume_arg_dynamic(arg, &sink, param_idx, consumed);
                         }
                     }
                 } else {
@@ -443,19 +464,24 @@ impl<'a> UseAfterMoveChecker<'a> {
                     // broad-consume vs in-function-body no-consume).
                     let mut pos_idx = 0usize;
                     for arg in args {
-                        let is_out = match &arg.node {
-                            ExpressionKind::NamedArgument(name, _) => params
-                                .iter()
-                                .find(|p| &p.name == name)
-                                .is_some_and(|p| p.is_out),
+                        let (is_out, param_idx) = match &arg.node {
+                            ExpressionKind::NamedArgument(name, _) => {
+                                let out = params
+                                    .iter()
+                                    .find(|p| &p.name == name)
+                                    .is_some_and(|p| p.is_out);
+                                let pidx = params.iter().position(|p| &p.name == name).unwrap_or(0);
+                                (out, pidx)
+                            }
                             _ => {
                                 let out = params.get(pos_idx).is_some_and(|p| p.is_out);
+                                let pidx = pos_idx;
                                 pos_idx += 1;
-                                out
+                                (out, pidx)
                             }
                         };
                         if !is_out {
-                            self.maybe_consume_arg(arg, &fn_name, consumed);
+                            self.maybe_consume_arg(arg, &fn_name, param_idx, consumed);
                         }
                     }
                 }
@@ -625,32 +651,40 @@ impl<'a> UseAfterMoveChecker<'a> {
     ///
     /// At top level: any managed type is consumed.
     /// Inside a function body: only resource types (those with `fn drop(self)`) are consumed.
+    ///
+    /// `callee_param_idx` is the parameter index of this arg in `fn_name`'s parameter list,
+    /// used to look up the escape chain for richer diagnostics.
     fn maybe_consume_arg(
         &self,
         arg: &Expression,
         fn_name: &str,
+        callee_param_idx: usize,
         consumed: &mut HashMap<String, ConsumedInfo>,
     ) {
         match &arg.node {
             ExpressionKind::Identifier(name, _)
                 if !consumed.contains_key(name.as_str()) && self.should_consume_expr(arg) =>
             {
+                let chain = self.build_chain(fn_name, callee_param_idx);
                 consumed.insert(
                     name.clone(),
                     ConsumedInfo {
                         by_fn: fn_name.to_string(),
                         at_span: arg.span,
+                        chain,
                     },
                 );
             }
             ExpressionKind::NamedArgument(_, val) => {
                 if let ExpressionKind::Identifier(name, _) = &val.node {
                     if !consumed.contains_key(name.as_str()) && self.should_consume_expr(val) {
+                        let chain = self.build_chain(fn_name, callee_param_idx);
                         consumed.insert(
                             name.clone(),
                             ConsumedInfo {
                                 by_fn: fn_name.to_string(),
                                 at_span: val.span,
+                                chain,
                             },
                         );
                     }
@@ -685,10 +719,13 @@ impl<'a> UseAfterMoveChecker<'a> {
     /// Mirrors `maybe_consume_arg` but uses the broader "any managed type"
     /// predicate (since the conservative rule says "all managed-type params
     /// escape", not just resources).
+    ///
+    /// `callee_param_idx` is used for chain lookup when `sink` is a known callee name.
     fn consume_arg_dynamic(
         &self,
         arg: &Expression,
         sink: &str,
+        callee_param_idx: usize,
         consumed: &mut HashMap<String, ConsumedInfo>,
     ) {
         let (name, ident_expr) = match &arg.node {
@@ -711,11 +748,13 @@ impl<'a> UseAfterMoveChecker<'a> {
         if is_auto_copy(&ty.kind, self.type_definitions) {
             return;
         }
+        let chain = self.build_chain(sink, callee_param_idx);
         consumed.insert(
             name,
             ConsumedInfo {
                 by_fn: sink.to_string(),
                 at_span: ident_expr.span,
+                chain,
             },
         );
     }
@@ -770,6 +809,77 @@ impl<'a> UseAfterMoveChecker<'a> {
             | ExpressionKind::Index(_, _) => true,
             _ => false,
         }
+    }
+
+    /// Builds the "consumed because:" chain lines by following `escape_next_hops`
+    /// through the escape summaries.
+    ///
+    /// Starts at `callee_fn` / `param_idx` and follows hops until reaching a sink
+    /// or a function with no hop data.  Returns the chain lines (each one line),
+    /// or an empty Vec when no chain info is available.
+    fn build_chain(&self, callee_fn: &str, param_idx: usize) -> Vec<String> {
+        let mut lines = Vec::new();
+        let mut current_fn = callee_fn.to_string();
+        let mut current_param = param_idx;
+        let mut visited = std::collections::HashSet::new();
+
+        loop {
+            if !visited.insert((current_fn.clone(), current_param)) {
+                break; // cycle guard
+            }
+            let Some(summary) = self.escape_summaries.get(&current_fn) else {
+                break;
+            };
+            let Some(hop) = summary.escape_next_hops.get(&current_param) else {
+                break;
+            };
+            match hop {
+                EscapeNextHop::Call { callee, param_slot } => {
+                    lines.push(format!(
+                        "    {} → calls {} (passes its argument)",
+                        current_fn, callee
+                    ));
+                    current_fn = callee.clone();
+                    current_param = *param_slot;
+                }
+                EscapeNextHop::Return => {
+                    lines.push(format!(
+                        "    {} → returns its argument (escape sink)",
+                        current_fn
+                    ));
+                    break;
+                }
+                EscapeNextHop::ReturnAggregate => {
+                    lines.push(format!(
+                        "    {} → returns its argument in an aggregate (escape sink)",
+                        current_fn
+                    ));
+                    break;
+                }
+                EscapeNextHop::FieldStore { field } => {
+                    lines.push(format!(
+                        "    {} → stores its argument into field '{}' (escape sink)",
+                        current_fn, field
+                    ));
+                    break;
+                }
+                EscapeNextHop::ClosureCapture => {
+                    lines.push(format!(
+                        "    {} → captures its argument in a returned closure (escape sink)",
+                        current_fn
+                    ));
+                    break;
+                }
+                EscapeNextHop::DynamicFn { fn_name } => {
+                    lines.push(format!(
+                        "    {} → passes its argument to dynamic fn '{}' (escape sink)",
+                        current_fn, fn_name
+                    ));
+                    break;
+                }
+            }
+        }
+        lines
     }
 
     fn extract_callee_name(&self, callee: &Expression) -> String {
@@ -885,6 +995,25 @@ impl<'a> UseAfterMoveChecker<'a> {
                 _ => return false,
             }
         }
+    }
+
+    /// Returns the qualified `"ClassName_method"` key for a method-call callee.
+    ///
+    /// Used so `build_chain` can look up the escape summary by its canonical key
+    /// rather than the bare method name.  Returns `None` for non-method callees
+    /// or when the receiver type is unresolved.
+    fn extract_method_chain_key(&self, callee: &Expression) -> Option<String> {
+        let ExpressionKind::Member(obj_expr, method_expr) = &callee.node else {
+            return None;
+        };
+        let ExpressionKind::Identifier(method_name, _) = &method_expr.node else {
+            return None;
+        };
+        let receiver_ty = self.types.get(&obj_expr.id)?;
+        let TypeKind::Custom(type_name, _) = &receiver_ty.kind else {
+            return None;
+        };
+        Some(format!("{type_name}_{method_name}"))
     }
 
     /// If `callee` is a method call (`Member(receiver, method_name)`), looks up

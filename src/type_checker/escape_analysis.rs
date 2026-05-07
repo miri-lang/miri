@@ -64,7 +64,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use serde::Deserialize;
 
-use crate::ast::expression::{Expression, ExpressionKind};
+use crate::ast::expression::{Expression, ExpressionKind, LeftHandSideExpression};
 use crate::ast::statement::{Statement, StatementKind};
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::Parameter;
@@ -98,6 +98,31 @@ pub struct ConditionalEscape {
     pub callee_param: ParamIndex,
 }
 
+/// One step in an escape chain — describes what happens to a parameter at the
+/// function boundary where it first escapes.
+///
+/// Stored in [`EscapeSummary::escape_next_hops`] and followed at error-report
+/// time to build the full "consumed because" chain shown to the user.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EscapeNextHop {
+    /// The parameter is passed to `callee` at `param_slot`, and that callee
+    /// escapes `param_slot`.  Follow the callee's summary to continue the chain.
+    Call { callee: String, param_slot: usize },
+    /// The parameter is returned directly from this function.
+    Return,
+    /// The parameter flows into an aggregate (list, tuple, struct constructor)
+    /// that is returned from this function.
+    ReturnAggregate,
+    /// The parameter is assigned into a field of `self` — it escapes into the
+    /// heap via `self.<field>`.
+    FieldStore { field: String },
+    /// The parameter is captured by a lambda that this function returns.
+    ClosureCapture,
+    /// The parameter is passed to a dynamic fn-value (fn-typed parameter or
+    /// local); all managed args are conservatively treated as escaping.
+    DynamicFn { fn_name: String },
+}
+
 /// Escape summary for a single function.
 ///
 /// Computed bottom-up over the call graph by the escape analysis pass
@@ -113,6 +138,11 @@ pub struct EscapeSummary {
     /// Parameters aliased by the return value — if the caller lets the return
     /// value escape, these params escape too.
     pub return_aliases: BTreeSet<ParamIndex>,
+    /// For each param in `direct_escapes`, the first hop that explains WHY it
+    /// escapes.  Populated in a post-fixpoint pass by [`resolve_next_hops`];
+    /// absent during the fixpoint itself (always empty then, so PartialEq is
+    /// unaffected by this field during iteration).
+    pub escape_next_hops: HashMap<ParamIndex, EscapeNextHop>,
 }
 
 impl EscapeSummary {
@@ -368,9 +398,13 @@ impl<'a> ReturnFlowAnalyzer<'a> {
                 self.classify(rhs, aliases_return, flow);
             }
 
-            // Lambda capture — handled separately.  Closures returned
-            // verbatim are handled at a higher level.
-            ExpressionKind::Lambda(_) => {}
+            // Lambda in return position: any managed params referenced in the
+            // lambda body are captured by the closure and escape the function.
+            ExpressionKind::Lambda(lambda_data) => {
+                if aliases_return {
+                    self.scan_lambda_captures(&lambda_data.body, flow);
+                }
+            }
 
             // Leaves that produce no value-flow into a managed return:
             ExpressionKind::Literal(_)
@@ -400,6 +434,70 @@ impl<'a> ReturnFlowAnalyzer<'a> {
                 }
             }
             StatementKind::Return(Some(e)) => self.classify(e, aliases_return, flow),
+            _ => {}
+        }
+    }
+
+    /// Scans a lambda body statement for references to managed params.
+    ///
+    /// Called when a lambda is returned from a function (closure-capture escape).
+    /// Any managed param referenced inside the lambda body is captured by the
+    /// closure and therefore escapes the enclosing function.
+    fn scan_lambda_captures(&self, stmt: &crate::ast::Statement, flow: &mut ReturnFlow) {
+        match &stmt.node {
+            StatementKind::Expression(e) => self.scan_lambda_expr(e, flow),
+            StatementKind::Block(stmts) => {
+                for s in stmts {
+                    self.scan_lambda_captures(s, flow);
+                }
+            }
+            StatementKind::Return(Some(e)) => self.scan_lambda_expr(e, flow),
+            StatementKind::Variable(decls, _) => {
+                for d in decls {
+                    if let Some(init) = &d.initializer {
+                        self.scan_lambda_expr(init, flow);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Walks an expression inside a lambda body looking for managed param references.
+    fn scan_lambda_expr(&self, expr: &Expression, flow: &mut ReturnFlow) {
+        match &expr.node {
+            ExpressionKind::Identifier(name, _) => {
+                if let Some(idx) = self.param_index(name) {
+                    if self.is_managed_expr(expr) {
+                        flow.direct_escapes.insert(idx);
+                        flow.return_aliases.insert(idx);
+                    }
+                }
+            }
+            ExpressionKind::Call(callee, args) => {
+                self.scan_lambda_expr(callee, flow);
+                for a in args {
+                    self.scan_lambda_expr(a, flow);
+                }
+            }
+            ExpressionKind::Member(obj, _) => self.scan_lambda_expr(obj, flow),
+            ExpressionKind::Binary(l, _, r) | ExpressionKind::Logical(l, _, r) => {
+                self.scan_lambda_expr(l, flow);
+                self.scan_lambda_expr(r, flow);
+            }
+            ExpressionKind::Unary(_, e) | ExpressionKind::Guard(_, e) => {
+                self.scan_lambda_expr(e, flow);
+            }
+            ExpressionKind::Index(obj, idx) => {
+                self.scan_lambda_expr(obj, flow);
+                self.scan_lambda_expr(idx, flow);
+            }
+            ExpressionKind::FormattedString(parts) => {
+                for p in parts {
+                    self.scan_lambda_expr(p, flow);
+                }
+            }
+            ExpressionKind::NamedArgument(_, val) => self.scan_lambda_expr(val, flow),
             _ => {}
         }
     }
@@ -554,6 +652,7 @@ impl From<TomlSummaryEntry> for EscapeSummary {
             direct_escapes: e.direct_escapes.into_iter().collect(),
             conditional_escapes: e.conditional_escapes,
             return_aliases: e.return_aliases.into_iter().collect(),
+            escape_next_hops: HashMap::new(),
         }
     }
 }
@@ -639,6 +738,34 @@ pub fn compute_escape_summaries(
             if !changed {
                 break;
             }
+        }
+    }
+
+    // Step 5: post-fixpoint pass — compute escape chains for all user functions.
+    // Processed in bottom-up SCC order so callee chains are ready before callers.
+    let all_hops: Vec<(FunctionId, HashMap<ParamIndex, EscapeNextHop>)> = sccs
+        .iter()
+        .flat_map(|scc| scc.iter())
+        .filter_map(|fn_id| {
+            let def = fn_defs.get(fn_id.as_str())?;
+            let summary = summaries.get(fn_id.as_str())?;
+            if summary.direct_escapes.is_empty() {
+                return None;
+            }
+            let hops = resolve_next_hops(
+                &def.params,
+                &summary.direct_escapes,
+                def.body,
+                &summaries,
+                types,
+            );
+            Some((fn_id.clone(), hops))
+        })
+        .collect();
+
+    for (fn_id, hops) in all_hops {
+        if let Some(summary) = summaries.get_mut(&fn_id) {
+            summary.escape_next_hops = hops;
         }
     }
 
@@ -1017,6 +1144,7 @@ fn compute_one_summary(
         direct_escapes,
         conditional_escapes: vec![],
         return_aliases,
+        escape_next_hops: HashMap::new(),
     }
 }
 
@@ -1267,7 +1395,18 @@ fn walk_expr_for_rule4(
                 walk_expr_for_rule4(v, params, summaries, direct_escapes);
             }
         }
-        ExpressionKind::Assignment(_, _, rhs) => {
+        ExpressionKind::Assignment(lhs, _, rhs) => {
+            // Detect `self.field = managed_param` — the param escapes into the heap
+            // because `self` persists after the method returns.
+            if let LeftHandSideExpression::Member(member_expr) = lhs.as_ref() {
+                if let ExpressionKind::Member(obj, _) = &member_expr.node {
+                    if let ExpressionKind::Identifier(obj_name, _) = &obj.node {
+                        if obj_name == "self" {
+                            apply_rule4_to_arg(rhs, 0, params, direct_escapes);
+                        }
+                    }
+                }
+            }
             walk_expr_for_rule4(rhs, params, summaries, direct_escapes);
         }
         ExpressionKind::NamedArgument(_, val) => {
@@ -1312,6 +1451,229 @@ fn apply_rule4_to_arg(
         if let Some(idx) = params.iter().position(|p| p.name == *name) {
             direct_escapes.insert(idx);
         }
+    }
+}
+
+// ── Post-fixpoint: escape chain resolution ────────────────────────────────────
+
+/// For each param in `direct_escapes`, finds the first [`EscapeNextHop`] by
+/// walking the function body.  Returns a map from param index to hop.
+///
+/// Must be called after the fixpoint has converged so that callee summaries
+/// (consulted when the hop is a `Call`) are stable.
+fn resolve_next_hops(
+    params: &[Parameter],
+    direct_escapes: &BTreeSet<ParamIndex>,
+    body: &Statement,
+    summaries: &HashMap<FunctionId, EscapeSummary>,
+    types: &HashMap<usize, Type>,
+) -> HashMap<ParamIndex, EscapeNextHop> {
+    let mut hops = HashMap::new();
+    for &param_idx in direct_escapes {
+        let Some(param) = params.get(param_idx) else {
+            continue;
+        };
+        if let Some(hop) = find_hop_in_stmt(&param.name, body, summaries, types) {
+            hops.insert(param_idx, hop);
+        }
+    }
+    hops
+}
+
+fn find_hop_in_stmt(
+    param_name: &str,
+    stmt: &Statement,
+    summaries: &HashMap<FunctionId, EscapeSummary>,
+    types: &HashMap<usize, Type>,
+) -> Option<EscapeNextHop> {
+    match &stmt.node {
+        StatementKind::Return(Some(e)) => find_hop_in_return_expr(param_name, e, summaries, types),
+        StatementKind::Block(stmts) => {
+            for s in stmts {
+                if let Some(h) = find_hop_in_stmt(param_name, s, summaries, types) {
+                    return Some(h);
+                }
+            }
+            None
+        }
+        StatementKind::Expression(e) => find_hop_in_stmt_expr(param_name, e, summaries, types),
+        StatementKind::Variable(decls, _) => {
+            for d in decls {
+                if let Some(init) = &d.initializer {
+                    if let Some(h) = find_hop_in_stmt_expr(param_name, init, summaries, types) {
+                        return Some(h);
+                    }
+                }
+            }
+            None
+        }
+        StatementKind::If(_, then, else_, _) => {
+            if let Some(h) = find_hop_in_stmt(param_name, then, summaries, types) {
+                return Some(h);
+            }
+            if let Some(e) = else_ {
+                find_hop_in_stmt(param_name, e, summaries, types)
+            } else {
+                None
+            }
+        }
+        StatementKind::While(_, body, _) => find_hop_in_stmt(param_name, body, summaries, types),
+        StatementKind::For(_, _, body) => find_hop_in_stmt(param_name, body, summaries, types),
+        _ => None,
+    }
+}
+
+fn find_hop_in_return_expr(
+    param_name: &str,
+    expr: &Expression,
+    summaries: &HashMap<FunctionId, EscapeSummary>,
+    types: &HashMap<usize, Type>,
+) -> Option<EscapeNextHop> {
+    match &expr.node {
+        ExpressionKind::Identifier(name, _) if name == param_name => Some(EscapeNextHop::Return),
+        ExpressionKind::List(elems) | ExpressionKind::Tuple(elems) | ExpressionKind::Set(elems) => {
+            if elems.iter().any(|e| expr_contains_param(e, param_name)) {
+                Some(EscapeNextHop::ReturnAggregate)
+            } else {
+                None
+            }
+        }
+        ExpressionKind::Array(elems, _) => {
+            if elems.iter().any(|e| expr_contains_param(e, param_name)) {
+                Some(EscapeNextHop::ReturnAggregate)
+            } else {
+                None
+            }
+        }
+        ExpressionKind::EnumValue(_, vals) => {
+            if vals.iter().any(|e| expr_contains_param(e, param_name)) {
+                Some(EscapeNextHop::ReturnAggregate)
+            } else {
+                None
+            }
+        }
+        ExpressionKind::Call(callee, args) => {
+            find_hop_in_call_expr(param_name, callee, args, summaries, types)
+        }
+        ExpressionKind::Lambda(_) => Some(EscapeNextHop::ClosureCapture),
+        ExpressionKind::Conditional(then, _, else_, _) => {
+            if let Some(h) = find_hop_in_return_expr(param_name, then, summaries, types) {
+                return Some(h);
+            }
+            if let Some(e) = else_ {
+                find_hop_in_return_expr(param_name, e, summaries, types)
+            } else {
+                None
+            }
+        }
+        ExpressionKind::Block(_, final_expr) => {
+            find_hop_in_return_expr(param_name, final_expr, summaries, types)
+        }
+        ExpressionKind::NamedArgument(_, val) => {
+            find_hop_in_return_expr(param_name, val, summaries, types)
+        }
+        _ => None,
+    }
+}
+
+fn find_hop_in_stmt_expr(
+    param_name: &str,
+    expr: &Expression,
+    summaries: &HashMap<FunctionId, EscapeSummary>,
+    types: &HashMap<usize, Type>,
+) -> Option<EscapeNextHop> {
+    match &expr.node {
+        ExpressionKind::Call(callee, args) => {
+            find_hop_in_call_expr(param_name, callee, args, summaries, types)
+        }
+        ExpressionKind::Assignment(lhs, _, rhs) => {
+            // self.field = param → FieldStore
+            if let LeftHandSideExpression::Member(member_expr) = lhs.as_ref() {
+                if let ExpressionKind::Member(obj, field_expr) = &member_expr.node {
+                    if let ExpressionKind::Identifier(obj_name, _) = &obj.node {
+                        if obj_name == "self" && expr_contains_param(rhs, param_name) {
+                            let field = match &field_expr.node {
+                                ExpressionKind::Identifier(f, _) => f.clone(),
+                                _ => "?".to_string(),
+                            };
+                            return Some(EscapeNextHop::FieldStore { field });
+                        }
+                    }
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn find_hop_in_call_expr(
+    param_name: &str,
+    callee: &Expression,
+    args: &[Expression],
+    summaries: &HashMap<FunctionId, EscapeSummary>,
+    types: &HashMap<usize, Type>,
+) -> Option<EscapeNextHop> {
+    match &callee.node {
+        // Free function call: f(param)
+        ExpressionKind::Identifier(fn_name, _) => {
+            let arg_pos = args
+                .iter()
+                .position(|a| expr_contains_param(a, param_name))?;
+            let summary = summaries.get(fn_name.as_str())?;
+            if summary.directly_escapes(arg_pos) {
+                Some(EscapeNextHop::Call {
+                    callee: fn_name.clone(),
+                    param_slot: arg_pos,
+                })
+            } else {
+                None
+            }
+        }
+        // Method call: obj.method(param) — slot 0 = self/receiver
+        ExpressionKind::Member(obj, method_expr) => {
+            let ExpressionKind::Identifier(method_name, _) = &method_expr.node else {
+                return None;
+            };
+            let receiver_ty = types.get(&obj.id)?;
+            let TypeKind::Custom(class_name, _) = &receiver_ty.kind else {
+                return None;
+            };
+            let callee_key = format!("{class_name}_{method_name}");
+            let summary = summaries.get(&callee_key)?;
+
+            // Is `param_name` the receiver itself?
+            if expr_contains_param(obj, param_name) && summary.directly_escapes(0) {
+                return Some(EscapeNextHop::Call {
+                    callee: callee_key,
+                    param_slot: 0,
+                });
+            }
+            // Is `param_name` one of the regular args?
+            let arg_pos = args
+                .iter()
+                .position(|a| expr_contains_param(a, param_name))?;
+            let escape_slot = arg_pos + 1; // +1 because self is slot 0
+            if summary.directly_escapes(escape_slot) {
+                Some(EscapeNextHop::Call {
+                    callee: callee_key,
+                    param_slot: escape_slot,
+                })
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Returns true if `expr` (or a direct named-arg wrapper) is an identifier
+/// equal to `param_name`.
+fn expr_contains_param(expr: &Expression, param_name: &str) -> bool {
+    match &expr.node {
+        ExpressionKind::Identifier(name, _) => name == param_name,
+        ExpressionKind::NamedArgument(_, val) => expr_contains_param(val, param_name),
+        _ => false,
     }
 }
 
