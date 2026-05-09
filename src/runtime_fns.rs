@@ -129,6 +129,7 @@ pub mod rt {
     pub const EPRINT: &str = "miri_rt_eprint";
     pub const EPRINTLN: &str = "miri_rt_eprintln";
     pub const GET_LINE_END: &str = "miri_rt_get_line_end";
+    pub const PANIC: &str = "miri_rt_panic";
 
     // ── String ────────────────────────────────────────────────────────────────
     pub const STRING_NEW: &str = "miri_rt_string_new";
@@ -249,6 +250,7 @@ pub mod rt {
         EPRINT,
         EPRINTLN,
         GET_LINE_END,
+        PANIC,
         // String
         STRING_NEW,
         STRING_FREE,

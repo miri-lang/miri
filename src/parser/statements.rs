@@ -111,7 +111,11 @@ impl<'source> Parser<'source> {
             Some((Token::Type, _)) => self.type_statement(MemberVisibility::Public)?,
             Some((Token::Break, _)) => self.break_statement()?,
             Some((Token::Continue, _)) => self.continue_statement()?,
-            Some((Token::Enum, _)) => self.enum_statement(MemberVisibility::Public)?,
+            Some((Token::Enum, _)) => self.enum_statement(MemberVisibility::Public, false)?,
+            Some((Token::MustUse, _)) => {
+                self.eat_token(&Token::MustUse)?;
+                self.enum_statement(MemberVisibility::Public, true)?
+            }
             Some((Token::Struct, _)) => self.struct_statement(MemberVisibility::Public)?,
             Some((Token::Class, _)) => self.class_statement(MemberVisibility::Public)?,
             Some((Token::Trait, _)) => self.trait_statement(MemberVisibility::Public)?,

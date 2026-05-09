@@ -1,0 +1,55 @@
+/// A type that represents either success (Ok) or failure (Err).
+///
+/// Result<T, E> is used for returning and propagating errors. It is a
+/// must_use enum with two variants: Ok(T), representing success, and
+/// Err(E), representing failure.
+///
+/// Example:
+///     fn divide(a int, b int) Result<int, String>
+///         if b == 0
+///             return Result.Err("division by zero")
+///         return Result.Ok(a / b)
+///
+///     match divide(10, 2)
+///         Result.Ok(value): println(f"{value}")
+///         Result.Err(msg): println("Error: " + msg)
+
+use system.io
+
+must_use enum Result<T, E>
+    Ok(T)
+    Err(E)
+
+    /// Returns true if the result is Ok.
+    public fn is_ok() bool
+        match self
+            Result.Ok(_): true
+            Result.Err(_): false
+
+    /// Returns true if the result is Err.
+    public fn is_err() bool
+        match self
+            Result.Ok(_): false
+            Result.Err(_): true
+
+    /// Returns the contained Ok value.
+    ///
+    /// Aborts the process if the result is Err.
+    public fn unwrap() T
+        match self
+            Result.Ok(value): value
+            Result.Err(_): panic("called unwrap() on an Err value")
+
+    /// Returns the contained Ok value, or the provided fallback.
+    public fn unwrap_or(fallback T) T
+        match self
+            Result.Ok(value): value
+            Result.Err(_): fallback
+
+    /// Returns the contained Err value.
+    ///
+    /// Aborts the process if the result is Ok.
+    public fn unwrap_err() E
+        match self
+            Result.Ok(_): panic("called unwrap_err() on an Ok value")
+            Result.Err(error): error

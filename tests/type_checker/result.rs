@@ -7,42 +7,43 @@ use miri::ast::factory::*;
 #[test]
 fn test_result_ok_inference() {
     let source = "
+use system.result
 let r = Ok(10)
-r
     ";
-    type_checker_expr_type_test(source, type_result(type_int(), type_void()));
+    type_checker_vars_type_test(source, vec![("r", type_result(type_int(), type_void()))]);
 }
 
 #[test]
 fn test_result_err_inference() {
     let source = "
+use system.result
 let r = Err(\"error\")
-r
     ";
-    type_checker_expr_type_test(source, type_result(type_void(), type_string()));
+    type_checker_vars_type_test(source, vec![("r", type_result(type_void(), type_string()))]);
 }
 
 #[test]
 fn test_result_ok_assignment() {
     let source = "
+use system.result
 let r result<int, String> = Ok(10)
-r
     ";
-    type_checker_expr_type_test(source, type_result(type_int(), type_string()));
+    type_checker_vars_type_test(source, vec![("r", type_result(type_int(), type_string()))]);
 }
 
 #[test]
 fn test_result_err_assignment() {
     let source = "
+use system.result
 let r result<int, String> = Err(\"fail\")
-r
     ";
-    type_checker_expr_type_test(source, type_result(type_int(), type_string()));
+    type_checker_vars_type_test(source, vec![("r", type_result(type_int(), type_string()))]);
 }
 
 #[test]
 fn test_result_ok_type_mismatch() {
     let source = "
+use system.result
 let r result<int, String> = Ok(\"wrong\")
     ";
     type_checker_error_test(source, "Type mismatch");
@@ -51,6 +52,7 @@ let r result<int, String> = Ok(\"wrong\")
 #[test]
 fn test_result_err_type_mismatch() {
     let source = "
+use system.result
 let r result<int, String> = Err(10)
     ";
     type_checker_error_test(source, "Type mismatch");
@@ -59,6 +61,7 @@ let r result<int, String> = Err(10)
 #[test]
 fn test_result_methods_is_ok() {
     let source = "
+use system.result
 let r = Ok(10)
 r.is_ok()
     ";
@@ -68,6 +71,7 @@ r.is_ok()
 #[test]
 fn test_result_methods_is_err() {
     let source = "
+use system.result
 let r = Err(\"error\")
 r.is_err()
     ";
@@ -77,6 +81,7 @@ r.is_err()
 #[test]
 fn test_result_methods_unwrap() {
     let source = "
+use system.result
 let r = Ok(10)
 r.unwrap()
     ";
@@ -86,6 +91,7 @@ r.unwrap()
 #[test]
 fn test_result_methods_unwrap_on_err() {
     let source = "
+use system.result
 let r = Err(\"error\")
 r.unwrap()
     ";
@@ -96,6 +102,7 @@ r.unwrap()
 #[test]
 fn test_result_methods_unwrap_typed() {
     let source = "
+use system.result
 let r result<int, String> = Err(\"error\")
 r.unwrap()
     ";
@@ -106,18 +113,22 @@ r.unwrap()
 #[test]
 fn test_nested_result() {
     let source = "
+use system.result
 let r result<result<int, String>, bool> = Ok(Ok(10))
-r
     ";
-    type_checker_expr_type_test(
+    type_checker_vars_type_test(
         source,
-        type_result(type_result(type_int(), type_string()), type_bool()),
+        vec![(
+            "r",
+            type_result(type_result(type_int(), type_string()), type_bool()),
+        )],
     );
 }
 
 #[test]
 fn test_nested_result_unwrap() {
     let source = "
+use system.result
 let r result<result<int, String>, bool> = Ok(Ok(10))
 r.unwrap().unwrap()
     ";
@@ -127,6 +138,7 @@ r.unwrap().unwrap()
 #[test]
 fn test_ok_argument_count() {
     let source = "
+use system.result
 let r = Ok(1, 2)
     ";
     type_checker_error_test(source, "Too many positional arguments");
@@ -135,6 +147,7 @@ let r = Ok(1, 2)
 #[test]
 fn test_err_argument_count() {
     let source = "
+use system.result
 let r = Err()
     ";
     type_checker_error_test(source, "Missing argument for parameter 'error'");
@@ -143,15 +156,17 @@ let r = Err()
 #[test]
 fn test_result_invalid_member() {
     let source = "
+use system.result
 let r = Ok(10)
 r.foo
     ";
-    type_checker_error_test(source, "does not have members");
+    type_checker_error_test(source, "has no method");
 }
 
 #[test]
 fn test_result_match_bind() {
     let source = "
+use system.result
 let r = Ok(10)
 match r
     x: x.unwrap()
@@ -162,6 +177,7 @@ match r
 #[test]
 fn test_result_match_shadow_ok_fails() {
     let source = "
+use system.result
 let r = Ok(10)
 match r
     Ok: Ok.unwrap()
@@ -173,23 +189,24 @@ match r
 #[test]
 fn test_result_custom_struct_error() {
     let source = "
+use system.result
 struct MyError
     code int
     message String
 
 let e = MyError(code: 404, message: \"Not Found\")
 let r result<int, MyError> = Err(e)
-r
     ";
-    type_checker_expr_type_test(
+    type_checker_vars_type_test(
         source,
-        type_result(type_int(), type_custom("MyError", None)),
+        vec![("r", type_result(type_int(), type_custom("MyError", None)))],
     );
 }
 
 #[test]
 fn test_result_custom_struct_error_mismatch() {
     let source = "
+use system.result
 struct MyError
     code int
 
@@ -205,16 +222,17 @@ let r result<int, MyError> = Err(e)
 #[test]
 fn test_result_custom_error_return() {
     let source = "
+use system.result
 struct MyError
     msg String
 
 fn fail() result<int, MyError>
     return Err(MyError(msg: \"fail\"))
 
-fail()
+let r = fail()
     ";
-    type_checker_expr_type_test(
+    type_checker_vars_type_test(
         source,
-        type_result(type_int(), type_custom("MyError", None)),
+        vec![("r", type_result(type_int(), type_custom("MyError", None)))],
     );
 }

@@ -3,9 +3,6 @@
 
 pub use crate::integration::utils;
 
-pub mod definition;
-pub mod dps;
-pub mod functions;
-pub mod managed;
-pub mod matching;
+pub mod basic;
 pub mod methods;
+pub mod must_use;

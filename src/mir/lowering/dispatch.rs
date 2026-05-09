@@ -117,6 +117,14 @@ pub(crate) fn resolve_inherited_method(
         return resolve_in_trait_hierarchy(type_defs, class_name, method_name);
     }
 
+    // Handle enum-typed receiver: look up the method directly on the enum definition.
+    if let Some(TypeDefinition::Enum(enum_def)) = type_defs.get(class_name) {
+        if let Some(method_info) = enum_def.methods.get(method_name) {
+            return Some((class_name.to_string(), method_info.clone()));
+        }
+        return None;
+    }
+
     // Is the original caller itself abstract?  If it is, the "concrete caller" rule
     // does not apply — we use the normal defining-class name.
     let caller_is_abstract = matches!(

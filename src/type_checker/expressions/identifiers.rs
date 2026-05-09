@@ -99,9 +99,9 @@ impl TypeChecker {
             let t_expr = ast_factory::type_expr_non_null(t_param.clone());
             let void_expr = ast_factory::type_expr_non_null(ast_factory::make_type(TypeKind::Void));
 
-            let return_type = ast_factory::make_type(TypeKind::Result(
-                Box::new(t_expr.clone()),
-                Box::new(void_expr),
+            let return_type = ast_factory::make_type(TypeKind::Custom(
+                "Result".to_string(),
+                Some(vec![t_expr.clone(), void_expr]),
             ));
 
             return ast_factory::make_type(TypeKind::Function(Box::new(FunctionTypeData {
@@ -126,9 +126,9 @@ impl TypeChecker {
             let e_expr = ast_factory::type_expr_non_null(e_param.clone());
             let void_expr = ast_factory::type_expr_non_null(ast_factory::make_type(TypeKind::Void));
 
-            let return_type = ast_factory::make_type(TypeKind::Result(
-                Box::new(void_expr),
-                Box::new(e_expr.clone()),
+            let return_type = ast_factory::make_type(TypeKind::Custom(
+                "Result".to_string(),
+                Some(vec![void_expr, e_expr.clone()]),
             ));
 
             return ast_factory::make_type(TypeKind::Function(Box::new(FunctionTypeData {

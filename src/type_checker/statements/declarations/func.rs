@@ -257,9 +257,21 @@ impl TypeChecker {
                 StatementKind::Block(stmts) => {
                     // Note: Do not enter a new scope here - the function body shares the scope with parameters.
 
-                    // First, check all statements normally
-                    for stmt in stmts.iter() {
+                    // Check all statements. For the last expression of a non-void
+                    // function, suppress must_use: the value is the implicit return,
+                    // not a discarded result.
+                    let last_idx = stmts.len().saturating_sub(1);
+                    let is_non_void_return =
+                        !infer_main_return && !matches!(return_type.kind, TypeKind::Void);
+                    for (i, stmt) in stmts.iter().enumerate() {
+                        if i == last_idx
+                            && is_non_void_return
+                            && matches!(stmt.node, StatementKind::Expression(_))
+                        {
+                            context.suppress_must_use = true;
+                        }
                         self.check_statement(stmt, context);
+                        context.suppress_must_use = false;
                     }
 
                     // For implicit return inference, find the last meaningful statement
