@@ -97,8 +97,11 @@ pub struct EnumDefinition {
     // Use BTreeMap for deterministic variant order (crucial for discriminants)
     pub variants: BTreeMap<String, Vec<Type>>,
     pub generics: Option<Vec<GenericDefinition>>,
+    pub methods: BTreeMap<String, MethodInfo>,
     /// The module that defines this enum (used for transitive-import filtering).
     pub module: String,
+    /// Whether expressions of this enum type must be used (not silently discarded).
+    pub must_use: bool,
 }
 
 /// Definition of a generic type parameter.
@@ -335,6 +338,10 @@ pub struct Context {
     /// Keyed by qualified function name (`"fn_name"` or `"ClassName_method"`).
     /// Populated during escape analysis; empty until then.
     pub escape_summaries: HashMap<FunctionId, EscapeSummary>,
+    /// When true, suppress must_use warnings for expression statements.
+    /// Set while checking the last statement of a non-void function body,
+    /// where the expression is an implicit return value, not a discarded value.
+    pub suppress_must_use: bool,
 }
 
 impl Context {
@@ -352,6 +359,7 @@ impl Context {
             current_base_class: None,
             current_class_type: None,
             escape_summaries: load_ffi_summaries(),
+            suppress_must_use: false,
         }
     }
 

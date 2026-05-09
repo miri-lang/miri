@@ -66,19 +66,12 @@ impl TypeChecker {
                     return ast_factory::make_type(TypeKind::Error);
                 }
                 let val_type = self.infer_expression(&values[0], context);
-                // result<T, Void>
-                return ast_factory::make_type(TypeKind::Result(
-                    Box::new(ast_factory::expr_with_span(
-                        ExpressionKind::Type(Box::new(val_type), false),
-                        span,
-                    )),
-                    Box::new(ast_factory::expr_with_span(
-                        ExpressionKind::Type(
-                            Box::new(ast_factory::make_type(TypeKind::Void)),
-                            false,
-                        ),
-                        span,
-                    )),
+                return ast_factory::make_type(TypeKind::Custom(
+                    "Result".to_string(),
+                    Some(vec![
+                        ast_factory::type_expr_non_null(val_type),
+                        ast_factory::type_expr_non_null(ast_factory::make_type(TypeKind::Void)),
+                    ]),
                 ));
             } else if id_name == "Err" {
                 if values.len() != 1 {
@@ -86,19 +79,12 @@ impl TypeChecker {
                     return ast_factory::make_type(TypeKind::Error);
                 }
                 let val_type = self.infer_expression(&values[0], context);
-                // result<Void, E>
-                return ast_factory::make_type(TypeKind::Result(
-                    Box::new(ast_factory::expr_with_span(
-                        ExpressionKind::Type(
-                            Box::new(ast_factory::make_type(TypeKind::Void)),
-                            false,
-                        ),
-                        span,
-                    )),
-                    Box::new(ast_factory::expr_with_span(
-                        ExpressionKind::Type(Box::new(val_type), false),
-                        span,
-                    )),
+                return ast_factory::make_type(TypeKind::Custom(
+                    "Result".to_string(),
+                    Some(vec![
+                        ast_factory::type_expr_non_null(ast_factory::make_type(TypeKind::Void)),
+                        ast_factory::type_expr_non_null(val_type),
+                    ]),
                 ));
             }
         }
@@ -143,11 +129,16 @@ impl TypeChecker {
                                     mapping.insert(name.clone(), val_type);
                                 }
                             }
-                            // Fill in remaining generics with Error type
+                            // Fill in remaining generics with identity — keeps them as Generic(name)
+                            // so callers expecting e.g. Result<U,E> see the right type variables.
                             for g in generics {
-                                mapping
-                                    .entry(g.name.clone())
-                                    .or_insert_with(|| ast_factory::make_type(TypeKind::Error));
+                                mapping.entry(g.name.clone()).or_insert_with(|| {
+                                    ast_factory::make_type(TypeKind::Generic(
+                                        g.name.clone(),
+                                        None,
+                                        crate::ast::types::TypeDeclarationKind::None,
+                                    ))
+                                });
                             }
                             mapping
                         } else {

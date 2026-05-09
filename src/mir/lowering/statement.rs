@@ -173,7 +173,7 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
                 }
             }
         }
-        StatementKind::Enum(name_expr, _generics, _variants, _vis) => {
+        StatementKind::Enum(name_expr, _generics, _variants, _methods, _vis, _must_use) => {
             // Lower enum declaration by looking up the type definition from type checker
             if let ExpressionKind::Identifier(name, _) = &name_expr.node {
                 if let Some(TypeDefinition::Enum(def)) =

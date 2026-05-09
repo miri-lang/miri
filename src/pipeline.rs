@@ -729,6 +729,57 @@ impl Pipeline {
                         }
                     }
                 }
+                StatementKind::Enum(name_expr, _generics, _variants, methods, _vis, _must_use) => {
+                    // Compile enum methods as `EnumName_methodName` using lower_class_method.
+                    // Enum methods have no explicit `self` in their param list (like class methods).
+                    let enum_name = if let ExpressionKind::Identifier(name, _) = &name_expr.node {
+                        name.as_str()
+                    } else {
+                        continue;
+                    };
+
+                    let self_type = crate::ast::types::Type::new(
+                        crate::ast::types::TypeKind::Custom(enum_name.to_string(), None),
+                        stmt.span,
+                    );
+
+                    for method_stmt in methods {
+                        if let StatementKind::FunctionDeclaration(method_decl) = &method_stmt.node {
+                            if method_decl.body.is_none() {
+                                continue;
+                            }
+
+                            let mut mangled =
+                                String::with_capacity(enum_name.len() + 1 + method_decl.name.len());
+                            mangled.push_str(enum_name);
+                            mangled.push('_');
+                            mangled.push_str(&method_decl.name);
+                            if lowered_names.contains(&mangled) {
+                                continue;
+                            }
+
+                            let (mir_body, lambdas) = mir::lowering::lower_class_method(
+                                method_stmt,
+                                self_type.clone(),
+                                &result.type_checker,
+                                is_release,
+                            )
+                            .map_err(|e| {
+                                CompilerError::Codegen(format!(
+                                    "MIR lowering failed for {}: {}",
+                                    mangled, e
+                                ))
+                            })?;
+
+                            lowered_names.insert(mangled.clone());
+                            bodies.push((mangled, mir_body));
+                            for lambda in lambdas {
+                                lowered_names.insert(lambda.name.clone());
+                                bodies.push((lambda.name, lambda.body));
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -795,6 +846,53 @@ impl Pipeline {
                                 class_name.len() + 1 + method_decl.name.len(),
                             );
                             mangled.push_str(class_name);
+                            mangled.push('_');
+                            mangled.push_str(&method_decl.name);
+                            if lowered_names.contains(&mangled) {
+                                continue;
+                            }
+
+                            let (mir_body, lambdas) = mir::lowering::lower_class_method(
+                                method_stmt,
+                                self_type.clone(),
+                                &result.type_checker,
+                                is_release,
+                            )
+                            .map_err(|e| {
+                                CompilerError::Codegen(format!(
+                                    "MIR lowering failed for {}: {}",
+                                    mangled, e
+                                ))
+                            })?;
+
+                            lowered_names.insert(mangled.clone());
+                            bodies.push((mangled, mir_body));
+                            for lambda in lambdas {
+                                lowered_names.insert(lambda.name.clone());
+                                bodies.push((lambda.name, lambda.body));
+                            }
+                        }
+                    }
+                }
+                StatementKind::Enum(name_expr, _generics, _variants, methods, _vis, _must_use) => {
+                    let enum_name = if let ExpressionKind::Identifier(name, _) = &name_expr.node {
+                        name.as_str()
+                    } else {
+                        continue;
+                    };
+
+                    let self_type =
+                        Type::new(TypeKind::Custom(enum_name.to_string(), None), stmt.span);
+
+                    for method_stmt in methods {
+                        if let StatementKind::FunctionDeclaration(method_decl) = &method_stmt.node {
+                            if method_decl.body.is_none() {
+                                continue;
+                            }
+
+                            let mut mangled =
+                                String::with_capacity(enum_name.len() + 1 + method_decl.name.len());
+                            mangled.push_str(enum_name);
                             mangled.push('_');
                             mangled.push_str(&method_decl.name);
                             if lowered_names.contains(&mangled) {

@@ -1,59 +1,27 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Statement type checking for the type checker.
-//!
-//! This module implements type checking for all statement kinds in Miri.
-//! The main entry point is [`TypeChecker::check_statement`], which validates
-//! statements and registers type information in the context.
-//!
-//! # Supported Statements
-//!
-//! ## Declarations
-//! - Variable declarations: `let x = 1`, `var y: int = 2`
-//! - Function declarations with generics and return type validation
-//! - Struct, enum, class, and trait definitions
-//! - Type aliases
-//!
-//! ## Control Flow
-//! - If/else statements with condition type checking
-//! - While loops (including forever loops)
-//! - For loops with iterator type inference
-//! - Match statements with exhaustiveness checking
-//! - Return statements with type compatibility validation
-//!
-//! ## Expressions
-//! - Expression statements (side effects)
-//! - Assignment validation
-//!
-//! ## Type Definitions
-//! - Structs with fields and generic parameters
-//! - Enums with variants and associated values
-//! - Classes with fields, methods, and inheritance
-//! - Traits with method signatures
-//!
-//! # Return Type Analysis
-//!
-//! The module includes return status analysis (`check_returns`) to determine:
-//! - Whether all code paths return a value
-//! - Implicit vs explicit returns
-//! - Return type compatibility
+//! Type checking for enum declarations.
 
 use crate::ast::factory::make_type;
 use crate::ast::types::TypeKind;
 use crate::ast::*;
 use crate::type_checker::context::{
-    Context, EnumDefinition, GenericDefinition, SymbolInfo, TypeDefinition,
+    Context, EnumDefinition, GenericDefinition, MethodInfo, SymbolInfo, TypeDefinition,
 };
+use crate::type_checker::statements::declarations::FunctionDeclarationInfo;
 use crate::type_checker::TypeChecker;
 use std::collections::BTreeMap;
 
 impl TypeChecker {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn check_enum(
         &mut self,
         name_expr: &Expression,
         generics: &Option<Vec<Expression>>,
         variants: &[Expression],
+        methods: &[Statement],
+        must_use: bool,
         visibility: &MemberVisibility,
         context: &mut Context,
     ) {
@@ -70,7 +38,6 @@ impl TypeChecker {
                 TypeDefinition::Enum(def) => def.variants.is_empty(),
                 _ => false,
             };
-
             if !is_placeholder {
                 self.report_error(
                     format!("Type '{}' is already defined", name),
@@ -80,30 +47,33 @@ impl TypeChecker {
             }
         }
 
-        // Handle generics
-        let mut generic_defs = None;
-        if let Some(gens) = generics {
-            context.enter_scope();
-            self.define_generics(gens, context);
+        // Enter a scope for generic type parameters
+        context.enter_scope();
 
-            let mut defs = Vec::with_capacity(gens.len());
+        let mut generic_defs = Vec::new();
+        if let Some(gens) = generics {
+            self.define_generics(gens, context);
             for gen in gens {
-                if let ExpressionKind::GenericType(name_expr, constraint, kind) = &gen.node {
-                    if let ExpressionKind::Identifier(n, _) = &name_expr.node {
+                if let ExpressionKind::GenericType(gen_name_expr, constraint, kind) = &gen.node {
+                    if let ExpressionKind::Identifier(gname, _) = &gen_name_expr.node {
                         let constraint_type = constraint
                             .as_ref()
                             .map(|c| self.resolve_type_expression(c, context));
-                        defs.push(GenericDefinition {
-                            name: n.clone(),
+                        generic_defs.push(GenericDefinition {
+                            name: gname.clone(),
                             constraint: constraint_type,
                             kind: kind.clone(),
                         });
                     }
                 }
             }
-            generic_defs = Some(defs);
         }
 
+        // Set up class context so `self` resolves correctly in method bodies
+        let self_type = make_type(TypeKind::Custom(name.clone(), None));
+        context.enter_class(name.clone(), None, self_type.clone());
+
+        // Resolve variants
         let mut variant_map = BTreeMap::new();
         for variant in variants {
             if let ExpressionKind::EnumValue(variant_name_expr, associated_types) = &variant.node {
@@ -124,42 +94,65 @@ impl TypeChecker {
             }
         }
 
-        let enum_def = EnumDefinition {
-            variants: variant_map,
-            generics: generic_defs.clone(),
-            module: self.current_module.clone(),
-        };
+        // Collect method signatures
+        let mut method_map: BTreeMap<String, MethodInfo> = BTreeMap::new();
+        let mut method_statements: Vec<&Statement> = Vec::with_capacity(methods.len());
+        for method_stmt in methods {
+            if let StatementKind::FunctionDeclaration(decl) = &method_stmt.node {
+                let mut params = Vec::with_capacity(decl.params.len());
+                for param in &decl.params {
+                    let param_ty = self.resolve_type_expression(&param.typ, context);
+                    params.push((param.name.clone(), param_ty));
+                }
 
-        if generics.is_some() {
-            context.exit_scope();
+                let return_type = if let Some(ret_expr) = &decl.return_type {
+                    self.resolve_type_expression(ret_expr, context)
+                } else {
+                    make_type(TypeKind::Void)
+                };
+
+                method_map.insert(
+                    decl.name.clone(),
+                    MethodInfo {
+                        params,
+                        return_type,
+                        visibility: MemberVisibility::Public,
+                        is_constructor: false,
+                        is_abstract: false,
+                    },
+                );
+                method_statements.push(method_stmt);
+            }
         }
 
+        let generic_defs_opt = if generic_defs.is_empty() {
+            None
+        } else {
+            Some(generic_defs)
+        };
+
+        let enum_def = EnumDefinition {
+            variants: variant_map,
+            generics: generic_defs_opt,
+            methods: method_map,
+            module: self.current_module.clone(),
+            must_use,
+        };
+
         context.define_type(name.clone(), TypeDefinition::Enum(enum_def.clone()));
-        if context.scopes.len() == 1 {
+        if context.scopes.len() == 2 {
+            // scopes.len() == 2: base_scope + enum_scope
             self.register_type_definition(name.clone(), TypeDefinition::Enum(enum_def));
         }
 
-        // Define enum type symbol
-        let enum_type = if let Some(defs) = generic_defs {
-            let args = defs
-                .iter()
-                .map(|g| {
-                    crate::ast::factory::type_expr_non_null(make_type(TypeKind::Custom(
-                        g.name.clone(),
-                        None,
-                    )))
-                })
-                .collect();
-            make_type(TypeKind::Custom(name.clone(), Some(args)))
-        } else {
-            make_type(TypeKind::Custom(name.clone(), None))
-        };
+        // Define enum type symbol (constructor/type)
+        let enum_type_meta = make_type(TypeKind::Meta(Box::new(self_type)));
 
-        if context.scopes.len() == 1 {
+        if context.scopes.len() == 2 {
             self.global_scope.insert(
                 name.clone(),
                 SymbolInfo::new(
-                    make_type(TypeKind::Meta(Box::new(enum_type.clone()))),
+                    enum_type_meta.clone(),
                     false,
                     false,
                     visibility.clone(),
@@ -168,11 +161,10 @@ impl TypeChecker {
                 ),
             );
         }
-
         context.define(
             name,
             SymbolInfo::new(
-                make_type(TypeKind::Meta(Box::new(enum_type))),
+                enum_type_meta,
                 false,
                 false,
                 visibility.clone(),
@@ -180,5 +172,28 @@ impl TypeChecker {
                 None,
             ),
         );
+
+        // PASS 2: Type-check method bodies
+        for stmt in method_statements {
+            if let StatementKind::FunctionDeclaration(decl) = &stmt.node {
+                if decl.body.is_none() {
+                    continue;
+                }
+                self.check_function_declaration(
+                    FunctionDeclarationInfo {
+                        name: &decl.name,
+                        generics: &decl.generics,
+                        params: &decl.params,
+                        return_type: &decl.return_type,
+                        body: decl.body.as_ref().map(|b| b.as_ref()),
+                        properties: &decl.properties,
+                    },
+                    context,
+                );
+            }
+        }
+
+        context.exit_class();
+        context.exit_scope();
     }
 }

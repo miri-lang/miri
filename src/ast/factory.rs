@@ -893,10 +893,14 @@ pub fn type_null(inner: Type) -> Type {
 }
 
 /// Creates a `Result` type.
+///
+/// Produces `Custom("Result", [ok, err])` — the canonical post-normalization
+/// representation used by the type checker after `resolve_type_kind` converts
+/// any `TypeKind::Result(...)` nodes.
 pub fn type_result(ok: Type, err: Type) -> Type {
-    make_type(TypeKind::Result(
-        Box::new(type_expr_non_null(ok)),
-        Box::new(type_expr_non_null(err)),
+    make_type(TypeKind::Custom(
+        "Result".to_string(),
+        Some(vec![type_expr_non_null(ok), type_expr_non_null(err)]),
     ))
 }
 
@@ -978,13 +982,17 @@ pub fn enum_statement(
     name: Expression,
     generic_types: Option<Vec<Expression>>,
     values: Vec<Expression>,
+    methods: Vec<Statement>,
     visibility: MemberVisibility,
+    must_use: bool,
 ) -> Statement {
     stmt(StatementKind::Enum(
         Box::new(name),
         generic_types,
         values,
+        methods,
         visibility,
+        must_use,
     ))
 }
 

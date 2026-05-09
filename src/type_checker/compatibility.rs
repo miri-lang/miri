@@ -152,6 +152,11 @@ impl TypeChecker {
             }
 
             if n1 == n2 {
+                // Result<T, E> special case: void on either side is a wildcard
+                // (Ok(x) infers Result<T, void> and Err(e) infers Result<void, E>).
+                if n1 == "Result" {
+                    return Some(self.check_result_args_compatible(args1, args2, context));
+                }
                 // Same type name - check generic arguments
                 return Some(self.check_generic_args_compatible(args1, args2, context));
             }
@@ -333,7 +338,7 @@ impl TypeChecker {
         false
     }
 
-    /// Checks Result type compatibility.
+    /// Checks Result type compatibility (for legacy TypeKind::Result pairs).
     fn check_result_compatible(
         &self,
         ok1: &crate::ast::Expression,
@@ -348,13 +353,50 @@ impl TypeChecker {
             self.extract_type_from_expression(ok2),
             self.extract_type_from_expression(err2),
         ) {
-            let ok_compatible = matches!(ok2_t.kind, TypeKind::Void)
+            let ok_compatible = matches!(ok1_t.kind, TypeKind::Void)
+                || matches!(ok2_t.kind, TypeKind::Void)
                 || self.are_compatible(&ok1_t, &ok2_t, context);
-            let err_compatible = matches!(err2_t.kind, TypeKind::Void)
+            let err_compatible = matches!(err1_t.kind, TypeKind::Void)
+                || matches!(err2_t.kind, TypeKind::Void)
                 || self.are_compatible(&err1_t, &err2_t, context);
             return ok_compatible && err_compatible;
         }
         false
+    }
+
+    /// Checks `Custom("Result", [ok, err])` arg compatibility.
+    ///
+    /// Void on either side of any arg is treated as a wildcard — `Ok(x)` infers
+    /// `Result<T, void>` (unknown error side) and `Err(e)` infers `Result<void, E>`
+    /// (unknown ok side). When such a partial result is assigned to a typed variable
+    /// the void must be compatible with whatever the declared type says.
+    fn check_result_args_compatible(
+        &self,
+        args1: &Option<Vec<crate::ast::Expression>>,
+        args2: &Option<Vec<crate::ast::Expression>>,
+        context: &Context,
+    ) -> bool {
+        let void_type = crate::ast::factory::make_type(TypeKind::Void);
+        let get_arg = |args: &Option<Vec<crate::ast::Expression>>, idx: usize| {
+            args.as_ref()
+                .and_then(|v| v.get(idx))
+                .and_then(|e| self.extract_type_from_expression(e).ok())
+                .unwrap_or_else(|| void_type.clone())
+        };
+
+        let ok1 = get_arg(args1, 0);
+        let err1 = get_arg(args1, 1);
+        let ok2 = get_arg(args2, 0);
+        let err2 = get_arg(args2, 1);
+
+        let ok_compatible = matches!(ok1.kind, TypeKind::Void)
+            || matches!(ok2.kind, TypeKind::Void)
+            || self.are_compatible(&ok1, &ok2, context);
+        let err_compatible = matches!(err1.kind, TypeKind::Void)
+            || matches!(err2.kind, TypeKind::Void)
+            || self.are_compatible(&err1, &err2, context);
+
+        ok_compatible && err_compatible
     }
 
     /// Checks function type compatibility.
@@ -408,18 +450,50 @@ impl TypeChecker {
 
     /// Checks generic type compatibility.
     fn check_generic_compatibility(&self, t1: &Type, t2: &Type, context: &Context) -> Option<bool> {
-        if let TypeKind::Generic(_, constraint, kind) = &t1.kind {
+        if let TypeKind::Generic(name1, constraint, kind) = &t1.kind {
+            // A generic type is always compatible with itself (same name).
+            if let TypeKind::Generic(name2, _, _) = &t2.kind {
+                if name1 == name2 {
+                    return Some(true);
+                }
+                // t2 is a free type variable (not bound in the current scope) — produced
+                // by identity-fill when an enum generic param couldn't be inferred from
+                // constructor arguments. Accept it as a wildcard to avoid false errors like
+                // "expected Result<U,E>, got Result<T,E>" when T is unresolved.
+                if constraint.is_none()
+                    && !matches!(
+                        context.resolve_type_definition(name2),
+                        Some(TypeDefinition::Generic(_))
+                    )
+                {
+                    return Some(true);
+                }
+            }
             if let Some(c) = constraint {
                 return Some(self.satisfies_constraint(t2, c, kind, context));
             }
-            return Some(false); // An unconstrained generic T cannot accept arbitrary concrete types!
+            // Unconstrained generic: any concrete type satisfies it.
+            // The caller already substituted known generics before calling are_compatible;
+            // if Generic("T") still appears here, T is either a live type parameter
+            // or a free variable from identity-fill — both accept any concrete type.
+            return Some(true);
         }
 
-        if let TypeKind::Generic(_, Some(constraint), kind) = &t2.kind {
-            if matches!(kind, TypeDeclarationKind::Extends) {
-                return Some(self.are_compatible(t1, constraint, context));
+        if let TypeKind::Generic(name2, constraint2, kind) = &t2.kind {
+            if let Some(c) = constraint2 {
+                if matches!(kind, TypeDeclarationKind::Extends) {
+                    return Some(self.are_compatible(t1, c, context));
+                }
+                return Some(false);
             }
-            return Some(false);
+            // Unconstrained generic in actual (t2) position that is NOT bound in the
+            // current scope is a free type variable (identity fill) — accept as wildcard.
+            if !matches!(
+                context.resolve_type_definition(name2),
+                Some(TypeDefinition::Generic(_))
+            ) {
+                return Some(true);
+            }
         }
 
         None

@@ -277,6 +277,27 @@ pub fn lower_class_method(
     // and class-level generics that appear in param/return types, e.g. T in List<T>).
     ctx.body.type_params = collect_type_params(decl, tc);
 
+    // Also inject enum/class-level generic names (e.g. T, E from Result<T, E>).
+    // `collect_type_params` only catches generics that `resolve_type` returns as
+    // `TypeKind::Generic`; but for enum methods the self_type is `Custom("Result", None)`
+    // and param types resolve to `Custom("T", None)` — so the generic names are missed.
+    // Reading them directly from the type definition closes the gap and prevents Perceus
+    // from treating unresolved generic placeholders as concrete heap-managed types.
+    if let TypeKind::Custom(class_name, _) = &self_type.kind {
+        if let Some(type_def) = tc.type_definitions().get(class_name.as_str()) {
+            let generics = match type_def {
+                crate::type_checker::context::TypeDefinition::Enum(ed) => ed.generics.as_deref(),
+                crate::type_checker::context::TypeDefinition::Class(cd) => cd.generics.as_deref(),
+                _ => None,
+            };
+            if let Some(gens) = generics {
+                for gen in gens {
+                    ctx.body.type_params.insert(gen.name.clone());
+                }
+            }
+        }
+    }
+
     // _0: Return value
     ctx.body
         .new_local(LocalDecl::new(ret_ty.clone(), ast_method.span));

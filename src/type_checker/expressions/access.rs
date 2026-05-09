@@ -999,9 +999,69 @@ impl TypeChecker {
                     );
                 }
                 return make_type(TypeKind::Error);
-            } else if let Some(TypeDefinition::Enum(_)) = def_opt {
-                // Could be an enum instance, but enums don't have fields yet (unless methods are added later)
-                self.report_error(format!("Type '{}' does not have members", name), span);
+            } else if let Some(TypeDefinition::Enum(enum_def)) = def_opt {
+                // Instance method access on an enum value
+                if let Some(method_info) = enum_def.methods.get(prop_name) {
+                    let type_args: Option<Vec<crate::ast::Expression>> =
+                        if let TypeKind::Custom(_, args) = &obj_type.kind {
+                            args.clone()
+                        } else {
+                            None
+                        };
+                    // Build generic substitution map
+                    let mut mapping = HashMap::new();
+                    if let (Some(args), Some(generics)) = (&type_args, &enum_def.generics) {
+                        if generics.len() == args.len() {
+                            for (param, arg_expr) in generics.iter().zip(args.iter()) {
+                                let arg_type = self
+                                    .extract_type_from_expression(arg_expr)
+                                    .unwrap_or(make_type(TypeKind::Error));
+                                mapping.insert(param.name.clone(), arg_type);
+                            }
+                        }
+                    }
+
+                    let params: Vec<Parameter> = method_info
+                        .params
+                        .iter()
+                        .map(|(pname, ty)| {
+                            let substituted_ty = if mapping.is_empty() {
+                                ty.clone()
+                            } else {
+                                self.substitute_type(ty, &mapping)
+                            };
+                            Parameter {
+                                name: pname.clone(),
+                                typ: Box::new(self.create_type_expression(substituted_ty)),
+                                guard: None,
+                                default_value: None,
+                                is_out: false,
+                            }
+                        })
+                        .collect();
+
+                    let return_type_expr = if matches!(method_info.return_type.kind, TypeKind::Void)
+                    {
+                        None
+                    } else {
+                        let substituted_ret = if mapping.is_empty() {
+                            method_info.return_type.clone()
+                        } else {
+                            self.substitute_type(&method_info.return_type, &mapping)
+                        };
+                        Some(Box::new(self.create_type_expression(substituted_ret)))
+                    };
+
+                    return make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                        generics: None,
+                        params,
+                        return_type: return_type_expr,
+                    })));
+                }
+                self.report_error(
+                    format!("Enum '{}' has no method '{}'", name, prop_name),
+                    span,
+                );
                 return make_type(TypeKind::Error);
             } else if def_opt.is_none() {
                 if let Some(module) = self.suggest_module_for_type(&name) {
@@ -1081,11 +1141,54 @@ impl TypeChecker {
                                         is_out: false,
                                     })
                                     .collect();
+
+                                // When no explicit type args are present and the enum is generic,
+                                // include the enum's generic params in the function type so that
+                                // infer_call can build the mapping via infer_generic_types and
+                                // produce a properly parameterized return type.
+                                let (fn_generics, return_type_args) = if type_args.is_none() {
+                                    if let Some(generics) = &def.generics {
+                                        let gen_exprs: Vec<Expression> = generics
+                                            .iter()
+                                            .map(|g| {
+                                                let constraint_expr =
+                                                    g.constraint.as_ref().map(|c| {
+                                                        Box::new(
+                                                            self.create_type_expression(c.clone()),
+                                                        )
+                                                    });
+                                                ast_factory::generic_type_with_kind(
+                                                    &g.name,
+                                                    constraint_expr,
+                                                    g.kind.clone(),
+                                                )
+                                            })
+                                            .collect();
+                                        let ret_args: Vec<Expression> = generics
+                                            .iter()
+                                            .map(|g| {
+                                                self.create_type_expression(make_type(
+                                                    TypeKind::Generic(
+                                                        g.name.clone(),
+                                                        g.constraint.clone().map(Box::new),
+                                                        g.kind.clone(),
+                                                    ),
+                                                ))
+                                            })
+                                            .collect();
+                                        (Some(gen_exprs), Some(ret_args))
+                                    } else {
+                                        (None, type_args)
+                                    }
+                                } else {
+                                    (None, type_args)
+                                };
+
                                 make_type(TypeKind::Function(Box::new(FunctionTypeData {
-                                    generics: None,
+                                    generics: fn_generics,
                                     params,
                                     return_type: Some(Box::new(self.create_type_expression(
-                                        make_type(TypeKind::Custom(name.clone(), type_args)),
+                                        make_type(TypeKind::Custom(name.clone(), return_type_args)),
                                     ))),
                                 })))
                             }

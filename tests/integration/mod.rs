@@ -25,6 +25,7 @@ pub mod operator_traits;
 pub mod option;
 pub mod pattern_matching;
 pub mod primitive_types;
+pub mod result;
 pub mod runtime_function;
 pub mod script;
 pub mod set;
