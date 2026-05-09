@@ -470,7 +470,9 @@ match c
                     enum_value("Green", vec![]),
                     enum_value("Blue", vec![]),
                 ],
+                vec![],
                 MemberVisibility::Public,
+                false,
             ),
             variable_statement(
                 vec![let_variable(
@@ -536,7 +538,9 @@ match c
                     enum_value("Green", vec![type_expr_non_null(type_string())]),
                     enum_value("Blue", vec![type_expr_non_null(type_string())]),
                 ],
+                vec![],
                 MemberVisibility::Public,
+                false,
             ),
             variable_statement(
                 vec![let_variable(

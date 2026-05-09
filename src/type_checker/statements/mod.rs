@@ -69,7 +69,27 @@ impl TypeChecker {
                 self.check_variable_declaration(decls, vis, context, statement.span)
             }
             StatementKind::Expression(expr) => {
-                self.infer_expression(expr, context);
+                let expr_type = self.infer_expression(expr, context);
+                // Enforce must_use semantics: expressions whose type is a must_use enum
+                // must not be silently discarded. Skip when suppress_must_use is set
+                // (e.g., the expression is the implicit return value of a function).
+                if !context.suppress_must_use {
+                    if let TypeKind::Custom(type_name, _) = &expr_type.kind {
+                        if let Some(TypeDefinition::Enum(def)) =
+                            self.global_type_definitions.get(type_name.as_str())
+                        {
+                            if def.must_use {
+                                self.report_error(
+                                    format!(
+                                        "Unused value of type '{}': this value must be used",
+                                        type_name
+                                    ),
+                                    statement.span,
+                                );
+                            }
+                        }
+                    }
+                }
             }
             StatementKind::Block(stmts) => self.check_block(stmts, context),
             StatementKind::If(cond, then_block, else_block, _) => {
@@ -96,8 +116,8 @@ impl TypeChecker {
             StatementKind::Struct(name, generics, fields, methods, vis) => {
                 self.check_struct(name, generics, fields, methods, vis, context)
             }
-            StatementKind::Enum(name, generics, variants, vis) => {
-                self.check_enum(name, generics, variants, vis, context)
+            StatementKind::Enum(name, generics, variants, methods, vis, must_use) => {
+                self.check_enum(name, generics, variants, methods, *must_use, vis, context)
             }
             StatementKind::Class(class_data) => self.check_class(
                 &class_data.name,

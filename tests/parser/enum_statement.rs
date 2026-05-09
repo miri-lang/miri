@@ -5,10 +5,11 @@ use std::vec;
 
 use super::utils::{parser_error_test, parser_test};
 use miri::ast::factory::{
-    enum_statement, enum_value, identifier, type_bool, type_expr_non_null, type_expr_option,
-    type_int, type_list, type_map, type_string,
+    block, boolean_literal, enum_statement, enum_value, expression_statement, function_declaration,
+    identifier, return_statement, type_bool, type_expr_non_null, type_expr_option, type_int,
+    type_list, type_map, type_string,
 };
-use miri::ast::MemberVisibility;
+use miri::ast::{FunctionProperties, MemberVisibility};
 use miri::error::syntax::SyntaxErrorKind;
 
 #[test]
@@ -25,7 +26,9 @@ enum Colors: Red, Green, Blue
                 enum_value("Green", vec![]),
                 enum_value("Blue", vec![]),
             ],
+            vec![],
             MemberVisibility::Public,
+            false,
         )],
     );
 }
@@ -47,7 +50,9 @@ enum Colors
                 enum_value("Green", vec![]),
                 enum_value("Blue", vec![]),
             ],
+            vec![],
             MemberVisibility::Public,
+            false,
         )],
     );
 }
@@ -71,7 +76,9 @@ enum Message: Write(String), Move(int, int)
                     ],
                 ),
             ],
+            vec![],
             MemberVisibility::Public,
+            false,
         )],
     );
 }
@@ -99,7 +106,9 @@ enum Event
                     ],
                 ),
             ],
+            vec![],
             MemberVisibility::Public,
+            false,
         )],
     );
 }
@@ -112,7 +121,9 @@ fn test_enum_with_single_value() {
             identifier("Status"),
             None,
             vec![enum_value("Ok", vec![])],
+            vec![],
             MemberVisibility::Public,
+            false,
         )],
     );
 }
@@ -133,7 +144,9 @@ enum Data: Point([int]?), Config({String: bool})
                     vec![type_expr_non_null(type_map(type_string(), type_bool()))],
                 ),
             ],
+            vec![],
             MemberVisibility::Public,
+            false,
         )],
     );
 }
@@ -187,7 +200,9 @@ fn test_error_enum_malformed_value_type() {
             identifier("E"),
             None,
             vec![enum_value("V", vec![type_expr_non_null(type_int())])],
+            vec![],
             MemberVisibility::Public,
+            false,
         )],
     );
 }
@@ -200,7 +215,9 @@ fn test_enum_visibility_modifiers() {
             identifier("Color"),
             None,
             vec![enum_value("Red", vec![])],
+            vec![],
             MemberVisibility::Public,
+            false,
         )],
     );
 
@@ -217,7 +234,9 @@ fn test_enum_visibility_modifiers() {
             identifier("E"),
             None,
             vec![enum_value("V", vec![])],
+            vec![],
             MemberVisibility::Private,
+            false,
         )],
     );
 }
@@ -248,5 +267,122 @@ fn test_error_on_trailing_comma_in_inline_enum() {
             expected: "identifier".to_string(),
             found: "end of file".to_string(),
         },
+    );
+}
+
+#[test]
+fn test_enum_with_method() {
+    parser_test(
+        "
+enum Status
+    Active
+    Inactive
+
+    fn is_active() bool
+        return true
+",
+        vec![enum_statement(
+            identifier("Status"),
+            None,
+            vec![enum_value("Active", vec![]), enum_value("Inactive", vec![])],
+            vec![function_declaration(
+                "is_active",
+                None,
+                vec![],
+                Some(Box::new(type_expr_non_null(type_bool()))),
+                block(vec![return_statement(Some(Box::new(boolean_literal(
+                    true,
+                ))))]),
+                FunctionProperties {
+                    visibility: MemberVisibility::Public,
+                    ..Default::default()
+                },
+            )],
+            MemberVisibility::Public,
+            false,
+        )],
+    );
+}
+
+#[test]
+fn test_must_use_enum() {
+    parser_test(
+        "must_use enum Outcome: Ok, Err",
+        vec![enum_statement(
+            identifier("Outcome"),
+            None,
+            vec![enum_value("Ok", vec![]), enum_value("Err", vec![])],
+            vec![],
+            MemberVisibility::Public,
+            true,
+        )],
+    );
+}
+
+#[test]
+fn test_enum_with_public_method() {
+    parser_test(
+        "
+enum Toggle
+    On
+    Off
+
+    public fn is_on() bool
+        return false
+",
+        vec![enum_statement(
+            identifier("Toggle"),
+            None,
+            vec![enum_value("On", vec![]), enum_value("Off", vec![])],
+            vec![function_declaration(
+                "is_on",
+                None,
+                vec![],
+                Some(Box::new(type_expr_non_null(type_bool()))),
+                block(vec![return_statement(Some(Box::new(boolean_literal(
+                    false,
+                ))))]),
+                FunctionProperties {
+                    visibility: MemberVisibility::Public,
+                    ..Default::default()
+                },
+            )],
+            MemberVisibility::Public,
+            false,
+        )],
+    );
+}
+
+#[test]
+fn test_enum_expression_body_method() {
+    parser_test(
+        "
+enum Flag
+    Set
+    Unset
+
+    fn value() int
+        42
+",
+        vec![enum_statement(
+            identifier("Flag"),
+            None,
+            vec![enum_value("Set", vec![]), enum_value("Unset", vec![])],
+            vec![function_declaration(
+                "value",
+                None,
+                vec![],
+                Some(Box::new(type_expr_non_null(type_int()))),
+                block(vec![expression_statement(
+                    miri::ast::factory::int_literal_expression(42),
+                )]),
+                FunctionProperties {
+                    visibility: MemberVisibility::Public,
+                    ..Default::default()
+                },
+            )],
+            MemberVisibility::Public,
+            false,
+        )],
     );
 }

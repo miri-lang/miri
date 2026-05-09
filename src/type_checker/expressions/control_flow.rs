@@ -230,6 +230,12 @@ impl TypeChecker {
             let body_type = self.infer_statement_type(&branch.body, context);
             context.exit_scope();
 
+            // Void-typed arms are diverging (explicit return, panic, etc.) and do not
+            // contribute to the match result type — skip compatibility checking for them.
+            if matches!(body_type.kind, TypeKind::Void) {
+                continue;
+            }
+
             if let Some(first) = &first_branch_type {
                 if !self.are_compatible(first, &body_type, context) {
                     self.report_error(

@@ -6,7 +6,7 @@ use crate::ast::*;
 use crate::error::syntax::SyntaxError;
 use crate::lexer::Token;
 
-use super::super::{DeclarationBlockConfig, Parser};
+use super::super::Parser;
 
 impl<'source> Parser<'source> {
     /// Parses a typed field declaration (e.g., `name int`) for use inside
@@ -55,7 +55,11 @@ impl<'source> Parser<'source> {
                     "a declaration (runtime functions cannot have visibility modifiers)",
                 ));
             }
-            Some((Token::Enum, _)) => self.enum_statement(visibility)?,
+            Some((Token::Enum, _)) => self.enum_statement(visibility, false)?,
+            Some((Token::MustUse, _)) => {
+                self.eat_token(&Token::MustUse)?;
+                self.enum_statement(visibility, true)?
+            }
             Some((Token::Struct, _)) => self.struct_statement(visibility)?,
             Some((Token::Type, _)) => self.type_statement(visibility)?,
             Some((Token::Class, _)) => self.class_statement(visibility)?,
@@ -72,55 +76,6 @@ impl<'source> Parser<'source> {
             }
         };
         Ok(statement)
-    }
-
-    pub(crate) fn parse_declaration_block<F, C>(
-        &mut self,
-        item_parser: F,
-        creator: C,
-        name: Expression,
-        visibility: MemberVisibility,
-        config: DeclarationBlockConfig,
-        generic_types: Option<Vec<Expression>>,
-    ) -> Result<Statement, SyntaxError>
-    where
-        F: Fn(&mut Self) -> Result<Expression, SyntaxError>,
-        C: Fn(Expression, Option<Vec<Expression>>, Vec<Expression>, MemberVisibility) -> Statement,
-    {
-        let mut items = vec![];
-
-        match &self._lookahead {
-            Some((Token::Colon, _)) => {
-                // Inline form
-                self.eat_token(&Token::Colon)?;
-                if !self.lookahead_is_expression_end() && self._lookahead.is_some() {
-                    items.push(item_parser(self)?);
-                    while self.lookahead_is_comma() {
-                        self.eat_token(&Token::Comma)?;
-                        items.push(item_parser(self)?);
-                    }
-                }
-            }
-            Some((Token::ExpressionStatementEnd, _)) => {
-                // Block form
-                self.eat_expression_end()?;
-                if self.lookahead_is_indent() {
-                    self.eat_token(&Token::Indent)?;
-                    while !self.lookahead_is_dedent() {
-                        items.push(item_parser(self)?);
-                        self.try_eat_expression_end();
-                    }
-                    self.eat_token(&Token::Dedent)?;
-                }
-            }
-            _ => return Err(self.error_unexpected_lookahead_token(config.inline_error)),
-        };
-
-        if items.is_empty() {
-            return Err(self.error_missing_members(config.missing_members_error));
-        }
-
-        Ok(creator(name, generic_types, items, visibility))
     }
 
     /*

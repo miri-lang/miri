@@ -3,7 +3,7 @@
 
 use crate::ast::factory as ast;
 use crate::ast::*;
-use crate::error::syntax::{SyntaxError, SyntaxErrorKind};
+use crate::error::syntax::SyntaxError;
 use crate::lexer::{Lexer, TokenSpan};
 
 pub mod declarations;
@@ -12,12 +12,6 @@ pub mod literals;
 pub mod statements;
 pub mod types;
 pub mod utils;
-
-/// Configuration for parsing declaration blocks (structs, enums, etc.).
-pub(crate) struct DeclarationBlockConfig<'a> {
-    pub inline_error: &'a str,
-    pub missing_members_error: SyntaxErrorKind,
-}
 
 /// Maximum recursion depth allowed during parsing to prevent stack overflow DoS attacks.
 pub const MAX_PARSE_DEPTH: usize = 256;

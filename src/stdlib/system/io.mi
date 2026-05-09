@@ -14,6 +14,7 @@ runtime "core" fn miri_rt_println(message String)
 runtime "core" fn miri_rt_eprint(message String)
 runtime "core" fn miri_rt_eprintln(message String)
 runtime "core" fn miri_rt_get_line_end() String
+runtime "core" fn miri_rt_panic(message String)
 
 // =============================================================================
 // Public API
@@ -48,3 +49,12 @@ public fn eprintln(message String)
 /// - On Windows: "\r\n"
 public fn line_end() String
     return miri_rt_get_line_end()
+
+/// Prints a message to stderr and aborts the process immediately.
+///
+/// Use when an unrecoverable error is detected — this function never returns.
+///
+/// Example:
+///     panic("index out of range")
+public fn panic(message String)
+    miri_rt_panic(message)

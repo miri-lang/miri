@@ -8,3 +8,4 @@ pub mod dps;
 pub mod functions;
 pub mod managed;
 pub mod matching;
+pub mod methods;

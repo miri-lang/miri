@@ -108,7 +108,7 @@ fn normalize_stmt(stmt: &mut Statement) {
             }
         }
 
-        StatementKind::Enum(name, generics, variants, _) => {
+        StatementKind::Enum(name, generics, variants, methods, _, _) => {
             normalize_expr(name);
             if let Some(gens) = generics {
                 for g in gens.iter_mut() {
@@ -117,6 +117,9 @@ fn normalize_stmt(stmt: &mut Statement) {
             }
             for v in variants.iter_mut() {
                 normalize_expr(v);
+            }
+            for m in methods.iter_mut() {
+                normalize_stmt(m);
             }
         }
 

@@ -632,6 +632,20 @@ impl TypeChecker {
                     ]),
                 ))
             }
+            TypeKind::Result(ok, err) => {
+                // Normalize TypeKind::Result(ok, err) to Custom("Result", [ok, err]) so that
+                // parser-produced Result<T, E> annotations are compatible with enum-constructed
+                // Result values (which infer_enum_value produces as Custom("Result", ...)).
+                let ok_type = self.resolve_type_expression(&ok, context);
+                let err_type = self.resolve_type_expression(&err, context);
+                make_type(TypeKind::Custom(
+                    "Result".to_string(),
+                    Some(vec![
+                        self.create_type_expression(ok_type),
+                        self.create_type_expression(err_type),
+                    ]),
+                ))
+            }
             TypeKind::Custom(name, args) => self.resolve_custom_type(&name, args, expr, context),
             _ => make_type(t.kind),
         }

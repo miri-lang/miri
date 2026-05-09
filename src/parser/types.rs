@@ -246,11 +246,15 @@ impl<'source> Parser<'source> {
             "String" => ast::make_type(TypeKind::String),
             "bool" => ast::make_type(TypeKind::Boolean),
             "RawPtr" => ast::make_type(TypeKind::RawPtr),
-            "Result" | "result" => self.generic_two_types_expression(
-                "Ok result type",
-                "Error result type",
-                TypeKind::Result,
-            )?,
+            "Result" | "result" => {
+                // Parse Result<T, E> directly as Custom("Result", [T, E]) so that
+                // the parser, type-checker, and codegen all share one representation.
+                self.generic_two_types_expression(
+                    "Ok result type",
+                    "Error result type",
+                    |ok, err| TypeKind::Custom("Result".to_string(), Some(vec![*ok, *err])),
+                )?
+            }
             "Map" => {
                 self.generic_two_types_expression("Map key type", "Map value type", TypeKind::Map)?
             }

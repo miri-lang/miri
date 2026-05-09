@@ -325,7 +325,7 @@ impl TypeChecker {
                     }
                 }
             }
-            StatementKind::Enum(name_expr, generics_expr, _, _) => {
+            StatementKind::Enum(name_expr, generics_expr, _, _, _, _) => {
                 if let Ok(name) = self.extract_type_name(name_expr) {
                     if !self.global_type_definitions.contains_key(name) {
                         let generics = generics_expr
@@ -337,7 +337,9 @@ impl TypeChecker {
                             TypeDefinition::Enum(context::EnumDefinition {
                                 variants: BTreeMap::new(),
                                 generics,
+                                methods: BTreeMap::new(),
                                 module: self.current_module.clone(),
+                                must_use: false,
                             }),
                         );
                     }
