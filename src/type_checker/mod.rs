@@ -161,6 +161,11 @@ impl TypeChecker {
         self.global_scope.get(name).map(|info| &info.ty)
     }
 
+    /// Returns the module name where the given variable/function is defined.
+    pub fn get_variable_module(&self, name: &str) -> Option<&str> {
+        self.global_scope.get(name).map(|info| info.module.as_str())
+    }
+
     /// Returns whether a global variable is a constant.
     pub fn is_constant(&self, name: &str) -> bool {
         self.global_scope

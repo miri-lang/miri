@@ -212,8 +212,9 @@ impl Perceus {
             }
         }
 
-        // 3. If we are creating a collection, increment the RC of every managed element.
-        if let Rvalue::Aggregate(_, operands) = rvalue {
+        // 3. If we are creating a collection or calling a math intrinsic,
+        // increment the RC of every managed element/operand.
+        if let Rvalue::Aggregate(_, operands) | Rvalue::MathIntrinsic(_, operands) = rvalue {
             if self.handle_aggregate(operands, stmt.span, ctx, new_stmts) {
                 changed = true;
             }

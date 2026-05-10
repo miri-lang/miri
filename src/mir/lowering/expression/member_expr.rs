@@ -25,6 +25,48 @@ pub(crate) fn lower_member_expr(
     let ExpressionKind::Member(obj, prop) = &expr.node else {
         unreachable!()
     };
+    // Handle module alias constant access (e.g., math.PI)
+    if let ExpressionKind::Identifier(alias_name, _) = &obj.node {
+        if ctx
+            .type_checker
+            .module_aliases
+            .contains_key(alias_name.as_str())
+        {
+            if let ExpressionKind::Identifier(prop_name, _) = &prop.node {
+                let constant_val = match prop_name.as_str() {
+                    "PI" => Some(std::f64::consts::PI),
+                    "E" => Some(std::f64::consts::E),
+                    "INF" => Some(f64::INFINITY),
+                    _ => None,
+                };
+
+                if let Some(val) = constant_val {
+                    let ty = resolve_type(ctx.type_checker, expr);
+                    let operand = Operand::Constant(Box::new(Constant {
+                        span: expr.span,
+                        ty: ty.clone(),
+                        literal: crate::ast::literal::Literal::Float(
+                            crate::ast::literal::FloatLiteral::F64(val.to_bits()),
+                        ),
+                    }));
+
+                    if let Some(d) = dest {
+                        ctx.push_statement(crate::mir::Statement {
+                            kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(operand)),
+                            span: expr.span,
+                        });
+                        return Ok(Operand::Copy(d));
+                    } else {
+                        // Return the constant operand directly.
+                        // If this is used as an argument to a function,
+                        // it will be passed as a value.
+                        return Ok(operand);
+                    }
+                }
+            }
+        }
+    }
+
     let obj_operand = lower_expression(ctx, obj, None)?;
 
     // Handle GPU Intrinsics (gpu_context.thread_idx.x, etc.)
