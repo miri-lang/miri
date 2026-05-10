@@ -156,6 +156,11 @@ pub trait Visitor {
             Rvalue::Cast(op, _) => self.visit_operand(op, location),
             Rvalue::Len(place) => self.visit_place(place, PlaceContext::NonMutatingUse, location),
             Rvalue::GpuIntrinsic(_) => {}
+            Rvalue::MathIntrinsic(_, args) => {
+                for op in args {
+                    self.visit_operand(op, location);
+                }
+            }
             Rvalue::Aggregate(_, ops) => {
                 for op in ops {
                     self.visit_operand(op, location);
@@ -328,6 +333,11 @@ pub trait MutVisitor {
             Rvalue::Cast(op, _) => self.visit_operand(op, location),
             Rvalue::Len(place) => self.visit_place(place, PlaceContext::NonMutatingUse, location),
             Rvalue::GpuIntrinsic(_) => {}
+            Rvalue::MathIntrinsic(_, args) => {
+                for op in args {
+                    self.visit_operand(op, location);
+                }
+            }
             Rvalue::Aggregate(_, ops) => {
                 for op in ops {
                     self.visit_operand(op, location);

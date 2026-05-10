@@ -350,6 +350,11 @@ impl SSABuilder {
                 // Phis are definitions in this block
             }
             Rvalue::GpuIntrinsic(_) => {}
+            Rvalue::MathIntrinsic(_, args) => {
+                for op in args {
+                    self.rewrite_operand(op);
+                }
+            }
             Rvalue::Allocate(size, align, alloc) => {
                 self.rewrite_operand(size);
                 self.rewrite_operand(align);

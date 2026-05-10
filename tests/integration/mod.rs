@@ -18,6 +18,7 @@ pub mod lambdas;
 pub mod linker;
 pub mod list;
 pub mod map;
+pub mod math;
 pub mod memory;
 pub mod multi_file;
 pub mod oop;

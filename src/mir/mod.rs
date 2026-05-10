@@ -47,7 +47,7 @@ pub use lambda::{CapturedVar, LambdaInfo, LambdaRegistry};
 pub use module::{Import, ImportItem, ImportKind, ImportSource};
 pub use operand::{Constant, Operand};
 pub use place::{Local, Place, PlaceElem};
-pub use rvalue::{AggregateKind, BinOp, Dimension, GpuIntrinsic, Rvalue, UnOp};
+pub use rvalue::{AggregateKind, BinOp, Dimension, GpuIntrinsic, MathIntrinsic, Rvalue, UnOp};
 pub use statement::{Statement, StatementKind};
 pub use terminator::{Discriminant, Terminator, TerminatorKind};
 pub use types::MirType;

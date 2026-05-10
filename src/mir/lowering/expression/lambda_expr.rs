@@ -113,6 +113,11 @@ fn collect_rvalue_locals(rv: &Rvalue, out: &mut HashSet<crate::mir::Local>) {
             collect_operand_locals(c, out);
         }
         Rvalue::GpuIntrinsic(_) => {}
+        Rvalue::MathIntrinsic(_, args) => {
+            for op in args {
+                collect_operand_locals(op, out);
+            }
+        }
     }
 }
 
