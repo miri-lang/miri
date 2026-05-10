@@ -59,7 +59,7 @@ impl TypeChecker {
                     result.push(GenericDefinition {
                         name: gen_name.to_string(),
                         constraint,
-                        kind: kind.clone(),
+                        kind: *kind,
                     });
                 }
             }

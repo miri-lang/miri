@@ -274,25 +274,7 @@ fn try_lower_module_alias_call(
         if let Some(module_path) = ctx.type_checker.module_aliases.get(alias_name.as_str()) {
             if module_path == "system.math" {
                 if let ExpressionKind::Identifier(func_name, _) = &method_expr.node {
-                    // Check for math intrinsic function names (abs, sqrt, sin, etc.)
-                    let math_intrinsic = match func_name.as_str() {
-                        "abs" => Some(MathIntrinsic::Abs),
-                        "min" => Some(MathIntrinsic::Min),
-                        "max" => Some(MathIntrinsic::Max),
-                        "pow" => Some(MathIntrinsic::Pow),
-                        "sqrt" => Some(MathIntrinsic::Sqrt),
-                        "floor" => Some(MathIntrinsic::Floor),
-                        "ceil" => Some(MathIntrinsic::Ceil),
-                        "round" => Some(MathIntrinsic::Round),
-                        "sin" => Some(MathIntrinsic::Sin),
-                        "cos" => Some(MathIntrinsic::Cos),
-                        "tan" => Some(MathIntrinsic::Tan),
-                        "ln" => Some(MathIntrinsic::Log),
-                        "exp" => Some(MathIntrinsic::Exp),
-                        _ => None,
-                    };
-
-                    if let Some(intrinsic) = math_intrinsic {
+                    if let Some(intrinsic) = MathIntrinsic::from_name(func_name.as_str()) {
                         let mut arg_ops = Vec::with_capacity(args.len());
                         for arg in args {
                             arg_ops.push(lower_expression(ctx, arg, None)?);
@@ -1157,23 +1139,7 @@ fn lower_direct_call(
     if !is_runtime_fn && !is_indirect_call {
         // Skip allocator injection for math functions which are handled as intrinsics
         let is_math_fn = if let ExpressionKind::Identifier(name, _) = &func.node {
-            let matches_name = matches!(
-                name.as_str(),
-                "abs"
-                    | "min"
-                    | "max"
-                    | "pow"
-                    | "sqrt"
-                    | "floor"
-                    | "ceil"
-                    | "round"
-                    | "sin"
-                    | "cos"
-                    | "tan"
-                    | "ln"
-                    | "exp"
-            );
-            matches_name
+            MathIntrinsic::from_name(name.as_str()).is_some()
                 && ctx
                     .type_checker
                     .get_variable_module(name.as_str())

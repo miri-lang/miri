@@ -60,6 +60,7 @@ fn is_top_level_stmt(stmt: &Statement) -> bool {
             | StatementKind::Trait(..)
             | StatementKind::Type(..)
             | StatementKind::RuntimeFunctionDeclaration(..)
+            | StatementKind::IntrinsicFunctionDeclaration(..)
             | StatementKind::FunctionDeclaration(..)
     )
 }

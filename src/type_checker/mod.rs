@@ -174,6 +174,14 @@ impl TypeChecker {
             .unwrap_or(false)
     }
 
+    /// Returns whether a global variable is an intrinsic.
+    pub fn is_intrinsic(&self, name: &str) -> bool {
+        self.global_scope
+            .get(name)
+            .map(|info| info.is_intrinsic)
+            .unwrap_or(false)
+    }
+
     /// Returns the global type definitions.
     pub fn type_definitions(&self) -> &HashMap<String, TypeDefinition> {
         &self.global_type_definitions
@@ -278,6 +286,39 @@ impl TypeChecker {
                         decl.properties.visibility.clone(),
                         self.current_module.clone(),
                         None,
+                    ),
+                );
+            }
+            StatementKind::IntrinsicFunctionDeclaration(
+                name,
+                generics,
+                params,
+                return_type,
+                visibility,
+            ) => {
+                let func_type = make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                    generics: generics.clone(),
+                    params: params.to_vec(),
+                    return_type: return_type.clone(),
+                })));
+
+                if context.scopes.len() == 1 {
+                    self.global_scope.insert(
+                        name.clone(),
+                        SymbolInfo::new_intrinsic(
+                            func_type.clone(),
+                            visibility.clone(),
+                            self.current_module.clone(),
+                        ),
+                    );
+                }
+
+                context.define(
+                    name.clone(),
+                    SymbolInfo::new_intrinsic(
+                        func_type,
+                        visibility.clone(),
+                        self.current_module.clone(),
                     ),
                 );
             }

@@ -62,7 +62,7 @@ impl TypeChecker {
                         generic_defs.push(GenericDefinition {
                             name: gname.clone(),
                             constraint: constraint_type,
-                            kind: kind.clone(),
+                            kind: *kind,
                         });
                     }
                 }

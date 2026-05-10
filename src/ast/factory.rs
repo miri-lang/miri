@@ -1379,6 +1379,23 @@ pub fn runtime_function_declaration(
     ))
 }
 
+/// Creates an intrinsic function declaration (compiler-implemented function).
+pub fn intrinsic_function_declaration(
+    name: &str,
+    generics: Option<Vec<Expression>>,
+    parameters: Vec<Parameter>,
+    return_type: Option<Box<Expression>>,
+    visibility: MemberVisibility,
+) -> Statement {
+    stmt(StatementKind::IntrinsicFunctionDeclaration(
+        name.into(),
+        generics,
+        parameters,
+        return_type,
+        visibility,
+    ))
+}
+
 /// Creates a lambda function builder.
 pub fn lambda() -> FunctionBuilder {
     FunctionBuilder::new("")

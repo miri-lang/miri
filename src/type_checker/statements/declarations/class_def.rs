@@ -333,6 +333,36 @@ impl TypeChecker {
                         ),
                     );
                 }
+                StatementKind::IntrinsicFunctionDeclaration(
+                    name,
+                    generics,
+                    params,
+                    return_type_expr,
+                    visibility,
+                ) => {
+                    let func_type = make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                        generics: generics.clone(),
+                        params: params.to_vec(),
+                        return_type: return_type_expr.clone(),
+                    })));
+
+                    self.global_scope.insert(
+                        name.to_string(),
+                        SymbolInfo::new_intrinsic(
+                            func_type.clone(),
+                            visibility.clone(),
+                            self.current_module.clone(),
+                        ),
+                    );
+                    context.define(
+                        name.to_string(),
+                        SymbolInfo::new_intrinsic(
+                            func_type,
+                            visibility.clone(),
+                            self.current_module.clone(),
+                        ),
+                    );
+                }
                 StatementKind::Empty => {}
                 _ => {
                     self.report_error(

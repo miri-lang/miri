@@ -117,6 +117,31 @@ impl<'source> Parser<'source> {
         ))
     }
 
+    /*
+     */
+    pub(crate) fn intrinsic_function_declaration(
+        &mut self,
+        visibility: MemberVisibility,
+    ) -> Result<Statement, SyntaxError> {
+        self.eat_token(&Token::Intrinsic)?;
+        self.eat_token(&Token::Fn)?;
+
+        let name = self.parse_simple_identifier()?;
+        let generic_types = self.generic_types_expression()?;
+        let parameters = self.function_params_expression()?;
+        let return_type = self.return_type_expression()?;
+
+        self.eat_statement_end()?;
+
+        Ok(ast::intrinsic_function_declaration(
+            &name,
+            generic_types,
+            parameters,
+            return_type,
+            visibility,
+        ))
+    }
+
     /// Parses a function declaration, optionally allowing abstract functions (no body).
     /// Abstract functions are only valid in traits and abstract classes.
     pub(crate) fn function_declaration_with_context(

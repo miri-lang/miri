@@ -211,7 +211,7 @@ impl TypeChecker {
                     TypeDefinition::Generic(GenericDefinition {
                         name: name.clone(),
                         constraint: constraint_type,
-                        kind: kind.clone(),
+                        kind: *kind,
                     }),
                 );
             }

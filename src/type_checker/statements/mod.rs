@@ -188,6 +188,76 @@ impl TypeChecker {
                     self.resolve_type_expression(rt_expr, context);
                 }
             }
+            StatementKind::IntrinsicFunctionDeclaration(
+                name,
+                generics,
+                params,
+                return_type_expr,
+                visibility,
+            ) => {
+                let func_type = make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                    generics: generics.clone(),
+                    params: params.to_vec(),
+                    return_type: return_type_expr.clone(),
+                })));
+
+                if context.scopes.len() == 1 {
+                    self.global_scope.insert(
+                        name.to_string(),
+                        SymbolInfo::new_intrinsic(
+                            func_type.clone(),
+                            visibility.clone(),
+                            self.current_module.clone(),
+                        ),
+                    );
+                }
+
+                context.define(
+                    name.to_string(),
+                    SymbolInfo::new_intrinsic(
+                        func_type,
+                        visibility.clone(),
+                        self.current_module.clone(),
+                    ),
+                );
+
+                // Register generic type parameters in the scope for the duration of this signature check
+                if let Some(gens) = generics {
+                    context.enter_scope();
+                    for gen in gens {
+                        if let ExpressionKind::GenericType(name_expr, constraint, kind) = &gen.node
+                        {
+                            if let ExpressionKind::Identifier(name, _) = &name_expr.node {
+                                let constraint_ty = constraint
+                                    .as_ref()
+                                    .map(|c| self.resolve_type_expression(c, context));
+                                context.define_type(
+                                    name.clone(),
+                                    TypeDefinition::Generic(GenericDefinition {
+                                        name: name.clone(),
+                                        constraint: constraint_ty,
+                                        kind: *kind,
+                                    }),
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // Resolve parameter types
+                for param in params {
+                    self.resolve_type_expression(&param.typ, context);
+                }
+
+                // Resolve return type
+                if let Some(rt_expr) = return_type_expr {
+                    self.resolve_type_expression(rt_expr, context);
+                }
+
+                if generics.is_some() {
+                    context.exit_scope();
+                }
+            }
             StatementKind::Use(path_expr, alias) => {
                 self.check_use(path_expr, alias, context);
             }
@@ -248,7 +318,7 @@ impl TypeChecker {
                                         defs.push(GenericDefinition {
                                             name: gen_name,
                                             constraint: constraint_type,
-                                            kind: gen_kind.clone(),
+                                            kind: *gen_kind,
                                         });
                                     }
                                 }

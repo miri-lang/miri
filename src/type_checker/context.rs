@@ -49,6 +49,7 @@ pub struct SymbolInfo {
     /// When this symbol is an import alias (e.g. `use m.{add as plus}`), the
     /// original symbol name (`"add"`) so MIR lowering can emit the right call target.
     pub original_name: Option<String>,
+    pub is_intrinsic: bool,
 }
 
 impl SymbolInfo {
@@ -69,6 +70,21 @@ impl SymbolInfo {
             consumed: false,
             value,
             original_name: None,
+            is_intrinsic: false,
+        }
+    }
+
+    pub fn new_intrinsic(ty: Type, visibility: MemberVisibility, module: String) -> Self {
+        Self {
+            ty,
+            mutable: false,
+            is_constant: false,
+            visibility,
+            module,
+            consumed: false,
+            value: None,
+            original_name: None,
+            is_intrinsic: true,
         }
     }
 }
