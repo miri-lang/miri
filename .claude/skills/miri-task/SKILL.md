@@ -1,6 +1,7 @@
 ---
 name: miri-task
 description: Execute a Miri compiler task end-to-end with TDD, full verification, and an honest pass/fail report. Use when the user references a milestone, a plan file, or provides a task description directly.
+gemini-model: pro
 ---
 
 # Miri task execution skill
