@@ -10,6 +10,18 @@ if s1.length() != 5
 else
     println("s1.length() passed")
 
+// Unicode test: "🦀" is 1 character but 4 bytes in UTF-8
+let crab = "🦀"
+if crab.length() != 1
+    eprintln("Error: crab.length() should be 1, got {crab.length()}")
+else
+    println("crab.length() passed")
+
+if crab.size() != 4
+    eprintln("Error: crab.size() should be 4, got {crab.size()}")
+else
+    println("crab.size() passed")
+
 // specific test for string.is_empty()
 if s1.is_empty()
     eprintln("Error: s1 should not be empty")

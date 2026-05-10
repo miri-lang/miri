@@ -48,13 +48,10 @@ public class String implements Equatable, Addable, Multiplicable, Iterable, Clon
 
     /// Returns the number of Unicode characters in the string.
     ///
-    /// Note: This is the number of bytes, not characters.
-    /// For Unicode character count, use `char_count()`.
+    /// This is an O(n) operation for UTF-8 strings.
     public fn length() int: miri_rt_string_char_count(self)
         
     /// Returns the byte length of the string.
-    ///
-    /// This correctly counts multi-byte Unicode characters.
     public fn size() int: miri_rt_string_len(self)
 
     /// Returns true if the string has no characters.
