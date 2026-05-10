@@ -855,7 +855,7 @@ impl TypeChecker {
                 make_type(TypeKind::Generic(
                     name.to_string(),
                     gen_def.constraint.clone().map(Box::new),
-                    gen_def.kind.clone(),
+                    gen_def.kind,
                 ))
             }
             TypeDefinition::Alias(alias_def) => {

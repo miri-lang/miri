@@ -101,6 +101,7 @@ pub(crate) fn check_returns(stmt: &Statement) -> ReturnStatus {
         | StatementKind::Trait(_, _, _, _, _)
         | StatementKind::Type(_, _)
         | StatementKind::RuntimeFunctionDeclaration(_, _, _, _)
+        | StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _)
         | StatementKind::Use(_, _)
         | StatementKind::Empty => ReturnStatus::None,
     }

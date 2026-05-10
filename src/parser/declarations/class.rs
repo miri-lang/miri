@@ -55,6 +55,7 @@ impl<'source> Parser<'source> {
                     "a declaration (runtime functions cannot have visibility modifiers)",
                 ));
             }
+            Some((Token::Intrinsic, _)) => self.intrinsic_function_declaration(visibility)?,
             Some((Token::Enum, _)) => self.enum_statement(visibility, false)?,
             Some((Token::MustUse, _)) => {
                 self.eat_token(&Token::MustUse)?;
