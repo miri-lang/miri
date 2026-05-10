@@ -1,6 +1,7 @@
 ---
 name: miri-qa
 description: Run a production-readiness QA pass on a recently-implemented Miri compiler feature, surfacing correctness gaps, Perceus RC bugs, MIR visitor holes, and missing test coverage before the user finds them. Use after implementing a feature, or when the user says "QA this", "stress-test this", or "is this ready to ship".
+gemini-model: pro
 ---
 
 # Adversarial QA skill for Miri
