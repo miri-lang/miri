@@ -184,6 +184,21 @@ println(f"{s.length()}")
 }
 
 #[test]
+fn test_string_unicode_length_and_size() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.string
+
+let s = "🦀"
+println(f"length: {s.length()}")
+println(f"size: {s.size()}")
+"#,
+        "length: 1\nsize: 4",
+    );
+}
+
+#[test]
 fn test_string_chained_methods() {
     assert_runs_with_output(
         r#"
