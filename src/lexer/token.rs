@@ -124,6 +124,8 @@ pub enum Token {
     Out,
     #[token("runtime")]
     Runtime,
+    #[token("intrinsic")]
+    Intrinsic,
 
     // Symbols and Operators
     #[token(";")]

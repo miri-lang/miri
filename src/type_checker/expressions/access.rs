@@ -303,7 +303,7 @@ impl TypeChecker {
                         return make_type(TypeKind::Generic(
                             g.name.clone(),
                             g.constraint.clone().map(Box::new),
-                            g.kind.clone(),
+                            g.kind,
                         ));
                     } else {
                         return make_type(TypeKind::Generic(
@@ -336,7 +336,7 @@ impl TypeChecker {
                     return make_type(TypeKind::Generic(
                         g.name.clone(),
                         g.constraint.clone().map(Box::new),
-                        g.kind.clone(),
+                        g.kind,
                     ));
                 }
                 make_type(TypeKind::Generic(
@@ -1160,7 +1160,7 @@ impl TypeChecker {
                                                 ast_factory::generic_type_with_kind(
                                                     &g.name,
                                                     constraint_expr,
-                                                    g.kind.clone(),
+                                                    g.kind,
                                                 )
                                             })
                                             .collect();
@@ -1171,7 +1171,7 @@ impl TypeChecker {
                                                     TypeKind::Generic(
                                                         g.name.clone(),
                                                         g.constraint.clone().map(Box::new),
-                                                        g.kind.clone(),
+                                                        g.kind,
                                                     ),
                                                 ))
                                             })

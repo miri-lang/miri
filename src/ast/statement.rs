@@ -155,6 +155,17 @@ pub enum StatementKind {
         Vec<Parameter>,          // Parameters
         Option<Box<Expression>>, // Return type
     ),
+
+    /// An intrinsic function declaration (compiler-implemented function).
+    /// These functions have no body and are handled specially by the compiler.
+    /// (name, generics, params, return_type, visibility)
+    IntrinsicFunctionDeclaration(
+        String,                  // Function name
+        Option<Vec<Expression>>, // Generics
+        Vec<Parameter>,          // Parameters
+        Option<Box<Expression>>, // Return type
+        MemberVisibility,        // Visibility
+    ),
 }
 
 /// Represents a statement

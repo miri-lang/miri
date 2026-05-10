@@ -281,8 +281,29 @@ pub enum MathIntrinsic {
     Sin,
     Cos,
     Tan,
-    Log,
+    Ln,
     Exp,
+}
+
+impl MathIntrinsic {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "abs" => Some(MathIntrinsic::Abs),
+            "min" => Some(MathIntrinsic::Min),
+            "max" => Some(MathIntrinsic::Max),
+            "pow" => Some(MathIntrinsic::Pow),
+            "sqrt" => Some(MathIntrinsic::Sqrt),
+            "floor" => Some(MathIntrinsic::Floor),
+            "ceil" => Some(MathIntrinsic::Ceil),
+            "round" => Some(MathIntrinsic::Round),
+            "sin" => Some(MathIntrinsic::Sin),
+            "cos" => Some(MathIntrinsic::Cos),
+            "tan" => Some(MathIntrinsic::Tan),
+            "ln" => Some(MathIntrinsic::Ln),
+            "exp" => Some(MathIntrinsic::Exp),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for MathIntrinsic {
@@ -299,7 +320,7 @@ impl fmt::Display for MathIntrinsic {
             MathIntrinsic::Sin => "sin",
             MathIntrinsic::Cos => "cos",
             MathIntrinsic::Tan => "tan",
-            MathIntrinsic::Log => "ln",
+            MathIntrinsic::Ln => "ln",
             MathIntrinsic::Exp => "exp",
         };
         write!(f, "{}", s)

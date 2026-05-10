@@ -93,25 +93,7 @@ pub(crate) fn lower_call_expr(
             return Ok(ret_op);
         }
 
-        // Check for math intrinsic function names (abs, sqrt, sin, etc.)
-        let math_intrinsic = match name.as_str() {
-            "abs" => Some(MathIntrinsic::Abs),
-            "min" => Some(MathIntrinsic::Min),
-            "max" => Some(MathIntrinsic::Max),
-            "pow" => Some(MathIntrinsic::Pow),
-            "sqrt" => Some(MathIntrinsic::Sqrt),
-            "floor" => Some(MathIntrinsic::Floor),
-            "ceil" => Some(MathIntrinsic::Ceil),
-            "round" => Some(MathIntrinsic::Round),
-            "sin" => Some(MathIntrinsic::Sin),
-            "cos" => Some(MathIntrinsic::Cos),
-            "tan" => Some(MathIntrinsic::Tan),
-            "ln" => Some(MathIntrinsic::Log),
-            "exp" => Some(MathIntrinsic::Exp),
-            _ => None,
-        };
-
-        if let Some(intrinsic) = math_intrinsic {
+        if let Some(intrinsic) = MathIntrinsic::from_name(name.as_str()) {
             // ONLY lower to intrinsic if it's explicitly from system.math
             let is_from_math_module = ctx
                 .type_checker

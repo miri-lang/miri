@@ -466,9 +466,10 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
             );
             ctx.push_local(name.clone(), func_ty, stmt.span);
         }
-        StatementKind::RuntimeFunctionDeclaration(..) => {
-            // Runtime function declarations are extern bindings with no body.
-            // Nothing to lower — they are resolved at link time.
+        StatementKind::RuntimeFunctionDeclaration(..)
+        | StatementKind::IntrinsicFunctionDeclaration(..) => {
+            // Runtime and intrinsic function declarations have no body.
+            // Nothing to lower.
         }
     }
     Ok(())

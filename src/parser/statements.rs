@@ -106,6 +106,9 @@ impl<'source> Parser<'source> {
             | Some((Token::Gpu, _))
             | Some((Token::Parallel, _)) => self.function_declaration(MemberVisibility::Public)?,
             Some((Token::Runtime, _)) => self.runtime_function_declaration()?,
+            Some((Token::Intrinsic, _)) => {
+                self.intrinsic_function_declaration(MemberVisibility::Public)?
+            }
             Some((Token::Return, _)) => self.return_statement()?,
             Some((Token::Use, _)) => self.use_statement()?,
             Some((Token::Type, _)) => self.type_statement(MemberVisibility::Public)?,

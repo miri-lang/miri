@@ -1,29 +1,16 @@
-public fn abs(x float) float
-    return 0.0
-public fn min(a float, b float) float
-    return 0.0
-public fn max(a float, b float) float
-    return 0.0
-public fn pow(base float, exp float) float
-    return 0.0
-public fn sqrt(x float) float
-    return 0.0
-public fn floor(x float) float
-    return 0.0
-public fn ceil(x float) float
-    return 0.0
-public fn round(x float) float
-    return 0.0
-public fn sin(x float) float
-    return 0.0
-public fn cos(x float) float
-    return 0.0
-public fn tan(x float) float
-    return 0.0
-public fn ln(x float) float
-    return 0.0
-public fn exp(x float) float
-    return 0.0
+public intrinsic fn abs(x float) float
+public intrinsic fn min(a float, b float) float
+public intrinsic fn max(a float, b float) float
+public intrinsic fn pow(base float, exp float) float
+public intrinsic fn sqrt(x float) float
+public intrinsic fn floor(x float) float
+public intrinsic fn ceil(x float) float
+public intrinsic fn round(x float) float
+public intrinsic fn sin(x float) float
+public intrinsic fn cos(x float) float
+public intrinsic fn tan(x float) float
+public intrinsic fn ln(x float) float
+public intrinsic fn exp(x float) float
 
 public const PI = 3.14159265358979323846
 public const E = 2.71828182845904523536

@@ -95,6 +95,18 @@ fn normalize_stmt(stmt: &mut Statement) {
             }
         }
 
+        StatementKind::IntrinsicFunctionDeclaration(_, generics, params, ret, _) => {
+            if let Some(gens) = generics {
+                for g in gens.iter_mut() {
+                    normalize_expr(g);
+                }
+            }
+            normalize_params(params);
+            if let Some(r) = ret {
+                normalize_expr(r);
+            }
+        }
+
         StatementKind::Use(path, alias) => {
             normalize_expr(path);
             if let Some(a) = alias {
