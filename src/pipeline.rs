@@ -1261,7 +1261,7 @@ impl Pipeline {
         let linker_path_display = linker_path.display().to_string();
         let mut cmd = Command::new(&linker_path);
         cmd.arg(object_path).arg("-o").arg(output_path);
-        
+
         // Link the math library (required for sin, cos, pow, etc. on Linux)
         cmd.arg("-lm");
 
