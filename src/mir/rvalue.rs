@@ -62,6 +62,8 @@ pub enum Rvalue {
     Len(Place),
     /// GPU intrinsic operation (thread index, block index, etc.)
     GpuIntrinsic(GpuIntrinsic),
+    /// Math intrinsic operation (abs, sin, sqrt, etc.)
+    MathIntrinsic(MathIntrinsic, Vec<Operand>),
     /// Construct an aggregate value from operands.
     /// - Tuple: operands are tuple elements in order
     /// - Array/List: operands are elements in order
@@ -88,6 +90,16 @@ impl fmt::Display for Rvalue {
             Rvalue::Cast(op, ty) => write!(f, "{} as {}", op, ty),
             Rvalue::Len(place) => write!(f, "Len({})", place),
             Rvalue::GpuIntrinsic(intrinsic) => write!(f, "{}", intrinsic),
+            Rvalue::MathIntrinsic(intrinsic, args) => {
+                write!(f, "{}(", intrinsic)?;
+                if let Some((first, rest)) = args.split_first() {
+                    write!(f, "{}", first)?;
+                    for op in rest {
+                        write!(f, ", {}", op)?;
+                    }
+                }
+                write!(f, ")")
+            }
             Rvalue::Aggregate(kind, ops) => match kind {
                 AggregateKind::Tuple => {
                     write!(f, "(")?;
@@ -250,6 +262,48 @@ pub enum GpuIntrinsic {
     /// - SPIR-V: `OpControlBarrier` with Workgroup scope
     /// - WebGPU: `workgroupBarrier()`
     SyncThreads,
+}
+
+/// High-level math intrinsic operations.
+///
+/// These operations are lowered to either CPU libm/Cranelift intrinsics
+/// or GPU built-in functions depending on the backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MathIntrinsic {
+    Abs,
+    Min,
+    Max,
+    Pow,
+    Sqrt,
+    Floor,
+    Ceil,
+    Round,
+    Sin,
+    Cos,
+    Tan,
+    Log,
+    Exp,
+}
+
+impl fmt::Display for MathIntrinsic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            MathIntrinsic::Abs => "abs",
+            MathIntrinsic::Min => "min",
+            MathIntrinsic::Max => "max",
+            MathIntrinsic::Pow => "pow",
+            MathIntrinsic::Sqrt => "sqrt",
+            MathIntrinsic::Floor => "floor",
+            MathIntrinsic::Ceil => "ceil",
+            MathIntrinsic::Round => "round",
+            MathIntrinsic::Sin => "sin",
+            MathIntrinsic::Cos => "cos",
+            MathIntrinsic::Tan => "tan",
+            MathIntrinsic::Log => "ln",
+            MathIntrinsic::Exp => "exp",
+        };
+        write!(f, "{}", s)
+    }
 }
 
 impl fmt::Display for GpuIntrinsic {

@@ -4,7 +4,7 @@ use crate::ast::types::{BuiltinCollectionKind, TypeKind};
 use crate::codegen::cranelift::layout::field_layout;
 use crate::codegen::cranelift::translator::{FunctionTranslator, ModuleCtx, TypeCtx};
 use crate::codegen::cranelift::types::translate_type;
-use crate::mir::{AggregateKind, BinOp, Constant, Local, Operand, Rvalue, UnOp};
+use crate::mir::{AggregateKind, BinOp, Constant, Local, MathIntrinsic, Operand, Rvalue, UnOp};
 use crate::type_checker::context::class_needs_vtable;
 use cranelift_codegen::ir::{
     condcodes::{FloatCC, IntCC},
@@ -16,6 +16,28 @@ use cranelift_module::{Linkage, Module};
 use std::collections::HashMap;
 
 impl<'a> FunctionTranslator<'a> {
+    fn emit_libm_call(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        func_name: &str,
+        ty: cl_types::Type,
+        arg_values: &[Value],
+    ) -> Result<Value, String> {
+        let mut sig = Signature::new(builder.func.signature.call_conv);
+        for _ in arg_values {
+            sig.params.push(AbiParam::new(ty));
+        }
+        sig.returns.push(AbiParam::new(ty));
+
+        let func_id = ctx
+            .module
+            .declare_function(func_name, Linkage::Import, &sig)
+            .map_err(|e| format!("Failed to declare {}: {}", func_name, e))?;
+        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+        let call = builder.ins().call(local_func, arg_values);
+        Ok(builder.inst_results(call)[0])
+    }
+
     /// Translate a MIR rvalue to a Cranelift value.
     pub(crate) fn translate_rvalue(
         builder: &mut FunctionBuilder,
@@ -1103,6 +1125,114 @@ impl<'a> FunctionTranslator<'a> {
 
             Rvalue::GpuIntrinsic(_intrinsic) => {
                 Err("GPU intrinsics not supported in CPU backend".to_string())
+            }
+
+            Rvalue::MathIntrinsic(intrinsic, args) => {
+                let mut arg_values = Vec::with_capacity(args.len());
+                for arg in args {
+                    arg_values.push(Self::translate_operand(
+                        builder, ctx, arg, locals, type_ctx,
+                    )?);
+                }
+
+                if arg_values.is_empty() {
+                    return Err(format!(
+                        "Math intrinsic {} expects at least one argument",
+                        intrinsic
+                    ));
+                }
+
+                let ty = builder.func.dfg.value_type(arg_values[0]);
+                let is_f32 = ty == cl_types::F32;
+
+                match intrinsic {
+                    MathIntrinsic::Abs => {
+                        if ty.is_float() {
+                            Ok(builder.ins().fabs(arg_values[0]))
+                        } else {
+                            // Integer abs: (x ^ (x >> (bits-1))) - (x >> (bits-1))
+                            let shift = ty.bits() - 1;
+                            let sign_mask = builder.ins().sshr_imm(arg_values[0], shift as i64);
+                            let xor = builder.ins().bxor(arg_values[0], sign_mask);
+                            Ok(builder.ins().isub(xor, sign_mask))
+                        }
+                    }
+                    MathIntrinsic::Sqrt => {
+                        if ty.is_float() {
+                            Ok(builder.ins().sqrt(arg_values[0]))
+                        } else {
+                            Err("sqrt expects a float argument".to_string())
+                        }
+                    }
+                    MathIntrinsic::Ceil => {
+                        if ty.is_float() {
+                            Ok(builder.ins().ceil(arg_values[0]))
+                        } else {
+                            Ok(arg_values[0])
+                        }
+                    }
+                    MathIntrinsic::Floor => {
+                        if ty.is_float() {
+                            Ok(builder.ins().floor(arg_values[0]))
+                        } else {
+                            Ok(arg_values[0])
+                        }
+                    }
+                    MathIntrinsic::Round => {
+                        if ty.is_float() {
+                            Ok(builder.ins().nearest(arg_values[0]))
+                        } else {
+                            Ok(arg_values[0])
+                        }
+                    }
+                    MathIntrinsic::Min => {
+                        if ty.is_float() {
+                            let func_name = if is_f32 { "fminf" } else { "fmin" };
+                            Self::emit_libm_call(builder, ctx, func_name, ty, &arg_values)
+                        } else if arg_values.len() == 2 {
+                            Ok(builder.ins().smin(arg_values[0], arg_values[1]))
+                        } else {
+                            Err("min expects exactly two arguments".to_string())
+                        }
+                    }
+                    MathIntrinsic::Max => {
+                        if ty.is_float() {
+                            let func_name = if is_f32 { "fmaxf" } else { "fmax" };
+                            Self::emit_libm_call(builder, ctx, func_name, ty, &arg_values)
+                        } else if arg_values.len() == 2 {
+                            Ok(builder.ins().smax(arg_values[0], arg_values[1]))
+                        } else {
+                            Err("max expects exactly two arguments".to_string())
+                        }
+                    }
+                    _ => {
+                        if !ty.is_float() {
+                            return Err(format!(
+                                "Math intrinsic {} expects float arguments, found {}",
+                                intrinsic, ty
+                            ));
+                        }
+
+                        // Other math functions (sin, cos, tan, log, exp, pow) via libm
+                        let func_name = match (intrinsic, is_f32) {
+                            (MathIntrinsic::Sin, true) => "sinf",
+                            (MathIntrinsic::Sin, false) => "sin",
+                            (MathIntrinsic::Cos, true) => "cosf",
+                            (MathIntrinsic::Cos, false) => "cos",
+                            (MathIntrinsic::Tan, true) => "tanf",
+                            (MathIntrinsic::Tan, false) => "tan",
+                            (MathIntrinsic::Log, true) => "logf",
+                            (MathIntrinsic::Log, false) => "log",
+                            (MathIntrinsic::Exp, true) => "expf",
+                            (MathIntrinsic::Exp, false) => "exp",
+                            (MathIntrinsic::Pow, true) => "powf",
+                            (MathIntrinsic::Pow, false) => "pow",
+                            _ => unreachable!(),
+                        };
+
+                        Self::emit_libm_call(builder, ctx, func_name, ty, &arg_values)
+                    }
+                }
             }
 
             Rvalue::Phi(_) => Err(

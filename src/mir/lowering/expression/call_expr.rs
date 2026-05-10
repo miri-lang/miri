@@ -7,7 +7,7 @@ use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::mir::{
-    AggregateKind, Constant, Dimension, GpuIntrinsic, Operand, Place, Rvalue,
+    AggregateKind, Constant, Dimension, GpuIntrinsic, MathIntrinsic, Operand, Place, Rvalue,
     StatementKind as MirStatementKind,
 };
 
@@ -91,6 +91,57 @@ pub(crate) fn lower_call_expr(
                 span: expr.span,
             });
             return Ok(ret_op);
+        }
+
+        // Check for math intrinsic function names (abs, sqrt, sin, etc.)
+        let math_intrinsic = match name.as_str() {
+            "abs" => Some(MathIntrinsic::Abs),
+            "min" => Some(MathIntrinsic::Min),
+            "max" => Some(MathIntrinsic::Max),
+            "pow" => Some(MathIntrinsic::Pow),
+            "sqrt" => Some(MathIntrinsic::Sqrt),
+            "floor" => Some(MathIntrinsic::Floor),
+            "ceil" => Some(MathIntrinsic::Ceil),
+            "round" => Some(MathIntrinsic::Round),
+            "sin" => Some(MathIntrinsic::Sin),
+            "cos" => Some(MathIntrinsic::Cos),
+            "tan" => Some(MathIntrinsic::Tan),
+            "ln" => Some(MathIntrinsic::Log),
+            "exp" => Some(MathIntrinsic::Exp),
+            _ => None,
+        };
+
+        if let Some(intrinsic) = math_intrinsic {
+            // ONLY lower to intrinsic if it's explicitly from system.math
+            let is_from_math_module = ctx
+                .type_checker
+                .get_variable_module(name.as_str())
+                .map(|m| m == "system.math")
+                .unwrap_or(false);
+
+            if is_from_math_module {
+                let mut arg_ops = Vec::with_capacity(args.len());
+                for arg in args {
+                    arg_ops.push(lower_expression(ctx, arg, None)?);
+                }
+
+                let return_ty = resolve_type(ctx.type_checker, expr);
+                let (target, ret_op) = if let Some(ref d) = dest {
+                    (d.clone(), Operand::Copy(d.clone()))
+                } else {
+                    let temp = ctx.push_temp(return_ty, expr.span);
+                    (Place::new(temp), Operand::Copy(Place::new(temp)))
+                };
+
+                ctx.push_statement(crate::mir::Statement {
+                    kind: MirStatementKind::Assign(
+                        target,
+                        Rvalue::MathIntrinsic(intrinsic, arg_ops),
+                    ),
+                    span: expr.span,
+                });
+                return Ok(ret_op);
+            }
         }
     }
 

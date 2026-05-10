@@ -7,7 +7,9 @@ use crate::ast::expression::Expression;
 use crate::ast::{BuiltinCollectionKind, ExpressionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
-use crate::mir::{Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind};
+use crate::mir::{
+    MathIntrinsic, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind,
+};
 use crate::runtime_fns::rt;
 use crate::type_checker::context::{
     class_needs_vtable, vtable_slot_index, MethodInfo, TypeDefinition,
@@ -269,13 +271,64 @@ fn try_lower_module_alias_call(
     dest: Option<Place>,
 ) -> Result<Option<Operand>, LoweringError> {
     if let ExpressionKind::Identifier(alias_name, _) = &obj_expr.node {
+        if let Some(module_path) = ctx.type_checker.module_aliases.get(alias_name.as_str()) {
+            if module_path == "system.math" {
+                if let ExpressionKind::Identifier(func_name, _) = &method_expr.node {
+                    // Check for math intrinsic function names (abs, sqrt, sin, etc.)
+                    let math_intrinsic = match func_name.as_str() {
+                        "abs" => Some(MathIntrinsic::Abs),
+                        "min" => Some(MathIntrinsic::Min),
+                        "max" => Some(MathIntrinsic::Max),
+                        "pow" => Some(MathIntrinsic::Pow),
+                        "sqrt" => Some(MathIntrinsic::Sqrt),
+                        "floor" => Some(MathIntrinsic::Floor),
+                        "ceil" => Some(MathIntrinsic::Ceil),
+                        "round" => Some(MathIntrinsic::Round),
+                        "sin" => Some(MathIntrinsic::Sin),
+                        "cos" => Some(MathIntrinsic::Cos),
+                        "tan" => Some(MathIntrinsic::Tan),
+                        "ln" => Some(MathIntrinsic::Log),
+                        "exp" => Some(MathIntrinsic::Exp),
+                        _ => None,
+                    };
+
+                    if let Some(intrinsic) = math_intrinsic {
+                        let mut arg_ops = Vec::with_capacity(args.len());
+                        for arg in args {
+                            arg_ops.push(lower_expression(ctx, arg, None)?);
+                        }
+
+                        let return_ty = ctx
+                            .type_checker
+                            .get_type(call_expr_id)
+                            .cloned()
+                            .unwrap_or_else(|| Type::new(TypeKind::Void, *span));
+                        let (target, ret_op) = if let Some(ref d) = dest {
+                            (d.clone(), Operand::Copy(d.clone()))
+                        } else {
+                            let temp = ctx.push_temp(return_ty, *span);
+                            (Place::new(temp), Operand::Copy(Place::new(temp)))
+                        };
+
+                        ctx.push_statement(crate::mir::Statement {
+                            kind: StatementKind::Assign(
+                                target,
+                                Rvalue::MathIntrinsic(intrinsic, arg_ops),
+                            ),
+                            span: *span,
+                        });
+                        return Ok(Some(ret_op));
+                    }
+                }
+            }
+        }
+
         let is_module_alias = ctx
             .type_checker
             .module_aliases
             .contains_key(alias_name.as_str());
         if is_module_alias {
             if let ExpressionKind::Identifier(func_name, _) = &method_expr.node {
-                // If this is a generic instantiation, mangle the name.
                 let mangled = if let Some(generic_args) =
                     ctx.type_checker.call_generic_mappings.get(&call_expr_id)
                 {
@@ -1102,16 +1155,46 @@ fn lower_direct_call(
     );
 
     if !is_runtime_fn && !is_indirect_call {
-        if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
-            let already_has_alloc = arg_ops.iter().any(|op| {
-                if let Operand::Copy(p) | Operand::Move(p) = op {
-                    p.local == alloc_local
-                } else {
-                    false
+        // Skip allocator injection for math functions which are handled as intrinsics
+        let is_math_fn = if let ExpressionKind::Identifier(name, _) = &func.node {
+            let matches_name = matches!(
+                name.as_str(),
+                "abs"
+                    | "min"
+                    | "max"
+                    | "pow"
+                    | "sqrt"
+                    | "floor"
+                    | "ceil"
+                    | "round"
+                    | "sin"
+                    | "cos"
+                    | "tan"
+                    | "ln"
+                    | "exp"
+            );
+            matches_name
+                && ctx
+                    .type_checker
+                    .get_variable_module(name.as_str())
+                    .map(|m| m == "system.math")
+                    .unwrap_or(false)
+        } else {
+            false
+        };
+
+        if !is_math_fn {
+            if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
+                let already_has_alloc = arg_ops.iter().any(|op| {
+                    if let Operand::Copy(p) | Operand::Move(p) = op {
+                        p.local == alloc_local
+                    } else {
+                        false
+                    }
+                });
+                if !already_has_alloc {
+                    arg_ops.push(Operand::Copy(Place::new(alloc_local)));
                 }
-            });
-            if !already_has_alloc {
-                arg_ops.push(Operand::Copy(Place::new(alloc_local)));
             }
         }
     }
