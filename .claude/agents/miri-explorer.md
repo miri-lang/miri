@@ -1,7 +1,7 @@
 ---
 name: miri-explorer
 description: Fast, cheap codebase exploration for the Miri compiler. Use to locate MIR instructions, Perceus patterns, runtime intrinsics, stdlib `.mi` declarations, type-checker logic, or integration tests. Prefer this over the generic Explore agent when the question is scoped to the Miri pipeline (lexer → parser → type checker → MIR → codegen → runtime → stdlib).
-model: haiku
+gemini-model: flash
 tools: Read, Grep, Glob
 ---
 

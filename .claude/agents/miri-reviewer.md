@@ -1,7 +1,7 @@
 ---
 name: miri-reviewer
 description: Independent adversarial review of a Miri change — Perceus RC correctness, MIR visitor completeness, runtime/stdlib ABI alignment, stdlib independence, exhaustive matching. Use for a second opinion on a diff before shipping. Read-only; reports findings, does not fix.
-model: sonnet
+gemini-model: pro
 tools: Read, Grep, Glob, Bash
 ---
 
