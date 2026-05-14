@@ -9,9 +9,9 @@ public intrinsic fn round(x float) float
 public intrinsic fn sin(x float) float
 public intrinsic fn cos(x float) float
 public intrinsic fn tan(x float) float
-public intrinsic fn ln(x float) float
+public intrinsic fn log(x float) float
 public intrinsic fn exp(x float) float
 
 public const PI = 3.14159265358979323846
 public const E = 2.71828182845904523536
-public const INF = 1e308
+public const INF = 1e309

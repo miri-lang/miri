@@ -71,12 +71,25 @@ fn test_math_functions_log_exp() {
     assert_runs_with_output(
         r#"
         use system.math as M
-        use system.math.{ln, exp}
+        use system.math.{log, exp}
         use system.io
 
-        print(f"{ln(M.E)}\n")
+        print(f"{log(M.E)}\n")
         print(f"{exp(0.0)}\n")
         "#,
         "1.0\n1.0",
+    );
+}
+
+#[test]
+fn test_math_inf_constant() {
+    assert_runs_with_output(
+        r#"
+        use system.math as M
+        use system.io
+
+        print(f"{M.INF}\n")
+        "#,
+        "inf",
     );
 }

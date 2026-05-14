@@ -299,7 +299,7 @@ impl MathIntrinsic {
             "sin" => Some(MathIntrinsic::Sin),
             "cos" => Some(MathIntrinsic::Cos),
             "tan" => Some(MathIntrinsic::Tan),
-            "ln" => Some(MathIntrinsic::Ln),
+            "log" => Some(MathIntrinsic::Ln),
             "exp" => Some(MathIntrinsic::Exp),
             _ => None,
         }
