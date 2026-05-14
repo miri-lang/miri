@@ -203,7 +203,7 @@ impl<'source> Parser<'source> {
                 } else {
                     // Otherwise, parse as f64
                     let f64_value = str_value.parse::<f64>().map_err(|_| err.clone())?;
-                    if f64_value.is_finite() {
+                    if !f64_value.is_nan() {
                         Ok(ast::float64_literal(f64_value))
                     } else {
                         Err(err)
