@@ -1,0 +1,50 @@
+use system.ops
+
+/// Trait for collections that support functional transformation operations.
+///
+/// Implementing this trait on a collection type (`List<T>`, `Array<T, Size>`,
+/// and in the future `GpuArray<T>`) gives users a uniform API:
+/// learn it once, use it on every collection kind.
+///
+/// Requires the implementing type to also satisfy `Iterable`.
+public trait Transformable<T>
+
+    /// Returns a new List containing each element transformed by `f`.
+    abstract fn map(f fn(T) T) [T]
+
+    /// Returns a new List containing only elements for which `f` returns true.
+    abstract fn filter(f fn(T) bool) [T]
+
+    /// Reduces all elements to a single value by applying `f` left-to-right.
+    abstract fn reduce(init T, f fn(T, T) T) T
+
+    /// Maps each element to a list and flattens all results into one list.
+    abstract fn flat_map(f fn(T) [T]) [T]
+
+    /// Returns true if any element satisfies the predicate.
+    abstract fn any(f fn(T) bool) bool
+
+    /// Returns true if all elements satisfy the predicate.
+    abstract fn all(f fn(T) bool) bool
+
+    /// Returns the first `n` elements as a new List.
+    abstract fn take(n int) [T]
+
+    /// Returns all elements after the first `n` as a new List.
+    abstract fn drop(n int) [T]
+
+    /// Returns a new sorted List using `f` as a comparator.
+    /// `f(a, b)` must return negative if a < b, zero if a == b, positive if a > b.
+    abstract fn sorted_by(f fn(T, T) int) [T]
+
+    /// Returns the sum of all elements (requires T to be numeric).
+    abstract fn sum() T
+
+    /// Returns the smallest element (requires T to be comparable).
+    abstract fn min() T
+
+    /// Returns the largest element (requires T to be comparable).
+    abstract fn max() T
+
+    /// Returns a new List with duplicate elements removed, preserving order.
+    abstract fn unique() [T]

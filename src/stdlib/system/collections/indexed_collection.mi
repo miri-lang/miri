@@ -9,7 +9,7 @@ use system.ops
 /// Concrete subclasses must implement `length() int` and
 /// `element_at(index int) T` (inherited from Iterable).  All other
 /// shared methods are derived from those two primitives.
-public abstract class Collection<T> implements Iterable
+public abstract class IndexedCollection<T> implements Iterable
 
     /// Abstract: must be provided by the concrete subclass.
     abstract fn length() int

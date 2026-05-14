@@ -6,6 +6,7 @@ pub use crate::integration::utils;
 pub mod construction;
 pub mod edge_cases;
 pub mod function_integration;
+pub mod functional;
 pub mod index_read;
 pub mod index_write;
 pub mod iteration;

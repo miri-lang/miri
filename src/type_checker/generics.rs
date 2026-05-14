@@ -11,8 +11,9 @@
 
 use super::context::{Context, GenericDefinition, TypeDefinition};
 use super::TypeChecker;
+use crate::ast::common::Parameter;
 use crate::ast::factory::make_type;
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::{FunctionTypeData, Type, TypeKind};
 use crate::ast::{Expression, ExpressionKind};
 use crate::error::syntax::Span;
 use std::collections::HashMap;
@@ -39,14 +40,35 @@ impl TypeChecker {
                 mapping.insert(name.clone(), arg_type.clone());
             }
 
-            // Collection canonical variants are normalized to Custom before type-checking.
-            // After normalization, List<T>/Map<K,V>/Set<T> all appear as Custom(...), so
-            // they are handled by the Custom arm below.
-            (
-                TypeKind::List(_) | TypeKind::Map(_, _) | TypeKind::Set(_) | TypeKind::Array(_, _),
-                _,
-            ) => {
-                unreachable!("collection types are normalized to Custom before this point")
+            // Unnormalized collection variants — normalize to Custom(...) and recurse so
+            // that stdlib method signatures using `[T]` syntax still infer generics correctly.
+            (TypeKind::List(elem), _) => {
+                let normalized = make_type(TypeKind::Custom(
+                    "List".to_string(),
+                    Some(vec![*elem.clone()]),
+                ));
+                self.infer_generic_types(&normalized, arg_type, mapping);
+            }
+            (TypeKind::Map(k, v), _) => {
+                let normalized = make_type(TypeKind::Custom(
+                    "Map".to_string(),
+                    Some(vec![*k.clone(), *v.clone()]),
+                ));
+                self.infer_generic_types(&normalized, arg_type, mapping);
+            }
+            (TypeKind::Set(elem), _) => {
+                let normalized = make_type(TypeKind::Custom(
+                    "Set".to_string(),
+                    Some(vec![*elem.clone()]),
+                ));
+                self.infer_generic_types(&normalized, arg_type, mapping);
+            }
+            (TypeKind::Array(elem, size), _) => {
+                let normalized = make_type(TypeKind::Custom(
+                    "Array".to_string(),
+                    Some(vec![*elem.clone(), *size.clone()]),
+                ));
+                self.infer_generic_types(&normalized, arg_type, mapping);
             }
 
             // Option<T> matches Option<concrete>
@@ -68,6 +90,26 @@ impl TypeChecker {
                                 self.infer_generic_types(&p_arg, &a_arg, mapping);
                             }
                         }
+                    }
+                }
+            }
+
+            // fn(T) R matches fn(concrete) concrete — infer generics from param and return types
+            (TypeKind::Function(p_func), TypeKind::Function(a_func)) => {
+                for (p_param, a_param) in p_func.params.iter().zip(a_func.params.iter()) {
+                    if let (Ok(p_ty), Ok(a_ty)) = (
+                        self.extract_type_from_expression(&p_param.typ),
+                        self.extract_type_from_expression(&a_param.typ),
+                    ) {
+                        self.infer_generic_types(&p_ty, &a_ty, mapping);
+                    }
+                }
+                if let (Some(p_rt), Some(a_rt)) = (&p_func.return_type, &a_func.return_type) {
+                    if let (Ok(p_ty), Ok(a_ty)) = (
+                        self.extract_type_from_expression(p_rt),
+                        self.extract_type_from_expression(a_rt),
+                    ) {
+                        self.infer_generic_types(&p_ty, &a_ty, mapping);
                     }
                 }
             }
@@ -114,9 +156,57 @@ impl TypeChecker {
                 make_type(TypeKind::Custom(name.clone(), new_args))
             }
 
-            // Collection canonical variants are normalized to Custom before type-checking.
-            TypeKind::List(_) | TypeKind::Map(_, _) | TypeKind::Set(_) | TypeKind::Array(_, _) => {
-                unreachable!("collection types are normalized to Custom before this point")
+            // Unnormalized collection variants — substitute element types and normalize to
+            // Custom(...) so the output is always in the canonical form expected downstream.
+            TypeKind::List(elem_expr) => {
+                let elem = self
+                    .extract_type_from_expression(elem_expr)
+                    .unwrap_or(make_type(TypeKind::Error));
+                let subst_elem = self.substitute_type(&elem, mapping);
+                make_type(TypeKind::Custom(
+                    "List".to_string(),
+                    Some(vec![self.create_type_expression(subst_elem)]),
+                ))
+            }
+            TypeKind::Map(k_expr, v_expr) => {
+                let k = self
+                    .extract_type_from_expression(k_expr)
+                    .unwrap_or(make_type(TypeKind::Error));
+                let v = self
+                    .extract_type_from_expression(v_expr)
+                    .unwrap_or(make_type(TypeKind::Error));
+                let subst_k = self.substitute_type(&k, mapping);
+                let subst_v = self.substitute_type(&v, mapping);
+                make_type(TypeKind::Custom(
+                    "Map".to_string(),
+                    Some(vec![
+                        self.create_type_expression(subst_k),
+                        self.create_type_expression(subst_v),
+                    ]),
+                ))
+            }
+            TypeKind::Set(elem_expr) => {
+                let elem = self
+                    .extract_type_from_expression(elem_expr)
+                    .unwrap_or(make_type(TypeKind::Error));
+                let subst_elem = self.substitute_type(&elem, mapping);
+                make_type(TypeKind::Custom(
+                    "Set".to_string(),
+                    Some(vec![self.create_type_expression(subst_elem)]),
+                ))
+            }
+            TypeKind::Array(elem_expr, size_expr) => {
+                let elem = self
+                    .extract_type_from_expression(elem_expr)
+                    .unwrap_or(make_type(TypeKind::Error));
+                let subst_elem = self.substitute_type(&elem, mapping);
+                make_type(TypeKind::Custom(
+                    "Array".to_string(),
+                    Some(vec![
+                        self.create_type_expression(subst_elem),
+                        *size_expr.clone(),
+                    ]),
+                ))
             }
 
             TypeKind::Option(inner) => make_type(TypeKind::Option(Box::new(
@@ -135,6 +225,36 @@ impl TypeChecker {
                 } else {
                     ty.clone()
                 }
+            }
+
+            // fn(T, ...) R — substitute generics in parameter types and return type
+            TypeKind::Function(func) => {
+                let new_params: Vec<Parameter> = func
+                    .params
+                    .iter()
+                    .map(|p| {
+                        let param_type = self
+                            .extract_type_from_expression(&p.typ)
+                            .unwrap_or(make_type(TypeKind::Error));
+                        let subst = self.substitute_type(&param_type, mapping);
+                        Parameter {
+                            typ: Box::new(self.create_type_expression(subst)),
+                            ..p.clone()
+                        }
+                    })
+                    .collect();
+                let new_return = func.return_type.as_ref().map(|rt_expr| {
+                    let rt = self
+                        .extract_type_from_expression(rt_expr)
+                        .unwrap_or(make_type(TypeKind::Error));
+                    let subst = self.substitute_type(&rt, mapping);
+                    Box::new(self.create_type_expression(subst))
+                });
+                make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                    generics: func.generics.clone(),
+                    params: new_params,
+                    return_type: new_return,
+                })))
             }
 
             // Non-generic types pass through unchanged

@@ -40,3 +40,35 @@ public class Set<T> implements Iterable, Cloneable
     /// Returns a deep copy of this set.
     public fn clone() Set<T>
         return miri_rt_set_clone(self)
+
+    /// Returns a new Set containing only elements for which `f` returns true.
+    public fn filter(f fn(T) bool) {T}
+        var result = Set<T>()
+        var i = 0
+        let n = self.length()
+        while i < n
+            let item = self.element_at(i)
+            if f(item)
+                result.add(item)
+            i += 1
+        return result
+
+    /// Returns a new Set with each element transformed by `f`.
+    public fn map(f fn(T) T) {T}
+        var result = Set<T>()
+        var i = 0
+        let n = self.length()
+        while i < n
+            result.add(f(self.element_at(i)))
+            i += 1
+        return result
+
+    /// Reduces all elements to a single value by applying `f`.
+    public fn reduce(init T, f fn(T, T) T) T
+        var acc = init
+        var i = 0
+        let n = self.length()
+        while i < n
+            acc = f(acc, self.element_at(i))
+            i += 1
+        return acc

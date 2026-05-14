@@ -86,6 +86,12 @@ impl TypeChecker {
             ));
         }
 
+        // Allow arithmetic on same-typed generic parameters (e.g. T + T in a generic method body).
+        // Concrete enforcement happens at call sites where T is resolved to a numeric type.
+        if matches!(left.kind, TypeKind::Generic(..)) && self.are_compatible(left, right, context) {
+            return Ok(left.clone());
+        }
+
         // Trait-based Add: if left implements Addable and types are compatible
         if matches!(op, BinaryOp::Add) && self.type_implements_trait(left, "Addable") {
             if self.are_compatible(left, right, context) {

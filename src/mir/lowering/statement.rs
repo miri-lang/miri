@@ -12,6 +12,7 @@ use crate::mir::declaration::{
     VariantDecl,
 };
 use crate::mir::module::{Import, ImportItem, ImportKind, ImportSource};
+use crate::mir::types::MirType;
 use crate::mir::{
     Operand, Place, Rvalue, StatementKind as MirStatementKind, Terminator, TerminatorKind,
 };
@@ -20,7 +21,7 @@ use crate::type_checker::context::TypeDefinition;
 use super::context::LoweringContext;
 use super::control_flow::{lower_break, lower_continue, lower_for, lower_if, lower_while};
 use super::expression::lower_expression;
-use super::helpers::{coerce_rvalue, resolve_type};
+use super::helpers::{coerce_rvalue, mir_types_structurally_match, resolve_type};
 use super::variable::lower_variable;
 
 /// Lower an AST statement to MIR.
@@ -47,7 +48,9 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
                 let ret_ty = ctx.body.local_decls[0].ty.clone();
                 let expr_ty_opt = ctx.type_checker.get_type(expr.id);
                 let types_match = if let Some(ety) = expr_ty_opt {
-                    ety.kind == ret_ty.kind
+                    let em = MirType::from_type_kind(&ety.kind);
+                    let rm = MirType::from_type_kind(&ret_ty.kind);
+                    em == rm || mir_types_structurally_match(&em, &rm)
                 } else {
                     false
                 };
