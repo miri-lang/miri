@@ -3,13 +3,12 @@
 
 #![allow(clippy::approx_constant)]
 
-use super::utils::{parser_error_test, parser_test, run_float_tests};
+use super::utils::{parser_test, run_float_tests};
 use miri::ast::factory::{
     binary, call, expression_statement, float32, float32_literal_expression, float64, identifier,
     let_variable, member, unary, variable_statement,
 };
 use miri::ast::{opt_expr, BinaryOp, MemberVisibility, UnaryOp};
-use miri::error::syntax::SyntaxErrorKind;
 
 #[test]
 fn test_parse_float_literal() {
@@ -106,6 +105,8 @@ fn test_float_as_method_call_target() {
 }
 
 #[test]
-fn test_error_on_float_overflow() {
-    parser_error_test("1.8e309", &SyntaxErrorKind::InvalidFloatLiteral);
+fn test_float_overflow_parses_as_infinity() {
+    // IEEE 754: overflow produces infinity, not an error.
+    // This lets stdlib constants like `INF = 1e309` express true IEEE infinity.
+    run_float_tests(vec![("1.8e309", float64(f64::INFINITY))]);
 }
