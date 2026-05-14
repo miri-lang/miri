@@ -9,6 +9,7 @@ use crate::ast::statement::{Statement, StatementKind};
 use crate::ast::types::{Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
+use crate::mir::types::MirType;
 use crate::mir::{
     Discriminant, Operand, Place, PlaceElem, Rvalue, StatementKind as MirStatementKind, Terminator,
     TerminatorKind,
@@ -268,6 +269,25 @@ pub fn bind_pattern(
     Ok(())
 }
 
+/// Returns true when two MirTypes have the same outer constructor, ignoring inner type args.
+///
+/// Used in `lower_as_return` to detect structurally-compatible generic collection types.
+/// For example, `List(Generic)` vs `List(Custom("T"))` both represent list pointers and
+/// are safe to assign via DPS without an intermediate Cast.
+pub(crate) fn mir_types_structurally_match(a: &MirType, b: &MirType) -> bool {
+    matches!(
+        (a, b),
+        (MirType::List(_), MirType::List(_))
+            | (MirType::Map(_, _), MirType::Map(_, _))
+            | (MirType::Set(_), MirType::Set(_))
+            | (MirType::Array(_), MirType::Array(_))
+            | (MirType::Option(_), MirType::Option(_))
+            | (MirType::Result(_, _), MirType::Result(_, _))
+            | (MirType::Tuple(_), MirType::Tuple(_))
+            | (MirType::Future(_), MirType::Future(_))
+    )
+}
+
 /// Helper to construct an Rvalue that coerces `operand` of type `op_ty` into `target_ty`.
 /// If `target_ty` is `Option<T>` and `op_ty` is `T`, it allocates an Option box.
 /// Otherwise, it emits a standard type Cast.
@@ -352,7 +372,15 @@ pub fn lower_as_return(
             let expr_ty = ctx.type_checker.get_type(expr.id).cloned();
             let types_match = expr_ty
                 .as_ref()
-                .map(|t| t.kind == ret_ty.kind)
+                .map(|t| {
+                    let em = MirType::from_type_kind(&t.kind);
+                    let rm = MirType::from_type_kind(&ret_ty.kind);
+                    // Exact match OR structurally-equivalent outer type.  The latter
+                    // handles generic collection returns where element types differ
+                    // (e.g. MirType::List(Generic) vs MirType::List(Custom("T"))):
+                    // both sides are compatible pointer-sized values, so DPS is safe.
+                    em == rm || mir_types_structurally_match(&em, &rm)
+                })
                 .unwrap_or(false);
 
             if types_match {

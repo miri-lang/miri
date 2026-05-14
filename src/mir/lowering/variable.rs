@@ -3,6 +3,7 @@
 
 use crate::ast::statement::VariableDeclaration;
 use crate::error::syntax::Span;
+use crate::mir::types::MirType;
 use crate::mir::{Place, Rvalue, StatementKind as MirStatementKind, StorageClass};
 
 use super::{helpers::coerce_rvalue, lower_expression, resolve_type, LoweringContext};
@@ -55,7 +56,9 @@ pub fn lower_variable(
                 // Check if we can use DPS (types match)
                 let init_ty = ctx.type_checker.get_type(init_expr.id);
                 // Comparison: ignore spans
-                let types_match = init_ty.is_some_and(|ity| ity.kind == var_ty_kind);
+                let types_match = init_ty.is_some_and(|ity| {
+                    MirType::from_type_kind(&ity.kind) == MirType::from_type_kind(&var_ty_kind)
+                });
 
                 if types_match {
                     // Optimized path: write directly to variable

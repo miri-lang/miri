@@ -593,6 +593,7 @@ fn try_lower_method_call(
                 &ctx.type_checker.global_type_definitions,
             ) {
                 let mut call_args = vec![self_op];
+                let arg_watermark = ctx.body.local_decls.len();
                 for arg in args {
                     call_args.push(lower_expression(ctx, arg, None)?);
                 }
@@ -603,7 +604,7 @@ fn try_lower_method_call(
                 ctx.set_terminator(Terminator::new(
                     TerminatorKind::VirtualCall {
                         vtable_slot: slot,
-                        args: call_args,
+                        args: call_args.clone(),
                         destination,
                         target: Some(target_bb),
                     },
@@ -613,6 +614,7 @@ fn try_lower_method_call(
                 if let Some(local) = obj_temp_local {
                     ctx.emit_temp_drop(local, obj_watermark, *span);
                 }
+                emit_closure_arg_drops(ctx, &call_args[1..], arg_watermark, *span);
                 return Ok(Some(op));
             }
         }
@@ -623,6 +625,7 @@ fn try_lower_method_call(
         mangled_name.push('_');
         mangled_name.push_str(method_name);
         let mut call_args = vec![self_op];
+        let arg_watermark = ctx.body.local_decls.len();
         for arg in args {
             call_args.push(lower_expression(ctx, arg, None)?);
         }
@@ -639,7 +642,7 @@ fn try_lower_method_call(
         ctx.set_terminator(Terminator::new(
             TerminatorKind::Call {
                 func: func_op,
-                args: call_args,
+                args: call_args.clone(),
                 out_args: Vec::new(),
                 destination,
                 target: Some(target_bb),
@@ -650,10 +653,36 @@ fn try_lower_method_call(
         if let Some(local) = obj_temp_local {
             ctx.emit_temp_drop(local, obj_watermark, *span);
         }
+        emit_closure_arg_drops(ctx, &call_args[1..], arg_watermark, *span);
         return Ok(Some(op));
     }
 
     Ok(None)
+}
+
+/// Release temporary closure arguments after a method call.
+///
+/// Closures passed as arguments are borrowed by the callee (called but not stored).
+/// The caller is responsible for freeing them after the call completes.
+/// Only locals created above `watermark` and with a `Function` type are released.
+fn emit_closure_arg_drops(
+    ctx: &mut LoweringContext,
+    args: &[Operand],
+    watermark: usize,
+    span: Span,
+) {
+    for op in args {
+        if let Operand::Copy(p) | Operand::Move(p) = op {
+            let local = p.local;
+            if local.0 >= watermark {
+                let is_closure =
+                    matches!(ctx.body.local_decls[local.0].ty.kind, TypeKind::Function(_));
+                if is_closure {
+                    ctx.emit_temp_drop(local, watermark, span);
+                }
+            }
+        }
+    }
 }
 
 /// Emit a Copy-on-Write check before a mutation operation on a collection local.
