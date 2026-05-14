@@ -10,3 +10,4 @@ pub mod indexing;
 pub mod integration;
 pub mod methods;
 pub mod rc;
+pub mod transformable;

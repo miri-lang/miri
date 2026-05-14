@@ -57,3 +57,40 @@ public class Map<K, V> implements Iterable, Cloneable
     /// Custom class values that implement Cloneable are deep-copied via their clone() method.
     public fn clone() Map<K, V>
         return miri_rt_map_clone(self)
+
+    /// Returns a new Map containing only entries for which `f` returns true.
+    public fn filter(f fn(K, V) bool) {K: V}
+        var result = Map<K, V>()
+        var i = 0
+        let n = self.length()
+        while i < n
+            let k = self.element_at(i)
+            let v = self.value_at(i)
+            if f(k, v)
+                result.set(k, v)
+            i += 1
+        return result
+
+    /// Returns a new Map with values transformed by `f` (keys unchanged).
+    public fn map(f fn(K, V) V) {K: V}
+        var result = Map<K, V>()
+        var i = 0
+        let n = self.length()
+        while i < n
+            let k = self.element_at(i)
+            let v = self.value_at(i)
+            result.set(k, f(k, v))
+            i += 1
+        return result
+
+    /// Reduces all entries to a single value by applying `f` left-to-right.
+    public fn reduce(init V, f fn(V, K, V) V) V
+        var acc = init
+        var i = 0
+        let n = self.length()
+        while i < n
+            let k = self.element_at(i)
+            let v = self.value_at(i)
+            acc = f(acc, k, v)
+            i += 1
+        return acc

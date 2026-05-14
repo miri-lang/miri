@@ -498,10 +498,15 @@ impl TypeChecker {
         // Try to resolve the type definition for the object's type
         let (type_name, type_args) = match &obj_type.kind {
             TypeKind::String => (Some("String".to_string()), None),
-            // Canonical collection variants are normalized to Custom before type-checking.
-            TypeKind::List(_) | TypeKind::Map(_, _) | TypeKind::Set(_) | TypeKind::Array(_, _) => {
-                unreachable!("collection types are normalized to Custom before this point")
-            }
+            // Unnormalized collection variants — normalize on the fly so that return types
+            // produced by generic substitution (e.g. `[int]`) still resolve to the right class.
+            TypeKind::List(elem) => (Some("List".to_string()), Some(vec![*elem.clone()])),
+            TypeKind::Map(k, v) => (Some("Map".to_string()), Some(vec![*k.clone(), *v.clone()])),
+            TypeKind::Set(elem) => (Some("Set".to_string()), Some(vec![*elem.clone()])),
+            TypeKind::Array(elem, size) => (
+                Some("Array".to_string()),
+                Some(vec![*elem.clone(), *size.clone()]),
+            ),
             TypeKind::Tuple(element_type_exprs) => {
                 // For homogeneous tuples, resolve to "Tuple" class with element type
                 if !element_type_exprs.is_empty() {
@@ -607,7 +612,20 @@ impl TypeChecker {
 
         if let Some(name) = type_name {
             // Instance member access (Struct field)
-            let def_opt = self.resolve_visible_type(&name, context);
+            //
+            // Builtin collection types (List, Map, Set, Array) may be invisible in the current
+            // scope when the user only imported the class that *returns* them (e.g. importing
+            // Array but not List) — the visibility restriction correctly hides transitive
+            // imports for user-facing names.  However, the result of calling Array.filter()
+            // has type List<T>, and the user must be able to call List methods on it.  For
+            // builtin collections we therefore fall back to global_type_definitions directly.
+            let def_opt = self.resolve_visible_type(&name, context).or_else(|| {
+                if BuiltinCollectionKind::from_name(&name).is_some() {
+                    self.global_type_definitions.get(&name)
+                } else {
+                    None
+                }
+            });
 
             if let Some(TypeDefinition::Struct(def)) = def_opt {
                 if let Some((_, field_type, visibility)) =
@@ -659,11 +677,11 @@ impl TypeChecker {
                 loop {
                     // Substitute generic parameters if present.
                     //
-                    // When walking up the inheritance chain (e.g. Array<T,Size> → Collection<T>),
+                    // When walking up the inheritance chain (e.g. Array<T,Size> → IndexedCollection<T>),
                     // the number of generics in the base class may not match the number of
                     // type_args from the call site.  In that case, build a partial mapping by
                     // matching generic names from the original class definition:
-                    // Collection<T> with Array<T,Size> instantiated as Array<int,3> → T = int.
+                    // IndexedCollection<T> with Array<T,Size> instantiated as Array<int,3> → T = int.
                     let mut mapping = std::collections::HashMap::new();
                     if let Some(generics) = &search_class_def.generics {
                         if let Some(type_args) = &type_args {
@@ -677,7 +695,7 @@ impl TypeChecker {
                             } else {
                                 // Length mismatch: we're in a base class with a different
                                 // number of generics.  Map by name using the original class's
-                                // generic list so that e.g. Collection<T> gets T→int when
+                                // generic list so that e.g. IndexedCollection<T> gets T→int when
                                 // called on Array<int, Size>.
                                 let orig_generics_opt = self
                                     .global_type_definitions
