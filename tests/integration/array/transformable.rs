@@ -85,3 +85,86 @@ println(f\"{d.length()}\")
         "2\n2",
     );
 }
+
+#[test]
+fn array_flat_map_flattens_results() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.array
+use system.collections.transformable
+use system.collections.list
+
+let a = [1, 2, 3]
+let result = a.flat_map(fn(x int) [int]: List([x, x * 10]))
+println(f\"{result.length()}\")
+for item in result
+    println(f\"{item}\")
+",
+        "6\n1\n10\n2\n20\n3\n30",
+    );
+}
+
+#[test]
+fn array_sorted_by_comparator() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.array
+use system.collections.transformable
+
+let a = [3, 1, 4, 1, 5]
+let s = a.sorted_by(fn(x int, y int) int: x - y)
+for item in s
+    println(f\"{item}\")
+",
+        "1\n1\n3\n4\n5",
+    );
+}
+
+#[test]
+fn array_sum_of_integers() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.array
+use system.collections.transformable
+
+let a = [1, 2, 3, 4, 5]
+println(f\"{a.sum()}\")
+",
+        "15",
+    );
+}
+
+#[test]
+fn array_min_and_max() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.array
+use system.collections.transformable
+
+let a = [3, 1, 4, 1, 5, 9, 2]
+println(f\"{a.min()}\")
+println(f\"{a.max()}\")
+",
+        "1\n9",
+    );
+}
+
+#[test]
+fn array_unique_deduplicates() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.array
+use system.collections.transformable
+
+let a = [1, 2, 2, 3, 1, 3]
+let u = a.unique()
+println(f\"{u.length()}\")
+",
+        "3",
+    );
+}

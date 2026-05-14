@@ -37,13 +37,13 @@ public trait Transformable<T>
     /// `f(a, b)` must return negative if a < b, zero if a == b, positive if a > b.
     abstract fn sorted_by(f fn(T, T) int) [T]
 
-    /// Returns the sum of all elements (requires T to be numeric).
+    /// Returns the sum of all elements (requires T to be numeric; collection must be non-empty).
     abstract fn sum() T
 
-    /// Returns the smallest element (requires T to be comparable).
+    /// Returns the smallest element (requires T to be comparable; collection must be non-empty).
     abstract fn min() T
 
-    /// Returns the largest element (requires T to be comparable).
+    /// Returns the largest element (requires T to be comparable; collection must be non-empty).
     abstract fn max() T
 
     /// Returns a new List with duplicate elements removed, preserving order.
