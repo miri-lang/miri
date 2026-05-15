@@ -168,3 +168,47 @@ println(f\"{u.length()}\")
         "3",
     );
 }
+
+#[test]
+fn array_zip_pairs_elements() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.array
+use system.collections.list
+use system.collections.transformable
+
+let a = [1, 2, 3]
+let b = List([10, 20, 30])
+let z = a.zip(b)
+println(f\"{z.length()}\")
+var i = 0
+while i < z.length()
+    let p = z[i]
+    println(f\"{p.0}, {p.1}\")
+    i += 1
+",
+        "3\n1, 10\n2, 20\n3, 30",
+    );
+}
+
+#[test]
+fn array_enumerate_indexes_elements() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.array
+use system.collections.transformable
+
+let a = [10, 20, 30]
+let e = a.enumerate()
+println(f\"{e.length()}\")
+var i = 0
+while i < e.length()
+    let p = e[i]
+    println(f\"{p.0}, {p.1}\")
+    i += 1
+",
+        "3\n0, 10\n1, 20\n2, 30",
+    );
+}

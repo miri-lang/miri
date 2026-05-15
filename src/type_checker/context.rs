@@ -178,6 +178,12 @@ pub struct TraitDefinition {
     pub name: String,
     pub generics: Option<Vec<GenericDefinition>>,
     pub parent_traits: Vec<String>,
+    /// Generic args declared at each `extends ParentTrait<...>` site, keyed by
+    /// the parent trait name. Each `Type` here is resolved in this trait's
+    /// generic-param scope (e.g. `extends Transformable<S>` records `S` as a
+    /// `Generic("S")` type that the implementing class will later substitute
+    /// when computing the concrete signature.).
+    pub parent_trait_args: BTreeMap<String, Vec<Type>>,
     pub methods: BTreeMap<String, MethodInfo>, // Deterministic method order
     pub module: String,
 }

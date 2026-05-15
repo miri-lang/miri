@@ -81,3 +81,28 @@ public trait Sequenced<T> extends Transformable<T>
             result.push(self.element_at(i))
             i -= 1
         return result
+
+    /// Pairs each element with the element at the same index in `other`.
+    /// The result length is `min(self.length(), other.length())` — extra
+    /// elements of the longer side are dropped.
+    public fn zip(other [T]) [(T, T)]
+        var result = List<(T, T)>()
+        let n = self.length()
+        let m = other.length()
+        var lim = n
+        if m < lim: lim = m
+        var i = 0
+        while i < lim
+            result.push((self.element_at(i), other.element_at(i)))
+            i += 1
+        return result
+
+    /// Pairs each element with its zero-based index.
+    public fn enumerate() [(int, T)]
+        var result = List<(int, T)>()
+        let n = self.length()
+        var i = 0
+        while i < n
+            result.push((i, self.element_at(i)))
+            i += 1
+        return result

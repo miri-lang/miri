@@ -71,6 +71,20 @@ impl TypeChecker {
                 self.infer_generic_types(&normalized, arg_type, mapping);
             }
 
+            // Tuple<T, U, ...> matches Tuple<concrete, concrete, ...>
+            (TypeKind::Tuple(p_elems), TypeKind::Tuple(a_elems))
+                if p_elems.len() == a_elems.len() =>
+            {
+                for (p_elem_expr, a_elem_expr) in p_elems.iter().zip(a_elems.iter()) {
+                    if let (Ok(p_elem), Ok(a_elem)) = (
+                        self.extract_type_from_expression(p_elem_expr),
+                        self.extract_type_from_expression(a_elem_expr),
+                    ) {
+                        self.infer_generic_types(&p_elem, &a_elem, mapping);
+                    }
+                }
+            }
+
             // Option<T> matches Option<concrete>
             (TypeKind::Option(p_inner), TypeKind::Option(a_inner)) => {
                 self.infer_generic_types(p_inner, a_inner, mapping);
@@ -212,6 +226,20 @@ impl TypeChecker {
             TypeKind::Option(inner) => make_type(TypeKind::Option(Box::new(
                 self.substitute_type(inner, mapping),
             ))),
+
+            TypeKind::Tuple(elements) => {
+                let new_elements = elements
+                    .iter()
+                    .map(|elem_expr| {
+                        let elem = self
+                            .extract_type_from_expression(elem_expr)
+                            .unwrap_or(make_type(TypeKind::Error));
+                        let subst = self.substitute_type(&elem, mapping);
+                        self.create_type_expression(subst)
+                    })
+                    .collect();
+                make_type(TypeKind::Tuple(new_elements))
+            }
 
             TypeKind::Result(ok_expr, err_expr) => {
                 if let (Ok(ok), Ok(err)) = (
