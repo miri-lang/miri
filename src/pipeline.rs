@@ -922,6 +922,56 @@ impl Pipeline {
                         }
                     }
                 }
+                StatementKind::Trait(name_expr, _generics, _parent_traits, body, _vis) => {
+                    // Compile default (non-abstract) trait methods imported from stdlib
+                    // as `TraitName_methodName`, mirroring the in-program AST trait pass.
+                    let trait_name = if let ExpressionKind::Identifier(name, _) = &name_expr.node {
+                        name.as_str()
+                    } else {
+                        continue;
+                    };
+
+                    let self_type =
+                        Type::new(TypeKind::Custom(trait_name.to_string(), None), stmt.span);
+
+                    for method_stmt in body {
+                        if let StatementKind::FunctionDeclaration(method_decl) = &method_stmt.node {
+                            if method_decl.body.is_none() {
+                                continue;
+                            }
+
+                            let mut mangled = String::with_capacity(
+                                trait_name.len() + 1 + method_decl.name.len(),
+                            );
+                            mangled.push_str(trait_name);
+                            mangled.push('_');
+                            mangled.push_str(&method_decl.name);
+                            if lowered_names.contains(&mangled) {
+                                continue;
+                            }
+
+                            let (mir_body, lambdas) = mir::lowering::lower_class_method(
+                                method_stmt,
+                                self_type.clone(),
+                                &result.type_checker,
+                                is_release,
+                            )
+                            .map_err(|e| {
+                                CompilerError::Codegen(format!(
+                                    "MIR lowering failed for {}: {}",
+                                    mangled, e
+                                ))
+                            })?;
+
+                            lowered_names.insert(mangled.clone());
+                            bodies.push((mangled, mir_body));
+                            for lambda in lambdas {
+                                lowered_names.insert(lambda.name.clone());
+                                bodies.push((lambda.name, lambda.body));
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -1059,6 +1109,168 @@ impl Pipeline {
                         }
 
                         base_opt = base_cd.base_class.clone();
+                    }
+                }
+            }
+        }
+
+        // ── Per-concrete-class trait-default re-lowering ─────────────────────────
+        //
+        // Mirrors the abstract-class pass above for traits. When a concrete class C
+        // implements a trait T with a non-abstract default method M, we synthesize
+        // `C_M` by re-lowering T.M's body with self_type = C. This lets
+        // `resolve_inherited_method` return C as the defining class (concrete-caller
+        // rule), so calls dispatch statically to `C_M`. Inside C_M, self-calls like
+        // `self.length()` also dispatch statically because self_type is concrete —
+        // avoiding the slot-mismatch issue between per-trait and combined-vtable
+        // method layouts.
+        {
+            use crate::type_checker::context::TypeDefinition;
+
+            // Step 1: collect default-method statements per trait name from both
+            // user code and stdlib imports.
+            let mut trait_default_methods: std::collections::HashMap<String, Vec<&Statement>> =
+                std::collections::HashMap::new();
+
+            let all_stmts = result
+                .ast
+                .body
+                .iter()
+                .chain(result.type_checker.imported_statements.iter());
+
+            for stmt in all_stmts {
+                if let StatementKind::Trait(name_expr, _gens, _parents, body, _vis) = &stmt.node {
+                    let trait_name = if let ExpressionKind::Identifier(n, _) = &name_expr.node {
+                        n.as_str()
+                    } else {
+                        continue;
+                    };
+                    let entry = trait_default_methods
+                        .entry(trait_name.to_string())
+                        .or_default();
+                    for method_stmt in body {
+                        if let StatementKind::FunctionDeclaration(md) = &method_stmt.node {
+                            if md.body.is_some() {
+                                entry.push(method_stmt);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Step 2: for each concrete class, walk the trait hierarchy of every
+            // trait it (or any ancestor class) implements, and emit a `C_M` copy.
+            let all_stmts2 = result
+                .ast
+                .body
+                .iter()
+                .chain(result.type_checker.imported_statements.iter());
+
+            for stmt in all_stmts2 {
+                let class_data = match &stmt.node {
+                    StatementKind::Class(cd) => cd,
+                    _ => continue,
+                };
+                let class_name = if let ExpressionKind::Identifier(n, _) = &class_data.name.node {
+                    n.as_str()
+                } else {
+                    continue;
+                };
+                let cd = match result.type_checker.global_type_definitions.get(class_name) {
+                    Some(TypeDefinition::Class(cd)) => cd,
+                    _ => continue,
+                };
+                if cd.is_abstract {
+                    continue;
+                }
+
+                let self_type =
+                    Type::new(TypeKind::Custom(class_name.to_string(), None), stmt.span);
+
+                // Walk all traits implemented by this class and its ancestors, plus
+                // the transitive parent-trait closure, collecting unique trait names.
+                let mut trait_names_to_process: Vec<String> = Vec::new();
+                let mut visited_traits: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
+                let mut walk_class = class_name.to_string();
+                while let Some(TypeDefinition::Class(walk_cd)) =
+                    result.type_checker.global_type_definitions.get(&walk_class)
+                {
+                    for t_name in &walk_cd.traits {
+                        let mut to_check = vec![t_name.clone()];
+                        while let Some(t) = to_check.pop() {
+                            if !visited_traits.insert(t.clone()) {
+                                continue;
+                            }
+                            if let Some(TypeDefinition::Trait(td)) =
+                                result.type_checker.global_type_definitions.get(&t)
+                            {
+                                to_check.extend(td.parent_traits.iter().cloned());
+                            }
+                            trait_names_to_process.push(t);
+                        }
+                    }
+                    match &walk_cd.base_class {
+                        Some(b) => walk_class = b.clone(),
+                        None => break,
+                    }
+                }
+
+                for t_name in &trait_names_to_process {
+                    let method_stmts = match trait_default_methods.get(t_name.as_str()) {
+                        Some(ms) => ms,
+                        None => continue,
+                    };
+                    for method_stmt in method_stmts {
+                        if let StatementKind::FunctionDeclaration(md) = &method_stmt.node {
+                            // Skip if the concrete class (or an ancestor) overrides.
+                            let overridden = {
+                                let mut current = class_name.to_string();
+                                let mut found = false;
+                                while let Some(TypeDefinition::Class(c)) =
+                                    result.type_checker.global_type_definitions.get(&current)
+                                {
+                                    if c.methods.contains_key(md.name.as_str()) {
+                                        found = true;
+                                        break;
+                                    }
+                                    match &c.base_class {
+                                        Some(b) => current = b.clone(),
+                                        None => break,
+                                    }
+                                }
+                                found
+                            };
+                            if overridden {
+                                continue;
+                            }
+                            let mut mangled =
+                                String::with_capacity(class_name.len() + 1 + md.name.len());
+                            mangled.push_str(class_name);
+                            mangled.push('_');
+                            mangled.push_str(&md.name);
+                            if lowered_names.contains(&mangled) {
+                                continue;
+                            }
+                            let (mir_body, lambdas) = mir::lowering::lower_class_method(
+                                method_stmt,
+                                self_type.clone(),
+                                &result.type_checker,
+                                is_release,
+                            )
+                            .map_err(|e| {
+                                CompilerError::Codegen(format!(
+                                    "MIR lowering failed for {}: {}",
+                                    mangled, e
+                                ))
+                            })?;
+                            lowered_names.insert(mangled.clone());
+                            bodies.push((mangled, mir_body));
+                            for lambda in lambdas {
+                                lowered_names.insert(lambda.name.clone());
+                                bodies.push((lambda.name, lambda.body));
+                            }
+                        }
                     }
                 }
             }

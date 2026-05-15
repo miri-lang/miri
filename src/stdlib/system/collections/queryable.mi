@@ -1,22 +1,18 @@
 use system.ops
 
-/// Abstract base class for ordered collections.
+/// Trait for indexed collections that support shape-preserving queries.
 ///
-/// Provides shared implementations for `is_empty`, `first`, `last`,
-/// `contains`, and `index_of` — methods that are the same for every
-/// indexed collection regardless of its backing storage.
+/// `Queryable<T>` is the read-only "ask questions of a collection" interface.
+/// All concrete methods derive from the two abstract primitives inherited from
+/// `Iterable<T>` — `length()` and `element_at(index)` — so any type that can
+/// answer those becomes `is_empty` / `first` / `last` / `contains` / `index_of`
+/// for free.
 ///
-/// Concrete subclasses must implement `length() int` and
-/// `element_at(index int) T` (inherited from Iterable).  All other
-/// shared methods are derived from those two primitives.
-public abstract class IndexedCollection<T> implements Iterable
-
-    /// Abstract: must be provided by the concrete subclass.
-    abstract fn length() int
-
-    /// Abstract: must be provided by the concrete subclass.
-    /// Returns the element at the given index.
-    abstract fn element_at(index int) T
+/// Default methods call `self.length()` and `self.element_at()`. Because the
+/// default body is compiled once with `Self = Queryable` and then re-lowered
+/// per concrete class, those self-calls go through the implementor's vtable
+/// at runtime in the abstract path and statically in the concrete path.
+public trait Queryable<T> extends Iterable<T>
 
     /// Returns true if the collection contains no elements.
     public fn is_empty() bool: self.length() == 0

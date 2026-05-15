@@ -1,12 +1,11 @@
 use system.ops
 use system.memory
 
-public class Map<K, V> implements Iterable, Cloneable
+public class Map<K, V> implements Iterable<K>, Cloneable
 
     runtime "core" fn miri_rt_map_new(key_size int, value_size int, key_kind int) Self
     runtime "core" fn miri_rt_map_free(m Self)
     runtime "core" fn miri_rt_map_len(m Self) int
-    runtime "core" fn miri_rt_map_is_empty(m Self) bool
     runtime "core" fn miri_rt_map_set(m Self, key K, value V)
     runtime "core" fn miri_rt_map_get(m Self, key K) V
     runtime "core" fn miri_rt_map_contains_key(m Self, key K) bool
@@ -48,7 +47,7 @@ public class Map<K, V> implements Iterable, Cloneable
         miri_rt_map_clear(self)
 
     /// Returns true if the map has no entries.
-    public fn is_empty() bool: miri_rt_map_is_empty(self)
+    public fn is_empty() bool: self.length() == 0
 
     /// Returns a clone of this map with independent structural ownership.
     ///

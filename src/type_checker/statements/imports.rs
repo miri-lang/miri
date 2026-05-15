@@ -233,6 +233,21 @@ impl TypeChecker {
         self.current_source_override =
             Some((file_path.to_string_lossy().to_string(), source.clone()));
 
+        // Pre-pass: register all type definitions (classes, traits, structs, enums)
+        // so that intra-module forward references work — e.g. a class declared
+        // earlier in the file can `implements` a trait declared later, and a
+        // trait default body can construct an instance of a class declared later.
+        // This mirrors the two-pass approach used for the entry-point program.
+        for stmt in &module_ast.body {
+            if let StatementKind::Block(stmts) = &stmt.node {
+                for s in stmts {
+                    self.collect_declaration(s, context);
+                }
+            } else {
+                self.collect_declaration(stmt, context);
+            }
+        }
+
         for stmt in &module_ast.body {
             self.check_statement(stmt, context);
         }
