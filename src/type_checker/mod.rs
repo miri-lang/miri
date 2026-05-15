@@ -99,6 +99,11 @@ pub struct TypeChecker {
     /// `global_type_definitions` but NOT in this set are internal-only
     /// (e.g. transitive trait dependencies kept for vtable generation).
     pub(crate) visible_type_names: std::collections::HashSet<String>,
+    /// Names of classes/traits inserted by the cross-module pre-pass as
+    /// partial placeholders so forward references resolve during recursive
+    /// module loading. `check_class` / `check_trait` recognize members of
+    /// this set as overwritable and remove the name on full registration.
+    pub(crate) pre_registered_types: std::collections::HashSet<String>,
 }
 
 impl Default for TypeChecker {
@@ -133,6 +138,7 @@ impl TypeChecker {
             module_aliases: HashMap::new(),
             current_source_override: None,
             visible_type_names,
+            pre_registered_types: std::collections::HashSet::new(),
         }
     }
 
@@ -195,8 +201,22 @@ impl TypeChecker {
         // in every program without an explicit `use` statement.
         self.load_prelude(&mut context);
 
-        // Pass 1: Collect all top-level declarations to support forward references.
-        // This registers function signatures and type definitions (structs, enums, classes, traits).
+        // Pass 1a: Register class/trait/struct/enum NAMES (shells only). This
+        // makes every top-level type identifier visible to any other top-level
+        // declaration's method-signature resolution in pass 1b.
+        for statement in &program.body {
+            if let StatementKind::Block(stmts) = &statement.node {
+                for stmt in stmts {
+                    self.collect_type_shells(stmt);
+                }
+            } else {
+                self.collect_type_shells(statement);
+            }
+        }
+
+        // Pass 1b: Collect full top-level declarations — function signatures
+        // and class/trait method signatures. Forward references between top-level
+        // types are now resolvable because every type is at least a shell.
         for statement in &program.body {
             if let StatementKind::Block(stmts) = &statement.node {
                 for stmt in stmts {
@@ -250,6 +270,109 @@ impl TypeChecker {
             Ok(())
         } else {
             Err(self.errors.clone())
+        }
+    }
+
+    /// Phase 1a — register class/trait/struct/enum names as empty shells.
+    /// Runs before `collect_declaration` so that method signatures in later
+    /// declarations can resolve forward references to types declared later
+    /// in the same module (or in a module that recursively imports us back).
+    pub(crate) fn collect_type_shells(&mut self, statement: &Statement) {
+        let mut context = Context::new();
+        let context = &mut context;
+        match &statement.node {
+            StatementKind::Class(class_data) => {
+                if let Ok(name) = self.extract_type_name(&class_data.name) {
+                    if !self.global_type_definitions.contains_key(name) {
+                        let generics = class_data
+                            .generics
+                            .as_ref()
+                            .map(|gens| self.extract_generic_definitions(gens, context));
+                        let base_class_name: Option<String> = class_data
+                            .base_class
+                            .as_ref()
+                            .and_then(|b| self.extract_type_name(b).ok().map(String::from));
+                        let trait_names: Vec<String> = class_data
+                            .traits
+                            .iter()
+                            .filter_map(|t| self.extract_type_name(t).ok().map(String::from))
+                            .collect();
+                        self.register_type_definition(
+                            name.to_string(),
+                            TypeDefinition::Class(context::ClassDefinition {
+                                name: name.to_string(),
+                                generics,
+                                base_class: base_class_name,
+                                traits: trait_names,
+                                fields: Vec::new(),
+                                methods: BTreeMap::new(),
+                                module: self.current_module.clone(),
+                                is_abstract: class_data.is_abstract,
+                                has_drop: false,
+                            }),
+                        );
+                        self.pre_registered_types.insert(name.to_string());
+                    }
+                }
+            }
+            StatementKind::Trait(name_expr, generics_expr, _, _, _) => {
+                if let Ok(name) = self.extract_type_name(name_expr) {
+                    if !self.global_type_definitions.contains_key(name) {
+                        let generics = generics_expr
+                            .as_ref()
+                            .map(|gens| self.extract_generic_definitions(gens, context));
+                        self.register_type_definition(
+                            name.to_string(),
+                            TypeDefinition::Trait(context::TraitDefinition {
+                                name: name.to_string(),
+                                generics,
+                                parent_traits: vec![],
+                                methods: BTreeMap::new(),
+                                module: self.current_module.clone(),
+                            }),
+                        );
+                        self.pre_registered_types.insert(name.to_string());
+                    }
+                }
+            }
+            StatementKind::Struct(name_expr, generics_expr, _, _, _) => {
+                if let Ok(name) = self.extract_type_name(name_expr) {
+                    if !self.global_type_definitions.contains_key(name) {
+                        let generics = generics_expr
+                            .as_ref()
+                            .map(|gens| self.extract_generic_definitions(gens, context));
+                        self.register_type_definition(
+                            name.to_string(),
+                            TypeDefinition::Struct(context::StructDefinition {
+                                fields: vec![],
+                                generics,
+                                has_drop: false,
+                                module: self.current_module.clone(),
+                            }),
+                        );
+                    }
+                }
+            }
+            StatementKind::Enum(name_expr, generics_expr, _, _, _, _) => {
+                if let Ok(name) = self.extract_type_name(name_expr) {
+                    if !self.global_type_definitions.contains_key(name) {
+                        let generics = generics_expr
+                            .as_ref()
+                            .map(|gens| self.extract_generic_definitions(gens, context));
+                        self.register_type_definition(
+                            name.to_string(),
+                            TypeDefinition::Enum(context::EnumDefinition {
+                                variants: BTreeMap::new(),
+                                generics,
+                                methods: BTreeMap::new(),
+                                module: self.current_module.clone(),
+                                must_use: false,
+                            }),
+                        );
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -323,30 +446,129 @@ impl TypeChecker {
                 );
             }
             StatementKind::Class(class_data) => {
-                // Register class name in global_type_definitions to allow references
-                // during function signature resolution.
+                // Register class name AND method signatures in global_type_definitions
+                // so cross-module forward references resolve method names too. Without
+                // method signatures here, a trait default body in another module would
+                // see `List` registered but `List.push` invisible until the full
+                // class-check runs. Field types and method bodies are deferred to
+                // the body-check pass. We also extract trait names from the
+                // `implements` clause so trait-default-method lookup works against
+                // this class during cross-module body checks; full validation of
+                // those traits (existence, signatures matching) happens in
+                // `check_class` later.
                 if let Ok(name) = self.extract_type_name(&class_data.name) {
-                    if !self.global_type_definitions.contains_key(name) {
-                        // Extract generics before insertion to avoid borrow checker error
+                    // Allow overwriting a pre-registered shell (from
+                    // `collect_type_shells`). A real duplicate would still error
+                    // later in `check_class`.
+                    let is_pre_shell = self.pre_registered_types.contains(name)
+                        && matches!(
+                            self.global_type_definitions.get(name),
+                            Some(TypeDefinition::Class(c)) if c.methods.is_empty()
+                        );
+                    if !self.global_type_definitions.contains_key(name) || is_pre_shell {
                         let generics = class_data
                             .generics
                             .as_ref()
                             .map(|gens| self.extract_generic_definitions(gens, context));
+                        let base_class_name: Option<String> = class_data
+                            .base_class
+                            .as_ref()
+                            .and_then(|b| self.extract_type_name(b).ok().map(String::from));
+                        let trait_names: Vec<String> = class_data
+                            .traits
+                            .iter()
+                            .filter_map(|t| self.extract_type_name(t).ok().map(String::from))
+                            .collect();
 
-                        // Initial registration as an empty class to resolve basic type identity.
-                        // The full class check will happen later in check_statement.
+                        // STEP 1: register the bare class shell so the class's own
+                        // name resolves inside its method signatures (e.g.
+                        // `fn clone() Point` inside `class Point`).
                         self.register_type_definition(
                             name.to_string(),
                             TypeDefinition::Class(context::ClassDefinition {
                                 name: name.to_string(),
-                                generics,
-                                base_class: None,
-                                traits: vec![],
+                                generics: generics.clone(),
+                                base_class: base_class_name.clone(),
+                                traits: trait_names.clone(),
                                 fields: Vec::new(),
                                 methods: BTreeMap::new(),
                                 module: self.current_module.clone(),
                                 is_abstract: class_data.is_abstract,
                                 has_drop: false,
+                            }),
+                        );
+                        self.pre_registered_types.insert(name.to_string());
+
+                        // STEP 2: extract method signatures (params + return type,
+                        // no body checks). Enter class scope so `Self` resolves
+                        // inside method signatures (e.g. `fn drop(self)` parameter
+                        // type), and define class generics so `T` in `List<T>`
+                        // resolves while we resolve method-param/return types.
+                        context.enter_scope();
+                        if let Some(gens) = &class_data.generics {
+                            self.define_generics(gens, context);
+                        }
+                        let class_type = make_type(TypeKind::Custom(name.to_string(), None));
+                        context.enter_class(name.to_string(), base_class_name.clone(), class_type);
+                        let mut methods: BTreeMap<String, context::MethodInfo> = BTreeMap::new();
+                        for stmt in &class_data.body {
+                            if let StatementKind::FunctionDeclaration(decl) = &stmt.node {
+                                let return_ty = if let Some(rt) = &decl.return_type {
+                                    self.resolve_type_expression(rt, context)
+                                } else {
+                                    make_type(TypeKind::Void)
+                                };
+                                let params: Vec<(String, crate::ast::types::Type)> = decl
+                                    .params
+                                    .iter()
+                                    .map(|p| {
+                                        (
+                                            p.name.clone(),
+                                            self.resolve_type_expression(&p.typ, context),
+                                        )
+                                    })
+                                    .collect();
+                                let is_abstract = decl.body.as_ref().is_none_or(|b| {
+                                    matches!(&b.node, StatementKind::Empty)
+                                        || matches!(
+                                            &b.node,
+                                            StatementKind::Block(stmts) if stmts.is_empty()
+                                        )
+                                });
+                                methods.insert(
+                                    decl.name.clone(),
+                                    context::MethodInfo {
+                                        params,
+                                        return_type: return_ty,
+                                        visibility: decl.properties.visibility.clone(),
+                                        is_constructor: decl.name == "init",
+                                        is_abstract,
+                                    },
+                                );
+                            }
+                        }
+                        context.exit_class();
+                        context.exit_scope();
+
+                        // STEP 3: overwrite the bare shell with the version that
+                        // carries method signatures. Compute `has_drop` here so
+                        // resource-bound detection works even when other passes
+                        // consult the type before `check_class` re-registers it.
+                        let has_drop = methods
+                            .get("drop")
+                            .is_some_and(|m| m.params.len() == 1 && m.params[0].0 == "self");
+                        self.register_type_definition(
+                            name.to_string(),
+                            TypeDefinition::Class(context::ClassDefinition {
+                                name: name.to_string(),
+                                generics,
+                                base_class: base_class_name,
+                                traits: trait_names,
+                                fields: Vec::new(),
+                                methods,
+                                module: self.current_module.clone(),
+                                is_abstract: class_data.is_abstract,
+                                has_drop,
                             }),
                         );
                     }
@@ -408,6 +630,7 @@ impl TypeChecker {
                                 module: self.current_module.clone(),
                             }),
                         );
+                        self.pre_registered_types.insert(name.to_string());
                     }
                 }
             }

@@ -1,0 +1,83 @@
+use system.ops
+use system.collections.list
+use system.collections.transformable
+
+/// Order-preserving operations on indexed collections.
+///
+/// `Sequenced` is the trait for *sequence-like* collections: those where the
+/// position of an element matters. List and Array implement it. Unordered
+/// collections such as `Set` and `Map` deliberately do not — `skip(3)` on a
+/// set is meaningless because there is no stable order.
+///
+/// All methods return a `[T]` (List) because the result length is data-dependent
+/// (`skip` shrinks, `sorted_by` preserves, `unique` may shrink). When the input
+/// is an `Array<T, N>` the fixed size is lost — the result is always a `List`.
+public trait Sequenced<T> extends Transformable<T>
+
+    /// Returns the first `n` elements as a new List.
+    public fn take(n int) [T]
+        var result = List<T>()
+        var i = 0
+        let len = self.length()
+        while i < n
+            if i >= len: return result
+            result.push(self.element_at(i))
+            i += 1
+        return result
+
+    /// Returns all elements after the first `n` as a new List.
+    /// Named `skip` to avoid collision with the destructor method `drop(self)`.
+    public fn skip(n int) [T]
+        var result = List<T>()
+        var i = 0
+        let len = self.length()
+        while i < len
+            if i >= n
+                result.push(self.element_at(i))
+            i += 1
+        return result
+
+    /// Returns a new sorted List using `f` as a comparator.
+    /// `f(a, b)` must return negative if a < b, zero if a == b, positive if a > b.
+    public fn sorted_by(f fn(T, T) int) [T]
+        var result = List<T>()
+        var k = 0
+        let m = self.length()
+        while k < m
+            result.push(self.element_at(k))
+            k += 1
+        let n = result.length()
+        var i = 0
+        while i < n
+            var j = 0
+            while j < n - i - 1
+                if f(result.get(j), result.get(j + 1)) > 0
+                    let tmp = result.get(j)
+                    result.set(j, result.get(j + 1))
+                    result.set(j + 1, tmp)
+                j += 1
+            i += 1
+        return result
+
+    /// Returns a new List with duplicate elements removed, preserving order.
+    public fn unique() [T]
+        var result = List<T>()
+        var i = 0
+        let n = self.length()
+        while i < n
+            let item = self.element_at(i)
+            if result.index_of(item) == -1
+                result.push(item)
+            i += 1
+        return result
+
+    /// Returns a new List containing the elements in reverse order.
+    /// Does not mutate the receiver; cf. in-place `reverse()` on List/Array.
+    public fn reversed() [T]
+        var result = List<T>()
+        let n = self.length()
+        var i = n - 1
+        while i >= 0
+            result.push(self.element_at(i))
+            i -= 1
+        return result
