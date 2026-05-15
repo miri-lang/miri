@@ -127,33 +127,23 @@ impl TypeChecker {
 
         // Set trait context so `Self` resolves inside method signatures
         let trait_type = make_type(TypeKind::Custom(name.clone(), None));
-        context.enter_class(name.clone(), None, trait_type);
+        context.enter_class(name.clone(), None, trait_type.clone());
 
         // Define generics in scope
         if let Some(gens) = generics {
             self.define_generics(gens, context);
         }
 
-        // Process trait body to collect methods
+        // PASS 1: Collect method signatures only (do not check default bodies yet —
+        // bodies may call `self.method()`, which requires the trait to be registered
+        // in the type definitions so that the trait-typed lookup branch can resolve
+        // member access against it.)
         let mut methods: BTreeMap<String, MethodInfo> = BTreeMap::new();
+        let mut method_statements: Vec<&Statement> = Vec::with_capacity(body.len());
 
         for stmt in body {
             match &stmt.node {
                 StatementKind::FunctionDeclaration(decl) => {
-                    // Check the function declaration
-                    self.check_function_declaration(
-                        FunctionDeclarationInfo {
-                            name: &decl.name,
-                            generics: &decl.generics,
-                            params: &decl.params,
-                            return_type: &decl.return_type,
-                            body: decl.body.as_ref().map(|b| b.as_ref()),
-                            properties: &decl.properties,
-                        },
-                        context,
-                    );
-
-                    // Collect method info
                     let return_ty = if let Some(rt_expr) = &decl.return_type {
                         self.resolve_type_expression(rt_expr, context)
                     } else {
@@ -184,6 +174,8 @@ impl TypeChecker {
                             is_abstract: method_is_abstract,
                         },
                     );
+
+                    method_statements.push(stmt);
                 }
                 _ => {
                     self.report_error(
@@ -194,10 +186,8 @@ impl TypeChecker {
             }
         }
 
-        context.exit_class();
-        context.exit_scope();
-
-        // Create trait definition
+        // Build trait definition and register it BEFORE checking default-method bodies,
+        // so that `self.method()` inside a default body can resolve against the trait.
         let trait_def = TraitDefinition {
             name: name.clone(),
             generics: generic_defs,
@@ -206,16 +196,13 @@ impl TypeChecker {
             module: self.current_module.clone(),
         };
 
-        // Register trait type definition
         context.define_type(name.clone(), TypeDefinition::Trait(trait_def.clone()));
-        if context.scopes.len() == 1 {
+        if context.scopes.len() == 2 {
             self.register_type_definition(name.clone(), TypeDefinition::Trait(trait_def));
         }
 
         // Define trait type symbol
-        let trait_type = make_type(TypeKind::Custom(name.clone(), None));
-
-        if context.scopes.len() == 1 {
+        if context.scopes.len() == 2 {
             self.global_scope.insert(
                 name.clone(),
                 SymbolInfo::new(
@@ -240,5 +227,28 @@ impl TypeChecker {
                 None,
             ),
         );
+
+        // PASS 2: Check default-method bodies. Abstract methods (no body) are skipped.
+        for stmt in method_statements {
+            if let StatementKind::FunctionDeclaration(decl) = &stmt.node {
+                if decl.body.is_none() {
+                    continue;
+                }
+                self.check_function_declaration(
+                    FunctionDeclarationInfo {
+                        name: &decl.name,
+                        generics: &decl.generics,
+                        params: &decl.params,
+                        return_type: &decl.return_type,
+                        body: decl.body.as_ref().map(|b| b.as_ref()),
+                        properties: &decl.properties,
+                    },
+                    context,
+                );
+            }
+        }
+
+        context.exit_class();
+        context.exit_scope();
     }
 }

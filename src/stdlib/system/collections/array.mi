@@ -1,7 +1,6 @@
 use system.ops
-use system.collections.indexed_collection
+use system.collections.queryable
 use system.collections.list
-use system.collections.transformable
 use system.memory
 
 /// A fixed-size array with elements of a single type.
@@ -18,7 +17,7 @@ use system.memory
 ///     for x in a
 ///         println(f"{x}")
 
-public class Array<T, Size> extends IndexedCollection<T> implements Iterable, Cloneable, Transformable<T>
+public class Array<T, Size> implements Queryable<T>, Iterable<T>, Cloneable, Transformable<T>, Foldable<T>, Sequenced<T>
 
     runtime "core" fn miri_rt_array_new(count int, elem_size int) Self
     runtime "core" fn miri_rt_array_free(a Self)
@@ -57,156 +56,3 @@ public class Array<T, Size> extends IndexedCollection<T> implements Iterable, Cl
     /// Returns a deep copy of this array.
     public fn clone() Array<T, Size>
         return miri_rt_array_clone(self)
-
-    // --- Transformable<T> implementation ---
-
-    /// Returns a new List with each element transformed by `f`.
-    public fn map(f fn(T) T) [T]
-        var result = List<T>()
-        var i = 0
-        let n = self.length()
-        while i < n
-            result.push(f(self.element_at(i)))
-            i += 1
-        return result
-
-    /// Returns a new List containing only elements for which `f` returns true.
-    public fn filter(f fn(T) bool) [T]
-        var result = List<T>()
-        var i = 0
-        let n = self.length()
-        while i < n
-            let item = self.element_at(i)
-            if f(item)
-                result.push(item)
-            i += 1
-        return result
-
-    /// Reduces all elements to a single value by applying `f` left-to-right.
-    public fn reduce(init T, f fn(T, T) T) T
-        var acc = init
-        var i = 0
-        let n = self.length()
-        while i < n
-            acc = f(acc, self.element_at(i))
-            i += 1
-        return acc
-
-    /// Maps each element to a list then flattens all results.
-    public fn flat_map(f fn(T) [T]) [T]
-        var result = List<T>()
-        var i = 0
-        let n = self.length()
-        while i < n
-            let mapped = f(self.element_at(i))
-            var j = 0
-            let m = mapped.length()
-            while j < m
-                result.push(mapped.element_at(j))
-                j += 1
-            i += 1
-        return result
-
-    /// Returns true if any element satisfies the predicate.
-    public fn any(f fn(T) bool) bool
-        var i = 0
-        let n = self.length()
-        while i < n
-            if f(self.element_at(i)): return true
-            i += 1
-        return false
-
-    /// Returns true if all elements satisfy the predicate.
-    public fn all(f fn(T) bool) bool
-        var i = 0
-        let n = self.length()
-        while i < n
-            if f(self.element_at(i)) == false: return false
-            i += 1
-        return true
-
-    /// Returns the first `n` elements as a new List.
-    public fn take(n int) [T]
-        var result = List<T>()
-        var i = 0
-        let len = self.length()
-        while i < n
-            if i >= len: return result
-            result.push(self.element_at(i))
-            i += 1
-        return result
-
-    /// Returns all elements after the first `n` as a new List.
-    public fn drop(n int) [T]
-        var result = List<T>()
-        var i = 0
-        let len = self.length()
-        while i < len
-            if i >= n
-                result.push(self.element_at(i))
-            i += 1
-        return result
-
-    /// Returns a new sorted List using `f` as a comparator.
-    public fn sorted_by(f fn(T, T) int) [T]
-        var result = List<T>()
-        for item in self
-            result.push(item)
-        let n = result.length()
-        var i = 0
-        while i < n
-            var j = 0
-            while j < n - i - 1
-                if f(result.get(j), result.get(j + 1)) > 0
-                    let tmp = result.get(j)
-                    result.set(j, result.get(j + 1))
-                    result.set(j + 1, tmp)
-                j += 1
-            i += 1
-        return result
-
-    /// Returns the sum of all elements (requires T to be numeric; collection must be non-empty).
-    public fn sum() T
-        var acc = self.element_at(0)
-        var i = 1
-        let n = self.length()
-        while i < n
-            acc = acc + self.element_at(i)
-            i += 1
-        return acc
-
-    /// Returns the smallest element (requires T to be comparable; collection must be non-empty).
-    public fn min() T
-        var result = self.element_at(0)
-        var i = 1
-        let n = self.length()
-        while i < n
-            let elem = self.element_at(i)
-            if elem < result
-                result = elem
-            i += 1
-        return result
-
-    /// Returns the largest element (requires T to be comparable; collection must be non-empty).
-    public fn max() T
-        var result = self.element_at(0)
-        var i = 1
-        let n = self.length()
-        while i < n
-            let elem = self.element_at(i)
-            if elem > result
-                result = elem
-            i += 1
-        return result
-
-    /// Returns a new List with duplicate elements removed, preserving order.
-    public fn unique() [T]
-        var result = List<T>()
-        var i = 0
-        let n = self.length()
-        while i < n
-            let item = self.element_at(i)
-            if result.index_of(item) == -1
-                result.push(item)
-            i += 1
-        return result

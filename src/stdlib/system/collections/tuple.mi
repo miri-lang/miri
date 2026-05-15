@@ -18,7 +18,7 @@ use system.ops
 ///     println(f"{t.length()}")      // 3
 ///     println(f"{t.contains(20)}")  // true
 
-public class Tuple<T> implements Iterable
+public class Tuple<T> implements Iterable<T>
 
     runtime "core" fn miri_rt_tuple_len(t Self) int
 

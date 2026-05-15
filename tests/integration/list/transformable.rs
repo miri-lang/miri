@@ -139,7 +139,7 @@ for item in t
 }
 
 #[test]
-fn list_drop_skips_first_n() {
+fn list_skip_skips_first_n() {
     assert_runs_with_output(
         "
 use system.io
@@ -147,7 +147,7 @@ use system.collections.list
 use system.collections.transformable
 
 let l = List([10, 20, 30, 40, 50])
-let d = l.drop(2)
+let d = l.skip(2)
 println(f\"{d.length()}\")
 for item in d
     println(f\"{item}\")

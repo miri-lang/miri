@@ -5,7 +5,7 @@ use system.memory
 ///
 /// Strings in Miri are immutable sequences of Unicode characters.
 /// All operations that modify a string return a new string instance.
-public class String implements Equatable, Addable, Multiplicable, Iterable, Cloneable
+public class String implements Equatable, Addable, Multiplicable, Iterable<String>, Cloneable
 
     // =========================================================================
     // Intrinsic function declarations
