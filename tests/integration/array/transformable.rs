@@ -69,7 +69,7 @@ println(f\"{a.all(fn(x int) bool: x % 2 == 0)}\")
 }
 
 #[test]
-fn array_take_and_drop() {
+fn array_take_and_skip() {
     assert_runs_with_output(
         "
 use system.io
@@ -78,7 +78,7 @@ use system.collections.transformable
 
 let a = [10, 20, 30, 40, 50]
 let t = a.take(2)
-let d = a.drop(3)
+let d = a.skip(3)
 println(f\"{t.length()}\")
 println(f\"{d.length()}\")
 ",

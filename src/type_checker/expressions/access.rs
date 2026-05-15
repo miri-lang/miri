@@ -835,7 +835,37 @@ impl TypeChecker {
 
                 // Fallback: look for a default (non-abstract) method in any trait
                 // implemented by this class or any of its ancestors.
+                //
+                // Generic substitution: build a mapping by NAME between the receiver's
+                // generic parameters (from its type_args) and matches them against the
+                // trait's own generic names. This relies on the same naming-convention
+                // shortcut used for inherited class methods (Array<T,Size> → trait T
+                // assumed to bind to receiver's T).
                 {
+                    // Build name → concrete type mapping from the receiver's type_args.
+                    let receiver_mapping: std::collections::HashMap<String, Type> = {
+                        let mut m = std::collections::HashMap::new();
+                        if let Some(orig_generics) =
+                            self.global_type_definitions.get(&name).and_then(|td| {
+                                if let TypeDefinition::Class(cd) = td {
+                                    cd.generics.clone()
+                                } else {
+                                    None
+                                }
+                            })
+                        {
+                            if let Some(type_args) = &type_args {
+                                for (gen, arg_expr) in orig_generics.iter().zip(type_args.iter()) {
+                                    let arg_type = self
+                                        .extract_type_from_expression(arg_expr)
+                                        .unwrap_or(make_type(TypeKind::Error));
+                                    m.insert(gen.name.clone(), arg_type);
+                                }
+                            }
+                        }
+                        m
+                    };
+
                     let mut search_class_name = name.clone();
                     'trait_search: loop {
                         let search_def = context
@@ -855,15 +885,24 @@ impl TypeChecker {
                                     {
                                         if let Some(method_info) = t_def.methods.get(prop_name) {
                                             if !method_info.is_abstract {
-                                                // Found a default trait implementation.
+                                                // Substitute trait's generic params using the
+                                                // by-name mapping derived from receiver type_args.
+                                                let substitute = |ty: &Type| -> Type {
+                                                    if receiver_mapping.is_empty() {
+                                                        ty.clone()
+                                                    } else {
+                                                        self.substitute_type(ty, &receiver_mapping)
+                                                    }
+                                                };
+
                                                 let params: Vec<Parameter> = method_info
                                                     .params
                                                     .iter()
                                                     .map(|(pname, ty)| Parameter {
                                                         name: pname.clone(),
-                                                        typ: Box::new(
-                                                            self.create_type_expression(ty.clone()),
-                                                        ),
+                                                        typ: Box::new(self.create_type_expression(
+                                                            substitute(ty),
+                                                        )),
                                                         guard: None,
                                                         default_value: None,
                                                         is_out: false,
@@ -876,7 +915,7 @@ impl TypeChecker {
                                                     None
                                                 } else {
                                                     Some(Box::new(self.create_type_expression(
-                                                        method_info.return_type.clone(),
+                                                        substitute(&method_info.return_type),
                                                     )))
                                                 };
                                                 return make_type(TypeKind::Function(Box::new(

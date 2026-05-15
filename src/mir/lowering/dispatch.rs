@@ -154,9 +154,23 @@ pub(crate) fn resolve_inherited_method(
             _ => return None,
         };
         // Check default (non-abstract) methods in implemented traits.
+        //
+        // When the concrete caller picks up a default method from a trait, we apply
+        // the same concrete-caller / abstract-definer rule used for abstract classes:
+        // the mangled symbol uses the caller's name so static dispatch lands on a
+        // per-concrete copy (`Array_is_empty`) rather than the trait-typed default
+        // (`Queryable_is_empty`). The per-concrete copy is synthesized by the
+        // pipeline's trait-default re-lowering pass.
         for trait_name in &traits {
-            if let Some(result) = resolve_trait_default_method(type_defs, trait_name, method_name) {
-                return Some(result);
+            if let Some((defining_trait, info)) =
+                resolve_trait_default_method(type_defs, trait_name, method_name)
+            {
+                let defining = if caller_is_abstract {
+                    defining_trait
+                } else {
+                    class_name.to_string()
+                };
+                return Some((defining, info));
             }
         }
         match base {
@@ -460,13 +474,22 @@ fn try_lower_method_call(
         None => return Ok(None),
     };
 
-    // Concrete receiver resolution for inherited methods inside abstract classes.
+    // Concrete receiver resolution for inherited methods inside abstract classes
+    // or trait default methods. When the AST-recorded receiver type is an abstract
+    // class or trait — i.e. the method body was type-checked against the abstract
+    // interface — the actual local's type is the concrete class supplied by the
+    // per-concrete re-lowering pass (e.g. self_type = "Array" instead of
+    // "Queryable"). Using the local's type here routes self-calls through static
+    // dispatch on the concrete class rather than vtable dispatch.
     let obj_ty_override: Option<Type> = if let TypeKind::Custom(name, _) = &raw_obj_ty.kind {
-        let is_abstract = matches!(
+        let needs_override = matches!(
             ctx.type_checker.global_type_definitions.get(name.as_str()),
             Some(TypeDefinition::Class(cd)) if cd.is_abstract
+        ) || matches!(
+            ctx.type_checker.global_type_definitions.get(name.as_str()),
+            Some(TypeDefinition::Trait(_))
         );
-        if is_abstract {
+        if needs_override {
             if let ExpressionKind::Identifier(var_name, _) = &obj.node {
                 if let Some(&local) = ctx.variable_map.get(var_name.as_str()) {
                     Some(ctx.body.local_decls[local.0].ty.clone())

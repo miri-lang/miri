@@ -1,9 +1,8 @@
 use system.ops
-use system.collections.indexed_collection
-use system.collections.transformable
+use system.collections.queryable
 use system.memory
 
-public class List<T> extends IndexedCollection<T> implements Iterable, Cloneable, Transformable<T>
+public class List<T> implements Queryable<T>, Iterable<T>, Cloneable, Transformable<T>, Foldable<T>, Sequenced<T>
 
     runtime "core" fn miri_rt_list_new(elem_size int) Self
     runtime "core" fn miri_rt_list_free(l Self)
@@ -80,9 +79,24 @@ public class List<T> extends IndexedCollection<T> implements Iterable, Cloneable
     public fn clone() List<T>
         return miri_rt_list_clone(self)
 
-    // --- Transformable<T> implementation ---
+// =====================================================================
+// Functional / sequence traits, co-located with `List` to avoid an
+// import cycle: their default method bodies construct a `List<T>` as
+// the result container, which would otherwise require importing
+// `system.collections.list` from a separate `transformable` module.
+// =====================================================================
 
-    /// Returns a new List with each element transformed by `f`.
+/// Pure transformations that produce a new collection.
+///
+/// `map`, `filter`, and `flat_map` rebuild the data with a shape that may differ
+/// from the source (filter can shrink, flat_map can grow). For ordered slice
+/// operations such as `take`/`skip`/`sorted_by`, use `Sequenced<T>`.
+public trait Transformable<T>
+
+    abstract fn length() int
+    abstract fn element_at(index int) T
+
+    /// Returns a new List containing each element transformed by `f`.
     public fn map(f fn(T) T) [T]
         var result = List<T>()
         var i = 0
@@ -104,17 +118,7 @@ public class List<T> extends IndexedCollection<T> implements Iterable, Cloneable
             i += 1
         return result
 
-    /// Reduces all elements to a single value by applying `f` left-to-right.
-    public fn reduce(init T, f fn(T, T) T) T
-        var acc = init
-        var i = 0
-        let n = self.length()
-        while i < n
-            acc = f(acc, self.element_at(i))
-            i += 1
-        return acc
-
-    /// Maps each element to a list then flattens all results.
+    /// Maps each element to a list and flattens all results into one list.
     public fn flat_map(f fn(T) [T]) [T]
         var result = List<T>()
         var i = 0
@@ -128,6 +132,27 @@ public class List<T> extends IndexedCollection<T> implements Iterable, Cloneable
                 j += 1
             i += 1
         return result
+
+/// Collapses a collection into a single scalar value.
+///
+/// `sum`/`min`/`max` require a non-empty collection — calling them on an empty
+/// collection is a programming error and traps. Use `is_empty()` first when in
+/// doubt. (A future revision will switch these to `T?` once Option ergonomics
+/// improve.)
+public trait Foldable<T>
+
+    abstract fn length() int
+    abstract fn element_at(index int) T
+
+    /// Reduces all elements to a single value by applying `f` left-to-right.
+    public fn reduce(init T, f fn(T, T) T) T
+        var acc = init
+        var i = 0
+        let n = self.length()
+        while i < n
+            acc = f(acc, self.element_at(i))
+            i += 1
+        return acc
 
     /// Returns true if any element satisfies the predicate.
     public fn any(f fn(T) bool) bool
@@ -147,43 +172,16 @@ public class List<T> extends IndexedCollection<T> implements Iterable, Cloneable
             i += 1
         return true
 
-    /// Returns the first `n` elements as a new List.
-    public fn take(n int) [T]
-        var result = List<T>()
+    /// Returns the number of elements that satisfy the predicate.
+    public fn count_where(f fn(T) bool) int
+        var count = 0
         var i = 0
-        let len = self.length()
+        let n = self.length()
         while i < n
-            if i >= len: return result
-            result.push(self.element_at(i))
+            if f(self.element_at(i))
+                count += 1
             i += 1
-        return result
-
-    /// Returns all elements after the first `n` as a new List.
-    public fn drop(n int) [T]
-        var result = List<T>()
-        var i = 0
-        let len = self.length()
-        while i < len
-            if i >= n
-                result.push(self.element_at(i))
-            i += 1
-        return result
-
-    /// Returns a new sorted List using `f` as a comparator.
-    public fn sorted_by(f fn(T, T) int) [T]
-        var result = self.clone()
-        let n = result.length()
-        var i = 0
-        while i < n
-            var j = 0
-            while j < n - i - 1
-                if f(result.get(j), result.get(j + 1)) > 0
-                    let tmp = result.get(j)
-                    result.set(j, result.get(j + 1))
-                    result.set(j + 1, tmp)
-                j += 1
-            i += 1
-        return result
+        return count
 
     /// Returns the sum of all elements (requires T to be numeric; collection must be non-empty).
     public fn sum() T
@@ -219,6 +217,63 @@ public class List<T> extends IndexedCollection<T> implements Iterable, Cloneable
             i += 1
         return result
 
+/// Order-preserving operations on indexed collections.
+///
+/// `Sequenced` is the trait for *sequence-like* collections: those where the
+/// position of an element matters. List and Array implement it. Unordered
+/// collections such as `Set` and `Map` deliberately do not — `skip(3)` on a
+/// set is meaningless because there is no stable order.
+///
+/// All methods return a `[T]` (List) because the result length is data-dependent
+/// (`skip` shrinks, `sorted_by` preserves, `unique` may shrink). When the input
+/// is an `Array<T, N>` the fixed size is lost — the result is always a `List`.
+public trait Sequenced<T> extends Transformable<T>
+
+    /// Returns the first `n` elements as a new List.
+    public fn take(n int) [T]
+        var result = List<T>()
+        var i = 0
+        let len = self.length()
+        while i < n
+            if i >= len: return result
+            result.push(self.element_at(i))
+            i += 1
+        return result
+
+    /// Returns all elements after the first `n` as a new List.
+    /// Named `skip` to avoid collision with the destructor method `drop(self)`.
+    public fn skip(n int) [T]
+        var result = List<T>()
+        var i = 0
+        let len = self.length()
+        while i < len
+            if i >= n
+                result.push(self.element_at(i))
+            i += 1
+        return result
+
+    /// Returns a new sorted List using `f` as a comparator.
+    /// `f(a, b)` must return negative if a < b, zero if a == b, positive if a > b.
+    public fn sorted_by(f fn(T, T) int) [T]
+        var result = List<T>()
+        var k = 0
+        let m = self.length()
+        while k < m
+            result.push(self.element_at(k))
+            k += 1
+        let n = result.length()
+        var i = 0
+        while i < n
+            var j = 0
+            while j < n - i - 1
+                if f(result.get(j), result.get(j + 1)) > 0
+                    let tmp = result.get(j)
+                    result.set(j, result.get(j + 1))
+                    result.set(j + 1, tmp)
+                j += 1
+            i += 1
+        return result
+
     /// Returns a new List with duplicate elements removed, preserving order.
     public fn unique() [T]
         var result = List<T>()
@@ -229,4 +284,15 @@ public class List<T> extends IndexedCollection<T> implements Iterable, Cloneable
             if result.index_of(item) == -1
                 result.push(item)
             i += 1
+        return result
+
+    /// Returns a new List containing the elements in reverse order.
+    /// Does not mutate the receiver; cf. in-place `reverse()` on List/Array.
+    public fn reversed() [T]
+        var result = List<T>()
+        let n = self.length()
+        var i = n - 1
+        while i >= 0
+            result.push(self.element_at(i))
+            i -= 1
         return result

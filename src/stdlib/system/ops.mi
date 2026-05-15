@@ -41,10 +41,12 @@ public trait Multiplicable
 ///
 /// Types implementing this trait can be used in `for x in collection` loops.
 /// The iterator protocol uses index-based access via `element_at` and `length`.
+/// The element type `T` is the type yielded by each iteration step — `Iterable<int>`
+/// produces ints, `Iterable<String>` produces strings, etc.
 ///
 /// Example:
-///     for ch in "hello"
-///         println(ch)  // prints each character
-public trait Iterable
-    public fn element_at(index int) Self
+///     for ch in "hello"        // String implements Iterable<String>
+///         println(ch)          // each ch is a one-character String
+public trait Iterable<T>
     public fn length() int
+    public fn element_at(index int) T

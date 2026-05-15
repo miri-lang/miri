@@ -626,6 +626,14 @@ impl TypeChecker {
                                 || matches!(class_ty, TypeKind::Generic(..))
                                 || matches!(class_ty, TypeKind::Custom(cn, _) if cn == &name);
                         }
+                        // Generic trait parameter (e.g. T in `Iterable<T>`) is allowed
+                        // to match any concrete type the class chose for that slot.
+                        // We don't track `implements Iterable<String>`'s type args,
+                        // so accept any well-formed substitution here. This mirrors
+                        // the looseness applied to `Self` above.
+                        if matches!(trait_ty, TypeKind::Generic(..)) {
+                            return true;
+                        }
                         false
                     };
 
