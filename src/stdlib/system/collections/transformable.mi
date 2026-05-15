@@ -1,10 +1,54 @@
-/// `system.collections.transformable` — compatibility shim.
-///
-/// The `Transformable<T>`, `Foldable<T>`, and `Sequenced<T>` traits now live in
-/// `system.collections.list` so their default method bodies can construct a
-/// `List<T>` without forming a stdlib import cycle.
-///
-/// Importing this module forwards to `system.collections.list` so existing
-/// `use system.collections.transformable` statements continue to work.
-
+use system.ops
 use system.collections.list
+
+/// Pure transformations that produce a new collection.
+///
+/// `map`, `filter`, and `flat_map` rebuild the data with a shape that may differ
+/// from the source (filter can shrink, flat_map can grow). For ordered slice
+/// operations such as `take`/`skip`/`sorted_by`, use `Sequenced<T>`.
+///
+/// Implementors must provide `length()` and `element_at(index)` (typically via
+/// `Queryable<T>` or `Iterable<T>`). The default bodies derive everything else
+/// from those two primitives and are re-lowered per concrete class at compile
+/// time, so dispatch stays static and zero-cost.
+public trait Transformable<T>
+
+    abstract fn length() int
+    abstract fn element_at(index int) T
+
+    /// Returns a new List containing each element transformed by `f`.
+    public fn map(f fn(T) T) [T]
+        var result = List<T>()
+        var i = 0
+        let n = self.length()
+        while i < n
+            result.push(f(self.element_at(i)))
+            i += 1
+        return result
+
+    /// Returns a new List containing only elements for which `f` returns true.
+    public fn filter(f fn(T) bool) [T]
+        var result = List<T>()
+        var i = 0
+        let n = self.length()
+        while i < n
+            let item = self.element_at(i)
+            if f(item)
+                result.push(item)
+            i += 1
+        return result
+
+    /// Maps each element to a list and flattens all results into one list.
+    public fn flat_map(f fn(T) [T]) [T]
+        var result = List<T>()
+        var i = 0
+        let n = self.length()
+        while i < n
+            let mapped = f(self.element_at(i))
+            var j = 0
+            let m = mapped.length()
+            while j < m
+                result.push(mapped.element_at(j))
+                j += 1
+            i += 1
+        return result

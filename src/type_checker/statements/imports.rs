@@ -157,25 +157,44 @@ impl TypeChecker {
         }
 
         if self.loading_stack.contains(&abs_path_str) {
-            // Build chain: show the cycle path for clear diagnostics.
-            let cycle_start = self
-                .loading_stack
-                .iter()
-                .position(|m| m == &abs_path_str)
-                .unwrap_or(0);
-            let chain: Vec<&str> = self.loading_stack[cycle_start..]
-                .iter()
-                .map(|s| s.as_str())
-                .collect();
-            self.report_error(
-                format!(
-                    "Circular import detected: '{}' is already being loaded. Import chain: {} -> {}",
-                    path_str,
-                    chain.join(" -> "),
-                    abs_path_str
-                ),
-                path.span,
-            );
+            // User-space cycles (any `local.*` import re-entering a module that
+            // is still mid-load) are a hard error — they signal a malformed
+            // project layout and would otherwise silently truncate type-checking.
+            if path_str.starts_with("local.") {
+                let cycle_start = self
+                    .loading_stack
+                    .iter()
+                    .position(|m| m == &abs_path_str)
+                    .unwrap_or(0);
+                let chain: Vec<&str> = self.loading_stack[cycle_start..]
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect();
+                self.report_error(
+                    format!(
+                        "Circular import detected: '{}' is already being loaded. Import chain: {} -> {}",
+                        path_str,
+                        chain.join(" -> "),
+                        abs_path_str
+                    ),
+                    path.span,
+                );
+                return;
+            }
+
+            // Stdlib soft cycles are allowed. The module being re-entered has
+            // its top-level type declarations (classes/traits/structs/enums)
+            // pre-registered before any body checks ran, so cross-module forward
+            // references to those *types* resolve correctly during this re-entrant
+            // load. Method bodies in the partially-loaded module finish checking
+            // once the outer load returns.
+            //
+            // This is what lets sibling modules be mutually `use`-imported: e.g.
+            // a trait module that declares a default body calling `List<T>()`
+            // can import `system.collections.list`, and `list.mi` can import
+            // the trait module back to declare `implements ThatTrait<T>` — only
+            // the type identity is needed across the boundary.
+            self.restore_visibility_for_module(&path_str, &import_kind);
             return;
         }
 
@@ -233,21 +252,58 @@ impl TypeChecker {
         self.current_source_override =
             Some((file_path.to_string_lossy().to_string(), source.clone()));
 
-        // Pre-pass: register all type definitions (classes, traits, structs, enums)
-        // so that intra-module forward references work — e.g. a class declared
-        // earlier in the file can `implements` a trait declared later, and a
-        // trait default body can construct an instance of a class declared later.
-        // This mirrors the two-pass approach used for the entry-point program.
+        // Phase 1a — register class/trait/struct/enum NAMES as bare shells. Done
+        // BEFORE loading transitive `use` statements so that any soft-cycle import
+        // back to us sees at least our type names.
         for stmt in &module_ast.body {
-            if let StatementKind::Block(stmts) = &stmt.node {
-                for s in stmts {
-                    self.collect_declaration(s, context);
+            match &stmt.node {
+                StatementKind::Use(..) => {}
+                StatementKind::Block(stmts) => {
+                    for s in stmts {
+                        if !matches!(s.node, StatementKind::Use(..)) {
+                            self.collect_type_shells(s);
+                        }
+                    }
                 }
-            } else {
-                self.collect_declaration(stmt, context);
+                _ => self.collect_type_shells(stmt),
             }
         }
 
+        // Phase 1b — fill in method signatures for our own class/trait declarations.
+        // Forward references to types declared later in this same module now resolve
+        // because all shells are in place.
+        for stmt in &module_ast.body {
+            match &stmt.node {
+                StatementKind::Use(..) => {}
+                StatementKind::Block(stmts) => {
+                    for s in stmts {
+                        if !matches!(s.node, StatementKind::Use(..)) {
+                            self.collect_declaration(s, context);
+                        }
+                    }
+                }
+                _ => self.collect_declaration(stmt, context),
+            }
+        }
+
+        // Phase 2 — process `use` statements (which may recursively re-enter this
+        // module via the soft-cycle path; our types are now visible to them).
+        for stmt in &module_ast.body {
+            match &stmt.node {
+                StatementKind::Use(..) => self.collect_declaration(stmt, context),
+                StatementKind::Block(stmts) => {
+                    for s in stmts {
+                        if matches!(s.node, StatementKind::Use(..)) {
+                            self.collect_declaration(s, context);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Phase 3 — type-check all bodies. By now both our own and our imports'
+        // type names are registered.
         for stmt in &module_ast.body {
             self.check_statement(stmt, context);
         }
