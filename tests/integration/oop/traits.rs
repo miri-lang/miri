@@ -455,3 +455,114 @@ fn main()
         "true\nfalse",
     );
 }
+
+// ── Strict generic-substitution check on `implements Trait<X>` ─────────────────
+
+#[test]
+fn test_implements_trait_with_wrong_generic_return_type_is_error() {
+    // A class declares `implements Container<String>` but its `get` returns int.
+    // The trait method `get() T` after substitution requires `String`, so this
+    // must fail at the implements clause.
+    assert_compiler_error(
+        r#"
+trait Container<T>
+    fn get() T
+
+class Bad implements Container<String>
+    fn get() int
+        return 0
+    "#,
+        "does not match trait",
+    );
+}
+
+#[test]
+fn test_implements_trait_with_wrong_generic_param_type_is_error() {
+    // Trait param has type T; after substitution, T = String, so the class
+    // must accept String, not int.
+    assert_compiler_error(
+        r#"
+trait Sink<T>
+    fn put(value T)
+
+class Bad implements Sink<String>
+    fn put(value int)
+        return
+    "#,
+        "does not match trait",
+    );
+}
+
+#[test]
+fn test_implements_trait_with_matching_generic_substitution_passes() {
+    // Sanity check: after substitution, the signatures line up.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+trait Container<T>
+    fn get() T
+
+class Box implements Container<int>
+    fn get() int
+        return 42
+
+fn main()
+    let b = Box()
+    println(f"{b.get()}")
+    "#,
+        "42",
+    );
+}
+
+#[test]
+fn test_parent_trait_generic_substitution_propagates() {
+    // When `class C implements Child<int>` and `Child<T> extends Parent<T>`, the
+    // parent trait's method signatures must also see `T = int`. A class method
+    // whose param/return type matches Parent<int> compiles; mismatches fail.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+trait Parent<T>
+    fn parent_method() T
+
+trait Child<T> extends Parent<T>
+    fn child_method() T
+
+class Holder implements Child<int>
+    fn parent_method() int
+        return 7
+    fn child_method() int
+        return 11
+
+fn main()
+    let h = Holder()
+    println(f"{h.parent_method()}")
+    println(f"{h.child_method()}")
+    "#,
+        "7\n11",
+    );
+}
+
+#[test]
+fn test_parent_trait_generic_substitution_rejects_mismatch() {
+    // `Child<String> extends Parent<String>`. The class returns `int` from
+    // `parent_method`, which should be rejected once Parent.T is substituted.
+    assert_compiler_error(
+        r#"
+trait Parent<T>
+    fn parent_method() T
+
+trait Child<T> extends Parent<T>
+    fn child_method() T
+
+class Bad implements Child<String>
+    fn parent_method() int
+        return 0
+    fn child_method() String
+        return "x"
+    "#,
+        "does not match trait",
+    );
+}

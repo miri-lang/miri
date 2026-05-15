@@ -53,6 +53,17 @@ pub fn ensure_place(ctx: &mut LoweringContext, operand: Operand, span: Span) -> 
 /// Unknown types produce `TypeKind::Error` instead of panicking. Callers should
 /// check for this and report appropriate errors if needed.
 pub fn resolve_type(tc: &TypeChecker, expr: &Expression) -> Type {
+    // Type-wrapper expressions (`ExpressionKind::Type`) carry their resolved
+    // type directly and are routinely synthesized with id=0. Reading the
+    // type-checker cache by id collides with any other id=0 expression that
+    // happens to have been stored last, so we trust the inner type instead.
+    if let ExpressionKind::Type(t, is_nullable) = &expr.node {
+        if *is_nullable {
+            return Type::new(TypeKind::Option(t.clone()), expr.span);
+        }
+        return *t.clone();
+    }
+
     if let Some(ty) = tc.get_type(expr.id) {
         return ty.clone();
     }

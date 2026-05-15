@@ -61,6 +61,11 @@ impl TypeChecker {
             return result;
         }
 
+        // Handle tuple types
+        if let Some(result) = self.check_tuple_compatibility(t1, t2, context) {
+            return result;
+        }
+
         // Handle function types
         if let Some(result) = self.check_function_compatibility(t1, t2, context) {
             return result;
@@ -397,6 +402,28 @@ impl TypeChecker {
             || self.are_compatible(&err1, &err2, context);
 
         ok_compatible && err_compatible
+    }
+
+    /// Checks tuple type compatibility (element-wise).
+    fn check_tuple_compatibility(&self, t1: &Type, t2: &Type, context: &Context) -> Option<bool> {
+        if let (TypeKind::Tuple(e1), TypeKind::Tuple(e2)) = (&t1.kind, &t2.kind) {
+            if e1.len() != e2.len() {
+                return Some(false);
+            }
+            for (a_expr, b_expr) in e1.iter().zip(e2.iter()) {
+                let a = self
+                    .extract_type_from_expression(a_expr)
+                    .unwrap_or(crate::ast::factory::make_type(TypeKind::Error));
+                let b = self
+                    .extract_type_from_expression(b_expr)
+                    .unwrap_or(crate::ast::factory::make_type(TypeKind::Error));
+                if !self.are_compatible(&a, &b, context) {
+                    return Some(false);
+                }
+            }
+            return Some(true);
+        }
+        None
     }
 
     /// Checks function type compatibility.

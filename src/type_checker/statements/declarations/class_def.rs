@@ -163,8 +163,18 @@ impl TypeChecker {
             }
         }
 
-        // Validate traits exist, are visible, and are actually traits
+        // Validate traits exist, are visible, and are actually traits.
+        // For each `implements Trait<X>`, we also capture the generic args at the
+        // implements site so that trait-method signatures can be compared after
+        // substituting the trait's generic params with the chosen concrete types.
+        // We pass the class's generic-param names so they resolve as Generic types
+        // here — context.define_generics has not run yet at this point.
+        let class_generic_names: std::collections::HashSet<String> = generic_defs
+            .as_ref()
+            .map(|defs| defs.iter().map(|d| d.name.clone()).collect())
+            .unwrap_or_default();
         let mut trait_names = Vec::with_capacity(traits.len());
+        let mut trait_direct_args: HashMap<String, Vec<Type>> = HashMap::new();
         for trait_expr in traits {
             if let Ok(trait_name) = self.extract_type_name(trait_expr) {
                 if !self.is_type_visible(trait_name) {
@@ -191,6 +201,18 @@ impl TypeChecker {
                             ),
                         );
                     }
+                }
+                // Capture generic args from `implements Trait<X, Y, ...>` so that
+                // signature checks can substitute the trait's generic params with
+                // the chosen concrete types. Args inside a `TypeDeclaration` are
+                // parsed as `GenericType(name_expr, ...)`; convert each to a
+                // resolvable type expression before calling resolve.
+                if let ExpressionKind::TypeDeclaration(_, Some(args), _, _) = &trait_expr.node {
+                    let resolved_args: Vec<Type> = args
+                        .iter()
+                        .map(|arg| self.resolve_implements_arg(arg, context, &class_generic_names))
+                        .collect();
+                    trait_direct_args.insert(trait_name.to_string(), resolved_args);
                 }
                 trait_names.push(trait_name.to_string());
             }
@@ -576,20 +598,46 @@ impl TypeChecker {
 
         // Validate: classes must implement all required trait methods (including parent traits)
         for trait_name in &trait_names {
-            // Collect all methods from trait hierarchy (including parent traits)
+            // Collect all methods from trait hierarchy (including parent traits) and
+            // compute a per-trait substitution map. The directly-implemented trait
+            // takes its args from the `implements Trait<X>` site; parent traits
+            // walked via `parent_traits` inherit args from their child by composing
+            // substitutions through each `extends Parent<...>` declaration.
+            let mut trait_substitutions: HashMap<String, HashMap<String, Type>> = HashMap::new();
             let all_trait_methods: HashMap<String, (MethodInfo, String)> = {
                 let mut all_methods = HashMap::new();
-                let mut traits_to_check: Vec<&str> = vec![trait_name];
+                let initial_subst: HashMap<String, Type> = trait_direct_args
+                    .get(trait_name)
+                    .and_then(|args| {
+                        let Some(TypeDefinition::Trait(td)) =
+                            self.global_type_definitions.get(trait_name)
+                        else {
+                            return None;
+                        };
+                        let gens = td.generics.as_ref()?;
+                        if gens.len() != args.len() {
+                            return None;
+                        }
+                        Some(
+                            gens.iter()
+                                .zip(args.iter())
+                                .map(|(g, a)| (g.name.clone(), a.clone()))
+                                .collect(),
+                        )
+                    })
+                    .unwrap_or_default();
+                let mut traits_to_check: Vec<(String, HashMap<String, Type>)> =
+                    vec![(trait_name.clone(), initial_subst)];
                 let mut visited_traits = std::collections::HashSet::new();
 
-                while let Some(current_trait_name) = traits_to_check.pop() {
-                    if visited_traits.contains(current_trait_name) {
+                while let Some((current_trait_name, current_subst)) = traits_to_check.pop() {
+                    if !visited_traits.insert(current_trait_name.clone()) {
                         continue;
                     }
-                    visited_traits.insert(current_trait_name);
+                    trait_substitutions.insert(current_trait_name.clone(), current_subst.clone());
 
                     if let Some(TypeDefinition::Trait(trait_def)) =
-                        self.global_type_definitions.get(current_trait_name)
+                        self.global_type_definitions.get(&current_trait_name)
                     {
                         // Add methods from this trait
                         for (method_name, method_info) in &trait_def.methods {
@@ -597,14 +645,22 @@ impl TypeChecker {
                             if !all_methods.contains_key(method_name) {
                                 all_methods.insert(
                                     method_name.clone(),
-                                    (method_info.clone(), current_trait_name.to_string()),
+                                    (method_info.clone(), current_trait_name.clone()),
                                 );
                             }
                         }
 
-                        // Add parent traits to check
-                        for parent_trait in &trait_def.parent_traits {
-                            traits_to_check.push(parent_trait);
+                        // Walk parents, composing the substitution through any
+                        // generic args declared at `extends Parent<...>`.
+                        for parent_name in &trait_def.parent_traits {
+                            let parent_subst = self
+                                .compose_parent_substitution(
+                                    parent_name,
+                                    trait_def.parent_trait_args.get(parent_name),
+                                    &current_subst,
+                                )
+                                .unwrap_or_default();
+                            traits_to_check.push((parent_name.clone(), parent_subst));
                         }
                     }
                 }
@@ -613,7 +669,7 @@ impl TypeChecker {
 
             // Collect missing and mismatched methods
             let mut missing_methods: Vec<(String, String)> = Vec::new();
-            let mut mismatched_methods: Vec<(String, String)> = Vec::new();
+            let mut mismatched_methods: Vec<(String, String, String)> = Vec::new();
 
             for (method_name, (method_info, origin_trait)) in &all_trait_methods {
                 // Check if method is required (abstract, no default implementation)
@@ -631,6 +687,23 @@ impl TypeChecker {
                     let class_type_kind = TypeKind::Custom(name.clone(), None);
                     let trait_self_kind = TypeKind::Custom(origin_trait.clone(), None);
 
+                    // Substitution for the originating trait, computed during the
+                    // hierarchy walk above. Empty if the trait declared no generic
+                    // args at this implements/extends site.
+                    let substitution: Option<HashMap<String, Type>> = trait_substitutions
+                        .get(origin_trait)
+                        .filter(|m| !m.is_empty())
+                        .cloned();
+
+                    // Substitute trait method's generic params with the concrete
+                    // types from the implements clause before comparing.
+                    let substitute = |ty: &Type| -> Type {
+                        match &substitution {
+                            Some(map) => self.substitute_type(ty, map),
+                            None => ty.clone(),
+                        }
+                    };
+
                     let types_match = |trait_ty: &TypeKind, class_ty: &TypeKind| -> bool {
                         if trait_ty == class_ty {
                             return true;
@@ -646,15 +719,23 @@ impl TypeChecker {
                                 || matches!(class_ty, TypeKind::Generic(..))
                                 || matches!(class_ty, TypeKind::Custom(cn, _) if cn == &name);
                         }
-                        // Generic trait parameter (e.g. T in `Iterable<T>`) is allowed
-                        // to match any concrete type the class chose for that slot.
-                        // We don't track `implements Iterable<String>`'s type args,
-                        // so accept any well-formed substitution here. This mirrors
-                        // the looseness applied to `Self` above.
+                        // Generic trait parameter that we couldn't substitute (e.g.
+                        // a method inherited from a parent trait whose generics are
+                        // not tracked at the implements site). Stay loose so we do
+                        // not regress before that propagation is wired up.
                         if matches!(trait_ty, TypeKind::Generic(..)) {
                             return true;
                         }
                         false
+                    };
+
+                    let kinds_compatible = |trait_ty: &Type, class_ty: &Type| -> bool {
+                        let substituted = substitute(trait_ty);
+                        // Fast path: after substitution, kinds match structurally.
+                        if substituted.kind == class_ty.kind {
+                            return true;
+                        }
+                        types_match(&substituted.kind, &class_ty.kind)
                     };
 
                     let params_match = method_info.params.len() == class_method.params.len()
@@ -662,11 +743,9 @@ impl TypeChecker {
                             .params
                             .iter()
                             .zip(class_method.params.iter())
-                            .all(|((_, t1), (_, t2))| types_match(&t1.kind, &t2.kind));
-                    let return_match = types_match(
-                        &method_info.return_type.kind,
-                        &class_method.return_type.kind,
-                    );
+                            .all(|((_, t1), (_, t2))| kinds_compatible(t1, t2));
+                    let return_match =
+                        kinds_compatible(&method_info.return_type, &class_method.return_type);
 
                     if !params_match || !return_match {
                         let expected = format!(
@@ -675,12 +754,16 @@ impl TypeChecker {
                             method_info
                                 .params
                                 .iter()
-                                .map(|(n, t)| format!("{}: {:?}", n, t.kind))
+                                .map(|(n, t)| format!("{}: {:?}", n, substitute(t).kind))
                                 .collect::<Vec<_>>()
                                 .join(", "),
-                            method_info.return_type.kind
+                            substitute(&method_info.return_type).kind
                         );
-                        mismatched_methods.push((method_name.clone(), expected));
+                        mismatched_methods.push((
+                            method_name.clone(),
+                            origin_trait.clone(),
+                            expected,
+                        ));
                     }
                 }
             }
@@ -696,12 +779,15 @@ impl TypeChecker {
                 );
             }
 
-            // Report errors for signature mismatches
-            for (method_name, expected_sig) in mismatched_methods {
+            // Report errors for signature mismatches. Use `origin_trait` (the
+            // trait that actually declares the method) rather than the directly
+            // implemented trait, so inherited-method mismatches name the right
+            // trait in the diagnostic.
+            for (method_name, origin_trait, expected_sig) in mismatched_methods {
                 self.report_error(
                     format!(
                         "Method '{}' in class '{}' does not match trait '{}' signature: expected {}",
-                        method_name, name, trait_name, expected_sig
+                        method_name, name, origin_trait, expected_sig
                     ),
                     name_expr.span,
                 );
@@ -794,5 +880,91 @@ impl TypeChecker {
         // Exit class context
         context.exit_class();
         context.exit_scope();
+    }
+
+    /// Resolves an argument expression from an `implements Trait<X, Y, ...>`
+    /// clause to a Type. Parser wraps each arg as `GenericType(name_expr, ...)`,
+    /// so we unwrap and map to a Type, handling primitive names directly. The
+    /// `class_generic_names` set carries the class's own generic-param names,
+    /// which are not yet in scope at this point in `check_class`.
+    fn resolve_implements_arg(
+        &mut self,
+        arg: &Expression,
+        context: &Context,
+        class_generic_names: &std::collections::HashSet<String>,
+    ) -> Type {
+        let name = match &arg.node {
+            ExpressionKind::GenericType(name_expr, _, _) => {
+                self.extract_type_name(name_expr).ok().map(str::to_string)
+            }
+            ExpressionKind::Identifier(name, _) => Some(name.clone()),
+            ExpressionKind::Type(_, _) => return self.resolve_type_expression(arg, context),
+            _ => None,
+        };
+        let Some(name) = name else {
+            return Type::new(TypeKind::Error, arg.span);
+        };
+        if class_generic_names.contains(&name) {
+            return make_type(TypeKind::Generic(
+                name,
+                None,
+                crate::ast::types::TypeDeclarationKind::None,
+            ));
+        }
+        let primitive = match name.as_str() {
+            "int" => Some(TypeKind::Int),
+            "bool" => Some(TypeKind::Boolean),
+            "float" => Some(TypeKind::Float),
+            "String" => Some(TypeKind::String),
+            "void" => Some(TypeKind::Void),
+            "i8" => Some(TypeKind::I8),
+            "i16" => Some(TypeKind::I16),
+            "i32" => Some(TypeKind::I32),
+            "i64" => Some(TypeKind::I64),
+            "i128" => Some(TypeKind::I128),
+            "u8" => Some(TypeKind::U8),
+            "u16" => Some(TypeKind::U16),
+            "u32" => Some(TypeKind::U32),
+            "u64" => Some(TypeKind::U64),
+            "u128" => Some(TypeKind::U128),
+            "f32" => Some(TypeKind::F32),
+            "f64" => Some(TypeKind::F64),
+            _ => None,
+        };
+        if let Some(kind) = primitive {
+            return make_type(kind);
+        }
+        let custom_expr = self.create_type_expression(make_type(TypeKind::Custom(name, None)));
+        self.resolve_type_expression(&custom_expr, context)
+    }
+
+    /// Compose the substitution for a parent trait by combining the child's
+    /// current substitution with the args the child supplied at
+    /// `extends Parent<...>`.
+    ///
+    /// The args returned by `parent_args` are expressed in the *child* trait's
+    /// generic scope. We substitute through `child_subst` to land them in
+    /// concrete types, then bind them to the *parent* trait's generic params.
+    fn compose_parent_substitution(
+        &self,
+        parent_name: &str,
+        parent_args: Option<&Vec<Type>>,
+        child_subst: &HashMap<String, Type>,
+    ) -> Option<HashMap<String, Type>> {
+        let parent_args = parent_args?;
+        let Some(TypeDefinition::Trait(parent_def)) = self.global_type_definitions.get(parent_name)
+        else {
+            return None;
+        };
+        let gens = parent_def.generics.as_ref()?;
+        if gens.len() != parent_args.len() {
+            return None;
+        }
+        let mut map = HashMap::new();
+        for (g, a) in gens.iter().zip(parent_args.iter()) {
+            let substituted = self.substitute_type(a, child_subst);
+            map.insert(g.name.clone(), substituted);
+        }
+        Some(map)
     }
 }

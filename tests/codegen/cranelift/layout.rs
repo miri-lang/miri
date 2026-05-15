@@ -602,6 +602,7 @@ fn test_trait_is_pointer_sized() {
             name: "MyTrait".to_string(),
             generics: None,
             parent_traits: vec![],
+            parent_trait_args: BTreeMap::new(),
             methods: BTreeMap::new(),
             module: String::new(),
         }),
