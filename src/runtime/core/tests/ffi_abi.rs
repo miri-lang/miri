@@ -409,7 +409,7 @@ fn test_string_ffi_abi() {
         assert!(!int_s.is_null());
         miri_rt_string_free(int_s);
 
-        let float_s = miri_rt_float_to_string(3.14);
+        let float_s = miri_rt_float_to_string(3.25);
         assert!(!float_s.is_null());
         miri_rt_string_free(float_s);
 

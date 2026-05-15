@@ -1,6 +1,9 @@
 use system.ops
 use system.collections.queryable
 use system.collections.list
+use system.collections.transformable
+use system.collections.foldable
+use system.collections.sequenced
 use system.memory
 
 /// A fixed-size array with elements of a single type.

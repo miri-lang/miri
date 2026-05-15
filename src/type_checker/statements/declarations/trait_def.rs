@@ -76,13 +76,15 @@ impl TypeChecker {
             let is_placeholder = match existing {
                 TypeDefinition::Trait(def) => def.methods.is_empty(),
                 _ => false,
-            };
+            } || (matches!(existing, TypeDefinition::Trait(_))
+                && self.pre_registered_types.contains(&name));
 
             if !is_placeholder {
                 self.report_error(format!("Type '{}' is already defined", name), span);
                 return;
             }
         }
+        self.pre_registered_types.remove(&name);
 
         // Process generics
         let generic_defs = generics

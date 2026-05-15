@@ -73,18 +73,20 @@ impl TypeChecker {
             }
         };
 
-        // Check for duplicate type definitions
+        // Check for duplicate type definitions. The cross-module pre-pass may
+        // have inserted a partial placeholder so forward references resolve;
+        // recognize it via `pre_registered_types` and let the full check below
+        // overwrite it. Anything else is a real duplicate.
         if let Some(existing) = self.global_type_definitions.get(&name) {
-            let is_placeholder = match existing {
-                TypeDefinition::Class(def) => def.fields.is_empty() && def.methods.is_empty(),
-                _ => false,
-            };
+            let is_placeholder = matches!(existing, TypeDefinition::Class(_))
+                && self.pre_registered_types.contains(&name);
 
             if !is_placeholder {
                 self.report_error(format!("Type '{}' is already defined", name), span);
                 return;
             }
         }
+        self.pre_registered_types.remove(&name);
 
         // Process generics
         let generic_defs = generics
@@ -391,9 +393,17 @@ impl TypeChecker {
         // Validate: method overrides must have compatible signatures
         let override_errors: Vec<String> = if let Some(ref base_name) = base_class_name {
             let mut errors = Vec::new();
-            // Walk up the inheritance chain to find parent methods
+            // Walk up the inheritance chain to find parent methods.
+            // Track visited classes to short-circuit on circular inheritance —
+            // the pre-pass registers mutually-extending shells in
+            // global_type_definitions, so without this guard A↔B loops forever.
+            let mut visited = std::collections::HashSet::new();
+            visited.insert(name.as_str());
             let mut current_base: Option<&str> = Some(base_name);
             while let Some(class_name) = current_base {
+                if !visited.insert(class_name) {
+                    break;
+                }
                 if let Some(TypeDefinition::Class(base_def)) =
                     self.global_type_definitions.get(class_name)
                 {
@@ -465,8 +475,13 @@ impl TypeChecker {
             // Check if parent has an accessible init method
             let parent_has_init = {
                 let mut has_init = false;
+                let mut visited = std::collections::HashSet::new();
+                visited.insert(name.as_str());
                 let mut current_base: Option<&str> = Some(base_name);
                 while let Some(check_class) = current_base {
+                    if !visited.insert(check_class) {
+                        break;
+                    }
                     if let Some(TypeDefinition::Class(base_def)) =
                         self.global_type_definitions.get(check_class)
                     {
@@ -524,9 +539,14 @@ impl TypeChecker {
                 // Collect all abstract methods from the entire inheritance chain
                 let missing_errors: Vec<String> = {
                     let mut errors = Vec::new();
+                    let mut visited = std::collections::HashSet::new();
+                    visited.insert(name.as_str());
                     let mut current_base: Option<&str> = Some(base_name);
 
                     while let Some(class_name) = current_base {
+                        if !visited.insert(class_name) {
+                            break;
+                        }
                         if let Some(TypeDefinition::Class(base_def)) =
                             self.global_type_definitions.get(class_name)
                         {

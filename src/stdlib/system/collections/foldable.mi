@@ -1,0 +1,96 @@
+use system.ops
+
+/// Collapses a collection into a single scalar value.
+///
+/// Folds do not produce a new collection; they accumulate a result. Predicate
+/// folds (`any`, `all`, `count_where`) report properties of the whole.
+///
+/// All methods derive from the abstract primitives `length()` and
+/// `element_at(index)` — implementors get them for free as default methods.
+///
+/// `sum`/`min`/`max` require a non-empty collection — calling them on an empty
+/// collection is a programming error and traps. Use `is_empty()` first when in
+/// doubt. (A future revision will switch these to `T?` once Option ergonomics
+/// improve.)
+///
+/// Foldable's defaults do not construct a new collection, so this module has
+/// no dependency on `system.collections.list` — keeping the trait reusable by
+/// any indexed type, including ones that don't have a `List` materialization
+/// path.
+public trait Foldable<T>
+
+    abstract fn length() int
+    abstract fn element_at(index int) T
+
+    /// Reduces all elements to a single value by applying `f` left-to-right.
+    public fn reduce(init T, f fn(T, T) T) T
+        var acc = init
+        var i = 0
+        let n = self.length()
+        while i < n
+            acc = f(acc, self.element_at(i))
+            i += 1
+        return acc
+
+    /// Returns true if any element satisfies the predicate.
+    public fn any(f fn(T) bool) bool
+        var i = 0
+        let n = self.length()
+        while i < n
+            if f(self.element_at(i)): return true
+            i += 1
+        return false
+
+    /// Returns true if all elements satisfy the predicate.
+    public fn all(f fn(T) bool) bool
+        var i = 0
+        let n = self.length()
+        while i < n
+            if f(self.element_at(i)) == false: return false
+            i += 1
+        return true
+
+    /// Returns the number of elements that satisfy the predicate.
+    public fn count_where(f fn(T) bool) int
+        var count = 0
+        var i = 0
+        let n = self.length()
+        while i < n
+            if f(self.element_at(i))
+                count += 1
+            i += 1
+        return count
+
+    /// Returns the sum of all elements (requires T to be numeric; collection must be non-empty).
+    public fn sum() T
+        var acc = self.element_at(0)
+        var i = 1
+        let n = self.length()
+        while i < n
+            acc = acc + self.element_at(i)
+            i += 1
+        return acc
+
+    /// Returns the smallest element (requires T to be comparable; collection must be non-empty).
+    public fn min() T
+        var result = self.element_at(0)
+        var i = 1
+        let n = self.length()
+        while i < n
+            let elem = self.element_at(i)
+            if elem < result
+                result = elem
+            i += 1
+        return result
+
+    /// Returns the largest element (requires T to be comparable; collection must be non-empty).
+    public fn max() T
+        var result = self.element_at(0)
+        var i = 1
+        let n = self.length()
+        while i < n
+            let elem = self.element_at(i)
+            if elem > result
+                result = elem
+            i += 1
+        return result

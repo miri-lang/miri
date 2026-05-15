@@ -472,8 +472,8 @@ fn test_ffi_float_to_string() {
         assert_eq!((*whole).as_str(), "3.0");
 
         // Fractional keeps natural formatting
-        let frac = miri_rt_float_to_string(3.14);
-        assert_eq!((*frac).as_str(), "3.14");
+        let frac = miri_rt_float_to_string(3.25);
+        assert_eq!((*frac).as_str(), "3.25");
 
         let neg = miri_rt_float_to_string(-0.5);
         assert_eq!((*neg).as_str(), "-0.5");
