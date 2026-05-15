@@ -136,6 +136,22 @@ impl TypeChecker {
             self.define_generics(gens, context);
         }
 
+        // Resolve generic args declared at each `extends ParentTrait<...>` site.
+        // Done after the trait's own generics are in scope so `S` in
+        // `extends Transformable<S>` resolves as `Generic("S")`.
+        let mut parent_trait_args: BTreeMap<String, Vec<Type>> = BTreeMap::new();
+        for trait_expr in parent_traits {
+            if let Ok(parent_name) = self.extract_type_name(trait_expr) {
+                if let ExpressionKind::TypeDeclaration(_, Some(args), _, _) = &trait_expr.node {
+                    let resolved_args: Vec<Type> = args
+                        .iter()
+                        .map(|arg| self.resolve_parent_trait_arg(arg, context))
+                        .collect();
+                    parent_trait_args.insert(parent_name.to_string(), resolved_args);
+                }
+            }
+        }
+
         // PASS 1: Collect method signatures only (do not check default bodies yet —
         // bodies may call `self.method()`, which requires the trait to be registered
         // in the type definitions so that the trait-typed lookup branch can resolve
@@ -194,6 +210,7 @@ impl TypeChecker {
             name: name.clone(),
             generics: generic_defs,
             parent_traits: parent_trait_names,
+            parent_trait_args,
             methods,
             module: self.current_module.clone(),
         };
@@ -252,5 +269,47 @@ impl TypeChecker {
 
         context.exit_class();
         context.exit_scope();
+    }
+
+    /// Resolves an argument expression from `extends ParentTrait<X, Y, ...>` to
+    /// a Type, with the enclosing trait's generic params already defined in
+    /// `context`. Parser wraps each arg as `GenericType(name_expr, ...)`.
+    fn resolve_parent_trait_arg(&mut self, arg: &Expression, context: &Context) -> Type {
+        let name = match &arg.node {
+            ExpressionKind::GenericType(name_expr, _, _) => {
+                self.extract_type_name(name_expr).ok().map(str::to_string)
+            }
+            ExpressionKind::Identifier(name, _) => Some(name.clone()),
+            ExpressionKind::Type(_, _) => return self.resolve_type_expression(arg, context),
+            _ => None,
+        };
+        let Some(name) = name else {
+            return Type::new(TypeKind::Error, arg.span);
+        };
+        let primitive = match name.as_str() {
+            "int" => Some(TypeKind::Int),
+            "bool" => Some(TypeKind::Boolean),
+            "float" => Some(TypeKind::Float),
+            "String" => Some(TypeKind::String),
+            "void" => Some(TypeKind::Void),
+            "i8" => Some(TypeKind::I8),
+            "i16" => Some(TypeKind::I16),
+            "i32" => Some(TypeKind::I32),
+            "i64" => Some(TypeKind::I64),
+            "i128" => Some(TypeKind::I128),
+            "u8" => Some(TypeKind::U8),
+            "u16" => Some(TypeKind::U16),
+            "u32" => Some(TypeKind::U32),
+            "u64" => Some(TypeKind::U64),
+            "u128" => Some(TypeKind::U128),
+            "f32" => Some(TypeKind::F32),
+            "f64" => Some(TypeKind::F64),
+            _ => None,
+        };
+        if let Some(kind) = primitive {
+            return make_type(kind);
+        }
+        let custom_expr = self.create_type_expression(make_type(TypeKind::Custom(name, None)));
+        self.resolve_type_expression(&custom_expr, context)
     }
 }

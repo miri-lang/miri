@@ -334,15 +334,14 @@ let b MaybeBox<int>
 
 #[test]
 fn test_generic_function_multiple_params() {
-    // TODO: Feature not implemented - generic tuple return types
-    type_checker_error_test(
+    // Generic functions can return a tuple of their type parameters.
+    type_checker_test(
         "
 fn pair<A, B>(a A, b B) (A, B)
     return (a, b)
 
 pair(1, \"hello\")
 ",
-        "Invalid return type",
     );
 }
 

@@ -145,12 +145,12 @@ fn is_auto_copy_inner<'a>(
         | TypeKind::Linear(_)
         | TypeKind::Generic(_, _, _) => false,
 
-        // Collection canonical variants — after normalization these are converted to
-        // TypeKind::Custom("List"/"Array"/"Map"/"Set") before reaching this function.
-        // Keeping them here ensures exhaustive match coverage.
-        TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => {
-            unreachable!("collection types are normalized to Custom before this point")
-        }
+        // Collection canonical variants — built-in collections (List/Array/Map/Set)
+        // are never auto-copy regardless of element type: they always live behind
+        // a refcounted pointer. Normalization to Custom is the common path, but
+        // parameter/return types in trait/function signatures can survive in this
+        // canonical form when resolve_type takes its early-out cache path.
+        TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => false,
 
         // Tuples: auto-copy if all elements are auto-copy
         TypeKind::Tuple(elements) => elements.iter().all(|elem_expr| {
@@ -647,6 +647,16 @@ impl TypeChecker {
                 ))
             }
             TypeKind::Custom(name, args) => self.resolve_custom_type(&name, args, expr, context),
+            TypeKind::Tuple(elements) => {
+                let resolved_elements: Vec<Expression> = elements
+                    .iter()
+                    .map(|elem_expr| {
+                        let resolved = self.resolve_type_expression(elem_expr, context);
+                        self.create_type_expression(resolved)
+                    })
+                    .collect();
+                make_type(TypeKind::Tuple(resolved_elements))
+            }
             _ => make_type(t.kind),
         }
     }
@@ -1227,6 +1237,7 @@ mod tests {
             name: "T".to_string(),
             generics: None,
             parent_traits: vec![],
+            parent_trait_args: BTreeMap::new(),
             methods: BTreeMap::<String, MethodInfo>::new(),
             module: "test".to_string(),
         })
