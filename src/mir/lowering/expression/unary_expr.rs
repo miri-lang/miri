@@ -9,6 +9,7 @@ use crate::mir::{Operand, Place, Rvalue, StatementKind as MirStatementKind, UnOp
 
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::lower_expression;
+use crate::mir::lowering::helpers::resolve_type;
 
 pub(crate) fn lower_unary_expr(
     ctx: &mut LoweringContext,
@@ -26,13 +27,11 @@ pub(crate) fn lower_unary_expr(
         // Decrement (--x) is treated as double negation: -(-x) = x
         // We recursively lower the operand and then negate twice
         crate::ast::operator::UnaryOp::Decrement => {
-            // First negate
-            let first_neg_ty = match &op_val {
-                Operand::Constant(c) => c.ty.clone(),
-                Operand::Copy(place) | Operand::Move(place) => {
-                    ctx.body.local_decls[place.local.0].ty.clone()
-                }
-            };
+            // Use the type-checker's resolved type for the operand expression.
+            // Reading the base local's type would lose projections (e.g. `self.field`
+            // would yield the class type rather than the field's scalar type),
+            // causing Perceus to mis-type the result temp.
+            let first_neg_ty = resolve_type(ctx.type_checker, operand);
             let first_neg = ctx.push_temp(first_neg_ty.clone(), expr.span);
             ctx.push_statement(crate::mir::Statement {
                 kind: MirStatementKind::Assign(
@@ -66,12 +65,11 @@ pub(crate) fn lower_unary_expr(
         crate::ast::operator::UnaryOp::BitwiseNot => UnOp::Not,
     };
 
-    let result_ty = match &op_val {
-        Operand::Constant(c) => c.ty.clone(),
-        Operand::Copy(place) | Operand::Move(place) => {
-            ctx.body.local_decls[place.local.0].ty.clone()
-        }
-    };
+    // Use the type-checker's resolved type for the unary expression.
+    // Reading the base local's type would lose projections (e.g. `-self.field`
+    // would yield the class type rather than the field's scalar type),
+    // causing Perceus to mis-type the result temp.
+    let result_ty = resolve_type(ctx.type_checker, expr);
 
     let (target, ret_op) = if let Some(d) = dest {
         (d.clone(), Operand::Copy(d))
