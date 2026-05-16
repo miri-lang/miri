@@ -323,8 +323,17 @@ impl<'source> Parser<'source> {
                 Err(self.error_invalid_inheritance_identifier())
             }
             ExpressionKind::Identifier(_, None) => {
-                // Check for optional generic type arguments: Collection<T>
-                if let Some(generic_args) = self.generic_types_expression()? {
+                // Generic args here are TYPE arguments (e.g. `Iterable<List<int>>`),
+                // not generic-parameter declarations, so parse them as type
+                // expressions to preserve nested generics. The previous use of
+                // `generic_types_expression` parsed each arg as a bare identifier
+                // and silently dropped any `<...>` inside, losing the inner types.
+                if self.lookahead_is_less_than() {
+                    let generic_args = self.multiple_element_type_expressions(
+                        "trait argument",
+                        &Token::LessThan,
+                        &Token::GreaterThan,
+                    )?;
                     let span = name.span;
                     Ok(crate::ast::factory::expr_with_span(
                         ExpressionKind::TypeDeclaration(
