@@ -518,6 +518,7 @@ fn test_class_is_pointer_sized() {
             name: "MyClass".to_string(),
             generics: None,
             base_class: None,
+            base_class_args: None,
             traits: vec![],
             fields: Vec::new(),
             methods: BTreeMap::new(),
@@ -542,6 +543,7 @@ fn test_class_field_layout_uses_pointer_slots() {
             name: "C".to_string(),
             generics: None,
             base_class: None,
+            base_class_args: None,
             traits: vec![],
             fields: vec![
                 (

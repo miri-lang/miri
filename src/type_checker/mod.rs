@@ -303,6 +303,7 @@ impl TypeChecker {
                                 name: name.to_string(),
                                 generics,
                                 base_class: base_class_name,
+                                base_class_args: None,
                                 traits: trait_names,
                                 fields: Vec::new(),
                                 methods: BTreeMap::new(),
@@ -490,6 +491,7 @@ impl TypeChecker {
                                 name: name.to_string(),
                                 generics: generics.clone(),
                                 base_class: base_class_name.clone(),
+                                base_class_args: None,
                                 traits: trait_names.clone(),
                                 fields: Vec::new(),
                                 methods: BTreeMap::new(),
@@ -511,6 +513,27 @@ impl TypeChecker {
                         }
                         let class_type = make_type(TypeKind::Custom(name.to_string(), None));
                         context.enter_class(name.to_string(), base_class_name.clone(), class_type);
+
+                        // Resolve `extends Base<...>` args in this class's
+                        // generic-param scope so descendants whose check_class
+                        // runs before ours can compose substitutions through
+                        // this ancestor. Without this, intermediate generic
+                        // ancestors look unparameterized at child-check time.
+                        let base_direct_args: Option<Vec<crate::ast::types::Type>> =
+                            class_data.base_class.as_ref().and_then(|be| {
+                                if let ExpressionKind::TypeDeclaration(_, Some(args), _, _) =
+                                    &be.node
+                                {
+                                    Some(
+                                        args.iter()
+                                            .map(|arg| self.resolve_type_expression(arg, context))
+                                            .collect(),
+                                    )
+                                } else {
+                                    None
+                                }
+                            });
+
                         let mut methods: BTreeMap<String, context::MethodInfo> = BTreeMap::new();
                         for stmt in &class_data.body {
                             if let StatementKind::FunctionDeclaration(decl) = &stmt.node {
@@ -564,6 +587,7 @@ impl TypeChecker {
                                 name: name.to_string(),
                                 generics,
                                 base_class: base_class_name,
+                                base_class_args: base_direct_args,
                                 traits: trait_names,
                                 fields: Vec::new(),
                                 methods,

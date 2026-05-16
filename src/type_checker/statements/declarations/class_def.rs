@@ -172,6 +172,23 @@ impl TypeChecker {
             self.define_generics(gens, context);
         }
 
+        // Capture generic args from `extends Base<X, Y, ...>`. Resolved in the
+        // class's own generic-param scope so that `extends Base<T>` (where T is
+        // this class's generic) survives as `Generic("T")` and gets substituted
+        // later by descendants that pin the chain. Mirrors `trait_direct_args`
+        // for `implements Trait<...>`.
+        let base_direct_args: Option<Vec<Type>> = base_class.as_ref().and_then(|be| {
+            if let ExpressionKind::TypeDeclaration(_, Some(args), _, _) = &be.node {
+                Some(
+                    args.iter()
+                        .map(|arg| self.resolve_type_expression(arg, context))
+                        .collect(),
+                )
+            } else {
+                None
+            }
+        });
+
         // Validate traits exist, are visible, and are actually traits.
         // For each `implements Trait<X>`, we also capture the generic args at the
         // implements site so that trait-method signatures can be compared after
@@ -414,9 +431,18 @@ impl TypeChecker {
             // Track visited classes to short-circuit on circular inheritance —
             // the pre-pass registers mutually-extending shells in
             // global_type_definitions, so without this guard A↔B loops forever.
+            //
+            // For each ancestor, build a substitution map from its generic params
+            // to the concrete args declared at the corresponding `extends ...<>`
+            // site. The map composes through the chain: at level N, args declared
+            // at level N-1's `extends` are themselves substituted by N-1's map
+            // before being installed for level N. Mirrors the trait-hierarchy
+            // walk that composes `parent_trait_args` via `compose_parent_substitution`.
             let mut visited = std::collections::HashSet::new();
             visited.insert(name.as_str());
             let mut current_base: Option<&str> = Some(base_name);
+            let mut current_args: Option<Vec<Type>> = base_direct_args.clone();
+            let mut current_subst: HashMap<String, Type> = HashMap::new();
             while let Some(class_name) = current_base {
                 if !visited.insert(class_name) {
                     break;
@@ -424,6 +450,23 @@ impl TypeChecker {
                 if let Some(TypeDefinition::Class(base_def)) =
                     self.global_type_definitions.get(class_name)
                 {
+                    // Build this ancestor's generic-param substitution. Apply the
+                    // already-accumulated `current_subst` to each arg so that an
+                    // arg referencing a deeper-level generic (`extends Base<T>`
+                    // where T is the intermediate class's param) lands as the
+                    // concrete type pinned higher in the chain.
+                    let ancestor_subst: HashMap<String, Type> =
+                        match (&base_def.generics, &current_args) {
+                            (Some(gens), Some(args)) if gens.len() == args.len() => gens
+                                .iter()
+                                .zip(args.iter())
+                                .map(|(g, a)| {
+                                    (g.name.clone(), self.substitute_type(a, &current_subst))
+                                })
+                                .collect(),
+                            _ => HashMap::new(),
+                        };
+
                     for (method_name, child_method) in &methods {
                         // Skip constructor (init) - constructors can have different signatures
                         if method_name == "init" {
@@ -447,13 +490,15 @@ impl TypeChecker {
                                         .zip(parent_method.params.iter())
                                         .enumerate()
                                 {
-                                    if child_type.kind != parent_type.kind {
+                                    let parent_substituted =
+                                        self.substitute_type(parent_type, &ancestor_subst);
+                                    if child_type.kind != parent_substituted.kind {
                                         errors.push(format!(
                                             "Method '{}' has incompatible parameter type for '{}' (position {}): expected {}, got {}",
                                             method_name,
                                             child_name,
                                             i + 1,
-                                            parent_type,
+                                            parent_substituted,
                                             child_type
                                         ));
                                     }
@@ -461,18 +506,24 @@ impl TypeChecker {
                             }
 
                             // Check return type
-                            if child_method.return_type.kind != parent_method.return_type.kind {
+                            let parent_return_substituted =
+                                self.substitute_type(&parent_method.return_type, &ancestor_subst);
+                            if child_method.return_type.kind != parent_return_substituted.kind {
                                 errors.push(format!(
                                     "Method '{}' has incompatible return type: expected {}, got {}",
                                     method_name,
-                                    parent_method.return_type,
+                                    parent_return_substituted,
                                     child_method.return_type
                                 ));
                             }
                         }
                     }
-                    // Move to the next ancestor
+                    // Move to the next ancestor, carrying its own `extends` args
+                    // (resolved in ITS scope) forward. The next iteration will
+                    // compose them through the now-current substitution.
                     current_base = base_def.base_class.as_deref();
+                    current_args = base_def.base_class_args.clone();
+                    current_subst = ancestor_subst;
                 } else {
                     break;
                 }
@@ -714,13 +765,6 @@ impl TypeChecker {
                                 || matches!(class_ty, TypeKind::Generic(..))
                                 || matches!(class_ty, TypeKind::Custom(cn, _) if cn == &name);
                         }
-                        // Generic trait parameter that we couldn't substitute (e.g.
-                        // a method inherited from a parent trait whose generics are
-                        // not tracked at the implements site). Stay loose so we do
-                        // not regress before that propagation is wired up.
-                        if matches!(trait_ty, TypeKind::Generic(..)) {
-                            return true;
-                        }
                         false
                     };
 
@@ -797,6 +841,7 @@ impl TypeChecker {
             name: name.clone(),
             generics: generic_defs,
             base_class: base_class_name.clone(),
+            base_class_args: base_direct_args.clone(),
             traits: trait_names.clone(),
             fields,
             methods,
