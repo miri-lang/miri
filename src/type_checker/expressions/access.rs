@@ -531,25 +531,10 @@ impl TypeChecker {
                 }
             }
             TypeKind::Custom(name, args) => (Some(name.clone()), args.clone()),
-            TypeKind::Result(ok_type, _) => {
-                if prop_name == "unwrap" {
-                    let t = self.resolve_type_expression(ok_type, context);
-                    return make_type(TypeKind::Function(Box::new(FunctionTypeData {
-                        generics: None,
-                        params: vec![],
-                        return_type: Some(Box::new(ast_factory::type_expr_non_null(t))),
-                    })));
-                } else if prop_name == "is_ok" || prop_name == "is_err" {
-                    return make_type(TypeKind::Function(Box::new(FunctionTypeData {
-                        generics: None,
-                        params: vec![],
-                        return_type: Some(Box::new(ast_factory::type_expr_non_null(make_type(
-                            TypeKind::Boolean,
-                        )))),
-                    })));
-                }
-                (None, None)
-            }
+            TypeKind::Result(ok, err) => (
+                Some("Result".to_string()),
+                Some(vec![*ok.clone(), *err.clone()]),
+            ),
             TypeKind::Option(_) => (None, None),
             // For generic types with constraints (T extends SomeClass), use constraint for member lookup
             TypeKind::Generic(_, Some(constraint), _) => {

@@ -79,35 +79,15 @@ r.is_err()
 }
 
 #[test]
-fn test_result_methods_unwrap() {
+fn test_result_methods_unwrap_removed() {
+    // unwrap() was removed from Result to satisfy the no-stdlib-panics rule.
+    // Users must use `match` or `unwrap_or(...)` instead.
     let source = "
 use system.result
 let r = Ok(10)
 r.unwrap()
     ";
-    type_checker_expr_type_test(source, type_int());
-}
-
-#[test]
-fn test_result_methods_unwrap_on_err() {
-    let source = "
-use system.result
-let r = Err(\"error\")
-r.unwrap()
-    ";
-    // unwrap on Err returns Void because Ok type is Void
-    type_checker_expr_type_test(source, type_void());
-}
-
-#[test]
-fn test_result_methods_unwrap_typed() {
-    let source = "
-use system.result
-let r result<int, String> = Err(\"error\")
-r.unwrap()
-    ";
-    // unwrap on typed Result returns the Ok type (Int)
-    type_checker_expr_type_test(source, type_int());
+    type_checker_error_test(source, "has no method");
 }
 
 #[test]
@@ -126,11 +106,12 @@ let r result<result<int, String>, bool> = Ok(Ok(10))
 }
 
 #[test]
-fn test_nested_result_unwrap() {
+fn test_nested_result_unwrap_or_extracts() {
     let source = "
 use system.result
 let r result<result<int, String>, bool> = Ok(Ok(10))
-r.unwrap().unwrap()
+let inner = r.unwrap_or(Ok(0))
+inner.unwrap_or(0)
     ";
     type_checker_expr_type_test(source, type_int());
 }
@@ -169,7 +150,7 @@ fn test_result_match_bind() {
 use system.result
 let r = Ok(10)
 match r
-    x: x.unwrap()
+    x: x.unwrap_or(0)
     ";
     type_checker_expr_type_test(source, type_int());
 }
@@ -180,9 +161,9 @@ fn test_result_match_shadow_ok_fails() {
 use system.result
 let r = Ok(10)
 match r
-    Ok: Ok.unwrap()
+    Ok: Ok.unwrap_or(0)
     ";
-    // Ok resolves to the constructor function, which doesn't have unwrap()
+    // Ok resolves to the constructor function, which doesn't have unwrap_or()
     type_checker_error_test(source, "does not have members");
 }
 

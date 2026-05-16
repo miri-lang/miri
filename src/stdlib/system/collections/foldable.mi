@@ -8,10 +8,9 @@ use system.ops
 /// All methods derive from the abstract primitives `length()` and
 /// `element_at(index)` — implementors get them for free as default methods.
 ///
-/// `sum`/`min`/`max` require a non-empty collection — calling them on an empty
-/// collection is a programming error and traps. Use `is_empty()` first when in
-/// doubt. (A future revision will switch these to `T?` once Option ergonomics
-/// improve.)
+/// `sum`/`min`/`max` return `T?` — `None` on an empty collection, `Some(value)`
+/// otherwise. Use the `??` operator to supply a fallback at the call site
+/// (e.g. `l.sum() ?? 0`).
 ///
 /// Foldable's defaults do not construct a new collection, so this module has
 /// no dependency on `system.collections.list` — keeping the trait reusable by
@@ -61,21 +60,25 @@ public trait Foldable<T>
             i += 1
         return count
 
-    /// Returns the sum of all elements (requires T to be numeric; collection must be non-empty).
-    public fn sum() T
+    /// Returns the sum of all elements as `Some(total)`, or `None` if the
+    /// collection is empty. T must be numeric.
+    public fn sum() T?
+        let n = self.length()
+        if n == 0: return None
         var acc = self.element_at(0)
         var i = 1
-        let n = self.length()
         while i < n
             acc = acc + self.element_at(i)
             i += 1
         return acc
 
-    /// Returns the smallest element (requires T to be comparable; collection must be non-empty).
-    public fn min() T
+    /// Returns the smallest element as `Some(value)`, or `None` if the
+    /// collection is empty. T must be comparable.
+    public fn min() T?
+        let n = self.length()
+        if n == 0: return None
         var result = self.element_at(0)
         var i = 1
-        let n = self.length()
         while i < n
             let elem = self.element_at(i)
             if elem < result
@@ -83,11 +86,13 @@ public trait Foldable<T>
             i += 1
         return result
 
-    /// Returns the largest element (requires T to be comparable; collection must be non-empty).
-    public fn max() T
+    /// Returns the largest element as `Some(value)`, or `None` if the
+    /// collection is empty. T must be comparable.
+    public fn max() T?
+        let n = self.length()
+        if n == 0: return None
         var result = self.element_at(0)
         var i = 1
-        let n = self.length()
         while i < n
             let elem = self.element_at(i)
             if elem > result
