@@ -1223,6 +1223,7 @@ mod tests {
             name: "C".to_string(),
             generics: None,
             base_class: None,
+            base_class_args: None,
             traits: vec![],
             fields: vec![] as Vec<(String, FieldInfo)>,
             methods: BTreeMap::<String, MethodInfo>::new(),

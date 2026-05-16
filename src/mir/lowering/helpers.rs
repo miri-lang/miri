@@ -64,6 +64,16 @@ pub fn resolve_type(tc: &TypeChecker, expr: &Expression) -> Type {
         return *t.clone();
     }
 
+    // Tripwire: any non-Type synthesized expression that reaches the cache
+    // with id=0 will collide with other id=0 entries (same hazard the Type
+    // short-circuit avoids). If this fires, allocate a real id at the
+    // synthesis site via `expr_with_span` instead of constructing
+    // `Expression` directly with `id: 0`.
+    debug_assert!(
+        expr.id != 0,
+        "expression with id=0 hit the MIR type cache — synthesizer missed an id"
+    );
+
     if let Some(ty) = tc.get_type(expr.id) {
         return ty.clone();
     }
