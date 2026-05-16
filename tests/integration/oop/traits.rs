@@ -566,3 +566,90 @@ class Bad implements Child<String>
         "does not match trait",
     );
 }
+
+// ── Nested generic args in `implements` / `extends` clauses ───────────────────
+
+#[test]
+fn test_implements_trait_with_nested_generic_arg_matches() {
+    // `implements Iterable<List<int>>` requires `element_at(i int) List<int>`;
+    // the trait arg's inner type (`int`) must be preserved through resolution.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+class Box implements Iterable<List<int>>
+    fn length() int
+        return 1
+    fn element_at(index int) List<int>
+        return List([10, 20, 30])
+
+fn main()
+    let b = Box()
+    let xs = b.element_at(0)
+    println(f"{xs.length()}")
+    "#,
+        "3",
+    );
+}
+
+#[test]
+fn test_implements_trait_with_nested_generic_arg_rejects_mismatch() {
+    // Same shape as above, but the class returns `List<String>` where the
+    // trait substitution requires `List<int>`. Must be rejected.
+    assert_compiler_error(
+        r#"
+use system.collections.list
+
+class Bad implements Iterable<List<int>>
+    fn length() int
+        return 1
+    fn element_at(index int) List<String>
+        return List(["x"])
+    "#,
+        "does not match trait",
+    );
+}
+
+#[test]
+fn test_implements_trait_with_nested_class_generic_arg_resolves() {
+    // `class Box<T> implements Iterable<List<T>>`: the class's own generic
+    // parameter `T` appears inside a nested type in the trait arg. The class's
+    // generics must be in scope when the implements clause is resolved, so
+    // `T` resolves as a Generic rather than failing with "Unknown type: T".
+    assert_type_checks(
+        r#"
+use system.collections.list
+
+class Box<T> implements Iterable<List<T>>
+    fn length() int
+        return 0
+    fn element_at(index int) List<T>
+        return List<T>()
+    "#,
+    );
+}
+
+#[test]
+fn test_parent_trait_with_nested_generic_arg_propagates() {
+    // `Child<List<int>> extends Parent<List<int>>`: the parent trait's
+    // substitution must preserve the inner `int`.
+    assert_compiler_error(
+        r#"
+use system.collections.list
+
+trait Parent<T>
+    fn parent_value() T
+
+trait Child<T> extends Parent<T>
+    fn child_value() T
+
+class Bad implements Child<List<int>>
+    fn parent_value() List<String>
+        return List(["x"])
+    fn child_value() List<int>
+        return List([1])
+    "#,
+        "does not match trait",
+    );
+}

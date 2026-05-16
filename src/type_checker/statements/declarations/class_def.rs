@@ -163,16 +163,19 @@ impl TypeChecker {
             }
         }
 
+        // Enter class scope and bring the class's own generics into scope BEFORE
+        // resolving `implements`/`extends` args, so that nested references to a
+        // class generic (`implements Iterable<List<T>>`) resolve as Generic
+        // rather than failing with "Unknown type: T".
+        context.enter_scope();
+        if let Some(gens) = generics {
+            self.define_generics(gens, context);
+        }
+
         // Validate traits exist, are visible, and are actually traits.
         // For each `implements Trait<X>`, we also capture the generic args at the
         // implements site so that trait-method signatures can be compared after
         // substituting the trait's generic params with the chosen concrete types.
-        // We pass the class's generic-param names so they resolve as Generic types
-        // here — context.define_generics has not run yet at this point.
-        let class_generic_names: std::collections::HashSet<String> = generic_defs
-            .as_ref()
-            .map(|defs| defs.iter().map(|d| d.name.clone()).collect())
-            .unwrap_or_default();
         let mut trait_names = Vec::with_capacity(traits.len());
         let mut trait_direct_args: HashMap<String, Vec<Type>> = HashMap::new();
         for trait_expr in traits {
@@ -204,13 +207,13 @@ impl TypeChecker {
                 }
                 // Capture generic args from `implements Trait<X, Y, ...>` so that
                 // signature checks can substitute the trait's generic params with
-                // the chosen concrete types. Args inside a `TypeDeclaration` are
-                // parsed as `GenericType(name_expr, ...)`; convert each to a
-                // resolvable type expression before calling resolve.
+                // the chosen concrete types. The parser produces fully-parsed
+                // type expressions for each arg, so nested generics survive
+                // intact.
                 if let ExpressionKind::TypeDeclaration(_, Some(args), _, _) = &trait_expr.node {
                     let resolved_args: Vec<Type> = args
                         .iter()
-                        .map(|arg| self.resolve_implements_arg(arg, context, &class_generic_names))
+                        .map(|arg| self.resolve_type_expression(arg, context))
                         .collect();
                     trait_direct_args.insert(trait_name.to_string(), resolved_args);
                 }
@@ -227,14 +230,6 @@ impl TypeChecker {
             for trait_name in &trait_names {
                 entry.implements.push(trait_name.clone());
             }
-        }
-
-        // Enter class scope
-        context.enter_scope();
-
-        // Define generics in scope
-        if let Some(gens) = generics {
-            self.define_generics(gens, context);
         }
 
         // Set class context for self/super resolution
@@ -880,62 +875,6 @@ impl TypeChecker {
         // Exit class context
         context.exit_class();
         context.exit_scope();
-    }
-
-    /// Resolves an argument expression from an `implements Trait<X, Y, ...>`
-    /// clause to a Type. Parser wraps each arg as `GenericType(name_expr, ...)`,
-    /// so we unwrap and map to a Type, handling primitive names directly. The
-    /// `class_generic_names` set carries the class's own generic-param names,
-    /// which are not yet in scope at this point in `check_class`.
-    fn resolve_implements_arg(
-        &mut self,
-        arg: &Expression,
-        context: &Context,
-        class_generic_names: &std::collections::HashSet<String>,
-    ) -> Type {
-        let name = match &arg.node {
-            ExpressionKind::GenericType(name_expr, _, _) => {
-                self.extract_type_name(name_expr).ok().map(str::to_string)
-            }
-            ExpressionKind::Identifier(name, _) => Some(name.clone()),
-            ExpressionKind::Type(_, _) => return self.resolve_type_expression(arg, context),
-            _ => None,
-        };
-        let Some(name) = name else {
-            return Type::new(TypeKind::Error, arg.span);
-        };
-        if class_generic_names.contains(&name) {
-            return make_type(TypeKind::Generic(
-                name,
-                None,
-                crate::ast::types::TypeDeclarationKind::None,
-            ));
-        }
-        let primitive = match name.as_str() {
-            "int" => Some(TypeKind::Int),
-            "bool" => Some(TypeKind::Boolean),
-            "float" => Some(TypeKind::Float),
-            "String" => Some(TypeKind::String),
-            "void" => Some(TypeKind::Void),
-            "i8" => Some(TypeKind::I8),
-            "i16" => Some(TypeKind::I16),
-            "i32" => Some(TypeKind::I32),
-            "i64" => Some(TypeKind::I64),
-            "i128" => Some(TypeKind::I128),
-            "u8" => Some(TypeKind::U8),
-            "u16" => Some(TypeKind::U16),
-            "u32" => Some(TypeKind::U32),
-            "u64" => Some(TypeKind::U64),
-            "u128" => Some(TypeKind::U128),
-            "f32" => Some(TypeKind::F32),
-            "f64" => Some(TypeKind::F64),
-            _ => None,
-        };
-        if let Some(kind) = primitive {
-            return make_type(kind);
-        }
-        let custom_expr = self.create_type_expression(make_type(TypeKind::Custom(name, None)));
-        self.resolve_type_expression(&custom_expr, context)
     }
 
     /// Compose the substitution for a parent trait by combining the child's
