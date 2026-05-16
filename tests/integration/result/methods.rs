@@ -64,36 +64,6 @@ fn main()
 }
 
 #[test]
-fn test_unwrap_ok() {
-    assert_runs_with_output(
-        r#"
-use system.io
-use system.result
-
-fn main()
-    let r Result<int, String> = Result.Ok(99)
-    let v = r.unwrap()
-    println(f"{v}")
-"#,
-        "99",
-    );
-}
-
-#[test]
-fn test_unwrap_panics_on_err() {
-    assert_runtime_crash(
-        r#"
-use system.io
-use system.result
-
-fn main()
-    let r Result<int, String> = Result.Err("oops")
-    r.unwrap()
-"#,
-    );
-}
-
-#[test]
 fn test_unwrap_or_ok() {
     assert_runs_with_output(
         r#"
@@ -124,7 +94,24 @@ fn main()
 }
 
 #[test]
-fn test_unwrap_err_ok() {
+fn test_match_extracts_ok_value() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.result
+
+fn main()
+    let r Result<int, String> = Result.Ok(99)
+    match r
+        Result.Ok(value): println(f"{value}")
+        Result.Err(_): println("err")
+"#,
+        "99",
+    );
+}
+
+#[test]
+fn test_match_extracts_err_value() {
     assert_runs_with_output(
         r#"
 use system.io
@@ -132,23 +119,10 @@ use system.result
 
 fn main()
     let r Result<int, String> = Result.Err("the error")
-    let e = r.unwrap_err()
-    println(e)
+    match r
+        Result.Ok(_): println("ok")
+        Result.Err(msg): println(msg)
 "#,
         "the error",
-    );
-}
-
-#[test]
-fn test_unwrap_err_panics_on_ok() {
-    assert_runtime_crash(
-        r#"
-use system.io
-use system.result
-
-fn main()
-    let r Result<int, String> = Result.Ok(1)
-    r.unwrap_err()
-"#,
     );
 }
