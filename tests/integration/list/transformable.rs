@@ -198,7 +198,7 @@ use system.collections.list
 use system.collections.transformable
 
 let l = List([1, 2, 3, 4, 5])
-println(f\"{l.sum()}\")
+println(f\"{l.sum() ?? 0}\")
 ",
         "15",
     );
@@ -213,8 +213,8 @@ use system.collections.list
 use system.collections.transformable
 
 let l = List([3, 1, 4, 1, 5, 9, 2])
-println(f\"{l.min()}\")
-println(f\"{l.max()}\")
+println(f\"{l.min() ?? 0}\")
+println(f\"{l.max() ?? 0}\")
 ",
         "1\n9",
     );
@@ -348,5 +348,67 @@ for p in l.enumerate()
     println(f\"{p.0}, {p.1}\")
 ",
         "0, 10\n1, 20\n2, 30",
+    );
+}
+
+#[test]
+fn list_sum_on_empty_returns_none() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.list
+use system.collections.transformable
+
+let l = List<int>()
+println(f\"{l.sum() ?? -1}\")
+",
+        "-1",
+    );
+}
+
+#[test]
+fn list_min_on_empty_returns_none() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.list
+use system.collections.transformable
+
+let l = List<int>()
+println(f\"{l.min() ?? -1}\")
+",
+        "-1",
+    );
+}
+
+#[test]
+fn list_max_on_empty_returns_none() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.list
+use system.collections.transformable
+
+let l = List<int>()
+println(f\"{l.max() ?? -1}\")
+",
+        "-1",
+    );
+}
+
+#[test]
+fn list_sum_min_max_single_element() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.list
+use system.collections.transformable
+
+let l = List([42])
+println(f\"{l.sum() ?? 0}\")
+println(f\"{l.min() ?? 0}\")
+println(f\"{l.max() ?? 0}\")
+",
+        "42\n42\n42",
     );
 }

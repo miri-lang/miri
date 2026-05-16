@@ -131,7 +131,7 @@ use system.collections.array
 use system.collections.transformable
 
 let a = [1, 2, 3, 4, 5]
-println(f\"{a.sum()}\")
+println(f\"{a.sum() ?? 0}\")
 ",
         "15",
     );
@@ -146,8 +146,8 @@ use system.collections.array
 use system.collections.transformable
 
 let a = [3, 1, 4, 1, 5, 9, 2]
-println(f\"{a.min()}\")
-println(f\"{a.max()}\")
+println(f\"{a.min() ?? 0}\")
+println(f\"{a.max() ?? 0}\")
 ",
         "1\n9",
     );
@@ -210,5 +210,67 @@ while i < e.length()
     i += 1
 ",
         "3\n0, 10\n1, 20\n2, 30",
+    );
+}
+
+#[test]
+fn array_sum_on_empty_returns_none() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.array
+use system.collections.transformable
+
+let a [int; 0] = []
+println(f\"{a.sum() ?? -1}\")
+",
+        "-1",
+    );
+}
+
+#[test]
+fn array_min_on_empty_returns_none() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.array
+use system.collections.transformable
+
+let a [int; 0] = []
+println(f\"{a.min() ?? -1}\")
+",
+        "-1",
+    );
+}
+
+#[test]
+fn array_max_on_empty_returns_none() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.array
+use system.collections.transformable
+
+let a [int; 0] = []
+println(f\"{a.max() ?? -1}\")
+",
+        "-1",
+    );
+}
+
+#[test]
+fn array_sum_min_max_single_element() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.array
+use system.collections.transformable
+
+let a = [42]
+println(f\"{a.sum() ?? 0}\")
+println(f\"{a.min() ?? 0}\")
+println(f\"{a.max() ?? 0}\")
+",
+        "42\n42\n42",
     );
 }
