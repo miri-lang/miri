@@ -631,6 +631,33 @@ class Box<T> implements Iterable<List<T>>
 }
 
 #[test]
+fn test_generic_class_with_implements_emits_vtable() {
+    // Instantiating a generic class that implements a trait must link.
+    // Previously the vtable generator skipped generic classes
+    // (`cd.generics.is_none()` guard), leaving `__vtable_Box` undefined and
+    // breaking the linker. The vtable is now emitted once per class — its
+    // method symbols are generic-opaque, so a single `__vtable_Box` serves
+    // every `<T>` instantiation.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+class Box<T> implements Iterable<List<T>>
+    fn length() int
+        return 0
+    fn element_at(index int) List<T>
+        return List<T>()
+
+fn main()
+    let b = Box<int>()
+    println(f"{b.length()}")
+    "#,
+        "0",
+    );
+}
+
+#[test]
 fn test_parent_trait_with_nested_generic_arg_propagates() {
     // `Child<List<int>> extends Parent<List<int>>`: the parent trait's
     // substitution must preserve the inner `int`.

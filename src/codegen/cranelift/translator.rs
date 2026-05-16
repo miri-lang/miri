@@ -3078,11 +3078,13 @@ impl<'a> FunctionTranslator<'a> {
             .iter()
             .filter_map(|(name, def)| {
                 if let TypeDefinition::Class(cd) = def {
-                    // Concrete (not abstract), not generic, and has an abstract ancestor
-                    if !cd.is_abstract
-                        && cd.generics.is_none()
-                        && class_needs_vtable(name, type_definitions)
-                    {
+                    // Concrete (not abstract) classes that participate in virtual
+                    // dispatch. Generic classes are included because their methods
+                    // are compiled once (T treated as opaque pointer-sized) and the
+                    // vtable references those single symbols; per-instantiation
+                    // mangling is not needed until distinct method bodies are
+                    // generated per `<T>`.
+                    if !cd.is_abstract && class_needs_vtable(name, type_definitions) {
                         return Some((name.as_str(), cd));
                     }
                 }

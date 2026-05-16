@@ -225,6 +225,164 @@ fn main()
 }
 
 #[test]
+fn test_extends_generic_base_substitutes_param_int() {
+    // `class IntStack extends Stack<int>` overriding `push(value T)` with
+    // `push(value int)` must be accepted: T = int after substitution.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+class Stack<T>
+    var marker int
+    fn init(m int)
+        self.marker = m
+    fn set_marker(value T)
+        self.marker = 0
+
+class IntStack extends Stack<int>
+    fn set_marker(value int)
+        self.marker = value
+
+fn main()
+    let s = IntStack(m: 0)
+    s.set_marker(42)
+    println(f"{s.marker}")
+    "#,
+        "42",
+    );
+}
+
+#[test]
+fn test_extends_generic_base_rejects_wrong_param() {
+    // After substituting Stack<int>, the inherited `push(value T)` becomes
+    // `push(value int)`. An override `push(value String)` must be rejected
+    // with the substituted expected type, not the bare `T`.
+    assert_compiler_error(
+        r#"
+use system.io
+
+class Stack<T>
+    var top T
+    fn init(t T)
+        self.top = t
+    fn push(value T)
+        self.top = value
+
+class IntStack extends Stack<int>
+    fn push(value String)
+        println(value)
+
+fn main()
+    let s = IntStack(t: 5)
+    "#,
+        "Method 'push' has incompatible parameter type for 'value' (position 1): expected int, got String",
+    );
+}
+
+#[test]
+fn test_extends_generic_base_rejects_wrong_return() {
+    // `class StringBox extends Box<String>` overriding `unwrap() T`
+    // with `unwrap() int` must be rejected; substituted return type is String.
+    assert_compiler_error(
+        r#"
+use system.io
+
+class Box<T>
+    var item T
+    fn init(i T)
+        self.item = i
+    fn unwrap() T
+        return self.item
+
+class StringBox extends Box<String>
+    fn unwrap() int
+        return 0
+
+fn main()
+    let b = StringBox(i: "hi")
+    "#,
+        "Method 'unwrap' has incompatible return type: expected String, got int",
+    );
+}
+
+#[test]
+fn test_extends_generic_chain_composition_propagates() {
+    // Chain composition: `C extends B<int>`, `B<U> extends A<U>`. A's `T` must
+    // resolve to `int` after composing B's substitution. Concrete-typed override
+    // in C must be accepted.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+class A<V>
+    fn ancestor_method(value V) int
+        return 1
+
+class B<U> extends A<U>
+
+class C extends B<int>
+    fn ancestor_method(value int) int
+        return value
+
+fn main()
+    let c = C()
+    println(f"{c.ancestor_method(42)}")
+    "#,
+        "42",
+    );
+}
+
+#[test]
+fn test_extends_generic_chain_composition_works_out_of_order() {
+    // Same chain as above, but child declared before its ancestors. Pass 1b
+    // must populate `base_class_args` for shells so descendants whose
+    // `check_class` runs first can compose substitutions through intermediate
+    // generic ancestors.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+class C extends B<int>
+    fn ancestor_method(value int) int
+        return value
+
+class B<U> extends A<U>
+
+class A<V>
+    fn ancestor_method(value V) int
+        return 1
+
+fn main()
+    let c = C()
+    println(f"{c.ancestor_method(42)}")
+    "#,
+        "42",
+    );
+}
+
+#[test]
+fn test_extends_generic_chain_composition_rejects_mismatch() {
+    // After composing B's `<int>` substitution into A, the inherited
+    // `ancestor_method(value V)` becomes `ancestor_method(value int)`. An
+    // override declaring `value String` must be rejected with the substituted
+    // expected type, not the bare `V`.
+    assert_compiler_error(
+        r#"
+class C extends B<int>
+    fn ancestor_method(value String)
+        return
+
+class B<U> extends A<U>
+
+class A<V>
+    fn ancestor_method(value V)
+        return
+    "#,
+        "Method 'ancestor_method' has incompatible parameter type for 'value' (position 1): expected int, got String",
+    );
+}
+
+#[test]
 fn test_field_layout_base_fields_before_derived() {
     // Base class fields must come before derived class fields in memory layout.
     // Dog has own field `breed`; Animal has `name`. Full layout: [name, breed].

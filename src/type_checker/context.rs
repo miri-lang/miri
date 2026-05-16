@@ -162,6 +162,10 @@ pub struct ClassDefinition {
     pub name: String,
     pub generics: Option<Vec<GenericDefinition>>,
     pub base_class: Option<String>,
+    /// Generic args declared at `extends Base<...>`. Resolved in this class's
+    /// generic-param scope, so a class generic `T` survives as `Generic("T")`
+    /// here and is substituted by descendants that pin the chain.
+    pub base_class_args: Option<Vec<Type>>,
     pub traits: Vec<String>,
     pub fields: Vec<(String, FieldInfo)>, // Preserves declaration order for constructor and layout
     pub methods: BTreeMap<String, MethodInfo>, // Deterministic method order
