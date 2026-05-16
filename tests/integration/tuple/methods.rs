@@ -175,3 +175,31 @@ println(f"{t.index_of(30)}")
         "2",
     );
 }
+
+#[test]
+fn test_tuple_string_queryable_methods() {
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.tuple
+
+let t = ("hello", "world", "foo")
+let first = t.first() ?? "none"
+let last = t.last() ?? "none"
+println(first)
+println(last)
+let c_yes = t.contains("world")
+let c_no = t.contains("zzz")
+println(f"{c_yes}")
+println(f"{c_no}")
+let i_first = t.index_of("hello")
+let i_last = t.index_of("foo")
+let i_missing = t.index_of("zzz")
+println(f"{i_first}")
+println(f"{i_last}")
+println(f"{i_missing}")
+println(f"{t.is_empty()}")
+"#,
+        "hello\nfoo\ntrue\nfalse\n0\n2\n-1\nfalse",
+    );
+}
