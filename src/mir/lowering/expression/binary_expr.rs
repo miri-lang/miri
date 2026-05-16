@@ -14,6 +14,7 @@ use crate::runtime_fns::rt;
 
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::lower_expression;
+use crate::mir::lowering::helpers::resolve_type;
 
 pub(crate) fn lower_binary_expr(
     ctx: &mut LoweringContext,
@@ -457,6 +458,11 @@ pub(crate) fn lower_binary_expr(
         }
     };
 
+    // Use the type-checker's resolved type for the binary expression. This is
+    // correct even when an operand is a projected place (e.g. `self.field`),
+    // whereas reading the base local's type would yield the parent aggregate
+    // (e.g. the class type instead of the field's scalar type) and cause
+    // Perceus to mis-type the result temp.
     let result_ty = match op {
         crate::ast::operator::BinaryOp::Equal
         | crate::ast::operator::BinaryOp::NotEqual
@@ -466,12 +472,7 @@ pub(crate) fn lower_binary_expr(
         | crate::ast::operator::BinaryOp::GreaterThanEqual => {
             Type::new(TypeKind::Boolean, expr.span)
         }
-        _ => match &lhs_op {
-            Operand::Constant(c) => c.ty.clone(),
-            Operand::Copy(place) | Operand::Move(place) => {
-                ctx.body.local_decls[place.local.0].ty.clone()
-            }
-        },
+        _ => resolve_type(ctx.type_checker, expr),
     };
 
     let (target, ret_op) = if let Some(d) = dest {

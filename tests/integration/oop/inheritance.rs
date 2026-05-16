@@ -412,3 +412,57 @@ fn main()
         "Rex\nLab",
     );
 }
+
+#[test]
+fn test_self_field_read_modify_write_scalar() {
+    // Regression: read-modify-write on a scalar field inside a non-constructor
+    // method body used to crash because the BinaryOp temp inherited the base
+    // local's (class) type instead of the projected scalar type, causing
+    // Perceus to DecRef an integer value as if it were a managed pointer.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+class Counter
+    var count int
+    fn init(c int)
+        self.count = c
+    fn double()
+        self.count = self.count * 2
+    fn inc()
+        self.count = self.count + 1
+
+fn main()
+    let c = Counter(c: 5)
+    c.double()
+    c.inc()
+    println(f"{c.count}")
+    "#,
+        "11",
+    );
+}
+
+#[test]
+fn test_self_field_unary_negate_scalar() {
+    // Regression: the UnaryOp result temp inherited the base local's (class)
+    // type instead of the projected scalar type when negating `self.field`,
+    // causing Perceus to mis-type the result and the program to crash.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+class Signed
+    var v int
+    fn init(x int)
+        self.v = x
+    fn flip()
+        self.v = -self.v
+
+fn main()
+    let s = Signed(x: 7)
+    s.flip()
+    println(f"{s.v}")
+    "#,
+        "-7",
+    );
+}
