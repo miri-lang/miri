@@ -15,6 +15,6 @@ Unlike the linear stream of tokens produced by the Lexer, the AST forms a tree t
 
 ## Design Principles
 
-1.  **Immutability**: Once constructed by the parser, AST nodes are generally immutable. Passes like the Type Checker attach metadata (like inferred types) to a separate context rather than mutating the AST directly.
+1.  **Immutability**: AST nodes are mutated only by the single post-parse `normalize` pass (which rewrites collection `TypeKind` variants into `TypeKind::Custom`); thereafter they are treated as immutable. Passes like the Type Checker attach metadata (like inferred types) to a separate context rather than mutating the AST directly.
 2.  **Span Tracking**: Every AST node contains an associated `Span` from the Lexer. This allows any downstream phase (Type Checker, MIR) to map errors directly back to the original source code location.
 3.  **Strict Tree Structure**: The AST enforces the grammatical rules of Miri. Invalid syntactic constructs (e.g., placing a declaration inside an expression) are impossible to represent in the AST.

@@ -8,19 +8,9 @@ use std::fmt;
 
 /// Identifies a built-in collection type canonically.
 ///
-/// This enum is the single source of truth for the names "Array", "List", "Map", "Set".
-/// All compiler logic that needs to identify built-in collections should use
-/// `TypeKind::as_builtin_collection()` rather than matching on string literals.
-///
-/// **Scope**: after Phase 1 (interception registry removed) and Phase 2 (String
-/// special-case removed), this enum exists solely to key the **constructor dispatch
-/// table** in `mir::lowering::constructors::COLLECTION_CTORS`. It is *not* used for
-/// method dispatch; method calls on collections go through normal class method
-/// resolution like any other type.
-///
-/// When a `sizeof<T>` built-in is added to the language, each collection's `init()`
-/// can be expressed in pure Miri source and moved to stdlib, at which point the
-/// corresponding entry in `COLLECTION_CTORS` (and eventually this enum) can be removed.
+/// Used to key the constructor dispatch table in
+/// `mir::lowering::constructors::COLLECTION_CTORS`. Prefer
+/// `TypeKind::as_builtin_collection()` over matching on raw class-name strings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BuiltinCollectionKind {
     Array,
@@ -29,10 +19,17 @@ pub enum BuiltinCollectionKind {
     Set,
 }
 
+/// Canonical class name for the built-in `Result<T, E>` sum type.
+///
+/// `TypeKind::Result(ok, err)` is normalized to
+/// `TypeKind::Custom(RESULT_TYPE_NAME, [ok, err])` by `resolve_type_kind` in
+/// the type checker; the factory uses the same name when producing already-
+/// normalized Result types. Centralized here to keep the spelling in one place.
+pub const RESULT_TYPE_NAME: &str = "Result";
+
 impl BuiltinCollectionKind {
-    /// Returns the `BuiltinCollectionKind` for a type name string, or `None` if it
-    /// is not a built-in collection.  This is the **only** place in the compiler
-    /// where the canonical names "Array", "List", "Map", "Set" are written.
+    /// Returns the `BuiltinCollectionKind` for a class name, or `None` if the
+    /// name does not match a built-in collection.
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "Array" => Some(Self::Array),
@@ -117,6 +114,9 @@ pub enum TypeKind {
     /// 64-bit floating point.
     F64,
     /// String type.
+    ///
+    /// Displayed as `"String"` (capital) to match the canonical stdlib class
+    /// spelling used in type-checker error messages and MIR dispatch.
     String,
     /// Boolean type.
     Boolean,
@@ -226,9 +226,10 @@ impl TypeKind {
             | TypeKind::Meta(_) => false,
             // Option: inherits from inner type
             TypeKind::Option(inner) => inner.kind.is_copy(),
-            // Tuple: Check that all elements are Copy (simplified - we'd need to resolve types)
-            // For now, treat tuples as Copy since lowering doesn't track element types here
-            TypeKind::Tuple(_) => true,
+            // Without resolved element types we cannot prove Copy for a tuple,
+            // so default to Move. Perceus then inserts the IncRef/DecRef pair;
+            // callers with resolved element types can override per-element.
+            TypeKind::Tuple(_) => false,
         }
     }
 
@@ -242,7 +243,34 @@ impl TypeKind {
             TypeKind::Map(_, _) => Some(BuiltinCollectionKind::Map),
             TypeKind::Set(_) => Some(BuiltinCollectionKind::Set),
             TypeKind::Custom(name, _) => BuiltinCollectionKind::from_name(name),
-            _ => None,
+            TypeKind::Int
+            | TypeKind::I8
+            | TypeKind::I16
+            | TypeKind::I32
+            | TypeKind::I64
+            | TypeKind::I128
+            | TypeKind::U8
+            | TypeKind::U16
+            | TypeKind::U32
+            | TypeKind::U64
+            | TypeKind::U128
+            | TypeKind::Float
+            | TypeKind::F32
+            | TypeKind::F64
+            | TypeKind::String
+            | TypeKind::Boolean
+            | TypeKind::Identifier
+            | TypeKind::RawPtr
+            | TypeKind::Tuple(_)
+            | TypeKind::Result(_, _)
+            | TypeKind::Future(_)
+            | TypeKind::Function(_)
+            | TypeKind::Generic(_, _, _)
+            | TypeKind::Meta(_)
+            | TypeKind::Option(_)
+            | TypeKind::Linear(_)
+            | TypeKind::Void
+            | TypeKind::Error => None,
         }
     }
 }
@@ -256,85 +284,85 @@ impl fmt::Display for Type {
 impl fmt::Display for TypeKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TypeKind::Int => write!(f, "int"),
-            TypeKind::I8 => write!(f, "i8"),
-            TypeKind::I16 => write!(f, "i16"),
-            TypeKind::I32 => write!(f, "i32"),
-            TypeKind::I64 => write!(f, "i64"),
-            TypeKind::I128 => write!(f, "i128"),
-            TypeKind::U8 => write!(f, "u8"),
-            TypeKind::U16 => write!(f, "u16"),
-            TypeKind::U32 => write!(f, "u32"),
-            TypeKind::U64 => write!(f, "u64"),
-            TypeKind::U128 => write!(f, "u128"),
-            TypeKind::Float => write!(f, "float"),
-            TypeKind::F32 => write!(f, "f32"),
-            TypeKind::F64 => write!(f, "f64"),
-            TypeKind::String => write!(f, "String"),
-            TypeKind::Boolean => write!(f, "bool"),
-            TypeKind::Identifier => write!(f, "identifier"),
-            TypeKind::RawPtr => write!(f, "RawPtr"),
+            TypeKind::Int => f.write_str("int"),
+            TypeKind::I8 => f.write_str("i8"),
+            TypeKind::I16 => f.write_str("i16"),
+            TypeKind::I32 => f.write_str("i32"),
+            TypeKind::I64 => f.write_str("i64"),
+            TypeKind::I128 => f.write_str("i128"),
+            TypeKind::U8 => f.write_str("u8"),
+            TypeKind::U16 => f.write_str("u16"),
+            TypeKind::U32 => f.write_str("u32"),
+            TypeKind::U64 => f.write_str("u64"),
+            TypeKind::U128 => f.write_str("u128"),
+            TypeKind::Float => f.write_str("float"),
+            TypeKind::F32 => f.write_str("f32"),
+            TypeKind::F64 => f.write_str("f64"),
+            TypeKind::String => f.write_str("String"),
+            TypeKind::Boolean => f.write_str("bool"),
+            TypeKind::Identifier => f.write_str("identifier"),
+            TypeKind::RawPtr => f.write_str("RawPtr"),
+            TypeKind::Void => f.write_str("void"),
+            TypeKind::Error => f.write_str("error"),
             TypeKind::List(inner) => write!(f, "List({})", inner.node),
             TypeKind::Array(inner, size) => write!(f, "Array({}, {})", inner.node, size.node),
             TypeKind::Map(k, v) => write!(f, "Map({}, {})", k.node, v.node),
-            TypeKind::Tuple(elements) => {
-                write!(f, "Tuple(")?;
-                if let Some((first, rest)) = elements.split_first() {
-                    write!(f, "{}", first.node)?;
-                    for e in rest {
-                        write!(f, ", {}", e.node)?;
-                    }
-                }
-                write!(f, ")")
-            }
             TypeKind::Set(inner) => write!(f, "Set({})", inner.node),
             TypeKind::Result(ok, err) => write!(f, "Result({}, {})", ok.node, err.node),
             TypeKind::Future(inner) => write!(f, "Future({})", inner.node),
-            TypeKind::Function(func) => {
-                write!(f, "Function(")?;
-                if let Some((first, rest)) = func.params.split_first() {
-                    write!(f, "{}", first.typ.node)?;
-                    for p in rest {
-                        write!(f, ", {}", p.typ.node)?;
-                    }
-                }
-                write!(f, ")")?;
-                if let Some(ret) = &func.return_type {
-                    write!(f, " -> {}", ret.node)?;
-                }
-                Ok(())
-            }
-            TypeKind::Generic(name, _, _) => write!(f, "{}", name),
-            TypeKind::Custom(name, args) => {
-                write!(f, "{}", name)?;
-                if let Some(args) = args {
-                    // Builtin collections use parenthesis notation (e.g. `Array(int, 3)`)
-                    // to match the display style of the old canonical variants.
-                    // Generic user-defined types use angle bracket notation (e.g. `Foo<T>`).
-                    let (open, close) = if BuiltinCollectionKind::from_name(name.as_str()).is_some()
-                    {
-                        ('(', ')')
-                    } else {
-                        ('<', '>')
-                    };
-                    write!(f, "{}", open)?;
-                    if let Some((first, rest)) = args.split_first() {
-                        write!(f, "{}", first.node)?;
-                        for arg in rest {
-                            write!(f, ", {}", arg.node)?;
-                        }
-                    }
-                    write!(f, "{}", close)?;
-                }
-                Ok(())
-            }
             TypeKind::Meta(inner) => write!(f, "meta({})", inner),
             TypeKind::Option(inner) => write!(f, "{}?", inner),
-            TypeKind::Void => write!(f, "void"),
-            TypeKind::Error => write!(f, "error"),
             TypeKind::Linear(inner) => write!(f, "linear({})", inner),
+            TypeKind::Generic(name, _, _) => f.write_str(name),
+            TypeKind::Tuple(elements) => fmt_tuple(f, elements),
+            TypeKind::Function(func) => fmt_function(f, func),
+            TypeKind::Custom(name, args) => fmt_custom(f, name, args.as_deref()),
         }
     }
+}
+
+fn fmt_tuple(f: &mut fmt::Formatter<'_>, elements: &[Expression]) -> fmt::Result {
+    f.write_str("Tuple(")?;
+    if let Some((first, rest)) = elements.split_first() {
+        write!(f, "{}", first.node)?;
+        for e in rest {
+            write!(f, ", {}", e.node)?;
+        }
+    }
+    f.write_str(")")
+}
+
+fn fmt_function(f: &mut fmt::Formatter<'_>, func: &FunctionTypeData) -> fmt::Result {
+    f.write_str("Function(")?;
+    if let Some((first, rest)) = func.params.split_first() {
+        write!(f, "{}", first.typ.node)?;
+        for p in rest {
+            write!(f, ", {}", p.typ.node)?;
+        }
+    }
+    f.write_str(")")?;
+    if let Some(ret) = &func.return_type {
+        write!(f, " -> {}", ret.node)?;
+    }
+    Ok(())
+}
+
+fn fmt_custom(f: &mut fmt::Formatter<'_>, name: &str, args: Option<&[Expression]>) -> fmt::Result {
+    f.write_str(name)?;
+    let Some(args) = args else { return Ok(()) };
+    let (open, close) = if BuiltinCollectionKind::from_name(name).is_some() {
+        ('(', ')')
+    } else {
+        ('<', '>')
+    };
+    write!(f, "{}", open)?;
+    if let Some((first, rest)) = args.split_first() {
+        write!(f, "{}", first.node)?;
+        for arg in rest {
+            write!(f, ", {}", arg.node)?;
+        }
+    }
+    write!(f, "{}", close)
 }
 
 impl fmt::Display for TypeDeclarationKind {

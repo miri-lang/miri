@@ -185,12 +185,39 @@ pub fn opt_expr(expr: Expression) -> Option<Box<Expression>> {
 
 impl fmt::Display for ExpressionKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Only leaf-like variants have a source-form rendering at this layer;
+        // composite expressions fall through to Debug because pretty-printing
+        // them belongs to a downstream formatter, not the AST.
         match self {
             ExpressionKind::Type(t, _) => write!(f, "{}", t),
             ExpressionKind::Identifier(name, _) => write!(f, "{}", name),
             ExpressionKind::GenericType(name, _, _) => write!(f, "{}", name.node),
             ExpressionKind::Literal(literal) => write!(f, "{}", literal),
-            _ => write!(f, "{:?}", self),
+            ExpressionKind::Binary(..)
+            | ExpressionKind::Logical(..)
+            | ExpressionKind::Unary(..)
+            | ExpressionKind::Assignment(..)
+            | ExpressionKind::Conditional(..)
+            | ExpressionKind::Range(..)
+            | ExpressionKind::Guard(..)
+            | ExpressionKind::Member(..)
+            | ExpressionKind::Index(..)
+            | ExpressionKind::Call(..)
+            | ExpressionKind::ImportPath(..)
+            | ExpressionKind::TypeDeclaration(..)
+            | ExpressionKind::EnumValue(..)
+            | ExpressionKind::StructMember(..)
+            | ExpressionKind::Lambda(..)
+            | ExpressionKind::List(..)
+            | ExpressionKind::Array(..)
+            | ExpressionKind::Map(..)
+            | ExpressionKind::Tuple(..)
+            | ExpressionKind::Set(..)
+            | ExpressionKind::Match(..)
+            | ExpressionKind::FormattedString(..)
+            | ExpressionKind::NamedArgument(..)
+            | ExpressionKind::Super
+            | ExpressionKind::Block(..) => write!(f, "{:?}", self),
         }
     }
 }

@@ -19,7 +19,10 @@ extern "C" {
     // On glibc, `sigsetjmp` is a macro that expands to `__sigsetjmp`; the bare
     // symbol does not exist in `libc.so`. macOS, BSDs, and musl export the
     // real `sigsetjmp` symbol, so only Linux+gnu needs the rename.
-    #[cfg_attr(all(target_os = "linux", target_env = "gnu"), link_name = "__sigsetjmp")]
+    #[cfg_attr(
+        all(target_os = "linux", target_env = "gnu"),
+        link_name = "__sigsetjmp"
+    )]
     fn sigsetjmp(env: *mut SigJmpBuf, savemask: i32) -> i32;
     fn siglongjmp(env: *mut SigJmpBuf, val: i32) -> !;
 }
