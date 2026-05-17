@@ -1,0 +1,124 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+//
+// Tests for `system.collections.list`. Covers construction, indexed read /
+// write, structural mutation, contains / index_of, sort / reverse and clone.
+
+use system.io
+use system.collections.list
+use system.testing
+
+fn test_empty_construction()
+    let empty = List<int>()
+    assert(empty.is_empty(), "List<int>() starts empty")
+    assert_eq(empty.length(), 0)
+    assert_eq(empty.last_index(), -1, "last_index of empty list is -1")
+
+fn test_literal_construction()
+    let nums = List([10, 20, 30])
+    assert_eq(nums.length(), 3)
+    assert(not nums.is_empty())
+    assert_eq(nums.get(0), 10)
+    assert_eq(nums.get(2), 30)
+    assert_eq(nums.element_at(1), 20, "element_at mirrors get")
+    assert_eq(nums.last_index(), 2)
+
+fn test_push_and_pop()
+    var stack = List<int>()
+    stack.push(1)
+    stack.push(2)
+    stack.push(3)
+    assert_eq(stack.length(), 3)
+    assert_eq(stack.pop(), 3, "pop returns last element")
+    assert_eq(stack.length(), 2)
+    assert_eq(stack.pop(), 2)
+    assert_eq(stack.pop(), 1)
+    assert(stack.is_empty(), "popping everything yields empty")
+
+fn test_set_insert_remove_at()
+    var xs = List([1, 2, 3, 4])
+    xs.set(0, 99)
+    assert_eq(xs.get(0), 99)
+    xs.insert(2, 50)
+    assert_eq(xs.length(), 5)
+    assert_eq(xs.get(2), 50)
+    assert_eq(xs.get(3), 3, "insert shifts subsequent elements right")
+    let removed = xs.remove_at(0)
+    assert_eq(removed, 99)
+    assert_eq(xs.get(0), 2, "remove_at shifts left")
+
+fn test_remove_by_value()
+    var dropper = List([10, 20, 30])
+    let was_removed = dropper.remove(20)
+    assert(was_removed, "remove returns true on success")
+    assert_eq(dropper.length(), 2)
+    assert_eq(dropper.get(0), 10)
+    assert_eq(dropper.get(1), 30)
+    let missing = dropper.remove(999)
+    assert(not missing, "remove returns false when item not found")
+
+fn test_contains_and_index_of()
+    let probe = List([4, 5, 6, 5])
+    assert(probe.contains(5))
+    assert(not probe.contains(42))
+    assert_eq(probe.index_of(5), 1, "first occurrence wins")
+    assert_eq(probe.index_of(6), 2)
+    assert_eq(probe.index_of(42), -1)
+
+fn test_first_and_last()
+    let probe = List([4, 5, 6, 5])
+    assert_eq(probe.first() ?? -1, 4)
+    assert_eq(probe.last() ?? -1, 5)
+    assert_eq(List<int>().first() ?? -1, -1, "empty.first() is None")
+    assert_eq(List<int>().last() ?? -1, -1)
+
+fn test_clear()
+    var clearable = List([1, 2, 3])
+    clearable.clear()
+    assert(clearable.is_empty())
+    assert_eq(clearable.length(), 0)
+
+fn test_reverse_in_place()
+    var rev = List([1, 2, 3, 4])
+    rev.reverse()
+    assert_eq(rev.get(0), 4)
+    assert_eq(rev.get(3), 1)
+
+fn test_sort_ascending()
+    var sortable = List([3, 1, 4, 1, 5, 9, 2, 6])
+    sortable.sort()
+    assert_eq(sortable.get(0), 1)
+    assert_eq(sortable.get(1), 1)
+    assert_eq(sortable.get(sortable.length() - 1), 9)
+    var i = 1
+    while i < sortable.length()
+        assert(sortable.get(i - 1) <= sortable.get(i), "sorted is monotonic")
+        i += 1
+
+fn test_clone_is_independent()
+    var src = List([1, 2, 3])
+    let dup = src.clone()
+    src.push(99)
+    assert_eq(dup.length(), 3, "clone unaffected by source mutation")
+    assert_eq(src.length(), 4)
+
+fn test_for_loop_iteration()
+    var sum = 0
+    for x in List([1, 2, 3, 4])
+        sum = sum + x
+    assert_eq(sum, 10, "for-loop iterates List in order")
+
+fn main()
+    test_empty_construction()
+    test_literal_construction()
+    test_push_and_pop()
+    test_set_insert_remove_at()
+    test_remove_by_value()
+    test_contains_and_index_of()
+    test_first_and_last()
+    test_clear()
+    test_reverse_in_place()
+    test_sort_ascending()
+    test_clone_is_independent()
+    test_for_loop_iteration()
+    println("system.collections.list: OK")

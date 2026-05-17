@@ -1,0 +1,90 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+//
+// Tests for `system.collections.map`.
+
+use system.io
+use system.collections.map
+use system.testing
+
+fn test_empty_construction()
+    let empty = Map<String, int>()
+    assert(empty.is_empty())
+    assert_eq(empty.length(), 0)
+
+fn test_literal_construction()
+    let m = {"a": 1, "b": 2}
+    assert_eq(m.length(), 2)
+    assert(not m.is_empty())
+    assert(m.contains_key("a"))
+    assert(m.contains_key("b"))
+    assert(not m.contains_key("missing"))
+
+fn test_set_inserts_and_overwrites()
+    var m = {"a": 1, "b": 2}
+    m.set("c", 3)
+    assert_eq(m.length(), 3)
+    assert(m.contains_key("c"))
+    m.set("a", 99)
+    assert_eq(m.length(), 3, "overwriting same key does not grow map")
+
+fn test_get_returns_option()
+    let m = {"a": 99, "b": 2}
+    let got_a = m.get("a") ?? -1
+    assert_eq(got_a, 99)
+    let missing = m.get("nope") ?? -1
+    assert_eq(missing, -1, "absent key returns None")
+
+fn test_match_on_get_result()
+    let m = {"b": 2}
+    let label = match m.get("b")
+        Some(v): f"found {v}"
+        None: "missing"
+    assert_eq(label, "found 2")
+
+fn test_remove()
+    var m = {"a": 1, "b": 2}
+    let did_remove = m.remove("a")
+    assert(did_remove)
+    assert(not m.contains_key("a"))
+    assert_eq(m.length(), 1)
+    let did_remove_missing = m.remove("ghost")
+    assert(not did_remove_missing)
+
+fn test_clear()
+    var m = {"a": 1}
+    m.clear()
+    assert(m.is_empty())
+    assert_eq(m.length(), 0)
+
+fn test_iteration_visits_each_pair()
+    let probe = {"x": 1, "y": 2, "z": 3}
+    var key_sum_len = 0
+    var val_sum = 0
+    var seen = 0
+    for k, v in probe
+        key_sum_len = key_sum_len + k.length()
+        val_sum = val_sum + v
+        seen += 1
+    assert_eq(seen, 3)
+    assert_eq(key_sum_len, 3, "each key is 1 char")
+    assert_eq(val_sum, 6, "1+2+3")
+
+fn test_clone_is_independent()
+    var src = {"a": 1}
+    let dup = src.clone()
+    src.set("b", 2)
+    assert_eq(dup.length(), 1)
+    assert(not dup.contains_key("b"))
+
+fn main()
+    test_empty_construction()
+    test_literal_construction()
+    test_set_inserts_and_overwrites()
+    test_get_returns_option()
+    test_match_on_get_result()
+    test_remove()
+    test_clear()
+    test_iteration_visits_each_pair()
+    test_clone_is_independent()
+    println("system.collections.map: OK")

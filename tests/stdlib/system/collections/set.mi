@@ -1,0 +1,82 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+//
+// Tests for `system.collections.set`.
+
+use system.io
+use system.collections.set
+use system.testing
+
+fn test_empty_construction()
+    let empty = Set<int>()
+    assert(empty.is_empty())
+    assert_eq(empty.length(), 0)
+
+fn test_literal_construction()
+    let s = {1, 2, 3}
+    assert(not s.is_empty())
+    assert_eq(s.length(), 3)
+    assert(s.contains(1))
+    assert(s.contains(3))
+    assert(not s.contains(99))
+
+fn test_in_operator()
+    let s = {1, 2, 3}
+    assert(2 in s)
+    assert(not (99 in s))
+
+fn test_add_dedupes()
+    var s = {1, 2, 3}
+    let added = s.add(4)
+    assert(added, "add returns true for new element")
+    assert_eq(s.length(), 4)
+    let dup_added = s.add(1)
+    assert(not dup_added, "add returns false when element already present")
+    assert_eq(s.length(), 4, "duplicate add does not grow set")
+
+fn test_remove()
+    var s = {1, 2, 3}
+    let removed = s.remove(2)
+    assert(removed, "remove returns true on hit")
+    assert_eq(s.length(), 2)
+    assert(not s.contains(2))
+    let missing = s.remove(99)
+    assert(not missing, "remove returns false on miss")
+
+fn test_clear()
+    var s = {10, 20}
+    s.clear()
+    assert(s.is_empty())
+    assert_eq(s.length(), 0)
+
+fn test_iteration_visits_each_once()
+    let iter_src = {10, 20, 30}
+    var seen10 = false
+    var seen20 = false
+    var seen30 = false
+    var count = 0
+    for x in iter_src
+        if x == 10: seen10 = true
+        if x == 20: seen20 = true
+        if x == 30: seen30 = true
+        count += 1
+    assert_eq(count, 3)
+    assert(seen10 and seen20 and seen30, "iteration visits every element")
+
+fn test_clone_is_independent()
+    var src = {1, 2, 3}
+    let dup = src.clone()
+    src.add(99)
+    assert(not dup.contains(99))
+    assert(src.contains(99))
+
+fn main()
+    test_empty_construction()
+    test_literal_construction()
+    test_in_operator()
+    test_add_dedupes()
+    test_remove()
+    test_clear()
+    test_iteration_visits_each_once()
+    test_clone_is_independent()
+    println("system.collections.set: OK")

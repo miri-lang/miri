@@ -1,0 +1,52 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+//
+// Tests for `system.result`. Covers Ok/Err discrimination, unwrap_or, and the
+// canonical match-on-Result pattern documented at the top of result.mi.
+
+use system.io
+use system.result
+use system.testing
+
+fn divide(a int, b int) Result<int, String>
+    if b == 0
+        return Result.Err("division by zero")
+    return Result.Ok(a / b)
+
+fn test_is_ok_is_err()
+    let ok = divide(10, 1)
+    let err = divide(10, 0)
+    assert(ok.is_ok())
+    assert(not ok.is_err())
+    assert(err.is_err())
+    assert(not err.is_ok())
+
+fn test_unwrap_or_returns_value_on_ok()
+    let v int = divide(20, 4).unwrap_or(-1)
+    assert_eq(v, 5)
+
+fn test_unwrap_or_returns_fallback_on_err()
+    let neg int = divide(1, 0).unwrap_or(-99)
+    assert_eq(neg, -99)
+
+fn test_match_extracts_ok_value()
+    let happy = divide(10, 2)
+    let happy_value = match happy
+        Result.Ok(v): v
+        Result.Err(_): -1
+    assert_eq(happy_value, 5)
+
+fn test_match_extracts_err_message()
+    let sad = divide(10, 0)
+    let sad_msg = match sad
+        Result.Ok(_): "ok"
+        Result.Err(m): m
+    assert_eq(sad_msg, "division by zero")
+
+fn main()
+    test_is_ok_is_err()
+    test_unwrap_or_returns_value_on_ok()
+    test_unwrap_or_returns_fallback_on_err()
+    test_match_extracts_ok_value()
+    test_match_extracts_err_message()
+    println("system.result: OK")

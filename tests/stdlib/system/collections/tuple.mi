@@ -1,0 +1,47 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+//
+// Tests for `system.collections.tuple`. A homogeneous tuple gains the
+// `Queryable<T>` methods after importing this module.
+
+use system.io
+use system.collections.tuple
+use system.testing
+
+fn test_dot_index_access()
+    let t = (10, 20, 30)
+    assert_eq(t.0, 10)
+    assert_eq(t.1, 20)
+    assert_eq(t.2, 30)
+
+fn test_length_and_element_at()
+    let t = (10, 20, 30)
+    assert_eq(t.length(), 3)
+    assert(not t.is_empty())
+    assert_eq(t.element_at(1), 20)
+
+fn test_contains_and_index_of()
+    let t = (10, 20, 30)
+    assert(t.contains(30))
+    assert(not t.contains(99))
+    assert_eq(t.index_of(20), 1)
+    assert_eq(t.index_of(999), -1)
+
+fn test_first_and_last()
+    let t = (10, 20, 30)
+    assert_eq(t.first() ?? -1, 10)
+    assert_eq(t.last() ?? -1, 30)
+
+fn test_for_loop_iteration()
+    var sum = 0
+    for x in (1, 2, 3, 4)
+        sum = sum + x
+    assert_eq(sum, 10)
+
+fn main()
+    test_dot_index_access()
+    test_length_and_element_at()
+    test_contains_and_index_of()
+    test_first_and_last()
+    test_for_loop_iteration()
+    println("system.collections.tuple: OK")

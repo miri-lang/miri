@@ -1,87 +1,102 @@
-use system.io.{print, println, eprintln}
-use system.string
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+//
+// Comprehensive tests for `system.string` using `system.testing` assertions.
+// Miri tests Miri: every check below executes in a real `miri run` invocation.
 
-println("Testing String...")
+use system.io
+use system.testing
 
-// specific test for string.length()
-let s1 = "Hello"
-if s1.length() != 5
-    eprintln("Error: s1.length() should be 5")
-else
-    println("s1.length() passed")
+fn test_length_and_size()
+    let hello = "Hello"
+    assert_eq(hello.length(), 5, "ASCII length")
+    assert_eq(hello.size(), 5, "ASCII size")
 
-// Unicode test: "🦀" is 1 character but 4 bytes in UTF-8
-let crab = "🦀"
-if crab.length() != 1
-    eprintln("Error: crab.length() should be 1, got {crab.length()}")
-else
-    println("crab.length() passed")
+    let crab = "🦀"
+    assert_eq(crab.length(), 1, "single emoji is 1 char")
+    assert_eq(crab.size(), 4, "single emoji is 4 UTF-8 bytes")
 
-if crab.size() != 4
-    eprintln("Error: crab.size() should be 4, got {crab.size()}")
-else
-    println("crab.size() passed")
+    let mixed = "a🦀b"
+    assert_eq(mixed.length(), 3)
+    assert_eq(mixed.size(), 6)
 
-// specific test for string.is_empty()
-if s1.is_empty()
-    eprintln("Error: s1 should not be empty")
-else
-    println("s1.is_empty() passed")
+fn test_is_empty()
+    let empty = ""
+    assert(empty.is_empty(), "empty literal is empty")
+    assert_eq(empty.length(), 0)
+    assert_eq(empty.size(), 0)
+    assert(not "x".is_empty(), "non-empty literal not empty")
 
-// specific test for string.to_lower()
-let s2 = s1.to_lower()
-if s2 != "hello"
-    eprintln("Error: to_lower failed")
-else
-    println("to_lower passed")
+fn test_case_folding()
+    assert_eq("Hello".to_lower(), "hello")
+    assert_eq("Hello".to_upper(), "HELLO")
+    assert_eq("MiXeD".to_lower(), "mixed")
+    assert_eq("MiXeD".to_upper(), "MIXED")
 
-// specific test for string.to_upper()
-let s3 = s1.to_upper()
-if s3 != "HELLO"
-    eprintln("Error: to_upper failed")
-else
-    println("to_upper passed")
+fn test_trim()
+    assert_eq("  spaced  ".trim(), "spaced")
+    assert_eq("  spaced  ".trim_start(), "spaced  ")
+    assert_eq("  spaced  ".trim_end(), "  spaced")
+    assert_eq("\t\n  x \n".trim(), "x")
+    assert_eq("nothing".trim(), "nothing")
 
-// specific test for string.trim()
-let s4 = "  hello  "
-let s5 = s4.trim()
-if s5 != "hello"
-    eprintln("Error: trim failed")
-else
-    println("trim passed")
+fn test_replace()
+    assert_eq("Hello, World!".replace("World", "Miri"), "Hello, Miri!")
+    assert_eq("aaa".replace("a", "bb"), "bbbbbb")
+    assert_eq("abc".replace("z", "Q"), "abc", "missing needle leaves string unchanged")
+    assert_eq("xx".replace("x", ""), "", "empty replacement removes all")
 
-// specific test for string.replace()
-let s6 = "Hello, World!"
-let s7 = s6.replace("World", "Miri")
-if s7 != "Hello, Miri!"
-    eprintln("Error: replace failed")
-else
-    println("replace passed")
+fn test_substring()
+    let banner = "Hello, World!"
+    assert_eq(banner.substring(0, 5), "Hello")
+    assert_eq(banner.substring(7, 12), "World")
+    assert_eq(banner.substring(0, 0), "", "empty range is empty")
+    assert_eq(banner.substring(100, 200), "", "out-of-bounds yields empty")
 
-// specific test for string.substring()
-let s8 = "Hello, World!"
-let s9 = s8.substring(0, 5)
-if s9 != "Hello"
-    eprintln("Error: substring failed")
-else
-    println("substring passed")
+fn test_search_predicates()
+    let banner = "Hello, World!"
+    assert(banner.contains("World"), "contains hit")
+    assert(not banner.contains("xyz"), "contains miss")
+    assert(banner.contains(""), "empty needle is always contained")
+    assert(banner.starts_with("Hello"))
+    assert(not banner.starts_with("World"))
+    assert(banner.ends_with("World!"))
+    assert(not banner.ends_with("Hello"))
 
-// specific test for string.contains()
-if not s8.contains("World")
-    eprintln("Error: contains failed")
-else
-    println("contains passed")
+fn test_equality_and_operators()
+    assert_eq("abc", "abc")
+    assert_ne("abc", "abd")
+    assert(("foo" + "bar") == "foobar", "+ operator concatenates")
+    assert_eq("ab" * 3, "ababab", "* operator repeats")
+    assert_eq("x" * 0, "", "repeat 0 yields empty")
 
-// specific test for string.starts_with()
-if not s8.starts_with("Hello")
-    eprintln("Error: starts_with failed")
-else
-    println("starts_with passed")
+fn test_element_at_by_codepoint()
+    let hello = "Hello"
+    assert_eq(hello.element_at(0), "H")
+    assert_eq(hello.element_at(4), "o")
+    assert_eq("a🦀b".element_at(1), "🦀", "multi-byte char accessed by codepoint")
 
-// specific test for string.ends_with()
-if not s8.ends_with("World!")
-    eprintln("Error: ends_with failed")
-else
-    println("ends_with passed")
+fn test_for_loop_iteration()
+    var collected = ""
+    for ch in "abc"
+        collected = collected + ch
+    assert_eq(collected, "abc", "for-loop joins back to original")
 
-println("String tests passed!")
+fn test_clone_is_value_equal()
+    let original = "tag"
+    let copy = original.clone()
+    assert_eq(copy, original)
+
+fn main()
+    test_length_and_size()
+    test_is_empty()
+    test_case_folding()
+    test_trim()
+    test_replace()
+    test_substring()
+    test_search_predicates()
+    test_equality_and_operators()
+    test_element_at_by_codepoint()
+    test_for_loop_iteration()
+    test_clone_is_value_equal()
+    println("system.string: OK")
