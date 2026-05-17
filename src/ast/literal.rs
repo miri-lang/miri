@@ -22,7 +22,11 @@ impl Literal {
         match self {
             Literal::Integer(i) => i.is_zero(),
             Literal::Float(f) => f.is_zero(),
-            _ => false,
+            Literal::String(_)
+            | Literal::Boolean(_)
+            | Literal::Identifier(_)
+            | Literal::Regex(_)
+            | Literal::None => false,
         }
     }
 }
