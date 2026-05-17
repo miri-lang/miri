@@ -1,0 +1,71 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+//
+// Tests for `Foldable<T>` defaults: reduce, any, all, count_where, sum, min,
+// max. Exercised via List.
+//
+// Predicates are inline lambdas — passing a named-fn reference through a
+// generic trait method (`xs.reduce(0, add)`) is currently miscompiled and
+// segfaults at runtime. Tracked under PLAN.md "Open follow-ups 2026-05-17".
+
+use system.io
+use system.collections.list
+use system.testing
+
+fn test_reduce()
+    let xs = List([1, 2, 3, 4, 5])
+    let reduced int = xs.reduce(0, fn(a int, b int) int: a + b)
+    assert_eq(reduced, 15)
+
+fn test_sum()
+    let xs = List([1, 2, 3, 4, 5])
+    let summed int = xs.sum() ?? -1
+    assert_eq(summed, 15, "sum of 1..5 == 15")
+
+fn test_min_max()
+    let xs = List([1, 2, 3, 4, 5])
+    let minv int = xs.min() ?? -1
+    assert_eq(minv, 1)
+    let maxv int = xs.max() ?? -1
+    assert_eq(maxv, 5)
+
+fn test_empty_collection_returns_none()
+    let empty = List<int>()
+    let esum int = empty.sum() ?? -1
+    assert_eq(esum, -1, "empty.sum() is None")
+    let emin int = empty.min() ?? -1
+    assert_eq(emin, -1, "empty.min() is None")
+    let emax int = empty.max() ?? -1
+    assert_eq(emax, -1, "empty.max() is None")
+
+fn test_any()
+    let xs = List([1, 2, 3, 4, 5])
+    assert(xs.any(fn(x int) bool: x > 0))
+    assert(not xs.any(fn(x int) bool: x > 100))
+
+fn test_all()
+    let xs = List([1, 2, 3, 4, 5])
+    assert(xs.all(fn(x int) bool: x > 0))
+    assert(not xs.all(fn(x int) bool: x > 3))
+
+fn test_any_all_on_empty_collection()
+    let empty = List<int>()
+    assert(not empty.any(fn(x int) bool: x > 0))
+    assert(empty.all(fn(x int) bool: x > 0), "vacuously true")
+
+fn test_count_where()
+    let xs = List([1, 2, 3, 4, 5])
+    assert_eq(xs.count_where(fn(x int) bool: x % 2 == 0), 2)
+    assert_eq(xs.count_where(fn(x int) bool: x > 0), 5)
+    assert_eq(xs.count_where(fn(x int) bool: x > 100), 0)
+
+fn main()
+    test_reduce()
+    test_sum()
+    test_min_max()
+    test_empty_collection_returns_none()
+    test_any()
+    test_all()
+    test_any_all_on_empty_collection()
+    test_count_where()
+    println("system.collections.foldable: OK")

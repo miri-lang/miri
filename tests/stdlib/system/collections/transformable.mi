@@ -1,0 +1,61 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+//
+// Tests for `Transformable<T>` defaults: map, filter, flat_map. Exercised via
+// List because every List<T> auto-implements the trait.
+//
+// All higher-order args are inline lambdas — passing a named-fn reference
+// through a generic trait method is currently miscompiled.
+
+use system.io
+use system.collections.list
+use system.testing
+
+fn test_map()
+    let src = List([1, 2, 3, 4, 5])
+    let doubled = src.map(fn(x int) int: x * 2)
+    assert_eq(doubled.length(), 5)
+    assert_eq(doubled.get(0), 2)
+    assert_eq(doubled.get(4), 10)
+
+fn test_filter_keeps_matches()
+    let src = List([1, 2, 3, 4, 5])
+    let evens = src.filter(fn(x int) bool: x % 2 == 0)
+    assert_eq(evens.length(), 2)
+    assert_eq(evens.get(0), 2)
+    assert_eq(evens.get(1), 4)
+
+fn test_filter_dropping_everything()
+    let src = List([1, 2, 3, 4, 5])
+    let nothing = src.filter(fn(x int) bool: x > 1000)
+    assert(nothing.is_empty())
+
+fn test_filter_keeping_everything()
+    let src = List([1, 2, 3, 4, 5])
+    let kept = src.filter(fn(x int) bool: x > 0)
+    assert_eq(kept.length(), 5)
+
+fn test_flat_map_concatenates()
+    let src = List([1, 2, 3, 4, 5])
+    let paired = src.flat_map(fn(x int) [int]: List([x, x]))
+    assert_eq(paired.length(), 10)
+    assert_eq(paired.get(0), 1)
+    assert_eq(paired.get(1), 1)
+    assert_eq(paired.get(8), 5)
+    assert_eq(paired.get(9), 5)
+
+fn test_filter_then_map_chain()
+    let src = List([1, 2, 3, 4, 5])
+    let chained = src.filter(fn(x int) bool: x % 2 == 0).map(fn(x int) int: x * 2)
+    assert_eq(chained.length(), 2)
+    assert_eq(chained.get(0), 4)
+    assert_eq(chained.get(1), 8)
+
+fn main()
+    test_map()
+    test_filter_keeps_matches()
+    test_filter_dropping_everything()
+    test_filter_keeping_everything()
+    test_flat_map_concatenates()
+    test_filter_then_map_chain()
+    println("system.collections.transformable: OK")
