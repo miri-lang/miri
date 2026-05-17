@@ -103,7 +103,14 @@ impl<'a> FunctionTranslator<'a> {
             Rvalue::BinaryOp(op, lhs, rhs) => {
                 // Structural equality: compare field-by-field instead of
                 // pointer comparison for tuples and structs.
-                if matches!(op, BinOp::Eq | BinOp::Ne) {
+                //
+                // Only takes the structural path when the operand denotes a
+                // *whole* aggregate. A `Copy(t.0)` is a primitive field load
+                // even though `operand_type_kind` reports the base local's
+                // tuple type — we must not treat its value as a tuple pointer.
+                let lhs_is_whole = Self::operand_has_no_projection(lhs);
+                let rhs_is_whole = Self::operand_has_no_projection(rhs);
+                if matches!(op, BinOp::Eq | BinOp::Ne) && lhs_is_whole && rhs_is_whole {
                     let lhs_kind = Self::operand_type_kind(lhs, type_ctx);
 
                     let structural_eq_result = match lhs_kind {
@@ -1756,12 +1763,27 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Returns the TypeKind of an operand.
+    ///
+    /// Note: this is the *base* local's type and ignores any projection on the
+    /// place. A `Copy(t.0)` whose base local is `Tuple<int>` reports
+    /// `Tuple<int>` even though the projected value is an `int`. Callers that
+    /// branch on aggregate shape must guard with `operand_has_no_projection`.
     fn operand_type_kind<'b>(operand: &'b Operand, type_ctx: &'b TypeCtx) -> &'b TypeKind {
         match operand {
             Operand::Copy(place) | Operand::Move(place) => {
                 &type_ctx.local_types[place.local.0].kind
             }
             Operand::Constant(c) => &c.ty.kind,
+        }
+    }
+
+    /// True when an operand references the whole base local rather than a
+    /// projected component (field / index / deref). Used to gate code paths
+    /// that interpret the operand's value as a full aggregate.
+    fn operand_has_no_projection(operand: &Operand) -> bool {
+        match operand {
+            Operand::Copy(place) | Operand::Move(place) => place.projection.is_empty(),
+            Operand::Constant(_) => true,
         }
     }
 

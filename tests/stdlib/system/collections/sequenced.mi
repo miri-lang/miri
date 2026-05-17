@@ -1,0 +1,85 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+//
+// Tests for `Sequenced<T>` defaults: take, skip, sorted_by, unique, reversed,
+// zip, enumerate. Exercised via List.
+
+use system.io
+use system.collections.list
+use system.collections.tuple
+use system.testing
+
+fn test_take()
+    let xs = List([10, 20, 30, 40, 50])
+    let first3 = xs.take(3)
+    assert_eq(first3.length(), 3)
+    assert_eq(first3.get(0), 10)
+    assert_eq(first3.get(2), 30)
+
+fn test_take_saturates_beyond_bounds()
+    let xs = List([10, 20, 30, 40, 50])
+    assert_eq(xs.take(100).length(), 5)
+    assert(xs.take(0).is_empty())
+
+fn test_skip()
+    let xs = List([10, 20, 30, 40, 50])
+    let dropped3 = xs.skip(3)
+    assert_eq(dropped3.length(), 2)
+    assert_eq(dropped3.get(0), 40)
+    assert_eq(dropped3.get(1), 50)
+
+fn test_skip_saturates_beyond_bounds()
+    let xs = List([10, 20, 30, 40, 50])
+    assert(xs.skip(100).is_empty())
+    assert_eq(xs.skip(0).length(), 5)
+
+fn test_sorted_by_descending()
+    let desc = List([3, 1, 4, 1, 5]).sorted_by(fn(a int, b int) int: b - a)
+    assert_eq(desc.length(), 5)
+    assert_eq(desc.get(0), 5)
+    assert_eq(desc.get(4), 1)
+
+fn test_unique_preserves_first_seen_order()
+    let uniq = List([1, 2, 2, 3, 1, 4]).unique()
+    assert_eq(uniq.length(), 4)
+    assert_eq(uniq.get(0), 1)
+    assert_eq(uniq.get(1), 2)
+    assert_eq(uniq.get(2), 3)
+    assert_eq(uniq.get(3), 4)
+
+fn test_reversed_does_not_mutate_receiver()
+    let original = List([1, 2, 3])
+    let rev = original.reversed()
+    assert_eq(rev.get(0), 3)
+    assert_eq(rev.get(2), 1)
+    assert_eq(original.get(0), 1, "reversed() does not mutate receiver")
+
+fn test_zip_truncates_to_shorter()
+    let a = List([1, 2, 3, 4])
+    let b = List([10, 20, 30])
+    let zipped = a.zip(b)
+    assert_eq(zipped.length(), 3, "zip truncates to shorter")
+    assert_eq(zipped.get(0).0, 1)
+    assert_eq(zipped.get(0).1, 10)
+    assert_eq(zipped.get(2).0, 3)
+    assert_eq(zipped.get(2).1, 30)
+
+fn test_enumerate_pairs_index_with_value()
+    let labelled = List([100, 200, 300]).enumerate()
+    assert_eq(labelled.length(), 3)
+    assert_eq(labelled.get(0).0, 0)
+    assert_eq(labelled.get(0).1, 100)
+    assert_eq(labelled.get(2).0, 2)
+    assert_eq(labelled.get(2).1, 300)
+
+fn main()
+    test_take()
+    test_take_saturates_beyond_bounds()
+    test_skip()
+    test_skip_saturates_beyond_bounds()
+    test_sorted_by_descending()
+    test_unique_preserves_first_seen_order()
+    test_reversed_does_not_mutate_receiver()
+    test_zip_truncates_to_shorter()
+    test_enumerate_pairs_index_with_value()
+    println("system.collections.sequenced: OK")

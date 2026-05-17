@@ -373,17 +373,29 @@ impl<'a> FunctionTranslator<'a> {
                         out_arg_slots.push((addr, local));
                         addr
                     } else {
-                        // Cast argument to match pre-declared parameter type if needed.
+                        // Cast argument to match pre-declared parameter type if
+                        // needed. Use `cast_value_with_sign` so the cast picks the
+                        // right Cranelift op for every (int↔int, int↔float,
+                        // float↔float) combination — the naive ireduce/sextend
+                        // pair would emit `ireduce.f32 v_i64` when the callee
+                        // expects a float, which the verifier rejects.
                         if let Some(ref pre_sig) = predeclared_sig {
                             if i < pre_sig.params.len() {
                                 let expected_ty = pre_sig.params[i].value_type;
                                 let actual_ty = builder.func.dfg.value_type(val);
                                 if actual_ty != expected_ty {
-                                    if actual_ty.bytes() > expected_ty.bytes() {
-                                        builder.ins().ireduce(expected_ty, val)
-                                    } else {
-                                        builder.ins().sextend(expected_ty, val)
-                                    }
+                                    crate::codegen::cranelift::translator::FunctionTranslator::cast_value_with_sign(
+                                        builder,
+                                        val,
+                                        actual_ty,
+                                        expected_ty,
+                                        false,
+                                    )
+                                    .map_err(|e| {
+                                        format!(
+                                            "Call arg {i}: cast {actual_ty} -> {expected_ty} failed: {e}"
+                                        )
+                                    })?
                                 } else {
                                     val
                                 }

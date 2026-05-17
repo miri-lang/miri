@@ -1,21 +1,28 @@
-use system.io.{print, println, eprintln, line_end}
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+//
+// Smoke tests for `system.io`. IO is side-effecting, so we mainly check that
+// the calls execute and `line_end` returns a sensible platform terminator.
 
-println("Testing IO...")
+use system.io
+use system.testing
 
-print("This is ")
-println("a split line")
+fn test_print_and_println()
+    print("io: ")
+    println("printed")
 
-eprintln("This is an error message (expected)")
+fn test_eprint_and_eprintln()
+    eprint("io.err: ")
+    eprintln("(this stderr line is expected)")
 
-let le = line_end()
-print("Line ending length: ")
-// println(le.length()) // can't print int yet? print takes String. 
-// String interpolation isn't explicitly clear if it works for print, but `println(le.length())` might fail if no overload.
-// sticking to string printing.
+fn test_line_end_is_platform_terminator()
+    let le = line_end()
+    assert(le.length() > 0, "line_end is non-empty")
+    assert(le.length() <= 2, "line_end is at most CRLF length")
+    assert(le == "\n" or le == "\r\n", "line_end matches a known platform terminator")
 
-if le.length() > 0
-    println("line_end() returned non-empty string")
-else
-    eprintln("Error: line_end() returned empty string")
-
-println("IO tests passed!")
+fn main()
+    test_print_and_println()
+    test_eprint_and_eprintln()
+    test_line_end_is_platform_terminator()
+    println("system.io: OK")

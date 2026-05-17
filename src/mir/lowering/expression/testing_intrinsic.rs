@@ -27,11 +27,6 @@ use crate::mir::{
     Terminator, TerminatorKind,
 };
 use crate::runtime_fns::rt;
-// `STRING_CONCAT` would suffice for the function name, but the f-string path
-// dispatches through the stdlib `String_concat` wrapper (allocator-injected),
-// so `emit_string_concat` here mirrors that ABI exactly.
-#[allow(unused_imports)]
-use crate::runtime_fns::rt::STRING_CONCAT as _;
 
 /// Name of every assertion intrinsic exported from `system.testing`. Used to
 /// short-circuit `lower_call_expr` before its generic-mangling step.
@@ -145,11 +140,22 @@ fn lower_assert_eq(
 
     let actual_arg = &args[0];
     let expected_arg = &args[1];
-    let value_kind = resolve_value_kind(ctx, expr, actual_arg, expected_arg, span)?;
+    let ast_kind = resolve_value_kind(ctx, expr, actual_arg, expected_arg, span)?;
 
     let watermark = ctx.body.local_decls.len();
     let actual_op = lower_expression(ctx, actual_arg, None)?;
     let expected_op = lower_expression(ctx, expected_arg, None)?;
+
+    // Prefer the AST-resolved kind unless it is unusable (e.g. a generic `T`
+    // that the type-checker never folded down to a primitive — happens when
+    // the value flows from an unmonomorphised function return). In that case
+    // pull the concrete kind from the lowered operands, where the local's
+    // declared type already carries the substituted value type.
+    let value_kind = if kind_is_primitive(&ast_kind) {
+        ast_kind
+    } else {
+        pick_concrete_kind(ctx, &actual_op, &expected_op, ast_kind)
+    };
     let user_msg = lower_optional_string_arg(ctx, args.get(2), span)?;
     let loc_op = build_location_operand(ctx, span);
 
@@ -356,6 +362,77 @@ fn materialize_void(ctx: &mut LoweringContext, span: Span, dest: Option<Place>) 
     Operand::Copy(Place::new(void_temp))
 }
 
+/// Returns true if `kind` is one of the primitive scalar kinds that the
+/// runtime assertion helpers know how to display. The set mirrors the
+/// branches handled in `emit_equality` / `emit_to_string`.
+fn kind_is_primitive(kind: &TypeKind) -> bool {
+    matches!(
+        kind,
+        TypeKind::Boolean
+            | TypeKind::Int
+            | TypeKind::I8
+            | TypeKind::I16
+            | TypeKind::I32
+            | TypeKind::I64
+            | TypeKind::I128
+            | TypeKind::U8
+            | TypeKind::U16
+            | TypeKind::U32
+            | TypeKind::U64
+            | TypeKind::U128
+            | TypeKind::Float
+            | TypeKind::F32
+            | TypeKind::F64
+            | TypeKind::String
+    )
+}
+
+/// Pick the most specific `TypeKind` to drive the equality + display path of
+/// `assert_eq`/`assert_ne`. Operand-derived kinds win over the AST-side
+/// resolution: the type checker can fail to propagate a function's return
+/// type back onto the binding (`let r = call_returning_float()`), but the
+/// operand's underlying local was already typed during lowering. Constants
+/// carry their declared `ty` directly. Falls back to `fallback` only when
+/// neither operand offers a usable kind.
+fn pick_concrete_kind(
+    ctx: &LoweringContext<'_>,
+    actual_op: &Operand,
+    expected_op: &Operand,
+    fallback: TypeKind,
+) -> TypeKind {
+    fn kind_of(ctx: &LoweringContext<'_>, op: &Operand) -> Option<TypeKind> {
+        match op {
+            Operand::Copy(place) | Operand::Move(place) => {
+                // A projected place (`t.0`, `s.field`, `xs[i]`) has a value
+                // type distinct from the base local — `local_decls` doesn't
+                // record that, so leave this operand out of the vote and let
+                // the AST-side fallback win.
+                if !place.projection.is_empty() {
+                    return None;
+                }
+                let local_kind = &ctx.body.local_decls[place.local.0].ty.kind;
+                if matches!(local_kind, TypeKind::Error) {
+                    None
+                } else {
+                    Some(local_kind.clone())
+                }
+            }
+            Operand::Constant(c) if !matches!(c.ty.kind, TypeKind::Error) => {
+                Some(c.ty.kind.clone())
+            }
+            Operand::Constant(_) => None,
+        }
+    }
+
+    if let Some(kind) = kind_of(ctx, actual_op) {
+        return kind;
+    }
+    if let Some(kind) = kind_of(ctx, expected_op) {
+        return kind;
+    }
+    fallback
+}
+
 /// Resolve the monomorphised T for `assert_eq<T>` / `assert_ne<T>`. Reads the
 /// type-checker's generic mapping on the call expression, then falls back to
 /// the argument's resolved type if the mapping is missing.
@@ -498,9 +575,9 @@ fn emit_value_to_quoted_string(
 }
 
 /// Emit a `String_concat(a, b, allocator)` call (the stdlib wrapper around
-/// `miri_rt_string_concat`) and return the resulting Local. We route through
-/// the wrapper so the call ABI — including the implicit allocator parameter
-/// — stays in sync with the f-string lowering, which uses the same symbol.
+/// `rt::STRING_CONCAT`) and return the resulting Local. We route through the
+/// wrapper so the call ABI — including the implicit allocator parameter —
+/// stays in sync with the f-string lowering, which uses the same symbol.
 fn emit_string_concat(
     ctx: &mut LoweringContext,
     span: Span,
