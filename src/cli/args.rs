@@ -94,7 +94,7 @@ pub enum CpuBackend {
     /// Cranelift: Fast compilation, good for development (default)
     #[default]
     Cranelift,
-    /// LLVM: Optimized compilation (not yet implemented)
+    /// LLVM: Optimized compilation
     Llvm,
 }
 
