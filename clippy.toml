@@ -1,0 +1,22 @@
+# Clippy thresholds encoding PRINCIPLES.md §3 (Clean Code).
+# Conservative enough to not break `make lint`; tightened where free.
+# `make audit` adds extra restriction lints on top as advisory findings.
+
+# §3.1 Functions — soft ceiling 40, hard ceiling 80.
+# Note: `too_many_lines` is `pedantic` (allow-by-default). Threshold here only
+# applies if a `[lints]` table enables it. We surface it via `make audit`.
+too-many-lines-threshold = 80
+
+# §3.1 Argument count ≤ 4 (target).
+# Default 7. Incumbents exist with 7 args (factory.rs, codegen). Holding at 7
+# to keep `make lint` green; tighten to 6 once those are refactored.
+# `make audit` independently flags fns with > 4 args as advisory findings.
+too-many-arguments-threshold = 7
+
+# §3.1 One level of abstraction per function — proxied by cognitive complexity.
+# Default 25 — keep as is (does not fire on current code).
+cognitive-complexity-threshold = 25
+
+# §3.6 No God objects / over-large signatures.
+# Holding default 250 — current `translator.rs` has a 200<x<250 type that is
+# acceptable. Pull tighter once that is extracted via `type` alias.
