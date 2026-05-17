@@ -3,9 +3,9 @@
 
 use super::utils::{combined_if_unless_test, if_statement_test, parser_error_test, parser_test};
 use miri::ast::factory::{
-    assign, binary, block, block_statement, empty_statement, expression_statement, identifier,
-    if_statement, int_literal_expression, let_variable, lhs_identifier, logical, unless_statement,
-    var, variable_statement,
+    assign, binary, block, empty_statement, expression_statement, identifier, if_statement,
+    int_literal_expression, let_variable, lhs_identifier, logical, unless_statement, var,
+    variable_statement,
 };
 use miri::ast::{opt_expr, AssignmentOp, BinaryOp, IfStatementType, MemberVisibility};
 use miri::error::syntax::SyntaxErrorKind;
@@ -112,7 +112,7 @@ if x
     x = 10
 ",
         identifier("x"),
-        block_statement(vec![expression_statement(assign(
+        block(vec![expression_statement(assign(
             lhs_identifier("x"),
             AssignmentOp::Assign,
             int_literal_expression(10),

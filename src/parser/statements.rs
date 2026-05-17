@@ -485,7 +485,7 @@ impl<'source> Parser<'source> {
                 };
                 let match_expr = ast::match_expression(value, vec![match_branch, break_branch]);
                 let match_stmt = ast::expression_statement(match_expr);
-                let loop_body = ast::block_statement(vec![match_stmt]);
+                let loop_body = ast::block(vec![match_stmt]);
 
                 return Ok(ast::while_statement_with_type(
                     ast::literal(ast::boolean(true)),
@@ -694,6 +694,6 @@ impl<'source> Parser<'source> {
             _ => self.statement_list()?,
         };
         self.eat_token(&Token::Dedent)?;
-        Ok(ast::block_statement(body))
+        Ok(ast::block(body))
     }
 }
