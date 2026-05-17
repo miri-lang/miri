@@ -16,7 +16,8 @@ Navigating a compiler is complex. Use this map to locate modules:
 
 - **`src/ast/`**: Language syntax tree definitions.
 - **`src/lexer/`**: Tokenization of source text.
-- **`src/parser/`**: Recursive descent parser. *Rule: Keep function names as nouns (e.g., `fn identifier()`).*
+- **`src/parser/`**: Recursive descent parser. *Rule: Keep function names as nouns matching the grammar non-terminal they produce (e.g., `fn identifier()`, `fn expression()`).*
+- **`src/ast/factory.rs`**: AST node constructors. *Same rule as parser: functions are named after the AST node they produce (e.g., `fn expr(...)`, `fn stmt(...)`, `fn class_statement(...)`). Do not rename to `parse_*` / `make_*` / `build_*`.*
 - **`src/type_checker/`**: Type inference, validation, and trait resolution.
 - **`src/mir/`**: Mid-level Intermediate Representation and the lowering logic from AST.
 - **`src/codegen/`**: Backend implementations.
@@ -53,10 +54,26 @@ When writing tests or standard library code, remember Miri's syntax:
 - **Separation of Concerns**: `struct` for data, `trait` for behavior. Avoid "God Objects".
 - **Comments**: Keep comments up-to-date with the code. Remove obsolete comments. Do NOT add comments that mention paragraphs, task or milestone numbers from planning documents. Ensure copyright headers are present.
 
+## 3.5 Principles Harness (BINDING)
+`PRINCIPLES.md` at the repo root is the **binding standard** for every change. It is the single source of truth for Clean Architecture (layer rules, stdlib independence), SOLID, Clean Code (function size, naming, comments, error handling), TDD discipline, and Miri-specific invariants (Perceus, runtime/stdlib alignment, exhaustive visitors).
+
+- Before writing code: read the relevant section of `PRINCIPLES.md`.
+- After writing code: run `make audit` (mechanical sweep) and self-check against the dimension lists in §1.3 / §2.6 / §3.7 / §4.5 / §5.5.
+- For existing-code reviews: use the `miri-audit` skill.
+- For diff-level review: use the `miri-reviewer` agent — it grades against the same principles.
+
+If you disagree with a principle, **say so** in the PR description. Do not silently deviate.
+
 ---
 
 ## 4. Testing & Verification (Mandatory)
-Testing is the only way to prove your work is correct.
+Testing is the only way to prove your work is correct. **Red-Green-Refactor is mandatory** — see PRINCIPLES.md §4. The cycle:
+1. **RED**: write a failing test; run it; confirm the failure is for the right reason.
+2. **GREEN**: minimum code that makes it pass. No speculative generality.
+3. **REFACTOR**: clean up names, extract functions, with the suite green.
+
+A task is **not done** until each acceptance criterion has gone through all three phases.
+
 
 - **Integration Tests**: Located in `tests/integration/`. Use helpers in `tests/integration/utils.rs`:
     - `assert_runs(code)`: High-level success check.
