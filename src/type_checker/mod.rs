@@ -104,6 +104,13 @@ pub struct TypeChecker {
     /// module loading. `check_class` / `check_trait` recognize members of
     /// this set as overwritable and remove the name on full registration.
     pub(crate) pre_registered_types: std::collections::HashSet<String>,
+    /// Source text of the entry-point file, populated by the pipeline right
+    /// before MIR lowering. Used by lowering passes (notably the testing
+    /// intrinsic lowering) to convert byte spans into human-readable line
+    /// numbers in runtime diagnostic messages.
+    pub entry_source: Option<std::rc::Rc<str>>,
+    /// Source path of the entry-point file. See [`entry_source`].
+    pub entry_source_path: Option<std::rc::Rc<str>>,
 }
 
 impl Default for TypeChecker {
@@ -139,6 +146,8 @@ impl TypeChecker {
             current_source_override: None,
             visible_type_names,
             pre_registered_types: std::collections::HashSet::new(),
+            entry_source: None,
+            entry_source_path: None,
         }
     }
 

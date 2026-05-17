@@ -130,6 +130,14 @@ pub mod rt {
     pub const EPRINTLN: &str = "miri_rt_eprintln";
     pub const GET_LINE_END: &str = "miri_rt_get_line_end";
     pub const PANIC: &str = "miri_rt_panic";
+    /// Compiler-internal: catch-and-validate a panic raised by a Miri closure.
+    pub const ASSERT_PANICS: &str = "miri_rt_assert_panics";
+    /// Compiler-internal: formats and aborts on a failed `assert(cond)`.
+    pub const ASSERT_FAIL: &str = "miri_rt_assert_fail";
+    /// Compiler-internal: formats and aborts on a failed `assert_eq(a, b)`.
+    pub const ASSERT_EQ_FAIL: &str = "miri_rt_assert_eq_fail";
+    /// Compiler-internal: formats and aborts on a failed `assert_ne(a, b)`.
+    pub const ASSERT_NE_FAIL: &str = "miri_rt_assert_ne_fail";
 
     // ── String ────────────────────────────────────────────────────────────────
     pub const STRING_NEW: &str = "miri_rt_string_new";
@@ -251,6 +259,10 @@ pub mod rt {
         EPRINTLN,
         GET_LINE_END,
         PANIC,
+        ASSERT_PANICS,
+        ASSERT_FAIL,
+        ASSERT_EQ_FAIL,
+        ASSERT_NE_FAIL,
         // String
         STRING_NEW,
         STRING_FREE,

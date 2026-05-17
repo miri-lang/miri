@@ -15,7 +15,7 @@ use std::rc::Rc;
 
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::control_flow::lower_call;
-use crate::mir::lowering::expression::lower_expression;
+use crate::mir::lowering::expression::{lower_expression, testing_intrinsic};
 use crate::mir::lowering::helpers::resolve_type;
 
 pub(crate) fn lower_call_expr(
@@ -65,6 +65,24 @@ pub(crate) fn lower_call_expr(
             ctx.emit_temp_drop(p.local, arg_watermark, expr.span);
         }
         return Ok(Operand::Copy(target));
+    }
+
+    // Check for `system.testing` assertion intrinsics. They are declared
+    // with `intrinsic fn` (no body) so the lowering synthesizes the
+    // failure-path MIR here, embedding the call-site source location in
+    // the runtime diagnostic.
+    if let ExpressionKind::Identifier(name, _) = &func.node {
+        if testing_intrinsic::is_testing_intrinsic(name.as_str())
+            && testing_intrinsic::is_from_testing_module(ctx, name.as_str())
+        {
+            return testing_intrinsic::lower_testing_intrinsic(
+                ctx,
+                expr,
+                name.as_str(),
+                args,
+                dest,
+            );
+        }
     }
 
     // Check for legacy GPU intrinsic function names (gpu_thread_idx_x etc.)

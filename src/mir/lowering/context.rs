@@ -58,6 +58,12 @@ pub struct LoweringContext<'a> {
     pub imports: Vec<Import>,
     /// Whether this is a release build (e.g. strip debug names)
     pub is_release: bool,
+    /// Source text of the file being lowered, used to convert byte spans into
+    /// human-readable line numbers for diagnostics emitted at run time
+    /// (e.g. assertion failure messages).
+    pub source: Option<&'a str>,
+    /// Absolute or relative path of the source file being lowered.
+    pub source_path: Option<&'a str>,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -75,6 +81,8 @@ impl<'a> LoweringContext<'a> {
         // Used by RC elision to avoid removing the DecRef that triggers the destructor.
         body.has_drop_types = Self::compute_has_drop_types(type_checker);
 
+        let source = type_checker.entry_source.as_deref();
+        let source_path = type_checker.entry_source_path.as_deref();
         let mut ctx = Self {
             body,
             variable_map: HashMap::new(),
@@ -88,10 +96,40 @@ impl<'a> LoweringContext<'a> {
             declarations: Vec::new(),
             imports: Vec::new(),
             is_release,
+            source,
+            source_path,
         };
         // Create the first basic block
         ctx.body.basic_blocks.push(BasicBlockData::new(None));
         ctx
+    }
+
+    /// Compute a 1-based line number for the given byte offset within
+    /// `self.source`. Returns `0` if no source is attached or the offset
+    /// is out of range.
+    pub fn line_of(&self, byte_offset: usize) -> usize {
+        let Some(src) = self.source else {
+            return 0;
+        };
+        if byte_offset > src.len() {
+            return 0;
+        }
+        src.as_bytes()[..byte_offset]
+            .iter()
+            .filter(|&&b| b == b'\n')
+            .count()
+            + 1
+    }
+
+    /// Format a span as a `"path:line"` (or `":line"` if no path is known)
+    /// human-readable location string, suitable for embedding in runtime
+    /// diagnostic messages.
+    pub fn format_span_location(&self, span: crate::error::syntax::Span) -> String {
+        let line = self.line_of(span.start);
+        match self.source_path {
+            Some(p) => format!("{}:{}", p, line),
+            None => format!(":{}", line),
+        }
     }
 
     /// Enter a new loop context

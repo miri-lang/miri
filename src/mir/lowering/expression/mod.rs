@@ -37,6 +37,7 @@ pub mod set_expr;
 
 pub mod structmember_expr;
 pub mod super_expr;
+pub mod testing_intrinsic;
 pub mod tuple_expr;
 pub mod type_expr;
 pub mod unary_expr;

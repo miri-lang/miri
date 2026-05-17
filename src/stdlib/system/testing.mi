@@ -1,8 +1,44 @@
-/// Test-only utilities for validating Miri's memory-safety infrastructure.
+/// Testing utilities for Miri.
 ///
-/// This module provides escape hatches that let integration tests verify the
-/// MIRI_LEAK_CHECK detector fires correctly. Do not use these functions in
-/// production code — they intentionally unbalance internal counters.
+/// Assertions in this module are the one carve-out from the
+/// "stdlib never panics" rule: their entire contract is to abort the process
+/// with a clear, source-located message when an expected condition fails.
+/// They are intrinsics — the compiler lowers them directly to the appropriate
+/// runtime call so that the failure message can include the call-site file
+/// and line number without requiring callers to thread location parameters.
+///
+/// Example:
+///
+///     use system.testing
+///
+///     fn main()
+///         assert(1 + 1 == 2)
+///         assert_eq(double(3), 6)
+///         assert_ne(state, State.Failed)
+///         assert_panics(fn() panic("bad input"), "bad input")
+
+/// Aborts the process with an "assertion failed" message if `condition` is
+/// false. The message includes the source location of the failing call. If
+/// `message` is non-empty it is appended to clarify the failure.
+public intrinsic fn assert(condition bool, message String = "")
+
+/// Aborts the process with a message showing `expected` and `actual` if they
+/// differ. Supports `T` ∈ {`int`, `bool`, `String`, `float`, `i8`..`u128`,
+/// `f32`/`f64`}. The optional `message` is appended after the diff.
+public intrinsic fn assert_eq<T>(actual T, expected T, message String = "")
+
+/// Aborts the process with a message showing the shared value if `a` and `b`
+/// are equal. Same type support as `assert_eq`.
+public intrinsic fn assert_ne<T>(a T, b T, message String = "")
+
+/// Calls `f`. Aborts if `f` did not panic. If `expected` is non-empty, also
+/// aborts unless the panic message contains `expected` as a substring.
+public intrinsic fn assert_panics(f fn(), expected String = "")
+
+// =============================================================================
+// Memory-safety test helpers (used by integration tests to exercise the
+// leak detector — not for production code).
+// =============================================================================
 
 runtime "core" fn miri_rt_test_simulate_closure_leak()
 
@@ -10,12 +46,6 @@ runtime "core" fn miri_rt_test_simulate_closure_leak()
 ///
 /// Increments the internal closure-allocation counter without allocating a
 /// closure, so the MIRI_LEAK_CHECK atexit handler will report a spurious leak
-/// when the process exits. Use in tests that verify the detector fires:
-///
-///     use system.io
-///     use system.testing
-///
-///     fn main()
-///         simulate_closure_leak()   // ← causes "leaked 1 closure allocation(s)"
+/// when the process exits. Use in tests that verify the detector fires.
 public fn simulate_closure_leak()
     miri_rt_test_simulate_closure_leak()
