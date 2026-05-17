@@ -439,7 +439,9 @@ impl Pipeline {
 
     /// Compile source code to a native executable, returning the artifact path.
     pub fn build(&self, source: &str, opts: &BuildOptions) -> Result<PathBuf, CompilerError> {
-        let pipeline_result = self.frontend_script(source)?;
+        let mut pipeline_result = self.frontend_script(source)?;
+        pipeline_result.type_checker.entry_source = Some(std::rc::Rc::from(source));
+        pipeline_result.type_checker.entry_source_path = self.source_path().map(std::rc::Rc::from);
         let mir_bodies = self.lower_to_mir(&pipeline_result, opts.release)?;
 
         let (object_bytes, required_runtimes) = match opts.cpu_backend {
@@ -1430,7 +1432,9 @@ impl Pipeline {
 
     /// Get MIR as a string for debugging purposes (pre-RC).
     pub fn get_mir(&self, source: &str) -> Result<String, CompilerError> {
-        let pipeline_result = self.frontend_script(source)?;
+        let mut pipeline_result = self.frontend_script(source)?;
+        pipeline_result.type_checker.entry_source = Some(std::rc::Rc::from(source));
+        pipeline_result.type_checker.entry_source_path = self.source_path().map(std::rc::Rc::from);
         let mir_bodies = self.lower_to_mir(&pipeline_result, false)?;
 
         let mut output = String::new();
@@ -1448,7 +1452,9 @@ impl Pipeline {
         &self,
         source: &str,
     ) -> Result<Vec<(String, crate::mir::Body)>, CompilerError> {
-        let pipeline_result = self.frontend_script(source)?;
+        let mut pipeline_result = self.frontend_script(source)?;
+        pipeline_result.type_checker.entry_source = Some(std::rc::Rc::from(source));
+        pipeline_result.type_checker.entry_source_path = self.source_path().map(std::rc::Rc::from);
         let mut bodies = self.lower_to_mir(&pipeline_result, false)?;
         for (_name, body) in &mut bodies {
             mir::optimization::insert_rc(body);
