@@ -3,8 +3,38 @@
 //! Provides standard output and error stream operations callable from
 //! compiled Miri code via FFI.
 
+use std::cell::Cell;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Platform-agnostic over-allocation of `sigjmp_buf`. macOS aarch64 uses
+/// `_JBLEN = 64` (520 bytes), x86_64 uses `_JBLEN = 48` (260 bytes), Linux
+/// glibc allocates ~200 bytes. 768 bytes / 8-byte alignment covers every
+/// supported target with room to spare and avoids depending on platform
+/// `sigjmp_buf` bindings that the `libc` crate does not export uniformly.
+#[repr(C, align(16))]
+pub(super) struct SigJmpBuf(pub(super) [u64; 96]);
+
+extern "C" {
+    fn sigsetjmp(env: *mut SigJmpBuf, savemask: i32) -> i32;
+    fn siglongjmp(env: *mut SigJmpBuf, val: i32) -> !;
+}
+
+thread_local! {
+    /// Saved `SigJmpBuf` pointer for the innermost active
+    /// `miri_rt_assert_panics` catch frame on this thread. When non-null,
+    /// `miri_rt_panic` records the message in `CAUGHT_PANIC_MSG` and
+    /// `siglongjmp`s back to the catch site instead of aborting.
+    pub(super) static PANIC_CATCH_BUF: Cell<*mut SigJmpBuf> = const {
+        Cell::new(std::ptr::null_mut())
+    };
+    /// Message captured by `miri_rt_panic` immediately before it `siglongjmp`s
+    /// out of the user closure. Consumed by `miri_rt_assert_panics` after the
+    /// jump returns. Leaks of intra-closure allocations are intentional: the
+    /// process is expected to terminate soon after a test failure.
+    pub(super) static CAUGHT_PANIC_MSG: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
 
 /// Tracks whether stdout output needs a trailing newline at program exit.
 ///
@@ -129,16 +159,219 @@ pub mod ffi {
 
     /// Prints a panic message to stderr and aborts the process.
     ///
+    /// If a `miri_rt_assert_panics` catch frame is active on the current
+    /// thread, stores the message in `CAUGHT_PANIC_MSG` and `siglongjmp`s
+    /// back to the catch site instead of aborting. The catch site reads the
+    /// message and decides whether to treat the panic as a test pass.
+    ///
     /// # Safety
     /// - `s` must be a valid pointer to a `MiriString` with valid UTF-8, or null.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_panic(s: *const MiriString) {
-        if s.is_null() {
-            eprintln!("Runtime error: explicit panic");
+        let msg: String = if s.is_null() {
+            "explicit panic".to_string()
         } else {
-            eprintln!("Runtime error: {}", (*s).as_str());
+            (*s).as_str().to_string()
+        };
+        let catch_buf = PANIC_CATCH_BUF.with(|c| c.get());
+        if !catch_buf.is_null() {
+            CAUGHT_PANIC_MSG.with(|m| *m.borrow_mut() = Some(msg));
+            siglongjmp(catch_buf, 1);
         }
+        eprintln!("Runtime error: {}", msg);
         std::process::abort();
+    }
+
+    /// Helper that formats the standard "assertion failed at <location>" prefix.
+    unsafe fn format_assert_prefix(location: *const MiriString) -> String {
+        if location.is_null() {
+            "assertion failed".to_string()
+        } else {
+            format!("assertion failed at {}", (*location).as_str())
+        }
+    }
+
+    /// Helper that returns the user message suffix (": <msg>") if non-empty.
+    unsafe fn user_msg_suffix(user_msg: *const MiriString) -> String {
+        if user_msg.is_null() {
+            return String::new();
+        }
+        let s = (*user_msg).as_str();
+        if s.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", s)
+        }
+    }
+
+    /// Reports a failed `assert(cond)` and aborts.
+    ///
+    /// # Safety
+    /// - `user_msg` and `location` must be valid pointers to `MiriString`s or null.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_assert_fail(
+        user_msg: *const MiriString,
+        location: *const MiriString,
+    ) {
+        let prefix = format_assert_prefix(location);
+        let suffix = user_msg_suffix(user_msg);
+        eprintln!("Runtime error: {}{}", prefix, suffix);
+        std::process::abort();
+    }
+
+    /// Reports a failed `assert_eq(actual, expected)` and aborts.
+    ///
+    /// # Safety
+    /// - `expected_str`, `actual_str`, `user_msg`, and `location` must be valid
+    ///   `MiriString` pointers or null.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_assert_eq_fail(
+        expected_str: *const MiriString,
+        actual_str: *const MiriString,
+        user_msg: *const MiriString,
+        location: *const MiriString,
+    ) {
+        let prefix = format_assert_prefix(location);
+        let expected_s = if expected_str.is_null() {
+            "<null>"
+        } else {
+            (*expected_str).as_str()
+        };
+        let actual_s = if actual_str.is_null() {
+            "<null>"
+        } else {
+            (*actual_str).as_str()
+        };
+        let suffix = user_msg_suffix(user_msg);
+        eprintln!(
+            "Runtime error: {}: expected {}, got {}{}",
+            prefix, expected_s, actual_s, suffix
+        );
+        std::process::abort();
+    }
+
+    /// Reports a failed `assert_ne(a, b)` and aborts.
+    ///
+    /// # Safety
+    /// - `value_str`, `user_msg`, and `location` must be valid `MiriString`
+    ///   pointers or null.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_assert_ne_fail(
+        value_str: *const MiriString,
+        user_msg: *const MiriString,
+        location: *const MiriString,
+    ) {
+        let prefix = format_assert_prefix(location);
+        let val_s = if value_str.is_null() {
+            "<null>"
+        } else {
+            (*value_str).as_str()
+        };
+        let suffix = user_msg_suffix(user_msg);
+        eprintln!(
+            "Runtime error: {}: values must differ, both were {}{}",
+            prefix, val_s, suffix
+        );
+        std::process::abort();
+    }
+
+    /// Invokes the zero-argument closure `closure_ptr` and verifies it panics.
+    ///
+    /// The closure layout is `[fn_ptr][dtor_ptr][captures...]`; `closure_ptr`
+    /// points to the start of the closure payload, which is also the
+    /// environment pointer passed to the closure as its implicit first
+    /// argument.
+    ///
+    /// Behavior:
+    /// - If the closure returns normally → emits an assertion-failed message
+    ///   at `location` and aborts.
+    /// - If the closure panics → captures the panic message string. If
+    ///   `expected` is non-null and non-empty, additionally checks that the
+    ///   captured message contains `expected` as a substring; aborts with a
+    ///   diagnostic if it doesn't. Otherwise returns normally.
+    ///
+    /// Note: any heap allocations made inside the closure between entry and
+    /// panic are leaked, because Perceus drop glue is skipped on the unwind
+    /// path. This is acceptable for test-only code; the process is expected
+    /// to terminate soon after.
+    ///
+    /// # Safety
+    /// - `closure_ptr` must point to a valid Miri closure payload whose first
+    ///   word is the closure function pointer of signature
+    ///   `extern "C" fn(*mut u8)`.
+    /// - `expected` and `location` must be valid pointers to `MiriString`s or null.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_assert_panics(
+        closure_ptr: *mut u8,
+        expected: *const MiriString,
+        location: *const MiriString,
+    ) {
+        if closure_ptr.is_null() {
+            eprintln!("Runtime error: assert_panics: null closure");
+            std::process::abort();
+        }
+
+        let loc_str: String = if location.is_null() {
+            "<unknown location>".to_string()
+        } else {
+            (*location).as_str().to_string()
+        };
+
+        // Stack-allocated jump buffer. We `sigsetjmp` here, install the buf
+        // pointer in TLS, then invoke the closure. If the closure calls
+        // `miri_rt_panic`, the panic helper stores the message and
+        // `siglongjmp`s back to this frame with a non-zero return value.
+        //
+        // The Rust drop glue on this frame is trivial (`MaybeUninit<sigjmp_buf>`
+        // is `Drop`-less, and the only owned strings are constructed AFTER the
+        // jump returns), so longjmp does not skip any required Drop call.
+        let mut buf: std::mem::MaybeUninit<SigJmpBuf> = std::mem::MaybeUninit::uninit();
+        let buf_ptr: *mut SigJmpBuf = buf.as_mut_ptr();
+
+        let prev_buf = PANIC_CATCH_BUF.with(|c| c.replace(buf_ptr));
+        CAUGHT_PANIC_MSG.with(|m| m.borrow_mut().take());
+
+        let jump_val = sigsetjmp(buf_ptr, 0);
+        if jump_val == 0 {
+            // First-time entry: invoke the closure. The closure's first
+            // argument is `env_ptr`, which equals `closure_ptr` (the payload
+            // pointer); the function pointer lives at `payload[0]`.
+            let fn_ptr_addr = *(closure_ptr as *const usize);
+            let f: extern "C" fn(*mut u8) = std::mem::transmute(fn_ptr_addr);
+            f(closure_ptr);
+
+            // Closure returned without panicking — restore catch slot and
+            // report failure.
+            PANIC_CATCH_BUF.with(|c| c.set(prev_buf));
+            eprintln!(
+                "Runtime error: {}: assertion failed: assert_panics: closure did not panic",
+                loc_str
+            );
+            std::process::abort();
+        }
+
+        // siglongjmp landed here. Restore the previous catch frame so nested
+        // assert_panics work, then validate the captured message against
+        // `expected` if one was provided.
+        PANIC_CATCH_BUF.with(|c| c.set(prev_buf));
+        let captured: String = CAUGHT_PANIC_MSG
+            .with(|m| m.borrow_mut().take())
+            .unwrap_or_default();
+
+        if !expected.is_null() {
+            let exp = (*expected).as_str();
+            if !exp.is_empty() && !captured.contains(exp) {
+                eprintln!(
+                    "Runtime error: {}: assertion failed: assert_panics: expected panic containing \"{}\", got \"{}\"",
+                    loc_str, exp, captured
+                );
+                std::process::abort();
+            }
+        }
     }
 }
