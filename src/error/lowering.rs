@@ -3,7 +3,7 @@
 
 //! Error types for MIR lowering.
 
-use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable, Severity, BUG_REPORT_URL};
+use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable, BUG_REPORT_URL};
 use crate::error::syntax::Span;
 
 /// An error produced during MIR lowering, with its source location.
@@ -58,107 +58,81 @@ impl LoweringErrorKind {
     /// Returns the error code, title, message, and help text for this error kind.
     pub fn properties(&self) -> ErrorProperties {
         match self {
-            Self::UnsupportedExpression { desc } => ErrorProperties {
-                code: "E0200",
-                title: "Unsupported Expression",
-                message: Some(format!("Unsupported expression: {}", desc)),
-                help: Some(
-                    "This expression is not yet supported by the compiler. Try rewriting it using simpler constructs."
-                        .to_string(),
+            Self::UnsupportedExpression { desc } => {
+                ErrorProperties::simple("E0200", "Unsupported Expression")
+                    .with_message(format!("Unsupported expression: {}", desc))
+                    .with_help(
+                        "This expression is not yet supported by the compiler. \
+                         Try rewriting it using simpler constructs.",
+                    )
+            }
+            Self::UnsupportedStatement { desc } => {
+                ErrorProperties::simple("E0201", "Unsupported Statement")
+                    .with_message(format!("Unsupported statement: {}", desc))
+                    .with_help(
+                        "This statement is not yet supported by the compiler. \
+                         Try rewriting it using simpler constructs.",
+                    )
+            }
+            Self::UndefinedVariable { name } => {
+                ErrorProperties::simple("E0202", "Undefined Variable")
+                    .with_message(format!("Undefined variable: {}", name))
+                    .with_help("Ensure the variable is defined before use.")
+            }
+            Self::TypeNotFound { .. } => ErrorProperties::simple("E0203", "Type Not Found")
+                .with_message(
+                    "Could not determine the type of this expression. \
+                     This is an internal compiler error — please report it.",
+                )
+                .with_help(format!("Please report this at {}", BUG_REPORT_URL)),
+            Self::BreakOutsideLoop => ErrorProperties::simple("E0204", "Break Outside Loop")
+                .with_message("break statement outside of loop")
+                .with_help("Move the break statement inside a loop."),
+            Self::ContinueOutsideLoop => ErrorProperties::simple("E0205", "Continue Outside Loop")
+                .with_message("continue statement outside of loop")
+                .with_help("Move the continue statement inside a loop."),
+            Self::UnsupportedLhs { desc } => {
+                ErrorProperties::simple("E0206", "Unsupported Left-Hand Side")
+                    .with_message(format!("Unsupported left-hand side: {}", desc))
+                    .with_help("This expression cannot be assigned to.")
+            }
+            Self::UnsupportedOperator { op } => {
+                ErrorProperties::simple("E0207", "Unsupported Operator")
+                    .with_message(format!("Unsupported operator: {}", op))
+                    .with_help("Supported operators: +, -, *, /, %, ==, !=, <, >, <=, >=, &&, ||.")
+            }
+            Self::UnsupportedRangeType => {
+                ErrorProperties::simple("E0208", "Unsupported Range Type")
+                    .with_message("Unsupported range type for loop")
+                    .with_help("Use exclusive (..) or inclusive (..=) ranges.")
+            }
+            Self::InvalidGpuLaunchArgs { expected, got } => {
+                ErrorProperties::simple("E0209", "Invalid GPU Launch Arguments")
+                    .with_message(format!(
+                        "GPU launch expects {} arguments, got {}",
+                        expected, got
+                    ))
+                    .with_help(
+                        "GPU launch requires exactly 2 arguments: grid and block dimensions.",
+                    )
+            }
+            Self::UnsupportedType { desc } => ErrorProperties::simple("E0210", "Unsupported Type")
+                .with_message(format!("Unsupported type: {}", desc))
+                .with_help(
+                    "This type is not yet supported by the compiler. \
+                     Use a supported type instead.",
                 ),
-            },
-            Self::UnsupportedStatement { desc } => ErrorProperties {
-                code: "E0201",
-                title: "Unsupported Statement",
-                message: Some(format!("Unsupported statement: {}", desc)),
-                help: Some(
-                    "This statement is not yet supported by the compiler. Try rewriting it using simpler constructs."
-                        .to_string(),
-                ),
-            },
-            Self::UndefinedVariable { name } => ErrorProperties {
-                code: "E0202",
-                title: "Undefined Variable",
-                message: Some(format!("Undefined variable: {}", name)),
-                help: Some("Ensure the variable is defined before use.".to_string()),
-            },
-            Self::TypeNotFound { .. } => ErrorProperties {
-                code: "E0203",
-                title: "Type Not Found",
-                message: Some(
-                    "Could not determine the type of this expression. This is an internal compiler error — please report it."
-                        .to_string(),
-                ),
-                help: Some(format!("Please report this at {}", BUG_REPORT_URL)),
-            },
-            Self::BreakOutsideLoop => ErrorProperties {
-                code: "E0204",
-                title: "Break Outside Loop",
-                message: Some("break statement outside of loop".to_string()),
-                help: Some("Move the break statement inside a loop.".to_string()),
-            },
-            Self::ContinueOutsideLoop => ErrorProperties {
-                code: "E0205",
-                title: "Continue Outside Loop",
-                message: Some("continue statement outside of loop".to_string()),
-                help: Some("Move the continue statement inside a loop.".to_string()),
-            },
-            Self::UnsupportedLhs { desc } => ErrorProperties {
-                code: "E0206",
-                title: "Unsupported Left-Hand Side",
-                message: Some(format!("Unsupported left-hand side: {}", desc)),
-                help: Some("This expression cannot be assigned to.".to_string()),
-            },
-            Self::UnsupportedOperator { op } => ErrorProperties {
-                code: "E0207",
-                title: "Unsupported Operator",
-                message: Some(format!("Unsupported operator: {}", op)),
-                help: Some(
-                    "Supported operators: +, -, *, /, %, ==, !=, <, >, <=, >=, &&, ||.".to_string(),
-                ),
-            },
-            Self::UnsupportedRangeType => ErrorProperties {
-                code: "E0208",
-                title: "Unsupported Range Type",
-                message: Some("Unsupported range type for loop".to_string()),
-                help: Some("Use exclusive (..) or inclusive (..=) ranges.".to_string()),
-            },
-            Self::InvalidGpuLaunchArgs { expected, got } => ErrorProperties {
-                code: "E0209",
-                title: "Invalid GPU Launch Arguments",
-                message: Some(format!(
-                    "GPU launch expects {} arguments, got {}",
-                    expected, got
-                )),
-                help: Some(
-                    "GPU launch requires exactly 2 arguments: grid and block dimensions."
-                        .to_string(),
-                ),
-            },
-            Self::UnsupportedType { desc } => ErrorProperties {
-                code: "E0210",
-                title: "Unsupported Type",
-                message: Some(format!("Unsupported type: {}", desc)),
-                help: Some(
-                    "This type is not yet supported by the compiler. Use a supported type instead."
-                        .to_string(),
-                ),
-            },
-            Self::MissingStructField { field, struct_name } => ErrorProperties {
-                code: "E0211",
-                title: "Missing Struct Field",
-                message: Some(format!(
-                    "Missing field '{}' in struct '{}' constructor",
-                    field, struct_name
-                )),
-                help: Some("Provide a value for all required struct fields.".to_string()),
-            },
-            Self::Custom { message, .. } => ErrorProperties {
-                code: "E0299",
-                title: "Lowering Error",
-                message: Some(message.clone()),
-                help: None,
-            },
+            Self::MissingStructField { field, struct_name } => {
+                ErrorProperties::simple("E0211", "Missing Struct Field")
+                    .with_message(format!(
+                        "Missing field '{}' in struct '{}' constructor",
+                        field, struct_name
+                    ))
+                    .with_help("Provide a value for all required struct fields.")
+            }
+            Self::Custom { message, .. } => {
+                ErrorProperties::simple("E0299", "Lowering Error").with_message(message.clone())
+            }
         }
     }
 }
@@ -276,23 +250,11 @@ impl LoweringError {
 
 impl Reportable for LoweringError {
     fn to_diagnostic(&self) -> Diagnostic {
-        let props = self.kind.properties();
-        let help = if let LoweringErrorKind::Custom { help, .. } = &self.kind {
-            help.clone()
-        } else {
-            props.help
-        };
-
-        Diagnostic {
-            severity: Severity::Error,
-            code: Some(props.code),
-            title: props.title.to_string(),
-            message: props.message.unwrap_or_else(|| props.title.to_string()),
-            span: Some(self.span),
-            help,
-            notes: Vec::new(),
-            source_override: None,
+        let mut props = self.kind.properties();
+        if let LoweringErrorKind::Custom { help, .. } = &self.kind {
+            props.help = help.clone();
         }
+        Diagnostic::from_props(props, Some(self.span), None)
     }
 }
 

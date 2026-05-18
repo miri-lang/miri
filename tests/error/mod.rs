@@ -5,7 +5,6 @@ pub mod builder;
 pub mod codegen;
 pub mod formatting;
 pub mod formatting_unit;
-pub mod interpreter;
 pub mod lowering;
 pub mod runtime;
 pub mod severity;

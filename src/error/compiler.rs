@@ -8,6 +8,19 @@ use crate::error::syntax::SyntaxError;
 use crate::error::type_error::TypeError;
 use thiserror::Error;
 
+fn simple_diag(title: &str, message: String, help: Option<String>) -> Diagnostic {
+    Diagnostic {
+        severity: Severity::Error,
+        code: None,
+        title: title.to_string(),
+        message,
+        span: None,
+        help,
+        notes: Vec::new(),
+        source_override: None,
+    }
+}
+
 /// Top-level error type encompassing all compiler pipeline errors.
 #[derive(Error, Debug)]
 pub enum CompilerError {
@@ -70,70 +83,30 @@ impl CompilerError {
                 parts.join("\n")
             }
             CompilerError::Lowering(e) => fmt(&e.to_diagnostic()),
-            CompilerError::Io(e) => fmt(&Diagnostic {
-                severity: Severity::Error,
-                code: None,
-                title: "I/O Error".to_string(),
-                message: format!("{}", e),
-                span: None,
-                help: None,
-                notes: Vec::new(),
-                source_override: None,
-            }),
-            CompilerError::FileNotFound(path) => fmt(&Diagnostic {
-                severity: Severity::Error,
-                code: None,
-                title: "File Not Found".to_string(),
-                message: format!("File not found: {}", path),
-                span: None,
-                help: None,
-                notes: Vec::new(),
-                source_override: None,
-            }),
-            CompilerError::Internal(msg) => fmt(&Diagnostic {
-                severity: Severity::Error,
-                code: None,
-                title: "Internal Compiler Error".to_string(),
-                message: msg.clone(),
-                span: None,
-                help: Some(format!("Please report this at {}", BUG_REPORT_URL)),
-                notes: Vec::new(),
-                source_override: None,
-            }),
-            CompilerError::Codegen(msg) => fmt(&Diagnostic {
-                severity: Severity::Error,
-                code: None,
-                title: "Code Generation Error".to_string(),
-                message: msg.clone(),
-                span: None,
-                help: None,
-                notes: Vec::new(),
-                source_override: None,
-            }),
-            CompilerError::Runtime(msg) => fmt(&Diagnostic {
-                severity: Severity::Error,
-                code: None,
-                title: "Runtime Error".to_string(),
-                message: msg.clone(),
-                span: None,
-                help: None,
-                notes: Vec::new(),
-                source_override: None,
-            }),
-            CompilerError::MirVerification(msg) => fmt(&Diagnostic {
-                severity: Severity::Error,
-                code: None,
-                title: "MIR Verification Error".to_string(),
-                message: msg.clone(),
-                span: None,
-                help: Some(
+            CompilerError::Io(e) => fmt(&simple_diag("I/O Error", format!("{}", e), None)),
+            CompilerError::FileNotFound(path) => fmt(&simple_diag(
+                "File Not Found",
+                format!("File not found: {}", path),
+                None,
+            )),
+            CompilerError::Internal(msg) => fmt(&simple_diag(
+                "Internal Compiler Error",
+                msg.clone(),
+                Some(format!("Please report this at {}", BUG_REPORT_URL)),
+            )),
+            CompilerError::Codegen(msg) => {
+                fmt(&simple_diag("Code Generation Error", msg.clone(), None))
+            }
+            CompilerError::Runtime(msg) => fmt(&simple_diag("Runtime Error", msg.clone(), None)),
+            CompilerError::MirVerification(msg) => fmt(&simple_diag(
+                "MIR Verification Error",
+                msg.clone(),
+                Some(
                     "This indicates a bug in MIR lowering or Perceus RC insertion. \
                      Please report it."
                         .to_string(),
                 ),
-                notes: Vec::new(),
-                source_override: None,
-            }),
+            )),
         }
     }
 }
