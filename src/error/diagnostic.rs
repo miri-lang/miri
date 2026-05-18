@@ -80,6 +80,30 @@ pub struct ErrorProperties {
     pub help: Option<String>,
 }
 
+impl ErrorProperties {
+    /// Build with only a code and title; message and help left empty.
+    pub fn simple(code: &'static str, title: &'static str) -> Self {
+        Self {
+            code,
+            title,
+            message: None,
+            help: None,
+        }
+    }
+
+    /// Set the detailed message.
+    pub fn with_message(mut self, message: impl Into<String>) -> Self {
+        self.message = Some(message.into());
+        self
+    }
+
+    /// Set the help text.
+    pub fn with_help(mut self, help: impl Into<String>) -> Self {
+        self.help = Some(help.into());
+        self
+    }
+}
+
 impl Diagnostic {
     /// Create a new error diagnostic.
     pub fn error(title: impl Into<String>) -> DiagnosticBuilder {
@@ -100,6 +124,27 @@ impl Diagnostic {
     pub fn format(&self, source: &str) -> String {
         use crate::error::format::format_diagnostic_full;
         format_diagnostic_full(source, self)
+    }
+
+    /// Build an error diagnostic from `ErrorProperties`, attaching the given span
+    /// and optional source override.
+    pub fn from_props(
+        props: ErrorProperties,
+        span: Option<Span>,
+        source_override: Option<(String, String)>,
+    ) -> Self {
+        let title = props.title.to_string();
+        let message = props.message.unwrap_or_else(|| title.clone());
+        Self {
+            severity: Severity::Error,
+            code: Some(props.code),
+            title,
+            message,
+            span,
+            help: props.help,
+            notes: Vec::new(),
+            source_override,
+        }
     }
 }
 

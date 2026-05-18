@@ -7,22 +7,23 @@
 //! formatting across all compiler phases.
 
 pub mod codegen;
-
 pub mod compiler;
 pub mod diagnostic;
 pub mod format;
-pub mod interpreter;
 pub mod lowering;
 pub mod runtime;
 pub mod syntax;
 pub mod type_error;
 
-pub use codegen::*;
-pub use compiler::*;
-pub use diagnostic::*;
-pub use format::*;
-pub use interpreter::*;
-pub use lowering::*;
-pub use runtime::*;
-pub use syntax::*;
-pub use type_error::*;
+pub use codegen::CodegenError;
+pub use compiler::CompilerError;
+pub use diagnostic::{
+    Diagnostic, DiagnosticBuilder, ErrorProperties, Reportable, Severity, BUG_REPORT_URL,
+};
+pub use format::{
+    find_best_match, format_diagnostic, format_diagnostic_full, levenshtein_distance, ColorScheme,
+};
+pub use lowering::{LoweringError, LoweringErrorKind};
+pub use runtime::RuntimeError;
+pub use syntax::{find_line_info, Span, SyntaxError, SyntaxErrorKind};
+pub use type_error::{TypeError, TypeErrorKind};

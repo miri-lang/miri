@@ -100,135 +100,125 @@ pub fn format_diagnostic_full(source: &str, diag: &Diagnostic) -> String {
 /// display the given path in the `-->` location line.
 pub fn format_diagnostic(source: &str, diag: &Diagnostic, source_path: Option<&str>) -> String {
     let colors = ColorScheme::detect();
+    let (effective_source, file_label) = effective_source_and_label(diag, source, source_path);
 
-    let level_color = colors.severity_color(diag.severity);
-
-    let level = diag.severity.as_str();
     let mut output = String::new();
+    append_header(&mut output, diag, &colors);
 
-    // Use source override if the diagnostic comes from an imported file,
-    // otherwise fall back to the entry-point source path if available.
-    let (effective_source, file_label) = match &diag.source_override {
-        Some((path, src)) => (src.as_str(), Some(path.as_str())),
-        None => (source, source_path),
-    };
-
-    // Header: error[E0001]: Title
-    output.push_str(colors.bold);
-    output.push_str(level_color);
-    output.push_str(level);
-    if let Some(code) = diag.code {
-        output.push('[');
-        output.push_str(code);
-        output.push(']');
+    let span_in_source = diag.span.filter(|s| s.start <= effective_source.len());
+    match span_in_source {
+        Some(span) => append_span_context(
+            &mut output,
+            diag,
+            effective_source,
+            file_label,
+            span,
+            &colors,
+        ),
+        None => append_spanless_body(&mut output, diag),
     }
-    output.push_str(": ");
-    output.push_str(colors.reset);
-    output.push_str(&diag.title);
-    output.push('\n');
 
-    // If we have a span that falls within the source, show source context.
-    // Spans from stdlib modules may point outside the user's source string;
-    // treat those as spanless to avoid panicking in find_line_info.
-    let effective_span = diag.span.filter(|s| s.start < effective_source.len());
+    append_notes(&mut output, diag, &colors);
+    output
+}
 
-    if let Some(ref span) = effective_span {
-        let (line_num, col_num, line_str) = find_line_info(effective_source, span.start);
-        let len = if span.end > span.start {
-            span.end - span.start
-        } else {
-            1
-        };
+fn effective_source_and_label<'a>(
+    diag: &'a Diagnostic,
+    main_source: &'a str,
+    main_path: Option<&'a str>,
+) -> (&'a str, Option<&'a str>) {
+    match &diag.source_override {
+        Some((path, src)) => (src.as_str(), Some(path.as_str())),
+        None => (main_source, main_path),
+    }
+}
 
-        let gutter_width = line_num.to_string().len();
-        let padding = " ".repeat(col_num.saturating_sub(1));
-        let underline = "^".repeat(len);
+fn append_header(out: &mut String, diag: &Diagnostic, colors: &ColorScheme) {
+    let level_color = colors.severity_color(diag.severity);
+    out.push_str(colors.bold);
+    out.push_str(level_color);
+    out.push_str(diag.severity.as_str());
+    if let Some(code) = diag.code {
+        out.push('[');
+        out.push_str(code);
+        out.push(']');
+    }
+    out.push_str(": ");
+    out.push_str(colors.reset);
+    out.push_str(&diag.title);
+    out.push('\n');
+}
 
-        // Location: --> file:line:col (or just line:col for the main file)
-        if let Some(path) = file_label {
-            output.push_str(&format!(
-                "{}-->{} {}:{}:{}\n",
-                colors.blue, colors.reset, path, line_num, col_num
-            ));
-        } else {
-            output.push_str(&format!(
-                "{}-->{} line {}:{}\n",
-                colors.blue, colors.reset, line_num, col_num
-            ));
-        }
+fn append_span_context(
+    out: &mut String,
+    diag: &Diagnostic,
+    source: &str,
+    file_label: Option<&str>,
+    span: crate::error::syntax::Span,
+    colors: &ColorScheme,
+) {
+    let level_color = colors.severity_color(diag.severity);
+    let (line_num, col_num, line_str) = find_line_info(source, span.start);
+    let len = span.end.saturating_sub(span.start).max(1);
+    let gutter_width = line_num.to_string().len();
+    let gutter = " ".repeat(gutter_width);
+    let padding = " ".repeat(col_num.saturating_sub(1));
+    let underline = "^".repeat(len);
 
-        // Empty line with pipe
-        output.push_str(&format!(
-            "{} {} |{}\n",
-            " ".repeat(gutter_width),
-            colors.blue,
-            colors.reset
-        ));
-
-        // Code line
-        output.push_str(&format!(
-            "{} {} |{} {}\n",
-            colors.blue, line_num, colors.reset, line_str
-        ));
-
-        // Underline with message if different from title
-        output.push_str(&format!(
-            "{} {} |{} {}{}{}{}",
-            " ".repeat(gutter_width),
-            colors.blue,
-            colors.reset,
-            padding,
-            colors.bold,
-            level_color,
-            underline
-        ));
-
-        // Inline message if different from title
-        if diag.message != diag.title {
-            output.push(' ');
-            output.push_str(&diag.message);
-        }
-
-        output.push_str(colors.reset);
-        output.push('\n');
-
-        // Help message on its own line
-        if let Some(ref h) = diag.help {
-            output.push_str(&format!(
-                "{} {} |{}\n",
-                " ".repeat(gutter_width),
-                colors.blue,
-                colors.reset
-            ));
-            output.push_str(&format!("  {}= help:{} {}\n", colors.cyan, colors.reset, h));
-        }
-
-        // Closing empty line with pipe
-        output.push_str(&format!(
-            "{} {} |{}\n",
-            " ".repeat(gutter_width),
-            colors.blue,
-            colors.reset
+    if let Some(path) = file_label {
+        out.push_str(&format!(
+            "{}-->{} {}:{}:{}\n",
+            colors.blue, colors.reset, path, line_num, col_num
         ));
     } else {
-        // No span - just show the message if different from title
-        if diag.message != diag.title {
-            output.push_str(&format!("  = {}\n", diag.message));
-        }
-        if let Some(ref h) = diag.help {
-            output.push_str(&format!("  = help: {}\n", h));
-        }
+        out.push_str(&format!(
+            "{}-->{} line {}:{}\n",
+            colors.blue, colors.reset, line_num, col_num
+        ));
     }
 
-    // Notes
+    out.push_str(&format!("{} {} |{}\n", gutter, colors.blue, colors.reset));
+    out.push_str(&format!(
+        "{} {} |{} {}\n",
+        colors.blue, line_num, colors.reset, line_str
+    ));
+    out.push_str(&format!(
+        "{} {} |{} {}{}{}{}",
+        gutter, colors.blue, colors.reset, padding, colors.bold, level_color, underline
+    ));
+    if diag.message != diag.title {
+        out.push(' ');
+        out.push_str(&diag.message);
+    }
+    out.push_str(colors.reset);
+    out.push('\n');
+
+    if let Some(ref help) = diag.help {
+        out.push_str(&format!("{} {} |{}\n", gutter, colors.blue, colors.reset));
+        out.push_str(&format!(
+            "  {}= help:{} {}\n",
+            colors.cyan, colors.reset, help
+        ));
+    }
+    out.push_str(&format!("{} {} |{}\n", gutter, colors.blue, colors.reset));
+}
+
+fn append_spanless_body(out: &mut String, diag: &Diagnostic) {
+    if diag.message != diag.title {
+        out.push_str(&format!("  = {}\n", diag.message));
+    }
+    if let Some(ref help) = diag.help {
+        out.push_str(&format!("  = help: {}\n", help));
+    }
+}
+
+fn append_notes(out: &mut String, diag: &Diagnostic, colors: &ColorScheme) {
     for note in &diag.notes {
-        output.push_str(&format!(
+        out.push_str(&format!(
             "  {}= note:{} {}\n",
             colors.cyan, colors.reset, note
         ));
     }
-
-    output
 }
 
 /// Computes the Levenshtein edit distance between two strings.
