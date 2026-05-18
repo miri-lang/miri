@@ -19,6 +19,13 @@ pub enum BuiltinCollectionKind {
     Set,
 }
 
+/// Canonical name of the built-in `Cloneable` trait.
+///
+/// Centralized so codegen and runtime-helper dispatch share one source of
+/// truth instead of scattering `"Cloneable"` string literals across the
+/// compiler. Mirrors the role of [`BuiltinCollectionKind`] / [`RESULT_TYPE_NAME`].
+pub const CLONEABLE_TRAIT_NAME: &str = "Cloneable";
+
 /// Canonical class name for the built-in `Result<T, E>` sum type.
 ///
 /// `TypeKind::Result(ok, err)` is normalized to
