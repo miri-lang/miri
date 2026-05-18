@@ -9,7 +9,10 @@
 use crate::ast::expression::ExpressionKind;
 use crate::ast::types::TypeKind;
 use crate::codegen::cranelift::types::translate_type_kind;
-use crate::type_checker::context::{class_needs_vtable, collect_class_fields_all, TypeDefinition};
+use crate::type_checker::context::{
+    class_needs_vtable, collect_class_fields_all, ClassDefinition, EnumDefinition,
+    StructDefinition, TypeDefinition,
+};
 use cranelift_codegen::ir::Type as CraneliftType;
 use std::collections::HashMap;
 
@@ -47,107 +50,172 @@ pub fn field_layout(
 ) -> (i32, CraneliftType) {
     let ptr_size = ptr_ty.bytes() as i32;
     match local_type {
-        TypeKind::Tuple(element_exprs) => {
-            debug_assert!(
-                field_idx < element_exprs.len(),
-                "field_layout: tuple field index {} out of range (len {})",
-                field_idx,
-                element_exprs.len()
-            );
-            // Tuple layout: [elem_count: ptr_size][field0][field1]...
-            // Fields start after the count header.
-            let mut offset: i32 = ptr_size;
-            for (i, elem_expr) in element_exprs.iter().enumerate() {
-                let cl_ty = type_from_expression(elem_expr, ptr_ty);
-                let alignment = type_alignment(cl_ty);
-                offset = align_to(offset, alignment);
-                if i == field_idx {
-                    return (offset, cl_ty);
-                }
-                offset += cl_ty.bytes() as i32;
-            }
-            // Unreachable if debug_assert passed; fallback for release builds
-            (offset, ptr_ty)
-        }
-        TypeKind::Custom(name, _) => {
-            if let Some(def) = type_definitions.get(name) {
-                match def {
-                    TypeDefinition::Struct(struct_def) => {
-                        debug_assert!(
-                            field_idx < struct_def.fields.len(),
-                            "field_layout: struct '{}' field index {} out of range (len {})",
-                            name,
-                            field_idx,
-                            struct_def.fields.len()
-                        );
-                        let mut offset: i32 = 0;
-                        for (i, (_field_name, field_ty, _vis)) in
-                            struct_def.fields.iter().enumerate()
-                        {
-                            let cl_ty = translate_type_kind(&field_ty.kind, ptr_ty);
-                            let alignment = type_alignment(cl_ty);
-                            offset = align_to(offset, alignment);
-                            if i == field_idx {
-                                return (offset, cl_ty);
-                            }
-                            offset += cl_ty.bytes() as i32;
-                        }
-                        // Unreachable if debug_assert passed; fallback for release builds
-                        (offset, ptr_ty)
-                    }
-                    TypeDefinition::Enum(_) => {
-                        // Discriminant is pointer-sized at offset 0; payload starts at offset ptr_size
-                        if field_idx == 0 {
-                            (0, ptr_ty) // discriminant
-                        } else {
-                            // Enums currently use pointer-sized slots for all fields to simplify.
-                            // Payload starts after the discriminant (pointer-sized).
-                            let payload_offset = ptr_size + ((field_idx - 1) as i32 * ptr_size);
-                            (payload_offset, ptr_ty)
-                        }
-                    }
-                    TypeDefinition::Alias(alias_def) => {
-                        // Resolve through the alias to the underlying type's layout
-                        field_layout(
-                            &alias_def.template.kind,
-                            field_idx,
-                            type_definitions,
-                            ptr_ty,
-                        )
-                    }
-                    TypeDefinition::Generic(_) => ((field_idx as i32) * ptr_size, ptr_ty),
-                    TypeDefinition::Class(class_def) => {
-                        // Class layout: [header: 16 bytes (malloc_ptr + RC)][vtable_ptr?][field0][field1]...
-                        // For vtable-bearing classes, offset 0 is the vtable pointer (raw, not user-visible).
-                        // User-declared fields start after the vtable pointer.
-                        let all_fields = collect_class_fields_all(class_def, type_definitions);
-                        let vtable_offset = if class_needs_vtable(name, type_definitions) {
-                            ptr_size
-                        } else {
-                            0
-                        };
-                        let mut offset: i32 = vtable_offset;
-                        for (i, (_field_name, field_info)) in all_fields.iter().enumerate() {
-                            let cl_ty = translate_type_kind(&field_info.ty.kind, ptr_ty);
-                            let alignment = type_alignment(cl_ty);
-                            offset = align_to(offset, alignment);
-                            if i == field_idx {
-                                return (offset, cl_ty);
-                            }
-                            offset += cl_ty.bytes() as i32;
-                        }
-                        (offset, ptr_ty)
-                    }
-                    TypeDefinition::Trait(_) => ((field_idx as i32) * ptr_size, ptr_ty),
-                }
-            } else {
-                // Type not found — assume pointer-sized fields
-                ((field_idx as i32) * ptr_size, ptr_ty)
-            }
-        }
-        // All other types: assume pointer-sized fields
-        _ => ((field_idx as i32) * ptr_size, ptr_ty),
+        TypeKind::Tuple(element_exprs) => tuple_field_layout(element_exprs, field_idx, ptr_ty),
+        TypeKind::Custom(name, _) => custom_field_layout(name, field_idx, type_definitions, ptr_ty),
+        TypeKind::Int
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::I128
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::U128
+        | TypeKind::Float
+        | TypeKind::F32
+        | TypeKind::F64
+        | TypeKind::String
+        | TypeKind::Boolean
+        | TypeKind::Identifier
+        | TypeKind::RawPtr
+        | TypeKind::List(_)
+        | TypeKind::Array(_, _)
+        | TypeKind::Map(_, _)
+        | TypeKind::Set(_)
+        | TypeKind::Result(_, _)
+        | TypeKind::Future(_)
+        | TypeKind::Function(_)
+        | TypeKind::Generic(_, _, _)
+        | TypeKind::Meta(_)
+        | TypeKind::Option(_)
+        | TypeKind::Void
+        | TypeKind::Error
+        | TypeKind::Linear(_) => ((field_idx as i32) * ptr_size, ptr_ty),
     }
+}
+
+fn tuple_field_layout(
+    element_exprs: &[crate::ast::expression::Expression],
+    field_idx: usize,
+    ptr_ty: CraneliftType,
+) -> (i32, CraneliftType) {
+    let ptr_size = ptr_ty.bytes() as i32;
+    debug_assert!(
+        field_idx < element_exprs.len(),
+        "field_layout: tuple field index {} out of range (len {})",
+        field_idx,
+        element_exprs.len()
+    );
+    // Tuple layout: [elem_count: ptr_size][field0][field1]...
+    // Fields start after the count header.
+    let mut offset: i32 = ptr_size;
+    for (i, elem_expr) in element_exprs.iter().enumerate() {
+        let cl_ty = type_from_expression(elem_expr, ptr_ty);
+        let alignment = type_alignment(cl_ty);
+        offset = align_to(offset, alignment);
+        if i == field_idx {
+            return (offset, cl_ty);
+        }
+        offset += cl_ty.bytes() as i32;
+    }
+    // Unreachable if debug_assert passed; fallback for release builds
+    (offset, ptr_ty)
+}
+
+fn custom_field_layout(
+    name: &str,
+    field_idx: usize,
+    type_definitions: &HashMap<String, TypeDefinition>,
+    ptr_ty: CraneliftType,
+) -> (i32, CraneliftType) {
+    let ptr_size = ptr_ty.bytes() as i32;
+    let Some(def) = type_definitions.get(name) else {
+        // Type not found — assume pointer-sized fields
+        return ((field_idx as i32) * ptr_size, ptr_ty);
+    };
+    match def {
+        TypeDefinition::Struct(struct_def) => {
+            struct_field_layout(name, struct_def, field_idx, ptr_ty)
+        }
+        TypeDefinition::Enum(enum_def) => enum_field_layout(enum_def, field_idx, ptr_ty),
+        TypeDefinition::Alias(alias_def) => field_layout(
+            &alias_def.template.kind,
+            field_idx,
+            type_definitions,
+            ptr_ty,
+        ),
+        TypeDefinition::Class(class_def) => {
+            class_field_layout(name, class_def, field_idx, type_definitions, ptr_ty)
+        }
+        TypeDefinition::Generic(_) | TypeDefinition::Trait(_) => {
+            ((field_idx as i32) * ptr_size, ptr_ty)
+        }
+    }
+}
+
+fn struct_field_layout(
+    name: &str,
+    struct_def: &StructDefinition,
+    field_idx: usize,
+    ptr_ty: CraneliftType,
+) -> (i32, CraneliftType) {
+    debug_assert!(
+        field_idx < struct_def.fields.len(),
+        "field_layout: struct '{}' field index {} out of range (len {})",
+        name,
+        field_idx,
+        struct_def.fields.len()
+    );
+    let mut offset: i32 = 0;
+    for (i, (_field_name, field_ty, _vis)) in struct_def.fields.iter().enumerate() {
+        let cl_ty = translate_type_kind(&field_ty.kind, ptr_ty);
+        let alignment = type_alignment(cl_ty);
+        offset = align_to(offset, alignment);
+        if i == field_idx {
+            return (offset, cl_ty);
+        }
+        offset += cl_ty.bytes() as i32;
+    }
+    // Unreachable if debug_assert passed; fallback for release builds
+    (offset, ptr_ty)
+}
+
+fn enum_field_layout(
+    _enum_def: &EnumDefinition,
+    field_idx: usize,
+    ptr_ty: CraneliftType,
+) -> (i32, CraneliftType) {
+    let ptr_size = ptr_ty.bytes() as i32;
+    // Discriminant is pointer-sized at offset 0; payload starts at offset ptr_size.
+    // Enums currently use pointer-sized slots for all fields to simplify layout.
+    if field_idx == 0 {
+        (0, ptr_ty)
+    } else {
+        let payload_offset = ptr_size + ((field_idx - 1) as i32 * ptr_size);
+        (payload_offset, ptr_ty)
+    }
+}
+
+fn class_field_layout(
+    name: &str,
+    class_def: &ClassDefinition,
+    field_idx: usize,
+    type_definitions: &HashMap<String, TypeDefinition>,
+    ptr_ty: CraneliftType,
+) -> (i32, CraneliftType) {
+    let ptr_size = ptr_ty.bytes() as i32;
+    // Class layout: [header: 16 bytes (malloc_ptr + RC)][vtable_ptr?][field0][field1]...
+    // For vtable-bearing classes, offset 0 is the vtable pointer (raw, not user-visible).
+    // User-declared fields start after the vtable pointer.
+    let all_fields = collect_class_fields_all(class_def, type_definitions);
+    let vtable_offset = if class_needs_vtable(name, type_definitions) {
+        ptr_size
+    } else {
+        0
+    };
+    let mut offset: i32 = vtable_offset;
+    for (i, (_field_name, field_info)) in all_fields.iter().enumerate() {
+        let cl_ty = translate_type_kind(&field_info.ty.kind, ptr_ty);
+        let alignment = type_alignment(cl_ty);
+        offset = align_to(offset, alignment);
+        if i == field_idx {
+            return (offset, cl_ty);
+        }
+        offset += cl_ty.bytes() as i32;
+    }
+    (offset, ptr_ty)
 }
 
 /// Compute total size of an aggregate for stack slot allocation.
@@ -161,61 +229,109 @@ pub fn aggregate_size(
     ptr_ty: CraneliftType,
 ) -> u32 {
     let ptr_size = ptr_ty.bytes();
-    let mut max_align = ptr_size as i32;
-
     match local_type {
-        TypeKind::Tuple(element_exprs) => {
-            // Start after the count header (ptr_size bytes at offset 0)
-            let mut total: i32 = ptr_size as i32;
-            for elem_expr in element_exprs {
-                let cl_ty = type_from_expression(elem_expr, ptr_ty);
-                let alignment = type_alignment(cl_ty);
-                max_align = max_align.max(alignment);
-                total = align_to(total, alignment);
-                total += cl_ty.bytes() as i32;
-            }
-            align_to(total, max_align) as u32
-        }
-        TypeKind::Custom(name, _) => {
-            if let Some(def) = type_definitions.get(name) {
-                match def {
-                    TypeDefinition::Struct(struct_def) => {
-                        let mut total: i32 = 0;
-                        for (_field_name, field_ty, _vis) in &struct_def.fields {
-                            let cl_ty = translate_type_kind(&field_ty.kind, ptr_ty);
-                            let alignment = type_alignment(cl_ty);
-                            max_align = max_align.max(alignment);
-                            total = align_to(total, alignment);
-                            total += cl_ty.bytes() as i32;
-                        }
-                        align_to(total, max_align) as u32
-                    }
-                    TypeDefinition::Enum(enum_def) => {
-                        // discriminant + max payload size
-                        // Each payload field is stored at pointer-size alignment to match
-                        // field_layout which uses pointer-sized slots per field.
-                        let max_payload: u32 = enum_def
-                            .variants
-                            .values()
-                            .map(|fields| (fields.len() as u32) * ptr_size)
-                            .max()
-                            .unwrap_or(0);
-                        ptr_size + max_payload
-                    }
-                    TypeDefinition::Alias(alias_def) => {
-                        // Resolve through the alias to the underlying type's layout
-                        aggregate_size(&alias_def.template.kind, type_definitions, ptr_ty)
-                    }
-                    // Generic, Class, Trait — pointer-sized
-                    TypeDefinition::Generic(_)
-                    | TypeDefinition::Class(_)
-                    | TypeDefinition::Trait(_) => ptr_size,
-                }
-            } else {
-                ptr_size
-            }
-        }
-        // All non-aggregate types: pointer-sized
-        _ => ptr_size,
+        TypeKind::Tuple(element_exprs) => tuple_aggregate_size(element_exprs, ptr_ty),
+        TypeKind::Custom(name, _) => custom_aggregate_size(name, type_definitions, ptr_ty),
+        TypeKind::Int
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::I128
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::U128
+        | TypeKind::Float
+        | TypeKind::F32
+        | TypeKind::F64
+        | TypeKind::String
+        | TypeKind::Boolean
+        | TypeKind::Identifier
+        | TypeKind::RawPtr
+        | TypeKind::List(_)
+        | TypeKind::Array(_, _)
+        | TypeKind::Map(_, _)
+        | TypeKind::Set(_)
+        | TypeKind::Result(_, _)
+        | TypeKind::Future(_)
+        | TypeKind::Function(_)
+        | TypeKind::Generic(_, _, _)
+        | TypeKind::Meta(_)
+        | TypeKind::Option(_)
+        | TypeKind::Void
+        | TypeKind::Error
+        | TypeKind::Linear(_) => ptr_size,
     }
+}
+
+/// Size of a tuple aggregate: `[count_header][field0][field1]...`, padded to
+/// the maximum field alignment.
+fn tuple_aggregate_size(
+    element_exprs: &[crate::ast::expression::Expression],
+    ptr_ty: CraneliftType,
+) -> u32 {
+    let ptr_size = ptr_ty.bytes() as i32;
+    let mut max_align = ptr_size;
+    let mut total = ptr_size;
+    for elem_expr in element_exprs {
+        let cl_ty = type_from_expression(elem_expr, ptr_ty);
+        let alignment = type_alignment(cl_ty);
+        max_align = max_align.max(alignment);
+        total = align_to(total, alignment);
+        total += cl_ty.bytes() as i32;
+    }
+    align_to(total, max_align) as u32
+}
+
+/// Size of a `Custom(name, _)` aggregate by dispatching on the resolved
+/// `TypeDefinition`. Unknown names and definitions that carry no on-stack
+/// payload (classes, traits, generics) fall back to a pointer slot.
+fn custom_aggregate_size(
+    name: &str,
+    type_definitions: &HashMap<String, TypeDefinition>,
+    ptr_ty: CraneliftType,
+) -> u32 {
+    let ptr_size = ptr_ty.bytes();
+    match type_definitions.get(name) {
+        Some(TypeDefinition::Struct(struct_def)) => struct_aggregate_size(struct_def, ptr_ty),
+        Some(TypeDefinition::Enum(enum_def)) => enum_aggregate_size(enum_def, ptr_size),
+        Some(TypeDefinition::Alias(alias_def)) => {
+            aggregate_size(&alias_def.template.kind, type_definitions, ptr_ty)
+        }
+        None
+        | Some(TypeDefinition::Generic(_))
+        | Some(TypeDefinition::Class(_))
+        | Some(TypeDefinition::Trait(_)) => ptr_size,
+    }
+}
+
+/// Size of a struct aggregate: sum of field sizes with per-field alignment,
+/// padded to the maximum encountered alignment (at least ptr-sized).
+fn struct_aggregate_size(struct_def: &StructDefinition, ptr_ty: CraneliftType) -> u32 {
+    let ptr_size = ptr_ty.bytes() as i32;
+    let mut max_align = ptr_size;
+    let mut total: i32 = 0;
+    for (_field_name, field_ty, _vis) in &struct_def.fields {
+        let cl_ty = translate_type_kind(&field_ty.kind, ptr_ty);
+        let alignment = type_alignment(cl_ty);
+        max_align = max_align.max(alignment);
+        total = align_to(total, alignment);
+        total += cl_ty.bytes() as i32;
+    }
+    align_to(total, max_align) as u32
+}
+
+/// Size of an enum aggregate: a ptr-sized discriminant followed by the
+/// largest variant payload. Each payload field uses a pointer-sized slot to
+/// match the convention in [`field_layout`].
+fn enum_aggregate_size(enum_def: &EnumDefinition, ptr_size: u32) -> u32 {
+    let max_payload = enum_def
+        .variants
+        .values()
+        .map(|fields| (fields.len() as u32) * ptr_size)
+        .max()
+        .unwrap_or(0);
+    ptr_size + max_payload
 }

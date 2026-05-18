@@ -250,7 +250,37 @@ impl<'a> FunctionTranslator<'a> {
                     builder, lhs_val, rhs_val, lhs_kind, def, type_ctx,
                 )?))
             }
-            _ => Ok(None),
+            TypeKind::Int
+            | TypeKind::I8
+            | TypeKind::I16
+            | TypeKind::I32
+            | TypeKind::I64
+            | TypeKind::I128
+            | TypeKind::U8
+            | TypeKind::U16
+            | TypeKind::U32
+            | TypeKind::U64
+            | TypeKind::U128
+            | TypeKind::Float
+            | TypeKind::F32
+            | TypeKind::F64
+            | TypeKind::String
+            | TypeKind::Boolean
+            | TypeKind::Identifier
+            | TypeKind::RawPtr
+            | TypeKind::List(_)
+            | TypeKind::Array(_, _)
+            | TypeKind::Map(_, _)
+            | TypeKind::Set(_)
+            | TypeKind::Result(_, _)
+            | TypeKind::Future(_)
+            | TypeKind::Function(_)
+            | TypeKind::Generic(_, _, _)
+            | TypeKind::Meta(_)
+            | TypeKind::Option(_)
+            | TypeKind::Void
+            | TypeKind::Error
+            | TypeKind::Linear(_) => Ok(None),
         }
     }
 
@@ -377,7 +407,7 @@ impl<'a> FunctionTranslator<'a> {
                 Some(&type_ctx.local_types[p.local.0].kind)
             }
             Operand::Constant(c) => Some(&c.ty.kind),
-            _ => None,
+            Operand::Copy(_) | Operand::Move(_) => None,
         });
         if let Some(elem_kind) = first_op_direct_kind {
             Self::register_elem_drop_clone(
@@ -449,29 +479,8 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
     ) -> Result<Value, CodegenError> {
         let ptr_type = type_ctx.ptr_type;
-        let ptr_size = ptr_type.bytes() as i32;
-
-        let key_size = if translated.len() >= 2 {
-            builder.func.dfg.value_type(translated[0]).bytes() as i64
-        } else {
-            ptr_size as i64
-        };
-        let value_size = if translated.len() >= 2 {
-            builder.func.dfg.value_type(translated[1]).bytes() as i64
-        } else {
-            ptr_size as i64
-        };
-        // key_kind: 1 for string keys, 0 for value keys.
-        let key_kind = if !operands.is_empty() {
-            let first_key_kind = Self::first_operand_kind(&operands[0], type_ctx);
-            if matches!(first_key_kind, Some(TypeKind::String)) {
-                1i64
-            } else {
-                0i64
-            }
-        } else {
-            0i64
-        };
+        let (key_size, value_size, key_kind) =
+            Self::map_aggregate_descriptor(builder, &translated, operands, type_ctx, ptr_type);
 
         let key_size_val = builder.ins().iconst(ptr_type, key_size);
         let value_size_val = builder.ins().iconst(ptr_type, value_size);
@@ -480,25 +489,7 @@ impl<'a> FunctionTranslator<'a> {
         let map_ptr =
             Self::call_rt_map_new(builder, ctx, key_size_val, value_size_val, key_kind_val)?;
 
-        if operands.len() >= 2 {
-            if let Some(val_kind) = Self::first_operand_kind(&operands[1], type_ctx) {
-                Self::register_elem_drop_clone(
-                    builder,
-                    ctx,
-                    val_kind,
-                    map_ptr,
-                    ptr_type,
-                    type_ctx.type_definitions,
-                    ElementCallbackSetters {
-                        set_drop: Self::call_rt_map_set_val_drop_fn,
-                        set_clone: Self::call_rt_map_set_val_clone_fn,
-                    },
-                )?;
-            }
-        }
-
-        // If keys are strings, register the string decref callback so that
-        // remove/clear/free properly DecRef string keys.
+        Self::register_map_value_callbacks(builder, ctx, operands, map_ptr, ptr_type, type_ctx)?;
         if key_kind == 1 {
             let drop_fn_addr = Self::get_rt_string_decref_element_addr(builder, ctx, ptr_type)?;
             Self::call_rt_map_set_key_drop_fn(builder, ctx, map_ptr, drop_fn_addr)?;
@@ -512,6 +503,71 @@ impl<'a> FunctionTranslator<'a> {
             }
         }
         Ok(map_ptr)
+    }
+
+    /// Returns `(key_size, value_size, key_kind)` for the upcoming map. `key_kind`
+    /// is 1 when the first key is a `TypeKind::String` (so the runtime knows to
+    /// DecRef string keys), 0 otherwise. Sizes fall back to pointer-size when the
+    /// literal has no concrete entries to measure.
+    fn map_aggregate_descriptor(
+        builder: &FunctionBuilder,
+        translated: &[Value],
+        operands: &[Operand],
+        type_ctx: &TypeCtx,
+        ptr_type: cl_types::Type,
+    ) -> (i64, i64, i64) {
+        let ptr_size = ptr_type.bytes() as i64;
+        let (key_size, value_size) = if translated.len() >= 2 {
+            (
+                builder.func.dfg.value_type(translated[0]).bytes() as i64,
+                builder.func.dfg.value_type(translated[1]).bytes() as i64,
+            )
+        } else {
+            (ptr_size, ptr_size)
+        };
+        let key_kind = match operands.first() {
+            Some(op)
+                if matches!(
+                    Self::first_operand_kind(op, type_ctx),
+                    Some(TypeKind::String)
+                ) =>
+            {
+                1
+            }
+            _ => 0,
+        };
+        (key_size, value_size, key_kind)
+    }
+
+    /// Registers `elem_drop_fn` / `elem_clone_fn` callbacks for the value side
+    /// of a map, when the value type tells us which managed decref/clone helper
+    /// to wire up.
+    fn register_map_value_callbacks(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        operands: &[Operand],
+        map_ptr: Value,
+        ptr_type: cl_types::Type,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), CodegenError> {
+        if operands.len() < 2 {
+            return Ok(());
+        }
+        let Some(val_kind) = Self::first_operand_kind(&operands[1], type_ctx) else {
+            return Ok(());
+        };
+        Self::register_elem_drop_clone(
+            builder,
+            ctx,
+            val_kind,
+            map_ptr,
+            ptr_type,
+            type_ctx.type_definitions,
+            ElementCallbackSetters {
+                set_drop: Self::call_rt_map_set_val_drop_fn,
+                set_clone: Self::call_rt_map_set_val_clone_fn,
+            },
+        )
     }
 
     /// Build a heap-allocated `Set` aggregate populated from `translated`.
@@ -755,8 +811,7 @@ impl<'a> FunctionTranslator<'a> {
         let ptr_size = ptr_type.bytes() as i32;
         let ty = type_ctx.local_types[place.local.0];
 
-        let is_tuple_type = matches!(&ty.kind, TypeKind::Tuple(_))
-            || matches!(&ty.kind, TypeKind::Custom(name, _) if name == "Tuple");
+        let is_tuple_type = ty.kind.is_tuple();
 
         let len_offset = if Self::is_collection_type(&ty.kind) {
             // MiriArray.elem_count, MiriList.len, MiriSet.len at offset ptr_size.
@@ -1306,7 +1361,7 @@ impl<'a> FunctionTranslator<'a> {
                 let kind = &type_ctx.local_types[p.local.0].kind;
                 super::translator::is_capture_managed(kind)
             }
-            _ => false,
+            Operand::Constant(_) => false,
         });
         if !has_managed {
             return Ok(builder.ins().iconst(ptr_type, 0));
@@ -1508,7 +1563,18 @@ impl<'a> FunctionTranslator<'a> {
             BinOp::Shl => builder.ins().ishl(lhs, rhs),
             BinOp::Shr if is_unsigned => builder.ins().ushr(lhs, rhs),
             BinOp::Shr => builder.ins().sshr(lhs, rhs),
-            _ => unreachable!(
+            BinOp::Add
+            | BinOp::Sub
+            | BinOp::Mul
+            | BinOp::Div
+            | BinOp::Rem
+            | BinOp::Eq
+            | BinOp::Ne
+            | BinOp::Lt
+            | BinOp::Le
+            | BinOp::Gt
+            | BinOp::Ge
+            | BinOp::Offset => unreachable!(
                 "translate_binop_bitwise called with non-bitwise op {:?}",
                 op
             ),
@@ -1560,7 +1626,19 @@ impl<'a> FunctionTranslator<'a> {
                     IntCC::SignedGreaterThanOrEqual
                 },
             ),
-            _ => unreachable!("translate_binop_cmp called with non-comparison op {:?}", op),
+            BinOp::Add
+            | BinOp::Sub
+            | BinOp::Mul
+            | BinOp::Div
+            | BinOp::Rem
+            | BinOp::BitXor
+            | BinOp::BitAnd
+            | BinOp::BitOr
+            | BinOp::Shl
+            | BinOp::Shr
+            | BinOp::Offset => {
+                unreachable!("translate_binop_cmp called with non-comparison op {:?}", op)
+            }
         };
         if is_float {
             builder.ins().fcmp(fcc, lhs, rhs)

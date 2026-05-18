@@ -102,6 +102,11 @@ impl<'a> FunctionTranslator<'a> {
     /// `StatementKind::DecRef`: decrement RC; when it reaches zero, run
     /// `emit_type_drop` for the resolved place kind. Skips null pointers
     /// (uninitialized) and immortal objects (high RC bit set).
+    ///
+    /// Delegates to `emit_decref_value`, which carries the canonical
+    /// null-guard / immortal-guard / decrement / zero-check chain. The
+    /// only place-specific work is resolving the projected type kind and
+    /// reading the pointer value.
     fn translate_dec_ref(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -109,51 +114,9 @@ impl<'a> FunctionTranslator<'a> {
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
-        let ptr_type = type_ctx.ptr_type;
-        let ptr_size = ptr_type.bytes() as i32;
-        // Resolve the actual field type when place has projections (e.g. h.data).
-        let place_kind_cow = Self::resolve_projected_type_kind(place, type_ctx);
+        let place_kind = Self::resolve_projected_type_kind(place, type_ctx);
         let ptr = Self::read_place(builder, ctx, place, locals, type_ctx)?;
-
-        let null = builder.ins().iconst(ptr_type, 0);
-        let is_null = builder.ins().icmp(IntCC::Equal, ptr, null);
-        let rc_block = builder.create_block();
-        let merge_block = builder.create_block();
-        builder.ins().brif(is_null, merge_block, &[], rc_block, &[]);
-
-        builder.switch_to_block(rc_block);
-        let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size as i64));
-        let rc = builder.ins().load(ptr_type, MemFlags::new(), header_ptr, 0);
-
-        let is_immortal = builder.ins().icmp_imm(IntCC::SignedLessThan, rc, 0);
-        let dec_block = builder.create_block();
-        builder
-            .ins()
-            .brif(is_immortal, merge_block, &[], dec_block, &[]);
-
-        builder.switch_to_block(dec_block);
-        let new_rc = builder.ins().iadd_imm(rc, -1);
-        builder.ins().store(MemFlags::new(), new_rc, header_ptr, 0);
-
-        let zero = builder.ins().iconst(ptr_type, 0);
-        let is_zero = builder.ins().icmp(IntCC::Equal, new_rc, zero);
-
-        let free_block = builder.create_block();
-        builder
-            .ins()
-            .brif(is_zero, free_block, &[], merge_block, &[]);
-
-        builder.switch_to_block(free_block);
-        Self::emit_type_drop(builder, ctx, &place_kind_cow, ptr, header_ptr, type_ctx)?;
-        builder.ins().jump(merge_block, &[]);
-
-        builder.seal_block(rc_block);
-        builder.seal_block(dec_block);
-        builder.seal_block(free_block);
-
-        builder.switch_to_block(merge_block);
-        builder.seal_block(merge_block);
-        Ok(())
+        Self::emit_decref_value(builder, ctx, &place_kind, ptr, type_ctx)
     }
 
     /// `StatementKind::Dealloc`: unconditional cleanup — the caller has
@@ -424,14 +387,7 @@ impl<'a> FunctionTranslator<'a> {
         type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
         let ptr_type = type_ctx.ptr_type;
-
-        let func_name = match func {
-            Operand::Constant(c) => match &c.literal {
-                Literal::Identifier(name) => Some(name.clone()),
-                _ => None,
-            },
-            _ => None,
-        };
+        let func_name = Self::direct_call_name(func);
 
         let (arg_values, sig, out_arg_slots) = Self::prepare_call_args(
             builder,
@@ -484,6 +440,24 @@ impl<'a> FunctionTranslator<'a> {
             builder.ins().jump(blocks[t], &[]);
         }
         Ok(())
+    }
+
+    /// Returns the static function name when `func` is a `Constant(Identifier)`
+    /// operand (direct named call); `None` for indirect/closure calls or any
+    /// non-identifier constant.
+    fn direct_call_name(func: &Operand) -> Option<String> {
+        match func {
+            Operand::Constant(c) => match &c.literal {
+                Literal::Identifier(name) => Some(name.clone()),
+                Literal::Integer(_)
+                | Literal::Float(_)
+                | Literal::String(_)
+                | Literal::Boolean(_)
+                | Literal::Regex(_)
+                | Literal::None => None,
+            },
+            Operand::Copy(_) | Operand::Move(_) => None,
+        }
     }
 
     /// Read each scalar `out`-param stack slot back into its caller-side
@@ -589,7 +563,7 @@ impl<'a> FunctionTranslator<'a> {
             {
                 Some(p.local)
             }
-            _ => None,
+            Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) => None,
         }
     }
 
@@ -759,7 +733,7 @@ impl<'a> FunctionTranslator<'a> {
             Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => {
                 Some(&type_ctx.local_types[p.local.0].kind)
             }
-            _ => None,
+            Operand::Copy(_) | Operand::Move(_) | Operand::Constant(_) => None,
         };
         let Some(array_kind) = array_kind else {
             return Ok(());
@@ -857,49 +831,82 @@ impl<'a> FunctionTranslator<'a> {
             "VirtualCall must have at least one arg (receiver)"
         );
 
+        let (arg_values, mut sig) =
+            Self::translate_vcall_args(builder, ctx, args, locals, type_ctx)?;
+        let dest_ty = &body.local_decls[destination.local.0].ty;
+        if dest_ty.kind != TypeKind::Void {
+            sig.returns
+                .push(AbiParam::new(translate_type(dest_ty, ptr_type)));
+        }
+
+        let fn_ptr = Self::load_vtable_fn_ptr(builder, arg_values[0], vtable_slot, ptr_type);
+        let sig_ref = builder.import_signature(sig);
+        let call = builder.ins().call_indirect(sig_ref, fn_ptr, &arg_values);
+
+        Self::store_vcall_result(builder, call, dest_ty, destination, locals)?;
+        if let Some(t) = target {
+            builder.ins().jump(blocks[t], &[]);
+        }
+        Ok(())
+    }
+
+    /// Translate every virtual-call argument and build the matching call
+    /// signature. Returns `(arg_values, signature-with-params-filled)`.
+    fn translate_vcall_args(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        args: &[Operand],
+        locals: &HashMap<Local, Variable>,
+        type_ctx: &TypeCtx,
+    ) -> Result<(Vec<cranelift_codegen::ir::Value>, Signature), CodegenError> {
         let mut sig = Signature::new(builder.func.signature.call_conv);
-        let mut arg_values = Vec::new();
+        let mut arg_values = Vec::with_capacity(args.len());
         for arg in args {
             let val = Self::translate_operand(builder, ctx, arg, locals, type_ctx)?;
             arg_values.push(val);
             sig.params
                 .push(AbiParam::new(builder.func.dfg.value_type(val)));
         }
+        Ok((arg_values, sig))
+    }
 
-        let dest_ty = &body.local_decls[destination.local.0].ty;
-        let cl_dest_ty = translate_type(dest_ty, ptr_type);
-        if dest_ty.kind != TypeKind::Void {
-            sig.returns.push(AbiParam::new(cl_dest_ty));
-        }
-
-        // Load vtable pointer from receiver[0]
-        let receiver_ptr = arg_values[0];
+    /// Load `vtable[slot]` from the receiver. Layout: receiver[0] = vtable ptr,
+    /// then `vtable[slot * ptr_size]` holds the resolved function pointer.
+    fn load_vtable_fn_ptr(
+        builder: &mut FunctionBuilder,
+        receiver_ptr: cranelift_codegen::ir::Value,
+        vtable_slot: usize,
+        ptr_type: cranelift_codegen::ir::Type,
+    ) -> cranelift_codegen::ir::Value {
         let vtable_ptr = builder
             .ins()
             .load(ptr_type, MemFlags::new(), receiver_ptr, 0);
-        // Load fn_ptr from vtable[slot * ptr_size]
         let slot_offset = (vtable_slot as i32) * ptr_type.bytes() as i32;
-        let fn_ptr = builder
+        builder
             .ins()
-            .load(ptr_type, MemFlags::new(), vtable_ptr, slot_offset);
+            .load(ptr_type, MemFlags::new(), vtable_ptr, slot_offset)
+    }
 
-        let sig_ref = builder.import_signature(sig);
-        let call = builder.ins().call_indirect(sig_ref, fn_ptr, &arg_values);
-
-        if dest_ty.kind != TypeKind::Void {
-            let result = builder.inst_results(call)[0];
-            let dest_var = locals.get(&destination.local).ok_or_else(|| {
-                CodegenError::Internal(format!(
-                    "Unknown vcall destination local: {:?}",
-                    destination.local
-                ))
-            })?;
-            builder.def_var(*dest_var, result);
+    /// Write the (non-void) result of a virtual call back into the destination
+    /// local. No-op for void return types.
+    fn store_vcall_result(
+        builder: &mut FunctionBuilder,
+        call: cranelift_codegen::ir::Inst,
+        dest_ty: &crate::ast::types::Type,
+        destination: &Place,
+        locals: &HashMap<Local, Variable>,
+    ) -> Result<(), CodegenError> {
+        if dest_ty.kind == TypeKind::Void {
+            return Ok(());
         }
-
-        if let Some(t) = target {
-            builder.ins().jump(blocks[t], &[]);
-        }
+        let result = builder.inst_results(call)[0];
+        let dest_var = locals.get(&destination.local).ok_or_else(|| {
+            CodegenError::Internal(format!(
+                "Unknown vcall destination local: {:?}",
+                destination.local
+            ))
+        })?;
+        builder.def_var(*dest_var, result);
         Ok(())
     }
 
@@ -917,14 +924,14 @@ impl<'a> FunctionTranslator<'a> {
                 PlaceElem::Field(idx) => {
                     current = match &current {
                         TypeKind::Custom(name, _) => {
+                            use crate::type_checker::context::TypeDefinition;
                             match type_ctx.type_definitions.get(name.as_str()) {
-                                Some(crate::type_checker::context::TypeDefinition::Struct(def)) => {
-                                    def.fields
-                                        .get(*idx)
-                                        .map(|(_, ty, _)| ty.kind.clone())
-                                        .unwrap_or(TypeKind::Error)
-                                }
-                                Some(crate::type_checker::context::TypeDefinition::Class(def)) => {
+                                Some(TypeDefinition::Struct(def)) => def
+                                    .fields
+                                    .get(*idx)
+                                    .map(|(_, ty, _)| ty.kind.clone())
+                                    .unwrap_or(TypeKind::Error),
+                                Some(TypeDefinition::Class(def)) => {
                                     let all_fields =
                                         crate::type_checker::context::collect_class_fields_all(
                                             def,
@@ -935,7 +942,11 @@ impl<'a> FunctionTranslator<'a> {
                                         .map(|(_, fi)| fi.ty.kind.clone())
                                         .unwrap_or(TypeKind::Error)
                                 }
-                                _ => TypeKind::Error,
+                                None
+                                | Some(TypeDefinition::Enum(_))
+                                | Some(TypeDefinition::Generic(_))
+                                | Some(TypeDefinition::Alias(_))
+                                | Some(TypeDefinition::Trait(_)) => TypeKind::Error,
                             }
                         }
                         // Closure env field: capture `idx` is looked up in the
@@ -946,10 +957,40 @@ impl<'a> FunctionTranslator<'a> {
                             .and_then(|caps| caps.get(*idx))
                             .map(|ty| ty.kind.clone())
                             .unwrap_or(TypeKind::Error),
-                        _ => TypeKind::Error,
+                        TypeKind::Int
+                        | TypeKind::I8
+                        | TypeKind::I16
+                        | TypeKind::I32
+                        | TypeKind::I64
+                        | TypeKind::I128
+                        | TypeKind::U8
+                        | TypeKind::U16
+                        | TypeKind::U32
+                        | TypeKind::U64
+                        | TypeKind::U128
+                        | TypeKind::Float
+                        | TypeKind::F32
+                        | TypeKind::F64
+                        | TypeKind::String
+                        | TypeKind::Boolean
+                        | TypeKind::Identifier
+                        | TypeKind::RawPtr
+                        | TypeKind::List(_)
+                        | TypeKind::Array(_, _)
+                        | TypeKind::Map(_, _)
+                        | TypeKind::Set(_)
+                        | TypeKind::Tuple(_)
+                        | TypeKind::Result(_, _)
+                        | TypeKind::Future(_)
+                        | TypeKind::Generic(_, _, _)
+                        | TypeKind::Meta(_)
+                        | TypeKind::Option(_)
+                        | TypeKind::Void
+                        | TypeKind::Error
+                        | TypeKind::Linear(_) => TypeKind::Error,
                     };
                 }
-                _ => break,
+                PlaceElem::Deref | PlaceElem::Index(_) => break,
             }
         }
 
