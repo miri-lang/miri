@@ -9,9 +9,8 @@ use cranelift_codegen::ir::Type as CraneliftType;
 
 /// Translate a Miri type to a Cranelift type.
 ///
-/// # Panics
-///
-/// Panics if the type cannot be represented in Cranelift (e.g., collections).
+/// All Miri types map to a Cranelift type — heap-managed types collapse to
+/// `ptr_ty`, primitives to their fixed-width Cranelift equivalent.
 pub fn translate_type(ty: &Type, ptr_ty: CraneliftType) -> CraneliftType {
     translate_type_kind(&ty.kind, ptr_ty)
 }

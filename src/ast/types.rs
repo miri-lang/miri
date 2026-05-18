@@ -34,6 +34,14 @@ pub const CLONEABLE_TRAIT_NAME: &str = "Cloneable";
 /// normalized Result types. Centralized here to keep the spelling in one place.
 pub const RESULT_TYPE_NAME: &str = "Result";
 
+/// Canonical class name for homogeneous tuples (`system.collections.tuple`).
+///
+/// Heterogeneous tuples use [`TypeKind::Tuple`]; the type checker normalizes
+/// homogeneous tuples to `TypeKind::Custom(TUPLE_TYPE_NAME, [elem_ty])` so
+/// they pick up the `Tuple<T>` class methods. Use [`TypeKind::is_tuple`] to
+/// recognize both forms instead of string-matching on this constant.
+pub const TUPLE_TYPE_NAME: &str = "Tuple";
+
 impl BuiltinCollectionKind {
     /// Returns the `BuiltinCollectionKind` for a class name, or `None` if the
     /// name does not match a built-in collection.
@@ -237,6 +245,48 @@ impl TypeKind {
             // so default to Move. Perceus then inserts the IncRef/DecRef pair;
             // callers with resolved element types can override per-element.
             TypeKind::Tuple(_) => false,
+        }
+    }
+
+    /// Returns true for either the canonical heterogeneous tuple
+    /// (`TypeKind::Tuple(...)`) or the post-normalization homogeneous form
+    /// (`TypeKind::Custom(TUPLE_TYPE_NAME, ...)`). Centralizing this check
+    /// keeps the `"Tuple"` spelling out of downstream dispatch logic.
+    pub fn is_tuple(&self) -> bool {
+        match self {
+            TypeKind::Tuple(_) => true,
+            TypeKind::Custom(name, _) => name == TUPLE_TYPE_NAME,
+            TypeKind::Int
+            | TypeKind::I8
+            | TypeKind::I16
+            | TypeKind::I32
+            | TypeKind::I64
+            | TypeKind::I128
+            | TypeKind::U8
+            | TypeKind::U16
+            | TypeKind::U32
+            | TypeKind::U64
+            | TypeKind::U128
+            | TypeKind::Float
+            | TypeKind::F32
+            | TypeKind::F64
+            | TypeKind::String
+            | TypeKind::Boolean
+            | TypeKind::Identifier
+            | TypeKind::RawPtr
+            | TypeKind::List(_)
+            | TypeKind::Array(_, _)
+            | TypeKind::Map(_, _)
+            | TypeKind::Set(_)
+            | TypeKind::Result(_, _)
+            | TypeKind::Future(_)
+            | TypeKind::Function(_)
+            | TypeKind::Generic(_, _, _)
+            | TypeKind::Meta(_)
+            | TypeKind::Option(_)
+            | TypeKind::Linear(_)
+            | TypeKind::Void
+            | TypeKind::Error => false,
         }
     }
 

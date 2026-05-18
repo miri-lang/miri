@@ -6,11 +6,15 @@
 //! This module provides the Cranelift-based code generator for CPU targets.
 //! Cranelift is a fast code generator suitable for both JIT and AOT compilation.
 
+mod closure;
 pub mod layout;
+mod predicates;
+mod rc;
 pub mod translate_rvalue;
 pub mod translate_statement;
 mod translator;
 mod types;
+mod vtable;
 
 use crate::codegen::backend::{ArtifactFormat, Backend, CompiledArtifact};
 use crate::codegen::cranelift::translator::needs_out_pointer;
@@ -381,7 +385,37 @@ impl CraneliftBackend {
         symbol_name: &str,
         ptr_size: u32,
     ) -> Result<(), CodegenError> {
-        // 1. Define the raw bytes
+        let bytes_id = Self::define_string_bytes(module, literal, symbol_name)?;
+
+        let mut struct_symbol = String::with_capacity(symbol_name.len() + 7);
+        struct_symbol.push_str(symbol_name);
+        struct_symbol.push_str("_struct");
+        let struct_id = module
+            .declare_data(&struct_symbol, Linkage::Export, false, false)
+            .map_err(|e| CodegenError::Module(e.to_string()))?;
+
+        let mut struct_ctx = DataDescription::new();
+        struct_ctx.set_align(ptr_size as u64);
+        struct_ctx.define(
+            Self::build_miri_string_struct_bytes(literal.len() as u64, ptr_size).into_boxed_slice(),
+        );
+
+        // Relocation for the data pointer at offset ptr_size
+        let bytes_ref = module.declare_data_in_data(bytes_id, &mut struct_ctx);
+        struct_ctx.write_data_addr(ptr_size, bytes_ref, 0);
+
+        module
+            .define_data(struct_id, &struct_ctx)
+            .map_err(|e| CodegenError::Module(e.to_string()))
+    }
+
+    /// Define the raw byte data for a string literal as
+    /// `{symbol_name}_bytes`; return the `DataId` of the byte array.
+    fn define_string_bytes(
+        module: &mut ObjectModule,
+        literal: &str,
+        symbol_name: &str,
+    ) -> Result<cranelift_module::DataId, CodegenError> {
         let mut bytes_symbol = String::with_capacity(symbol_name.len() + 6);
         bytes_symbol.push_str(symbol_name);
         bytes_symbol.push_str("_bytes");
@@ -393,50 +427,25 @@ impl CraneliftBackend {
         module
             .define_data(bytes_id, &bytes_ctx)
             .map_err(|e| CodegenError::Module(e.to_string()))?;
+        Ok(bytes_id)
+    }
 
-        // 2. Define the MiriString struct: [RC, DataPtr, Len, Cap]
-        let mut struct_symbol = String::with_capacity(symbol_name.len() + 7);
-        struct_symbol.push_str(symbol_name);
-        struct_symbol.push_str("_struct");
-        let struct_id = module
-            .declare_data(&struct_symbol, Linkage::Export, false, false)
-            .map_err(|e| CodegenError::Module(e.to_string()))?;
-
-        let mut struct_ctx = DataDescription::new();
-        struct_ctx.set_align(ptr_size as u64);
+    /// Build the `MiriString` struct payload: `[RC | DataPtr | Len | Cap]`
+    /// with the high RC bit set so the runtime treats the literal as immortal.
+    /// The DataPtr slot (offset `ptr_size`) is left zero — the caller writes
+    /// the relocation via `write_data_addr`.
+    fn build_miri_string_struct_bytes(len: u64, ptr_size: u32) -> Vec<u8> {
         let mut data = vec![0u8; 4 * ptr_size as usize];
-
-        // RC header: high bit set = immortal/constant object
-        let immortal_rc = if ptr_size == 4 {
-            (1u32 << 31) as u64
-        } else {
-            1u64 << 63
-        };
         if ptr_size == 4 {
-            data[0..4].copy_from_slice(&(immortal_rc as u32).to_ne_bytes());
-        } else {
-            data[0..8].copy_from_slice(&immortal_rc.to_ne_bytes());
-        }
-
-        // Len and Cap (both same for literals)
-        let len = literal.len() as u64;
-        if ptr_size == 4 {
+            data[0..4].copy_from_slice(&(1u32 << 31).to_ne_bytes());
             data[8..12].copy_from_slice(&(len as u32).to_ne_bytes());
             data[12..16].copy_from_slice(&(len as u32).to_ne_bytes());
         } else {
+            data[0..8].copy_from_slice(&(1u64 << 63).to_ne_bytes());
             data[16..24].copy_from_slice(&len.to_ne_bytes());
             data[24..32].copy_from_slice(&len.to_ne_bytes());
         }
-
-        struct_ctx.define(data.into_boxed_slice());
-
-        // Relocation for the data pointer at offset ptr_size
-        let bytes_ref = module.declare_data_in_data(bytes_id, &mut struct_ctx);
-        struct_ctx.write_data_addr(ptr_size, bytes_ref, 0);
-
-        module
-            .define_data(struct_id, &struct_ctx)
-            .map_err(|e| CodegenError::Module(e.to_string()))
+        data
     }
 
     /// Finish the object module and inject the macOS build-version load command
@@ -544,7 +553,9 @@ impl CraneliftBackend {
                     TypeDefinition::Struct(sd) => sd.generics.is_some(),
                     TypeDefinition::Class(cd) => cd.generics.is_some(),
                     TypeDefinition::Enum(ed) => ed.generics.is_some(),
-                    _ => return None,
+                    TypeDefinition::Generic(_)
+                    | TypeDefinition::Alias(_)
+                    | TypeDefinition::Trait(_) => return None,
                 };
                 if has_generics {
                     return None;
