@@ -1,10 +1,21 @@
 use crate::ast::expression::ExpressionKind;
 use crate::ast::literal::Literal;
-use crate::ast::types::{BuiltinCollectionKind, TypeKind};
+use crate::ast::types::TypeKind;
 use crate::codegen::cranelift::translator::{
-    needs_out_pointer, FunctionTranslator, ModuleCtx, TypeCtx,
+    needs_out_pointer, ElementShape, FunctionTranslator, ModuleCtx, TypeCtx,
 };
+
+/// Output of `prepare_call_args`: per-arg Cranelift values, the partially-built
+/// call signature (params filled, returns appended later by the caller), and
+/// the list of scalar-out stack slots paired with their caller-side `Local`s
+/// for post-call writeback.
+type PreparedCallArgs = (
+    Vec<cranelift_codegen::ir::Value>,
+    Signature,
+    Vec<(cranelift_codegen::ir::Value, Local)>,
+);
 use crate::codegen::cranelift::types::translate_type;
+use crate::error::CodegenError;
 use crate::mir::{
     AggregateKind, BasicBlock, Body, Local, Operand, Place, PlaceElem, Rvalue, Statement,
     StatementKind, Terminator, TerminatorKind,
@@ -26,169 +37,221 @@ impl<'a> FunctionTranslator<'a> {
         stmt: &Statement,
         locals: &HashMap<Local, Variable>,
         type_ctx: &TypeCtx,
-    ) -> Result<(), String> {
-        let ptr_type = type_ctx.ptr_type;
-        let ptr_size = ptr_type.bytes() as i32;
+    ) -> Result<(), CodegenError> {
         match &stmt.kind {
             StatementKind::IncRef(place) => {
-                // Uniform RC increment for all heap types.
-                // All heap values use [RC][payload] layout; ptr points past RC.
-                let ptr = Self::read_place(builder, ctx, place, locals, type_ctx)?;
-
-                // Guard: skip if pointer is null (uninitialized local)
-                let null = builder.ins().iconst(ptr_type, 0);
-                let is_null = builder.ins().icmp(IntCC::Equal, ptr, null);
-                let rc_block = builder.create_block();
-                let merge_block = builder.create_block();
-                builder.ins().brif(is_null, merge_block, &[], rc_block, &[]);
-
-                builder.switch_to_block(rc_block);
-                let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size as i64));
-                let rc = builder.ins().load(ptr_type, MemFlags::new(), header_ptr, 0);
-
-                let is_immortal = builder.ins().icmp_imm(IntCC::SignedLessThan, rc, 0);
-                let then_block = builder.create_block();
-                builder
-                    .ins()
-                    .brif(is_immortal, merge_block, &[], then_block, &[]);
-
-                builder.switch_to_block(then_block);
-                let new_rc = builder.ins().iadd_imm(rc, 1);
-                builder.ins().store(MemFlags::new(), new_rc, header_ptr, 0);
-                builder.ins().jump(merge_block, &[]);
-
-                builder.seal_block(rc_block);
-                builder.seal_block(then_block);
-                builder.switch_to_block(merge_block);
-                builder.seal_block(merge_block);
+                Self::translate_inc_ref(builder, ctx, place, locals, type_ctx)
             }
             StatementKind::DecRef(place) => {
-                // Uniform RC decrement for all heap types.
-                // When RC reaches zero, call type-appropriate cleanup.
-                // Resolve the actual field type when place has projections (e.g. h.data).
-                let place_kind_cow = Self::resolve_projected_type_kind(place, type_ctx);
-                let ptr = Self::read_place(builder, ctx, place, locals, type_ctx)?;
-
-                // Guard: skip if pointer is null (uninitialized local)
-                let null = builder.ins().iconst(ptr_type, 0);
-                let is_null = builder.ins().icmp(IntCC::Equal, ptr, null);
-                let rc_block = builder.create_block();
-                let merge_block = builder.create_block();
-                builder.ins().brif(is_null, merge_block, &[], rc_block, &[]);
-
-                builder.switch_to_block(rc_block);
-                let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size as i64));
-                let rc = builder.ins().load(ptr_type, MemFlags::new(), header_ptr, 0);
-
-                let is_immortal = builder.ins().icmp_imm(IntCC::SignedLessThan, rc, 0);
-                let dec_block = builder.create_block();
-                builder
-                    .ins()
-                    .brif(is_immortal, merge_block, &[], dec_block, &[]);
-
-                builder.switch_to_block(dec_block);
-                let new_rc = builder.ins().iadd_imm(rc, -1);
-                builder.ins().store(MemFlags::new(), new_rc, header_ptr, 0);
-
-                let zero = builder.ins().iconst(ptr_type, 0);
-                let is_zero = builder.ins().icmp(IntCC::Equal, new_rc, zero);
-
-                let free_block = builder.create_block();
-                builder
-                    .ins()
-                    .brif(is_zero, free_block, &[], merge_block, &[]);
-
-                builder.switch_to_block(free_block);
-                Self::emit_type_drop(builder, ctx, &place_kind_cow, ptr, header_ptr, type_ctx)?;
-                builder.ins().jump(merge_block, &[]);
-
-                builder.seal_block(rc_block);
-                builder.seal_block(dec_block);
-                builder.seal_block(free_block);
-
-                builder.switch_to_block(merge_block);
-                builder.seal_block(merge_block);
+                Self::translate_dec_ref(builder, ctx, place, locals, type_ctx)
             }
             StatementKind::Dealloc(place) => {
-                // Unconditional cleanup — the caller has already determined
-                // this value needs freeing (e.g., unique owner going out of scope).
-                // Guard against null (uninitialized locals).
-                let place_kind_cow = Self::resolve_projected_type_kind(place, type_ctx);
-                let ptr = Self::read_place(builder, ctx, place, locals, type_ctx)?;
-
-                let null = builder.ins().iconst(ptr_type, 0);
-                let is_null = builder.ins().icmp(IntCC::Equal, ptr, null);
-                let dealloc_block = builder.create_block();
-                let merge_block = builder.create_block();
-                builder
-                    .ins()
-                    .brif(is_null, merge_block, &[], dealloc_block, &[]);
-
-                builder.switch_to_block(dealloc_block);
-                let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size as i64));
-                Self::emit_type_drop(builder, ctx, &place_kind_cow, ptr, header_ptr, type_ctx)?;
-                builder.ins().jump(merge_block, &[]);
-
-                builder.seal_block(dealloc_block);
-                builder.switch_to_block(merge_block);
-                builder.seal_block(merge_block);
+                Self::translate_dealloc(builder, ctx, place, locals, type_ctx)
             }
             StatementKind::Assign(place, rvalue) | StatementKind::Reassign(place, rvalue) => {
-                let mut value = Self::translate_rvalue(builder, ctx, rvalue, locals, type_ctx)?;
-
-                // Handle implicit casts (e.g. float -> f32, u8 -> u32)
-                let dest_ty = &type_ctx.local_types[place.local.0];
-                let dest_cl_ty = translate_type(dest_ty, ptr_type);
-                let val_ty = builder.func.dfg.value_type(value);
-
-                if dest_cl_ty != val_ty {
-                    let is_unsigned = Self::is_unsigned_type_kind(&dest_ty.kind);
-                    value = Self::cast_value_with_sign(
-                        builder,
-                        value,
-                        val_ty,
-                        dest_cl_ty,
-                        is_unsigned,
-                    )?;
-                }
-
-                Self::assign_to_place(builder, ctx, place, value, locals, type_ctx)?;
-
-                // After constructing an empty Set<T>(), set elem_drop_fn and
-                // elem_clone_fn from the destination type. translate_rvalue has no
-                // operands to inspect for this path, so we derive the element type
-                // from the assignment target's type annotation.
-                if let Rvalue::Aggregate(AggregateKind::Set, ops) = rvalue {
-                    if ops.is_empty() {
-                        if let Some(elem_expr) = FunctionTranslator::set_elem_expr(&dest_ty.kind) {
-                            if let ExpressionKind::Type(elem_ty, _) = &elem_expr.node {
-                                FunctionTranslator::emit_set_drop_fn_for_elem_kind(
-                                    builder,
-                                    ctx,
-                                    &elem_ty.kind,
-                                    value,
-                                    ptr_type,
-                                )?;
-                                FunctionTranslator::emit_set_clone_fn_for_elem_kind(
-                                    builder,
-                                    ctx,
-                                    &elem_ty.kind,
-                                    value,
-                                    ptr_type,
-                                    type_ctx.type_definitions,
-                                )?;
-                            }
-                        }
-                    }
-                }
+                Self::translate_assign(builder, ctx, place, rvalue, locals, type_ctx)
             }
-            StatementKind::Nop => {
-                // Nothing to do
-            }
-            StatementKind::StorageLive(_) | StatementKind::StorageDead(_) => {
-                // These are hints for the optimizer, we can ignore them for now
+            StatementKind::Nop | StatementKind::StorageLive(_) | StatementKind::StorageDead(_) => {
+                Ok(())
             }
         }
+    }
+
+    /// `StatementKind::IncRef`: bump the RC slot at `payload - ptr_size`,
+    /// unless the pointer is null (uninitialized local) or the high bit of
+    /// the RC is set (immortal/constant object).
+    fn translate_inc_ref(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        place: &Place,
+        locals: &HashMap<Local, Variable>,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), CodegenError> {
+        let ptr_type = type_ctx.ptr_type;
+        let ptr_size = ptr_type.bytes() as i32;
+        let ptr = Self::read_place(builder, ctx, place, locals, type_ctx)?;
+
+        let null = builder.ins().iconst(ptr_type, 0);
+        let is_null = builder.ins().icmp(IntCC::Equal, ptr, null);
+        let rc_block = builder.create_block();
+        let merge_block = builder.create_block();
+        builder.ins().brif(is_null, merge_block, &[], rc_block, &[]);
+
+        builder.switch_to_block(rc_block);
+        let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size as i64));
+        let rc = builder.ins().load(ptr_type, MemFlags::new(), header_ptr, 0);
+
+        let is_immortal = builder.ins().icmp_imm(IntCC::SignedLessThan, rc, 0);
+        let then_block = builder.create_block();
+        builder
+            .ins()
+            .brif(is_immortal, merge_block, &[], then_block, &[]);
+
+        builder.switch_to_block(then_block);
+        let new_rc = builder.ins().iadd_imm(rc, 1);
+        builder.ins().store(MemFlags::new(), new_rc, header_ptr, 0);
+        builder.ins().jump(merge_block, &[]);
+
+        builder.seal_block(rc_block);
+        builder.seal_block(then_block);
+        builder.switch_to_block(merge_block);
+        builder.seal_block(merge_block);
+        Ok(())
+    }
+
+    /// `StatementKind::DecRef`: decrement RC; when it reaches zero, run
+    /// `emit_type_drop` for the resolved place kind. Skips null pointers
+    /// (uninitialized) and immortal objects (high RC bit set).
+    fn translate_dec_ref(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        place: &Place,
+        locals: &HashMap<Local, Variable>,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), CodegenError> {
+        let ptr_type = type_ctx.ptr_type;
+        let ptr_size = ptr_type.bytes() as i32;
+        // Resolve the actual field type when place has projections (e.g. h.data).
+        let place_kind_cow = Self::resolve_projected_type_kind(place, type_ctx);
+        let ptr = Self::read_place(builder, ctx, place, locals, type_ctx)?;
+
+        let null = builder.ins().iconst(ptr_type, 0);
+        let is_null = builder.ins().icmp(IntCC::Equal, ptr, null);
+        let rc_block = builder.create_block();
+        let merge_block = builder.create_block();
+        builder.ins().brif(is_null, merge_block, &[], rc_block, &[]);
+
+        builder.switch_to_block(rc_block);
+        let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size as i64));
+        let rc = builder.ins().load(ptr_type, MemFlags::new(), header_ptr, 0);
+
+        let is_immortal = builder.ins().icmp_imm(IntCC::SignedLessThan, rc, 0);
+        let dec_block = builder.create_block();
+        builder
+            .ins()
+            .brif(is_immortal, merge_block, &[], dec_block, &[]);
+
+        builder.switch_to_block(dec_block);
+        let new_rc = builder.ins().iadd_imm(rc, -1);
+        builder.ins().store(MemFlags::new(), new_rc, header_ptr, 0);
+
+        let zero = builder.ins().iconst(ptr_type, 0);
+        let is_zero = builder.ins().icmp(IntCC::Equal, new_rc, zero);
+
+        let free_block = builder.create_block();
+        builder
+            .ins()
+            .brif(is_zero, free_block, &[], merge_block, &[]);
+
+        builder.switch_to_block(free_block);
+        Self::emit_type_drop(builder, ctx, &place_kind_cow, ptr, header_ptr, type_ctx)?;
+        builder.ins().jump(merge_block, &[]);
+
+        builder.seal_block(rc_block);
+        builder.seal_block(dec_block);
+        builder.seal_block(free_block);
+
+        builder.switch_to_block(merge_block);
+        builder.seal_block(merge_block);
+        Ok(())
+    }
+
+    /// `StatementKind::Dealloc`: unconditional cleanup — the caller has
+    /// already determined this value's RC chain is done. Skips null pointers.
+    fn translate_dealloc(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        place: &Place,
+        locals: &HashMap<Local, Variable>,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), CodegenError> {
+        let ptr_type = type_ctx.ptr_type;
+        let ptr_size = ptr_type.bytes() as i32;
+        let place_kind_cow = Self::resolve_projected_type_kind(place, type_ctx);
+        let ptr = Self::read_place(builder, ctx, place, locals, type_ctx)?;
+
+        let null = builder.ins().iconst(ptr_type, 0);
+        let is_null = builder.ins().icmp(IntCC::Equal, ptr, null);
+        let dealloc_block = builder.create_block();
+        let merge_block = builder.create_block();
+        builder
+            .ins()
+            .brif(is_null, merge_block, &[], dealloc_block, &[]);
+
+        builder.switch_to_block(dealloc_block);
+        let header_ptr = builder.ins().iadd_imm(ptr, -(ptr_size as i64));
+        Self::emit_type_drop(builder, ctx, &place_kind_cow, ptr, header_ptr, type_ctx)?;
+        builder.ins().jump(merge_block, &[]);
+
+        builder.seal_block(dealloc_block);
+        builder.switch_to_block(merge_block);
+        builder.seal_block(merge_block);
+        Ok(())
+    }
+
+    /// `StatementKind::Assign` / `Reassign`: translate the rvalue, cast to
+    /// the destination's declared type if widths differ, and store. After an
+    /// empty `Set<T>()` constructor, also register elem_drop_fn / elem_clone_fn
+    /// from the destination type's element annotation.
+    fn translate_assign(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        place: &Place,
+        rvalue: &Rvalue,
+        locals: &HashMap<Local, Variable>,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), CodegenError> {
+        let ptr_type = type_ctx.ptr_type;
+        let mut value = Self::translate_rvalue(builder, ctx, rvalue, locals, type_ctx)?;
+
+        let dest_ty = &type_ctx.local_types[place.local.0];
+        let dest_cl_ty = translate_type(dest_ty, ptr_type);
+        let val_ty = builder.func.dfg.value_type(value);
+        if dest_cl_ty != val_ty {
+            let is_unsigned = Self::is_unsigned_type_kind(&dest_ty.kind);
+            value = Self::cast_value_with_sign(builder, value, val_ty, dest_cl_ty, is_unsigned)?;
+        }
+        Self::assign_to_place(builder, ctx, place, value, locals, type_ctx)?;
+
+        if let Rvalue::Aggregate(AggregateKind::Set, ops) = rvalue {
+            if ops.is_empty() {
+                Self::apply_empty_set_init(builder, ctx, dest_ty, value, type_ctx)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// After an empty `Set<T>()` constructor: derive the element type from the
+    /// destination annotation and register `elem_drop_fn` + `elem_clone_fn`.
+    fn apply_empty_set_init(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        dest_ty: &crate::ast::types::Type,
+        set_ptr: cranelift_codegen::ir::Value,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), CodegenError> {
+        let ptr_type = type_ctx.ptr_type;
+        let Some(elem_expr) = FunctionTranslator::set_elem_expr(&dest_ty.kind) else {
+            return Ok(());
+        };
+        let ExpressionKind::Type(elem_ty, _) = &elem_expr.node else {
+            return Ok(());
+        };
+        FunctionTranslator::emit_set_drop_fn_for_elem_kind(
+            builder,
+            ctx,
+            &elem_ty.kind,
+            set_ptr,
+            ptr_type,
+        )?;
+        FunctionTranslator::emit_set_clone_fn_for_elem_kind(
+            builder,
+            ctx,
+            &elem_ty.kind,
+            set_ptr,
+            ptr_type,
+            type_ctx.type_definitions,
+        )?;
         Ok(())
     }
     /// Translate a terminator.
@@ -200,506 +263,643 @@ impl<'a> FunctionTranslator<'a> {
         locals: &HashMap<Local, Variable>,
         blocks: &HashMap<BasicBlock, Block>,
         type_ctx: &TypeCtx,
-    ) -> Result<(), String> {
-        let ptr_type = type_ctx.ptr_type;
+    ) -> Result<(), CodegenError> {
         match &terminator.kind {
-            TerminatorKind::Return => {
-                // Write back scalar out params through their caller-provided pointers.
-                for (&param_local, &ptr_var) in type_ctx.out_param_ptr_vars {
-                    let ptr = builder.use_var(ptr_var);
-                    if let Some(&val_var) = locals.get(&param_local) {
-                        let val = builder.use_var(val_var);
-                        builder.ins().store(MemFlags::new(), val, ptr, 0);
-                    }
-                }
-                // Return the value in local 0 (return place)
-                if let Some(&var) = locals.get(&Local(0)) {
-                    let ret_ty = &body.local_decls[0].ty;
-                    if ret_ty.kind != TypeKind::Void {
-                        let value = builder.use_var(var);
-                        builder.ins().return_(&[value]);
-                    } else {
-                        builder.ins().return_(&[]);
-                    }
-                } else {
-                    builder.ins().return_(&[]);
-                }
-            }
-
+            TerminatorKind::Return => Self::translate_return(builder, body, locals, type_ctx),
             TerminatorKind::Goto { target } => {
-                let target_block = blocks[target];
-                builder.ins().jump(target_block, &[]);
+                builder.ins().jump(blocks[target], &[]);
+                Ok(())
             }
-
             TerminatorKind::SwitchInt {
                 discr,
                 targets,
                 otherwise,
-            } => {
-                let disc_val = Self::translate_operand(builder, ctx, discr, locals, type_ctx)?;
-
-                let disc_ty = builder.func.dfg.value_type(disc_val);
-
-                if targets.is_empty() {
-                    // No targets — unconditional jump to otherwise
-                    let otherwise_block = blocks[otherwise];
-                    builder.ins().jump(otherwise_block, &[]);
-                } else if targets.len() == 1 {
-                    // Simple if-then-else pattern
-                    let (value, target) = &targets[0];
-                    let then_block = blocks[target];
-                    let else_block = blocks[otherwise];
-
-                    // Compare discriminant with target value
-                    let cmp_val = builder.ins().iconst(disc_ty, value.value() as i64);
-                    let cond = builder.ins().icmp(IntCC::Equal, disc_val, cmp_val);
-                    builder.ins().brif(cond, then_block, &[], else_block, &[]);
-                } else {
-                    // Multi-way branch using a chain of conditionals
-                    let mut remaining_targets: Vec<_> = targets.iter().collect();
-                    let otherwise_block = blocks[otherwise];
-
-                    while let Some((value, target)) = remaining_targets.pop() {
-                        let target_block = blocks[target];
-                        let cmp_val = builder.ins().iconst(disc_ty, value.value() as i64);
-                        let cond = builder.ins().icmp(IntCC::Equal, disc_val, cmp_val);
-
-                        if remaining_targets.is_empty() {
-                            builder
-                                .ins()
-                                .brif(cond, target_block, &[], otherwise_block, &[]);
-                        } else {
-                            let next_check = builder.create_block();
-                            builder.ins().brif(cond, target_block, &[], next_check, &[]);
-                            builder.seal_block(next_check);
-                            builder.switch_to_block(next_check);
-                        }
-                    }
-                }
-            }
-
+            } => Self::translate_switch_int(
+                builder, ctx, discr, targets, otherwise, locals, blocks, type_ctx,
+            ),
             TerminatorKind::Call {
                 func,
                 args,
                 out_args,
                 destination,
                 target,
-            } => {
-                // Determine whether this is a direct (named) or indirect (function-pointer) call.
-                let func_name = match func {
-                    Operand::Constant(c) => match &c.literal {
-                        Literal::Identifier(name) => Some(name.clone()),
-                        _ => None,
-                    },
-                    _ => None,
-                };
-
-                // Translate call arguments and build the call signature.
-                //
-                // If the function was already pre-declared (user-defined functions
-                // are pre-declared with correct MIR-derived signatures), we look up
-                // the existing declaration and cast argument values to match the
-                // declared parameter types.  This avoids signature mismatches when
-                // the DFG value type differs from the declared type (e.g. u8 stored
-                // as I64 in the DFG vs I8 in the declaration).
-                let mut arg_values = Vec::new();
-
-                // Look up any pre-existing declaration for this function.
-                let predeclared_sig = func_name.as_deref().and_then(|name| {
-                    use cranelift_module::FuncOrDataId;
-                    if let Some(FuncOrDataId::Func(id)) = ctx.module.get_name(name) {
-                        Some(
-                            ctx.module
-                                .declarations()
-                                .get_function_decl(id)
-                                .signature
-                                .clone(),
-                        )
-                    } else {
-                        None
-                    }
-                });
-
-                // Runtime collection functions use pointer-sized values for element
-                // arguments to maintain a consistent FFI signature regardless of the
-                // element type (bool/i8, int/i64, etc.).
-                let widen_value_args = func_name
-                    .as_deref()
-                    .is_some_and(|n| n == rt::LIST_PUSH || n == rt::LIST_INSERT);
-
-                let mut sig = Signature::new(builder.func.signature.call_conv);
-
-                // Tracks (slot_addr, local) pairs for scalar out-param writeback after the call.
-                let mut out_arg_slots: Vec<(cranelift_codegen::ir::Value, Local)> = Vec::new();
-
-                for (i, arg) in args.iter().enumerate() {
-                    let val = Self::translate_operand(builder, ctx, arg, locals, type_ctx)?;
-                    let val_ty = builder.func.dfg.value_type(val);
-
-                    // For collection runtime calls, widen non-pointer element values
-                    // (skip arg 0 which is the collection pointer)
-                    let val = if widen_value_args && i > 0 && val_ty.bytes() < ptr_type.bytes() {
-                        builder.ins().sextend(ptr_type, val)
-                    } else {
-                        val
-                    };
-
-                    // For scalar `out` params: allocate a stack slot, store the current value,
-                    // and pass the slot address. The predeclared sig already uses ptr_type here,
-                    // so we skip the normal cast-to-predeclared path for these args.
-                    let is_scalar_out = out_args.get(i).copied().unwrap_or(false) && {
-                        match arg {
-                            Operand::Copy(p) | Operand::Move(p) => {
-                                p.projection.is_empty()
-                                    && needs_out_pointer(&type_ctx.local_types[p.local.0].kind)
-                            }
-                            _ => false,
-                        }
-                    };
-
-                    let val = if is_scalar_out {
-                        let local = match arg {
-                            Operand::Copy(p) | Operand::Move(p) => p.local,
-                            _ => unreachable!(),
-                        };
-                        let cur_val_ty = builder.func.dfg.value_type(val);
-                        let slot = builder.create_sized_stack_slot(StackSlotData::new(
-                            StackSlotKind::ExplicitSlot,
-                            cur_val_ty.bytes(),
-                            cur_val_ty.bytes().trailing_zeros() as u8,
-                        ));
-                        let addr = builder.ins().stack_addr(ptr_type, slot, 0);
-                        builder.ins().store(MemFlags::new(), val, addr, 0);
-                        out_arg_slots.push((addr, local));
-                        addr
-                    } else {
-                        // Cast argument to match pre-declared parameter type if
-                        // needed. Use `cast_value_with_sign` so the cast picks the
-                        // right Cranelift op for every (int↔int, int↔float,
-                        // float↔float) combination — the naive ireduce/sextend
-                        // pair would emit `ireduce.f32 v_i64` when the callee
-                        // expects a float, which the verifier rejects.
-                        if let Some(ref pre_sig) = predeclared_sig {
-                            if i < pre_sig.params.len() {
-                                let expected_ty = pre_sig.params[i].value_type;
-                                let actual_ty = builder.func.dfg.value_type(val);
-                                if actual_ty != expected_ty {
-                                    crate::codegen::cranelift::translator::FunctionTranslator::cast_value_with_sign(
-                                        builder,
-                                        val,
-                                        actual_ty,
-                                        expected_ty,
-                                        false,
-                                    )
-                                    .map_err(|e| {
-                                        format!(
-                                            "Call arg {i}: cast {actual_ty} -> {expected_ty} failed: {e}"
-                                        )
-                                    })?
-                                } else {
-                                    val
-                                }
-                            } else {
-                                val
-                            }
-                        } else {
-                            val
-                        }
-                    };
-
-                    arg_values.push(val);
-                    sig.params
-                        .push(AbiParam::new(builder.func.dfg.value_type(val)));
-                }
-
-                let dest_ty = &body.local_decls[destination.local.0].ty;
-                let cl_dest_ty = translate_type(dest_ty, ptr_type);
-                if dest_ty.kind != TypeKind::Void {
-                    sig.returns.push(AbiParam::new(cl_dest_ty));
-                }
-
-                // Pre-compute flags before consuming func_name in the match.
-                let is_list_from_managed =
-                    func_name.as_deref() == Some(rt::LIST_NEW_FROM_MANAGED_ARRAY);
-                // Empty List<T>() constructor: elem_drop_fn must be set from the
-                // destination type because there are no operands to inspect.
-                let is_list_new_empty = func_name.as_deref() == Some(rt::LIST_NEW);
-
-                if let Some(func_name) = func_name {
-                    // Direct call to a named symbol.
-                    let func_id = ctx
-                        .module
-                        .declare_function(&func_name, Linkage::Import, &sig)
-                        .map_err(|e| format!("Failed to declare function {}: {}", func_name, e))?;
-                    let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
-                    let call = builder.ins().call(local_func, &arg_values);
-
-                    let maybe_result = if dest_ty.kind != TypeKind::Void {
-                        let result = builder.inst_results(call)[0];
-                        let dest_var = locals.get(&destination.local).ok_or_else(|| {
-                            format!("Unknown call destination local: {:?}", destination.local)
-                        })?;
-                        builder.def_var(*dest_var, result);
-                        Some(result)
-                    } else {
-                        None
-                    };
-
-                    // After miri_rt_list_new_from_managed_array, that runtime sets
-                    // elem_drop_fn = miri_rt_list_decref_element for all managed types.
-                    // Override with __decref_TypeName when elements are user-defined classes.
-                    if is_list_from_managed {
-                        if let (Some(list_ptr), Some(array_arg)) = (maybe_result, args.first()) {
-                            let array_kind = match array_arg {
-                                Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => {
-                                    Some(&type_ctx.local_types[p.local.0].kind)
-                                }
-                                _ => None,
-                            };
-                            if let Some(array_kind) = array_kind {
-                                if let Some(elem_expr) =
-                                    FunctionTranslator::collection_elem_expr(array_kind)
-                                {
-                                    if let ExpressionKind::Type(inner_ty, _) = &elem_expr.node {
-                                        // The runtime unconditionally sets elem_drop_fn =
-                                        // miri_rt_list_decref_element for all managed types.
-                                        // Override here for non-List managed element types so that
-                                        // clear/remove_at call the correct decref function.
-                                        let decref_addr_opt: Option<
-                                            Result<cranelift_codegen::ir::Value, String>,
-                                        > = match &inner_ty.kind {
-                                            TypeKind::Array(_, _) => {
-                                                Some(FunctionTranslator::get_rt_array_decref_element_addr(
-                                                    builder, ctx, ptr_type,
-                                                ))
-                                            }
-                                            TypeKind::Set(_) => {
-                                                Some(FunctionTranslator::get_rt_set_decref_element_addr(
-                                                    builder, ctx, ptr_type,
-                                                ))
-                                            }
-                                            TypeKind::Map(_, _) => {
-                                                Some(FunctionTranslator::get_rt_map_decref_element_addr(
-                                                    builder, ctx, ptr_type,
-                                                ))
-                                            }
-                                            TypeKind::Custom(type_name, Some(_))
-                                                if BuiltinCollectionKind::from_name(type_name)
-                                                    == Some(BuiltinCollectionKind::Array) =>
-                                            {
-                                                Some(FunctionTranslator::get_rt_array_decref_element_addr(
-                                                    builder, ctx, ptr_type,
-                                                ))
-                                            }
-                                            TypeKind::Custom(type_name, Some(_))
-                                                if BuiltinCollectionKind::from_name(type_name)
-                                                    == Some(BuiltinCollectionKind::Set) =>
-                                            {
-                                                Some(FunctionTranslator::get_rt_set_decref_element_addr(
-                                                    builder, ctx, ptr_type,
-                                                ))
-                                            }
-                                            TypeKind::Custom(type_name, Some(_))
-                                                if BuiltinCollectionKind::from_name(type_name)
-                                                    == Some(BuiltinCollectionKind::Map) =>
-                                            {
-                                                Some(FunctionTranslator::get_rt_map_decref_element_addr(
-                                                    builder, ctx, ptr_type,
-                                                ))
-                                            }
-                                            TypeKind::Custom(type_name, _)
-                                                if BuiltinCollectionKind::from_name(type_name)
-                                                    .is_none() =>
-                                            {
-                                                Some(FunctionTranslator::get_custom_decref_thunk_addr(
-                                                    builder, ctx, type_name, ptr_type,
-                                                ))
-                                            }
-                                            _ => None,
-                                        };
-                                        if let Some(decref_addr) = decref_addr_opt {
-                                            FunctionTranslator::call_rt_list_set_elem_drop_fn(
-                                                builder,
-                                                ctx,
-                                                list_ptr,
-                                                decref_addr?,
-                                            )?;
-                                        }
-                                        if let TypeKind::Custom(type_name, _) = &inner_ty.kind {
-                                            if BuiltinCollectionKind::from_name(type_name).is_none()
-                                                && FunctionTranslator::class_implements_cloneable(
-                                                    type_name,
-                                                    type_ctx.type_definitions,
-                                                )
-                                            {
-                                                let clone_fn_addr =
-                                                    FunctionTranslator::get_custom_clone_thunk_addr(
-                                                        builder,
-                                                        ctx,
-                                                        type_name,
-                                                        ptr_type,
-                                                    )?;
-                                                FunctionTranslator::call_rt_list_set_elem_clone_fn(
-                                                    builder,
-                                                    ctx,
-                                                    list_ptr,
-                                                    clone_fn_addr,
-                                                )?;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // After miri_rt_list_new (empty List<T>() constructor), set elem_drop_fn
-                    // and elem_clone_fn from the destination type. translate_rvalue has no
-                    // operands to inspect for this path, so we derive the element type from
-                    // the assignment target's type annotation.
-                    if is_list_new_empty {
-                        if let Some(list_ptr) = maybe_result {
-                            if let Some(elem_expr) =
-                                FunctionTranslator::collection_elem_expr(&dest_ty.kind)
-                            {
-                                if let ExpressionKind::Type(elem_ty, _) = &elem_expr.node {
-                                    FunctionTranslator::emit_list_drop_fn_for_elem_kind(
-                                        builder,
-                                        ctx,
-                                        &elem_ty.kind,
-                                        list_ptr,
-                                        ptr_type,
-                                    )?;
-                                    FunctionTranslator::emit_list_clone_fn_for_elem_kind(
-                                        builder,
-                                        ctx,
-                                        &elem_ty.kind,
-                                        list_ptr,
-                                        ptr_type,
-                                        type_ctx.type_definitions,
-                                    )?;
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    // Indirect call through a closure struct.
-                    // Layout: payload[0]=fn_ptr, payload[1]=dtor_ptr, payload[2+i]=cap_i.
-                    let closure_ptr =
-                        Self::translate_operand(builder, ctx, func, locals, type_ctx)?;
-
-                    // Load fn_ptr from closure struct (first word of payload).
-                    let fn_ptr = builder
-                        .ins()
-                        .load(ptr_type, MemFlags::new(), closure_ptr, 0);
-
-                    // Prepend env_ptr (= closure_ptr) to the argument list.
-                    let mut full_args = vec![closure_ptr];
-                    full_args.extend_from_slice(&arg_values);
-
-                    // Prepend env_ptr to the signature.
-                    let mut full_sig = Signature::new(builder.func.signature.call_conv);
-                    full_sig.params.push(AbiParam::new(ptr_type)); // env_ptr
-                    full_sig.params.extend(sig.params);
-                    full_sig.returns.extend(sig.returns);
-
-                    let sig_ref = builder.import_signature(full_sig);
-                    let call = builder.ins().call_indirect(sig_ref, fn_ptr, &full_args);
-
-                    if dest_ty.kind != TypeKind::Void {
-                        let result = builder.inst_results(call)[0];
-                        let dest_var = locals.get(&destination.local).ok_or_else(|| {
-                            format!("Unknown call destination local: {:?}", destination.local)
-                        })?;
-                        builder.def_var(*dest_var, result);
-                    }
-                }
-
-                // Load updated values back from out-arg stack slots into caller locals.
-                for (addr, local) in &out_arg_slots {
-                    if let Some(&var) = locals.get(local) {
-                        let local_ty = translate_type(type_ctx.local_types[local.0], ptr_type);
-                        let loaded = builder.ins().load(local_ty, MemFlags::new(), *addr, 0);
-                        builder.def_var(var, loaded);
-                    }
-                }
-
-                if let Some(t) = target {
-                    let target_block = blocks[t];
-                    builder.ins().jump(target_block, &[]);
-                }
-            }
-
+            } => Self::translate_call(
+                builder,
+                ctx,
+                func,
+                args,
+                out_args,
+                destination,
+                target.as_ref(),
+                body,
+                locals,
+                blocks,
+                type_ctx,
+            ),
             TerminatorKind::Unreachable => {
-                let trap_code = TrapCode::user(1)
-                    .ok_or_else(|| "Failed to create user trap code".to_string())?;
+                let trap_code = TrapCode::user(1).ok_or_else(|| {
+                    CodegenError::Internal("Failed to create user trap code".to_string())
+                })?;
                 builder.ins().trap(trap_code);
+                Ok(())
             }
-
-            TerminatorKind::GpuLaunch { .. } => {
-                return Err("GPU launches not supported in CPU backend".to_string());
-            }
-
+            TerminatorKind::GpuLaunch { .. } => Err(CodegenError::Internal(
+                "GPU launches not supported in CPU backend".to_string(),
+            )),
             TerminatorKind::VirtualCall {
                 vtable_slot,
                 args,
                 destination,
                 target,
-            } => {
-                // args[0] is the receiver. Load vtable ptr from receiver[0], then
-                // load fn_ptr from vtable[vtable_slot * ptr_size], then call_indirect.
-                debug_assert!(
-                    !args.is_empty(),
-                    "VirtualCall must have at least one arg (receiver)"
-                );
+            } => Self::translate_virtual_call(
+                builder,
+                ctx,
+                *vtable_slot,
+                args,
+                destination,
+                target.as_ref(),
+                body,
+                locals,
+                blocks,
+                type_ctx,
+            ),
+        }
+    }
 
-                // Translate all arguments
-                let mut sig = Signature::new(builder.func.signature.call_conv);
-                let mut arg_values = Vec::new();
-                for arg in args {
-                    let val = Self::translate_operand(builder, ctx, arg, locals, type_ctx)?;
-                    arg_values.push(val);
-                    sig.params
-                        .push(AbiParam::new(builder.func.dfg.value_type(val)));
-                }
-
-                let dest_ty = &body.local_decls[destination.local.0].ty;
-                let cl_dest_ty = translate_type(dest_ty, ptr_type);
-                if dest_ty.kind != TypeKind::Void {
-                    sig.returns.push(AbiParam::new(cl_dest_ty));
-                }
-
-                // Load vtable pointer from receiver[0]
-                let receiver_ptr = arg_values[0];
-                let vtable_ptr = builder
-                    .ins()
-                    .load(ptr_type, MemFlags::new(), receiver_ptr, 0);
-
-                // Load fn_ptr from vtable[slot * ptr_size]
-                let slot_offset = (*vtable_slot as i32) * ptr_type.bytes() as i32;
-                let fn_ptr = builder
-                    .ins()
-                    .load(ptr_type, MemFlags::new(), vtable_ptr, slot_offset);
-
-                // Call via call_indirect — receiver is already in arg_values[0]
-                let sig_ref = builder.import_signature(sig);
-                let call = builder.ins().call_indirect(sig_ref, fn_ptr, &arg_values);
-
-                if dest_ty.kind != TypeKind::Void {
-                    let result = builder.inst_results(call)[0];
-                    let dest_var = locals.get(&destination.local).ok_or_else(|| {
-                        format!("Unknown vcall destination local: {:?}", destination.local)
-                    })?;
-                    builder.def_var(*dest_var, result);
-                }
-
-                if let Some(t) = target {
-                    let target_block = blocks[t];
-                    builder.ins().jump(target_block, &[]);
-                }
+    /// Translate `TerminatorKind::Return`: write back scalar out params via
+    /// caller stack slots, then return local(0) (or void).
+    fn translate_return(
+        builder: &mut FunctionBuilder,
+        body: &Body,
+        locals: &HashMap<Local, Variable>,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), CodegenError> {
+        for (&param_local, &ptr_var) in type_ctx.out_param_ptr_vars {
+            let ptr = builder.use_var(ptr_var);
+            if let Some(&val_var) = locals.get(&param_local) {
+                let val = builder.use_var(val_var);
+                builder.ins().store(MemFlags::new(), val, ptr, 0);
             }
         }
+        if let Some(&var) = locals.get(&Local(0)) {
+            let ret_ty = &body.local_decls[0].ty;
+            if ret_ty.kind != TypeKind::Void {
+                let value = builder.use_var(var);
+                builder.ins().return_(&[value]);
+            } else {
+                builder.ins().return_(&[]);
+            }
+        } else {
+            builder.ins().return_(&[]);
+        }
+        Ok(())
+    }
 
+    /// Translate `TerminatorKind::SwitchInt`. Lowers to a chain of `icmp` +
+    /// `brif`, with a final unconditional branch to `otherwise` when no target
+    /// matches.
+    #[allow(clippy::too_many_arguments)]
+    fn translate_switch_int(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        discr: &Operand,
+        targets: &[(crate::mir::terminator::Discriminant, BasicBlock)],
+        otherwise: &BasicBlock,
+        locals: &HashMap<Local, Variable>,
+        blocks: &HashMap<BasicBlock, Block>,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), CodegenError> {
+        let disc_val = Self::translate_operand(builder, ctx, discr, locals, type_ctx)?;
+        let disc_ty = builder.func.dfg.value_type(disc_val);
+
+        if targets.is_empty() {
+            builder.ins().jump(blocks[otherwise], &[]);
+            return Ok(());
+        }
+        if targets.len() == 1 {
+            let (value, target) = &targets[0];
+            let cmp_val = builder.ins().iconst(disc_ty, value.value() as i64);
+            let cond = builder.ins().icmp(IntCC::Equal, disc_val, cmp_val);
+            builder
+                .ins()
+                .brif(cond, blocks[target], &[], blocks[otherwise], &[]);
+            return Ok(());
+        }
+
+        let mut remaining_targets: Vec<_> = targets.iter().collect();
+        let otherwise_block = blocks[otherwise];
+        while let Some((value, target)) = remaining_targets.pop() {
+            let target_block = blocks[target];
+            let cmp_val = builder.ins().iconst(disc_ty, value.value() as i64);
+            let cond = builder.ins().icmp(IntCC::Equal, disc_val, cmp_val);
+            if remaining_targets.is_empty() {
+                builder
+                    .ins()
+                    .brif(cond, target_block, &[], otherwise_block, &[]);
+            } else {
+                let next_check = builder.create_block();
+                builder.ins().brif(cond, target_block, &[], next_check, &[]);
+                builder.seal_block(next_check);
+                builder.switch_to_block(next_check);
+            }
+        }
+        Ok(())
+    }
+
+    /// Translate `TerminatorKind::Call`: direct named call or indirect closure
+    /// call, with scalar-out writeback and optional collection-construction
+    /// post-processing (`miri_rt_list_new`, `miri_rt_list_new_from_managed_array`).
+    #[allow(clippy::too_many_arguments)]
+    fn translate_call(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        func: &Operand,
+        args: &[Operand],
+        out_args: &[bool],
+        destination: &Place,
+        target: Option<&BasicBlock>,
+        body: &Body,
+        locals: &HashMap<Local, Variable>,
+        blocks: &HashMap<BasicBlock, Block>,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), CodegenError> {
+        let ptr_type = type_ctx.ptr_type;
+
+        let func_name = match func {
+            Operand::Constant(c) => match &c.literal {
+                Literal::Identifier(name) => Some(name.clone()),
+                _ => None,
+            },
+            _ => None,
+        };
+
+        let (arg_values, sig, out_arg_slots) = Self::prepare_call_args(
+            builder,
+            ctx,
+            func_name.as_deref(),
+            args,
+            out_args,
+            locals,
+            type_ctx,
+        )?;
+
+        let dest_ty = &body.local_decls[destination.local.0].ty;
+        let cl_dest_ty = translate_type(dest_ty, ptr_type);
+        let mut sig = sig;
+        if dest_ty.kind != TypeKind::Void {
+            sig.returns.push(AbiParam::new(cl_dest_ty));
+        }
+
+        if let Some(func_name) = func_name {
+            Self::dispatch_named_call(
+                builder,
+                ctx,
+                &func_name,
+                args,
+                arg_values,
+                sig,
+                dest_ty,
+                destination,
+                locals,
+                type_ctx,
+                ptr_type,
+            )?;
+        } else {
+            Self::dispatch_indirect_call(
+                builder,
+                ctx,
+                func,
+                arg_values,
+                sig,
+                dest_ty,
+                destination,
+                locals,
+                type_ctx,
+                ptr_type,
+            )?;
+        }
+
+        Self::writeback_out_arg_slots(builder, &out_arg_slots, locals, type_ctx, ptr_type);
+        if let Some(t) = target {
+            builder.ins().jump(blocks[t], &[]);
+        }
+        Ok(())
+    }
+
+    /// Read each scalar `out`-param stack slot back into its caller-side
+    /// `Local`. Pairs were recorded during `prepare_call_args`.
+    fn writeback_out_arg_slots(
+        builder: &mut FunctionBuilder,
+        out_arg_slots: &[(cranelift_codegen::ir::Value, Local)],
+        locals: &HashMap<Local, Variable>,
+        type_ctx: &TypeCtx,
+        ptr_type: cranelift_codegen::ir::Type,
+    ) {
+        for (addr, local) in out_arg_slots {
+            if let Some(&var) = locals.get(local) {
+                let local_ty = translate_type(type_ctx.local_types[local.0], ptr_type);
+                let loaded = builder.ins().load(local_ty, MemFlags::new(), *addr, 0);
+                builder.def_var(var, loaded);
+            }
+        }
+    }
+
+    /// Translate every call argument, applying ptr-width widening for runtime
+    /// collection calls and copy-in/copy-out for scalar `out` params. Returns
+    /// `(arg_values, signature-with-params-filled, out_arg_slots)` where
+    /// `out_arg_slots` records the stack slot + caller local for each scalar
+    /// out arg so the caller can read updated values back after the call.
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_call_args(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        func_name: Option<&str>,
+        args: &[Operand],
+        out_args: &[bool],
+        locals: &HashMap<Local, Variable>,
+        type_ctx: &TypeCtx,
+    ) -> Result<PreparedCallArgs, CodegenError> {
+        let ptr_type = type_ctx.ptr_type;
+        let predeclared_sig = Self::lookup_predeclared_sig(ctx, func_name);
+        let widen_value_args =
+            func_name.is_some_and(|n| n == rt::LIST_PUSH || n == rt::LIST_INSERT);
+
+        let mut sig = Signature::new(builder.func.signature.call_conv);
+        let mut arg_values = Vec::with_capacity(args.len());
+        let mut out_arg_slots: Vec<(cranelift_codegen::ir::Value, Local)> = Vec::new();
+
+        for (i, arg) in args.iter().enumerate() {
+            let val = Self::translate_operand(builder, ctx, arg, locals, type_ctx)?;
+            let val_ty = builder.func.dfg.value_type(val);
+            let val = if widen_value_args && i > 0 && val_ty.bytes() < ptr_type.bytes() {
+                builder.ins().sextend(ptr_type, val)
+            } else {
+                val
+            };
+            let scalar_out_local = Self::scalar_out_local_for_arg(out_args, i, arg, type_ctx);
+            let val = if let Some(local) = scalar_out_local {
+                let addr = Self::box_value_in_stack_slot(builder, val, ptr_type);
+                out_arg_slots.push((addr, local));
+                addr
+            } else {
+                Self::cast_arg_to_predeclared(builder, val, i, predeclared_sig.as_ref())?
+            };
+            arg_values.push(val);
+            sig.params
+                .push(AbiParam::new(builder.func.dfg.value_type(val)));
+        }
+        Ok((arg_values, sig, out_arg_slots))
+    }
+
+    /// Look up `func_name`'s pre-existing module declaration so later call
+    /// args can be cast to the declared param types (avoids DFG-widened
+    /// mismatches like passing an `I64`-widened `u8` where `I8` is expected).
+    fn lookup_predeclared_sig(ctx: &ModuleCtx, func_name: Option<&str>) -> Option<Signature> {
+        use cranelift_module::FuncOrDataId;
+        let name = func_name?;
+        if let Some(FuncOrDataId::Func(id)) = ctx.module.get_name(name) {
+            Some(
+                ctx.module
+                    .declarations()
+                    .get_function_decl(id)
+                    .signature
+                    .clone(),
+            )
+        } else {
+            None
+        }
+    }
+
+    /// If arg `i` is flagged as `out` and points to a scalar that needs a
+    /// caller-provided stack slot, return the caller-side `Local` to write
+    /// back to after the call; otherwise `None`.
+    fn scalar_out_local_for_arg(
+        out_args: &[bool],
+        i: usize,
+        arg: &Operand,
+        type_ctx: &TypeCtx,
+    ) -> Option<Local> {
+        if !out_args.get(i).copied().unwrap_or(false) {
+            return None;
+        }
+        match arg {
+            Operand::Copy(p) | Operand::Move(p)
+                if p.projection.is_empty()
+                    && needs_out_pointer(&type_ctx.local_types[p.local.0].kind) =>
+            {
+                Some(p.local)
+            }
+            _ => None,
+        }
+    }
+
+    /// Allocate a stack slot sized to `val`'s Cranelift type, store `val`
+    /// into it, and return the slot's address as a ptr-typed value. Used to
+    /// box scalar `out`-param values so the callee can write through them.
+    fn box_value_in_stack_slot(
+        builder: &mut FunctionBuilder,
+        val: cranelift_codegen::ir::Value,
+        ptr_type: cranelift_codegen::ir::Type,
+    ) -> cranelift_codegen::ir::Value {
+        let cur_val_ty = builder.func.dfg.value_type(val);
+        let slot = builder.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            cur_val_ty.bytes(),
+            cur_val_ty.bytes().trailing_zeros() as u8,
+        ));
+        let addr = builder.ins().stack_addr(ptr_type, slot, 0);
+        builder.ins().store(MemFlags::new(), val, addr, 0);
+        addr
+    }
+
+    /// Cast a call argument to match the pre-declared parameter type when one
+    /// is known. Uses `cast_value_with_sign` so int↔int, int↔float, and
+    /// float↔float all pick a verifier-legal Cranelift op.
+    fn cast_arg_to_predeclared(
+        builder: &mut FunctionBuilder,
+        val: cranelift_codegen::ir::Value,
+        i: usize,
+        predeclared_sig: Option<&Signature>,
+    ) -> Result<cranelift_codegen::ir::Value, CodegenError> {
+        let Some(pre_sig) = predeclared_sig else {
+            return Ok(val);
+        };
+        if i >= pre_sig.params.len() {
+            return Ok(val);
+        }
+        let expected_ty = pre_sig.params[i].value_type;
+        let actual_ty = builder.func.dfg.value_type(val);
+        if actual_ty == expected_ty {
+            return Ok(val);
+        }
+        crate::codegen::cranelift::translator::FunctionTranslator::cast_value_with_sign(
+            builder,
+            val,
+            actual_ty,
+            expected_ty,
+            false,
+        )
+        .map_err(|e| {
+            CodegenError::Internal(format!(
+                "Call arg {i}: cast {actual_ty} -> {expected_ty} failed: {e}"
+            ))
+        })
+    }
+
+    /// Direct call to a named symbol: declare-import the callee, emit the
+    /// `call` instruction, store the result into the destination local, and
+    /// run any runtime-specific post-call initialization (List drop-fn /
+    /// clone-fn registration for `miri_rt_list_new*`).
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_named_call(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        func_name: &str,
+        args: &[Operand],
+        arg_values: Vec<cranelift_codegen::ir::Value>,
+        sig: Signature,
+        dest_ty: &crate::ast::types::Type,
+        destination: &Place,
+        locals: &HashMap<Local, Variable>,
+        type_ctx: &TypeCtx,
+        ptr_type: cranelift_codegen::ir::Type,
+    ) -> Result<(), CodegenError> {
+        let func_id = ctx
+            .module
+            .declare_function(func_name, Linkage::Import, &sig)
+            .map_err(|e| CodegenError::declare_function(func_name.to_string(), e.to_string()))?;
+        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+        let call = builder.ins().call(local_func, &arg_values);
+
+        let maybe_result = if dest_ty.kind != TypeKind::Void {
+            let result = builder.inst_results(call)[0];
+            let dest_var = locals.get(&destination.local).ok_or_else(|| {
+                CodegenError::Internal(format!(
+                    "Unknown call destination local: {:?}",
+                    destination.local
+                ))
+            })?;
+            builder.def_var(*dest_var, result);
+            Some(result)
+        } else {
+            None
+        };
+
+        if func_name == rt::LIST_NEW_FROM_MANAGED_ARRAY {
+            Self::apply_list_from_managed_overrides(builder, ctx, maybe_result, args, type_ctx)?;
+        }
+        if func_name == rt::LIST_NEW {
+            Self::apply_list_new_init(builder, ctx, maybe_result, dest_ty, type_ctx, ptr_type)?;
+        }
+        Ok(())
+    }
+
+    /// Indirect call through a closure pointer. Loads fn_ptr from
+    /// `payload[0]`, prepends env_ptr (= closure_ptr) to args and sig, and
+    /// invokes via `call_indirect`.
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_indirect_call(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        func: &Operand,
+        arg_values: Vec<cranelift_codegen::ir::Value>,
+        sig: Signature,
+        dest_ty: &crate::ast::types::Type,
+        destination: &Place,
+        locals: &HashMap<Local, Variable>,
+        type_ctx: &TypeCtx,
+        ptr_type: cranelift_codegen::ir::Type,
+    ) -> Result<(), CodegenError> {
+        let closure_ptr = Self::translate_operand(builder, ctx, func, locals, type_ctx)?;
+        let fn_ptr = builder
+            .ins()
+            .load(ptr_type, MemFlags::new(), closure_ptr, 0);
+
+        let mut full_args = vec![closure_ptr];
+        full_args.extend_from_slice(&arg_values);
+
+        let mut full_sig = Signature::new(builder.func.signature.call_conv);
+        full_sig.params.push(AbiParam::new(ptr_type)); // env_ptr
+        full_sig.params.extend(sig.params);
+        full_sig.returns.extend(sig.returns);
+
+        let sig_ref = builder.import_signature(full_sig);
+        let call = builder.ins().call_indirect(sig_ref, fn_ptr, &full_args);
+
+        if dest_ty.kind != TypeKind::Void {
+            let result = builder.inst_results(call)[0];
+            let dest_var = locals.get(&destination.local).ok_or_else(|| {
+                CodegenError::Internal(format!(
+                    "Unknown call destination local: {:?}",
+                    destination.local
+                ))
+            })?;
+            builder.def_var(*dest_var, result);
+        }
+        Ok(())
+    }
+
+    /// After `miri_rt_list_new_from_managed_array`: the runtime preset is
+    /// `elem_drop_fn = miri_rt_list_decref_element`. Override here for
+    /// non-List managed element types (Array/Set/Map/UserClass) so the
+    /// per-element decref dispatched on clear/remove_at matches the actual
+    /// element kind. Also registers the clone helper for Cloneable user classes.
+    fn apply_list_from_managed_overrides(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        maybe_result: Option<cranelift_codegen::ir::Value>,
+        args: &[Operand],
+        type_ctx: &TypeCtx,
+    ) -> Result<(), CodegenError> {
+        let ptr_type = type_ctx.ptr_type;
+        let (Some(list_ptr), Some(array_arg)) = (maybe_result, args.first()) else {
+            return Ok(());
+        };
+        let array_kind = match array_arg {
+            Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => {
+                Some(&type_ctx.local_types[p.local.0].kind)
+            }
+            _ => None,
+        };
+        let Some(array_kind) = array_kind else {
+            return Ok(());
+        };
+        let Some(elem_expr) = FunctionTranslator::collection_elem_expr(array_kind) else {
+            return Ok(());
+        };
+        let ExpressionKind::Type(inner_ty, _) = &elem_expr.node else {
+            return Ok(());
+        };
+        let shape = FunctionTranslator::classify_element_shape(&inner_ty.kind);
+        let needs_decref_override = matches!(
+            shape,
+            ElementShape::Builtin(
+                crate::ast::types::BuiltinCollectionKind::Array
+                    | crate::ast::types::BuiltinCollectionKind::Set
+                    | crate::ast::types::BuiltinCollectionKind::Map,
+            ) | ElementShape::UserClass(_)
+        );
+        if needs_decref_override {
+            if let Some(addr) =
+                FunctionTranslator::elem_decref_addr_for_shape(builder, ctx, shape, ptr_type)?
+            {
+                FunctionTranslator::call_rt_list_set_elem_drop_fn(builder, ctx, list_ptr, addr)?;
+            }
+        }
+        if let Some(addr) = FunctionTranslator::elem_clone_addr_for_shape(
+            builder,
+            ctx,
+            shape,
+            type_ctx.type_definitions,
+            ptr_type,
+        )? {
+            FunctionTranslator::call_rt_list_set_elem_clone_fn(builder, ctx, list_ptr, addr)?;
+        }
+        Ok(())
+    }
+
+    /// After `miri_rt_list_new` (empty `List<T>()` constructor): set
+    /// `elem_drop_fn` and `elem_clone_fn` from the destination type's
+    /// element annotation, since the constructor has no operands to inspect.
+    fn apply_list_new_init(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        maybe_result: Option<cranelift_codegen::ir::Value>,
+        dest_ty: &crate::ast::types::Type,
+        type_ctx: &TypeCtx,
+        ptr_type: cranelift_codegen::ir::Type,
+    ) -> Result<(), CodegenError> {
+        let Some(list_ptr) = maybe_result else {
+            return Ok(());
+        };
+        let Some(elem_expr) = FunctionTranslator::collection_elem_expr(&dest_ty.kind) else {
+            return Ok(());
+        };
+        let ExpressionKind::Type(elem_ty, _) = &elem_expr.node else {
+            return Ok(());
+        };
+        FunctionTranslator::emit_list_drop_fn_for_elem_kind(
+            builder,
+            ctx,
+            &elem_ty.kind,
+            list_ptr,
+            ptr_type,
+        )?;
+        FunctionTranslator::emit_list_clone_fn_for_elem_kind(
+            builder,
+            ctx,
+            &elem_ty.kind,
+            list_ptr,
+            ptr_type,
+            type_ctx.type_definitions,
+        )?;
+        Ok(())
+    }
+
+    /// Translate `TerminatorKind::VirtualCall`: load fn-ptr from receiver's
+    /// vtable slot and invoke via `call_indirect`.
+    #[allow(clippy::too_many_arguments)]
+    fn translate_virtual_call(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        vtable_slot: usize,
+        args: &[Operand],
+        destination: &Place,
+        target: Option<&BasicBlock>,
+        body: &Body,
+        locals: &HashMap<Local, Variable>,
+        blocks: &HashMap<BasicBlock, Block>,
+        type_ctx: &TypeCtx,
+    ) -> Result<(), CodegenError> {
+        let ptr_type = type_ctx.ptr_type;
+        debug_assert!(
+            !args.is_empty(),
+            "VirtualCall must have at least one arg (receiver)"
+        );
+
+        let mut sig = Signature::new(builder.func.signature.call_conv);
+        let mut arg_values = Vec::new();
+        for arg in args {
+            let val = Self::translate_operand(builder, ctx, arg, locals, type_ctx)?;
+            arg_values.push(val);
+            sig.params
+                .push(AbiParam::new(builder.func.dfg.value_type(val)));
+        }
+
+        let dest_ty = &body.local_decls[destination.local.0].ty;
+        let cl_dest_ty = translate_type(dest_ty, ptr_type);
+        if dest_ty.kind != TypeKind::Void {
+            sig.returns.push(AbiParam::new(cl_dest_ty));
+        }
+
+        // Load vtable pointer from receiver[0]
+        let receiver_ptr = arg_values[0];
+        let vtable_ptr = builder
+            .ins()
+            .load(ptr_type, MemFlags::new(), receiver_ptr, 0);
+        // Load fn_ptr from vtable[slot * ptr_size]
+        let slot_offset = (vtable_slot as i32) * ptr_type.bytes() as i32;
+        let fn_ptr = builder
+            .ins()
+            .load(ptr_type, MemFlags::new(), vtable_ptr, slot_offset);
+
+        let sig_ref = builder.import_signature(sig);
+        let call = builder.ins().call_indirect(sig_ref, fn_ptr, &arg_values);
+
+        if dest_ty.kind != TypeKind::Void {
+            let result = builder.inst_results(call)[0];
+            let dest_var = locals.get(&destination.local).ok_or_else(|| {
+                CodegenError::Internal(format!(
+                    "Unknown vcall destination local: {:?}",
+                    destination.local
+                ))
+            })?;
+            builder.def_var(*dest_var, result);
+        }
+
+        if let Some(t) = target {
+            builder.ins().jump(blocks[t], &[]);
+        }
         Ok(())
     }
 
@@ -754,5 +954,92 @@ impl<'a> FunctionTranslator<'a> {
         }
 
         current
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::types::Type;
+    use crate::error::syntax::Span;
+    use crate::mir::Place;
+    use std::collections::HashMap;
+
+    fn ty(kind: TypeKind) -> Type {
+        Type::new(kind, Span::default())
+    }
+
+    fn local_types_for(kinds: &[TypeKind]) -> Vec<Type> {
+        kinds.iter().map(|k| ty(k.clone())).collect()
+    }
+
+    fn type_ctx_with<'a>(local_types: &'a [&'a Type]) -> TypeCtx<'a> {
+        static EMPTY_DEFS: std::sync::OnceLock<
+            HashMap<String, crate::type_checker::context::TypeDefinition>,
+        > = std::sync::OnceLock::new();
+        static EMPTY_CAPS: std::sync::OnceLock<HashMap<Local, Vec<Type>>> =
+            std::sync::OnceLock::new();
+        static EMPTY_OUT: std::sync::OnceLock<HashMap<Local, cranelift_frontend::Variable>> =
+            std::sync::OnceLock::new();
+        TypeCtx {
+            local_types,
+            type_definitions: EMPTY_DEFS.get_or_init(HashMap::new),
+            ptr_type: cranelift_codegen::ir::types::I64,
+            closure_capture_ast_types: EMPTY_CAPS.get_or_init(HashMap::new),
+            out_param_ptr_vars: EMPTY_OUT.get_or_init(HashMap::new),
+        }
+    }
+
+    #[test]
+    fn scalar_out_local_returns_local_for_scalar_out_arg() {
+        let locals_ty = local_types_for(&[TypeKind::Int]);
+        let refs: Vec<&Type> = locals_ty.iter().collect();
+        let type_ctx = type_ctx_with(&refs);
+        let arg = Operand::Copy(Place {
+            local: Local(0),
+            projection: Vec::new(),
+        });
+        let got = FunctionTranslator::scalar_out_local_for_arg(&[true], 0, &arg, &type_ctx);
+        assert_eq!(got, Some(Local(0)));
+    }
+
+    #[test]
+    fn scalar_out_local_skips_managed_args() {
+        // Managed types (e.g. String) do not need an out pointer — they're already pointers.
+        let locals_ty = local_types_for(&[TypeKind::String]);
+        let refs: Vec<&Type> = locals_ty.iter().collect();
+        let type_ctx = type_ctx_with(&refs);
+        let arg = Operand::Copy(Place {
+            local: Local(0),
+            projection: Vec::new(),
+        });
+        let got = FunctionTranslator::scalar_out_local_for_arg(&[true], 0, &arg, &type_ctx);
+        assert!(got.is_none());
+    }
+
+    #[test]
+    fn scalar_out_local_returns_none_when_flag_unset() {
+        let locals_ty = local_types_for(&[TypeKind::Int]);
+        let refs: Vec<&Type> = locals_ty.iter().collect();
+        let type_ctx = type_ctx_with(&refs);
+        let arg = Operand::Copy(Place {
+            local: Local(0),
+            projection: Vec::new(),
+        });
+        let got = FunctionTranslator::scalar_out_local_for_arg(&[false], 0, &arg, &type_ctx);
+        assert!(got.is_none());
+    }
+
+    #[test]
+    fn scalar_out_local_skips_projected_places() {
+        let locals_ty = local_types_for(&[TypeKind::Int]);
+        let refs: Vec<&Type> = locals_ty.iter().collect();
+        let type_ctx = type_ctx_with(&refs);
+        let arg = Operand::Copy(Place {
+            local: Local(0),
+            projection: vec![crate::mir::PlaceElem::Field(0)],
+        });
+        let got = FunctionTranslator::scalar_out_local_for_arg(&[true], 0, &arg, &type_ctx);
+        assert!(got.is_none());
     }
 }
