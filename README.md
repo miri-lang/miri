@@ -6,7 +6,7 @@
 
 **A modern, GPU-first, statically-typed, compiled programming language designed for balancing high performance and safety in the age of Generative AI.**
 
-Miri is designed for agentic engineering, where humans define intent and AI fills in safe, verifiable, high-performance implementations.
+Miri is built for **agentic engineering** — a world in which the majority of production code is generated, repaired, and shipped by autonomous agents. Humans declare intent. The compiler enforces the invariants agents are most likely to violate, and the toolchain emits structured artifacts agents can consume directly.
 
 ## Current State (v0.3.0-beta.1)
 
