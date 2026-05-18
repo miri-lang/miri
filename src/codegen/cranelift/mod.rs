@@ -198,93 +198,138 @@ impl Backend for CraneliftBackend {
 
     /// Compile the provided MIR bodies into an artifact.
     ///
-    /// This method translates each body into Cranelift IR, manages string literals
-    /// by emitting them as static data, and generates a native object file.
+    /// Pipeline: resolve ISA → create object module → declare runtime imports →
+    /// generate drop thunks / closure dtors → predeclare user fns → compile each
+    /// body → generate vtables → emit string literals → finalize object.
     fn compile(
         &self,
         bodies: &[(&str, &Body)],
         options: &Self::Options,
     ) -> Result<CompiledArtifact, Self::Error> {
-        // Reuse the existing ISA when options match defaults (avoids ISA rebuild).
-        let is_default = options.opt_level == OptLevel::None && options.pic;
-        let isa = if is_default {
-            self.isa.clone()
-        } else {
-            let mut settings_builder = settings::builder();
-            let opt_level_str = match options.opt_level {
-                OptLevel::None => "none",
-                OptLevel::Speed => "speed",
-                OptLevel::SpeedAndSize => "speed_and_size",
-            };
-            settings_builder
-                .set("opt_level", opt_level_str)
-                .map_err(|e| CodegenError::Module(e.to_string()))?;
-            if options.pic {
-                settings_builder
-                    .set("is_pic", "true")
-                    .map_err(|e| CodegenError::Module(e.to_string()))?;
-            }
-            let flags = settings::Flags::new(settings_builder);
-            cranelift_codegen::isa::lookup(self.isa.triple().clone())
-                .map_err(|e| CodegenError::TargetIsa(e.to_string()))?
-                .finish(flags)
-                .map_err(|e| CodegenError::TargetIsa(e.to_string()))?
-        };
+        let isa = self.resolve_isa(options)?;
+        let (mut module, mut ctx) = Self::create_object_module(&isa)?;
 
-        // Create object module
+        self.declare_runtime_imports(&mut module)?;
+        self.generate_type_drop_functions(&mut module, &mut ctx, &isa)?;
+        self.generate_lambda_destructors(&mut module, &mut ctx, &isa, bodies)?;
+        self.predeclare_user_functions(&mut module, &isa, bodies)?;
+
+        let mut string_literals = HashMap::new();
+        for (name, body) in bodies {
+            self.compile_function(
+                &mut module,
+                &mut ctx,
+                name,
+                body,
+                &isa,
+                &mut string_literals,
+            )?;
+        }
+
+        FunctionTranslator::generate_vtables(&mut module, &isa, &self.type_definitions)?;
+        Self::define_string_literals(&mut module, &isa, string_literals)?;
+        let object = self.finalize_object(module)?;
+
+        Ok(CompiledArtifact {
+            bytes: object,
+            format: ArtifactFormat::ObjectFile,
+        })
+    }
+
+    fn name(&self) -> &'static str {
+        "cranelift"
+    }
+}
+
+impl CraneliftBackend {
+    /// Resolve the target ISA. Reuses the cached default ISA when options match
+    /// defaults; otherwise rebuilds with the requested opt-level/PIC flags.
+    fn resolve_isa(&self, options: &CraneliftOptions) -> Result<Arc<dyn TargetIsa>, CodegenError> {
+        let is_default = options.opt_level == OptLevel::None && options.pic;
+        if is_default {
+            return Ok(self.isa.clone());
+        }
+        let mut settings_builder = settings::builder();
+        let opt_level_str = match options.opt_level {
+            OptLevel::None => "none",
+            OptLevel::Speed => "speed",
+            OptLevel::SpeedAndSize => "speed_and_size",
+        };
+        settings_builder
+            .set("opt_level", opt_level_str)
+            .map_err(|e| CodegenError::Module(e.to_string()))?;
+        if options.pic {
+            settings_builder
+                .set("is_pic", "true")
+                .map_err(|e| CodegenError::Module(e.to_string()))?;
+        }
+        let flags = settings::Flags::new(settings_builder);
+        cranelift_codegen::isa::lookup(self.isa.triple().clone())
+            .map_err(|e| CodegenError::TargetIsa(e.to_string()))?
+            .finish(flags)
+            .map_err(|e| CodegenError::TargetIsa(e.to_string()))
+    }
+
+    /// Create the `ObjectModule` + per-function `Context` used to build the
+    /// final artifact.
+    fn create_object_module(
+        isa: &Arc<dyn TargetIsa>,
+    ) -> Result<(ObjectModule, Context), CodegenError> {
         let object_builder = ObjectBuilder::new(
             isa.clone(),
             "miri_module",
             cranelift_module::default_libcall_names(),
         )
         .map_err(|e| CodegenError::Module(e.to_string()))?;
+        Ok((ObjectModule::new(object_builder), Context::new()))
+    }
 
-        let mut module = ObjectModule::new(object_builder);
-        let mut ctx = Context::new();
-
-        // Declare runtime function imports as external symbols
-        self.declare_runtime_imports(&mut module)?;
-
-        // Generate type-specific `__drop_TypeName` functions for every managed
-        // concrete type (structs, classes, enums with managed fields).
-        // These must be defined before user functions so that Import declarations
-        // inside user code resolve correctly.
-        self.generate_type_drop_functions(&mut module, &mut ctx, &isa)
-            .map_err(|e| CodegenError::Module(format!("drop thunk generation: {e}")))?;
-
-        // Generate `__dtor_{lambda_name}` destructors for lambda bodies that have
-        // managed captures. These must be defined before user functions so that
-        // translate_closure_aggregate can reference them via Linkage::Import.
+    /// Generate `__dtor_{lambda_name}` destructors for closure bodies that
+    /// capture managed values. Must run before user fns so call sites can
+    /// reference them via `Linkage::Import`.
+    fn generate_lambda_destructors(
+        &self,
+        module: &mut ObjectModule,
+        ctx: &mut Context,
+        isa: &Arc<dyn TargetIsa>,
+        bodies: &[(&str, &Body)],
+    ) -> Result<(), CodegenError> {
         for (name, body) in bodies.iter() {
-            if !body.env_capture_locals.is_empty() {
-                let has_managed = body.env_capture_locals.iter().any(|&cap_local| {
-                    crate::codegen::cranelift::translator::is_capture_managed(
-                        &body.local_decls[cap_local.0].ty.kind,
-                    )
-                });
-                if has_managed {
-                    FunctionTranslator::generate_closure_destructor(
-                        &mut module,
-                        &mut ctx,
-                        &isa,
-                        name,
-                        body,
-                        &self.type_definitions,
-                    )
-                    .map_err(|e| CodegenError::Module(format!("closure dtor generation: {e}")))?;
-                }
+            if body.env_capture_locals.is_empty() {
+                continue;
+            }
+            let has_managed = body.env_capture_locals.iter().any(|&cap_local| {
+                crate::codegen::cranelift::translator::is_capture_managed(
+                    &body.local_decls[cap_local.0].ty.kind,
+                )
+            });
+            if has_managed {
+                FunctionTranslator::generate_closure_destructor(
+                    module,
+                    ctx,
+                    isa,
+                    name,
+                    body,
+                    &self.type_definitions,
+                )?;
             }
         }
+        Ok(())
+    }
 
-        // Pre-declare all user functions with correct signatures from MIR types.
-        // This prevents signature mismatches when a call site is compiled before
-        // the callee's definition (the call site would otherwise infer the
-        // signature from DFG value types which may be widened).
+    /// Pre-declare all user functions with MIR-derived signatures so call sites
+    /// compiled before the callee resolve to the correct signature (avoids
+    /// the DFG-inferred widened-type mismatch).
+    fn predeclare_user_functions(
+        &self,
+        module: &mut ObjectModule,
+        isa: &Arc<dyn TargetIsa>,
+        bodies: &[(&str, &Body)],
+    ) -> Result<(), CodegenError> {
         let ptr_type = isa.pointer_type();
         let call_conv = isa.default_call_conv();
         for (name, body) in bodies.iter() {
             let mut sig = Signature::new(call_conv);
-            // Return type is local 0
             if !body.local_decls.is_empty() {
                 let ret_ty = &body.local_decls[0].ty;
                 if ret_ty.kind != crate::ast::types::TypeKind::Void {
@@ -292,7 +337,6 @@ impl Backend for CraneliftBackend {
                         .push(AbiParam::new(translate_type(ret_ty, ptr_type)));
                 }
             }
-            // Parameters are locals 1..=arg_count.
             // Scalar `out` params use ptr_type (copy-in/copy-out ABI) — must match
             // the signature built in FunctionTranslator::build_signature.
             for i in 1..=body.arg_count {
@@ -312,93 +356,94 @@ impl Backend for CraneliftBackend {
                 .declare_function(name, Linkage::Export, &sig)
                 .map_err(|e| CodegenError::declare_function(*name, e.to_string()))?;
         }
+        Ok(())
+    }
 
-        // Compile each function
-        let mut string_literals = HashMap::new();
-        for (name, body) in bodies {
-            self.compile_function(
-                &mut module,
-                &mut ctx,
-                name,
-                body,
-                &isa,
-                &mut string_literals,
-            )?;
-        }
-
-        // Generate vtables for classes that participate in virtual dispatch.
-        // Must run after all user functions are compiled so method symbols are registered.
-        FunctionTranslator::generate_vtables(&mut module, &isa, &self.type_definitions)
-            .map_err(|e| CodegenError::Module(format!("vtable generation: {e}")))?;
-
-        // Define string literals as static data structures
+    /// Define collected string literals as immortal static data structures
+    /// (`[RC][DataPtr][Len][Cap]`) referencing a sibling `*_bytes` data symbol.
+    fn define_string_literals(
+        module: &mut ObjectModule,
+        isa: &Arc<dyn TargetIsa>,
+        string_literals: HashMap<String, String>,
+    ) -> Result<(), CodegenError> {
         let ptr_type = isa.pointer_type();
         let ptr_size = ptr_type.bytes();
         for (literal, symbol_name) in string_literals {
-            // 1. Define the raw bytes
-            let mut bytes_symbol = String::with_capacity(symbol_name.len() + 6);
-            bytes_symbol.push_str(&symbol_name);
-            bytes_symbol.push_str("_bytes");
-            let bytes_id = module
-                .declare_data(&bytes_symbol, Linkage::Export, false, false)
-                .map_err(|e| CodegenError::Module(e.to_string()))?;
-            let mut bytes_ctx = DataDescription::new();
-            bytes_ctx.define(literal.as_bytes().to_vec().into_boxed_slice());
-            module
-                .define_data(bytes_id, &bytes_ctx)
-                .map_err(|e| CodegenError::Module(e.to_string()))?;
+            Self::define_one_string_literal(module, &literal, &symbol_name, ptr_size)?;
+        }
+        Ok(())
+    }
 
-            // 2. Define the MiriString struct: [RC, DataPtr, Len, Cap]
-            let mut struct_symbol = String::with_capacity(symbol_name.len() + 7);
-            struct_symbol.push_str(&symbol_name);
-            struct_symbol.push_str("_struct");
-            let struct_id = module
-                .declare_data(&struct_symbol, Linkage::Export, false, false)
-                .map_err(|e| CodegenError::Module(e.to_string()))?;
+    /// Emit the byte data + MiriString struct for one string literal.
+    fn define_one_string_literal(
+        module: &mut ObjectModule,
+        literal: &str,
+        symbol_name: &str,
+        ptr_size: u32,
+    ) -> Result<(), CodegenError> {
+        // 1. Define the raw bytes
+        let mut bytes_symbol = String::with_capacity(symbol_name.len() + 6);
+        bytes_symbol.push_str(symbol_name);
+        bytes_symbol.push_str("_bytes");
+        let bytes_id = module
+            .declare_data(&bytes_symbol, Linkage::Export, false, false)
+            .map_err(|e| CodegenError::Module(e.to_string()))?;
+        let mut bytes_ctx = DataDescription::new();
+        bytes_ctx.define(literal.as_bytes().to_vec().into_boxed_slice());
+        module
+            .define_data(bytes_id, &bytes_ctx)
+            .map_err(|e| CodegenError::Module(e.to_string()))?;
 
-            let mut struct_ctx = DataDescription::new();
-            struct_ctx.set_align(ptr_size as u64);
-            let mut data = vec![0u8; 4 * ptr_size as usize];
+        // 2. Define the MiriString struct: [RC, DataPtr, Len, Cap]
+        let mut struct_symbol = String::with_capacity(symbol_name.len() + 7);
+        struct_symbol.push_str(symbol_name);
+        struct_symbol.push_str("_struct");
+        let struct_id = module
+            .declare_data(&struct_symbol, Linkage::Export, false, false)
+            .map_err(|e| CodegenError::Module(e.to_string()))?;
 
-            // RC header: set high bit to indicate immortal/constant object
-            let immortal_rc = if ptr_size == 4 {
-                (1u32 << 31) as u64
-            } else {
-                1u64 << 63
-            };
+        let mut struct_ctx = DataDescription::new();
+        struct_ctx.set_align(ptr_size as u64);
+        let mut data = vec![0u8; 4 * ptr_size as usize];
 
-            if ptr_size == 4 {
-                data[0..4].copy_from_slice(&(immortal_rc as u32).to_ne_bytes());
-            } else {
-                data[0..8].copy_from_slice(&immortal_rc.to_ne_bytes());
-            }
-
-            // Len and Cap (both same for literals)
-            let len = literal.len() as u64;
-            if ptr_size == 4 {
-                data[8..12].copy_from_slice(&(len as u32).to_ne_bytes());
-                data[12..16].copy_from_slice(&(len as u32).to_ne_bytes());
-            } else {
-                data[16..24].copy_from_slice(&len.to_ne_bytes());
-                data[24..32].copy_from_slice(&len.to_ne_bytes());
-            }
-
-            struct_ctx.define(data.into_boxed_slice());
-
-            // Relocation for the data pointer at offset ptr_size
-            let bytes_ref = module.declare_data_in_data(bytes_id, &mut struct_ctx);
-            struct_ctx.write_data_addr(ptr_size as u32, bytes_ref, 0);
-
-            module
-                .define_data(struct_id, &struct_ctx)
-                .map_err(|e| CodegenError::Module(e.to_string()))?;
+        // RC header: high bit set = immortal/constant object
+        let immortal_rc = if ptr_size == 4 {
+            (1u32 << 31) as u64
+        } else {
+            1u64 << 63
+        };
+        if ptr_size == 4 {
+            data[0..4].copy_from_slice(&(immortal_rc as u32).to_ne_bytes());
+        } else {
+            data[0..8].copy_from_slice(&immortal_rc.to_ne_bytes());
         }
 
-        // Emit the object file
+        // Len and Cap (both same for literals)
+        let len = literal.len() as u64;
+        if ptr_size == 4 {
+            data[8..12].copy_from_slice(&(len as u32).to_ne_bytes());
+            data[12..16].copy_from_slice(&(len as u32).to_ne_bytes());
+        } else {
+            data[16..24].copy_from_slice(&len.to_ne_bytes());
+            data[24..32].copy_from_slice(&len.to_ne_bytes());
+        }
+
+        struct_ctx.define(data.into_boxed_slice());
+
+        // Relocation for the data pointer at offset ptr_size
+        let bytes_ref = module.declare_data_in_data(bytes_id, &mut struct_ctx);
+        struct_ctx.write_data_addr(ptr_size, bytes_ref, 0);
+
+        module
+            .define_data(struct_id, &struct_ctx)
+            .map_err(|e| CodegenError::Module(e.to_string()))
+    }
+
+    /// Finish the object module and inject the macOS build-version load command
+    /// when targeting Darwin (cranelift-object doesn't do this automatically).
+    fn finalize_object(&self, module: ObjectModule) -> Result<Vec<u8>, CodegenError> {
         let mut product = module.finish();
 
-        // If we are on macOS (Darwin), we need to inject the Mach-O build version load command.
-        // cranelift-object currently doesn't do this automatically even if the target is set correctly.
         if matches!(
             self.target().operating_system,
             OperatingSystem::Darwin(_) | OperatingSystem::MacOSX(_)
@@ -411,22 +456,11 @@ impl Backend for CraneliftBackend {
             product.object.set_macho_build_version(info);
         }
 
-        let object = product
+        product
             .emit()
-            .map_err(|e| CodegenError::Emit(e.to_string()))?;
-
-        Ok(CompiledArtifact {
-            bytes: object,
-            format: ArtifactFormat::ObjectFile,
-        })
+            .map_err(|e| CodegenError::Emit(e.to_string()))
     }
 
-    fn name(&self) -> &'static str {
-        "cranelift"
-    }
-}
-
-impl CraneliftBackend {
     /// Compile a single MIR function body to Cranelift IR.
     ///
     /// # Arguments
@@ -451,7 +485,7 @@ impl CraneliftBackend {
         // Translate MIR to Cranelift IR
         translator
             .translate(body, module, string_literals)
-            .map_err(|e| CodegenError::translation(name, e))?;
+            .map_err(|e| CodegenError::translation(name, e.to_string()))?;
 
         // Get the function signature and declare it
         let sig = translator.signature().clone();
@@ -496,7 +530,7 @@ impl CraneliftBackend {
         module: &mut ObjectModule,
         ctx: &mut Context,
         isa: &Arc<dyn TargetIsa>,
-    ) -> Result<(), String> {
+    ) -> Result<(), CodegenError> {
         // Collect all non-generic concrete Struct/Class/Enum types and sort for
         // deterministic output.  We include types without managed fields so that
         // __decref_TypeName can be generated for them — it is needed as elem_drop_fn
