@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable, Severity};
+use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable};
 use crate::error::syntax::Span;
 
 /// A type error detected during type checking, with its source location.
@@ -70,91 +70,66 @@ impl TypeErrorKind {
     /// Returns the error code, title, message, and help text for this error kind.
     pub fn properties(&self) -> ErrorProperties {
         match self {
-            Self::UndefinedVariable { name } => ErrorProperties {
-                code: "E0100",
-                title: "Undefined Variable",
-                message: Some(format!("Undefined variable: {}", name)),
-                help: Some("Ensure the variable is defined and in scope.".to_string()),
-            },
-            Self::TypeMismatch { expected, found } => ErrorProperties {
-                code: "E0101",
-                title: "Type Mismatch",
-                message: Some(format!("Expected type {}, but got {}", expected, found)),
-                help: Some("Ensure the types match the expected values.".to_string()),
-            },
-            Self::UnknownType { name } => ErrorProperties {
-                code: "E0102",
-                title: "Unknown Type",
-                message: Some(format!("Unknown type: {}", name)),
-                help: Some("Ensure the type is defined and imported correctly.".to_string()),
-            },
-            Self::MissingField { field, type_name } => ErrorProperties {
-                code: "E0103",
-                title: "Missing Field",
-                message: Some(format!("Missing field '{}' in type {}", field, type_name)),
-                help: Some("Ensure all required fields are initialized.".to_string()),
-            },
-            Self::MissingVariant { variant, enum_name } => ErrorProperties {
-                code: "E0104",
-                title: "Missing Variant",
-                message: Some(format!(
-                    "Missing variant '{}' in type {}",
-                    variant, enum_name
-                )),
-                help: Some("Ensure the variant is defined in the enum.".to_string()),
-            },
-            Self::IncompatibleTypes { lhs, rhs, .. } => ErrorProperties {
-                code: "E0105",
-                title: "Incompatible Types",
-                message: Some(format!("Types {} and {} are incompatible", lhs, rhs)),
-                help: Some("These types cannot be used together in this operation.".to_string()),
-            },
-            Self::ImmutableAssignment { name } => ErrorProperties {
-                code: "E0106",
-                title: "Immutable Assignment",
-                message: Some(format!("Cannot assign to immutable variable: {}", name)),
-                help: Some("Declare the variable as mutable using 'mut'.".to_string()),
-            },
-            Self::MissingReturn { expected } => ErrorProperties {
-                code: "E0107",
-                title: "Missing Return",
-                message: Some(format!("Missing return statement of type {}", expected)),
-                help: Some("Ensure the function returns a value on all paths.".to_string()),
-            },
-            Self::InvalidCall { reason } => ErrorProperties {
-                code: "E0108",
-                title: "Invalid Call",
-                message: Some(format!("Invalid call: {}", reason)),
-                help: Some("Ensure you are calling a function or closure.".to_string()),
-            },
-            Self::ArityMismatch { expected, found } => ErrorProperties {
-                code: "E0109",
-                title: "Arity Mismatch",
-                message: Some(format!(
-                    "Function expects {} arguments, but got {}",
-                    expected, found
-                )),
-                help: Some(
-                    "Check the function signature and provide the correct number of arguments."
-                        .to_string(),
-                ),
-            },
-            Self::Custom { message, .. } => ErrorProperties {
-                code: "E0110",
-                title: "Type Error",
-                message: Some(message.clone()),
-                help: None,
-            },
+            Self::UndefinedVariable { name } => {
+                ErrorProperties::simple("E0100", "Undefined Variable")
+                    .with_message(format!("Undefined variable: {}", name))
+                    .with_help("Ensure the variable is defined and in scope.")
+            }
+            Self::TypeMismatch { expected, found } => {
+                ErrorProperties::simple("E0101", "Type Mismatch")
+                    .with_message(format!("Expected type {}, but got {}", expected, found))
+                    .with_help("Ensure the types match the expected values.")
+            }
+            Self::UnknownType { name } => ErrorProperties::simple("E0102", "Unknown Type")
+                .with_message(format!("Unknown type: {}", name))
+                .with_help("Ensure the type is defined and imported correctly."),
+            Self::MissingField { field, type_name } => {
+                ErrorProperties::simple("E0103", "Missing Field")
+                    .with_message(format!("Missing field '{}' in type {}", field, type_name))
+                    .with_help("Ensure all required fields are initialized.")
+            }
+            Self::MissingVariant { variant, enum_name } => {
+                ErrorProperties::simple("E0104", "Missing Variant")
+                    .with_message(format!(
+                        "Missing variant '{}' in type {}",
+                        variant, enum_name
+                    ))
+                    .with_help("Ensure the variant is defined in the enum.")
+            }
+            Self::IncompatibleTypes { lhs, rhs, .. } => {
+                ErrorProperties::simple("E0105", "Incompatible Types")
+                    .with_message(format!("Types {} and {} are incompatible", lhs, rhs))
+                    .with_help("These types cannot be used together in this operation.")
+            }
+            Self::ImmutableAssignment { name } => {
+                ErrorProperties::simple("E0106", "Immutable Assignment")
+                    .with_message(format!("Cannot assign to immutable variable: {}", name))
+                    .with_help("Declare the variable as mutable using 'mut'.")
+            }
+            Self::MissingReturn { expected } => ErrorProperties::simple("E0107", "Missing Return")
+                .with_message(format!("Missing return statement of type {}", expected))
+                .with_help("Ensure the function returns a value on all paths."),
+            Self::InvalidCall { reason } => ErrorProperties::simple("E0108", "Invalid Call")
+                .with_message(format!("Invalid call: {}", reason))
+                .with_help("Ensure you are calling a function or closure."),
+            Self::ArityMismatch { expected, found } => {
+                ErrorProperties::simple("E0109", "Arity Mismatch")
+                    .with_message(format!(
+                        "Function expects {} arguments, but got {}",
+                        expected, found
+                    ))
+                    .with_help(
+                        "Check the function signature and provide the correct number of arguments.",
+                    )
+            }
+            Self::Custom { message, .. } => {
+                ErrorProperties::simple("E0110", "Type Error").with_message(message.clone())
+            }
             Self::ParseError {
                 code,
                 title,
                 message,
-            } => ErrorProperties {
-                code,
-                title,
-                message: Some(message.clone()),
-                help: None,
-            },
+            } => ErrorProperties::simple(code, title).with_message(message.clone()),
         }
     }
 }
@@ -200,23 +175,11 @@ impl TypeError {
 
 impl Reportable for TypeError {
     fn to_diagnostic(&self) -> Diagnostic {
-        let props = self.kind.properties();
-        let help = if let TypeErrorKind::Custom { help, .. } = &self.kind {
-            help.clone()
-        } else {
-            props.help
-        };
-
-        Diagnostic {
-            severity: Severity::Error,
-            code: Some(props.code),
-            title: props.title.to_string(),
-            message: props.message.unwrap_or_else(|| props.title.to_string()),
-            span: Some(self.span),
-            help,
-            notes: Vec::new(),
-            source_override: self.source_override.clone(),
+        let mut props = self.kind.properties();
+        if let TypeErrorKind::Custom { help, .. } = &self.kind {
+            props.help = help.clone();
         }
+        Diagnostic::from_props(props, Some(self.span), self.source_override.clone())
     }
 }
 

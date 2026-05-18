@@ -6,7 +6,7 @@
 //! These error messages are used by both the interpreter and compiled code
 //! to ensure consistent error reporting.
 
-use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable, Severity};
+use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable};
 use std::fmt;
 
 /// Runtime errors that can occur during program execution.
@@ -25,49 +25,23 @@ pub enum RuntimeError {
 impl RuntimeError {
     pub fn properties(&self) -> ErrorProperties {
         match self {
-            Self::DivisionByZero => ErrorProperties {
-                code: "E0400",
-                title: "Division by Zero",
-                message: Some("attempt to divide by zero".to_string()),
-                help: None,
-            },
-            Self::RemainderByZero => ErrorProperties {
-                code: "E0401",
-                title: "Remainder by Zero",
-                message: Some(
-                    "attempt to calculate the remainder with a divisor of zero".to_string(),
-                ),
-                help: None,
-            },
-            Self::Overflow => ErrorProperties {
-                code: "E0402",
-                title: "Integer Overflow",
-                message: Some("integer overflow".to_string()),
-                help: None,
-            },
-            Self::InvalidOperand { op, operand } => ErrorProperties {
-                code: "E0405",
-                title: "Invalid Operand",
-                message: Some(format!("Invalid operand for {}: {}", op, operand)),
-                help: None,
-            },
+            Self::DivisionByZero => ErrorProperties::simple("E0400", "Division by Zero")
+                .with_message("attempt to divide by zero"),
+            Self::RemainderByZero => ErrorProperties::simple("E0401", "Remainder by Zero")
+                .with_message("attempt to calculate the remainder with a divisor of zero"),
+            Self::Overflow => ErrorProperties::simple("E0402", "Integer Overflow")
+                .with_message("integer overflow"),
+            Self::InvalidOperand { op, operand } => {
+                ErrorProperties::simple("E0405", "Invalid Operand")
+                    .with_message(format!("Invalid operand for {}: {}", op, operand))
+            }
         }
     }
 }
 
 impl Reportable for RuntimeError {
     fn to_diagnostic(&self) -> Diagnostic {
-        let props = self.properties();
-        Diagnostic {
-            severity: Severity::Error,
-            code: Some(props.code),
-            title: props.title.to_string(),
-            message: props.message.unwrap_or_else(|| props.title.to_string()),
-            span: None, // Runtime errors don't have source spans
-            help: props.help,
-            notes: Vec::new(),
-            source_override: None,
-        }
+        Diagnostic::from_props(self.properties(), None, None)
     }
 }
 

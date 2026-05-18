@@ -7,7 +7,7 @@
 //! (Cranelift, LLVM, etc.). Errors are consolidated here for consistent
 //! formatting and reporting.
 
-use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable, Severity};
+use crate::error::diagnostic::{Diagnostic, ErrorProperties, Reportable};
 use std::fmt;
 
 /// Unified error type for all code generation backends.
@@ -41,63 +41,37 @@ pub enum CodegenError {
 impl CodegenError {
     pub fn properties(&self) -> ErrorProperties {
         match self {
-            CodegenError::TargetIsa(msg) => ErrorProperties {
-                code: "E0300",
-                title: "Target ISA Error",
-                message: Some(format!("Failed to create target ISA: {}", msg)),
-                help: None,
-            },
-            CodegenError::Module(msg) => ErrorProperties {
-                code: "E0301",
-                title: "Module Creation Error",
-                message: Some(format!("Failed to create module: {}", msg)),
-                help: None,
-            },
-            CodegenError::DeclareFunction { name, details } => ErrorProperties {
-                code: "E0302",
-                title: "Function Declaration Error",
-                message: Some(format!(
-                    "Failed to declare function '{}': {}",
-                    name, details
-                )),
-                help: None,
-            },
-            CodegenError::DefineFunction { name, details } => ErrorProperties {
-                code: "E0303",
-                title: "Function Definition Error",
-                message: Some(format!("Failed to define function '{}': {}", name, details)),
-                help: None,
-            },
-            CodegenError::Translation { name, details } => ErrorProperties {
-                code: "E0304",
-                title: "Translation Error",
-                message: Some(format!(
+            CodegenError::TargetIsa(msg) => ErrorProperties::simple("E0300", "Target ISA Error")
+                .with_message(format!("Failed to create target ISA: {}", msg)),
+            CodegenError::Module(msg) => ErrorProperties::simple("E0301", "Module Creation Error")
+                .with_message(format!("Failed to create module: {}", msg)),
+            CodegenError::DeclareFunction { name, details } => {
+                ErrorProperties::simple("E0302", "Function Declaration Error").with_message(
+                    format!("Failed to declare function '{}': {}", name, details),
+                )
+            }
+            CodegenError::DefineFunction { name, details } => {
+                ErrorProperties::simple("E0303", "Function Definition Error")
+                    .with_message(format!("Failed to define function '{}': {}", name, details))
+            }
+            CodegenError::Translation { name, details } => {
+                ErrorProperties::simple("E0304", "Translation Error").with_message(format!(
                     "Failed to translate function '{}': {}",
                     name, details
-                )),
-                help: None,
-            },
-            CodegenError::Emit(msg) => ErrorProperties {
-                code: "E0305",
-                title: "Emit Error",
-                message: Some(format!("Failed to emit object file: {}", msg)),
-                help: None,
-            },
-            CodegenError::NotSupported { backend } => ErrorProperties {
-                code: "E0306",
-                title: "Backend Not Supported",
-                message: Some(format!(
+                ))
+            }
+            CodegenError::Emit(msg) => ErrorProperties::simple("E0305", "Emit Error")
+                .with_message(format!("Failed to emit object file: {}", msg)),
+            CodegenError::NotSupported { backend } => {
+                ErrorProperties::simple("E0306", "Backend Not Supported").with_message(format!(
                     "{} backend is not yet available. Use the Cranelift backend (default) instead.",
                     backend
-                )),
-                help: None,
-            },
-            CodegenError::Internal(msg) => ErrorProperties {
-                code: "E0307",
-                title: "Internal Codegen Error",
-                message: Some(format!("Internal codegen error: {}", msg)),
-                help: None,
-            },
+                ))
+            }
+            CodegenError::Internal(msg) => {
+                ErrorProperties::simple("E0307", "Internal Codegen Error")
+                    .with_message(format!("Internal codegen error: {}", msg))
+            }
         }
     }
 
@@ -152,17 +126,7 @@ impl CodegenError {
 
 impl Reportable for CodegenError {
     fn to_diagnostic(&self) -> Diagnostic {
-        let props = self.properties();
-        Diagnostic {
-            severity: Severity::Error,
-            code: Some(props.code),
-            title: props.title.to_string(),
-            message: props.message.unwrap_or_else(|| props.title.to_string()),
-            span: None, // Codegen errors don't have source spans
-            help: props.help,
-            notes: Vec::new(),
-            source_override: None,
-        }
+        Diagnostic::from_props(self.properties(), None, None)
     }
 }
 
