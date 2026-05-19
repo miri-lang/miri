@@ -13,8 +13,6 @@ use super::super::utils::{
 use super::super::Parser;
 
 impl<'source> Parser<'source> {
-    /*
-     */
     pub(crate) fn relational_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.binary_expression_precedence(
             Self::range_expression,
@@ -24,8 +22,6 @@ impl<'source> Parser<'source> {
         )
     }
 
-    /*
-     */
     pub(crate) fn equality_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.binary_expression_precedence(
             Self::relational_expression,
@@ -35,8 +31,6 @@ impl<'source> Parser<'source> {
         )
     }
 
-    /*
-     */
     pub(crate) fn logical_and_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.binary_expression_precedence(
             Self::equality_expression,
@@ -46,8 +40,6 @@ impl<'source> Parser<'source> {
         )
     }
 
-    /*
-     */
     pub(crate) fn logical_or_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.binary_expression_precedence(
             Self::logical_and_expression,
@@ -57,8 +49,6 @@ impl<'source> Parser<'source> {
         )
     }
 
-    /*
-     */
     pub(crate) fn null_coalesce_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.binary_expression_precedence(
             Self::logical_or_expression,
@@ -68,8 +58,6 @@ impl<'source> Parser<'source> {
         )
     }
 
-    /*
-     */
     pub(crate) fn additive_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.binary_expression_precedence(
             Self::multiplicative_expression,
@@ -79,8 +67,6 @@ impl<'source> Parser<'source> {
         )
     }
 
-    /*
-     */
     pub(crate) fn multiplicative_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.binary_expression_precedence(
             Self::unary_expression,
@@ -104,19 +90,14 @@ impl<'source> Parser<'source> {
     ) -> Result<Expression, SyntaxError>
     where
         F: FnMut(&mut Self) -> Result<Expression, SyntaxError>,
-        G: FnMut(&mut Self) -> Result<BinaryOp, Result<Expression, SyntaxError>>,
+        G: FnMut(&mut Self) -> Result<BinaryOp, SyntaxError>,
         E: FnMut(Expression, BinaryOp, Expression, Span) -> Expression,
     {
         let mut left = create_branch(self)?;
 
         while self.match_lookahead_type(op_predicate) {
-            let op = match eat_op(self) {
-                Ok(value) => value,
-                Err(value) => return value,
-            };
-
+            let op = eat_op(self)?;
             let right = create_branch(self)?;
-
             let span = Span::new(left.span.start, right.span.end);
             left = create_expression(left, op, right, span);
         }

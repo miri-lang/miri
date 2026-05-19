@@ -9,12 +9,10 @@ use crate::lexer::Token;
 use super::super::Parser;
 
 impl<'source> Parser<'source> {
-    /*
-     */
     pub(crate) fn range_expression(&mut self) -> Result<Expression, SyntaxError> {
         let start = self.additive_expression()?;
 
-        match &self._lookahead {
+        match &self.lookahead {
             Some((Token::Range, _)) => {
                 self.eat_token(&Token::Range)?;
                 let end = self.additive_expression()?;

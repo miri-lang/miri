@@ -8,21 +8,19 @@ use crate::lexer::Token;
 use super::super::Parser;
 
 impl<'source> Parser<'source> {
-    /*
-     */
     pub(crate) fn pattern(&mut self) -> Result<Pattern, SyntaxError> {
-        match &self._lookahead {
+        match &self.lookahead {
             Some((Token::Default, _)) => {
                 self.eat_token(&Token::Default)?;
                 Ok(Pattern::Default)
             }
             Some((Token::Identifier, _)) => {
-                let name = self.parse_simple_identifier()?;
+                let name = self.simple_identifier()?;
                 let mut pattern = Pattern::Identifier(name);
 
                 while self.match_lookahead_type(|t| t == &Token::Dot) {
                     self.eat_token(&Token::Dot)?;
-                    let member = self.parse_simple_identifier()?;
+                    let member = self.simple_identifier()?;
                     pattern = Pattern::Member(Box::new(pattern), member);
                 }
 
@@ -52,8 +50,6 @@ impl<'source> Parser<'source> {
         }
     }
 
-    /*
-     */
     pub(crate) fn tuple_pattern(&mut self) -> Result<Pattern, SyntaxError> {
         self.eat_token(&Token::LParen)?;
         let mut patterns = Vec::new();

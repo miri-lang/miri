@@ -9,8 +9,6 @@ use crate::lexer::Token;
 use super::super::Parser;
 
 impl<'source> Parser<'source> {
-    /*
-     */
     pub(crate) fn list_literal_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.eat_token(&Token::LBracket)?;
 
@@ -28,8 +26,6 @@ impl<'source> Parser<'source> {
         Ok(ast::array(elements, Box::new(size)))
     }
 
-    /*
-     */
     pub(crate) fn brace_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.eat_token(&Token::LBrace)?;
 
@@ -76,10 +72,8 @@ impl<'source> Parser<'source> {
         }
     }
 
-    /*
-     */
     pub(crate) fn literal_expression(&mut self) -> Result<Expression, SyntaxError> {
-        let span = if let Some((_, span)) = &self._lookahead {
+        let span = if let Some((_, span)) = &self.lookahead {
             *span
         } else {
             return Err(self.error_eof());

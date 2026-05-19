@@ -10,8 +10,6 @@ use crate::lexer::Token;
 use super::super::Parser;
 
 impl<'source> Parser<'source> {
-    /*
-     */
     pub(crate) fn call_member_expression(&mut self) -> Result<Expression, SyntaxError> {
         let mut expression = self.primary_expression()?;
 
@@ -20,111 +18,123 @@ impl<'source> Parser<'source> {
                 break;
             }
 
-            expression = match &self._lookahead {
-                Some((Token::Dot, _)) => {
-                    self.eat_token(&Token::Dot)?;
-                    let property = if self.match_lookahead_type(|t| matches!(t, Token::Int)) {
-                        self.literal_expression()?
-                    } else {
-                        self.identifier()?
-                    };
-                    let span = Span::new(expression.span.start, property.span.end);
-                    ast::member_with_span(expression, property, span)
-                }
-                Some((Token::LBracket, _)) => {
-                    self.eat_token(&Token::LBracket)?;
-                    let index = self.expression()?;
-                    let (_, rbracket_span) = self.eat_token(&Token::RBracket)?;
-                    let span = Span::new(expression.span.start, rbracket_span.end);
-                    ast::index_with_span(expression, index, span)
-                }
-                Some((Token::LParen, _)) => {
-                    let (args, rparen_span) = self.arguments()?;
-                    let span = Span::new(expression.span.start, rparen_span.end);
-                    ast::call_with_span(expression, args, span)
-                }
-                Some((Token::LessThan, _)) => {
-                    // Heuristic: If there is whitespace between the expression and '<', it's a comparison.
-                    // If there is no whitespace, it's a generic argument list.
-                    // e.g. `a < b` (comparison), `foo<T>` (generic)
-                    let prev_end = expression.span.end;
-                    let current_start = if let Some((_, ref span)) = self._lookahead {
-                        span.start
-                    } else {
-                        break;
-                    };
-
-                    if current_start > prev_end {
-                        break;
-                    }
-
-                    let args = self.multiple_element_type_expressions(
-                        "Generic arguments",
-                        &Token::LessThan,
-                        &Token::GreaterThan,
-                    )?;
-                    let end = args
-                        .last()
-                        .map(|a| a.span.end)
-                        .unwrap_or(expression.span.end);
-                    let span = Span::new(expression.span.start, end);
-                    IdNode::new(
-                        0,
-                        ExpressionKind::TypeDeclaration(
-                            Box::new(expression),
-                            Some(args),
-                            TypeDeclarationKind::None,
-                            None,
-                        ),
-                        span,
-                    )
-                }
-                Some((Token::Float, _)) => {
-                    let span = self.current_token_span();
-                    let source = self.source;
-                    let float_text = &source[span.start..span.end];
-
-                    if let Some(int_part) = float_text.strip_prefix('.') {
-                        // This might be a tuple access like `t.0` which tokenizes as Identifier `t` then Float `.0`.
-                        // We need to treat `.0` as a dot followed by an integer.
-
-                        // Verify the rest is a valid integer (only digits and underscores).
-                        if int_part.chars().all(|c| c.is_ascii_digit() || c == '_') {
-                            // Valid tuple access pattern.
-                            self.eat_token(&Token::Float)?;
-
-                            // Parse the integer value.
-                            let val_str = int_part.replace("_", "");
-                            // We use i128 to be safe, though tuple indices are usually small.
-                            let val = val_str.parse::<i128>().map_err(|_| {
-                                self.error_unexpected_token("valid integer", "number too large")
-                            })?;
-
-                            // Create the property node.
-                            // The span of the property is the float span sans the leading dot.
-                            let prop_span = Span::new(span.start + 1, span.end);
-                            let property = ast::literal_with_span(ast::int_literal(val), prop_span);
-
-                            let span = Span::new(expression.span.start, property.span.end);
-                            ast::member_with_span(expression, property, span)
-                        } else {
-                            // Contains exponent or other float chars, treat as boundary stop (not member access).
-                            break;
-                        }
-                    } else {
-                        // Float doesn't start with dot (e.g. `1.0`), not a member access here.
-                        break;
-                    }
-                }
-                _ => break,
+            let head = match self.lookahead.as_ref().map(|(t, _)| t.clone()) {
+                Some(token) => token,
+                None => break,
             };
+
+            let next = match head {
+                Token::Dot => Some(self.member_access(expression.clone())?),
+                Token::LBracket => Some(self.index_access(expression.clone())?),
+                Token::LParen => Some(self.call_access(expression.clone())?),
+                Token::LessThan => self.generic_arg_access(expression.clone())?,
+                Token::Float => self.tuple_field_access(expression.clone())?,
+                _ => None,
+            };
+
+            match next {
+                Some(updated) => expression = updated,
+                None => break,
+            }
         }
 
         Ok(expression)
     }
 
-    /*
-     */
+    fn member_access(&mut self, expression: Expression) -> Result<Expression, SyntaxError> {
+        self.eat_token(&Token::Dot)?;
+        let property = if self.match_lookahead_type(|t| matches!(t, Token::Int)) {
+            self.literal_expression()?
+        } else {
+            self.identifier()?
+        };
+        let span = Span::new(expression.span.start, property.span.end);
+        Ok(ast::member_with_span(expression, property, span))
+    }
+
+    fn index_access(&mut self, expression: Expression) -> Result<Expression, SyntaxError> {
+        self.eat_token(&Token::LBracket)?;
+        let index = self.expression()?;
+        let (_, rbracket_span) = self.eat_token(&Token::RBracket)?;
+        let span = Span::new(expression.span.start, rbracket_span.end);
+        Ok(ast::index_with_span(expression, index, span))
+    }
+
+    fn call_access(&mut self, expression: Expression) -> Result<Expression, SyntaxError> {
+        let (args, rparen_span) = self.arguments()?;
+        let span = Span::new(expression.span.start, rparen_span.end);
+        Ok(ast::call_with_span(expression, args, span))
+    }
+
+    /// `foo<T>` vs `a < b`: whitespace between the expression and `<` means
+    /// comparison, no whitespace means a generic argument list.
+    fn generic_arg_access(
+        &mut self,
+        expression: Expression,
+    ) -> Result<Option<Expression>, SyntaxError> {
+        let prev_end = expression.span.end;
+        let Some((_, ref span)) = self.lookahead else {
+            return Ok(None);
+        };
+        if span.start > prev_end {
+            return Ok(None);
+        }
+
+        let args = self.multiple_element_type_expressions(
+            "Generic arguments",
+            &Token::LessThan,
+            &Token::GreaterThan,
+        )?;
+        let end = args
+            .last()
+            .map(|a| a.span.end)
+            .unwrap_or(expression.span.end);
+        let span = Span::new(expression.span.start, end);
+        Ok(Some(IdNode::new(
+            0,
+            ExpressionKind::TypeDeclaration(
+                Box::new(expression),
+                Some(args),
+                TypeDeclarationKind::None,
+                None,
+            ),
+            span,
+        )))
+    }
+
+    /// Tuple access `t.0` tokenizes as `Identifier(t)` then `Float(.0)`.
+    /// Floats starting with `.` followed by an integer are rewritten as
+    /// member-access with an integer property.
+    fn tuple_field_access(
+        &mut self,
+        expression: Expression,
+    ) -> Result<Option<Expression>, SyntaxError> {
+        let span = self.current_token_span();
+        let float_text = &self.source[span.start..span.end];
+
+        let Some(int_part) = float_text.strip_prefix('.') else {
+            return Ok(None);
+        };
+        if !int_part.chars().all(|c| c.is_ascii_digit() || c == '_') {
+            return Ok(None);
+        }
+
+        self.eat_token(&Token::Float)?;
+
+        let val_str = int_part.replace("_", "");
+        let val = val_str
+            .parse::<i128>()
+            .map_err(|_| self.error_unexpected_token("valid integer", "number too large"))?;
+
+        let prop_span = Span::new(span.start + 1, span.end);
+        let property = ast::literal_with_span(ast::int_literal(val), prop_span);
+
+        let total_span = Span::new(expression.span.start, property.span.end);
+        Ok(Some(ast::member_with_span(
+            expression, property, total_span,
+        )))
+    }
+
     pub(crate) fn arguments(&mut self) -> Result<(Vec<Expression>, Span), SyntaxError> {
         self.eat_token(&Token::LParen)?;
 
@@ -138,8 +148,6 @@ impl<'source> Parser<'source> {
         Ok((argument_list, span))
     }
 
-    /*
-     */
     pub(crate) fn argument_list(&mut self) -> Result<Vec<Expression>, SyntaxError> {
         let mut args = Vec::new();
 
