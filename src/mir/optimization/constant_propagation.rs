@@ -18,121 +18,128 @@ pub struct ConstantPropagation;
 
 impl OptimizationPass for ConstantPropagation {
     fn run(&mut self, body: &mut Body) -> bool {
+        let known_consts = collect_constants(body);
         let mut changed = false;
-        let mut known_consts: HashMap<Local, Constant> = HashMap::new();
-
-        // 1. Collect constants
-        for block in &body.basic_blocks {
-            for stmt in &block.statements {
-                if let StatementKind::Assign(place, Rvalue::Use(Operand::Constant(c))) = &stmt.kind
-                {
-                    if place.projection.is_empty() {
-                        known_consts.insert(place.local, *c.clone());
-                    }
-                }
-            }
-        }
-
-        // 2. Propagate and Fold
         for block in &mut body.basic_blocks {
             for stmt in &mut block.statements {
                 if let StatementKind::Assign(_, rvalue) = &mut stmt.kind {
-                    match rvalue {
-                        Rvalue::Use(op) => {
-                            if let Operand::Copy(place) | Operand::Move(place) = op {
-                                if place.projection.is_empty() {
-                                    if let Some(c) = known_consts.get(&place.local) {
-                                        *op = Operand::Constant(Box::new(c.clone()));
-                                        changed = true;
-                                    }
-                                }
-                            }
-                        }
-                        Rvalue::BinaryOp(bin_op, lhs, rhs) => {
-                            // Try to resolve operands
-                            resolve_operand(lhs, &known_consts);
-                            resolve_operand(rhs, &known_consts);
-
-                            // Fold if both are constants
-                            // lhs and rhs are &mut Operand
-                            if let (Operand::Constant(l), Operand::Constant(r)) = (&**lhs, &**rhs) {
-                                if let Some(res) = fold_binary(*bin_op, l, r) {
-                                    *rvalue = Rvalue::Use(Operand::Constant(Box::new(res)));
-                                    changed = true;
-                                }
-                            }
-                        }
-                        Rvalue::UnaryOp(un_op, operand) => {
-                            resolve_operand(operand, &known_consts);
-                            if let Operand::Constant(c) = &**operand {
-                                if let Some(res) = fold_unary(*un_op, c) {
-                                    *rvalue = Rvalue::Use(Operand::Constant(Box::new(res)));
-                                    changed = true;
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
+                    changed |= propagate_in_rvalue(rvalue, &known_consts);
                 }
             }
-
-            // 3. Fold Terminators
             if let Some(term) = &mut block.terminator {
-                if let TerminatorKind::SwitchInt {
-                    discr,
-                    targets,
-                    otherwise,
-                } = &mut term.kind
-                {
-                    resolve_operand(discr, &known_consts);
-                    if let Operand::Constant(c) = discr {
-                        if let Literal::Integer(val) = &c.literal {
-                            let int_val = match val {
-                                IntegerLiteral::I8(v) => *v as i128,
-                                IntegerLiteral::I16(v) => *v as i128,
-                                IntegerLiteral::I32(v) => *v as i128,
-                                IntegerLiteral::I64(v) => *v as i128,
-                                IntegerLiteral::I128(v) => *v,
-                                IntegerLiteral::U8(v) => *v as i128,
-                                IntegerLiteral::U16(v) => *v as i128,
-                                IntegerLiteral::U32(v) => *v as i128,
-                                IntegerLiteral::U64(v) => *v as i128,
-                                IntegerLiteral::U128(v) => *v as i128,
-                            };
-
-                            let mut target_bb = *otherwise;
-                            for (v, bb) in targets {
-                                if v.value() == int_val as u128 {
-                                    target_bb = *bb;
-                                    break;
-                                }
-                            }
-
-                            term.kind = TerminatorKind::Goto { target: target_bb };
-                            changed = true;
-                        } else if let Literal::Boolean(b) = &c.literal {
-                            // SwitchInt usage for boolean: 0=false, 1=true usually
-                            let val = if *b { 1u128 } else { 0u128 };
-                            let mut target_bb = *otherwise;
-                            for (v, bb) in targets {
-                                if v.value() == val {
-                                    target_bb = *bb;
-                                    break;
-                                }
-                            }
-                            term.kind = TerminatorKind::Goto { target: target_bb };
-                            changed = true;
-                        }
-                    }
-                }
+                changed |= fold_terminator(term, &known_consts);
             }
         }
-
         changed
     }
 
     fn name(&self) -> &'static str {
         "Constant Propagation"
+    }
+}
+
+fn collect_constants(body: &Body) -> HashMap<Local, Constant> {
+    let mut known_consts = HashMap::new();
+    for block in &body.basic_blocks {
+        for stmt in &block.statements {
+            if let StatementKind::Assign(place, Rvalue::Use(Operand::Constant(c))) = &stmt.kind {
+                if place.projection.is_empty() {
+                    known_consts.insert(place.local, *c.clone());
+                }
+            }
+        }
+    }
+    known_consts
+}
+
+fn propagate_in_rvalue(rvalue: &mut Rvalue, known_consts: &HashMap<Local, Constant>) -> bool {
+    match rvalue {
+        Rvalue::Use(op) => {
+            if let Operand::Copy(place) | Operand::Move(place) = op {
+                if place.projection.is_empty() {
+                    if let Some(c) = known_consts.get(&place.local) {
+                        *op = Operand::Constant(Box::new(c.clone()));
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+        Rvalue::BinaryOp(bin_op, lhs, rhs) => {
+            resolve_operand(lhs, known_consts);
+            resolve_operand(rhs, known_consts);
+            if let (Operand::Constant(l), Operand::Constant(r)) = (&**lhs, &**rhs) {
+                if let Some(res) = fold_binary(*bin_op, l, r) {
+                    *rvalue = Rvalue::Use(Operand::Constant(Box::new(res)));
+                    return true;
+                }
+            }
+            false
+        }
+        Rvalue::UnaryOp(un_op, operand) => {
+            resolve_operand(operand, known_consts);
+            if let Operand::Constant(c) = &**operand {
+                if let Some(res) = fold_unary(*un_op, c) {
+                    *rvalue = Rvalue::Use(Operand::Constant(Box::new(res)));
+                    return true;
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+fn fold_terminator(
+    term: &mut crate::mir::Terminator,
+    known_consts: &HashMap<Local, Constant>,
+) -> bool {
+    let TerminatorKind::SwitchInt {
+        discr,
+        targets,
+        otherwise,
+    } = &mut term.kind
+    else {
+        return false;
+    };
+    resolve_operand(discr, known_consts);
+    let Operand::Constant(c) = discr else {
+        return false;
+    };
+    let val = match &c.literal {
+        Literal::Integer(val) => integer_literal_as_u128(val),
+        Literal::Boolean(b) => {
+            if *b {
+                1u128
+            } else {
+                0u128
+            }
+        }
+        _ => return false,
+    };
+    let mut target_bb = *otherwise;
+    for (v, bb) in targets.iter() {
+        if v.value() == val {
+            target_bb = *bb;
+            break;
+        }
+    }
+    term.kind = TerminatorKind::Goto { target: target_bb };
+    true
+}
+
+fn integer_literal_as_u128(val: &IntegerLiteral) -> u128 {
+    match val {
+        IntegerLiteral::I8(v) => *v as i128 as u128,
+        IntegerLiteral::I16(v) => *v as i128 as u128,
+        IntegerLiteral::I32(v) => *v as i128 as u128,
+        IntegerLiteral::I64(v) => *v as i128 as u128,
+        IntegerLiteral::I128(v) => *v as u128,
+        IntegerLiteral::U8(v) => *v as u128,
+        IntegerLiteral::U16(v) => *v as u128,
+        IntegerLiteral::U32(v) => *v as u128,
+        IntegerLiteral::U64(v) => *v as u128,
+        IntegerLiteral::U128(v) => *v,
     }
 }
 
@@ -155,100 +162,61 @@ fn resolve_operand(op: &mut Operand, constants: &HashMap<Local, Constant>) {
 
 fn fold_binary(op: crate::mir::BinOp, lhs: &Constant, rhs: &Constant) -> Option<Constant> {
     use crate::mir::BinOp;
-
-    // Extract values. Only handling integers for now.
     let l_val = get_int(lhs)?;
     let r_val = get_int(rhs)?;
+    let res = compute_binary_int(op, l_val, r_val)?;
 
-    let res = match op {
-        BinOp::Add => l_val.wrapping_add(r_val),
-        BinOp::Sub => l_val.wrapping_sub(r_val),
-        BinOp::Mul => l_val.wrapping_mul(r_val),
-        BinOp::Div => {
-            if r_val == 0 {
-                return None;
-            } else {
-                l_val.wrapping_div(r_val)
-            }
-        }
-        BinOp::Rem => {
-            if r_val == 0 {
-                return None;
-            } else {
-                l_val.wrapping_rem(r_val)
-            }
-        }
-        BinOp::BitAnd => l_val & r_val,
-        BinOp::BitOr => l_val | r_val,
-        BinOp::BitXor => l_val ^ r_val,
-        BinOp::Shl => l_val.wrapping_shl(r_val as u32),
-        BinOp::Shr => l_val.wrapping_shr(r_val as u32),
-        BinOp::Eq => {
-            if l_val == r_val {
-                1
-            } else {
-                0
-            }
-        }
-        BinOp::Ne => {
-            if l_val != r_val {
-                1
-            } else {
-                0
-            }
-        }
-        BinOp::Lt => {
-            if l_val < r_val {
-                1
-            } else {
-                0
-            }
-        }
-        BinOp::Le => {
-            if l_val <= r_val {
-                1
-            } else {
-                0
-            }
-        }
-        BinOp::Gt => {
-            if l_val > r_val {
-                1
-            } else {
-                0
-            }
-        }
-        BinOp::Ge => {
-            if l_val >= r_val {
-                1
-            } else {
-                0
-            }
-        }
-        BinOp::Offset => return None, // Pointer arithmetic
-    };
-
-    let ty = if matches!(
+    let is_comparison = matches!(
         op,
         BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
-    ) {
+    );
+    let ty = if is_comparison {
         crate::ast::types::Type::new(TypeKind::Boolean, lhs.span)
     } else {
         lhs.ty.clone()
     };
-
+    let literal = if is_comparison {
+        Literal::Boolean(res != 0)
+    } else {
+        reconstruct_integer_literal(&lhs.literal, res)
+    };
     Some(Constant {
         span: lhs.span,
         ty,
-        literal: if matches!(
-            op,
-            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
-        ) {
-            Literal::Boolean(res != 0)
-        } else {
-            // Reconstruct a typed integer literal preserving the LHS type
-            reconstruct_integer_literal(&lhs.literal, res)
-        },
+        literal,
+    })
+}
+
+fn compute_binary_int(op: crate::mir::BinOp, l: i128, r: i128) -> Option<i128> {
+    use crate::mir::BinOp;
+    Some(match op {
+        BinOp::Add => l.wrapping_add(r),
+        BinOp::Sub => l.wrapping_sub(r),
+        BinOp::Mul => l.wrapping_mul(r),
+        BinOp::Div => {
+            if r == 0 {
+                return None;
+            }
+            l.wrapping_div(r)
+        }
+        BinOp::Rem => {
+            if r == 0 {
+                return None;
+            }
+            l.wrapping_rem(r)
+        }
+        BinOp::BitAnd => l & r,
+        BinOp::BitOr => l | r,
+        BinOp::BitXor => l ^ r,
+        BinOp::Shl => l.wrapping_shl(r as u32),
+        BinOp::Shr => l.wrapping_shr(r as u32),
+        BinOp::Eq => i128::from(l == r),
+        BinOp::Ne => i128::from(l != r),
+        BinOp::Lt => i128::from(l < r),
+        BinOp::Le => i128::from(l <= r),
+        BinOp::Gt => i128::from(l > r),
+        BinOp::Ge => i128::from(l >= r),
+        BinOp::Offset => return None,
     })
 }
 

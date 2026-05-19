@@ -40,30 +40,36 @@ impl OptimizationPass for SimplifyCfg {
 }
 
 fn thread_jumps(body: &mut Body) -> bool {
-    let mut changed = false;
-    // Find blocks that are just 'Goto(X)'.
-    // Map such blocks to X.
-    let mut replacements: HashMap<BasicBlock, BasicBlock> = HashMap::new();
-
-    for (i, block) in body.basic_blocks.iter().enumerate() {
-        if block.statements.is_empty() {
-            if let Some(term) = &block.terminator {
-                if let TerminatorKind::Goto { target } = term.kind {
-                    if target != BasicBlock(i) {
-                        // Avoid self-loop infinite threading
-                        replacements.insert(BasicBlock(i), target);
-                    }
-                }
-            }
-        }
-    }
-
+    let mut replacements = collect_goto_only_blocks(body);
     if replacements.is_empty() {
         return false;
     }
+    resolve_replacement_chains(&mut replacements);
+    apply_block_replacements(body, &replacements)
+}
 
-    // Resolve chains: A -> B, B -> C  =>  A -> C
-    // Iteratively resolve until no changes occur, avoiding the need to clone.
+/// Identify blocks that are empty and end with `Goto(target)` — they can be
+/// short-circuited away. Self-loops are skipped to avoid infinite threading.
+fn collect_goto_only_blocks(body: &Body) -> HashMap<BasicBlock, BasicBlock> {
+    let mut replacements = HashMap::new();
+    for (i, block) in body.basic_blocks.iter().enumerate() {
+        if !block.statements.is_empty() {
+            continue;
+        }
+        let Some(term) = &block.terminator else {
+            continue;
+        };
+        if let TerminatorKind::Goto { target } = term.kind {
+            if target != BasicBlock(i) {
+                replacements.insert(BasicBlock(i), target);
+            }
+        }
+    }
+    replacements
+}
+
+/// Iteratively resolve `A -> B, B -> C` chains into `A -> C`.
+fn resolve_replacement_chains(replacements: &mut HashMap<BasicBlock, BasicBlock>) {
     loop {
         let mut progress = false;
         for key in replacements.keys().copied().collect::<Vec<_>>() {
@@ -79,46 +85,51 @@ fn thread_jumps(body: &mut Body) -> bool {
             break;
         }
     }
+}
 
-    // Apply replacements to all terminators
+fn apply_block_replacements(
+    body: &mut Body,
+    replacements: &HashMap<BasicBlock, BasicBlock>,
+) -> bool {
+    let mut changed = false;
     for block in &mut body.basic_blocks {
-        if let Some(terminator) = &mut block.terminator {
-            match &mut terminator.kind {
-                TerminatorKind::Goto { target } => {
+        let Some(terminator) = &mut block.terminator else {
+            continue;
+        };
+        match &mut terminator.kind {
+            TerminatorKind::Goto { target } => {
+                if let Some(new_target) = replacements.get(target) {
+                    *target = *new_target;
+                    changed = true;
+                }
+            }
+            TerminatorKind::SwitchInt {
+                targets, otherwise, ..
+            } => {
+                for (_, target) in targets {
                     if let Some(new_target) = replacements.get(target) {
                         *target = *new_target;
                         changed = true;
                     }
                 }
-                TerminatorKind::SwitchInt {
-                    targets, otherwise, ..
-                } => {
-                    for (_, target) in targets {
-                        if let Some(new_target) = replacements.get(target) {
-                            *target = *new_target;
-                            changed = true;
-                        }
-                    }
-                    if let Some(new_target) = replacements.get(otherwise) {
-                        *otherwise = *new_target;
+                if let Some(new_target) = replacements.get(otherwise) {
+                    *otherwise = *new_target;
+                    changed = true;
+                }
+            }
+            TerminatorKind::Call { target, .. }
+            | TerminatorKind::GpuLaunch { target, .. }
+            | TerminatorKind::VirtualCall { target, .. } => {
+                if let Some(t) = target {
+                    if let Some(new_target) = replacements.get(t) {
+                        *t = *new_target;
                         changed = true;
                     }
                 }
-                TerminatorKind::Call { target, .. }
-                | TerminatorKind::GpuLaunch { target, .. }
-                | TerminatorKind::VirtualCall { target, .. } => {
-                    if let Some(t) = target {
-                        if let Some(new_target) = replacements.get(t) {
-                            *t = *new_target;
-                            changed = true;
-                        }
-                    }
-                }
-                _ => {}
             }
+            _ => {}
         }
     }
-
     changed
 }
 

@@ -293,3 +293,18 @@ pub mod rt {
         NANOTIME,
     ];
 }
+
+use crate::ast::types::BuiltinCollectionKind;
+
+/// Returns the Copy-on-Write runtime function for a built-in collection kind,
+/// or `None` for kinds that do not have a CoW intrinsic (`Array`).
+///
+/// Centralized so dispatch logic does not branch on string class names.
+pub fn cow_fn(kind: BuiltinCollectionKind) -> Option<&'static str> {
+    match kind {
+        BuiltinCollectionKind::List => Some(rt::LIST_COW),
+        BuiltinCollectionKind::Set => Some(rt::SET_COW),
+        BuiltinCollectionKind::Map => Some(rt::MAP_COW),
+        BuiltinCollectionKind::Array => None,
+    }
+}

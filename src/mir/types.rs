@@ -27,7 +27,6 @@ use std::collections::HashSet;
 /// traverse the type tree without touching the AST.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MirType {
-    // ── Primitive / auto-copy types ──────────────────────────────────────────
     Int,
     I8,
     I16,
@@ -48,13 +47,11 @@ pub enum MirType {
     RawPtr,
     Error,
 
-    // ── String ───────────────────────────────────────────────────────────────
     /// Heap-allocated via `Box`, but **not** RC-managed (no `alloc_with_rc`
     /// layout).  Included as its own variant so callers can distinguish it
     /// from user-defined types without string matching.
     String,
 
-    // ── RC-managed collection types ──────────────────────────────────────────
     /// Dynamic list `[T]`.  Element type resolved from the AST type expression.
     List(Box<MirType>),
     /// Fixed-size array `[T; N]`.  Element type resolved; size is stored for
@@ -73,7 +70,6 @@ pub enum MirType {
     /// Async future `future<T>`.  Inner type resolved.
     Future(Box<MirType>),
 
-    // ── User-defined / opaque types ──────────────────────────────────────────
     /// A named user-defined type (struct, class, or enum).
     /// Generic arguments are not tracked — only the base name is needed for
     /// RC management decisions.
@@ -142,47 +138,36 @@ impl MirType {
             TypeKind::Generic(_, _, _) => MirType::Generic,
             // Closures are heap-allocated and RC-managed.
             TypeKind::Function(_) => MirType::Function,
-            TypeKind::Custom(name, args) => {
-                // After normalization, builtin collections are Custom("List"/"Array"/...).
-                // Map them back to the corresponding MirType collection variant, but only
-                // when args is Some (instantiated). When args is None, the name appears as
-                // an unresolved self-reference inside a stdlib class body — keep it as
-                // MirType::Custom so the managed-type check excludes it correctly.
-                match (BuiltinCollectionKind::from_name(name), args) {
-                    (Some(BuiltinCollectionKind::List), Some(args)) => {
-                        let elem = args
-                            .first()
-                            .map(Self::from_expr)
-                            .unwrap_or(MirType::Unknown);
-                        MirType::List(Box::new(elem))
-                    }
-                    (Some(BuiltinCollectionKind::Array), Some(args)) => {
-                        let elem = args
-                            .first()
-                            .map(Self::from_expr)
-                            .unwrap_or(MirType::Unknown);
-                        MirType::Array(Box::new(elem))
-                    }
-                    (Some(BuiltinCollectionKind::Map), Some(args)) => {
-                        let k = args
-                            .first()
-                            .map(Self::from_expr)
-                            .unwrap_or(MirType::Unknown);
-                        let v = args.get(1).map(Self::from_expr).unwrap_or(MirType::Unknown);
-                        MirType::Map(Box::new(k), Box::new(v))
-                    }
-                    (Some(BuiltinCollectionKind::Set), Some(args)) => {
-                        let elem = args
-                            .first()
-                            .map(Self::from_expr)
-                            .unwrap_or(MirType::Unknown);
-                        MirType::Set(Box::new(elem))
-                    }
-                    _ => MirType::Custom(name.clone()),
-                }
-            }
+            TypeKind::Custom(name, args) => Self::from_custom(name, args.as_deref()),
             // Meta and linear types are not involved in RC management.
             TypeKind::Meta(_) | TypeKind::Linear(_) => MirType::Unknown,
+        }
+    }
+
+    /// Map a `Custom(name, args)` back to a MirType collection variant if the
+    /// name canonicalizes to a built-in collection and the args are instantiated.
+    /// When `args` is `None`, the name appears as an unresolved self-reference
+    /// inside a stdlib class body — keep it as `MirType::Custom` so the managed-
+    /// type check excludes it correctly.
+    fn from_custom(name: &str, args: Option<&[crate::ast::expression::Expression]>) -> Self {
+        let Some(builtin) = BuiltinCollectionKind::from_name(name) else {
+            return MirType::Custom(name.to_string());
+        };
+        let Some(args) = args else {
+            return MirType::Custom(name.to_string());
+        };
+        let arg_or_unknown = |idx: usize| {
+            args.get(idx)
+                .map(Self::from_expr)
+                .unwrap_or(MirType::Unknown)
+        };
+        match builtin {
+            BuiltinCollectionKind::List => MirType::List(Box::new(arg_or_unknown(0))),
+            BuiltinCollectionKind::Array => MirType::Array(Box::new(arg_or_unknown(0))),
+            BuiltinCollectionKind::Map => {
+                MirType::Map(Box::new(arg_or_unknown(0)), Box::new(arg_or_unknown(1)))
+            }
+            BuiltinCollectionKind::Set => MirType::Set(Box::new(arg_or_unknown(0))),
         }
     }
 

@@ -154,72 +154,95 @@ impl SSABuilder {
     }
 
     fn rename_variables(&mut self, body: &mut Body, block: BasicBlock) {
-        let (basic_blocks, local_decls) = (&mut body.basic_blocks, &mut body.local_decls);
-
-        // Track which stack entries we added per original local, to pop them later.
-        // Sized for original locals only; new SSA locals always map back to an original.
         let num_originals = self.version_stack.len();
         let mut pushed_counts: Vec<usize> = vec![0; num_originals];
 
-        // 1. Rename Phis (definitions part) and Statements
+        self.rename_block_statements(body, block, &mut pushed_counts);
+        self.rename_block_terminator(body, block, &mut pushed_counts);
+        self.fill_phi_args_in_successors(body, block);
+
+        let children = self
+            .dom_tree
+            .children
+            .get(&block)
+            .cloned()
+            .unwrap_or_default();
+        for child in children {
+            self.rename_variables(body, child);
+        }
+
+        for (idx, &count) in pushed_counts.iter().enumerate() {
+            if count > 0 {
+                let stack = &mut self.version_stack[idx];
+                stack.truncate(stack.len().saturating_sub(count));
+            }
+        }
+    }
+
+    fn rename_block_statements(
+        &mut self,
+        body: &mut Body,
+        block: BasicBlock,
+        pushed_counts: &mut [usize],
+    ) {
+        let (basic_blocks, local_decls) = (&mut body.basic_blocks, &mut body.local_decls);
         let stmt_count = basic_blocks[block.0].statements.len();
         for i in 0..stmt_count {
             if self.is_phi(basic_blocks, block, i) {
-                // LHS is def
                 let s = &basic_blocks[block.0].statements[i];
                 if let StatementKind::Assign(place, _) = &s.kind {
                     let local = place.local;
                     let new_local = self.new_version(local_decls, local);
                     pushed_counts[local.0] += 1;
-
-                    // Mutate
                     if let StatementKind::Assign(p, _) =
                         &mut basic_blocks[block.0].statements[i].kind
                     {
                         p.local = new_local;
                     }
                 }
-            } else {
-                // Regular statement
-                let stmt = &mut basic_blocks[block.0].statements[i];
+                continue;
+            }
 
-                // Rewrite Uses first
-                match &mut stmt.kind {
-                    StatementKind::Assign(_, rvalue) | StatementKind::Reassign(_, rvalue) => {
-                        self.rewrite_uses_in_rvalue(rvalue);
-                    }
-                    StatementKind::Nop
-                    | StatementKind::StorageLive(_)
-                    | StatementKind::StorageDead(_) => {}
-                    StatementKind::IncRef(place)
-                    | StatementKind::DecRef(place)
-                    | StatementKind::Dealloc(place) => {
-                        if place.projection.is_empty() {
-                            place.local = self.get_current_version(place.local);
-                        }
-                    }
+            let stmt = &mut basic_blocks[block.0].statements[i];
+            match &mut stmt.kind {
+                StatementKind::Assign(_, rvalue) | StatementKind::Reassign(_, rvalue) => {
+                    self.rewrite_uses_in_rvalue(rvalue);
                 }
-
-                // Rewrite Defs
-                if let StatementKind::Assign(place, _) | StatementKind::Reassign(place, _) =
-                    &mut stmt.kind
-                {
+                StatementKind::Nop
+                | StatementKind::StorageLive(_)
+                | StatementKind::StorageDead(_) => {}
+                StatementKind::IncRef(place)
+                | StatementKind::DecRef(place)
+                | StatementKind::Dealloc(place) => {
                     if place.projection.is_empty() {
-                        let new_local = self.new_version(local_decls, place.local);
-                        let original = self.get_original_local(place.local);
-                        place.local = new_local;
-                        pushed_counts[original.0] += 1;
+                        place.local = self.get_current_version(place.local);
                     }
                 }
             }
-        }
 
-        // Rewrite Terminator uses
+            if let StatementKind::Assign(place, _) | StatementKind::Reassign(place, _) =
+                &mut stmt.kind
+            {
+                if place.projection.is_empty() {
+                    let new_local = self.new_version(local_decls, place.local);
+                    let original = self.get_original_local(place.local);
+                    place.local = new_local;
+                    pushed_counts[original.0] += 1;
+                }
+            }
+        }
+    }
+
+    fn rename_block_terminator(
+        &mut self,
+        body: &mut Body,
+        block: BasicBlock,
+        pushed_counts: &mut [usize],
+    ) {
+        let (basic_blocks, local_decls) = (&mut body.basic_blocks, &mut body.local_decls);
         if let Some(terminator) = &mut basic_blocks[block.0].terminator {
             self.rewrite_uses_in_terminator(terminator);
         }
-
-        // Rewrite Defs in Terminator
         if let Some(terminator) = &mut basic_blocks[block.0].terminator {
             match &mut terminator.kind {
                 TerminatorKind::Call { destination, .. }
@@ -235,54 +258,29 @@ impl SSABuilder {
                 _ => {}
             }
         }
+    }
 
-        // 2. Fill Phi arguments in successors
+    fn fill_phi_args_in_successors(&mut self, body: &mut Body, block: BasicBlock) {
+        let basic_blocks = &mut body.basic_blocks;
         let successors = self.get_successors(basic_blocks, block);
         for succ in successors {
             let succ_indices: Vec<usize> = (0..basic_blocks[succ.0].statements.len())
                 .filter(|&idx| self.is_phi(basic_blocks, succ, idx))
                 .collect();
-
             for idx in succ_indices {
                 let stmt = &mut basic_blocks[succ.0].statements[idx];
                 if let StatementKind::Assign(place, Rvalue::Phi(args)) = &mut stmt.kind {
-                    // Determine original local
                     let phi_original_local = if self.is_original(place.local) {
                         place.local
                     } else {
-                        // Safe: if not original, it must be in new_to_old
                         self.new_to_old
                             .get(&place.local)
                             .copied()
                             .unwrap_or(place.local)
                     };
-
-                    // Get current version
                     let current_val = self.get_current_version(phi_original_local);
-
-                    // Add to Phi args
                     args.push((Operand::Copy(Place::new(current_val)), block));
                 }
-            }
-        }
-
-        // 3. Recurse into children in DomTree
-        // To avoid borrow issues, we collect children first.
-        let children = self
-            .dom_tree
-            .children
-            .get(&block)
-            .cloned()
-            .unwrap_or_default();
-        for child in children {
-            self.rename_variables(body, child);
-        }
-
-        // 4. Pop stack
-        for (idx, &count) in pushed_counts.iter().enumerate() {
-            if count > 0 {
-                let stack = &mut self.version_stack[idx];
-                stack.truncate(stack.len().saturating_sub(count));
             }
         }
     }
