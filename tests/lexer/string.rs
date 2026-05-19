@@ -383,6 +383,28 @@ fn test_f_string_with_whitespace_expression() {
 }
 
 #[test]
+fn test_f_string_with_multibyte_char_before_brace() {
+    // Regression: `is_escaped` previously byte-sliced `body[i-1..i]`, which
+    // panicked when the byte before `{` was a UTF-8 continuation byte.
+    lexer_token_test(
+        r#"f"📌{x}""#,
+        vec![
+            Token::FormattedStringStart(Box::new("📌".to_string())),
+            Token::Identifier,
+            Token::FormattedStringEnd(Box::new("".to_string())),
+        ],
+    );
+    lexer_token_test(
+        r#"f"中文{y}尾""#,
+        vec![
+            Token::FormattedStringStart(Box::new("中文".to_string())),
+            Token::Identifier,
+            Token::FormattedStringEnd(Box::new("尾".to_string())),
+        ],
+    );
+}
+
+#[test]
 fn test_string_and_identifier_boundaries() {
     run_lexer_tests(vec![
         (r#""hello"world"#, vec![Token::String, Token::Identifier]),

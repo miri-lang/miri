@@ -171,6 +171,14 @@ fn test_comment_markers_inside_strings() {
 }
 
 #[test]
+fn test_multiline_comment_with_multibyte_chars() {
+    // Regression: previously panicked because lex_nested_comment byte-sliced
+    // `&src[i..i+2]` across UTF-8 boundaries.
+    lexer_token_test("/* 中 */ x", vec![Token::Identifier]);
+    lexer_token_test("/* 🎯 nested /* 中 */ */ y", vec![Token::Identifier]);
+}
+
+#[test]
 fn test_malformed_comment_delimiters() {
     // A lone closing comment delimiter is just a star and a slash, not a comment.
     lexer_token_test(
