@@ -89,336 +89,382 @@ impl TypeChecker {
                     }
                 }
 
-                // Compile-time bounds check for slicing with constant range bounds
-                let check_slice_bounds = |tc: &mut TypeChecker,
-                                          array_size: Option<i128>,
-                                          index: &Expression,
-                                          span: Span| {
-                    if let ExpressionKind::Range(start, end, _range_type) = &index.node {
-                        if let Some(size) = array_size {
-                            if let Some(start_val) =
-                                Self::try_eval_const_int_with_context(start, context)
-                            {
-                                if start_val < 0 {
-                                    tc.report_error(
-                                        "Slice start index must be a non-negative integer"
-                                            .to_string(),
-                                        start.span,
-                                    );
-                                } else if start_val > size {
-                                    tc.report_error(
-                                        format!(
-                                            "Slice start index out of bounds: index {} but array has {} elements",
-                                            start_val, size
-                                        ),
-                                        start.span,
-                                    );
-                                }
-                            }
-                            if let Some(end_expr) = end {
-                                if let Some(end_val) =
-                                    Self::try_eval_const_int_with_context(end_expr, context)
-                                {
-                                    if end_val < 0 {
-                                        tc.report_error(
-                                            "Slice end index must be a non-negative integer"
-                                                .to_string(),
-                                            end_expr.span,
-                                        );
-                                    } else if end_val > size {
-                                        tc.report_error(
-                                            format!(
-                                                "Slice end index out of bounds: index {} but array has {} elements",
-                                                end_val, size
-                                            ),
-                                            end_expr.span,
-                                        );
-                                    }
-                                }
-                            }
-                        }
+                return self.infer_index_with_range(&obj_type, index, span, context);
+            }
+        }
 
-                        // Check start <= end when both are constant
-                        if let Some(end_expr) = end {
-                            if let (Some(s), Some(e)) = (
-                                Self::try_eval_const_int_with_context(start, context),
-                                Self::try_eval_const_int_with_context(end_expr, context),
-                            ) {
-                                if s > e {
-                                    tc.report_error(
-                                        format!(
-                                            "Slice start index ({}) is greater than end index ({})",
-                                            s, e
-                                        ),
-                                        span,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                };
+        self.infer_index_regular(&obj_type, index, &index_type, span, context)
+    }
 
-                match obj_type.kind {
-                    TypeKind::String => return make_type(TypeKind::String),
-                    // Collection canonical variants are normalized to Custom before this point.
-                    TypeKind::List(_) | TypeKind::Array(_, _) => {
-                        unreachable!("collection types are normalized to Custom before this point")
+    fn infer_index_with_range(
+        &mut self,
+        obj_type: &Type,
+        index: &Expression,
+        span: Span,
+        context: &mut Context,
+    ) -> Type {
+        match obj_type.kind {
+            TypeKind::String => make_type(TypeKind::String),
+            TypeKind::List(_) | TypeKind::Array(_, _) => {
+                unreachable!("collection types are normalized to Custom before this point")
+            }
+            TypeKind::Custom(ref cname, ref cargs)
+                if matches!(
+                    BuiltinCollectionKind::from_name(cname.as_str()),
+                    Some(BuiltinCollectionKind::List)
+                ) =>
+            {
+                make_type(TypeKind::Custom(cname.clone(), cargs.clone()))
+            }
+            TypeKind::Custom(ref cname, ref cargs)
+                if BuiltinCollectionKind::from_name(cname.as_str())
+                    == Some(BuiltinCollectionKind::Array) =>
+            {
+                self.infer_index_with_range_array(cname, cargs, index, span, context)
+            }
+            TypeKind::Tuple(ref elements) => {
+                self.infer_index_with_range_tuple(elements, span, context)
+            }
+            _ => {
+                self.report_error(format!("Type {} is not sliceable", obj_type), span);
+                make_type(TypeKind::Error)
+            }
+        }
+    }
+
+    fn infer_index_with_range_array(
+        &mut self,
+        cname: &str,
+        cargs: &Option<Vec<Expression>>,
+        index: &Expression,
+        span: Span,
+        context: &mut Context,
+    ) -> Type {
+        let inner = match cargs.as_deref() {
+            Some([i, ..]) => i.clone(),
+            _ => return make_type(TypeKind::Error),
+        };
+        let size_expr_opt = match cargs.as_deref() {
+            Some([_, s, ..]) => Some(s.clone()),
+            _ => None,
+        };
+        if let Some(size_expr) = size_expr_opt {
+            let array_size = Self::try_eval_const_int(&size_expr);
+            self.check_slice_bounds_for_array(array_size, index, span, context);
+            if let ExpressionKind::Range(start, end, range_type) = &index.node {
+                let start_val = Self::try_eval_const_int_with_context(start, context);
+                let end_val = end
+                    .as_ref()
+                    .and_then(|e| Self::try_eval_const_int_with_context(e, context));
+                if let (Some(s), Some(e)) = (start_val, end_val) {
+                    let slice_size = match range_type {
+                        RangeExpressionType::Exclusive => e - s,
+                        RangeExpressionType::Inclusive => e - s + 1,
+                        _ => e - s,
+                    };
+                    let new_size = crate::ast::factory::int_literal_expression(slice_size);
+                    return make_type(TypeKind::Custom(
+                        "Array".to_string(),
+                        Some(vec![inner, new_size]),
+                    ));
+                }
+            }
+            return make_type(TypeKind::Custom(
+                cname.to_string(),
+                Some(vec![inner, size_expr]),
+            ));
+        }
+        make_type(TypeKind::Custom(cname.to_string(), cargs.clone()))
+    }
+
+    fn infer_index_with_range_tuple(
+        &mut self,
+        elements: &[Expression],
+        span: Span,
+        context: &mut Context,
+    ) -> Type {
+        if elements.is_empty() {
+            return make_type(TypeKind::Custom(
+                "List".to_string(),
+                Some(vec![self.create_type_expression(make_type(TypeKind::Void))]),
+            ));
+        }
+        let first = self.resolve_type_expression(&elements[0], context);
+        let is_homogeneous = elements.iter().all(|e| {
+            let t = self.resolve_type_expression(e, context);
+            self.are_compatible(&t, &first, context)
+        });
+
+        if is_homogeneous {
+            make_type(TypeKind::Custom(
+                "List".to_string(),
+                Some(vec![self.create_type_expression(first)]),
+            ))
+        } else {
+            self.report_error("Cannot slice heterogeneous tuple".to_string(), span);
+            make_type(TypeKind::Error)
+        }
+    }
+
+    fn check_slice_bounds_for_array(
+        &mut self,
+        array_size: Option<i128>,
+        index: &Expression,
+        span: Span,
+        context: &mut Context,
+    ) {
+        if let ExpressionKind::Range(start, end, _range_type) = &index.node {
+            if let Some(size) = array_size {
+                if let Some(start_val) = Self::try_eval_const_int_with_context(start, context) {
+                    if start_val < 0 {
+                        self.report_error(
+                            "Slice start index must be a non-negative integer".to_string(),
+                            start.span,
+                        );
+                    } else if start_val > size {
+                        self.report_error(
+                            format!(
+                                "Slice start index out of bounds: index {} but array has {} elements",
+                                start_val, size
+                            ),
+                            start.span,
+                        );
                     }
-                    TypeKind::Custom(ref cname, ref cargs)
-                        if matches!(
-                            BuiltinCollectionKind::from_name(cname.as_str()),
-                            Some(BuiltinCollectionKind::List)
-                        ) =>
+                }
+                if let Some(end_expr) = end {
+                    if let Some(end_val) = Self::try_eval_const_int_with_context(end_expr, context)
                     {
-                        return make_type(TypeKind::Custom(cname.clone(), cargs.clone()));
-                    }
-                    TypeKind::Custom(ref cname, ref cargs)
-                        if BuiltinCollectionKind::from_name(cname.as_str())
-                            == Some(BuiltinCollectionKind::Array) =>
-                    {
-                        // args: [inner_type_expr, size_expr]
-                        let inner = match cargs.as_deref() {
-                            Some([i, ..]) => i.clone(),
-                            _ => return make_type(TypeKind::Error),
-                        };
-                        let size_expr_opt = match cargs.as_deref() {
-                            Some([_, s, ..]) => Some(s.clone()),
-                            _ => None,
-                        };
-                        if let Some(size_expr) = size_expr_opt {
-                            let array_size = Self::try_eval_const_int(&size_expr);
-                            check_slice_bounds(self, array_size, index, span);
-                            if let ExpressionKind::Range(start, end, range_type) = &index.node {
-                                let start_val =
-                                    Self::try_eval_const_int_with_context(start, context);
-                                let end_val = end.as_ref().and_then(|e| {
-                                    Self::try_eval_const_int_with_context(e, context)
-                                });
-                                if let (Some(s), Some(e)) = (start_val, end_val) {
-                                    let slice_size = match range_type {
-                                        RangeExpressionType::Exclusive => e - s,
-                                        RangeExpressionType::Inclusive => e - s + 1,
-                                        _ => e - s,
-                                    };
-                                    let new_size =
-                                        crate::ast::factory::int_literal_expression(slice_size);
-                                    return make_type(TypeKind::Custom(
-                                        "Array".to_string(),
-                                        Some(vec![inner, new_size]),
-                                    ));
-                                }
-                            }
-                            // Fallback: unknown slice size, return original
-                            return make_type(TypeKind::Custom(
-                                cname.clone(),
-                                Some(vec![inner, size_expr]),
-                            ));
+                        if end_val < 0 {
+                            self.report_error(
+                                "Slice end index must be a non-negative integer".to_string(),
+                                end_expr.span,
+                            );
+                        } else if end_val > size {
+                            self.report_error(
+                                format!(
+                                    "Slice end index out of bounds: index {} but array has {} elements",
+                                    end_val, size
+                                ),
+                                end_expr.span,
+                            );
                         }
-                        return make_type(TypeKind::Custom(cname.clone(), cargs.clone()));
                     }
-                    TypeKind::Tuple(elements) => {
-                        if elements.is_empty() {
-                            return make_type(TypeKind::Custom(
-                                "List".to_string(),
-                                Some(vec![self.create_type_expression(make_type(TypeKind::Void))]),
-                            ));
-                        }
-                        let first = self.resolve_type_expression(&elements[0], context);
-                        let is_homogeneous = elements.iter().all(|e| {
-                            let t = self.resolve_type_expression(e, context);
-                            self.are_compatible(&t, &first, context)
-                        });
+                }
+            }
 
-                        if is_homogeneous {
-                            return make_type(TypeKind::Custom(
-                                "List".to_string(),
-                                Some(vec![self.create_type_expression(first)]),
-                            ));
-                        } else {
-                            self.report_error("Cannot slice heterogeneous tuple".to_string(), span);
-                            return make_type(TypeKind::Error);
-                        }
-                    }
-                    _ => {
-                        self.report_error(format!("Type {} is not sliceable", obj_type), span);
-                        return make_type(TypeKind::Error);
+            if let Some(end_expr) = end {
+                if let (Some(s), Some(e)) = (
+                    Self::try_eval_const_int_with_context(start, context),
+                    Self::try_eval_const_int_with_context(end_expr, context),
+                ) {
+                    if s > e {
+                        self.report_error(
+                            format!(
+                                "Slice start index ({}) is greater than end index ({})",
+                                s, e
+                            ),
+                            span,
+                        );
                     }
                 }
             }
         }
+    }
 
+    fn infer_index_regular(
+        &mut self,
+        obj_type: &Type,
+        index: &Expression,
+        index_type: &Type,
+        span: Span,
+        context: &mut Context,
+    ) -> Type {
         match obj_type.kind {
-            // Canonical collection variants are normalized to Custom before this point.
             TypeKind::Array(_, _) | TypeKind::List(_) | TypeKind::Map(_, _) => {
                 unreachable!("collection types are normalized to Custom before this point")
             }
-            TypeKind::Custom(name, args)
+            TypeKind::Custom(ref name, ref args)
                 if matches!(
                     BuiltinCollectionKind::from_name(name.as_str()),
                     Some(BuiltinCollectionKind::Array | BuiltinCollectionKind::List)
                 ) || name == "Tuple" =>
             {
-                if !matches!(index_type.kind, TypeKind::Int) {
-                    self.report_error(format!("{} index must be an integer", name), index.span);
-                    return make_type(TypeKind::Error);
-                }
-                // Compile-time bounds check for Array
-                if BuiltinCollectionKind::from_name(name.as_str())
-                    == Some(BuiltinCollectionKind::Array)
-                {
-                    if let Some(idx_val) = Self::try_eval_const_int_with_context(index, context) {
-                        if idx_val < 0 {
-                            self.report_error(
-                                "Array index must be a non-negative integer".to_string(),
-                                index.span,
-                            );
-                            return make_type(TypeKind::Error);
-                        }
-                        if let Some(size_expr) = args.as_deref().and_then(|a| a.get(1)) {
-                            if let Some(size_val) = Self::try_eval_const_int(size_expr) {
-                                let idx = idx_val as usize;
-                                let size = size_val as usize;
-                                if idx >= size {
-                                    self.report_error(
-                                        format!(
-                                            "Array index out of bounds: index {} but array has {} elements",
-                                            idx, size
-                                        ),
-                                        span,
-                                    );
-                                    return make_type(TypeKind::Error);
-                                }
-                            }
-                        }
-                    }
-                }
-                if let Some(args) = args {
-                    if let Some(inner_type_expr) = args.first() {
-                        return self.resolve_type_expression(inner_type_expr, context);
-                    }
-                } else {
-                    // Inside the class definition itself, args is None.
-                    // We can look up the generic parameter 'T' from the context.
-                    if let Some(TypeDefinition::Generic(g)) = context.resolve_type_definition("T") {
-                        return make_type(TypeKind::Generic(
-                            g.name.clone(),
-                            g.constraint.clone().map(Box::new),
-                            g.kind,
-                        ));
-                    } else {
-                        return make_type(TypeKind::Generic(
-                            "T".to_string(),
-                            None,
-                            TypeDeclarationKind::None,
-                        ));
-                    }
-                }
-                make_type(TypeKind::Error)
+                self.infer_index_array_list_tuple(name, args, index, index_type, span, context)
             }
-            TypeKind::Custom(name, args)
+            TypeKind::Custom(ref name, ref args)
                 if BuiltinCollectionKind::from_name(name.as_str())
                     == Some(BuiltinCollectionKind::Map) =>
             {
-                // Custom("Map", args): key=args[0], value=args[1].
-                // Inside the Map class definition, args may be None (generic placeholders).
-                if let Some(args) = args {
-                    if args.len() >= 2 {
-                        let key_type = self.resolve_type_expression(&args[0], context);
-                        if !self.are_compatible(&key_type, &index_type, context) {
-                            self.report_error("Invalid map key type".to_string(), index.span);
-                            return make_type(TypeKind::Error);
-                        }
-                        return self.resolve_type_expression(&args[1], context);
-                    }
-                }
-                // Inside the class body, args is None — resolve generics from context.
-                if let Some(TypeDefinition::Generic(g)) = context.resolve_type_definition("V") {
-                    return make_type(TypeKind::Generic(
-                        g.name.clone(),
-                        g.constraint.clone().map(Box::new),
-                        g.kind,
-                    ));
-                }
-                make_type(TypeKind::Generic(
-                    "V".to_string(),
-                    None,
-                    TypeDeclarationKind::None,
-                ))
+                self.infer_index_map(args, index, index_type, context)
             }
-            TypeKind::Tuple(element_type_exprs) => {
-                // Check if tuple is homogeneous
-                let is_homogeneous = if element_type_exprs.is_empty() {
-                    true
-                } else {
-                    let resolved_types: Vec<Type> = element_type_exprs
-                        .iter()
-                        .map(|t| self.resolve_type_expression(t, context))
-                        .collect();
-
-                    let first_type = &resolved_types[0];
-                    resolved_types
-                        .iter()
-                        .all(|t| self.are_compatible(t, first_type, context))
-                };
-
-                if is_homogeneous {
-                    if !matches!(index_type.kind, TypeKind::Int) {
-                        self.report_error("Tuple index must be an integer".to_string(), index.span);
-                        return make_type(TypeKind::Error);
-                    }
-                    // If homogeneous, we can return the type of the first element (or any element)
-                    if element_type_exprs.is_empty() {
-                        // Indexing empty tuple is always out of bounds, but let's handle it gracefully or error
-                        self.report_error(
-                            "Tuple index out of bounds (empty tuple)".to_string(),
-                            span,
-                        );
-                        return make_type(TypeKind::Error);
-                    }
-
-                    // If it's a literal, we can still check bounds
-                    if let ExpressionKind::Literal(Literal::Integer(val)) = &index.node {
-                        let idx = val.to_usize();
-                        if idx >= element_type_exprs.len() {
-                            self.report_error("Tuple index out of bounds".to_string(), span);
-                            return make_type(TypeKind::Error);
-                        }
-                    }
-
-                    self.resolve_type_expression(&element_type_exprs[0], context)
-                } else {
-                    // For heterogeneous tuple, index must be a compile-time integer literal
-                    if let ExpressionKind::Literal(Literal::Integer(val)) = &index.node {
-                        let idx = val.to_usize();
-
-                        if idx < element_type_exprs.len() {
-                            self.resolve_type_expression(&element_type_exprs[idx], context)
-                        } else {
-                            self.report_error("Tuple index out of bounds".to_string(), span);
-                            make_type(TypeKind::Error)
-                        }
-                    } else {
-                        self.report_error(
-                            "Tuple index must be an integer literal for heterogeneous tuples"
-                                .to_string(),
-                            index.span,
-                        );
-                        make_type(TypeKind::Error)
-                    }
-                }
+            TypeKind::Tuple(ref element_type_exprs) => {
+                self.infer_index_tuple_hetero(element_type_exprs, index, index_type, span, context)
             }
             TypeKind::String => {
                 if !matches!(index_type.kind, TypeKind::Int) {
                     self.report_error("String index must be an integer".to_string(), index.span);
                     return make_type(TypeKind::Error);
                 }
-                make_type(TypeKind::String) // Indexing a string returns a string (char)
+                make_type(TypeKind::String)
             }
             TypeKind::Error => make_type(TypeKind::Error),
             _ => {
                 self.report_error(format!("Type {} is not indexable", obj_type), span);
                 make_type(TypeKind::Error)
             }
+        }
+    }
+
+    fn infer_index_array_list_tuple(
+        &mut self,
+        name: &str,
+        args: &Option<Vec<Expression>>,
+        index: &Expression,
+        index_type: &Type,
+        span: Span,
+        context: &mut Context,
+    ) -> Type {
+        if !matches!(index_type.kind, TypeKind::Int) {
+            self.report_error(format!("{} index must be an integer", name), index.span);
+            return make_type(TypeKind::Error);
+        }
+
+        if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Array) {
+            if let Some(idx_val) = Self::try_eval_const_int_with_context(index, context) {
+                if idx_val < 0 {
+                    self.report_error(
+                        "Array index must be a non-negative integer".to_string(),
+                        index.span,
+                    );
+                    return make_type(TypeKind::Error);
+                }
+                if let Some(size_expr) = args.as_deref().and_then(|a| a.get(1)) {
+                    if let Some(size_val) = Self::try_eval_const_int(size_expr) {
+                        let idx = idx_val as usize;
+                        let size = size_val as usize;
+                        if idx >= size {
+                            self.report_error(
+                                format!(
+                                    "Array index out of bounds: index {} but array has {} elements",
+                                    idx, size
+                                ),
+                                span,
+                            );
+                            return make_type(TypeKind::Error);
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(args) = args {
+            if let Some(inner_type_expr) = args.first() {
+                return self.resolve_type_expression(inner_type_expr, context);
+            }
+        } else if let Some(TypeDefinition::Generic(g)) = context.resolve_type_definition("T") {
+            return make_type(TypeKind::Generic(
+                g.name.clone(),
+                g.constraint.clone().map(Box::new),
+                g.kind,
+            ));
+        } else {
+            return make_type(TypeKind::Generic(
+                "T".to_string(),
+                None,
+                TypeDeclarationKind::None,
+            ));
+        }
+        make_type(TypeKind::Error)
+    }
+
+    fn infer_index_map(
+        &mut self,
+        args: &Option<Vec<Expression>>,
+        index: &Expression,
+        index_type: &Type,
+        context: &mut Context,
+    ) -> Type {
+        if let Some(args) = args {
+            if args.len() >= 2 {
+                let key_type = self.resolve_type_expression(&args[0], context);
+                if !self.are_compatible(&key_type, index_type, context) {
+                    self.report_error("Invalid map key type".to_string(), index.span);
+                    return make_type(TypeKind::Error);
+                }
+                return self.resolve_type_expression(&args[1], context);
+            }
+        }
+        if let Some(TypeDefinition::Generic(g)) = context.resolve_type_definition("V") {
+            make_type(TypeKind::Generic(
+                g.name.clone(),
+                g.constraint.clone().map(Box::new),
+                g.kind,
+            ))
+        } else {
+            make_type(TypeKind::Generic(
+                "V".to_string(),
+                None,
+                TypeDeclarationKind::None,
+            ))
+        }
+    }
+
+    fn infer_index_tuple_hetero(
+        &mut self,
+        element_type_exprs: &[Expression],
+        index: &Expression,
+        index_type: &Type,
+        span: Span,
+        context: &mut Context,
+    ) -> Type {
+        let is_homogeneous = if element_type_exprs.is_empty() {
+            true
+        } else {
+            let resolved_types: Vec<Type> = element_type_exprs
+                .iter()
+                .map(|t| self.resolve_type_expression(t, context))
+                .collect();
+
+            let first_type = &resolved_types[0];
+            resolved_types
+                .iter()
+                .all(|t| self.are_compatible(t, first_type, context))
+        };
+
+        if is_homogeneous {
+            if !matches!(index_type.kind, TypeKind::Int) {
+                self.report_error("Tuple index must be an integer".to_string(), index.span);
+                return make_type(TypeKind::Error);
+            }
+            if element_type_exprs.is_empty() {
+                self.report_error("Tuple index out of bounds (empty tuple)".to_string(), span);
+                return make_type(TypeKind::Error);
+            }
+
+            if let ExpressionKind::Literal(Literal::Integer(val)) = &index.node {
+                let idx = val.to_usize();
+                if idx >= element_type_exprs.len() {
+                    self.report_error("Tuple index out of bounds".to_string(), span);
+                    return make_type(TypeKind::Error);
+                }
+            }
+
+            self.resolve_type_expression(&element_type_exprs[0], context)
+        } else if let ExpressionKind::Literal(Literal::Integer(val)) = &index.node {
+            let idx = val.to_usize();
+
+            if idx < element_type_exprs.len() {
+                self.resolve_type_expression(&element_type_exprs[idx], context)
+            } else {
+                self.report_error("Tuple index out of bounds".to_string(), span);
+                make_type(TypeKind::Error)
+            }
+        } else {
+            self.report_error(
+                "Tuple index must be an integer literal for heterogeneous tuples".to_string(),
+                index.span,
+            );
+            make_type(TypeKind::Error)
         }
     }
 
@@ -433,41 +479,21 @@ impl TypeChecker {
         span: Span,
         context: &mut Context,
     ) -> Type {
-        // Module alias access: `M.foo` where `M` was introduced by `use X as M`.
-        // Resolve `foo` directly from global_scope without treating `M` as a variable.
         if let ExpressionKind::Identifier(alias_name, _) = &obj.node {
             if let Some(module_path) = self.module_aliases.get(alias_name.as_str()).cloned() {
-                let prop_name = if let ExpressionKind::Identifier(name, _) = &prop.node {
-                    name.clone()
-                } else {
-                    self.report_error(
-                        "Member property must be an identifier".to_string(),
-                        prop.span,
-                    );
-                    return make_type(TypeKind::Error);
-                };
-                // Record a placeholder type for the alias identifier itself so that
-                // `get_type(obj.id)` returns None (not triggering class dispatch).
-                self.types.insert(obj.id, make_type(TypeKind::Identifier));
-                if let Some(info) = self.global_scope.get(prop_name.as_str()).cloned() {
-                    if !self.check_visibility(&info.visibility, &info.module) {
-                        self.report_error(format!("'{}' is not visible", prop_name), span);
-                        return make_type(TypeKind::Error);
-                    }
-                    return info.ty.clone();
-                }
-                self.report_error(
-                    format!("'{}' is not defined in module '{}'", prop_name, module_path),
+                return self.infer_member_module_alias(
+                    alias_name,
+                    &module_path,
+                    obj,
+                    prop,
                     span,
+                    context,
                 );
-                return make_type(TypeKind::Error);
             }
         }
 
         let obj_type = self.infer_expression(obj, context);
 
-        // Suppress cascade errors: if the object already has error type,
-        // silently propagate it instead of reporting "Type 'error' does not have members".
         if matches!(obj_type.kind, TypeKind::Error) {
             return make_type(TypeKind::Error);
         }
@@ -475,7 +501,6 @@ impl TypeChecker {
         if let TypeKind::Tuple(element_types) = &obj_type.kind {
             if let ExpressionKind::Literal(Literal::Integer(val)) = &prop.node {
                 let idx = val.to_usize();
-
                 if idx < element_types.len() {
                     return self.resolve_type_expression(&element_types[idx], context);
                 } else {
@@ -495,11 +520,113 @@ impl TypeChecker {
             return make_type(TypeKind::Error);
         };
 
-        // Try to resolve the type definition for the object's type
-        let (type_name, type_args) = match &obj_type.kind {
+        self.infer_member_dispatch(&obj_type, prop_name, span, context)
+    }
+
+    fn infer_member_dispatch(
+        &mut self,
+        obj_type: &Type,
+        prop_name: &str,
+        span: Span,
+        context: &mut Context,
+    ) -> Type {
+        let (type_name, type_args) = self.extract_member_type_and_args(obj_type, span, context);
+
+        if let Some(name) = &type_name {
+            if name == "Kernel" && prop_name == "launch" {
+                return self.infer_member_kernel_launch();
+            }
+        }
+
+        if let Some(name) = type_name {
+            let def_opt = self
+                .resolve_visible_type(&name, context)
+                .or_else(|| {
+                    if BuiltinCollectionKind::from_name(&name).is_some() {
+                        self.global_type_definitions.get(&name)
+                    } else {
+                        None
+                    }
+                })
+                .cloned();
+
+            if let Some(TypeDefinition::Struct(def)) = &def_opt {
+                return self.infer_member_struct(def, &name, prop_name, &type_args, span, context);
+            } else if let Some(TypeDefinition::Class(def)) = &def_opt {
+                return self.infer_member_class(def, &name, prop_name, &type_args, span, context);
+            } else if let Some(TypeDefinition::Trait(trait_def)) = &def_opt {
+                return self.infer_member_trait(&name, trait_def, prop_name, span, context);
+            } else if let Some(TypeDefinition::Enum(enum_def)) = &def_opt {
+                return self.infer_member_enum(enum_def, &name, prop_name, obj_type, span, context);
+            } else if def_opt.is_none() {
+                if let Some(module) = self.suggest_module_for_type(&name) {
+                    self.report_error_with_help(
+                        format!("Type '{}' does not have members", obj_type),
+                        span,
+                        format!("Consider importing '{}' to use {} methods", module, name),
+                    );
+                } else {
+                    self.report_error(format!("Type '{}' does not have members", obj_type), span);
+                }
+                return make_type(TypeKind::Error);
+            }
+        }
+
+        match &obj_type.kind {
+            TypeKind::Meta(inner_type) => {
+                self.infer_member_meta(inner_type, prop_name, span, context)
+            }
+            _ => {
+                self.report_error(format!("Type '{}' does not have members", obj_type), span);
+                make_type(TypeKind::Error)
+            }
+        }
+    }
+
+    fn infer_member_module_alias(
+        &mut self,
+        _alias_name: &str,
+        module_path: &str,
+        obj: &Expression,
+        prop: &Expression,
+        span: Span,
+        _context: &mut Context,
+    ) -> Type {
+        let prop_name = if let ExpressionKind::Identifier(name, _) = &prop.node {
+            name.clone()
+        } else {
+            self.report_error(
+                "Member property must be an identifier".to_string(),
+                prop.span,
+            );
+            return make_type(TypeKind::Error);
+        };
+
+        self.types.insert(obj.id, make_type(TypeKind::Identifier));
+
+        if let Some(info) = self.global_scope.get(prop_name.as_str()).cloned() {
+            if !self.check_visibility(&info.visibility, &info.module) {
+                self.report_error(format!("'{}' is not visible", prop_name), span);
+                return make_type(TypeKind::Error);
+            }
+            return info.ty.clone();
+        }
+
+        self.report_error(
+            format!("'{}' is not defined in module '{}'", prop_name, module_path),
+            span,
+        );
+        make_type(TypeKind::Error)
+    }
+
+    fn extract_member_type_and_args(
+        &mut self,
+        obj_type: &Type,
+        span: Span,
+        context: &mut Context,
+    ) -> (Option<String>, Option<Vec<Expression>>) {
+        match &obj_type.kind {
             TypeKind::String => (Some("String".to_string()), None),
-            // Unnormalized collection variants — normalize on the fly so that return types
-            // produced by generic substitution (e.g. `[int]`) still resolve to the right class.
             TypeKind::List(elem) => (Some("List".to_string()), Some(vec![*elem.clone()])),
             TypeKind::Map(k, v) => (Some("Map".to_string()), Some(vec![*k.clone(), *v.clone()])),
             TypeKind::Set(elem) => (Some("Set".to_string()), Some(vec![*elem.clone()])),
@@ -508,7 +635,6 @@ impl TypeChecker {
                 Some(vec![*elem.clone(), *size.clone()]),
             ),
             TypeKind::Tuple(element_type_exprs) => {
-                // For homogeneous tuples, resolve to "Tuple" class with element type
                 if !element_type_exprs.is_empty() {
                     let resolved_types: Vec<Type> = element_type_exprs
                         .iter()
@@ -536,16 +662,11 @@ impl TypeChecker {
                 Some(vec![*ok.clone(), *err.clone()]),
             ),
             TypeKind::Option(_) => (None, None),
-            // For generic types with constraints (T extends SomeClass), use constraint for member lookup
-            TypeKind::Generic(_, Some(constraint), _) => {
-                // Use the constraint type for member lookup
-                match &constraint.kind {
-                    TypeKind::Custom(name, args) => (Some(name.clone()), args.clone()),
-                    _ => (None, None),
-                }
-            }
+            TypeKind::Generic(_, Some(constraint), _) => match &constraint.kind {
+                TypeKind::Custom(name, args) => (Some(name.clone()), args.clone()),
+                _ => (None, None),
+            },
             TypeKind::Generic(name, None, _) => {
-                // Generic without constraint - no members
                 self.report_error(
                     format!(
                         "Generic type '{}' without constraints has no known members",
@@ -553,729 +674,789 @@ impl TypeChecker {
                     ),
                     span,
                 );
+                (None, None)
+            }
+            _ => (None, None),
+        }
+    }
+
+    fn infer_member_kernel_launch(&mut self) -> Type {
+        let dim3_type = ast_factory::make_type(TypeKind::Custom("Dim3".to_string(), None));
+        let dim3_expr = Box::new(ast_factory::type_expr_non_null(dim3_type.clone()));
+
+        let future_void_type = ast_factory::make_type(TypeKind::Custom(
+            "Future".to_string(),
+            Some(vec![ast_factory::type_expr_non_null(
+                ast_factory::make_type(TypeKind::Void),
+            )]),
+        ));
+
+        ast_factory::make_type(TypeKind::Function(Box::new(FunctionTypeData {
+            generics: None,
+            params: vec![
+                Parameter {
+                    name: "grid".to_string(),
+                    typ: dim3_expr.clone(),
+                    guard: None,
+                    default_value: None,
+                    is_out: false,
+                },
+                Parameter {
+                    name: "block".to_string(),
+                    typ: dim3_expr,
+                    guard: None,
+                    default_value: None,
+                    is_out: false,
+                },
+            ],
+            return_type: Some(Box::new(ast_factory::type_expr_non_null(future_void_type))),
+        })))
+    }
+
+    fn infer_member_struct(
+        &mut self,
+        def: &crate::type_checker::context::StructDefinition,
+        type_name: &str,
+        prop_name: &str,
+        type_args: &Option<Vec<Expression>>,
+        span: Span,
+        _context: &mut Context,
+    ) -> Type {
+        if let Some((_, field_type, visibility)) =
+            def.fields.iter().find(|(n, _, _)| n == prop_name)
+        {
+            if !self.check_visibility(visibility, &def.module) {
+                self.report_error(format!("Field '{}' is not visible", prop_name), span);
                 return make_type(TypeKind::Error);
             }
-            // Add others as needed
-            _ => (None, None),
-        };
 
-        if let Some(name) = &type_name {
-            if name == "Kernel" && prop_name == "launch" {
-                // Method signature: fn(grid: Dim3, block: Dim3) -> Future<void>
-                let dim3_type = ast_factory::make_type(TypeKind::Custom("Dim3".to_string(), None));
-                let dim3_expr = Box::new(ast_factory::type_expr_non_null(dim3_type.clone()));
-
-                let future_void_type = ast_factory::make_type(TypeKind::Custom(
-                    "Future".to_string(),
-                    Some(vec![ast_factory::type_expr_non_null(
-                        ast_factory::make_type(TypeKind::Void),
-                    )]),
-                ));
-
-                return ast_factory::make_type(TypeKind::Function(Box::new(FunctionTypeData {
-                    generics: None,
-                    params: vec![
-                        Parameter {
-                            name: "grid".to_string(),
-                            typ: dim3_expr.clone(),
-                            guard: None,
-                            default_value: None,
-                            is_out: false,
-                        },
-                        Parameter {
-                            name: "block".to_string(),
-                            typ: dim3_expr,
-                            guard: None,
-                            default_value: None,
-                            is_out: false,
-                        },
-                    ],
-                    return_type: Some(Box::new(ast_factory::type_expr_non_null(future_void_type))),
-                })));
+            if let Some(generics) = &def.generics {
+                if let Some(type_args) = type_args {
+                    if generics.len() == type_args.len() {
+                        let mut mapping = HashMap::new();
+                        for (param, arg_expr) in generics.iter().zip(type_args.iter()) {
+                            let arg_type = self
+                                .extract_type_from_expression(arg_expr)
+                                .unwrap_or(make_type(TypeKind::Error));
+                            mapping.insert(param.name.clone(), arg_type);
+                        }
+                        return self.substitute_type(field_type, &mapping);
+                    }
+                }
             }
+
+            return field_type.clone();
         }
 
-        if let Some(name) = type_name {
-            // Instance member access (Struct field)
-            //
-            // Builtin collection types (List, Map, Set, Array) may be invisible in the current
-            // scope when the user only imported the class that *returns* them (e.g. importing
-            // Array but not List) — the visibility restriction correctly hides transitive
-            // imports for user-facing names.  However, the result of calling Array.filter()
-            // has type List<T>, and the user must be able to call List methods on it.  For
-            // builtin collections we therefore fall back to global_type_definitions directly.
-            let def_opt = self.resolve_visible_type(&name, context).or_else(|| {
-                if BuiltinCollectionKind::from_name(&name).is_some() {
-                    self.global_type_definitions.get(&name)
-                } else {
-                    None
-                }
-            });
+        let candidates: Vec<&str> = def.fields.iter().map(|(n, _, _)| n.as_str()).collect();
+        if let Some(suggestion) = find_best_match(prop_name, &candidates) {
+            self.report_error_with_help(
+                format!("Type '{}' has no field '{}'", type_name, prop_name),
+                span,
+                format!("Did you mean '{}'?", suggestion),
+            );
+        } else {
+            self.report_error(
+                format!("Type '{}' has no field '{}'", type_name, prop_name),
+                span,
+            );
+        }
+        make_type(TypeKind::Error)
+    }
 
-            if let Some(TypeDefinition::Struct(def)) = def_opt {
-                if let Some((_, field_type, visibility)) =
-                    def.fields.iter().find(|(n, _, _)| n == prop_name)
-                {
-                    if !self.check_visibility(visibility, &def.module) {
-                        self.report_error(format!("Field '{}' is not visible", prop_name), span);
-                        return make_type(TypeKind::Error);
-                    }
+    fn infer_member_class(
+        &mut self,
+        def: &crate::type_checker::context::ClassDefinition,
+        name: &str,
+        prop_name: &str,
+        type_args: &Option<Vec<Expression>>,
+        span: Span,
+        context: &mut Context,
+    ) -> Type {
+        if let Some(ty) =
+            self.search_class_hierarchy(def, name, prop_name, type_args, span, context)
+        {
+            return ty;
+        }
 
-                    // Substitute generic parameters if present
-                    if let Some(generics) = &def.generics {
-                        if let Some(type_args) = &type_args {
-                            if generics.len() == type_args.len() {
-                                let mut mapping = HashMap::new();
-                                for (param, arg_expr) in generics.iter().zip(type_args.iter()) {
-                                    let arg_type = self
-                                        .extract_type_from_expression(arg_expr)
-                                        .unwrap_or(make_type(TypeKind::Error));
-                                    mapping.insert(param.name.clone(), arg_type);
-                                }
-                                return self.substitute_type(field_type, &mapping);
-                            }
-                        }
-                    }
+        if let Some(ty) = self.infer_member_class_trait_fallback(name, prop_name, type_args) {
+            return ty;
+        }
 
-                    return field_type.clone();
-                } else {
-                    let candidates: Vec<&str> =
-                        def.fields.iter().map(|(n, _, _)| n.as_str()).collect();
-                    if let Some(suggestion) = find_best_match(prop_name, &candidates) {
-                        self.report_error_with_help(
-                            format!("Type '{}' has no field '{}'", name, prop_name),
-                            span,
-                            format!("Did you mean '{}'?", suggestion),
-                        );
-                    } else {
-                        self.report_error(
-                            format!("Type '{}' has no field '{}'", name, prop_name),
-                            span,
-                        );
-                    }
-                    return make_type(TypeKind::Error);
-                }
-            } else if let Some(TypeDefinition::Class(def)) = def_opt {
-                // Walk up the inheritance chain to find the member
-                let mut search_class_def = def;
+        self.report_class_member_not_found(name, prop_name, context, span)
+    }
 
-                loop {
-                    // Substitute generic parameters if present.
-                    //
-                    // When walking up the inheritance chain (e.g. Array<T,Size> → IndexedCollection<T>),
-                    // the number of generics in the base class may not match the number of
-                    // type_args from the call site.  In that case, build a partial mapping by
-                    // matching generic names from the original class definition:
-                    // IndexedCollection<T> with Array<T,Size> instantiated as Array<int,3> → T = int.
-                    let mut mapping = std::collections::HashMap::new();
-                    if let Some(generics) = &search_class_def.generics {
-                        if let Some(type_args) = &type_args {
-                            if generics.len() == type_args.len() {
-                                for (param, arg_expr) in generics.iter().zip(type_args.iter()) {
-                                    let arg_type = self
-                                        .extract_type_from_expression(arg_expr)
-                                        .unwrap_or(make_type(TypeKind::Error));
-                                    mapping.insert(param.name.clone(), arg_type);
-                                }
+    fn search_class_hierarchy(
+        &mut self,
+        def: &crate::type_checker::context::ClassDefinition,
+        name: &str,
+        prop_name: &str,
+        type_args: &Option<Vec<Expression>>,
+        span: Span,
+        context: &mut Context,
+    ) -> Option<Type> {
+        let mut search_class_def: crate::type_checker::context::ClassDefinition = def.clone();
+        loop {
+            let mapping = self.build_class_method_mapping(&search_class_def, name, type_args);
+
+            if let Some(field_ty) =
+                self.lookup_class_field(&search_class_def, prop_name, name, &mapping, span, context)
+            {
+                return Some(field_ty);
+            }
+
+            if let Some(method_ty) = self.lookup_class_method(
+                &search_class_def,
+                prop_name,
+                name,
+                &mapping,
+                span,
+                context,
+            ) {
+                return Some(method_ty);
+            }
+
+            let next_def = search_class_def
+                .base_class
+                .as_ref()
+                .and_then(|base_class_name| {
+                    context
+                        .resolve_type_definition(base_class_name)
+                        .or_else(|| self.global_type_definitions.get(base_class_name))
+                        .and_then(|def| {
+                            if let TypeDefinition::Class(c) = def {
+                                Some(c.clone())
                             } else {
-                                // Length mismatch: we're in a base class with a different
-                                // number of generics.  Map by name using the original class's
-                                // generic list so that e.g. IndexedCollection<T> gets T→int when
-                                // called on Array<int, Size>.
-                                let orig_generics_opt = self
-                                    .global_type_definitions
-                                    .get(&name)
-                                    .and_then(|td| {
-                                        if let TypeDefinition::Class(cd) = td {
-                                            cd.generics.as_ref()
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .cloned();
-                                if let Some(orig_generics) = orig_generics_opt {
-                                    for base_generic in generics.iter() {
-                                        if let Some(idx) = orig_generics
-                                            .iter()
-                                            .position(|g| g.name == base_generic.name)
-                                        {
-                                            if let Some(arg_expr) = type_args.get(idx) {
-                                                let arg_type = self
-                                                    .extract_type_from_expression(arg_expr)
-                                                    .unwrap_or(make_type(TypeKind::Error));
-                                                mapping.insert(base_generic.name.clone(), arg_type);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Check fields in current class
-                    if let Some((_, field_info)) =
-                        search_class_def.fields.iter().find(|(n, _)| n == prop_name)
-                    {
-                        // Check visibility for class field.
-                        // Pass the receiver's declared type (`name`) so that the
-                        // protected check can reject sibling-class access.
-                        if !self.check_member_visibility(
-                            &field_info.visibility,
-                            &search_class_def.name,
-                            context.current_class.as_deref(),
-                            Some(name.as_str()),
-                        ) {
-                            self.report_error(
-                                format!(
-                                    "Field '{}' of class '{}' is {:?} and cannot be accessed from here",
-                                    prop_name, search_class_def.name, field_info.visibility
-                                ),
-                                span,
-                            );
-                            return make_type(TypeKind::Error);
-                        }
-
-                        if mapping.is_empty() {
-                            return field_info.ty.clone();
-                        } else {
-                            return self.substitute_type(&field_info.ty, &mapping);
-                        }
-                    }
-
-                    // Check methods in current class
-                    if let Some(method_info) = search_class_def.methods.get(prop_name) {
-                        // Check visibility for class method.
-                        // Pass the receiver's declared type (`name`) so that the
-                        // protected check can reject sibling-class access.
-                        if !self.check_member_visibility(
-                            &method_info.visibility,
-                            &search_class_def.name,
-                            context.current_class.as_deref(),
-                            Some(name.as_str()),
-                        ) {
-                            self.report_error(
-                                format!(
-                                    "Method '{}' of class '{}' is {:?} and cannot be accessed from here",
-                                    prop_name, search_class_def.name, method_info.visibility
-                                ),
-                                span,
-                            );
-                            return make_type(TypeKind::Error);
-                        }
-
-                        // Build a function type from the method signature
-                        let params: Vec<Parameter> = method_info
-                            .params
-                            .iter()
-                            .map(|(name, ty)| {
-                                let substituted_ty = if mapping.is_empty() {
-                                    ty.clone()
-                                } else {
-                                    self.substitute_type(ty, &mapping)
-                                };
-                                Parameter {
-                                    name: name.clone(),
-                                    typ: Box::new(self.create_type_expression(substituted_ty)),
-                                    guard: None,
-                                    default_value: None,
-                                    is_out: false,
-                                }
-                            })
-                            .collect();
-
-                        let return_type_expr =
-                            if matches!(method_info.return_type.kind, TypeKind::Void) {
                                 None
-                            } else {
-                                let substituted_ret = if mapping.is_empty() {
-                                    method_info.return_type.clone()
-                                } else {
-                                    self.substitute_type(&method_info.return_type, &mapping)
-                                };
-                                Some(Box::new(self.create_type_expression(substituted_ret)))
-                            };
-
-                        return make_type(TypeKind::Function(Box::new(FunctionTypeData {
-                            generics: None,
-                            params,
-                            return_type: return_type_expr,
-                        })));
-                    }
-
-                    // If not found, try the base class
-                    if let Some(base_class_name) = &search_class_def.base_class {
-                        let base_def_opt = context
-                            .resolve_type_definition(base_class_name)
-                            .or_else(|| self.global_type_definitions.get(base_class_name));
-
-                        if let Some(TypeDefinition::Class(base_def)) = base_def_opt {
-                            search_class_def = base_def;
-                            continue;
-                        }
-                    }
-
-                    // No more base classes, member not found
-                    break;
-                }
-
-                // Fallback: look for a default (non-abstract) method in any trait
-                // implemented by this class or any of its ancestors.
-                //
-                // Generic substitution: build a mapping by NAME between the receiver's
-                // generic parameters (from its type_args) and matches them against the
-                // trait's own generic names. This relies on the same naming-convention
-                // shortcut used for inherited class methods (Array<T,Size> → trait T
-                // assumed to bind to receiver's T).
-                {
-                    // Build name → concrete type mapping from the receiver's type_args.
-                    let receiver_mapping: std::collections::HashMap<String, Type> = {
-                        let mut m = std::collections::HashMap::new();
-                        if let Some(orig_generics) =
-                            self.global_type_definitions.get(&name).and_then(|td| {
-                                if let TypeDefinition::Class(cd) = td {
-                                    cd.generics.clone()
-                                } else {
-                                    None
-                                }
-                            })
-                        {
-                            if let Some(type_args) = &type_args {
-                                for (gen, arg_expr) in orig_generics.iter().zip(type_args.iter()) {
-                                    let arg_type = self
-                                        .extract_type_from_expression(arg_expr)
-                                        .unwrap_or(make_type(TypeKind::Error));
-                                    m.insert(gen.name.clone(), arg_type);
-                                }
-                            }
-                        }
-                        m
-                    };
-
-                    let mut search_class_name = name.clone();
-                    'trait_search: loop {
-                        let search_def = context
-                            .resolve_type_definition(&search_class_name)
-                            .or_else(|| self.global_type_definitions.get(&search_class_name));
-
-                        if let Some(TypeDefinition::Class(class_def)) = search_def {
-                            for trait_name in &class_def.traits {
-                                let mut to_check = vec![trait_name.as_str()];
-                                let mut visited = std::collections::HashSet::new();
-                                while let Some(t_name) = to_check.pop() {
-                                    if !visited.insert(t_name) {
-                                        continue;
-                                    }
-                                    if let Some(TypeDefinition::Trait(t_def)) =
-                                        self.global_type_definitions.get(t_name)
-                                    {
-                                        if let Some(method_info) = t_def.methods.get(prop_name) {
-                                            if !method_info.is_abstract {
-                                                // Substitute trait's generic params using the
-                                                // by-name mapping derived from receiver type_args.
-                                                let substitute = |ty: &Type| -> Type {
-                                                    if receiver_mapping.is_empty() {
-                                                        ty.clone()
-                                                    } else {
-                                                        self.substitute_type(ty, &receiver_mapping)
-                                                    }
-                                                };
-
-                                                let params: Vec<Parameter> = method_info
-                                                    .params
-                                                    .iter()
-                                                    .map(|(pname, ty)| Parameter {
-                                                        name: pname.clone(),
-                                                        typ: Box::new(self.create_type_expression(
-                                                            substitute(ty),
-                                                        )),
-                                                        guard: None,
-                                                        default_value: None,
-                                                        is_out: false,
-                                                    })
-                                                    .collect();
-                                                let return_type_expr = if matches!(
-                                                    method_info.return_type.kind,
-                                                    TypeKind::Void
-                                                ) {
-                                                    None
-                                                } else {
-                                                    Some(Box::new(self.create_type_expression(
-                                                        substitute(&method_info.return_type),
-                                                    )))
-                                                };
-                                                return make_type(TypeKind::Function(Box::new(
-                                                    FunctionTypeData {
-                                                        generics: None,
-                                                        params,
-                                                        return_type: return_type_expr,
-                                                    },
-                                                )));
-                                            }
-                                        }
-                                        to_check
-                                            .extend(t_def.parent_traits.iter().map(|s| s.as_str()));
-                                    }
-                                }
-                            }
-                            if let Some(base_name) = class_def.base_class.clone() {
-                                search_class_name = base_name;
-                                continue 'trait_search;
-                            }
-                        }
-                        break;
-                    }
-                }
-
-                // Collect all candidates from the class hierarchy for suggestions
-                let mut candidates: Vec<&str> = Vec::new();
-                let mut collect_class_name = name.as_str();
-                loop {
-                    let collect_def_opt = context
-                        .resolve_type_definition(collect_class_name)
-                        .or_else(|| self.global_type_definitions.get(collect_class_name));
-
-                    if let Some(TypeDefinition::Class(collect_def)) = collect_def_opt {
-                        candidates.extend(collect_def.fields.iter().map(|(n, _)| n.as_str()));
-                        candidates.extend(collect_def.methods.keys().map(|k| k.as_str()));
-
-                        if let Some(base_name) = &collect_def.base_class {
-                            collect_class_name = base_name.as_str();
-                            continue;
-                        }
-                    }
-                    break;
-                }
-
-                if let Some(suggestion) = find_best_match(prop_name, &candidates) {
-                    self.report_error_with_help(
-                        format!("Type '{}' has no field or method '{}'", name, prop_name),
-                        span,
-                        format!("Did you mean '{}'?", suggestion),
-                    );
-                } else {
-                    self.report_error(
-                        format!("Type '{}' has no field or method '{}'", name, prop_name),
-                        span,
-                    );
-                }
-                return make_type(TypeKind::Error);
-            } else if let Some(TypeDefinition::Trait(trait_def)) = def_opt {
-                // Trait-typed variable: look up the method in the trait's method table
-                // (and recursively in parent traits). This enables polymorphic dispatch
-                // through a trait-typed variable: `let x MyTrait = ConcreteImpl()`.
-                let mut to_check = vec![name.as_str()];
-                let mut visited = std::collections::HashSet::new();
-                while let Some(t_name) = to_check.pop() {
-                    if !visited.insert(t_name) {
-                        continue;
-                    }
-                    let t_def_opt: Option<&crate::type_checker::context::TraitDefinition> =
-                        if t_name == name {
-                            Some(trait_def)
-                        } else {
-                            match self.global_type_definitions.get(t_name) {
-                                Some(TypeDefinition::Trait(d)) => Some(d),
-                                _ => None,
-                            }
-                        };
-                    if let Some(t_def) = t_def_opt {
-                        if let Some(method_info) = t_def.methods.get(prop_name) {
-                            let params: Vec<Parameter> = method_info
-                                .params
-                                .iter()
-                                .map(|(pname, ty)| Parameter {
-                                    name: pname.clone(),
-                                    typ: Box::new(self.create_type_expression(ty.clone())),
-                                    guard: None,
-                                    default_value: None,
-                                    is_out: false,
-                                })
-                                .collect();
-                            let return_type_expr =
-                                if matches!(method_info.return_type.kind, TypeKind::Void) {
-                                    None
-                                } else {
-                                    Some(Box::new(
-                                        self.create_type_expression(
-                                            method_info.return_type.clone(),
-                                        ),
-                                    ))
-                                };
-                            return make_type(TypeKind::Function(Box::new(FunctionTypeData {
-                                generics: None,
-                                params,
-                                return_type: return_type_expr,
-                            })));
-                        }
-                        to_check.extend(t_def.parent_traits.iter().map(|s: &String| s.as_str()));
-                    }
-                }
-                // Method not found in any trait
-                let all_methods: Vec<&str> = {
-                    let mut methods: Vec<&str> = Vec::new();
-                    let mut all_to_check = vec![name.as_str()];
-                    let mut all_visited = std::collections::HashSet::new();
-                    while let Some(t_name) = all_to_check.pop() {
-                        if !all_visited.insert(t_name) {
-                            continue;
-                        }
-                        if let Some(TypeDefinition::Trait(td)) =
-                            self.global_type_definitions.get(t_name)
-                        {
-                            methods.extend(td.methods.keys().map(|s| s.as_str()));
-                            all_to_check.extend(td.parent_traits.iter().map(|s| s.as_str()));
-                        }
-                    }
-                    methods
-                };
-                if let Some(suggestion) = find_best_match(prop_name, &all_methods) {
-                    self.report_error_with_help(
-                        format!("Trait '{}' has no method '{}'", name, prop_name),
-                        span,
-                        format!("Did you mean '{}'?", suggestion),
-                    );
-                } else {
-                    self.report_error(
-                        format!("Trait '{}' has no method '{}'", name, prop_name),
-                        span,
-                    );
-                }
-                return make_type(TypeKind::Error);
-            } else if let Some(TypeDefinition::Enum(enum_def)) = def_opt {
-                // Instance method access on an enum value
-                if let Some(method_info) = enum_def.methods.get(prop_name) {
-                    let type_args: Option<Vec<crate::ast::Expression>> =
-                        if let TypeKind::Custom(_, args) = &obj_type.kind {
-                            args.clone()
-                        } else {
-                            None
-                        };
-                    // Build generic substitution map
-                    let mut mapping = HashMap::new();
-                    if let (Some(args), Some(generics)) = (&type_args, &enum_def.generics) {
-                        if generics.len() == args.len() {
-                            for (param, arg_expr) in generics.iter().zip(args.iter()) {
-                                let arg_type = self
-                                    .extract_type_from_expression(arg_expr)
-                                    .unwrap_or(make_type(TypeKind::Error));
-                                mapping.insert(param.name.clone(), arg_type);
-                            }
-                        }
-                    }
-
-                    let params: Vec<Parameter> = method_info
-                        .params
-                        .iter()
-                        .map(|(pname, ty)| {
-                            let substituted_ty = if mapping.is_empty() {
-                                ty.clone()
-                            } else {
-                                self.substitute_type(ty, &mapping)
-                            };
-                            Parameter {
-                                name: pname.clone(),
-                                typ: Box::new(self.create_type_expression(substituted_ty)),
-                                guard: None,
-                                default_value: None,
-                                is_out: false,
                             }
                         })
-                        .collect();
+                });
 
-                    let return_type_expr = if matches!(method_info.return_type.kind, TypeKind::Void)
-                    {
-                        None
-                    } else {
-                        let substituted_ret = if mapping.is_empty() {
-                            method_info.return_type.clone()
-                        } else {
-                            self.substitute_type(&method_info.return_type, &mapping)
-                        };
-                        Some(Box::new(self.create_type_expression(substituted_ret)))
-                    };
-
-                    return make_type(TypeKind::Function(Box::new(FunctionTypeData {
-                        generics: None,
-                        params,
-                        return_type: return_type_expr,
-                    })));
-                }
-                self.report_error(
-                    format!("Enum '{}' has no method '{}'", name, prop_name),
-                    span,
-                );
-                return make_type(TypeKind::Error);
-            } else if def_opt.is_none() {
-                if let Some(module) = self.suggest_module_for_type(&name) {
-                    self.report_error_with_help(
-                        format!("Type '{}' does not have members", obj_type),
-                        span,
-                        format!("Consider importing '{}' to use {} methods", module, name),
-                    );
-                } else {
-                    self.report_error(format!("Type '{}' does not have members", obj_type), span);
-                }
-                return make_type(TypeKind::Error);
+            match next_def {
+                Some(base_def) => search_class_def = base_def,
+                None => break,
             }
         }
+        None
+    }
 
-        match obj_type.kind {
-            TypeKind::Meta(inner_type) => {
-                // Static member access (Enum variant)
-                if let TypeKind::Custom(name, _) = &inner_type.kind {
-                    let def_opt = self.resolve_visible_type(name, context);
-
-                    if let Some(TypeDefinition::Enum(def)) = def_opt {
-                        if let Some(variant_types) = def.variants.get(prop_name) {
-                            // If variant has no associated types, it's a value of the Enum type.
-                            // If it has associated types, it's a constructor function.
-
-                            // Check for generics substitution
-                            let type_args = if let TypeKind::Custom(_, args) = &inner_type.kind {
-                                args.clone()
-                            } else {
-                                None
-                            };
-
-                            if variant_types.is_empty() {
-                                make_type(TypeKind::Custom(name.clone(), type_args))
-                            } else {
-                                // Constructor function: (args) -> EnumType
-
-                                // Perform substitution if needed
-                                let mut substituted_variant_types =
-                                    Vec::with_capacity(variant_types.len());
-                                if let Some(generics) = &def.generics {
-                                    if let Some(args) = &type_args {
-                                        if generics.len() == args.len() {
-                                            let mut mapping = HashMap::new();
-                                            for (param, arg_expr) in
-                                                generics.iter().zip(args.iter())
-                                            {
-                                                let arg_type = self
-                                                    .extract_type_from_expression(arg_expr)
-                                                    .unwrap_or(make_type(TypeKind::Error));
-                                                mapping.insert(param.name.clone(), arg_type);
-                                            }
-
-                                            for t in variant_types {
-                                                substituted_variant_types
-                                                    .push(self.substitute_type(t, &mapping));
-                                            }
-                                        } else {
-                                            substituted_variant_types = variant_types.clone();
-                                        }
-                                    } else {
-                                        substituted_variant_types = variant_types.clone();
-                                    }
-                                } else {
-                                    substituted_variant_types = variant_types.clone();
-                                }
-
-                                let params: Vec<Parameter> = substituted_variant_types
-                                    .iter()
-                                    .enumerate()
-                                    .map(|(i, t)| Parameter {
-                                        name: format!("arg{}", i),
-                                        typ: Box::new(self.create_type_expression(t.clone())),
-                                        guard: None,
-                                        default_value: None,
-                                        is_out: false,
-                                    })
-                                    .collect();
-
-                                // When no explicit type args are present and the enum is generic,
-                                // include the enum's generic params in the function type so that
-                                // infer_call can build the mapping via infer_generic_types and
-                                // produce a properly parameterized return type.
-                                let (fn_generics, return_type_args) = if type_args.is_none() {
-                                    if let Some(generics) = &def.generics {
-                                        let gen_exprs: Vec<Expression> = generics
-                                            .iter()
-                                            .map(|g| {
-                                                let constraint_expr =
-                                                    g.constraint.as_ref().map(|c| {
-                                                        Box::new(
-                                                            self.create_type_expression(c.clone()),
-                                                        )
-                                                    });
-                                                ast_factory::generic_type_with_kind(
-                                                    &g.name,
-                                                    constraint_expr,
-                                                    g.kind,
-                                                )
-                                            })
-                                            .collect();
-                                        let ret_args: Vec<Expression> = generics
-                                            .iter()
-                                            .map(|g| {
-                                                self.create_type_expression(make_type(
-                                                    TypeKind::Generic(
-                                                        g.name.clone(),
-                                                        g.constraint.clone().map(Box::new),
-                                                        g.kind,
-                                                    ),
-                                                ))
-                                            })
-                                            .collect();
-                                        (Some(gen_exprs), Some(ret_args))
-                                    } else {
-                                        (None, type_args)
-                                    }
-                                } else {
-                                    (None, type_args)
-                                };
-
-                                make_type(TypeKind::Function(Box::new(FunctionTypeData {
-                                    generics: fn_generics,
-                                    params,
-                                    return_type: Some(Box::new(self.create_type_expression(
-                                        make_type(TypeKind::Custom(name.clone(), return_type_args)),
-                                    ))),
-                                })))
-                            }
-                        } else {
-                            let candidates: Vec<&str> =
-                                def.variants.keys().map(|s| s.as_str()).collect();
-                            if let Some(suggestion) = find_best_match(prop_name, &candidates) {
-                                self.report_error_with_help(
-                                    format!("Enum '{}' has no variant '{}'", name, prop_name),
-                                    span,
-                                    format!("Did you mean '{}'?", suggestion),
-                                );
-                            } else {
-                                self.report_error(
-                                    format!("Enum '{}' has no variant '{}'", name, prop_name),
-                                    span,
-                                );
-                            }
-                            make_type(TypeKind::Error)
-                        }
-                    } else {
-                        self.report_error(
-                            format!("Type '{}' does not have static members", name),
-                            span,
-                        );
-                        make_type(TypeKind::Error)
-                    }
-                } else {
+    fn lookup_class_field(
+        &mut self,
+        search_class_def: &crate::type_checker::context::ClassDefinition,
+        prop_name: &str,
+        name: &str,
+        mapping: &std::collections::HashMap<String, Type>,
+        span: Span,
+        context: &mut Context,
+    ) -> Option<Type> {
+        search_class_def
+            .fields
+            .iter()
+            .find(|(n, _)| n == prop_name)
+            .cloned()
+            .map(|(_, field_info)| {
+                if !self.check_member_visibility(
+                    &field_info.visibility,
+                    &search_class_def.name,
+                    context.current_class.as_deref(),
+                    Some(name),
+                ) {
                     self.report_error(
-                        format!("Type '{}' does not have static members", inner_type),
+                        format!(
+                            "Field '{}' of class '{}' is {:?} and cannot be accessed from here",
+                            prop_name, search_class_def.name, field_info.visibility
+                        ),
                         span,
                     );
                     make_type(TypeKind::Error)
+                } else if mapping.is_empty() {
+                    field_info.ty.clone()
+                } else {
+                    self.substitute_type(&field_info.ty, mapping)
+                }
+            })
+    }
+
+    fn lookup_class_method(
+        &mut self,
+        search_class_def: &crate::type_checker::context::ClassDefinition,
+        prop_name: &str,
+        name: &str,
+        mapping: &std::collections::HashMap<String, Type>,
+        span: Span,
+        context: &mut Context,
+    ) -> Option<Type> {
+        search_class_def
+            .methods
+            .get(prop_name)
+            .cloned()
+            .map(|method_info| {
+                if !self.check_member_visibility(
+                    &method_info.visibility,
+                    &search_class_def.name,
+                    context.current_class.as_deref(),
+                    Some(name),
+                ) {
+                    self.report_error(
+                        format!(
+                            "Method '{}' of class '{}' is {:?} and cannot be accessed from here",
+                            prop_name, search_class_def.name, method_info.visibility
+                        ),
+                        span,
+                    );
+                    make_type(TypeKind::Error)
+                } else {
+                    self.build_class_method_type(&method_info, mapping)
+                }
+            })
+    }
+
+    fn build_class_method_mapping(
+        &mut self,
+        search_class_def: &crate::type_checker::context::ClassDefinition,
+        name: &str,
+        type_args: &Option<Vec<Expression>>,
+    ) -> std::collections::HashMap<String, Type> {
+        let mut mapping = std::collections::HashMap::new();
+        if let Some(generics) = &search_class_def.generics {
+            if let Some(type_args) = type_args {
+                if generics.len() == type_args.len() {
+                    for (param, arg_expr) in generics.iter().zip(type_args.iter()) {
+                        let arg_type = self
+                            .extract_type_from_expression(arg_expr)
+                            .unwrap_or(make_type(TypeKind::Error));
+                        mapping.insert(param.name.clone(), arg_type);
+                    }
+                } else {
+                    let orig_generics_opt = self
+                        .global_type_definitions
+                        .get(name)
+                        .and_then(|td| {
+                            if let TypeDefinition::Class(cd) = td {
+                                cd.generics.as_ref()
+                            } else {
+                                None
+                            }
+                        })
+                        .cloned();
+                    if let Some(orig_generics) = orig_generics_opt {
+                        for base_generic in generics.iter() {
+                            if let Some(idx) = orig_generics
+                                .iter()
+                                .position(|g| g.name == base_generic.name)
+                            {
+                                if let Some(arg_expr) = type_args.get(idx) {
+                                    let arg_type = self
+                                        .extract_type_from_expression(arg_expr)
+                                        .unwrap_or(make_type(TypeKind::Error));
+                                    mapping.insert(base_generic.name.clone(), arg_type);
+                                }
+                            }
+                        }
+                    }
                 }
             }
-            // TypeKind::String is NOT handled here: String resolves to type_name =
-            // Some("String") at the top of this function, enters the class-definition
-            // lookup block, and always returns from that block (either with the resolved
-            // method type or an error).  This final match is only reached when type_name
-            // was None (primitive types with no class definition), so a TypeKind::String
-            // arm here would be dead code that silently bypasses the stdlib definition.
-            _ => {
-                self.report_error(format!("Type '{}' does not have members", obj_type), span);
-                make_type(TypeKind::Error)
+        }
+        mapping
+    }
+
+    fn report_class_member_not_found(
+        &mut self,
+        name: &str,
+        prop_name: &str,
+        context: &mut Context,
+        span: Span,
+    ) -> Type {
+        let mut candidates: Vec<&str> = Vec::new();
+        let mut collect_class_name = name;
+        loop {
+            let collect_def_opt = context
+                .resolve_type_definition(collect_class_name)
+                .or_else(|| self.global_type_definitions.get(collect_class_name));
+
+            if let Some(TypeDefinition::Class(collect_def)) = collect_def_opt {
+                candidates.extend(collect_def.fields.iter().map(|(n, _)| n.as_str()));
+                candidates.extend(collect_def.methods.keys().map(|k| k.as_str()));
+
+                if let Some(base_name) = &collect_def.base_class {
+                    collect_class_name = base_name.as_str();
+                    continue;
+                }
+            }
+            break;
+        }
+
+        if let Some(suggestion) = find_best_match(prop_name, &candidates) {
+            self.report_error_with_help(
+                format!("Type '{}' has no field or method '{}'", name, prop_name),
+                span,
+                format!("Did you mean '{}'?", suggestion),
+            );
+        } else {
+            self.report_error(
+                format!("Type '{}' has no field or method '{}'", name, prop_name),
+                span,
+            );
+        }
+        make_type(TypeKind::Error)
+    }
+
+    fn build_class_method_type(
+        &mut self,
+        method_info: &crate::type_checker::context::MethodInfo,
+        mapping: &std::collections::HashMap<String, Type>,
+    ) -> Type {
+        let params: Vec<Parameter> = method_info
+            .params
+            .iter()
+            .map(|(pname, ty)| {
+                let substituted_ty = if mapping.is_empty() {
+                    ty.clone()
+                } else {
+                    self.substitute_type(ty, mapping)
+                };
+                Parameter {
+                    name: pname.clone(),
+                    typ: Box::new(self.create_type_expression(substituted_ty)),
+                    guard: None,
+                    default_value: None,
+                    is_out: false,
+                }
+            })
+            .collect();
+
+        let return_type_expr = if matches!(method_info.return_type.kind, TypeKind::Void) {
+            None
+        } else {
+            let substituted_ret = if mapping.is_empty() {
+                method_info.return_type.clone()
+            } else {
+                self.substitute_type(&method_info.return_type, mapping)
+            };
+            Some(Box::new(self.create_type_expression(substituted_ret)))
+        };
+
+        make_type(TypeKind::Function(Box::new(FunctionTypeData {
+            generics: None,
+            params,
+            return_type: return_type_expr,
+        })))
+    }
+
+    fn infer_member_class_trait_fallback(
+        &mut self,
+        name: &str,
+        prop_name: &str,
+        type_args: &Option<Vec<Expression>>,
+    ) -> Option<Type> {
+        let receiver_mapping = self.build_receiver_mapping(name, type_args);
+
+        let mut search_class_name = Some(name.to_string());
+        while let Some(class_name) = search_class_name.take() {
+            let (traits, base_class) = match self.global_type_definitions.get(&class_name) {
+                Some(TypeDefinition::Class(class_def)) => {
+                    (class_def.traits.clone(), class_def.base_class.clone())
+                }
+                _ => break,
+            };
+            for trait_name in &traits {
+                if let Some(ty) = self.search_trait_method(trait_name, prop_name, &receiver_mapping)
+                {
+                    return Some(ty);
+                }
+            }
+            if let Some(base_name) = base_class {
+                search_class_name = Some(base_name);
+                continue;
+            }
+            break;
+        }
+        None
+    }
+
+    fn build_receiver_mapping(
+        &mut self,
+        name: &str,
+        type_args: &Option<Vec<Expression>>,
+    ) -> std::collections::HashMap<String, Type> {
+        let mut m = std::collections::HashMap::new();
+        if let Some(orig_generics) = self.global_type_definitions.get(name).and_then(|td| {
+            if let TypeDefinition::Class(cd) = td {
+                cd.generics.clone()
+            } else {
+                None
+            }
+        }) {
+            if let Some(type_args) = type_args {
+                for (gen, arg_expr) in orig_generics.iter().zip(type_args.iter()) {
+                    let arg_type = self
+                        .extract_type_from_expression(arg_expr)
+                        .unwrap_or(make_type(TypeKind::Error));
+                    m.insert(gen.name.clone(), arg_type);
+                }
             }
         }
+        m
+    }
+
+    fn search_trait_method(
+        &mut self,
+        trait_name: &str,
+        prop_name: &str,
+        receiver_mapping: &std::collections::HashMap<String, Type>,
+    ) -> Option<Type> {
+        let mut to_check: Vec<String> = vec![trait_name.to_string()];
+        let mut visited = std::collections::HashSet::new();
+        while let Some(t_name) = to_check.pop() {
+            if !visited.insert(t_name.clone()) {
+                continue;
+            }
+            let (method_opt, parents) = match self.global_type_definitions.get(&t_name) {
+                Some(TypeDefinition::Trait(t_def)) => (
+                    t_def.methods.get(prop_name).cloned(),
+                    t_def.parent_traits.clone(),
+                ),
+                _ => continue,
+            };
+            if let Some(method_info) = method_opt {
+                if !method_info.is_abstract {
+                    return Some(self.build_method_type(&method_info, receiver_mapping));
+                }
+            }
+            to_check.extend(parents);
+        }
+        None
+    }
+
+    fn build_method_type(
+        &mut self,
+        method_info: &crate::type_checker::context::MethodInfo,
+        receiver_mapping: &std::collections::HashMap<String, Type>,
+    ) -> Type {
+        let substitute = |ty: &Type| -> Type {
+            if receiver_mapping.is_empty() {
+                ty.clone()
+            } else {
+                self.substitute_type(ty, receiver_mapping)
+            }
+        };
+
+        let params: Vec<Parameter> = method_info
+            .params
+            .iter()
+            .map(|(pname, ty)| Parameter {
+                name: pname.clone(),
+                typ: Box::new(self.create_type_expression(substitute(ty))),
+                guard: None,
+                default_value: None,
+                is_out: false,
+            })
+            .collect();
+
+        let return_type_expr = if matches!(method_info.return_type.kind, TypeKind::Void) {
+            None
+        } else {
+            Some(Box::new(self.create_type_expression(substitute(
+                &method_info.return_type,
+            ))))
+        };
+
+        make_type(TypeKind::Function(Box::new(FunctionTypeData {
+            generics: None,
+            params,
+            return_type: return_type_expr,
+        })))
+    }
+
+    fn infer_member_trait(
+        &mut self,
+        name: &str,
+        trait_def: &crate::type_checker::context::TraitDefinition,
+        prop_name: &str,
+        span: Span,
+        _context: &mut Context,
+    ) -> Type {
+        let mut to_check: Vec<String> = vec![name.to_string()];
+        let mut visited = std::collections::HashSet::new();
+        while let Some(t_name) = to_check.pop() {
+            if !visited.insert(t_name.clone()) {
+                continue;
+            }
+            let (method_info, parent_traits) = if t_name == name {
+                (
+                    trait_def.methods.get(prop_name).cloned(),
+                    trait_def.parent_traits.clone(),
+                )
+            } else {
+                match self.global_type_definitions.get(&t_name) {
+                    Some(TypeDefinition::Trait(d)) => {
+                        (d.methods.get(prop_name).cloned(), d.parent_traits.clone())
+                    }
+                    _ => continue,
+                }
+            };
+            if let Some(method_info) = method_info {
+                let empty_map = std::collections::HashMap::new();
+                return self.build_method_type(&method_info, &empty_map);
+            }
+            to_check.extend(parent_traits);
+        }
+
+        let all_methods = self.collect_trait_methods_for_access(name);
+        if let Some(suggestion) = find_best_match(prop_name, &all_methods) {
+            self.report_error_with_help(
+                format!("Trait '{}' has no method '{}'", name, prop_name),
+                span,
+                format!("Did you mean '{}'?", suggestion),
+            );
+        } else {
+            self.report_error(
+                format!("Trait '{}' has no method '{}'", name, prop_name),
+                span,
+            );
+        }
+        make_type(TypeKind::Error)
+    }
+
+    fn collect_trait_methods_for_access(&mut self, name: &str) -> Vec<&str> {
+        let mut methods: Vec<&str> = Vec::new();
+        let mut all_to_check = vec![name];
+        let mut all_visited = std::collections::HashSet::new();
+        while let Some(t_name) = all_to_check.pop() {
+            if !all_visited.insert(t_name) {
+                continue;
+            }
+            if let Some(TypeDefinition::Trait(td)) = self.global_type_definitions.get(t_name) {
+                methods.extend(td.methods.keys().map(|s| s.as_str()));
+                all_to_check.extend(td.parent_traits.iter().map(|s| s.as_str()));
+            }
+        }
+        methods
+    }
+
+    fn infer_member_enum(
+        &mut self,
+        enum_def: &crate::type_checker::context::EnumDefinition,
+        name: &str,
+        prop_name: &str,
+        obj_type: &Type,
+        span: Span,
+        _context: &mut Context,
+    ) -> Type {
+        if let Some(method_info) = enum_def.methods.get(prop_name) {
+            let type_args: Option<Vec<crate::ast::Expression>> =
+                if let TypeKind::Custom(_, args) = &obj_type.kind {
+                    args.clone()
+                } else {
+                    None
+                };
+            let mut mapping = HashMap::new();
+            if let (Some(args), Some(generics)) = (&type_args, &enum_def.generics) {
+                if generics.len() == args.len() {
+                    for (param, arg_expr) in generics.iter().zip(args.iter()) {
+                        let arg_type = self
+                            .extract_type_from_expression(arg_expr)
+                            .unwrap_or(make_type(TypeKind::Error));
+                        mapping.insert(param.name.clone(), arg_type);
+                    }
+                }
+            }
+
+            let params: Vec<Parameter> = method_info
+                .params
+                .iter()
+                .map(|(pname, ty)| {
+                    let substituted_ty = if mapping.is_empty() {
+                        ty.clone()
+                    } else {
+                        self.substitute_type(ty, &mapping)
+                    };
+                    Parameter {
+                        name: pname.clone(),
+                        typ: Box::new(self.create_type_expression(substituted_ty)),
+                        guard: None,
+                        default_value: None,
+                        is_out: false,
+                    }
+                })
+                .collect();
+
+            let return_type_expr = if matches!(method_info.return_type.kind, TypeKind::Void) {
+                None
+            } else {
+                let substituted_ret = if mapping.is_empty() {
+                    method_info.return_type.clone()
+                } else {
+                    self.substitute_type(&method_info.return_type, &mapping)
+                };
+                Some(Box::new(self.create_type_expression(substituted_ret)))
+            };
+
+            return make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                generics: None,
+                params,
+                return_type: return_type_expr,
+            })));
+        }
+        self.report_error(
+            format!("Enum '{}' has no method '{}'", name, prop_name),
+            span,
+        );
+        make_type(TypeKind::Error)
+    }
+
+    fn infer_member_meta(
+        &mut self,
+        inner_type: &Type,
+        prop_name: &str,
+        span: Span,
+        context: &mut Context,
+    ) -> Type {
+        if let TypeKind::Custom(name, _) = &inner_type.kind {
+            let def_opt = self.resolve_visible_type(name, context).cloned();
+
+            if let Some(TypeDefinition::Enum(def)) = &def_opt {
+                if let Some(variant_types) = def.variants.get(prop_name) {
+                    let type_args = if let TypeKind::Custom(_, args) = &inner_type.kind {
+                        args.clone()
+                    } else {
+                        None
+                    };
+
+                    if variant_types.is_empty() {
+                        return make_type(TypeKind::Custom(name.clone(), type_args));
+                    }
+
+                    let variant_types_clone = variant_types.clone();
+                    return self.infer_member_enum_variant(
+                        name,
+                        &variant_types_clone,
+                        def,
+                        &type_args,
+                    );
+                }
+
+                let candidates: Vec<&str> = def.variants.keys().map(|s| s.as_str()).collect();
+                if let Some(suggestion) = find_best_match(prop_name, &candidates) {
+                    self.report_error_with_help(
+                        format!("Enum '{}' has no variant '{}'", name, prop_name),
+                        span,
+                        format!("Did you mean '{}'?", suggestion),
+                    );
+                } else {
+                    self.report_error(
+                        format!("Enum '{}' has no variant '{}'", name, prop_name),
+                        span,
+                    );
+                }
+                return make_type(TypeKind::Error);
+            }
+
+            self.report_error(
+                format!("Type '{}' does not have static members", name),
+                span,
+            );
+            return make_type(TypeKind::Error);
+        }
+
+        self.report_error(
+            format!("Type '{}' does not have static members", inner_type),
+            span,
+        );
+        make_type(TypeKind::Error)
+    }
+
+    fn infer_member_enum_variant(
+        &mut self,
+        name: &str,
+        variant_types: &[Type],
+        def: &crate::type_checker::context::EnumDefinition,
+        type_args: &Option<Vec<Expression>>,
+    ) -> Type {
+        let substituted_variant_types =
+            self.substitute_variant_types(variant_types, def, type_args);
+        let params = self.build_variant_params(&substituted_variant_types);
+        let (fn_generics, return_type_args) = self.build_variant_generics(def, type_args);
+
+        make_type(TypeKind::Function(Box::new(FunctionTypeData {
+            generics: fn_generics,
+            params,
+            return_type: Some(Box::new(self.create_type_expression(make_type(
+                TypeKind::Custom(name.to_string(), return_type_args),
+            )))),
+        })))
+    }
+
+    fn substitute_variant_types(
+        &mut self,
+        variant_types: &[Type],
+        def: &crate::type_checker::context::EnumDefinition,
+        type_args: &Option<Vec<Expression>>,
+    ) -> Vec<Type> {
+        if let Some(generics) = &def.generics {
+            if let Some(args) = type_args {
+                if generics.len() == args.len() {
+                    let mut mapping = HashMap::new();
+                    for (param, arg_expr) in generics.iter().zip(args.iter()) {
+                        let arg_type = self
+                            .extract_type_from_expression(arg_expr)
+                            .unwrap_or(make_type(TypeKind::Error));
+                        mapping.insert(param.name.clone(), arg_type);
+                    }
+                    return variant_types
+                        .iter()
+                        .map(|t| self.substitute_type(t, &mapping))
+                        .collect();
+                }
+            }
+        }
+        variant_types.to_vec()
+    }
+
+    fn build_variant_params(&self, substituted_variant_types: &[Type]) -> Vec<Parameter> {
+        substituted_variant_types
+            .iter()
+            .enumerate()
+            .map(|(i, t)| Parameter {
+                name: format!("arg{}", i),
+                typ: Box::new(self.create_type_expression(t.clone())),
+                guard: None,
+                default_value: None,
+                is_out: false,
+            })
+            .collect()
+    }
+
+    fn build_variant_generics(
+        &self,
+        def: &crate::type_checker::context::EnumDefinition,
+        type_args: &Option<Vec<Expression>>,
+    ) -> (Option<Vec<Expression>>, Option<Vec<Expression>>) {
+        if type_args.is_none() {
+            if let Some(generics) = &def.generics {
+                let gen_exprs: Vec<Expression> = generics
+                    .iter()
+                    .map(|g| {
+                        let constraint_expr = g
+                            .constraint
+                            .as_ref()
+                            .map(|c| Box::new(self.create_type_expression(c.clone())));
+                        ast_factory::generic_type_with_kind(&g.name, constraint_expr, g.kind)
+                    })
+                    .collect();
+                let ret_args: Vec<Expression> = generics
+                    .iter()
+                    .map(|g| {
+                        self.create_type_expression(make_type(TypeKind::Generic(
+                            g.name.clone(),
+                            g.constraint.clone().map(Box::new),
+                            g.kind,
+                        )))
+                    })
+                    .collect();
+                return (Some(gen_exprs), Some(ret_args));
+            }
+        }
+        (None, type_args.clone())
     }
 }

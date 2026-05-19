@@ -42,6 +42,7 @@
 use crate::ast::factory::make_type;
 use crate::ast::types::{TypeDeclarationKind, TypeKind};
 use crate::ast::*;
+use crate::error::syntax::Span;
 use crate::type_checker::context::{
     AliasDefinition, Context, GenericDefinition, StructDefinition, SymbolInfo, TypeDefinition,
 };
@@ -68,29 +69,7 @@ impl TypeChecker {
             StatementKind::Variable(decls, vis) => {
                 self.check_variable_declaration(decls, vis, context, statement.span)
             }
-            StatementKind::Expression(expr) => {
-                let expr_type = self.infer_expression(expr, context);
-                // Enforce must_use semantics: expressions whose type is a must_use enum
-                // must not be silently discarded. Skip when suppress_must_use is set
-                // (e.g., the expression is the implicit return value of a function).
-                if !context.suppress_must_use {
-                    if let TypeKind::Custom(type_name, _) = &expr_type.kind {
-                        if let Some(TypeDefinition::Enum(def)) =
-                            self.global_type_definitions.get(type_name.as_str())
-                        {
-                            if def.must_use {
-                                self.report_error(
-                                    format!(
-                                        "Unused value of type '{}': this value must be used",
-                                        type_name
-                                    ),
-                                    statement.span,
-                                );
-                            }
-                        }
-                    }
-                }
-            }
+            StatementKind::Expression(expr) => self.check_expr_stmt(expr, context, statement.span),
             StatementKind::Block(stmts) => self.check_block(stmts, context),
             StatementKind::If(cond, then_block, else_block, _) => {
                 self.check_if(cond, then_block, else_block, context)
@@ -143,50 +122,7 @@ impl TypeChecker {
                 self.check_type_statement(exprs, visibility, context)
             }
             StatementKind::RuntimeFunctionDeclaration(_runtime, name, params, return_type_expr) => {
-                // Runtime functions are extern bindings. Register their type
-                // signature in the current scope so calls can be type-checked,
-                // but skip body checking since they have no body.
-                let func_type = make_type(TypeKind::Function(Box::new(FunctionTypeData {
-                    generics: None,
-                    params: params.to_vec(),
-                    return_type: return_type_expr.clone(),
-                })));
-
-                if context.scopes.len() == 1 {
-                    self.global_scope.insert(
-                        name.to_string(),
-                        SymbolInfo::new(
-                            func_type.clone(),
-                            false,
-                            false,
-                            MemberVisibility::Private,
-                            self.current_module.clone(),
-                            None,
-                        ),
-                    );
-                }
-
-                context.define(
-                    name.to_string(),
-                    SymbolInfo::new(
-                        func_type,
-                        false,
-                        false,
-                        MemberVisibility::Private,
-                        self.current_module.clone(),
-                        None,
-                    ),
-                );
-
-                // Resolve parameter types to catch errors early
-                for param in params {
-                    self.resolve_type_expression(&param.typ, context);
-                }
-
-                // Resolve return type if present
-                if let Some(rt_expr) = return_type_expr {
-                    self.resolve_type_expression(rt_expr, context);
-                }
+                self.check_runtime_fn_decl(name, params, return_type_expr, context)
             }
             StatementKind::IntrinsicFunctionDeclaration(
                 name,
@@ -194,77 +130,152 @@ impl TypeChecker {
                 params,
                 return_type_expr,
                 visibility,
-            ) => {
-                let func_type = make_type(TypeKind::Function(Box::new(FunctionTypeData {
-                    generics: generics.clone(),
-                    params: params.to_vec(),
-                    return_type: return_type_expr.clone(),
-                })));
-
-                if context.scopes.len() == 1 {
-                    self.global_scope.insert(
-                        name.to_string(),
-                        SymbolInfo::new_intrinsic(
-                            func_type.clone(),
-                            visibility.clone(),
-                            self.current_module.clone(),
-                        ),
-                    );
-                }
-
-                context.define(
-                    name.to_string(),
-                    SymbolInfo::new_intrinsic(
-                        func_type,
-                        visibility.clone(),
-                        self.current_module.clone(),
-                    ),
-                );
-
-                // Register generic type parameters in the scope for the duration of this signature check
-                if let Some(gens) = generics {
-                    context.enter_scope();
-                    for gen in gens {
-                        if let ExpressionKind::GenericType(name_expr, constraint, kind) = &gen.node
-                        {
-                            if let ExpressionKind::Identifier(name, _) = &name_expr.node {
-                                let constraint_ty = constraint
-                                    .as_ref()
-                                    .map(|c| self.resolve_type_expression(c, context));
-                                context.define_type(
-                                    name.clone(),
-                                    TypeDefinition::Generic(GenericDefinition {
-                                        name: name.clone(),
-                                        constraint: constraint_ty,
-                                        kind: *kind,
-                                    }),
-                                );
-                            }
-                        }
-                    }
-                }
-
-                // Resolve parameter types
-                for param in params {
-                    self.resolve_type_expression(&param.typ, context);
-                }
-
-                // Resolve return type
-                if let Some(rt_expr) = return_type_expr {
-                    self.resolve_type_expression(rt_expr, context);
-                }
-
-                if generics.is_some() {
-                    context.exit_scope();
-                }
-            }
+            ) => self.check_intrinsic_fn_decl(
+                name,
+                generics,
+                params,
+                return_type_expr,
+                visibility,
+                context,
+            ),
             StatementKind::Use(path_expr, alias) => {
                 self.check_use(path_expr, alias, context);
             }
-            // These statement kinds require no type checking:
-            // - Empty: no-op
-            // - Break/Continue: validated above via check_break/check_continue match arms
             StatementKind::Empty => {}
+        }
+    }
+
+    fn check_expr_stmt(&mut self, expr: &Expression, context: &mut Context, span: Span) {
+        let expr_type = self.infer_expression(expr, context);
+        if !context.suppress_must_use {
+            if let TypeKind::Custom(type_name, _) = &expr_type.kind {
+                if let Some(TypeDefinition::Enum(def)) =
+                    self.global_type_definitions.get(type_name.as_str())
+                {
+                    if def.must_use {
+                        self.report_error(
+                            format!(
+                                "Unused value of type '{}': this value must be used",
+                                type_name
+                            ),
+                            span,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn check_runtime_fn_decl(
+        &mut self,
+        name: &str,
+        params: &[Parameter],
+        return_type_expr: &Option<Box<Expression>>,
+        context: &mut Context,
+    ) {
+        let func_type = make_type(TypeKind::Function(Box::new(FunctionTypeData {
+            generics: None,
+            params: params.to_vec(),
+            return_type: return_type_expr.clone(),
+        })));
+
+        if context.scopes.len() == 1 {
+            self.global_scope.insert(
+                name.to_string(),
+                SymbolInfo::new(
+                    func_type.clone(),
+                    false,
+                    false,
+                    MemberVisibility::Private,
+                    self.current_module.clone(),
+                    None,
+                ),
+            );
+        }
+
+        context.define(
+            name.to_string(),
+            SymbolInfo::new(
+                func_type,
+                false,
+                false,
+                MemberVisibility::Private,
+                self.current_module.clone(),
+                None,
+            ),
+        );
+
+        for param in params {
+            self.resolve_type_expression(&param.typ, context);
+        }
+
+        if let Some(rt_expr) = return_type_expr {
+            self.resolve_type_expression(rt_expr, context);
+        }
+    }
+
+    fn check_intrinsic_fn_decl(
+        &mut self,
+        name: &str,
+        generics: &Option<Vec<Expression>>,
+        params: &[Parameter],
+        return_type_expr: &Option<Box<Expression>>,
+        visibility: &MemberVisibility,
+        context: &mut Context,
+    ) {
+        let func_type = make_type(TypeKind::Function(Box::new(FunctionTypeData {
+            generics: generics.clone(),
+            params: params.to_vec(),
+            return_type: return_type_expr.clone(),
+        })));
+
+        if context.scopes.len() == 1 {
+            self.global_scope.insert(
+                name.to_string(),
+                SymbolInfo::new_intrinsic(
+                    func_type.clone(),
+                    visibility.clone(),
+                    self.current_module.clone(),
+                ),
+            );
+        }
+
+        context.define(
+            name.to_string(),
+            SymbolInfo::new_intrinsic(func_type, visibility.clone(), self.current_module.clone()),
+        );
+
+        if let Some(gens) = generics {
+            context.enter_scope();
+            for gen in gens {
+                if let ExpressionKind::GenericType(name_expr, constraint, kind) = &gen.node {
+                    if let ExpressionKind::Identifier(gen_name, _) = &name_expr.node {
+                        let constraint_ty = constraint
+                            .as_ref()
+                            .map(|c| self.resolve_type_expression(c, context));
+                        context.define_type(
+                            gen_name.clone(),
+                            TypeDefinition::Generic(GenericDefinition {
+                                name: gen_name.clone(),
+                                constraint: constraint_ty,
+                                kind: *kind,
+                            }),
+                        );
+                    }
+                }
+            }
+        }
+
+        for param in params {
+            self.resolve_type_expression(&param.typ, context);
+        }
+
+        if let Some(rt_expr) = return_type_expr {
+            self.resolve_type_expression(rt_expr, context);
+        }
+
+        if generics.is_some() {
+            context.exit_scope();
         }
     }
 
@@ -279,7 +290,6 @@ impl TypeChecker {
                 &expr.node
             {
                 if let Ok(name) = self.extract_name(name_expr) {
-                    // Reject incomplete type declarations (type A, B, C without is/extends/implements)
                     if *kind == TypeDeclarationKind::None && target_expr.is_none() {
                         self.report_error(
                             format!(
@@ -292,112 +302,127 @@ impl TypeChecker {
                     }
                     let name = name.to_string();
 
-                    // Handle "type F is map<string, int>" or "type Optional<T> is T?"
                     if *kind == TypeDeclarationKind::Is {
                         if let Some(target) = target_expr {
-                            // Extract generic definitions from the generics expression
-                            let generic_defs = if let Some(gens) = generics {
-                                let mut defs = Vec::with_capacity(gens.len());
-                                for gen in gens {
-                                    if let ExpressionKind::GenericType(
-                                        name_expr,
-                                        constraint_expr,
-                                        gen_kind,
-                                    ) = &gen.node
-                                    {
-                                        let gen_name = if let ExpressionKind::Identifier(n, _) =
-                                            &name_expr.node
-                                        {
-                                            n.clone()
-                                        } else {
-                                            continue;
-                                        };
-                                        let constraint_type = constraint_expr
-                                            .as_ref()
-                                            .map(|c| self.resolve_type_expression(c, context));
-                                        defs.push(GenericDefinition {
-                                            name: gen_name,
-                                            constraint: constraint_type,
-                                            kind: *gen_kind,
-                                        });
-                                    }
-                                }
-                                if defs.is_empty() {
-                                    None
-                                } else {
-                                    Some(defs)
-                                }
-                            } else {
-                                None
-                            };
-
-                            // If there are generics, define them in a temporary scope before resolving the type
-                            if let Some(ref gens) = generics {
-                                context.enter_scope();
-                                self.define_generics(gens, context);
-                            }
-
-                            let target_type = self.resolve_type_expression(target, context);
-
-                            if generics.is_some() {
-                                context.exit_scope();
-                            }
-
-                            self.register_type_definition(
-                                name.clone(),
-                                TypeDefinition::Alias(AliasDefinition {
-                                    template: target_type,
-                                    generics: generic_defs,
-                                }),
-                            );
+                            self.check_type_alias(&name, generics, target, context);
                         }
                     } else if let Some(target) = target_expr {
-                        // For extends/implements/includes, check for conflicts with existing types
-                        if self.is_type_visible(&name) {
-                            self.report_error(
-                                format!(
-                                    "Type '{}' is already defined. Cannot use 'type' statement with '{}' on an existing type.",
-                                    name, kind
-                                ),
-                                expr.span,
-                            );
-                            continue;
-                        }
-
-                        // Validate that target type exists
-                        if let Ok(target_name) = self.extract_type_name(target) {
-                            if !self.is_type_visible(target_name) {
-                                self.report_error(
-                                    format!("Unknown type '{}' in type declaration", target_name),
-                                    target.span,
-                                );
-                                continue;
-                            }
-                            let target_name = target_name.to_string();
-
-                            // Register new type and add hierarchy relationship
-                            self.register_type_definition(
-                                name.clone(),
-                                TypeDefinition::Struct(StructDefinition {
-                                    fields: vec![],
-                                    generics: None,
-                                    has_drop: false,
-                                    module: self.current_module.clone(),
-                                }),
-                            );
-
-                            let entry = self.hierarchy.entry(name.clone()).or_default();
-                            match kind {
-                                TypeDeclarationKind::Extends => entry.extends = Some(target_name),
-                                TypeDeclarationKind::Implements => {
-                                    entry.implements.push(target_name)
-                                }
-                                TypeDeclarationKind::Includes => entry.includes.push(target_name),
-                                _ => {}
-                            }
-                        }
+                        self.check_type_hierarchy(&name, kind, target, context, expr.span);
                     }
                 }
+            }
+        }
+    }
+
+    fn check_type_alias(
+        &mut self,
+        name: &str,
+        generics: &Option<Vec<Expression>>,
+        target: &Expression,
+        context: &mut Context,
+    ) {
+        let generic_defs = self.extract_generic_defs(generics, context);
+
+        if let Some(ref gens) = generics {
+            context.enter_scope();
+            self.define_generics(gens, context);
+        }
+
+        let target_type = self.resolve_type_expression(target, context);
+
+        if generics.is_some() {
+            context.exit_scope();
+        }
+
+        self.register_type_definition(
+            name.to_string(),
+            TypeDefinition::Alias(AliasDefinition {
+                template: target_type,
+                generics: generic_defs,
+            }),
+        );
+    }
+
+    fn extract_generic_defs(
+        &mut self,
+        generics: &Option<Vec<Expression>>,
+        context: &mut Context,
+    ) -> Option<Vec<GenericDefinition>> {
+        if let Some(gens) = generics {
+            let mut defs = Vec::with_capacity(gens.len());
+            for gen in gens {
+                if let ExpressionKind::GenericType(name_expr, constraint_expr, gen_kind) = &gen.node
+                {
+                    let gen_name = if let ExpressionKind::Identifier(n, _) = &name_expr.node {
+                        n.clone()
+                    } else {
+                        continue;
+                    };
+                    let constraint_type = constraint_expr
+                        .as_ref()
+                        .map(|c| self.resolve_type_expression(c, context));
+                    defs.push(GenericDefinition {
+                        name: gen_name,
+                        constraint: constraint_type,
+                        kind: *gen_kind,
+                    });
+                }
+            }
+            if defs.is_empty() {
+                None
+            } else {
+                Some(defs)
+            }
+        } else {
+            None
+        }
+    }
+
+    fn check_type_hierarchy(
+        &mut self,
+        name: &str,
+        kind: &TypeDeclarationKind,
+        target: &Expression,
+        _context: &mut Context,
+        span: Span,
+    ) {
+        if self.is_type_visible(name) {
+            self.report_error(
+                format!(
+                    "Type '{}' is already defined. Cannot use 'type' statement with '{}' on an existing type.",
+                    name, kind
+                ),
+                span,
+            );
+            return;
+        }
+
+        if let Ok(target_name) = self.extract_type_name(target) {
+            if !self.is_type_visible(target_name) {
+                self.report_error(
+                    format!("Unknown type '{}' in type declaration", target_name),
+                    target.span,
+                );
+                return;
+            }
+            let target_name = target_name.to_string();
+
+            self.register_type_definition(
+                name.to_string(),
+                TypeDefinition::Struct(StructDefinition {
+                    fields: vec![],
+                    generics: None,
+                    has_drop: false,
+                    module: self.current_module.clone(),
+                }),
+            );
+
+            let entry = self.hierarchy.entry(name.to_string()).or_default();
+            match kind {
+                TypeDeclarationKind::Extends => entry.extends = Some(target_name),
+                TypeDeclarationKind::Implements => entry.implements.push(target_name),
+                TypeDeclarationKind::Includes => entry.includes.push(target_name),
+                _ => {}
             }
         }
     }

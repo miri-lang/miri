@@ -112,69 +112,9 @@ impl TypeChecker {
         context: &mut Context,
     ) -> Type {
         let rhs_type = self.infer_expression(rhs, context);
-        let lhs_type = match lhs {
-            LeftHandSideExpression::Identifier(id_expr) => {
-                if let ExpressionKind::Identifier(name, _) = &id_expr.node {
-                    // 'self' is always mutable in class context (for constructor assignment)
-                    // Only check mutability if the variable is actually defined;
-                    // undefined variables will be reported by infer_identifier below.
-                    if name != "self"
-                        && context.resolve_info(name).is_some()
-                        && !context.is_mutable(name)
-                    {
-                        if context.is_constant(name) {
-                            self.report_error(
-                                format!("Cannot assign to constant '{}'", name),
-                                span,
-                            );
-                        } else {
-                            self.report_error(
-                                format!("Cannot assign to immutable variable '{}'", name),
-                                span,
-                            );
-                        }
-                    }
-                    self.infer_identifier(name, id_expr.span, context)
-                } else {
-                    self.report_error("Invalid assignment target".to_string(), span);
-                    ast_factory::make_type(TypeKind::Error)
-                }
-            }
-            LeftHandSideExpression::Member(member_expr) => {
-                if let ExpressionKind::Member(obj, prop) = &member_expr.node {
-                    if !self.is_mutable_expression(obj, context) {
-                        self.report_error(
-                            "Cannot assign to field of immutable variable".to_string(),
-                            span,
-                        );
-                    }
-                    self.infer_member(obj, prop, member_expr.span, context)
-                } else {
-                    ast_factory::make_type(TypeKind::Error)
-                }
-            }
-            LeftHandSideExpression::Index(index_expr) => {
-                if let ExpressionKind::Index(obj, index) = &index_expr.node {
-                    if !self.is_mutable_expression(obj, context) {
-                        self.report_error(
-                            "Cannot assign to element of immutable variable".to_string(),
-                            span,
-                        );
-                    }
-                    self.infer_index(obj, index, index_expr.span, context)
-                } else {
-                    ast_factory::make_type(TypeKind::Error)
-                }
-            }
-        };
+        let lhs_type = self.infer_assignment_target(lhs, span, context);
 
-        if matches!(op, AssignmentOp::AssignDiv | AssignmentOp::AssignMod) {
-            if let ExpressionKind::Literal(lit) = &rhs.node {
-                if lit.is_zero() {
-                    self.report_error("Division by zero".to_string(), rhs.span);
-                }
-            }
-        }
+        self.check_division_by_zero_assignment(op, rhs);
 
         if !self.are_compatible(&lhs_type, &rhs_type, context) {
             self.report_error(
@@ -187,5 +127,92 @@ impl TypeChecker {
         }
 
         lhs_type
+    }
+
+    fn infer_assignment_target(
+        &mut self,
+        lhs: &LeftHandSideExpression,
+        span: Span,
+        context: &mut Context,
+    ) -> Type {
+        match lhs {
+            LeftHandSideExpression::Identifier(id_expr) => {
+                self.infer_assignment_to_identifier(id_expr, span, context)
+            }
+            LeftHandSideExpression::Member(member_expr) => {
+                self.infer_assignment_to_member(member_expr, span, context)
+            }
+            LeftHandSideExpression::Index(index_expr) => {
+                self.infer_assignment_to_index(index_expr, span, context)
+            }
+        }
+    }
+
+    fn infer_assignment_to_identifier(
+        &mut self,
+        id_expr: &Expression,
+        span: Span,
+        context: &mut Context,
+    ) -> Type {
+        let ExpressionKind::Identifier(name, _) = &id_expr.node else {
+            self.report_error("Invalid assignment target".to_string(), span);
+            return ast_factory::make_type(TypeKind::Error);
+        };
+        if name != "self" && context.resolve_info(name).is_some() && !context.is_mutable(name) {
+            let msg = if context.is_constant(name) {
+                format!("Cannot assign to constant '{}'", name)
+            } else {
+                format!("Cannot assign to immutable variable '{}'", name)
+            };
+            self.report_error(msg, span);
+        }
+        self.infer_identifier(name, id_expr.span, context)
+    }
+
+    fn infer_assignment_to_member(
+        &mut self,
+        member_expr: &Expression,
+        span: Span,
+        context: &mut Context,
+    ) -> Type {
+        let ExpressionKind::Member(obj, prop) = &member_expr.node else {
+            return ast_factory::make_type(TypeKind::Error);
+        };
+        if !self.is_mutable_expression(obj, context) {
+            self.report_error(
+                "Cannot assign to field of immutable variable".to_string(),
+                span,
+            );
+        }
+        self.infer_member(obj, prop, member_expr.span, context)
+    }
+
+    fn infer_assignment_to_index(
+        &mut self,
+        index_expr: &Expression,
+        span: Span,
+        context: &mut Context,
+    ) -> Type {
+        let ExpressionKind::Index(obj, index) = &index_expr.node else {
+            return ast_factory::make_type(TypeKind::Error);
+        };
+        if !self.is_mutable_expression(obj, context) {
+            self.report_error(
+                "Cannot assign to element of immutable variable".to_string(),
+                span,
+            );
+        }
+        self.infer_index(obj, index, index_expr.span, context)
+    }
+
+    fn check_division_by_zero_assignment(&mut self, op: &AssignmentOp, rhs: &Expression) {
+        if !matches!(op, AssignmentOp::AssignDiv | AssignmentOp::AssignMod) {
+            return;
+        }
+        if let ExpressionKind::Literal(lit) = &rhs.node {
+            if lit.is_zero() {
+                self.report_error("Division by zero".to_string(), rhs.span);
+            }
+        }
     }
 }

@@ -84,113 +84,25 @@ impl<'a> UseAfterMoveChecker<'a> {
 
     fn check_stmt(&mut self, stmt: &Statement, consumed: &mut HashMap<String, ConsumedInfo>) {
         match &stmt.node {
-            // Analyze function bodies with resource-only tracking: managed types are never
-            // flagged inside function bodies (read-only recursive algorithms pass the same
-            // managed value to multiple calls without consuming it). Only resource types
-            // (those defining `fn drop(self)`) are tracked.
-            StatementKind::FunctionDeclaration(decl) => {
-                if let Some(body) = &decl.body {
-                    let prev_in_fn = self.in_function_body;
-                    let prev_bindings = std::mem::take(&mut self.fn_bindings);
-                    self.in_function_body = true;
-                    // Parameters are bindings inside the body — a call whose
-                    // callee identifier matches a parameter name is dynamic.
-                    // We add every parameter name; whether the param is fn-typed
-                    // is checked at the call site (an Identifier callee that
-                    // isn't fn-typed wouldn't type-check anyway).
-                    for p in &decl.params {
-                        self.fn_bindings.insert(p.name.clone());
-                    }
-                    let mut fn_consumed: HashMap<String, ConsumedInfo> = HashMap::new();
-                    self.check_stmt(body, &mut fn_consumed);
-                    self.in_function_body = prev_in_fn;
-                    self.fn_bindings = prev_bindings;
-                }
-            }
-
-            StatementKind::Block(stmts) => {
-                self.check_block(stmts, consumed);
-            }
-
-            StatementKind::Expression(expr) => {
-                self.check_expr(expr, consumed);
-            }
-
-            StatementKind::Variable(decls, _) => {
-                for decl in decls {
-                    if let Some(init) = &decl.initializer {
-                        self.check_expr(init, consumed);
-                        // Assignment of a resource type is a move — mark the
-                        // source identifier consumed regardless of scope.
-                        if let ExpressionKind::Identifier(src, _) = &init.node {
-                            if let Some(ty) = self.types.get(&init.id) {
-                                if is_resource(&ty.kind, self.type_definitions) {
-                                    consumed.insert(
-                                        src.clone(),
-                                        ConsumedInfo {
-                                            by_fn: format!("assignment to '{}'", decl.name),
-                                            at_span: init.span,
-                                            chain: vec![],
-                                        },
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    // Every let/var local is a binding — its callee form
-                    // (`name(...)`) is a dynamic-fn call, never a literal.
-                    self.fn_bindings.insert(decl.name.clone());
-                }
-            }
-
+            StatementKind::FunctionDeclaration(decl) => self.check_fn_decl(decl),
+            StatementKind::Block(stmts) => self.check_block(stmts, consumed),
+            StatementKind::Expression(expr) => self.check_expr(expr, consumed),
+            StatementKind::Variable(decls, _) => self.check_variable_stmt(decls, consumed),
             StatementKind::Return(expr) => {
                 if let Some(e) = expr {
                     self.check_expr(e, consumed);
                 }
             }
-
             StatementKind::If(cond, then, else_, _) => {
-                self.check_expr(cond, consumed);
-
-                // Each branch gets a snapshot of the pre-branch consumed state so
-                // that consuming in the then-branch doesn't poison the else-branch
-                // or vice-versa.  After the if: only variables consumed in BOTH
-                // branches are "definitely consumed".
-                let mut then_consumed = consumed.clone();
-                self.check_stmt(then, &mut then_consumed);
-
-                let mut else_consumed = consumed.clone();
-                if let Some(e) = else_ {
-                    self.check_stmt(e, &mut else_consumed);
-                }
-
-                *consumed = then_consumed
-                    .into_iter()
-                    .filter(|(k, _)| else_consumed.contains_key(k))
-                    .collect();
+                self.check_if_stmt(cond, then, else_.as_deref(), consumed);
             }
-
             StatementKind::While(cond, body, _) => {
                 self.check_expr(cond, consumed);
                 self.check_stmt(body, consumed);
             }
-
             StatementKind::For(decls, iter, body) => {
-                self.check_expr(iter, consumed);
-                // The loop pattern variable is a binding inside the body —
-                // `for f in fns: f(items)` must classify `f` as a dynamic-fn
-                // callee.  Snapshot/restore so the binding does not leak past
-                // the loop and accidentally over-consume calls to a shadowed
-                // top-level fn after the loop exits.
-                let prev_bindings = self.fn_bindings.clone();
-                for d in decls {
-                    self.fn_bindings.insert(d.name.clone());
-                }
-                self.check_stmt(body, consumed);
-                self.fn_bindings = prev_bindings;
+                self.check_for_stmt(decls, iter, body, consumed);
             }
-
-            // Declarations, imports, type aliases — no variable uses.
             StatementKind::Empty
             | StatementKind::Break
             | StatementKind::Continue
@@ -203,6 +115,83 @@ impl<'a> UseAfterMoveChecker<'a> {
             | StatementKind::RuntimeFunctionDeclaration(_, _, _, _)
             | StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => {}
         }
+    }
+
+    fn check_fn_decl(&mut self, decl: &crate::ast::statement::FunctionDeclarationData) {
+        let Some(body) = &decl.body else { return };
+        let prev_in_fn = self.in_function_body;
+        let prev_bindings = std::mem::take(&mut self.fn_bindings);
+        self.in_function_body = true;
+        for p in &decl.params {
+            self.fn_bindings.insert(p.name.clone());
+        }
+        let mut fn_consumed: HashMap<String, ConsumedInfo> = HashMap::new();
+        self.check_stmt(body, &mut fn_consumed);
+        self.in_function_body = prev_in_fn;
+        self.fn_bindings = prev_bindings;
+    }
+
+    fn check_variable_stmt(
+        &mut self,
+        decls: &[crate::ast::statement::VariableDeclaration],
+        consumed: &mut HashMap<String, ConsumedInfo>,
+    ) {
+        for decl in decls {
+            if let Some(init) = &decl.initializer {
+                self.check_expr(init, consumed);
+                if let ExpressionKind::Identifier(src, _) = &init.node {
+                    if let Some(ty) = self.types.get(&init.id) {
+                        if is_resource(&ty.kind, self.type_definitions) {
+                            consumed.insert(
+                                src.clone(),
+                                ConsumedInfo {
+                                    by_fn: format!("assignment to '{}'", decl.name),
+                                    at_span: init.span,
+                                    chain: vec![],
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+            self.fn_bindings.insert(decl.name.clone());
+        }
+    }
+
+    fn check_if_stmt(
+        &mut self,
+        cond: &Expression,
+        then: &Statement,
+        else_: Option<&Statement>,
+        consumed: &mut HashMap<String, ConsumedInfo>,
+    ) {
+        self.check_expr(cond, consumed);
+        let mut then_consumed = consumed.clone();
+        self.check_stmt(then, &mut then_consumed);
+        let mut else_consumed = consumed.clone();
+        if let Some(e) = else_ {
+            self.check_stmt(e, &mut else_consumed);
+        }
+        *consumed = then_consumed
+            .into_iter()
+            .filter(|(k, _)| else_consumed.contains_key(k))
+            .collect();
+    }
+
+    fn check_for_stmt(
+        &mut self,
+        decls: &[crate::ast::statement::VariableDeclaration],
+        iter: &Expression,
+        body: &Statement,
+        consumed: &mut HashMap<String, ConsumedInfo>,
+    ) {
+        self.check_expr(iter, consumed);
+        let prev_bindings = self.fn_bindings.clone();
+        for d in decls {
+            self.fn_bindings.insert(d.name.clone());
+        }
+        self.check_stmt(body, consumed);
+        self.fn_bindings = prev_bindings;
     }
 
     /// Processes a block's statement list with scope-exit warning for unconsumed resource vars.
@@ -274,249 +263,22 @@ impl<'a> UseAfterMoveChecker<'a> {
     fn check_expr(&mut self, expr: &Expression, consumed: &mut HashMap<String, ConsumedInfo>) {
         match &expr.node {
             ExpressionKind::Identifier(name, _) => {
-                if let Some(info) = consumed.get(name.as_str()) {
-                    let chain_section = if info.chain.is_empty() {
-                        String::new()
-                    } else {
-                        format!("\n  consumed because:\n{}", info.chain.join("\n"))
-                    };
-                    self.errors.push(TypeError {
-                        kind: TypeErrorKind::Custom {
-                            message: format!(
-                                "'{}' was consumed by '{}' and cannot be used again{}\n  fix: call .clone() to keep your copy independent",
-                                name, info.by_fn, chain_section
-                            ),
-                            help: None,
-                        },
-                        span: expr.span,
-                        source_override: None,
-                    });
-                }
+                self.report_use_after_consume(name, expr, consumed)
             }
-
-            ExpressionKind::Call(callee, args) => {
-                let fn_name = self.extract_callee_name(callee);
-
-                // For method calls, compute the qualified key ("ClassName_method") used
-                // both as the chain-lookup key in escape_summaries and as the display name
-                // in the "consumed by" message (more informative than just "method").
-                let method_chain_key: Option<String> = self.extract_method_chain_key(callee);
-
-                // Extract the method escape summary (owned) before any
-                // mutable borrow of self so the borrow checker stays happy.
-                let method_summary: Option<EscapeSummary> = self.extract_method_summary(callee);
-
-                // Inside a function body, also look up a free-function summary
-                // by literal callee name.  This enables escape-summary-driven
-                // consume for user functions whose summaries were computed by
-                // the §12.1 escape analysis pass.  At top level we preserve the
-                // existing broad-consume behaviour (§12.5 defers top-level CoW).
-                let free_fn_summary: Option<EscapeSummary> =
-                    if self.in_function_body && method_summary.is_none() {
-                        match &callee.node {
-                            ExpressionKind::Identifier(name, _)
-                                if !self.fn_bindings.contains(name.as_str()) =>
-                            {
-                                self.escape_summaries.get(name.as_str()).cloned()
-                            }
-                            _ => None,
-                        }
-                    } else {
-                        None
-                    };
-
-                // Classify the callee.  A literal callee is a free-fn
-                // identifier (declared at module scope, not in `fn_bindings`) or
-                // a method member access.  Anything else — let-bound, branch,
-                // returned-from-fn, parameter — is a dynamic fn-value, and the
-                // dynamic-fn fallback below treats every managed-typed argument
-                // as escaping.
-                let is_dynamic_fn = method_summary.is_none()
-                    && free_fn_summary.is_none()
-                    && self.is_dynamic_fn_callee(callee);
-
-                // Check callee for consumed uses (handles method receiver via Member).
-                self.check_expr(callee, consumed);
-
-                // Check args — error if any consumed variable is used.
-                for arg in args {
-                    self.check_expr(arg, consumed);
-                }
-
-                // Resolve the function's parameter list so we can skip consuming
-                // variables passed to `out` params — the callee writes to those,
-                // so the caller's variable remains live after the call.
-                let params: &[Parameter] = self
-                    .types
-                    .get(&callee.id)
-                    .and_then(|ty| {
-                        if let TypeKind::Function(fd) = &ty.kind {
-                            Some(fd.params.as_slice())
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(&[]);
-
-                if let Some(ref summary) = method_summary {
-                    // Apply escape summary. param 0 = self (receiver); params 1..N = explicit args.
-                    // Use consume_arg_dynamic (bypasses in_function_body gate) because
-                    // the summary is the authoritative source — if the callee escapes
-                    // an argument, we must consume it even inside a fn body.
-                    // Use the qualified name ("ClassName_method") so build_chain can find
-                    // the escape summary for chain-following diagnostics.
-                    let method_sink = method_chain_key.as_deref().unwrap_or(&fn_name);
-                    if summary.directly_escapes(0) {
-                        if let ExpressionKind::Member(obj_expr, _) = &callee.node {
-                            self.consume_arg_dynamic(obj_expr, method_sink, 0, consumed);
-                        }
-                    }
-                    // Track both the out-param index (into `params`, self-free)
-                    // and the escape-summary index (1-based, shifted for self at 0).
-                    let mut pos_idx = 0usize;
-                    for arg in args {
-                        let (is_out, escape_idx) = match &arg.node {
-                            ExpressionKind::NamedArgument(name, _) => {
-                                let out = params
-                                    .iter()
-                                    .find(|p| &p.name == name)
-                                    .is_some_and(|p| p.is_out);
-                                // Named arg: position in params + 1 for self offset.
-                                let eidx = params
-                                    .iter()
-                                    .position(|p| &p.name == name)
-                                    .map(|i| i + 1)
-                                    .unwrap_or(usize::MAX);
-                                (out, eidx)
-                            }
-                            _ => {
-                                let out = params.get(pos_idx).is_some_and(|p| p.is_out);
-                                let eidx = pos_idx + 1; // +1 because self is param 0
-                                pos_idx += 1;
-                                (out, eidx)
-                            }
-                        };
-                        if !is_out && summary.directly_escapes(escape_idx) {
-                            self.consume_arg_dynamic(arg, method_sink, escape_idx, consumed);
-                        }
-                    }
-                } else if let Some(ref summary) = free_fn_summary {
-                    // Free function with a computed escape summary: apply it.
-                    // Params start at index 0 (no self offset).
-                    let mut pos_idx = 0usize;
-                    for arg in args {
-                        let (is_out, escape_idx) = match &arg.node {
-                            ExpressionKind::NamedArgument(name, _) => {
-                                let out = params
-                                    .iter()
-                                    .find(|p| &p.name == name)
-                                    .is_some_and(|p| p.is_out);
-                                let eidx = params
-                                    .iter()
-                                    .position(|p| &p.name == name)
-                                    .unwrap_or(usize::MAX);
-                                (out, eidx)
-                            }
-                            _ => {
-                                let out = params.get(pos_idx).is_some_and(|p| p.is_out);
-                                let eidx = pos_idx;
-                                pos_idx += 1;
-                                (out, eidx)
-                            }
-                        };
-                        if !is_out && summary.directly_escapes(escape_idx) {
-                            self.consume_arg_dynamic(arg, &fn_name, escape_idx, consumed);
-                        }
-                    }
-                } else if is_dynamic_fn {
-                    // Dynamic fn-valued callee: every managed-typed arg
-                    // is conservatively treated as escaping ("via dynamic fn
-                    // parameter `f`"), regardless of whether we are at top
-                    // level or inside a function body.  Resource args are
-                    // always consumed, so the predicate below accepts both
-                    // managed and resource — only auto-copy types are exempt.
-                    let sink = format!("dynamic fn '{fn_name}'");
-                    let mut pos_idx = 0usize;
-                    for arg in args {
-                        let (is_out, param_idx) = match &arg.node {
-                            ExpressionKind::NamedArgument(name, _) => {
-                                let out = params
-                                    .iter()
-                                    .find(|p| &p.name == name)
-                                    .is_some_and(|p| p.is_out);
-                                let pidx = params.iter().position(|p| &p.name == name).unwrap_or(0);
-                                (out, pidx)
-                            }
-                            _ => {
-                                let out = params.get(pos_idx).is_some_and(|p| p.is_out);
-                                let pidx = pos_idx;
-                                pos_idx += 1;
-                                (out, pidx)
-                            }
-                        };
-                        if !is_out {
-                            self.consume_arg_dynamic(arg, &sink, param_idx, consumed);
-                        }
-                    }
-                } else {
-                    // Free function call with no computed escape summary, or
-                    // method call with no summary available: fall back to the
-                    // existing should_consume_expr logic (manages top-level
-                    // broad-consume vs in-function-body no-consume).
-                    let mut pos_idx = 0usize;
-                    for arg in args {
-                        let (is_out, param_idx) = match &arg.node {
-                            ExpressionKind::NamedArgument(name, _) => {
-                                let out = params
-                                    .iter()
-                                    .find(|p| &p.name == name)
-                                    .is_some_and(|p| p.is_out);
-                                let pidx = params.iter().position(|p| &p.name == name).unwrap_or(0);
-                                (out, pidx)
-                            }
-                            _ => {
-                                let out = params.get(pos_idx).is_some_and(|p| p.is_out);
-                                let pidx = pos_idx;
-                                pos_idx += 1;
-                                (out, pidx)
-                            }
-                        };
-                        if !is_out {
-                            self.maybe_consume_arg(arg, &fn_name, param_idx, consumed);
-                        }
-                    }
-                }
-            }
-
-            ExpressionKind::Member(obj, _) => {
-                // Only check the object, not the field name expression.
-                self.check_expr(obj, consumed);
-            }
-
+            ExpressionKind::Call(callee, args) => self.check_call_expr(callee, args, consumed),
+            ExpressionKind::Member(obj, _) => self.check_expr(obj, consumed),
             ExpressionKind::Binary(l, _, r) | ExpressionKind::Logical(l, _, r) => {
                 self.check_expr(l, consumed);
                 self.check_expr(r, consumed);
             }
-
-            ExpressionKind::Unary(_, e) => {
-                self.check_expr(e, consumed);
-            }
-
+            ExpressionKind::Unary(_, e) => self.check_expr(e, consumed),
             ExpressionKind::Assignment(lhs, _, rhs) => {
-                self.check_expr(rhs, consumed);
-                // Re-assigning a variable revives it (clears consumed status).
-                if let LeftHandSideExpression::Identifier(name_expr) = lhs.as_ref() {
-                    if let ExpressionKind::Identifier(name, _) = &name_expr.node {
-                        consumed.remove(name.as_str());
-                    }
-                }
+                self.check_assignment_expr(lhs, rhs, consumed)
             }
-
             ExpressionKind::Index(obj, idx) => {
                 self.check_expr(obj, consumed);
                 self.check_expr(idx, consumed);
             }
-
             ExpressionKind::Conditional(cond, then, else_, _) => {
                 self.check_expr(cond, consumed);
                 self.check_expr(then, consumed);
@@ -524,119 +286,39 @@ impl<'a> UseAfterMoveChecker<'a> {
                     self.check_expr(e, consumed);
                 }
             }
-
             ExpressionKind::Range(start, end_, _) => {
                 self.check_expr(start, consumed);
                 if let Some(e) = end_ {
                     self.check_expr(e, consumed);
                 }
             }
-
-            ExpressionKind::Guard(_, e) => {
-                self.check_expr(e, consumed);
-            }
-
-            ExpressionKind::FormattedString(parts) => {
-                for part in parts {
-                    self.check_expr(part, consumed);
-                }
-            }
-
-            ExpressionKind::List(elems)
-            | ExpressionKind::Set(elems)
-            | ExpressionKind::Tuple(elems) => {
-                for e in elems {
-                    self.check_expr(e, consumed);
-                }
-            }
-
-            ExpressionKind::Array(elems, _) => {
-                for e in elems {
-                    self.check_expr(e, consumed);
-                }
-            }
-
+            ExpressionKind::Guard(_, e) => self.check_expr(e, consumed),
+            ExpressionKind::FormattedString(parts)
+            | ExpressionKind::List(parts)
+            | ExpressionKind::Set(parts)
+            | ExpressionKind::Tuple(parts) => self.check_each(parts, consumed),
+            ExpressionKind::Array(elems, _) => self.check_each(elems, consumed),
             ExpressionKind::Map(pairs) => {
                 for (k, v) in pairs {
                     self.check_expr(k, consumed);
                     self.check_expr(v, consumed);
                 }
             }
-
             ExpressionKind::Match(scrutinee, branches) => {
-                self.check_expr(scrutinee, consumed);
-
-                // Each arm is an independent execution path.  A variable is
-                // "definitely consumed" after a match only if it is consumed in
-                // every arm; otherwise we conservatively leave it alive.
-                let pre_consumed = consumed.clone();
-                let mut intersection: Option<HashMap<String, ConsumedInfo>> = None;
-
-                for branch in branches {
-                    let mut arm_consumed = pre_consumed.clone();
-                    // Pattern bindings in this arm (`case Some(g): ...`)
-                    // are locals — calling them is a dynamic-fn dispatch.  Add
-                    // each branch's pattern-bound names to `fn_bindings` for the
-                    // arm body, then restore so they do not leak across arms or
-                    // past the match expression.
-                    let prev_bindings = self.fn_bindings.clone();
-                    for pat in &branch.patterns {
-                        Self::collect_pattern_bindings(pat, &mut self.fn_bindings);
-                    }
-                    if let Some(guard) = &branch.guard {
-                        self.check_expr(guard, &mut arm_consumed);
-                    }
-                    self.check_stmt(&branch.body, &mut arm_consumed);
-                    self.fn_bindings = prev_bindings;
-
-                    intersection = Some(match intersection.take() {
-                        None => arm_consumed,
-                        Some(acc) => acc
-                            .into_iter()
-                            .filter(|(k, _)| arm_consumed.contains_key(k))
-                            .collect(),
-                    });
-                }
-
-                if let Some(result) = intersection {
-                    *consumed = result;
-                }
+                self.check_match_expr(scrutinee, branches, consumed);
             }
-
             ExpressionKind::EnumValue(name, values) => {
                 self.check_expr(name, consumed);
-                for v in values {
-                    self.check_expr(v, consumed);
-                }
+                self.check_each(values, consumed);
             }
-
-            ExpressionKind::NamedArgument(_, val) => {
-                self.check_expr(val, consumed);
-            }
-
-            ExpressionKind::Lambda(lambda) => {
-                // Lambda body gets its own consumed map (captures are borrowed, not consumed).
-                // Lambda parameters are bindings inside the body — an fn-typed
-                // lambda parameter called as `g(items)` must be classified as a
-                // dynamic-fn callee.  Snapshot/restore so the params do not leak
-                // into the surrounding scope after the lambda expression is evaluated.
-                let prev_bindings = self.fn_bindings.clone();
-                for p in &lambda.params {
-                    self.fn_bindings.insert(p.name.clone());
-                }
-                let mut lambda_consumed = HashMap::new();
-                self.check_stmt(&lambda.body, &mut lambda_consumed);
-                self.fn_bindings = prev_bindings;
-            }
-
+            ExpressionKind::NamedArgument(_, val) => self.check_expr(val, consumed),
+            ExpressionKind::Lambda(lambda) => self.check_lambda_expr(lambda),
             ExpressionKind::Block(stmts, final_expr) => {
                 for s in stmts {
                     self.check_stmt(s, consumed);
                 }
                 self.check_expr(final_expr, consumed);
             }
-
-            // Leaf nodes: literals, type expressions, super — nothing to check.
             ExpressionKind::Literal(_)
             | ExpressionKind::Type(_, _)
             | ExpressionKind::GenericType(_, _, _)
@@ -644,6 +326,239 @@ impl<'a> UseAfterMoveChecker<'a> {
             | ExpressionKind::StructMember(_, _)
             | ExpressionKind::ImportPath(_, _)
             | ExpressionKind::Super => {}
+        }
+    }
+
+    fn check_each(&mut self, exprs: &[Expression], consumed: &mut HashMap<String, ConsumedInfo>) {
+        for e in exprs {
+            self.check_expr(e, consumed);
+        }
+    }
+
+    fn check_assignment_expr(
+        &mut self,
+        lhs: &LeftHandSideExpression,
+        rhs: &Expression,
+        consumed: &mut HashMap<String, ConsumedInfo>,
+    ) {
+        self.check_expr(rhs, consumed);
+        if let LeftHandSideExpression::Identifier(name_expr) = lhs {
+            if let ExpressionKind::Identifier(name, _) = &name_expr.node {
+                consumed.remove(name.as_str());
+            }
+        }
+    }
+
+    fn check_lambda_expr(&mut self, lambda: &crate::ast::expression::LambdaData) {
+        let prev_bindings = self.fn_bindings.clone();
+        for p in &lambda.params {
+            self.fn_bindings.insert(p.name.clone());
+        }
+        let mut lambda_consumed = HashMap::new();
+        self.check_stmt(&lambda.body, &mut lambda_consumed);
+        self.fn_bindings = prev_bindings;
+    }
+
+    fn report_use_after_consume(
+        &mut self,
+        name: &str,
+        expr: &Expression,
+        consumed: &HashMap<String, ConsumedInfo>,
+    ) {
+        if let Some(info) = consumed.get(name) {
+            let chain_section = if info.chain.is_empty() {
+                String::new()
+            } else {
+                format!("\n  consumed because:\n{}", info.chain.join("\n"))
+            };
+            self.errors.push(TypeError {
+                kind: TypeErrorKind::Custom {
+                    message: format!(
+                        "'{}' was consumed by '{}' and cannot be used again{}\n  fix: call .clone() to keep your copy independent",
+                        name, info.by_fn, chain_section
+                    ),
+                    help: None,
+                },
+                span: expr.span,
+                source_override: None,
+            });
+        }
+    }
+
+    fn check_match_expr(
+        &mut self,
+        scrutinee: &Expression,
+        branches: &[crate::ast::pattern::MatchBranch],
+        consumed: &mut HashMap<String, ConsumedInfo>,
+    ) {
+        self.check_expr(scrutinee, consumed);
+
+        let pre_consumed = consumed.clone();
+        let mut intersection: Option<HashMap<String, ConsumedInfo>> = None;
+
+        for branch in branches {
+            let mut arm_consumed = pre_consumed.clone();
+            let prev_bindings = self.fn_bindings.clone();
+            for pat in &branch.patterns {
+                Self::collect_pattern_bindings(pat, &mut self.fn_bindings);
+            }
+            if let Some(guard) = &branch.guard {
+                self.check_expr(guard, &mut arm_consumed);
+            }
+            self.check_stmt(&branch.body, &mut arm_consumed);
+            self.fn_bindings = prev_bindings;
+
+            intersection = Some(match intersection.take() {
+                None => arm_consumed,
+                Some(acc) => acc
+                    .into_iter()
+                    .filter(|(k, _)| arm_consumed.contains_key(k))
+                    .collect(),
+            });
+        }
+
+        if let Some(result) = intersection {
+            *consumed = result;
+        }
+    }
+
+    fn check_call_expr(
+        &mut self,
+        callee: &Expression,
+        args: &[Expression],
+        consumed: &mut HashMap<String, ConsumedInfo>,
+    ) {
+        let fn_name = self.extract_callee_name(callee);
+        let method_chain_key: Option<String> = self.extract_method_chain_key(callee);
+        let method_summary: Option<EscapeSummary> = self.extract_method_summary(callee);
+
+        let free_fn_summary: Option<EscapeSummary> =
+            if self.in_function_body && method_summary.is_none() {
+                match &callee.node {
+                    ExpressionKind::Identifier(name, _)
+                        if !self.fn_bindings.contains(name.as_str()) =>
+                    {
+                        self.escape_summaries.get(name.as_str()).cloned()
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+
+        let is_dynamic_fn = method_summary.is_none()
+            && free_fn_summary.is_none()
+            && self.is_dynamic_fn_callee(callee);
+
+        self.check_expr(callee, consumed);
+        for arg in args {
+            self.check_expr(arg, consumed);
+        }
+
+        let params: Vec<Parameter> = self
+            .types
+            .get(&callee.id)
+            .and_then(|ty| {
+                if let TypeKind::Function(fd) = &ty.kind {
+                    Some(fd.params.clone())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+
+        if let Some(summary) = method_summary {
+            let method_sink = method_chain_key.as_deref().unwrap_or(&fn_name);
+            if summary.directly_escapes(0) {
+                if let ExpressionKind::Member(obj_expr, _) = &callee.node {
+                    self.consume_arg_dynamic(obj_expr, method_sink, 0, consumed);
+                }
+            }
+            self.apply_summary_to_args(args, &params, &summary, method_sink, consumed, true);
+        } else if let Some(summary) = free_fn_summary {
+            self.apply_summary_to_args(args, &params, &summary, &fn_name, consumed, false);
+        } else if is_dynamic_fn {
+            let sink = format!("dynamic fn '{fn_name}'");
+            self.consume_args_unconditional(args, &params, &sink, consumed);
+        } else {
+            self.consume_args_with_predicate(args, &params, &fn_name, consumed);
+        }
+    }
+
+    fn arg_classify(arg: &Expression, params: &[Parameter], pos_idx: &mut usize) -> (bool, usize) {
+        match &arg.node {
+            ExpressionKind::NamedArgument(name, _) => {
+                let out = params
+                    .iter()
+                    .find(|p| &p.name == name)
+                    .is_some_and(|p| p.is_out);
+                let idx = params
+                    .iter()
+                    .position(|p| &p.name == name)
+                    .unwrap_or(usize::MAX);
+                (out, idx)
+            }
+            _ => {
+                let out = params.get(*pos_idx).is_some_and(|p| p.is_out);
+                let idx = *pos_idx;
+                *pos_idx += 1;
+                (out, idx)
+            }
+        }
+    }
+
+    fn apply_summary_to_args(
+        &self,
+        args: &[Expression],
+        params: &[Parameter],
+        summary: &EscapeSummary,
+        sink: &str,
+        consumed: &mut HashMap<String, ConsumedInfo>,
+        has_self_offset: bool,
+    ) {
+        let mut pos_idx = 0usize;
+        for arg in args {
+            let (is_out, mut idx) = Self::arg_classify(arg, params, &mut pos_idx);
+            if has_self_offset && idx != usize::MAX {
+                idx += 1;
+            }
+            if !is_out && summary.directly_escapes(idx) {
+                self.consume_arg_dynamic(arg, sink, idx, consumed);
+            }
+        }
+    }
+
+    fn consume_args_unconditional(
+        &self,
+        args: &[Expression],
+        params: &[Parameter],
+        sink: &str,
+        consumed: &mut HashMap<String, ConsumedInfo>,
+    ) {
+        let mut pos_idx = 0usize;
+        for arg in args {
+            let (is_out, idx) = Self::arg_classify(arg, params, &mut pos_idx);
+            let param_idx = if idx == usize::MAX { 0 } else { idx };
+            if !is_out {
+                self.consume_arg_dynamic(arg, sink, param_idx, consumed);
+            }
+        }
+    }
+
+    fn consume_args_with_predicate(
+        &self,
+        args: &[Expression],
+        params: &[Parameter],
+        fn_name: &str,
+        consumed: &mut HashMap<String, ConsumedInfo>,
+    ) {
+        let mut pos_idx = 0usize;
+        for arg in args {
+            let (is_out, idx) = Self::arg_classify(arg, params, &mut pos_idx);
+            let param_idx = if idx == usize::MAX { 0 } else { idx };
+            if !is_out {
+                self.maybe_consume_arg(arg, fn_name, param_idx, consumed);
+            }
         }
     }
 
