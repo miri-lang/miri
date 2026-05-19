@@ -10,14 +10,12 @@ use super::super::utils::is_assignment_op;
 use super::super::Parser;
 
 impl<'source> Parser<'source> {
-    /*
-     */
     pub(crate) fn expression(&mut self) -> Result<Expression, SyntaxError> {
         self.depth += 1;
         if self.depth > crate::parser::MAX_PARSE_DEPTH {
             self.depth -= 1;
             let span = self
-                ._lookahead
+                .lookahead
                 .as_ref()
                 .map(|(_, s)| *s)
                 .unwrap_or(crate::error::syntax::Span::new(0, 0));
@@ -31,8 +29,6 @@ impl<'source> Parser<'source> {
         res
     }
 
-    /*
-     */
     pub(crate) fn assignment_expression(&mut self) -> Result<Expression, SyntaxError> {
         let left = self.conditional_expression()?;
 
@@ -74,8 +70,6 @@ impl<'source> Parser<'source> {
         Ok(assignment_expression)
     }
 
-    /*
-     */
     pub(crate) fn left_hand_side_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.call_member_expression()
     }

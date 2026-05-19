@@ -9,7 +9,7 @@ use super::Parser;
 
 impl<'source> Parser<'source> {
     pub(crate) fn current_token_span(&self) -> Span {
-        self._lookahead.as_ref().map_or(
+        self.lookahead.as_ref().map_or(
             Span::new(self.source.len(), self.source.len()),
             |(_, span)| *span,
         )
@@ -20,12 +20,12 @@ impl<'source> Parser<'source> {
         expected: impl Fn(&Token) -> bool,
         expected_str: impl FnOnce() -> String,
     ) -> Result<TokenSpan, SyntaxError> {
-        let token = &self._lookahead;
+        let token = &self.lookahead;
 
         match token {
             Some((ref t, ref span)) if expected(t) => {
                 let result = (t.clone(), *span);
-                self._lookahead = self.lexer.next().transpose()?;
+                self.lookahead = self.lexer.next().transpose()?;
                 Ok(result)
             }
             Some((found, span)) => Err(SyntaxError::new(
@@ -38,7 +38,7 @@ impl<'source> Parser<'source> {
             None => {
                 if expected(&Token::ExpressionStatementEnd) {
                     // Special case for end of expression
-                    self._lookahead = None;
+                    self.lookahead = None;
                     return Ok((Token::ExpressionStatementEnd, Span::new(0, 0)));
                 }
 
@@ -63,7 +63,7 @@ impl<'source> Parser<'source> {
     }
 
     pub(crate) fn match_lookahead_type(&self, match_token: fn(&Token) -> bool) -> bool {
-        if let Some((token, _)) = &self._lookahead {
+        if let Some((token, _)) = &self.lookahead {
             match_token(token)
         } else {
             false
@@ -103,7 +103,7 @@ impl<'source> Parser<'source> {
     }
 
     pub(crate) fn lookahead_as_string(&self) -> String {
-        self._lookahead.as_ref().map_or_else(
+        self.lookahead.as_ref().map_or_else(
             || "end of file".to_string(),
             |(t, _)| token_to_string(t).into_owned(),
         )
@@ -137,123 +137,89 @@ impl<'source> Parser<'source> {
         self.match_lookahead_type(is_function_modifier)
     }
 
-    pub(crate) fn eat_additive_op(&mut self) -> Result<BinaryOp, Result<Expression, SyntaxError>> {
-        let op = match self.eat_binary_op(is_additive_op) {
-            Ok(token) => match token.0 {
-                Token::Plus => BinaryOp::Add,
-                Token::Minus => BinaryOp::Sub,
-                Token::Pipe => BinaryOp::BitwiseOr,
-                Token::Ampersand => BinaryOp::BitwiseAnd,
-                Token::Caret => BinaryOp::BitwiseXor,
-                _ => return Err(Err(self.error_unexpected_operator(token, "+, -, |, &, ^"))),
-            },
-            Err(err) => return Err(Err(err)),
-        };
-        Ok(op)
+    pub(crate) fn eat_additive_op(&mut self) -> Result<BinaryOp, SyntaxError> {
+        let token = self.eat_binary_op(is_additive_op)?;
+        match token.0 {
+            Token::Plus => Ok(BinaryOp::Add),
+            Token::Minus => Ok(BinaryOp::Sub),
+            Token::Pipe => Ok(BinaryOp::BitwiseOr),
+            Token::Ampersand => Ok(BinaryOp::BitwiseAnd),
+            Token::Caret => Ok(BinaryOp::BitwiseXor),
+            _ => Err(self.error_unexpected_operator(token, "+, -, |, &, ^")),
+        }
     }
 
-    pub(crate) fn eat_relational_op(
-        &mut self,
-    ) -> Result<BinaryOp, Result<Expression, SyntaxError>> {
-        let op = match self.eat_binary_op(is_relational_op) {
-            Ok(token) => match token.0 {
-                Token::LessThan => BinaryOp::LessThan,
-                Token::LessThanEqual => BinaryOp::LessThanEqual,
-                Token::GreaterThanEqual => BinaryOp::GreaterThanEqual,
-                Token::GreaterThan => BinaryOp::GreaterThan,
-                Token::In => BinaryOp::In,
-                _ => {
-                    return Err(Err(
-                        self.error_unexpected_operator(token, "<, <=, >, >=, in")
-                    ))
-                }
-            },
-            Err(err) => return Err(Err(err)),
-        };
-        Ok(op)
+    pub(crate) fn eat_relational_op(&mut self) -> Result<BinaryOp, SyntaxError> {
+        let token = self.eat_binary_op(is_relational_op)?;
+        match token.0 {
+            Token::LessThan => Ok(BinaryOp::LessThan),
+            Token::LessThanEqual => Ok(BinaryOp::LessThanEqual),
+            Token::GreaterThanEqual => Ok(BinaryOp::GreaterThanEqual),
+            Token::GreaterThan => Ok(BinaryOp::GreaterThan),
+            Token::In => Ok(BinaryOp::In),
+            _ => Err(self.error_unexpected_operator(token, "<, <=, >, >=, in")),
+        }
     }
 
-    pub(crate) fn eat_equality_op(&mut self) -> Result<BinaryOp, Result<Expression, SyntaxError>> {
-        let op = match self.eat_binary_op(is_equality_op) {
-            Ok(token) => match token.0 {
-                Token::Equal => BinaryOp::Equal,
-                Token::NotEqual => BinaryOp::NotEqual,
-                _ => return Err(Err(self.error_unexpected_operator(token, "=, !="))),
-            },
-            Err(err) => return Err(Err(err)),
-        };
-        Ok(op)
+    pub(crate) fn eat_equality_op(&mut self) -> Result<BinaryOp, SyntaxError> {
+        let token = self.eat_binary_op(is_equality_op)?;
+        match token.0 {
+            Token::Equal => Ok(BinaryOp::Equal),
+            Token::NotEqual => Ok(BinaryOp::NotEqual),
+            _ => Err(self.error_unexpected_operator(token, "=, !=")),
+        }
     }
 
-    pub(crate) fn eat_logical_and_op(
-        &mut self,
-    ) -> Result<BinaryOp, Result<Expression, SyntaxError>> {
-        let op = match self.eat_binary_op(is_logical_and_op) {
-            Ok(token) => match token.0 {
-                Token::And => BinaryOp::And,
-                _ => return Err(Err(self.error_unexpected_operator(token, "and"))),
-            },
-            Err(err) => return Err(Err(err)),
-        };
-        Ok(op)
+    pub(crate) fn eat_logical_and_op(&mut self) -> Result<BinaryOp, SyntaxError> {
+        let token = self.eat_binary_op(is_logical_and_op)?;
+        match token.0 {
+            Token::And => Ok(BinaryOp::And),
+            _ => Err(self.error_unexpected_operator(token, "and")),
+        }
     }
 
-    pub(crate) fn eat_logical_or_op(
-        &mut self,
-    ) -> Result<BinaryOp, Result<Expression, SyntaxError>> {
-        let op = match self.eat_binary_op(is_logical_or_op) {
-            Ok(token) => match token.0 {
-                Token::Or => BinaryOp::Or,
-                _ => return Err(Err(self.error_unexpected_operator(token, "or"))),
-            },
-            Err(err) => return Err(Err(err)),
-        };
-        Ok(op)
+    pub(crate) fn eat_logical_or_op(&mut self) -> Result<BinaryOp, SyntaxError> {
+        let token = self.eat_binary_op(is_logical_or_op)?;
+        match token.0 {
+            Token::Or => Ok(BinaryOp::Or),
+            _ => Err(self.error_unexpected_operator(token, "or")),
+        }
     }
 
-    pub(crate) fn eat_null_coalesce_op(
-        &mut self,
-    ) -> Result<BinaryOp, Result<Expression, SyntaxError>> {
-        let op = match self.eat_binary_op(is_null_coalesce_op) {
-            Ok(token) => match token.0 {
-                Token::QuestionQuestion => BinaryOp::NullCoalesce,
-                _ => return Err(Err(self.error_unexpected_operator(token, "??"))),
-            },
-            Err(err) => return Err(Err(err)),
-        };
-        Ok(op)
+    pub(crate) fn eat_null_coalesce_op(&mut self) -> Result<BinaryOp, SyntaxError> {
+        let token = self.eat_binary_op(is_null_coalesce_op)?;
+        match token.0 {
+            Token::QuestionQuestion => Ok(BinaryOp::NullCoalesce),
+            _ => Err(self.error_unexpected_operator(token, "??")),
+        }
     }
 
-    pub(crate) fn eat_multiplicative_op(
-        &mut self,
-    ) -> Result<BinaryOp, Result<Expression, SyntaxError>> {
-        let op = match self.eat_binary_op(is_multiplicative_op) {
-            Ok(token) => match token.0 {
-                Token::Star => BinaryOp::Mul,
-                Token::Slash => BinaryOp::Div,
-                Token::Percent => BinaryOp::Mod,
-                _ => return Err(Err(self.error_unexpected_operator(token, "*, /, %"))),
-            },
-            Err(err) => return Err(Err(err)),
-        };
-        Ok(op)
+    pub(crate) fn eat_multiplicative_op(&mut self) -> Result<BinaryOp, SyntaxError> {
+        let token = self.eat_binary_op(is_multiplicative_op)?;
+        match token.0 {
+            Token::Star => Ok(BinaryOp::Mul),
+            Token::Slash => Ok(BinaryOp::Div),
+            Token::Percent => Ok(BinaryOp::Mod),
+            _ => Err(self.error_unexpected_operator(token, "*, /, %")),
+        }
     }
 
     pub(crate) fn eat_expression_end(&mut self) -> Result<TokenSpan, SyntaxError> {
         self.eat_token(&Token::ExpressionStatementEnd)
     }
 
-    pub(crate) fn try_eat_expression_end(&mut self) {
+    pub(crate) fn try_eat_expression_end(&mut self) -> Result<(), SyntaxError> {
         if self.lookahead_is_expression_end() {
-            let _ = self.eat_expression_end();
+            self.eat_expression_end()?;
         }
+        Ok(())
     }
 
     pub(crate) fn eat_statement_end(&mut self) -> Result<(), SyntaxError> {
         // A statement must be followed by a token that can validly end it.
         // This includes a newline, the end of the file, the end of a block (Dedent),
         // or a keyword that starts a new clause (like `else`).
-        match &self._lookahead {
+        match &self.lookahead {
             // Valid terminators that we consume.
             Some((Token::ExpressionStatementEnd, _)) => {
                 self.eat_expression_end()?;

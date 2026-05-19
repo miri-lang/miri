@@ -12,8 +12,8 @@ impl<'source> Parser<'source> {
     pub(crate) fn enum_statement(
         &mut self,
         visibility: MemberVisibility,
-        must_use: bool,
     ) -> Result<Statement, SyntaxError> {
+        let must_use = self.try_eat_must_use_modifier()?;
         self.eat_token(&Token::Enum)?;
         let name = self.identifier()?;
         let generic_types = self.generic_types_expression()?;
@@ -34,16 +34,25 @@ impl<'source> Parser<'source> {
         ))
     }
 
+    fn try_eat_must_use_modifier(&mut self) -> Result<bool, SyntaxError> {
+        if self.match_lookahead_type(|t| t == &Token::MustUse) {
+            self.eat_token(&Token::MustUse)?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     /// Parses an enum body containing variant declarations and optionally method declarations.
     fn enum_body(&mut self) -> Result<(Vec<Expression>, Vec<Statement>), SyntaxError> {
         let mut variants = vec![];
         let mut methods = vec![];
 
-        match &self._lookahead {
+        match &self.lookahead {
             Some((Token::Colon, _)) => {
                 // Inline form — only variants allowed inline
                 self.eat_token(&Token::Colon)?;
-                if !self.lookahead_is_expression_end() && self._lookahead.is_some() {
+                if !self.lookahead_is_expression_end() && self.lookahead.is_some() {
                     variants.push(self.enum_value_expression()?);
                     while self.lookahead_is_comma() {
                         self.eat_token(&Token::Comma)?;
@@ -57,7 +66,7 @@ impl<'source> Parser<'source> {
                 if self.lookahead_is_indent() {
                     self.eat_token(&Token::Indent)?;
                     while !self.lookahead_is_dedent() {
-                        match &self._lookahead {
+                        match &self.lookahead {
                             Some((Token::Fn, _))
                             | Some((Token::Async, _))
                             | Some((Token::Gpu, _)) => {
@@ -78,7 +87,7 @@ impl<'source> Parser<'source> {
                                 variants.push(self.enum_value_expression()?);
                             }
                         }
-                        self.try_eat_expression_end();
+                        self.try_eat_expression_end()?;
                     }
                     self.eat_token(&Token::Dedent)?;
                 }

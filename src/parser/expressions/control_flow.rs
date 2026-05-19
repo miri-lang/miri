@@ -9,13 +9,11 @@ use crate::lexer::Token;
 use super::super::Parser;
 
 impl<'source> Parser<'source> {
-    /*
-     */
     pub(crate) fn conditional_expression(&mut self) -> Result<Expression, SyntaxError> {
         let expression = self.null_coalesce_expression()?;
 
-        // Block-like expressions (e.g. match) should not consume a postfix `if`/`unless`,
-        // because `if` after a match block is always a new statement.
+        // A match block can't take a postfix `if`/`unless`; the following `if`
+        // always starts a new statement.
         if matches!(expression.node, ExpressionKind::Match(..)) {
             return Ok(expression);
         }
@@ -32,10 +30,8 @@ impl<'source> Parser<'source> {
             IfStatementType::Unless
         };
 
-        // The condition is also a full expression, which will be parsed with its own precedence.
         let condition = self.conditional_expression()?;
 
-        // The `else` part is optional for a postfix modifier `if`.
         let else_branch = if self.match_lookahead_type(|t| t == &Token::Else) {
             self.eat_token(&Token::Else)?;
             Some(self.conditional_expression()?)
@@ -51,22 +47,16 @@ impl<'source> Parser<'source> {
                 condition.span.end
             },
         );
-        let expression =
-            ast::conditional_with_span(expression, condition, else_branch, if_statement_type, span);
-
-        Ok(expression)
+        Ok(ast::conditional_with_span(
+            expression,
+            condition,
+            else_branch,
+            if_statement_type,
+            span,
+        ))
     }
 
-    /// Parses a prefix `if`/`unless` expression.
-    ///
-    /// Supports two forms:
-    /// - Inline: `if condition: then_value else: else_value`
-    /// - Block: `if condition\n    then_value\nelse\n    else_value`
-    ///
-    /// Returns a `Conditional` expression node with the condition first.
-    /// Parses a block expression body: a sequence of statements/expressions in an
-    /// indented block. The last line is treated as the return expression.
-    /// Returns a single expression (or a `Block` expression if there are preceding statements).
+    /// Parses an indented block where the last expression is the block's value.
     fn block_expression_body(&mut self) -> Result<Expression, SyntaxError> {
         self.eat_token(&Token::Indent)?;
 
@@ -77,45 +67,41 @@ impl<'source> Parser<'source> {
                 break;
             }
 
-            // Try parsing a statement that isn't an expression
             let is_statement_start = matches!(
-                &self._lookahead,
+                &self.lookahead,
                 Some((Token::Let, _)) | Some((Token::Var, _)) | Some((Token::Const, _))
             );
 
             if is_statement_start {
                 let stmt = self.statement()?;
-                self.try_eat_expression_end();
+                self.try_eat_expression_end()?;
                 statements.push(stmt);
             } else {
-                // Parse as expression
                 let expr = self.expression()?;
-                self.try_eat_expression_end();
+                self.try_eat_expression_end()?;
 
-                // If next is dedent, this is the final expression
                 if self.lookahead_is_dedent() {
                     self.eat_token(&Token::Dedent)?;
                     if statements.is_empty() {
                         return Ok(expr);
-                    } else {
-                        let span = expr.span;
-                        return Ok(ast::expr_with_span(
-                            ExpressionKind::Block(statements, Box::new(expr)),
-                            span,
-                        ));
                     }
+                    let span = expr.span;
+                    return Ok(ast::expr_with_span(
+                        ExpressionKind::Block(statements, Box::new(expr)),
+                        span,
+                    ));
                 }
 
-                // Not the last line — wrap expression as a statement
                 statements.push(ast::expression_statement(expr));
             }
         }
 
-        // Dedent reached without a final expression
         self.eat_token(&Token::Dedent)?;
         Err(self.error_unexpected_lookahead_token("an expression as the last line of the block"))
     }
 
+    /// Parses a prefix `if`/`unless` expression. Inline form: `if c: v else: v`.
+    /// Block form: `if c\n  v\nelse\n  v`.
     pub(crate) fn prefix_if_expression(&mut self) -> Result<Expression, SyntaxError> {
         let if_type = if self.match_lookahead_type(|t| t == &Token::Unless) {
             self.eat_token(&Token::Unless)?;
@@ -126,50 +112,9 @@ impl<'source> Parser<'source> {
         };
 
         let condition = self.expression()?;
-
-        // Parse the then branch
-        let then_expr = if self.lookahead_is_colon() {
-            // Inline form: if condition: value
-            self.eat_token(&Token::Colon)?;
-            self.expression()?
-        } else if self.lookahead_is_expression_end() {
-            // Block form: if condition\n    <block>
-            self.eat_expression_end()?;
-            if self.lookahead_is_indent() {
-                self.block_expression_body()?
-            } else {
-                return Err(self.error_unexpected_lookahead_token("an indented block"));
-            }
-        } else {
-            return Err(self.error_unexpected_lookahead_token("':' or newline after if condition"));
-        };
-
-        self.try_eat_expression_end();
-
-        // Parse the else branch
-        let else_expr = if self.lookahead_is_else() {
-            self.eat_token(&Token::Else)?;
-            if self.lookahead_is_colon() {
-                // Inline: else: value
-                self.eat_token(&Token::Colon)?;
-                Some(self.expression()?)
-            } else if self.lookahead_is_expression_end() {
-                // Block: else\n    <block>
-                self.eat_expression_end()?;
-                if self.lookahead_is_indent() {
-                    Some(self.block_expression_body()?)
-                } else {
-                    None
-                }
-            } else if self.match_lookahead_type(|t| t == &Token::If || t == &Token::Unless) {
-                // else if ...
-                Some(self.prefix_if_expression()?)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let then_expr = self.if_expression_branch()?;
+        self.try_eat_expression_end()?;
+        let else_expr = self.optional_else_branch()?;
 
         let span = Span::new(
             condition.span.start,
@@ -185,8 +130,44 @@ impl<'source> Parser<'source> {
         ))
     }
 
-    /*
-     */
+    fn if_expression_branch(&mut self) -> Result<Expression, SyntaxError> {
+        if self.lookahead_is_colon() {
+            self.eat_token(&Token::Colon)?;
+            return self.expression();
+        }
+        if self.lookahead_is_expression_end() {
+            self.eat_expression_end()?;
+            if self.lookahead_is_indent() {
+                return self.block_expression_body();
+            }
+            return Err(self.error_unexpected_lookahead_token("an indented block"));
+        }
+        Err(self.error_unexpected_lookahead_token("':' or newline after if condition"))
+    }
+
+    fn optional_else_branch(&mut self) -> Result<Option<Expression>, SyntaxError> {
+        if !self.lookahead_is_else() {
+            return Ok(None);
+        }
+        self.eat_token(&Token::Else)?;
+
+        if self.lookahead_is_colon() {
+            self.eat_token(&Token::Colon)?;
+            return Ok(Some(self.expression()?));
+        }
+        if self.lookahead_is_expression_end() {
+            self.eat_expression_end()?;
+            if self.lookahead_is_indent() {
+                return Ok(Some(self.block_expression_body()?));
+            }
+            return Ok(None);
+        }
+        if self.match_lookahead_type(|t| t == &Token::If || t == &Token::Unless) {
+            return Ok(Some(self.prefix_if_expression()?));
+        }
+        Ok(None)
+    }
+
     pub(crate) fn match_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.eat_token(&Token::Match)?;
         let value = self.expression()?;
@@ -194,14 +175,14 @@ impl<'source> Parser<'source> {
 
         if self.lookahead_is_colon() {
             self.eat_token(&Token::Colon)?;
-            if self._lookahead.is_some() {
-                branches.extend(self.match_branch_list(true)?);
+            if self.lookahead.is_some() {
+                branches.extend(self.inline_match_branches()?);
             }
         } else if self.lookahead_is_expression_end() {
             self.eat_expression_end()?;
             if self.lookahead_is_indent() {
                 self.eat_token(&Token::Indent)?;
-                branches.extend(self.match_branch_list(false)?);
+                branches.extend(self.block_match_branches()?);
                 self.eat_token(&Token::Dedent)?;
             }
         } else {
@@ -214,54 +195,47 @@ impl<'source> Parser<'source> {
             return Err(self.error_missing_match_branches());
         }
 
-        // Check for duplicate (pattern, guard) combinations.
-        // This catches simple duplicates like `1: ... 1: ...` or
-        // `x if x > 10: ... x if x > 10: ...`.
-        // A more complex semantic analysis for overlapping or unreachable
-        // patterns is left to a later compiler stage.
-        let mut seen_pattern_guards = std::collections::HashSet::new();
-        for branch in &branches {
-            for pattern in &branch.patterns {
-                let key = (pattern.clone(), branch.guard.clone());
-                if !seen_pattern_guards.insert(key) {
-                    // This exact pattern and guard combination has been seen before.
-                    return Err(self.error_duplicate_match_pattern());
-                }
-            }
-        }
+        self.reject_duplicate_branches(&branches)?;
 
         Ok(ast::match_expression(value, branches))
     }
 
-    /*
-     */
-    pub(crate) fn match_branch_list(
-        &mut self,
-        inline_mode: bool,
-    ) -> Result<Vec<MatchBranch>, SyntaxError> {
+    fn reject_duplicate_branches(&self, branches: &[MatchBranch]) -> Result<(), SyntaxError> {
+        let mut seen = std::collections::HashSet::new();
+        for branch in branches {
+            for pattern in &branch.patterns {
+                let key = (pattern.clone(), branch.guard.clone());
+                if !seen.insert(key) {
+                    return Err(self.error_duplicate_match_pattern());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn inline_match_branches(&mut self) -> Result<Vec<MatchBranch>, SyntaxError> {
+        let mut branches = vec![self.match_branch()?];
+        while self.lookahead_is_comma() {
+            self.eat_token(&Token::Comma)?;
+            branches.push(self.match_branch()?);
+        }
+        Ok(branches)
+    }
+
+    fn block_match_branches(&mut self) -> Result<Vec<MatchBranch>, SyntaxError> {
         let mut branches = vec![self.match_branch()?];
 
-        while (inline_mode && self.lookahead_is_comma())
-            || (!inline_mode && self._lookahead.is_some() && !self.lookahead_is_dedent())
-        {
-            if inline_mode {
-                self.eat_token(&Token::Comma)?;
-            } else {
-                // Consume optional terminator (newline) between branches
-                self.try_eat_expression_end();
-
-                // Re-check termination condition after consuming terminator
-                if self._lookahead.is_none() || self.lookahead_is_dedent() {
-                    break;
-                }
-
-                if self.lookahead_is_indent() {
-                    // If we encounter an indent here, it must be an empty block (trailing whitespace/comment)
-                    // that produced an INDENT-DEDENT pair. We consume it and continue.
-                    self.eat_token(&Token::Indent)?;
-                    self.eat_token(&Token::Dedent)?;
-                    continue;
-                }
+        while self.lookahead.is_some() && !self.lookahead_is_dedent() {
+            self.try_eat_expression_end()?;
+            if self.lookahead.is_none() || self.lookahead_is_dedent() {
+                break;
+            }
+            if self.lookahead_is_indent() {
+                // Trailing INDENT/DEDENT pairs leak through from empty blocks
+                // (e.g. comment-only lines). Skip them silently.
+                self.eat_token(&Token::Indent)?;
+                self.eat_token(&Token::Dedent)?;
+                continue;
             }
             branches.push(self.match_branch()?);
         }
@@ -269,8 +243,6 @@ impl<'source> Parser<'source> {
         Ok(branches)
     }
 
-    /*
-     */
     pub(crate) fn match_branch(&mut self) -> Result<MatchBranch, SyntaxError> {
         let mut patterns = vec![self.pattern()?];
         while self.match_lookahead_type(|t| t == &Token::Pipe) {
@@ -288,7 +260,7 @@ impl<'source> Parser<'source> {
         let body_parsing_error = self.error_unexpected_lookahead_token(
             "a colon for an inline body or an indented block for a block body",
         );
-        let body = match &self._lookahead {
+        let body = match &self.lookahead {
             Some((Token::Colon, _)) => {
                 self.eat_token(&Token::Colon)?;
                 let expr = self.expression()?;
@@ -304,7 +276,7 @@ impl<'source> Parser<'source> {
             }
             _ => return Err(body_parsing_error),
         };
-        self.try_eat_expression_end();
+        self.try_eat_expression_end()?;
 
         Ok(MatchBranch {
             patterns,

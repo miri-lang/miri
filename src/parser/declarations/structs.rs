@@ -38,11 +38,11 @@ impl<'source> Parser<'source> {
         let mut fields = vec![];
         let mut methods = vec![];
 
-        match &self._lookahead {
+        match &self.lookahead {
             Some((Token::Colon, _)) => {
                 // Inline form — only fields allowed inline
                 self.eat_token(&Token::Colon)?;
-                if !self.lookahead_is_expression_end() && self._lookahead.is_some() {
+                if !self.lookahead_is_expression_end() && self.lookahead.is_some() {
                     fields.push(self.struct_member_expression()?);
                     while self.lookahead_is_comma() {
                         self.eat_token(&Token::Comma)?;
@@ -56,7 +56,7 @@ impl<'source> Parser<'source> {
                 if self.lookahead_is_indent() {
                     self.eat_token(&Token::Indent)?;
                     while !self.lookahead_is_dedent() {
-                        match &self._lookahead {
+                        match &self.lookahead {
                             Some((Token::Fn, _))
                             | Some((Token::Async, _))
                             | Some((Token::Gpu, _)) => {
@@ -67,7 +67,7 @@ impl<'source> Parser<'source> {
                                 fields.push(self.struct_member_expression()?);
                             }
                         }
-                        self.try_eat_expression_end();
+                        self.try_eat_expression_end()?;
                     }
                     self.eat_token(&Token::Dedent)?;
                 }

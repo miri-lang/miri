@@ -9,21 +9,19 @@ use crate::lexer::Token;
 use super::super::Parser;
 
 impl<'source> Parser<'source> {
-    /*
-     */
     pub(crate) fn identifier(&mut self) -> Result<Expression, SyntaxError> {
         let (name, span) = if self.match_lookahead_type(|t| matches!(t, Token::None)) {
             let (_, span) = self.eat_token(&Token::None)?;
             ("None".to_string(), span)
         } else {
-            if self._lookahead.is_none() {
+            if self.lookahead.is_none() {
                 return Err(self.error_unexpected_lookahead_token("identifier"));
             }
             let (_, span) = self.eat_token(&Token::Identifier)?;
             (self.source[span.start..span.end].to_string(), span)
         };
 
-        let (name, class, full_span) = match &self._lookahead {
+        let (name, class, full_span) = match &self.lookahead {
             Some((Token::DoubleColon, _)) => {
                 self.eat_token(&Token::DoubleColon)?;
                 let (_, second_span) = self.eat_token(&Token::Identifier)?;
@@ -39,7 +37,7 @@ impl<'source> Parser<'source> {
         Ok(ast::identifier_with_class_and_span(&name, class, full_span))
     }
 
-    pub(crate) fn parse_simple_identifier(&mut self) -> Result<String, SyntaxError> {
+    pub(crate) fn simple_identifier(&mut self) -> Result<String, SyntaxError> {
         let identifier_expr = self.identifier()?;
         if let ExpressionKind::Identifier(id, class_opt) = identifier_expr.node {
             if let Some(class) = class_opt {
@@ -54,10 +52,8 @@ impl<'source> Parser<'source> {
         }
     }
 
-    /*
-     */
     pub(crate) fn primary_expression(&mut self) -> Result<Expression, SyntaxError> {
-        if self._lookahead.is_none() {
+        if self.lookahead.is_none() {
             return Err(self.error_eof());
         }
 
@@ -65,7 +61,7 @@ impl<'source> Parser<'source> {
             return self.literal_expression();
         }
 
-        match &self._lookahead {
+        match &self.lookahead {
             Some((Token::LParen, _)) => self.parenthesized_expression(),
             Some((Token::Identifier, _)) => self.identifier(),
             Some((Token::Super, _)) => {
@@ -105,8 +101,6 @@ impl<'source> Parser<'source> {
         }
     }
 
-    /*
-     */
     pub(crate) fn parenthesized_expression(&mut self) -> Result<Expression, SyntaxError> {
         self.eat_token(&Token::LParen)?;
 
