@@ -113,7 +113,6 @@ fn is_auto_copy_inner<'a>(
     visited: &mut std::collections::HashSet<&'a str>,
 ) -> bool {
     match kind {
-        // Primitives are always auto-copy
         TypeKind::Int
         | TypeKind::I8
         | TypeKind::I16
@@ -132,87 +131,103 @@ fn is_auto_copy_inner<'a>(
         | TypeKind::RawPtr
         | TypeKind::Void
         | TypeKind::Error
-        | TypeKind::Identifier => true,
+        | TypeKind::Identifier
+        | TypeKind::Function(_) => true,
 
-        // Function types are plain function pointers (pointer-sized, no RC).
-        TypeKind::Function(_) => true,
-
-        // Managed heap types are never auto-copy
         TypeKind::String
         | TypeKind::Result(_, _)
         | TypeKind::Future(_)
         | TypeKind::Meta(_)
         | TypeKind::Linear(_)
-        | TypeKind::Generic(_, _, _) => false,
+        | TypeKind::Generic(_, _, _)
+        | TypeKind::List(_)
+        | TypeKind::Array(_, _)
+        | TypeKind::Map(_, _)
+        | TypeKind::Set(_) => false,
 
-        // Collection canonical variants — built-in collections (List/Array/Map/Set)
-        // are never auto-copy regardless of element type: they always live behind
-        // a refcounted pointer. Normalization to Custom is the common path, but
-        // parameter/return types in trait/function signatures can survive in this
-        // canonical form when resolve_type takes its early-out cache path.
-        TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => false,
+        TypeKind::Tuple(elements) => is_auto_copy_tuple(elements, type_definitions, visited),
 
-        // Tuples: auto-copy if all elements are auto-copy
-        TypeKind::Tuple(elements) => elements.iter().all(|elem_expr| {
-            if let crate::ast::expression::ExpressionKind::Type(ty, _) = &elem_expr.node {
-                is_auto_copy_inner(&ty.kind, type_definitions, visited)
-            } else {
-                // Can't resolve element type — conservative: not auto-copy
-                false
-            }
-        }),
-
-        // Option: inherits from inner type
         TypeKind::Option(inner) => is_auto_copy_inner(&inner.kind, type_definitions, visited),
 
-        // Custom types: look up the definition
-        TypeKind::Custom(name, _) => {
-            // Prevent infinite recursion
-            if !visited.insert(name.as_str()) {
-                return false;
-            }
-
-            match type_definitions.get(name) {
-                Some(TypeDefinition::Struct(struct_def)) => {
-                    // Resource types (fn drop) are never auto-copy — they must be RC-managed
-                    // so the drop hook fires at scope exit.
-                    if struct_def.has_drop {
-                        return false;
-                    }
-                    // All fields must be auto-copy and total size <= threshold
-                    let all_fields_copy = struct_def.fields.iter().all(|(_, field_ty, _)| {
-                        is_auto_copy_inner(&field_ty.kind, type_definitions, visited)
-                    });
-                    if !all_fields_copy {
-                        return false;
-                    }
-                    estimated_type_size(kind, type_definitions)
-                        <= crate::mir::body::AUTO_COPY_MAX_SIZE
-                }
-                Some(TypeDefinition::Enum(enum_def)) => {
-                    // All variant payloads must be auto-copy
-                    let all_variants_copy = enum_def.variants.values().all(|payload_types| {
-                        payload_types
-                            .iter()
-                            .all(|ty| is_auto_copy_inner(&ty.kind, type_definitions, visited))
-                    });
-                    if !all_variants_copy {
-                        return false;
-                    }
-                    estimated_type_size(kind, type_definitions)
-                        <= crate::mir::body::AUTO_COPY_MAX_SIZE
-                }
-                // Classes, traits, aliases, generics — not auto-copy
-                Some(TypeDefinition::Class(_))
-                | Some(TypeDefinition::Trait(_))
-                | Some(TypeDefinition::Generic(_)) => false,
-                Some(TypeDefinition::Alias(alias_def)) => {
-                    is_auto_copy_inner(&alias_def.template.kind, type_definitions, visited)
-                }
-                None => false,
-            }
-        }
+        TypeKind::Custom(name, _) => is_auto_copy_custom(name, kind, type_definitions, visited),
     }
+}
+
+fn is_auto_copy_tuple<'a>(
+    elements: &'a [crate::ast::expression::Expression],
+    type_definitions: &'a std::collections::HashMap<String, TypeDefinition>,
+    visited: &mut std::collections::HashSet<&'a str>,
+) -> bool {
+    elements.iter().all(|elem_expr| {
+        if let crate::ast::expression::ExpressionKind::Type(ty, _) = &elem_expr.node {
+            is_auto_copy_inner(&ty.kind, type_definitions, visited)
+        } else {
+            false
+        }
+    })
+}
+
+fn is_auto_copy_custom<'a>(
+    name: &'a str,
+    kind: &'a TypeKind,
+    type_definitions: &'a std::collections::HashMap<String, TypeDefinition>,
+    visited: &mut std::collections::HashSet<&'a str>,
+) -> bool {
+    if !visited.insert(name) {
+        return false;
+    }
+
+    match type_definitions.get(name) {
+        Some(TypeDefinition::Struct(struct_def)) => {
+            is_auto_copy_struct(struct_def, kind, type_definitions, visited)
+        }
+        Some(TypeDefinition::Enum(enum_def)) => {
+            is_auto_copy_enum(enum_def, kind, type_definitions, visited)
+        }
+        Some(TypeDefinition::Alias(alias_def)) => {
+            is_auto_copy_inner(&alias_def.template.kind, type_definitions, visited)
+        }
+        Some(TypeDefinition::Class(_))
+        | Some(TypeDefinition::Trait(_))
+        | Some(TypeDefinition::Generic(_))
+        | None => false,
+    }
+}
+
+fn is_auto_copy_struct<'a>(
+    struct_def: &'a crate::type_checker::context::StructDefinition,
+    kind: &TypeKind,
+    type_definitions: &'a std::collections::HashMap<String, TypeDefinition>,
+    visited: &mut std::collections::HashSet<&'a str>,
+) -> bool {
+    if struct_def.has_drop {
+        return false;
+    }
+    let all_fields_copy = struct_def
+        .fields
+        .iter()
+        .all(|(_, field_ty, _)| is_auto_copy_inner(&field_ty.kind, type_definitions, visited));
+    if !all_fields_copy {
+        return false;
+    }
+    estimated_type_size(kind, type_definitions) <= crate::mir::body::AUTO_COPY_MAX_SIZE
+}
+
+fn is_auto_copy_enum<'a>(
+    enum_def: &'a crate::type_checker::context::EnumDefinition,
+    kind: &TypeKind,
+    type_definitions: &'a std::collections::HashMap<String, TypeDefinition>,
+    visited: &mut std::collections::HashSet<&'a str>,
+) -> bool {
+    let all_variants_copy = enum_def.variants.values().all(|payload_types| {
+        payload_types
+            .iter()
+            .all(|ty| is_auto_copy_inner(&ty.kind, type_definitions, visited))
+    });
+    if !all_variants_copy {
+        return false;
+    }
+    estimated_type_size(kind, type_definitions) <= crate::mir::body::AUTO_COPY_MAX_SIZE
 }
 
 /// Estimates the byte size of a type for auto-copy threshold checking.
@@ -576,89 +591,110 @@ impl TypeChecker {
     /// Resolves a Type based on its kind.
     fn resolve_type_kind(&mut self, t: Type, expr: &Expression, context: &Context) -> Type {
         match t.kind {
-            // Collection canonical variants — after normalization these arrive as
-            // TypeKind::Custom.  If somehow they appear here (e.g. from factory
-            // functions that haven't been updated), convert them to Custom so that
-            // downstream code only sees one representation.
-            TypeKind::List(inner) => {
-                let resolved_inner = self.resolve_type_expression(&inner, context);
-                make_type(TypeKind::Custom(
-                    "List".to_string(),
-                    Some(vec![self.create_type_expression(resolved_inner)]),
-                ))
-            }
-            TypeKind::Set(inner) => {
-                let resolved_inner = self.resolve_type_expression(&inner, context);
-                if let TypeKind::Option(_) = resolved_inner.kind {
-                    self.report_error("Set elements cannot be optional".to_string(), inner.span);
-                }
-                make_type(TypeKind::Custom(
-                    "Set".to_string(),
-                    Some(vec![self.create_type_expression(resolved_inner)]),
-                ))
-            }
-            TypeKind::Map(k, v) => {
-                let rk = self.resolve_type_expression(&k, context);
-                if let TypeKind::Option(_) = rk.kind {
-                    self.report_error("Map keys cannot be optional".to_string(), k.span);
-                }
-                let rv = self.resolve_type_expression(&v, context);
-                make_type(TypeKind::Custom(
-                    "Map".to_string(),
-                    Some(vec![
-                        self.create_type_expression(rk),
-                        self.create_type_expression(rv),
-                    ]),
-                ))
-            }
-            TypeKind::Option(inner) => {
-                let inner_expr = self.create_type_expression(*inner);
-                let resolved_inner = self.resolve_type_expression(&inner_expr, context);
-                make_type(TypeKind::Option(Box::new(resolved_inner)))
-            }
-            TypeKind::Array(inner, size) => {
-                let resolved_inner = self.resolve_type_expression(&inner, context);
-                // Fold constant size expressions (e.g., `1 + 2` → `3`)
-                let folded_size = if let Some(val) = Self::try_eval_const_int(&size) {
-                    Box::new(crate::ast::factory::int_literal_expression(val))
-                } else {
-                    size
-                };
-                make_type(TypeKind::Custom(
-                    "Array".to_string(),
-                    Some(vec![
-                        self.create_type_expression(resolved_inner),
-                        *folded_size,
-                    ]),
-                ))
-            }
-            TypeKind::Result(ok, err) => {
-                // Normalize TypeKind::Result(ok, err) to Custom("Result", [ok, err]) so that
-                // parser-produced Result<T, E> annotations are compatible with enum-constructed
-                // Result values (which infer_enum_value produces as Custom("Result", ...)).
-                let ok_type = self.resolve_type_expression(&ok, context);
-                let err_type = self.resolve_type_expression(&err, context);
-                make_type(TypeKind::Custom(
-                    "Result".to_string(),
-                    Some(vec![
-                        self.create_type_expression(ok_type),
-                        self.create_type_expression(err_type),
-                    ]),
-                ))
-            }
+            TypeKind::List(inner) => self.resolve_list_type(inner, context),
+            TypeKind::Set(inner) => self.resolve_set_type(inner, context),
+            TypeKind::Map(k, v) => self.resolve_map_type(k, v, context),
+            TypeKind::Option(inner) => self.resolve_option_type(*inner, context),
+            TypeKind::Array(inner, size) => self.resolve_array_type(inner, size, context),
+            TypeKind::Result(ok, err) => self.resolve_result_type(ok, err, context),
             TypeKind::Custom(name, args) => self.resolve_custom_type(&name, args, expr, context),
-            TypeKind::Tuple(elements) => {
-                let resolved_elements: Vec<Expression> = elements
-                    .iter()
-                    .map(|elem_expr| {
-                        let resolved = self.resolve_type_expression(elem_expr, context);
-                        self.create_type_expression(resolved)
-                    })
-                    .collect();
-                make_type(TypeKind::Tuple(resolved_elements))
-            }
+            TypeKind::Tuple(elements) => self.resolve_tuple_type(elements, context),
             _ => make_type(t.kind),
         }
+    }
+
+    fn resolve_list_type(&mut self, inner: Box<Expression>, context: &Context) -> Type {
+        let resolved_inner = self.resolve_type_expression(&inner, context);
+        make_type(TypeKind::Custom(
+            "List".to_string(),
+            Some(vec![self.create_type_expression(resolved_inner)]),
+        ))
+    }
+
+    fn resolve_set_type(&mut self, inner: Box<Expression>, context: &Context) -> Type {
+        let resolved_inner = self.resolve_type_expression(&inner, context);
+        if let TypeKind::Option(_) = resolved_inner.kind {
+            self.report_error("Set elements cannot be optional".to_string(), inner.span);
+        }
+        make_type(TypeKind::Custom(
+            "Set".to_string(),
+            Some(vec![self.create_type_expression(resolved_inner)]),
+        ))
+    }
+
+    fn resolve_map_type(
+        &mut self,
+        k: Box<Expression>,
+        v: Box<Expression>,
+        context: &Context,
+    ) -> Type {
+        let rk = self.resolve_type_expression(&k, context);
+        if let TypeKind::Option(_) = rk.kind {
+            self.report_error("Map keys cannot be optional".to_string(), k.span);
+        }
+        let rv = self.resolve_type_expression(&v, context);
+        make_type(TypeKind::Custom(
+            "Map".to_string(),
+            Some(vec![
+                self.create_type_expression(rk),
+                self.create_type_expression(rv),
+            ]),
+        ))
+    }
+
+    fn resolve_option_type(&mut self, inner: Type, context: &Context) -> Type {
+        let inner_expr = self.create_type_expression(inner);
+        let resolved_inner = self.resolve_type_expression(&inner_expr, context);
+        make_type(TypeKind::Option(Box::new(resolved_inner)))
+    }
+
+    fn resolve_array_type(
+        &mut self,
+        inner: Box<Expression>,
+        size: Box<Expression>,
+        context: &Context,
+    ) -> Type {
+        let resolved_inner = self.resolve_type_expression(&inner, context);
+        let folded_size = if let Some(val) = Self::try_eval_const_int(&size) {
+            Box::new(crate::ast::factory::int_literal_expression(val))
+        } else {
+            size
+        };
+        make_type(TypeKind::Custom(
+            "Array".to_string(),
+            Some(vec![
+                self.create_type_expression(resolved_inner),
+                *folded_size,
+            ]),
+        ))
+    }
+
+    fn resolve_result_type(
+        &mut self,
+        ok: Box<Expression>,
+        err: Box<Expression>,
+        context: &Context,
+    ) -> Type {
+        let ok_type = self.resolve_type_expression(&ok, context);
+        let err_type = self.resolve_type_expression(&err, context);
+        make_type(TypeKind::Custom(
+            "Result".to_string(),
+            Some(vec![
+                self.create_type_expression(ok_type),
+                self.create_type_expression(err_type),
+            ]),
+        ))
+    }
+
+    fn resolve_tuple_type(&mut self, elements: Vec<Expression>, context: &Context) -> Type {
+        let resolved_elements: Vec<Expression> = elements
+            .iter()
+            .map(|elem_expr| {
+                let resolved = self.resolve_type_expression(elem_expr, context);
+                self.create_type_expression(resolved)
+            })
+            .collect();
+        make_type(TypeKind::Tuple(resolved_elements))
     }
 
     /// Resolves a custom type (user-defined or built-in generic type).
@@ -725,116 +761,142 @@ impl TypeChecker {
         context: &Context,
     ) -> Option<Type> {
         match name {
-            "Map" => {
-                if let Some(args) = args {
-                    if args.len() == 2 {
-                        let k = self.resolve_type_expression(&args[0], context);
-                        if let TypeKind::Option(_) = k.kind {
-                            self.report_error(
-                                "Map keys cannot be optional".to_string(),
-                                args[0].span,
-                            );
-                        }
-                        let v = self.resolve_type_expression(&args[1], context);
-                        return Some(make_type(TypeKind::Custom(
-                            "Map".to_string(),
-                            Some(vec![
-                                self.create_type_expression(k),
-                                self.create_type_expression(v),
-                            ]),
-                        )));
-                    }
-                }
-                None
-            }
-            "Array" => {
-                if let Some(args) = args {
-                    if args.len() == 2 {
-                        let elem = self.resolve_type_expression(&args[0], context);
-                        // The second argument is the size expression (may be a literal or a
-                        // constant-foldable expression, not a type expression).
-                        let size = &args[1];
-                        let folded_size = if let Some(val) = Self::try_eval_const_int(size) {
-                            Box::new(crate::ast::factory::int_literal_expression(val))
-                        } else {
-                            Box::new(size.clone())
-                        };
-                        return Some(make_type(TypeKind::Custom(
-                            "Array".to_string(),
-                            Some(vec![self.create_type_expression(elem), *folded_size]),
-                        )));
-                    }
-                }
-                None
-            }
-            "List" | "list" => {
-                if let Some(args) = args {
-                    if args.len() == 1 {
-                        let t = self.resolve_type_expression(&args[0], context);
-                        return Some(make_type(TypeKind::Custom(
-                            "List".to_string(),
-                            Some(vec![self.create_type_expression(t)]),
-                        )));
-                    }
-                }
-                None
-            }
-            "Set" | "set" => {
-                if let Some(args) = args {
-                    if args.len() == 1 {
-                        let t = self.resolve_type_expression(&args[0], context);
-                        if let TypeKind::Option(_) = t.kind {
-                            self.report_error(
-                                "Set elements cannot be optional".to_string(),
-                                args[0].span,
-                            );
-                        }
-                        return Some(make_type(TypeKind::Custom(
-                            "Set".to_string(),
-                            Some(vec![self.create_type_expression(t)]),
-                        )));
-                    }
-                }
-                None
-            }
-            "range" => {
-                if let Some(args) = args {
-                    if args.len() == 1 {
-                        let t = self.resolve_type_expression(&args[0], context);
-                        return Some(make_type(TypeKind::Custom(
-                            "Range".to_string(),
-                            Some(vec![self.create_type_expression(t)]),
-                        )));
-                    }
-                } else {
-                    // Default to Range<Int>
-                    return Some(make_type(TypeKind::Custom(
-                        "Range".to_string(),
-                        Some(vec![self.create_type_expression(make_type(TypeKind::Int))]),
-                    )));
-                }
-                None
-            }
-            "Option" => {
-                if let Some(args) = args {
-                    if args.len() == 1 {
-                        let t = self.resolve_type_expression(&args[0], context);
-                        return Some(make_type(TypeKind::Option(Box::new(t))));
-                    }
-                }
-                None
-            }
-            "Linear" => {
-                if let Some(args) = args {
-                    if args.len() == 1 {
-                        let t = self.resolve_type_expression(&args[0], context);
-                        return Some(make_type(TypeKind::Linear(Box::new(t))));
-                    }
-                }
-                None
-            }
+            "Map" => self.resolve_alias_map(args, context),
+            "Array" => self.resolve_alias_array(args, context),
+            "List" | "list" => self.resolve_alias_list(args, context),
+            "Set" | "set" => self.resolve_alias_set(args, context),
+            "range" => self.resolve_alias_range(args, context),
+            "Option" => self.resolve_alias_option(args, context),
+            "Linear" => self.resolve_alias_linear(args, context),
             _ => None,
         }
+    }
+
+    fn resolve_alias_map(
+        &mut self,
+        args: &Option<Vec<Expression>>,
+        context: &Context,
+    ) -> Option<Type> {
+        let args = args.as_ref()?;
+        if args.len() != 2 {
+            return None;
+        }
+        let k = self.resolve_type_expression(&args[0], context);
+        if let TypeKind::Option(_) = k.kind {
+            self.report_error("Map keys cannot be optional".to_string(), args[0].span);
+        }
+        let v = self.resolve_type_expression(&args[1], context);
+        Some(make_type(TypeKind::Custom(
+            "Map".to_string(),
+            Some(vec![
+                self.create_type_expression(k),
+                self.create_type_expression(v),
+            ]),
+        )))
+    }
+
+    fn resolve_alias_array(
+        &mut self,
+        args: &Option<Vec<Expression>>,
+        context: &Context,
+    ) -> Option<Type> {
+        let args = args.as_ref()?;
+        if args.len() != 2 {
+            return None;
+        }
+        let elem = self.resolve_type_expression(&args[0], context);
+        let size = &args[1];
+        let folded_size = if let Some(val) = Self::try_eval_const_int(size) {
+            Box::new(crate::ast::factory::int_literal_expression(val))
+        } else {
+            Box::new(size.clone())
+        };
+        Some(make_type(TypeKind::Custom(
+            "Array".to_string(),
+            Some(vec![self.create_type_expression(elem), *folded_size]),
+        )))
+    }
+
+    fn resolve_alias_list(
+        &mut self,
+        args: &Option<Vec<Expression>>,
+        context: &Context,
+    ) -> Option<Type> {
+        let args = args.as_ref()?;
+        if args.len() != 1 {
+            return None;
+        }
+        let t = self.resolve_type_expression(&args[0], context);
+        Some(make_type(TypeKind::Custom(
+            "List".to_string(),
+            Some(vec![self.create_type_expression(t)]),
+        )))
+    }
+
+    fn resolve_alias_set(
+        &mut self,
+        args: &Option<Vec<Expression>>,
+        context: &Context,
+    ) -> Option<Type> {
+        let args = args.as_ref()?;
+        if args.len() != 1 {
+            return None;
+        }
+        let t = self.resolve_type_expression(&args[0], context);
+        if let TypeKind::Option(_) = t.kind {
+            self.report_error("Set elements cannot be optional".to_string(), args[0].span);
+        }
+        Some(make_type(TypeKind::Custom(
+            "Set".to_string(),
+            Some(vec![self.create_type_expression(t)]),
+        )))
+    }
+
+    fn resolve_alias_range(
+        &mut self,
+        args: &Option<Vec<Expression>>,
+        context: &Context,
+    ) -> Option<Type> {
+        match args {
+            Some(args) if args.len() == 1 => {
+                let t = self.resolve_type_expression(&args[0], context);
+                Some(make_type(TypeKind::Custom(
+                    "Range".to_string(),
+                    Some(vec![self.create_type_expression(t)]),
+                )))
+            }
+            None => Some(make_type(TypeKind::Custom(
+                "Range".to_string(),
+                Some(vec![self.create_type_expression(make_type(TypeKind::Int))]),
+            ))),
+            _ => None,
+        }
+    }
+
+    fn resolve_alias_option(
+        &mut self,
+        args: &Option<Vec<Expression>>,
+        context: &Context,
+    ) -> Option<Type> {
+        let args = args.as_ref()?;
+        if args.len() != 1 {
+            return None;
+        }
+        let t = self.resolve_type_expression(&args[0], context);
+        Some(make_type(TypeKind::Option(Box::new(t))))
+    }
+
+    fn resolve_alias_linear(
+        &mut self,
+        args: &Option<Vec<Expression>>,
+        context: &Context,
+    ) -> Option<Type> {
+        let args = args.as_ref()?;
+        if args.len() != 1 {
+            return None;
+        }
+        let t = self.resolve_type_expression(&args[0], context);
+        Some(make_type(TypeKind::Linear(Box::new(t))))
     }
 
     /// Validates a type definition and returns the resolved type.

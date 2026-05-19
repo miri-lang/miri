@@ -62,7 +62,7 @@ impl TypeChecker {
         context: &mut Context,
         span: Span,
     ) {
-        // Extract trait name
+        // Extract and validate trait name
         let name = match self.extract_type_name(name_expr) {
             Ok(n) => n.to_string(),
             Err(_) => {
@@ -86,12 +86,60 @@ impl TypeChecker {
         }
         self.pre_registered_types.remove(&name);
 
-        // Process generics
+        // Enter trait scope and set up context
+        context.enter_scope();
+        let trait_type = make_type(TypeKind::Custom(name.clone(), None));
+        context.enter_class(name.clone(), None, trait_type.clone());
+
+        // Resolve all trait dependencies and signatures
         let generic_defs = generics
             .as_ref()
             .map(|gens| self.extract_generic_definitions(gens, context));
+        if let Some(gens) = generics {
+            self.define_generics(gens, context);
+        }
 
-        // Validate parent traits exist and are actually traits
+        let parent_trait_names = self.resolve_parent_traits(parent_traits, context);
+        let parent_trait_args = self.resolve_parent_trait_args(parent_traits, context);
+        let (methods, method_statements) = self.collect_trait_methods(body, context);
+
+        // Build and register trait definition
+        let trait_def = TraitDefinition {
+            name: name.clone(),
+            generics: generic_defs,
+            parent_traits: parent_trait_names,
+            parent_trait_args,
+            methods,
+            module: self.current_module.clone(),
+        };
+        self.finalize_trait_definition(&name, &trait_type, trait_def, visibility, context);
+
+        // Type-check method bodies
+        self.check_trait_method_bodies(method_statements, context);
+        context.exit_class();
+        context.exit_scope();
+    }
+
+    fn finalize_trait_definition(
+        &mut self,
+        name: &str,
+        trait_type: &Type,
+        trait_def: TraitDefinition,
+        visibility: &MemberVisibility,
+        context: &mut Context,
+    ) {
+        context.define_type(name.to_string(), TypeDefinition::Trait(trait_def.clone()));
+        if context.scopes.len() == 2 {
+            self.register_type_definition(name.to_string(), TypeDefinition::Trait(trait_def));
+        }
+        self.register_trait_symbol(name, trait_type, visibility, context);
+    }
+
+    fn resolve_parent_traits(
+        &mut self,
+        parent_traits: &[Expression],
+        _context: &mut Context,
+    ) -> Vec<String> {
         let mut parent_trait_names = Vec::with_capacity(parent_traits.len());
         for trait_expr in parent_traits {
             if let Ok(trait_name) = self.extract_type_name(trait_expr) {
@@ -123,22 +171,14 @@ impl TypeChecker {
                 parent_trait_names.push(trait_name.to_string());
             }
         }
+        parent_trait_names
+    }
 
-        // Enter trait scope
-        context.enter_scope();
-
-        // Set trait context so `Self` resolves inside method signatures
-        let trait_type = make_type(TypeKind::Custom(name.clone(), None));
-        context.enter_class(name.clone(), None, trait_type.clone());
-
-        // Define generics in scope
-        if let Some(gens) = generics {
-            self.define_generics(gens, context);
-        }
-
-        // Resolve generic args declared at each `extends ParentTrait<...>` site.
-        // Done after the trait's own generics are in scope so `S` in
-        // `extends Transformable<S>` resolves as `Generic("S")`.
+    fn resolve_parent_trait_args(
+        &mut self,
+        parent_traits: &[Expression],
+        context: &mut Context,
+    ) -> BTreeMap<String, Vec<Type>> {
         let mut parent_trait_args: BTreeMap<String, Vec<Type>> = BTreeMap::new();
         for trait_expr in parent_traits {
             if let Ok(parent_name) = self.extract_type_name(trait_expr) {
@@ -151,11 +191,14 @@ impl TypeChecker {
                 }
             }
         }
+        parent_trait_args
+    }
 
-        // PASS 1: Collect method signatures only (do not check default bodies yet —
-        // bodies may call `self.method()`, which requires the trait to be registered
-        // in the type definitions so that the trait-typed lookup branch can resolve
-        // member access against it.)
+    fn collect_trait_methods<'a>(
+        &mut self,
+        body: &'a [Statement],
+        context: &mut Context,
+    ) -> (BTreeMap<String, MethodInfo>, Vec<&'a Statement>) {
         let mut methods: BTreeMap<String, MethodInfo> = BTreeMap::new();
         let mut method_statements: Vec<&Statement> = Vec::with_capacity(body.len());
 
@@ -203,27 +246,19 @@ impl TypeChecker {
                 }
             }
         }
+        (methods, method_statements)
+    }
 
-        // Build trait definition and register it BEFORE checking default-method bodies,
-        // so that `self.method()` inside a default body can resolve against the trait.
-        let trait_def = TraitDefinition {
-            name: name.clone(),
-            generics: generic_defs,
-            parent_traits: parent_trait_names,
-            parent_trait_args,
-            methods,
-            module: self.current_module.clone(),
-        };
-
-        context.define_type(name.clone(), TypeDefinition::Trait(trait_def.clone()));
-        if context.scopes.len() == 2 {
-            self.register_type_definition(name.clone(), TypeDefinition::Trait(trait_def));
-        }
-
-        // Define trait type symbol
+    fn register_trait_symbol(
+        &mut self,
+        name: &str,
+        trait_type: &Type,
+        visibility: &MemberVisibility,
+        context: &mut Context,
+    ) {
         if context.scopes.len() == 2 {
             self.global_scope.insert(
-                name.clone(),
+                name.to_string(),
                 SymbolInfo::new(
                     make_type(TypeKind::Meta(Box::new(trait_type.clone()))),
                     false,
@@ -236,9 +271,9 @@ impl TypeChecker {
         }
 
         context.define(
-            name,
+            name.to_string(),
             SymbolInfo::new(
-                make_type(TypeKind::Meta(Box::new(trait_type))),
+                make_type(TypeKind::Meta(Box::new(trait_type.clone()))),
                 false,
                 false,
                 visibility.clone(),
@@ -246,8 +281,13 @@ impl TypeChecker {
                 None,
             ),
         );
+    }
 
-        // PASS 2: Check default-method bodies. Abstract methods (no body) are skipped.
+    fn check_trait_method_bodies(
+        &mut self,
+        method_statements: Vec<&Statement>,
+        context: &mut Context,
+    ) {
         for stmt in method_statements {
             if let StatementKind::FunctionDeclaration(decl) = &stmt.node {
                 if decl.body.is_none() {
@@ -266,8 +306,5 @@ impl TypeChecker {
                 );
             }
         }
-
-        context.exit_class();
-        context.exit_scope();
     }
 }

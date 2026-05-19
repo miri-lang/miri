@@ -72,73 +72,84 @@ impl TypeChecker {
             TypeKind::U8 | TypeKind::U16 | TypeKind::U32 | TypeKind::U64 | TypeKind::U128
         );
 
-        match val {
-            IntegerLiteral::U128(v) => {
-                if is_target_unsigned {
-                    let max = match size {
-                        8 => u8::MAX as u128,
-                        16 => u16::MAX as u128,
-                        32 => u32::MAX as u128,
-                        64 => u64::MAX as u128,
-                        128 => u128::MAX,
-                        _ => return false,
-                    };
-                    *v <= max
-                } else {
-                    let max = match size {
-                        8 => i8::MAX as u128,
-                        16 => i16::MAX as u128,
-                        32 => i32::MAX as u128,
-                        64 => i64::MAX as u128,
-                        128 => i128::MAX as u128,
-                        _ => return false,
-                    };
-                    *v <= max
-                }
-            }
-            _ => {
-                let val_i128 = match val {
-                    IntegerLiteral::I8(v) => *v as i128,
-                    IntegerLiteral::I16(v) => *v as i128,
-                    IntegerLiteral::I32(v) => *v as i128,
-                    IntegerLiteral::I64(v) => *v as i128,
-                    IntegerLiteral::I128(v) => *v,
-                    IntegerLiteral::U8(v) => *v as i128,
-                    IntegerLiteral::U16(v) => *v as i128,
-                    IntegerLiteral::U32(v) => *v as i128,
-                    IntegerLiteral::U64(v) => *v as i128,
-                    _ => unreachable!(),
-                };
-
-                if is_target_unsigned {
-                    if val_i128 < 0 {
-                        return false;
-                    }
-                    let max = match size {
-                        8 => u8::MAX as i128,
-                        16 => u16::MAX as i128,
-                        32 => u32::MAX as i128,
-                        64 => u64::MAX as i128,
-                        128 => i128::MAX,
-                        _ => return false,
-                    };
-                    if size == 128 {
-                        return true;
-                    }
-                    val_i128 <= max
-                } else {
-                    let (min, max) = match size {
-                        8 => (i8::MIN as i128, i8::MAX as i128),
-                        16 => (i16::MIN as i128, i16::MAX as i128),
-                        32 => (i32::MIN as i128, i32::MAX as i128),
-                        64 => (i64::MIN as i128, i64::MAX as i128),
-                        128 => (i128::MIN, i128::MAX),
-                        _ => return false,
-                    };
-                    val_i128 >= min && val_i128 <= max
-                }
-            }
+        if let IntegerLiteral::U128(v) = val {
+            return Self::u128_fits(*v, size, is_target_unsigned);
         }
+        let Some(val_i128) = Self::integer_to_i128(val) else {
+            return false;
+        };
+        if is_target_unsigned {
+            Self::i128_fits_unsigned(val_i128, size)
+        } else {
+            Self::i128_fits_signed(val_i128, size)
+        }
+    }
+
+    fn u128_fits(v: u128, size: u8, is_target_unsigned: bool) -> bool {
+        let max = if is_target_unsigned {
+            match size {
+                8 => u8::MAX as u128,
+                16 => u16::MAX as u128,
+                32 => u32::MAX as u128,
+                64 => u64::MAX as u128,
+                128 => u128::MAX,
+                _ => return false,
+            }
+        } else {
+            match size {
+                8 => i8::MAX as u128,
+                16 => i16::MAX as u128,
+                32 => i32::MAX as u128,
+                64 => i64::MAX as u128,
+                128 => i128::MAX as u128,
+                _ => return false,
+            }
+        };
+        v <= max
+    }
+
+    fn integer_to_i128(val: &IntegerLiteral) -> Option<i128> {
+        Some(match val {
+            IntegerLiteral::I8(v) => *v as i128,
+            IntegerLiteral::I16(v) => *v as i128,
+            IntegerLiteral::I32(v) => *v as i128,
+            IntegerLiteral::I64(v) => *v as i128,
+            IntegerLiteral::I128(v) => *v,
+            IntegerLiteral::U8(v) => *v as i128,
+            IntegerLiteral::U16(v) => *v as i128,
+            IntegerLiteral::U32(v) => *v as i128,
+            IntegerLiteral::U64(v) => *v as i128,
+            IntegerLiteral::U128(_) => return None,
+        })
+    }
+
+    fn i128_fits_unsigned(val_i128: i128, size: u8) -> bool {
+        if val_i128 < 0 {
+            return false;
+        }
+        if size == 128 {
+            return true;
+        }
+        let max = match size {
+            8 => u8::MAX as i128,
+            16 => u16::MAX as i128,
+            32 => u32::MAX as i128,
+            64 => u64::MAX as i128,
+            _ => return false,
+        };
+        val_i128 <= max
+    }
+
+    fn i128_fits_signed(val_i128: i128, size: u8) -> bool {
+        let (min, max) = match size {
+            8 => (i8::MIN as i128, i8::MAX as i128),
+            16 => (i16::MIN as i128, i16::MAX as i128),
+            32 => (i32::MIN as i128, i32::MAX as i128),
+            64 => (i64::MIN as i128, i64::MAX as i128),
+            128 => (i128::MIN, i128::MAX),
+            _ => return false,
+        };
+        val_i128 >= min && val_i128 <= max
     }
 
     /// Checks if a statement (typically a method body) contains a call to `super.init()`

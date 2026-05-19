@@ -40,49 +40,25 @@ impl TypeChecker {
                 mapping.insert(name.clone(), arg_type.clone());
             }
 
-            // Unnormalized collection variants — normalize to Custom(...) and recurse so
-            // that stdlib method signatures using `[T]` syntax still infer generics correctly.
+            // Unnormalized collection variants
             (TypeKind::List(elem), _) => {
-                let normalized = make_type(TypeKind::Custom(
-                    "List".to_string(),
-                    Some(vec![*elem.clone()]),
-                ));
-                self.infer_generic_types(&normalized, arg_type, mapping);
+                self.infer_unnormalized_list(elem, arg_type, mapping);
             }
             (TypeKind::Map(k, v), _) => {
-                let normalized = make_type(TypeKind::Custom(
-                    "Map".to_string(),
-                    Some(vec![*k.clone(), *v.clone()]),
-                ));
-                self.infer_generic_types(&normalized, arg_type, mapping);
+                self.infer_unnormalized_map(k, v, arg_type, mapping);
             }
             (TypeKind::Set(elem), _) => {
-                let normalized = make_type(TypeKind::Custom(
-                    "Set".to_string(),
-                    Some(vec![*elem.clone()]),
-                ));
-                self.infer_generic_types(&normalized, arg_type, mapping);
+                self.infer_unnormalized_set(elem, arg_type, mapping);
             }
             (TypeKind::Array(elem, size), _) => {
-                let normalized = make_type(TypeKind::Custom(
-                    "Array".to_string(),
-                    Some(vec![*elem.clone(), *size.clone()]),
-                ));
-                self.infer_generic_types(&normalized, arg_type, mapping);
+                self.infer_unnormalized_array(elem, size, arg_type, mapping);
             }
 
             // Tuple<T, U, ...> matches Tuple<concrete, concrete, ...>
             (TypeKind::Tuple(p_elems), TypeKind::Tuple(a_elems))
                 if p_elems.len() == a_elems.len() =>
             {
-                for (p_elem_expr, a_elem_expr) in p_elems.iter().zip(a_elems.iter()) {
-                    if let (Ok(p_elem), Ok(a_elem)) = (
-                        self.extract_type_from_expression(p_elem_expr),
-                        self.extract_type_from_expression(a_elem_expr),
-                    ) {
-                        self.infer_generic_types(&p_elem, &a_elem, mapping);
-                    }
-                }
+                self.infer_tuple_generics(p_elems, a_elems, mapping);
             }
 
             // Option<T> matches Option<concrete>
@@ -94,41 +70,129 @@ impl TypeChecker {
             (TypeKind::Custom(p_name, p_args), TypeKind::Custom(a_name, a_args))
                 if p_name == a_name =>
             {
-                if let (Some(p_args), Some(a_args)) = (p_args, a_args) {
-                    if p_args.len() == a_args.len() {
-                        for (p_arg_expr, a_arg_expr) in p_args.iter().zip(a_args.iter()) {
-                            if let (Ok(p_arg), Ok(a_arg)) = (
-                                self.extract_type_from_expression(p_arg_expr),
-                                self.extract_type_from_expression(a_arg_expr),
-                            ) {
-                                self.infer_generic_types(&p_arg, &a_arg, mapping);
-                            }
-                        }
-                    }
-                }
+                self.infer_custom_generics(p_args, a_args, mapping);
             }
 
-            // fn(T) R matches fn(concrete) concrete — infer generics from param and return types
+            // fn(T) R matches fn(concrete) concrete
             (TypeKind::Function(p_func), TypeKind::Function(a_func)) => {
-                for (p_param, a_param) in p_func.params.iter().zip(a_func.params.iter()) {
-                    if let (Ok(p_ty), Ok(a_ty)) = (
-                        self.extract_type_from_expression(&p_param.typ),
-                        self.extract_type_from_expression(&a_param.typ),
-                    ) {
-                        self.infer_generic_types(&p_ty, &a_ty, mapping);
-                    }
-                }
-                if let (Some(p_rt), Some(a_rt)) = (&p_func.return_type, &a_func.return_type) {
-                    if let (Ok(p_ty), Ok(a_ty)) = (
-                        self.extract_type_from_expression(p_rt),
-                        self.extract_type_from_expression(a_rt),
-                    ) {
-                        self.infer_generic_types(&p_ty, &a_ty, mapping);
-                    }
-                }
+                self.infer_function_generics(p_func, a_func, mapping);
             }
 
             _ => {}
+        }
+    }
+
+    fn infer_unnormalized_list(
+        &self,
+        elem: &Expression,
+        arg_type: &Type,
+        mapping: &mut HashMap<String, Type>,
+    ) {
+        let normalized = make_type(TypeKind::Custom(
+            "List".to_string(),
+            Some(vec![elem.clone()]),
+        ));
+        self.infer_generic_types(&normalized, arg_type, mapping);
+    }
+
+    fn infer_unnormalized_map(
+        &self,
+        k: &Expression,
+        v: &Expression,
+        arg_type: &Type,
+        mapping: &mut HashMap<String, Type>,
+    ) {
+        let normalized = make_type(TypeKind::Custom(
+            "Map".to_string(),
+            Some(vec![k.clone(), v.clone()]),
+        ));
+        self.infer_generic_types(&normalized, arg_type, mapping);
+    }
+
+    fn infer_unnormalized_set(
+        &self,
+        elem: &Expression,
+        arg_type: &Type,
+        mapping: &mut HashMap<String, Type>,
+    ) {
+        let normalized = make_type(TypeKind::Custom(
+            "Set".to_string(),
+            Some(vec![elem.clone()]),
+        ));
+        self.infer_generic_types(&normalized, arg_type, mapping);
+    }
+
+    fn infer_unnormalized_array(
+        &self,
+        elem: &Expression,
+        size: &Expression,
+        arg_type: &Type,
+        mapping: &mut HashMap<String, Type>,
+    ) {
+        let normalized = make_type(TypeKind::Custom(
+            "Array".to_string(),
+            Some(vec![elem.clone(), size.clone()]),
+        ));
+        self.infer_generic_types(&normalized, arg_type, mapping);
+    }
+
+    fn infer_tuple_generics(
+        &self,
+        p_elems: &[Expression],
+        a_elems: &[Expression],
+        mapping: &mut HashMap<String, Type>,
+    ) {
+        for (p_elem_expr, a_elem_expr) in p_elems.iter().zip(a_elems.iter()) {
+            if let (Ok(p_elem), Ok(a_elem)) = (
+                self.extract_type_from_expression(p_elem_expr),
+                self.extract_type_from_expression(a_elem_expr),
+            ) {
+                self.infer_generic_types(&p_elem, &a_elem, mapping);
+            }
+        }
+    }
+
+    fn infer_custom_generics(
+        &self,
+        p_args: &Option<Vec<Expression>>,
+        a_args: &Option<Vec<Expression>>,
+        mapping: &mut HashMap<String, Type>,
+    ) {
+        if let (Some(p_args), Some(a_args)) = (p_args, a_args) {
+            if p_args.len() == a_args.len() {
+                for (p_arg_expr, a_arg_expr) in p_args.iter().zip(a_args.iter()) {
+                    if let (Ok(p_arg), Ok(a_arg)) = (
+                        self.extract_type_from_expression(p_arg_expr),
+                        self.extract_type_from_expression(a_arg_expr),
+                    ) {
+                        self.infer_generic_types(&p_arg, &a_arg, mapping);
+                    }
+                }
+            }
+        }
+    }
+
+    fn infer_function_generics(
+        &self,
+        p_func: &FunctionTypeData,
+        a_func: &FunctionTypeData,
+        mapping: &mut HashMap<String, Type>,
+    ) {
+        for (p_param, a_param) in p_func.params.iter().zip(a_func.params.iter()) {
+            if let (Ok(p_ty), Ok(a_ty)) = (
+                self.extract_type_from_expression(&p_param.typ),
+                self.extract_type_from_expression(&a_param.typ),
+            ) {
+                self.infer_generic_types(&p_ty, &a_ty, mapping);
+            }
+        }
+        if let (Some(p_rt), Some(a_rt)) = (&p_func.return_type, &a_func.return_type) {
+            if let (Ok(p_ty), Ok(a_ty)) = (
+                self.extract_type_from_expression(p_rt),
+                self.extract_type_from_expression(a_rt),
+            ) {
+                self.infer_generic_types(&p_ty, &a_ty, mapping);
+            }
         }
     }
 
@@ -139,155 +203,191 @@ impl TypeChecker {
     /// all generic parameters replaced.
     pub(crate) fn substitute_type(&self, ty: &Type, mapping: &HashMap<String, Type>) -> Type {
         match &ty.kind {
-            // Direct substitution for generic types
             TypeKind::Generic(name, _, _) => {
                 mapping.get(name).cloned().unwrap_or_else(|| ty.clone())
             }
-
-            // Custom types - substitute name if it's a generic parameter, and recurse into args
-            TypeKind::Custom(name, args) => {
-                // Check if the type name itself is a generic parameter
-                if args.is_none() {
-                    if let Some(subst) = mapping.get(name) {
-                        return subst.clone();
-                    }
-                }
-
-                // Substitute in generic arguments
-                let new_args = args.as_ref().map(|args_vec| {
-                    args_vec
-                        .iter()
-                        .map(|arg| {
-                            let arg_type = self
-                                .extract_type_from_expression(arg)
-                                .unwrap_or(make_type(TypeKind::Error));
-                            let subst_arg = self.substitute_type(&arg_type, mapping);
-                            self.create_type_expression(subst_arg)
-                        })
-                        .collect()
-                });
-
-                make_type(TypeKind::Custom(name.clone(), new_args))
-            }
-
-            // Unnormalized collection variants — substitute element types and normalize to
-            // Custom(...) so the output is always in the canonical form expected downstream.
-            TypeKind::List(elem_expr) => {
-                let elem = self
-                    .extract_type_from_expression(elem_expr)
-                    .unwrap_or(make_type(TypeKind::Error));
-                let subst_elem = self.substitute_type(&elem, mapping);
-                make_type(TypeKind::Custom(
-                    "List".to_string(),
-                    Some(vec![self.create_type_expression(subst_elem)]),
-                ))
-            }
-            TypeKind::Map(k_expr, v_expr) => {
-                let k = self
-                    .extract_type_from_expression(k_expr)
-                    .unwrap_or(make_type(TypeKind::Error));
-                let v = self
-                    .extract_type_from_expression(v_expr)
-                    .unwrap_or(make_type(TypeKind::Error));
-                let subst_k = self.substitute_type(&k, mapping);
-                let subst_v = self.substitute_type(&v, mapping);
-                make_type(TypeKind::Custom(
-                    "Map".to_string(),
-                    Some(vec![
-                        self.create_type_expression(subst_k),
-                        self.create_type_expression(subst_v),
-                    ]),
-                ))
-            }
-            TypeKind::Set(elem_expr) => {
-                let elem = self
-                    .extract_type_from_expression(elem_expr)
-                    .unwrap_or(make_type(TypeKind::Error));
-                let subst_elem = self.substitute_type(&elem, mapping);
-                make_type(TypeKind::Custom(
-                    "Set".to_string(),
-                    Some(vec![self.create_type_expression(subst_elem)]),
-                ))
-            }
+            TypeKind::Custom(name, args) => self.substitute_custom(name, args, mapping),
+            TypeKind::List(elem_expr) => self.substitute_list(elem_expr, mapping),
+            TypeKind::Map(k_expr, v_expr) => self.substitute_map(k_expr, v_expr, mapping),
+            TypeKind::Set(elem_expr) => self.substitute_set(elem_expr, mapping),
             TypeKind::Array(elem_expr, size_expr) => {
-                let elem = self
-                    .extract_type_from_expression(elem_expr)
-                    .unwrap_or(make_type(TypeKind::Error));
-                let subst_elem = self.substitute_type(&elem, mapping);
-                make_type(TypeKind::Custom(
-                    "Array".to_string(),
-                    Some(vec![
-                        self.create_type_expression(subst_elem),
-                        *size_expr.clone(),
-                    ]),
-                ))
+                self.substitute_array(elem_expr, size_expr, mapping)
             }
-
-            TypeKind::Option(inner) => make_type(TypeKind::Option(Box::new(
-                self.substitute_type(inner, mapping),
-            ))),
-
-            TypeKind::Tuple(elements) => {
-                let new_elements = elements
-                    .iter()
-                    .map(|elem_expr| {
-                        let elem = self
-                            .extract_type_from_expression(elem_expr)
-                            .unwrap_or(make_type(TypeKind::Error));
-                        let subst = self.substitute_type(&elem, mapping);
-                        self.create_type_expression(subst)
-                    })
-                    .collect();
-                make_type(TypeKind::Tuple(new_elements))
-            }
-
+            TypeKind::Option(inner) => self.substitute_option(inner, mapping),
+            TypeKind::Tuple(elements) => self.substitute_tuple(elements, mapping),
             TypeKind::Result(ok_expr, err_expr) => {
-                if let (Ok(ok), Ok(err)) = (
-                    self.extract_type_from_expression(ok_expr),
-                    self.extract_type_from_expression(err_expr),
-                ) {
-                    make_type(TypeKind::Result(
-                        Box::new(self.create_type_expression(self.substitute_type(&ok, mapping))),
-                        Box::new(self.create_type_expression(self.substitute_type(&err, mapping))),
-                    ))
-                } else {
-                    ty.clone()
-                }
+                self.substitute_result(ok_expr, err_expr, mapping)
             }
-
-            // fn(T, ...) R — substitute generics in parameter types and return type
-            TypeKind::Function(func) => {
-                let new_params: Vec<Parameter> = func
-                    .params
-                    .iter()
-                    .map(|p| {
-                        let param_type = self
-                            .extract_type_from_expression(&p.typ)
-                            .unwrap_or(make_type(TypeKind::Error));
-                        let subst = self.substitute_type(&param_type, mapping);
-                        Parameter {
-                            typ: Box::new(self.create_type_expression(subst)),
-                            ..p.clone()
-                        }
-                    })
-                    .collect();
-                let new_return = func.return_type.as_ref().map(|rt_expr| {
-                    let rt = self
-                        .extract_type_from_expression(rt_expr)
-                        .unwrap_or(make_type(TypeKind::Error));
-                    let subst = self.substitute_type(&rt, mapping);
-                    Box::new(self.create_type_expression(subst))
-                });
-                make_type(TypeKind::Function(Box::new(FunctionTypeData {
-                    generics: func.generics.clone(),
-                    params: new_params,
-                    return_type: new_return,
-                })))
-            }
-
-            // Non-generic types pass through unchanged
+            TypeKind::Function(func) => self.substitute_function(func, mapping),
             _ => ty.clone(),
         }
+    }
+
+    fn substitute_custom(
+        &self,
+        name: &str,
+        args: &Option<Vec<Expression>>,
+        mapping: &HashMap<String, Type>,
+    ) -> Type {
+        if args.is_none() {
+            if let Some(subst) = mapping.get(name) {
+                return subst.clone();
+            }
+        }
+
+        let new_args = args.as_ref().map(|args_vec| {
+            args_vec
+                .iter()
+                .map(|arg| {
+                    let arg_type = self
+                        .extract_type_from_expression(arg)
+                        .unwrap_or(make_type(TypeKind::Error));
+                    let subst_arg = self.substitute_type(&arg_type, mapping);
+                    self.create_type_expression(subst_arg)
+                })
+                .collect()
+        });
+
+        make_type(TypeKind::Custom(name.to_string(), new_args))
+    }
+
+    fn substitute_list(&self, elem_expr: &Expression, mapping: &HashMap<String, Type>) -> Type {
+        let elem = self
+            .extract_type_from_expression(elem_expr)
+            .unwrap_or(make_type(TypeKind::Error));
+        let subst_elem = self.substitute_type(&elem, mapping);
+        make_type(TypeKind::Custom(
+            "List".to_string(),
+            Some(vec![self.create_type_expression(subst_elem)]),
+        ))
+    }
+
+    fn substitute_map(
+        &self,
+        k_expr: &Expression,
+        v_expr: &Expression,
+        mapping: &HashMap<String, Type>,
+    ) -> Type {
+        let k = self
+            .extract_type_from_expression(k_expr)
+            .unwrap_or(make_type(TypeKind::Error));
+        let v = self
+            .extract_type_from_expression(v_expr)
+            .unwrap_or(make_type(TypeKind::Error));
+        let subst_k = self.substitute_type(&k, mapping);
+        let subst_v = self.substitute_type(&v, mapping);
+        make_type(TypeKind::Custom(
+            "Map".to_string(),
+            Some(vec![
+                self.create_type_expression(subst_k),
+                self.create_type_expression(subst_v),
+            ]),
+        ))
+    }
+
+    fn substitute_set(&self, elem_expr: &Expression, mapping: &HashMap<String, Type>) -> Type {
+        let elem = self
+            .extract_type_from_expression(elem_expr)
+            .unwrap_or(make_type(TypeKind::Error));
+        let subst_elem = self.substitute_type(&elem, mapping);
+        make_type(TypeKind::Custom(
+            "Set".to_string(),
+            Some(vec![self.create_type_expression(subst_elem)]),
+        ))
+    }
+
+    fn substitute_array(
+        &self,
+        elem_expr: &Expression,
+        size_expr: &Expression,
+        mapping: &HashMap<String, Type>,
+    ) -> Type {
+        let elem = self
+            .extract_type_from_expression(elem_expr)
+            .unwrap_or(make_type(TypeKind::Error));
+        let subst_elem = self.substitute_type(&elem, mapping);
+        make_type(TypeKind::Custom(
+            "Array".to_string(),
+            Some(vec![
+                self.create_type_expression(subst_elem),
+                size_expr.clone(),
+            ]),
+        ))
+    }
+
+    fn substitute_option(&self, inner: &Type, mapping: &HashMap<String, Type>) -> Type {
+        make_type(TypeKind::Option(Box::new(
+            self.substitute_type(inner, mapping),
+        )))
+    }
+
+    fn substitute_tuple(&self, elements: &[Expression], mapping: &HashMap<String, Type>) -> Type {
+        let new_elements = elements
+            .iter()
+            .map(|elem_expr| {
+                let elem = self
+                    .extract_type_from_expression(elem_expr)
+                    .unwrap_or(make_type(TypeKind::Error));
+                let subst = self.substitute_type(&elem, mapping);
+                self.create_type_expression(subst)
+            })
+            .collect();
+        make_type(TypeKind::Tuple(new_elements))
+    }
+
+    fn substitute_result(
+        &self,
+        ok_expr: &Expression,
+        err_expr: &Expression,
+        mapping: &HashMap<String, Type>,
+    ) -> Type {
+        if let (Ok(ok), Ok(err)) = (
+            self.extract_type_from_expression(ok_expr),
+            self.extract_type_from_expression(err_expr),
+        ) {
+            make_type(TypeKind::Result(
+                Box::new(self.create_type_expression(self.substitute_type(&ok, mapping))),
+                Box::new(self.create_type_expression(self.substitute_type(&err, mapping))),
+            ))
+        } else {
+            make_type(TypeKind::Result(
+                Box::new(ok_expr.clone()),
+                Box::new(err_expr.clone()),
+            ))
+        }
+    }
+
+    fn substitute_function(
+        &self,
+        func: &FunctionTypeData,
+        mapping: &HashMap<String, Type>,
+    ) -> Type {
+        let new_params: Vec<Parameter> = func
+            .params
+            .iter()
+            .map(|p| {
+                let param_type = self
+                    .extract_type_from_expression(&p.typ)
+                    .unwrap_or(make_type(TypeKind::Error));
+                let subst = self.substitute_type(&param_type, mapping);
+                Parameter {
+                    typ: Box::new(self.create_type_expression(subst)),
+                    ..p.clone()
+                }
+            })
+            .collect();
+        let new_return = func.return_type.as_ref().map(|rt_expr| {
+            let rt = self
+                .extract_type_from_expression(rt_expr)
+                .unwrap_or(make_type(TypeKind::Error));
+            let subst = self.substitute_type(&rt, mapping);
+            Box::new(self.create_type_expression(subst))
+        });
+        make_type(TypeKind::Function(Box::new(FunctionTypeData {
+            generics: func.generics.clone(),
+            params: new_params,
+            return_type: new_return,
+        })))
     }
 
     /// Validates that provided generic arguments satisfy their constraints.

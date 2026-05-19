@@ -67,32 +67,70 @@ impl TypeChecker {
         visibility: &MemberVisibility,
         context: &mut Context,
     ) {
-        let name = if let ExpressionKind::Identifier(n, _) = &name_expr.node {
-            n.clone()
-        } else {
-            self.report_error("Invalid struct name".to_string(), name_expr.span);
+        let Some(name) = self.extract_struct_name(name_expr) else {
             return;
         };
+        if !self.check_struct_not_duplicate(&name, name_expr) {
+            return;
+        }
 
-        // Check for duplicate type definitions
-        if let Some(existing) = self.global_type_definitions.get(&name) {
+        context.enter_scope();
+        let generic_defs = self.collect_struct_generics(generics, context);
+        let fields_vec = self.collect_struct_fields(fields, context);
+        context.exit_scope();
+
+        if !self.validate_struct_field_types(&name, &fields_vec, name_expr) {
+            return;
+        }
+
+        let has_drop = methods.iter().any(is_drop_method);
+        let struct_def = StructDefinition {
+            fields: fields_vec,
+            generics: if generic_defs.is_empty() {
+                None
+            } else {
+                Some(generic_defs)
+            },
+            has_drop,
+            module: self.current_module.clone(),
+        };
+
+        self.register_struct_definition(&name, struct_def, visibility, context);
+    }
+
+    fn extract_struct_name(&mut self, name_expr: &Expression) -> Option<String> {
+        if let ExpressionKind::Identifier(n, _) = &name_expr.node {
+            Some(n.clone())
+        } else {
+            self.report_error("Invalid struct name".to_string(), name_expr.span);
+            None
+        }
+    }
+
+    fn check_struct_not_duplicate(&mut self, name: &str, name_expr: &Expression) -> bool {
+        if let Some(existing) = self.global_type_definitions.get(name) {
             let is_placeholder = match existing {
                 TypeDefinition::Struct(def) => def.fields.is_empty(),
                 _ => false,
             };
-
             if !is_placeholder {
                 self.report_error(
                     format!("Type '{}' is already defined", name),
                     name_expr.span,
                 );
-                return;
+                return false;
             }
         }
+        true
+    }
 
+    fn collect_struct_generics(
+        &mut self,
+        generics: &Option<Vec<Expression>>,
+        context: &mut Context,
+    ) -> Vec<GenericDefinition> {
         let capacity = generics.as_ref().map(|g| g.len()).unwrap_or(0);
         let mut generic_defs = Vec::with_capacity(capacity);
-        context.enter_scope();
         if let Some(gens) = generics {
             self.define_generics(gens, context);
             for gen in gens {
@@ -110,7 +148,14 @@ impl TypeChecker {
                 }
             }
         }
+        generic_defs
+    }
 
+    fn collect_struct_fields(
+        &mut self,
+        fields: &[Expression],
+        context: &mut Context,
+    ) -> Vec<(String, crate::ast::types::Type, MemberVisibility)> {
         let mut fields_vec = Vec::with_capacity(fields.len());
         for field in fields {
             if let ExpressionKind::StructMember(field_name_expr, field_type_expr) = &field.node {
@@ -127,14 +172,17 @@ impl TypeChecker {
                 self.report_error("Invalid struct field definition".to_string(), field.span);
             }
         }
+        fields_vec
+    }
 
-        context.exit_scope();
-
-        // Detect infinite recursive struct types: a struct that contains itself
-        // (directly or indirectly) without going through an optional type would
-        // have infinite size and cannot be instantiated.
-        for (field_name, field_type, _) in &fields_vec {
-            if self.is_infinite_recursive_type(&name, &field_type.kind) {
+    fn validate_struct_field_types(
+        &mut self,
+        name: &str,
+        fields_vec: &[(String, crate::ast::types::Type, MemberVisibility)],
+        name_expr: &Expression,
+    ) -> bool {
+        for (field_name, field_type, _) in fields_vec {
+            if self.is_infinite_recursive_type(name, &field_type.kind) {
                 self.report_error(
                     format!(
                         "Infinite recursive type: field '{}' of struct '{}' contains '{}' without indirection",
@@ -142,37 +190,28 @@ impl TypeChecker {
                     ),
                     name_expr.span,
                 );
-                return;
+                return false;
             }
         }
+        true
+    }
 
-        let has_drop = methods.iter().any(is_drop_method);
-        // TODO: type-check method bodies once struct method dispatch is implemented.
-        // For now, fn drop(self) is treated purely as a resource-type marker.
-
-        let struct_def = StructDefinition {
-            fields: fields_vec,
-            generics: if generic_defs.is_empty() {
-                None
-            } else {
-                Some(generic_defs)
-            },
-            has_drop,
-            module: self.current_module.clone(),
-        };
-
-        context.define_type(name.clone(), TypeDefinition::Struct(struct_def.clone()));
+    fn register_struct_definition(
+        &mut self,
+        name: &str,
+        struct_def: StructDefinition,
+        visibility: &MemberVisibility,
+        context: &mut Context,
+    ) {
+        context.define_type(name.to_string(), TypeDefinition::Struct(struct_def.clone()));
         if context.scopes.len() == 1 {
-            self.register_type_definition(name.clone(), TypeDefinition::Struct(struct_def));
+            self.register_type_definition(name.to_string(), TypeDefinition::Struct(struct_def));
         }
 
-        // Define constructor/type symbol
-        // The type of the struct name identifier is Meta(Custom(name))
-        let struct_type = make_type(TypeKind::Custom(name.clone(), None)); // TODO: Handle generics
-
+        let struct_type = make_type(TypeKind::Custom(name.to_string(), None));
         if context.scopes.len() == 1 {
             self.global_scope.insert(
-                name.clone(),
+                name.to_string(),
                 SymbolInfo::new(
                     make_type(TypeKind::Meta(Box::new(struct_type.clone()))),
                     false,
@@ -185,7 +224,7 @@ impl TypeChecker {
         }
 
         context.define(
-            name,
+            name.to_string(),
             SymbolInfo::new(
                 make_type(TypeKind::Meta(Box::new(struct_type))),
                 false,
