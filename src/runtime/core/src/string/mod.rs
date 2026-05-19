@@ -22,10 +22,6 @@ pub use core::MiriString;
 // via `miri_runtime_core::string::miri_rt_string_*`.
 pub use ffi::*;
 
-// ---------------------------------------------------------------------------
-// Internal helpers shared across submodules
-// ---------------------------------------------------------------------------
-
 /// Heap-allocates a [`MiriString`] into an RC block (`[RC=1][payload]`) and
 /// returns a pointer to the payload.
 ///

@@ -453,10 +453,6 @@ impl Drop for MiriMap {
     }
 }
 
-// =============================================================================
-// FFI Functions
-// =============================================================================
-
 /// Stable FFI interface for map operations.
 pub mod ffi {
     use super::*;
@@ -796,16 +792,13 @@ pub mod ffi {
         new_map
     }
 
-    /// Decrements the RC of a managed Map element and frees it if RC reaches zero.
-    ///
-    /// Used as `elem_drop_fn` / `val_drop_fn` by outer collections (Array, List, Set,
-    /// Map) when they remove or overwrite a Map-typed element at runtime (e.g. clear,
-    /// remove, or element overwrite).  Unlike the Perceus scope-exit path — which
-    /// emits an inline codegen loop to DecRef managed values before calling
-    /// `miri_rt_map_free` — this runtime callback has no such loop.  We therefore
     /// Copy-on-Write check: if the map has more than one owner, produce an
     /// independent clone and decrement the old RC. Returns the (possibly new)
     /// pointer that the caller should now use.
+    ///
+    /// Invariant: the caller must treat the returned pointer as freshly owned
+    /// (RC=1). The old pointer's RC is decremented inside this function and
+    /// must not be used again by the caller.
     #[no_mangle]
     #[allow(clippy::missing_safety_doc)]
     pub unsafe extern "C" fn miri_rt_map_cow(ptr: *mut MiriMap) -> *mut MiriMap {
@@ -825,6 +818,13 @@ pub mod ffi {
         new_ptr
     }
 
+    /// Decrements the RC of a managed Map element and frees it if RC reaches zero.
+    ///
+    /// Used as `elem_drop_fn` / `val_drop_fn` by outer collections (Array, List, Set,
+    /// Map) when they remove or overwrite a Map-typed element at runtime (e.g. clear,
+    /// remove, or element overwrite). Unlike the Perceus scope-exit path — which
+    /// emits an inline codegen loop to DecRef managed values before calling
+    /// `miri_rt_map_free` — this runtime callback has no such loop. We therefore
     /// call `val_drop_fn` on every occupied slot here, before delegating to
     /// `miri_rt_map_free`, so that managed values (e.g. List, Set, Map) nested
     /// inside the element map are correctly DecRef'd and never leaked.
@@ -865,10 +865,6 @@ pub mod ffi {
         }
     }
 } // pub mod ffi
-
-// =============================================================================
-// Tests
-// =============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -1634,6 +1630,72 @@ mod tests {
             miri_rt_map_free(map);
             assert_eq!(VAL_DROPS.load(Ordering::SeqCst), 3);
             assert_eq!(KEY_DROPS.load(Ordering::SeqCst), 3);
+        }
+    }
+
+    #[test]
+    fn test_map_cow_null_returns_null() {
+        unsafe {
+            let result = miri_rt_map_cow(std::ptr::null_mut());
+            assert!(result.is_null());
+        }
+    }
+
+    #[test]
+    fn test_map_cow_unique_returns_same_pointer() {
+        unsafe {
+            let map = miri_rt_map_new(8, 8, 0);
+            miri_rt_map_set(map, 1, 100);
+            let rc_ptr = (map as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *const usize;
+            assert_eq!(*rc_ptr, 1);
+
+            let cowed = miri_rt_map_cow(map);
+            assert_eq!(cowed, map, "RC=1 → no copy");
+            assert_eq!(*rc_ptr, 1);
+
+            miri_rt_map_free(map);
+        }
+    }
+
+    #[test]
+    fn test_map_cow_shared_copies_and_decrefs() {
+        unsafe {
+            let map = miri_rt_map_new(8, 8, 0);
+            miri_rt_map_set(map, 1, 100);
+            miri_rt_map_set(map, 2, 200);
+            let rc_ptr = (map as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *mut usize;
+            *rc_ptr = 2;
+
+            let cowed = miri_rt_map_cow(map);
+            assert_ne!(cowed, map, "RC>1 → fresh pointer");
+            assert_eq!(*rc_ptr, 1, "old RC decremented");
+
+            let new_rc_ptr = (cowed as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *const usize;
+            assert_eq!(*new_rc_ptr, 1);
+            assert_eq!(miri_rt_map_len(cowed), 2);
+            assert_eq!(miri_rt_map_get(cowed, 1), 100);
+            assert_eq!(miri_rt_map_get(cowed, 2), 200);
+
+            miri_rt_map_free(map);
+            miri_rt_map_free(cowed);
+        }
+    }
+
+    #[test]
+    fn test_map_cow_immortal_returns_same_pointer() {
+        unsafe {
+            let map = miri_rt_map_new(8, 8, 0);
+            miri_rt_map_set(map, 1, 100);
+            let rc_ptr = (map as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *mut usize;
+            let immortal = (-1isize) as usize;
+            *rc_ptr = immortal;
+
+            let cowed = miri_rt_map_cow(map);
+            assert_eq!(cowed, map, "immortal RC → no copy");
+            assert_eq!(*rc_ptr, immortal, "immortal RC unchanged");
+
+            *rc_ptr = 1;
+            miri_rt_map_free(map);
         }
     }
 }

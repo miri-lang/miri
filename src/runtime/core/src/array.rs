@@ -80,10 +80,6 @@ impl Drop for MiriArray {
     }
 }
 
-// =============================================================================
-// FFI Functions
-// =============================================================================
-
 /// Stable FFI interface for array operations.
 pub mod ffi {
     use super::*;
@@ -473,10 +469,6 @@ pub mod ffi {
         list
     }
 
-    // =============================================================================
-    // Error Handling
-    // =============================================================================
-
     /// Panics with a clear out-of-bounds error message.
     ///
     /// This provides a better debugging experience than crashing silently on
@@ -491,10 +483,6 @@ pub mod ffi {
         std::process::abort();
     }
 } // pub mod ffi
-
-// =============================================================================
-// Tests
-// =============================================================================
 
 #[cfg(test)]
 mod tests {

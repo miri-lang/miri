@@ -211,10 +211,6 @@ pub unsafe extern "C" fn miri_rt_string_repeat(
     into_raw_ptr(MiriString::from_str(&repeated))
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
 /// Applies a transformation that produces an owned `String` from a `&str`.
 ///
 /// Used by `to_lower`, `to_upper`, and similar functions.
