@@ -42,6 +42,20 @@ pub const RESULT_TYPE_NAME: &str = "Result";
 /// recognize both forms instead of string-matching on this constant.
 pub const TUPLE_TYPE_NAME: &str = "Tuple";
 
+/// Canonical class name for the built-in `Option<T>` sum type.
+///
+/// `TypeKind::Option(t)` is the canonical variant; the type checker also
+/// recognizes `TypeKind::Custom(OPTION_TYPE_NAME, [t])` produced from generic
+/// instantiations. Centralized so dispatch and pattern-match code share one
+/// spelling instead of scattering `"Option"` literals.
+pub const OPTION_TYPE_NAME: &str = "Option";
+
+/// Canonical class name for the built-in `String` type when referred to by
+/// class-method dispatch (e.g. `String_length`). The primitive form is
+/// [`TypeKind::String`]; this constant is used for symbol mangling and
+/// stdlib method-registry lookups.
+pub const STRING_TYPE_NAME: &str = "String";
+
 impl BuiltinCollectionKind {
     /// Returns the `BuiltinCollectionKind` for a class name, or `None` if the
     /// name does not match a built-in collection.
@@ -66,6 +80,23 @@ impl BuiltinCollectionKind {
             Self::List => "List",
             Self::Map => "Map",
             Self::Set => "Set",
+        }
+    }
+
+    /// True if `method_name` mutates the underlying collection storage and so
+    /// requires a copy-on-write guard before lowering.
+    ///
+    /// Methods handled by inline intrinsics (`push`, `insert`, `set` on List)
+    /// emit their own CoW check and are excluded here.
+    pub fn mutates_method(self, method_name: &str) -> bool {
+        match self {
+            Self::List => matches!(
+                method_name,
+                "pop" | "remove" | "remove_at" | "clear" | "sort" | "reverse"
+            ),
+            Self::Set => matches!(method_name, "add" | "remove" | "clear"),
+            Self::Map => matches!(method_name, "set" | "remove" | "clear"),
+            Self::Array => false,
         }
     }
 }

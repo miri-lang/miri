@@ -32,7 +32,7 @@ pub(crate) fn lower_call_expr(
         ExpressionKind::Member(enum_expr, variant_expr) => {
             if let ExpressionKind::Identifier(type_name, _) = &enum_expr.node {
                 if let ExpressionKind::Identifier(variant_name, _) = &variant_expr.node {
-                    type_name == "Option" && variant_name == "Some"
+                    type_name == crate::ast::types::OPTION_TYPE_NAME && variant_name == "Some"
                 } else {
                     false
                 }

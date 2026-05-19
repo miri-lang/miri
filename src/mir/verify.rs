@@ -66,18 +66,23 @@ impl fmt::Display for VerificationViolation {
 /// StorageLive/Dead balance checking, because their lifetimes are managed
 /// by the outer scope that allocated the closure environment.
 pub fn verify_body(body: &Body) -> Vec<VerificationViolation> {
-    let mut violations = Vec::new();
-
-    // Closure-captured locals have their lifetimes managed by the outer scope;
-    // skip them so we do not emit false-positive StorageLive/Dead imbalances.
     let env_captures: HashSet<Local> = body.env_capture_locals.iter().copied().collect();
+    let managed_locals = collect_owned_managed_locals(body, &env_captures);
+    let managed_params = collect_managed_param_locals(body);
+    let reachable_blocks = reachable_block_indices(body);
 
-    // Managed locals owned by this function (not parameters, not return value).
-    // Local 0 = return value (no StorageLive/Dead emitted for it — skip).
-    // Locals 1..=arg_count = parameters (caller-owned, Perceus skips them — skip).
-    // Locals > arg_count = owned by this function — these are the ones we verify.
-    let managed_locals: HashSet<Local> = body
-        .local_decls
+    let counts = collect_storage_counts(body, &reachable_blocks, &managed_locals, &managed_params);
+
+    let mut violations = Vec::new();
+    flag_storage_leaks(body, managed_locals, &counts, &mut violations);
+    flag_decref_on_params(body, counts.decref_param_violations, &mut violations);
+    violations
+}
+
+/// Managed locals owned by this function: not the return slot, not parameters,
+/// not closure-captured environment locals.
+fn collect_owned_managed_locals(body: &Body, env_captures: &HashSet<Local>) -> HashSet<Local> {
+    body.local_decls
         .iter()
         .enumerate()
         .filter(|(i, decl)| {
@@ -88,13 +93,12 @@ pub fn verify_body(body: &Body) -> Vec<VerificationViolation> {
                     .is_managed(&body.auto_copy_types, &body.type_params)
         })
         .map(|(i, _)| Local(i))
-        .collect();
+        .collect()
+}
 
-    // Managed parameter locals — Perceus may emit IncRef when a parameter is
-    // copied (the copy needs its own reference), but must never emit DecRef
-    // because the caller owns the original reference and will release it.
-    let managed_params: HashSet<Local> = body
-        .local_decls
+/// Managed parameter locals — caller-owned, must never receive a callee-side DecRef.
+fn collect_managed_param_locals(body: &Body) -> HashSet<Local> {
+    body.local_decls
         .iter()
         .enumerate()
         .filter(|(i, decl)| {
@@ -105,22 +109,34 @@ pub fn verify_body(body: &Body) -> Vec<VerificationViolation> {
                     .is_managed(&body.auto_copy_types, &body.type_params)
         })
         .map(|(i, _)| Local(i))
-        .collect();
+        .collect()
+}
 
-    // Only analyse reachable blocks — dead code is excluded.
+fn reachable_block_indices(body: &Body) -> Vec<usize> {
     let unreachable: HashSet<usize> = body.find_unreachable_blocks().into_iter().collect();
-    let reachable_blocks: Vec<usize> = (0..body.basic_blocks.len())
+    (0..body.basic_blocks.len())
         .filter(|i| !unreachable.contains(i))
-        .collect();
+        .collect()
+}
 
-    // Collect StorageLive/Dead counts and DecRef-on-parameter violations.
+struct StorageCounts {
+    storage_live_count: HashMap<Local, usize>,
+    storage_dead_count: HashMap<Local, usize>,
+    decref_param_violations: Vec<Local>,
+}
+
+fn collect_storage_counts(
+    body: &Body,
+    reachable_blocks: &[usize],
+    managed_locals: &HashSet<Local>,
+    managed_params: &HashSet<Local>,
+) -> StorageCounts {
     let mut storage_live_count: HashMap<Local, usize> = HashMap::new();
     let mut storage_dead_count: HashMap<Local, usize> = HashMap::new();
     let mut decref_param_violations: Vec<Local> = Vec::new();
 
-    for bb_idx in &reachable_blocks {
-        let block = &body.basic_blocks[*bb_idx];
-        for stmt in &block.statements {
+    for bb_idx in reachable_blocks {
+        for stmt in &body.basic_blocks[*bb_idx].statements {
             match &stmt.kind {
                 StatementKind::StorageLive(place) if managed_locals.contains(&place.local) => {
                     *storage_live_count.entry(place.local).or_default() += 1;
@@ -139,23 +155,32 @@ pub fn verify_body(body: &Body) -> Vec<VerificationViolation> {
         }
     }
 
-    // --- Check 1: StorageLive not exceeded by StorageDead ---
-    // We only flag `StorageLive > StorageDead` (potential leak: scope opened but
-    // never fully closed).  We do NOT flag `StorageDead > StorageLive` because
-    // exclusive-path cleanup in branching code (e.g. early returns) causes the
-    // aggregate StorageDead count to exceed StorageLive without any bug.
-    //
-    // Only check locals that appear in at least one StorageLive statement;
-    // skipping others avoids false positives for locals initialised through
-    // Call terminators where no StorageLive statement is emitted.
+    StorageCounts {
+        storage_live_count,
+        storage_dead_count,
+        decref_param_violations,
+    }
+}
+
+/// Flag locals whose aggregate StorageLive count exceeds StorageDead.
+/// (StorageDead > StorageLive is legitimate — exclusive-path cleanup in branching
+/// code can over-count Dead events relative to Live without any actual bug.)
+/// Locals with zero StorageLive events are skipped: they are initialised via
+/// Call terminators that do not emit StorageLive.
+fn flag_storage_leaks(
+    body: &Body,
+    managed_locals: HashSet<Local>,
+    counts: &StorageCounts,
+    violations: &mut Vec<VerificationViolation>,
+) {
     let mut sorted_locals: Vec<Local> = managed_locals.into_iter().collect();
     sorted_locals.sort_by_key(|l| l.0);
     for local in sorted_locals {
-        let live = storage_live_count.get(&local).copied().unwrap_or(0);
+        let live = counts.storage_live_count.get(&local).copied().unwrap_or(0);
         if live == 0 {
             continue;
         }
-        let dead = storage_dead_count.get(&local).copied().unwrap_or(0);
+        let dead = counts.storage_dead_count.get(&local).copied().unwrap_or(0);
         if live > dead {
             let name = local_display_name(body, local);
             violations.push(VerificationViolation {
@@ -168,12 +193,15 @@ pub fn verify_body(body: &Body) -> Vec<VerificationViolation> {
             });
         }
     }
+}
 
-    // --- Check 2: No DecRef on parameter locals ---
-    // IncRef on parameters IS legal — it happens when a parameter is copied
-    // (the copy needs its own reference that will be decremented at its StorageDead).
-    // DecRef on parameters is NOT legal — the caller owns the reference and will
-    // release it; a callee-side DecRef would corrupt the caller's reference count.
+/// IncRef on parameters is legal (a callee-side copy needs its own reference);
+/// DecRef on parameters corrupts the caller's reference count and is rejected.
+fn flag_decref_on_params(
+    body: &Body,
+    decref_param_violations: Vec<Local>,
+    violations: &mut Vec<VerificationViolation>,
+) {
     for local in decref_param_violations {
         let name = local_display_name(body, local);
         violations.push(VerificationViolation {
@@ -184,8 +212,6 @@ pub fn verify_body(body: &Body) -> Vec<VerificationViolation> {
                     .to_string(),
         });
     }
-
-    violations
 }
 
 /// Returns a human-readable display name for a local: the variable name if

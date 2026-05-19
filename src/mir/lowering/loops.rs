@@ -270,7 +270,8 @@ fn lower_for_over_iterable(
                 super::resolve_type(ctx.type_checker, &elem_type_exprs[0])
             }
             TypeKind::Custom(name, Some(args))
-                if (BuiltinCollectionKind::from_name(name).is_some() || name == "Tuple")
+                if (BuiltinCollectionKind::from_name(name).is_some()
+                    || name == crate::ast::types::TUPLE_TYPE_NAME)
                     && !args.is_empty() =>
             {
                 super::resolve_type(ctx.type_checker, &args[0])
@@ -389,7 +390,7 @@ fn lower_for_over_iterable(
         .type_checker
         .get_type(iterable.id)
         .and_then(|ty| match &ty.kind {
-            TypeKind::String => Some("String".to_string()),
+            TypeKind::String => Some(crate::ast::types::STRING_TYPE_NAME.to_string()),
             // Canonical variants are normalized to Custom before MIR lowering.
             TypeKind::Map(_, _) | TypeKind::Set(_) => {
                 unreachable!("collection types are normalized to Custom before this point")
@@ -402,7 +403,14 @@ fn lower_for_over_iterable(
             {
                 Some(name.clone())
             }
-            TypeKind::Custom(name, _) if !matches!(BuiltinCollectionKind::from_name(name), Some(BuiltinCollectionKind::Array | BuiltinCollectionKind::List)) && name != "Tuple" => Some(name.clone()),
+            TypeKind::Custom(name, _)
+                if !matches!(
+                    BuiltinCollectionKind::from_name(name),
+                    Some(BuiltinCollectionKind::Array | BuiltinCollectionKind::List)
+                ) && name != crate::ast::types::TUPLE_TYPE_NAME =>
+            {
+                Some(name.clone())
+            }
             _ => None,
         })
         .filter(|name| {

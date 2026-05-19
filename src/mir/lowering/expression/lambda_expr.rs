@@ -134,12 +134,8 @@ pub(crate) fn lower_lambda_expr(
     let body_stmt = &lambda.body;
     let props = &lambda.properties;
 
-    // Generate a unique name for this lambda.
     let lambda_id = expr.id;
-    let mut lambda_name_str = String::with_capacity(20);
-    use std::fmt::Write;
-    write!(&mut lambda_name_str, "__lambda_{}", lambda_id).unwrap();
-    let lambda_name: std::rc::Rc<str> = lambda_name_str.into();
+    let lambda_name: std::rc::Rc<str> = format!("__lambda_{lambda_id}").into();
 
     // Resolve the lambda's full function type (used as type of the closure variable).
     let lambda_ty = resolve_type(ctx.type_checker, expr);
@@ -160,7 +156,6 @@ pub(crate) fn lower_lambda_expr(
         ExecutionModel::Cpu
     };
 
-    // ── Build the lambda Body ────────────────────────────────────────────
     // arg_count = 1 (env_ptr) + user params.
     // Note: the actual arg_count will be adjusted below after capture detection,
     // but we start with the maximum possible value.
@@ -170,7 +165,6 @@ pub(crate) fn lower_lambda_expr(
     // Local 0: return value — allocated directly in body before context creation.
     lambda_body.new_local(LocalDecl::new(ret_ty.clone(), expr.span));
 
-    // ── Create the inner lowering context ───────────────────────────────
     // NOTE: all param locals (1, 2, ...) are allocated via push_param, NOT new_local,
     // so the LoweringContext sees them as proper parameters.
     let outer_variable_map = ctx.variable_map.clone();
@@ -190,7 +184,6 @@ pub(crate) fn lower_lambda_expr(
         lambda_ctx.push_param(param.name.clone(), param_ty, param.typ.span);
     }
 
-    // ── Register potential captures ──────────────────────────────────────
     // All outer variables that are NOT lambda params are potential captures.
     // We add them to the lambda context so the body can reference them.
     // After lowering, we prune any that are not actually read in the body.
@@ -213,7 +206,6 @@ pub(crate) fn lower_lambda_expr(
         tentative_captures.push((name.clone(), *outer_local, lambda_local));
     }
 
-    // ── Lower the lambda body ────────────────────────────────────────────
     lower_as_return(&mut lambda_ctx, body_stmt, &ret_ty)?;
 
     // Ensure the last block has a terminator.
@@ -225,7 +217,6 @@ pub(crate) fn lower_lambda_expr(
         lambda_ctx.set_terminator(Terminator::new(TerminatorKind::Return, expr.span));
     }
 
-    // ── Prune unused captures ────────────────────────────────────────────
     // Only keep captures whose lambda_local is actually READ in the body.
     let read_locals = collect_read_locals(&lambda_ctx.body);
 
@@ -244,7 +235,7 @@ pub(crate) fn lower_lambda_expr(
         // include it in env_capture_locals or in the closure aggregate operands.
     }
 
-    // ── Record capture types in the outer body for Perceus / codegen ────
+    // Record capture types in the outer body for Perceus / codegen.
     // Stored as AST Type so both Perceus (via MirType::from_type_kind) and
     // codegen (via TypeKind) can use the same source of truth.
     let capture_ast_types: Vec<Type> = captures
@@ -252,7 +243,6 @@ pub(crate) fn lower_lambda_expr(
         .map(|cap| ctx.body.local_decls[cap.outer_local.0].ty.clone())
         .collect();
 
-    // ── Register the lambda ─────────────────────────────────────────────
     let lambda_info = LambdaInfo {
         name: lambda_name.to_string(),
         body: lambda_ctx.body,
@@ -260,7 +250,7 @@ pub(crate) fn lower_lambda_expr(
     };
     ctx.lambda_bodies.push(lambda_info);
 
-    // ── Emit closure struct allocation at the creation site ─────────────
+    // Emit closure struct allocation at the creation site.
     // Build capture operands from the outer scope's locals.
     let capture_operands: Vec<Operand> = captures
         .iter()
