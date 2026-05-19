@@ -205,10 +205,6 @@ impl MiriSet {
     }
 }
 
-// =============================================================================
-// FFI Functions
-// =============================================================================
-
 /// Stable FFI interface for set operations.
 pub mod ffi {
     use super::*;
@@ -521,10 +517,6 @@ pub mod ffi {
         }
     }
 } // pub mod ffi
-
-// =============================================================================
-// Tests
-// =============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -921,6 +913,74 @@ mod tests {
             assert_eq!(miri_rt_set_len(set), 0);
             assert_eq!(miri_rt_set_is_empty(set), 1);
 
+            miri_rt_set_free(set);
+        }
+    }
+
+    #[test]
+    fn test_set_cow_null_returns_null() {
+        unsafe {
+            let result = miri_rt_set_cow(std::ptr::null_mut());
+            assert!(result.is_null());
+        }
+    }
+
+    #[test]
+    fn test_set_cow_unique_returns_same_pointer() {
+        unsafe {
+            let set = miri_rt_set_new(8);
+            miri_rt_set_add(set, 1);
+            let rc_ptr = (set as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *const usize;
+            assert_eq!(*rc_ptr, 1);
+
+            let cowed = miri_rt_set_cow(set);
+            assert_eq!(cowed, set, "RC=1 → no copy");
+            assert_eq!(*rc_ptr, 1);
+
+            miri_rt_set_free(set);
+        }
+    }
+
+    #[test]
+    fn test_set_cow_shared_copies_and_decrefs() {
+        unsafe {
+            let set = miri_rt_set_new(8);
+            miri_rt_set_add(set, 10);
+            miri_rt_set_add(set, 20);
+            miri_rt_set_add(set, 30);
+            let rc_ptr = (set as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *mut usize;
+            *rc_ptr = 2;
+
+            let cowed = miri_rt_set_cow(set);
+            assert_ne!(cowed, set, "RC>1 → fresh pointer");
+            assert_eq!(*rc_ptr, 1, "old RC decremented");
+
+            let new_rc_ptr = (cowed as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *const usize;
+            assert_eq!(*new_rc_ptr, 1);
+            assert_eq!(miri_rt_set_len(cowed), 3);
+            assert_eq!(miri_rt_set_contains(cowed, 10), 1);
+            assert_eq!(miri_rt_set_contains(cowed, 20), 1);
+            assert_eq!(miri_rt_set_contains(cowed, 30), 1);
+
+            miri_rt_set_free(set);
+            miri_rt_set_free(cowed);
+        }
+    }
+
+    #[test]
+    fn test_set_cow_immortal_returns_same_pointer() {
+        unsafe {
+            let set = miri_rt_set_new(8);
+            miri_rt_set_add(set, 1);
+            let rc_ptr = (set as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *mut usize;
+            let immortal = (-1isize) as usize;
+            *rc_ptr = immortal;
+
+            let cowed = miri_rt_set_cow(set);
+            assert_eq!(cowed, set, "immortal RC → no copy");
+            assert_eq!(*rc_ptr, immortal, "immortal RC unchanged");
+
+            *rc_ptr = 1;
             miri_rt_set_free(set);
         }
     }

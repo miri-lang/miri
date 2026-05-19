@@ -300,10 +300,6 @@ impl Drop for MiriList {
     }
 }
 
-// =============================================================================
-// FFI Functions
-// =============================================================================
-
 /// Stable FFI interface for list operations.
 pub mod ffi {
     use super::read_as_i64;
@@ -1609,6 +1605,72 @@ mod tests {
 
             assert_eq!(DROP_CALLS.load(Ordering::SeqCst), 0);
             let _ = counting_drop as unsafe extern "C" fn(*mut u8);
+        }
+    }
+
+    #[test]
+    fn test_list_cow_null_returns_null() {
+        unsafe {
+            let result = miri_rt_list_cow(std::ptr::null_mut());
+            assert!(result.is_null());
+        }
+    }
+
+    #[test]
+    fn test_list_cow_unique_returns_same_pointer() {
+        unsafe {
+            let list = make_i32_list(&[1, 2, 3]);
+            let rc_ptr = (list as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *const usize;
+            assert_eq!(*rc_ptr, 1);
+
+            let cowed = miri_rt_list_cow(list);
+            assert_eq!(cowed, list, "RC=1 → no copy, same pointer");
+            assert_eq!(*rc_ptr, 1, "RC unchanged");
+
+            miri_rt_list_free(list);
+        }
+    }
+
+    #[test]
+    fn test_list_cow_shared_copies_and_decrefs() {
+        unsafe {
+            let list = make_i32_list(&[10, 20, 30]);
+            let rc_ptr = (list as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *mut usize;
+            // Simulate a second owner.
+            *rc_ptr = 2;
+
+            let cowed = miri_rt_list_cow(list);
+            assert_ne!(cowed, list, "RC>1 → fresh pointer");
+            assert_eq!(*rc_ptr, 1, "old RC decremented");
+
+            // New pointer must own its data and have the same values.
+            let new_rc_ptr = (cowed as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *const usize;
+            assert_eq!(*new_rc_ptr, 1);
+            assert_eq!(miri_rt_list_len(cowed), 3);
+            assert_eq!(*(miri_rt_list_get(cowed, 0) as *const i32), 10);
+
+            miri_rt_list_free(list);
+            miri_rt_list_free(cowed);
+        }
+    }
+
+    #[test]
+    fn test_list_cow_immortal_returns_same_pointer() {
+        unsafe {
+            let list = make_i32_list(&[1, 2, 3]);
+            let rc_ptr = (list as *mut u8).sub(crate::rc::RC_HEADER_SIZE) as *mut usize;
+            // Immortal sentinel: negative isize encoded as usize.
+            let immortal = (-1isize) as usize;
+            *rc_ptr = immortal;
+
+            let cowed = miri_rt_list_cow(list);
+            assert_eq!(cowed, list, "immortal RC → no copy");
+            assert_eq!(*rc_ptr, immortal, "immortal RC unchanged");
+
+            // Restore RC=1 so test cleanup deallocs without leaving a dangling
+            // "second owner" in the allocator balance.
+            *rc_ptr = 1;
+            miri_rt_list_free(list);
         }
     }
 }
