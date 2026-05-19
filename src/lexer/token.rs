@@ -3,7 +3,8 @@
 
 use logos::Logos;
 
-use crate::error::syntax::Span;
+use super::{BracketLevel, LexAction, LexerWork};
+use crate::error::syntax::{Span, SyntaxErrorKind};
 
 /// A parsed regex literal with its flags.
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
@@ -297,3 +298,52 @@ pub enum Token {
 
 /// A token paired with its source span.
 pub type TokenSpan = (Token, Span);
+
+impl Token {
+    /// Classifies how the indentation-aware lexer must handle this raw token from logos.
+    /// The match is exhaustive so adding a new `Token` variant forces a deliberate update
+    /// here rather than a silent pass-through.
+    #[rustfmt::skip]
+    pub(crate) fn lex_action(&self) -> LexAction {
+        match self {
+            Token::MultilineComment => LexAction::ContinueWith(LexerWork::NestedComment),
+            Token::Newline => LexAction::ContinueWith(LexerWork::Newline),
+            Token::FloatOrRange => LexAction::ContinueWith(LexerWork::FloatOrRange),
+            Token::LParen => LexAction::TrackOpen(BracketLevel::Paren),
+            Token::RParen => LexAction::TrackClose(BracketLevel::Paren),
+            Token::LBracket => LexAction::TrackOpen(BracketLevel::Bracket),
+            Token::RBracket => LexAction::TrackClose(BracketLevel::Bracket),
+            Token::LBrace => LexAction::TrackOpen(BracketLevel::Brace),
+            Token::RBrace => LexAction::TrackClose(BracketLevel::Brace),
+            Token::SingleQuotedRegex => LexAction::Regex('\''),
+            Token::DoubleQuotedRegex => LexAction::Regex('"'),
+            Token::SingleQuotedString | Token::DoubleQuotedString => LexAction::PromoteToString,
+            Token::SingleQuotedFormattedString => LexAction::FormattedString('\''),
+            Token::DoubleQuotedFormattedString => LexAction::FormattedString('"'),
+            Token::InvalidNumber => LexAction::Invalid(SyntaxErrorKind::InvalidNumberLiteral),
+            Token::InvalidBinaryNumber => LexAction::Invalid(SyntaxErrorKind::InvalidBinaryLiteral),
+            Token::InvalidHexNumber => LexAction::Invalid(SyntaxErrorKind::InvalidHexLiteral),
+            Token::InvalidOctalNumber => LexAction::Invalid(SyntaxErrorKind::InvalidOctalLiteral),
+            Token::Use | Token::Fn | Token::Async | Token::Await | Token::Spawn | Token::Parallel | Token::Gpu
+            | Token::If | Token::Unless | Token::Else | Token::Match | Token::Default | Token::Return
+            | Token::While | Token::Until | Token::Do | Token::For | Token::Forever | Token::In
+            | Token::Let | Token::Var | Token::Const | Token::Or | Token::And | Token::Not
+            | Token::True | Token::False | Token::None | Token::From | Token::As | Token::Break | Token::Continue
+            | Token::Extends | Token::Is | Token::Includes | Token::Implements | Token::Type | Token::Enum
+            | Token::Struct | Token::Class | Token::Trait | Token::Super | Token::Public | Token::Protected
+            | Token::Shared | Token::Private | Token::System | Token::Local | Token::Abstract | Token::MustUse
+            | Token::Out | Token::Runtime | Token::Intrinsic
+            | Token::Semicolon | Token::Colon | Token::DoubleColon | Token::FatArrow | Token::Arrow | Token::LeftArrow
+            | Token::Equal | Token::NotEqual | Token::GreaterThanEqual | Token::LessThanEqual | Token::GreaterThan | Token::LessThan
+            | Token::Assign | Token::AssignAdd | Token::AssignSub | Token::AssignMul | Token::AssignDiv | Token::AssignMod
+            | Token::Plus | Token::Increment | Token::Minus | Token::Decrement | Token::Star | Token::Slash | Token::Percent
+            | Token::Comma | Token::Range | Token::RangeInclusive | Token::Dot
+            | Token::Pipe | Token::Ampersand | Token::Caret | Token::QuestionMark | Token::QuestionQuestion | Token::Tilde
+            | Token::Identifier | Token::Int | Token::Float | Token::BinaryNumber | Token::HexNumber | Token::OctalNumber
+            | Token::String | Token::Regex(_)
+            | Token::FormattedStringStart(_) | Token::FormattedStringMiddle(_) | Token::FormattedStringEnd(_)
+            | Token::Indent | Token::Dedent | Token::ExpressionStatementEnd
+            | Token::InlineComment | Token::Whitespace | Token::Shebang | Token::ByteOrderMark => LexAction::EmitAsIs,
+        }
+    }
+}

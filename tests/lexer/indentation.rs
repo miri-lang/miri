@@ -90,6 +90,21 @@ nested_func(5)
 }
 
 #[test]
+fn test_scan_indent_handles_multibyte_first_char() {
+    // Regression: `scan_indent` previously byte-sliced `&src[cursor..cursor+1]`,
+    // which panicked when the first byte after a newline started a multi-byte
+    // UTF-8 char (e.g. an emoji inside a string literal at column 0).
+    lexer_token_test(
+        "x\n\"🎯\"",
+        vec![
+            Token::Identifier,
+            Token::ExpressionStatementEnd,
+            Token::String,
+        ],
+    );
+}
+
+#[test]
 fn test_windows_line_endings() {
     lexer_token_test(
         "line1\r\nline2\r\n",
