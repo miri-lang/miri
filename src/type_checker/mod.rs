@@ -680,6 +680,7 @@ impl TypeChecker {
                     )
                 })
                 .collect();
+            let is_out_flags: Vec<bool> = decl.params.iter().map(|p| p.is_out).collect();
             let is_abstract = decl.body.as_ref().is_none_or(|b| {
                 matches!(&b.node, StatementKind::Empty)
                     || matches!(&b.node, StatementKind::Block(stmts) if stmts.is_empty())
@@ -688,6 +689,7 @@ impl TypeChecker {
                 decl.name.clone(),
                 context::MethodInfo {
                     params,
+                    is_out_flags,
                     return_type: return_ty,
                     visibility: decl.properties.visibility.clone(),
                     is_constructor: decl.name == "init",

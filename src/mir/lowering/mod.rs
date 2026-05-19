@@ -305,10 +305,15 @@ pub fn lower_class_method(
     // _1: self parameter (the class instance, registered in variable_map)
     ctx.push_param("self".to_string(), self_type, ast_method.span);
 
-    // Remaining explicit parameters (registered in variable_map)
+    // Remaining explicit parameters (registered in variable_map). ABI param 0
+    // is `self` (never `out`); explicit params follow at 1..=N. The allocator
+    // is appended below as a non-out ABI param.
+    let mut out_params = Vec::with_capacity(params.len() + 2);
+    out_params.push(false);
     for param in params.iter() {
         let param_ty = resolve_type(tc, &param.typ);
         ctx.push_param(param.name.clone(), param_ty, param.typ.span);
+        out_params.push(param.is_out);
     }
 
     // Inject allocator into the ABI for call-site compatibility.
@@ -317,6 +322,8 @@ pub fn lower_class_method(
     let alloc_local = ctx.body.new_local(allocator_decl);
     ctx.variable_map.insert("allocator".into(), alloc_local);
     ctx.body.arg_count += 1;
+    out_params.push(false);
+    ctx.body.out_params = out_params;
 
     // Lower body
     if let Some(body_box) = body_stmt {

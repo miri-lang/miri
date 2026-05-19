@@ -680,3 +680,90 @@ class Bad implements Child<List<int>>
         "does not match trait",
     );
 }
+
+// ── out parameters on virtual / trait method calls ───────────────────────────
+
+#[test]
+fn test_trait_method_out_param_writeback_via_vtable() {
+    // Virtual dispatch: receiver static type is a trait. The callee must write back
+    // the scalar `out` arg through the caller's stack slot, mirroring direct Call.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+trait Counter
+    fn inc(n out int)
+
+class Tally implements Counter
+    fn inc(n out int)
+        n = n + 1
+
+fn main()
+    let c Counter = Tally()
+    var n = 1
+    c.inc(n)
+    println(f"{n}")
+    "#,
+        "2",
+    );
+}
+
+#[test]
+fn test_class_method_out_param_writeback_static_dispatch() {
+    // Static dispatch: same ABI path through the concrete class symbol. Locks in that
+    // the out_args flag flows through class-method dispatch, not just virtual.
+    assert_runs_with_output(
+        r#"
+use system.io
+
+class Tally
+    fn inc(n out int)
+        n = n + 1
+
+fn main()
+    let c = Tally()
+    var n = 7
+    c.inc(n)
+    println(f"{n}")
+    "#,
+        "8",
+    );
+}
+
+#[test]
+fn test_class_method_out_param_rejects_immutable_arg() {
+    // The type checker must fire `validate_out_parameter` for method calls too,
+    // not only free functions. An immutable `let` bound passed to an `out` slot
+    // is rejected at type-check time.
+    assert_compiler_error(
+        r#"
+class Tally
+    fn inc(n out int)
+        n = n + 1
+
+fn main()
+    let c = Tally()
+    let n = 1
+    c.inc(n)
+    "#,
+        "expected mutable variable for 'out' parameter",
+    );
+}
+
+#[test]
+fn test_trait_method_out_modifier_mismatch_rejected() {
+    // ABI safety: if the trait declares `out` but the impl drops it (or vice
+    // versa), a vtable caller and callee would disagree on whether the param
+    // is boxed in a stack slot. The type checker must reject this.
+    assert_compiler_error(
+        r#"
+trait Counter
+    fn inc(n out int)
+
+class Tally implements Counter
+    fn inc(n int)
+        let _ = n
+    "#,
+        "does not match trait",
+    );
+}

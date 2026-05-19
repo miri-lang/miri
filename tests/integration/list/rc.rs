@@ -486,6 +486,33 @@ fn main()
 // ── Task 3.3: Clear decref all elements ─────────────────────────────────────
 
 #[test]
+fn test_list_of_custom_index_write_calls_decref_thunk() {
+    // Direct index-write on a List<UserClass> must dispatch through the
+    // __decref_TypeName path in emit_managed_elem_decref. 100 iterations
+    // overwriting the same slot would crash on use-after-free if the old
+    // RC was skipped (ElementShape::UserClass arm).
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+class Point
+    var x int
+    var y int
+
+fn main()
+    var l = List([Point(x: 0, y: 0)])
+    var i = 0
+    while i < 100
+        l[0] = Point(x: i, y: i)
+        i = i + 1
+    println(f"{l[0].x}")
+"#,
+        "99",
+    );
+}
+
+#[test]
 fn test_list_of_100_strings_clear_no_leak() {
     // List<String>: push 100 non-immortal (concatenated) strings then clear().
     // MIRI_LEAK_CHECK=1 catches any string that was not DecRef'd by elem_drop_fn.

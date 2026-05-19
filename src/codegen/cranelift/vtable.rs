@@ -288,6 +288,7 @@ mod tests {
     fn method(is_abstract: bool, is_constructor: bool) -> MethodInfo {
         MethodInfo {
             params: Vec::new(),
+            is_out_flags: Vec::new(),
             return_type: void_type(),
             visibility: MemberVisibility::Public,
             is_constructor,

@@ -4,16 +4,6 @@ use crate::ast::types::TypeKind;
 use crate::codegen::cranelift::translator::{
     needs_out_pointer, ElementShape, FunctionTranslator, ModuleCtx, TypeCtx,
 };
-
-/// Output of `prepare_call_args`: per-arg Cranelift values, the partially-built
-/// call signature (params filled, returns appended later by the caller), and
-/// the list of scalar-out stack slots paired with their caller-side `Local`s
-/// for post-call writeback.
-type PreparedCallArgs = (
-    Vec<cranelift_codegen::ir::Value>,
-    Signature,
-    Vec<(cranelift_codegen::ir::Value, Local)>,
-);
 use crate::codegen::cranelift::types::translate_type;
 use crate::error::CodegenError;
 use crate::mir::{
@@ -28,6 +18,16 @@ use cranelift_codegen::ir::{
 use cranelift_frontend::{FunctionBuilder, Variable};
 use cranelift_module::{Linkage, Module};
 use std::collections::HashMap;
+
+/// Output of `prepare_call_args`: per-arg Cranelift values, the partially-built
+/// call signature (params filled, returns appended later by the caller), and
+/// the list of scalar-out stack slots paired with their caller-side `Local`s
+/// for post-call writeback.
+type PreparedCallArgs = (
+    Vec<cranelift_codegen::ir::Value>,
+    Signature,
+    Vec<(cranelift_codegen::ir::Value, Local)>,
+);
 
 impl<'a> FunctionTranslator<'a> {
     /// Translate a MIR statement.
@@ -272,6 +272,7 @@ impl<'a> FunctionTranslator<'a> {
             TerminatorKind::VirtualCall {
                 vtable_slot,
                 args,
+                out_args,
                 destination,
                 target,
             } => Self::translate_virtual_call(
@@ -279,6 +280,7 @@ impl<'a> FunctionTranslator<'a> {
                 ctx,
                 *vtable_slot,
                 args,
+                out_args,
                 destination,
                 target.as_ref(),
                 body,
@@ -811,13 +813,15 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Translate `TerminatorKind::VirtualCall`: load fn-ptr from receiver's
-    /// vtable slot and invoke via `call_indirect`.
+    /// vtable slot and invoke via `call_indirect`. Scalar `out` params use the
+    /// same copy-in/copy-out stack-slot ABI as direct `Call`.
     #[allow(clippy::too_many_arguments)]
     fn translate_virtual_call(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         vtable_slot: usize,
         args: &[Operand],
+        out_args: &[bool],
         destination: &Place,
         target: Option<&BasicBlock>,
         body: &Body,
@@ -831,8 +835,8 @@ impl<'a> FunctionTranslator<'a> {
             "VirtualCall must have at least one arg (receiver)"
         );
 
-        let (arg_values, mut sig) =
-            Self::translate_vcall_args(builder, ctx, args, locals, type_ctx)?;
+        let (arg_values, mut sig, out_arg_slots) =
+            Self::prepare_call_args(builder, ctx, None, args, out_args, locals, type_ctx)?;
         let dest_ty = &body.local_decls[destination.local.0].ty;
         if dest_ty.kind != TypeKind::Void {
             sig.returns
@@ -844,30 +848,11 @@ impl<'a> FunctionTranslator<'a> {
         let call = builder.ins().call_indirect(sig_ref, fn_ptr, &arg_values);
 
         Self::store_vcall_result(builder, call, dest_ty, destination, locals)?;
+        Self::writeback_out_arg_slots(builder, &out_arg_slots, locals, type_ctx, ptr_type);
         if let Some(t) = target {
             builder.ins().jump(blocks[t], &[]);
         }
         Ok(())
-    }
-
-    /// Translate every virtual-call argument and build the matching call
-    /// signature. Returns `(arg_values, signature-with-params-filled)`.
-    fn translate_vcall_args(
-        builder: &mut FunctionBuilder,
-        ctx: &mut ModuleCtx,
-        args: &[Operand],
-        locals: &HashMap<Local, Variable>,
-        type_ctx: &TypeCtx,
-    ) -> Result<(Vec<cranelift_codegen::ir::Value>, Signature), CodegenError> {
-        let mut sig = Signature::new(builder.func.signature.call_conv);
-        let mut arg_values = Vec::with_capacity(args.len());
-        for arg in args {
-            let val = Self::translate_operand(builder, ctx, arg, locals, type_ctx)?;
-            arg_values.push(val);
-            sig.params
-                .push(AbiParam::new(builder.func.dfg.value_type(val)));
-        }
-        Ok((arg_values, sig))
     }
 
     /// Load `vtable[slot]` from the receiver. Layout: receiver[0] = vtable ptr,

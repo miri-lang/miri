@@ -617,10 +617,13 @@ fn try_lower_method_call(
                     call_args.push(Operand::Copy(Place::new(alloc_local)));
                 }
 
+                let out_args = build_method_out_args(&method_info, args.len(), call_args.len());
+
                 ctx.set_terminator(Terminator::new(
                     TerminatorKind::VirtualCall {
                         vtable_slot: slot,
                         args: call_args.clone(),
+                        out_args,
                         destination,
                         target: Some(target_bb),
                     },
@@ -655,11 +658,13 @@ fn try_lower_method_call(
             literal: crate::ast::literal::Literal::Identifier(mangled_name),
         }));
 
+        let out_args = build_method_out_args(&method_info, args.len(), call_args.len());
+
         ctx.set_terminator(Terminator::new(
             TerminatorKind::Call {
                 func: func_op,
                 args: call_args.clone(),
-                out_args: Vec::new(),
+                out_args,
                 destination,
                 target: Some(target_bb),
             },
@@ -674,6 +679,26 @@ fn try_lower_method_call(
     }
 
     Ok(None)
+}
+
+/// Build the `out_args` flag list for a method call's argument vector.
+///
+/// Method dispatch builds args as `[self, ...user_args, alloc?]`. The receiver
+/// and the implicit allocator are never `out`; positional user args map 1:1
+/// to `method_info.is_param_out(i)`. Length always matches `total_call_args`
+/// so downstream code can rely on `out_args.len() == args.len()`.
+fn build_method_out_args(
+    method_info: &MethodInfo,
+    user_arg_count: usize,
+    total_call_args: usize,
+) -> Vec<bool> {
+    let mut flags = vec![false; total_call_args];
+    for i in 0..user_arg_count {
+        if method_info.is_param_out(i) {
+            flags[1 + i] = true;
+        }
+    }
+    flags
 }
 
 /// Release temporary closure arguments after a method call.
