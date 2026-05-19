@@ -9,8 +9,6 @@ use crate::lexer::Token;
 use super::super::Parser;
 
 impl<'source> Parser<'source> {
-    /*
-     */
     pub(crate) fn lambda_expression(&mut self) -> Result<Expression, SyntaxError> {
         let properties = self.function_modifiers(MemberVisibility::Public)?;
 
@@ -23,7 +21,7 @@ impl<'source> Parser<'source> {
         let body_parsing_error = self.error_unexpected_lookahead_token(
             "a colon for an inline body or an indented block for a block body",
         );
-        let body = match &self._lookahead {
+        let body = match &self.lookahead {
             Some((Token::Colon, _)) => {
                 self.eat_token(&Token::Colon)?;
                 let expr = self.expression()?;
@@ -33,7 +31,7 @@ impl<'source> Parser<'source> {
                 self.eat_expression_end()?;
                 if self.lookahead_is_indent() {
                     self.block_statement()?
-                } else if self.lookahead_is_dedent() || self._lookahead.is_none() {
+                } else if self.lookahead_is_dedent() || self.lookahead.is_none() {
                     ast::empty_statement() // No body, just an expression end
                 } else {
                     return Err(body_parsing_error);

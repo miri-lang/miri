@@ -23,7 +23,7 @@ pub const MAX_PARSE_DEPTH: usize = 256;
 pub struct Parser<'source> {
     pub(super) lexer: &'source mut Lexer<'source>,
     pub(super) source: &'source str,
-    pub(super) _lookahead: Option<TokenSpan>,
+    pub(super) lookahead: Option<TokenSpan>,
     pub(super) depth: usize,
 }
 
@@ -33,14 +33,14 @@ impl<'source> Parser<'source> {
         Parser {
             lexer,
             source,
-            _lookahead: None,
+            lookahead: None,
             depth: 0,
         }
     }
 
     /// Parses the token stream into a complete program AST.
     pub fn parse(&mut self) -> Result<Program, SyntaxError> {
-        self._lookahead = self.lexer.next().transpose()?;
+        self.lookahead = self.lexer.next().transpose()?;
         self.program()
     }
 

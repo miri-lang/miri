@@ -18,10 +18,9 @@ impl<'source> Parser<'source> {
     pub(crate) fn statement_list(&mut self) -> Result<Vec<Statement>, SyntaxError> {
         let mut statements = vec![];
 
-        // Keep parsing statements until we hit the end of the file or a dedent.
-        while self._lookahead.is_some() && !self.lookahead_is_dedent() {
+        while self.lookahead.is_some() && !self.lookahead_is_dedent() {
             statements.push(self.statement()?);
-            self.try_eat_expression_end();
+            self.try_eat_expression_end()?;
         }
 
         Ok(statements)
@@ -52,7 +51,7 @@ impl<'source> Parser<'source> {
         if self.depth > crate::parser::MAX_PARSE_DEPTH {
             self.depth -= 1;
             let span = self
-                ._lookahead
+                .lookahead
                 .as_ref()
                 .map(|(_, s)| *s)
                 .unwrap_or(crate::error::syntax::Span::new(0, 0));
@@ -61,17 +60,17 @@ impl<'source> Parser<'source> {
                 span,
             ));
         }
-        let res = self.statement_internal();
+        let res = self.dispatch_statement();
         self.depth -= 1;
         res
     }
 
-    fn statement_internal(&mut self) -> Result<Statement, SyntaxError> {
-        if self._lookahead.is_none() {
+    fn dispatch_statement(&mut self) -> Result<Statement, SyntaxError> {
+        if self.lookahead.is_none() {
             return Ok(ast::empty_statement());
         }
 
-        let statement = match &self._lookahead {
+        let statement = match &self.lookahead {
             Some((Token::Public, _)) => {
                 self.eat_token(&Token::Public)?;
                 self.class_member_statement(MemberVisibility::Public)?
@@ -114,10 +113,8 @@ impl<'source> Parser<'source> {
             Some((Token::Type, _)) => self.type_statement(MemberVisibility::Public)?,
             Some((Token::Break, _)) => self.break_statement()?,
             Some((Token::Continue, _)) => self.continue_statement()?,
-            Some((Token::Enum, _)) => self.enum_statement(MemberVisibility::Public, false)?,
-            Some((Token::MustUse, _)) => {
-                self.eat_token(&Token::MustUse)?;
-                self.enum_statement(MemberVisibility::Public, true)?
+            Some((Token::Enum, _)) | Some((Token::MustUse, _)) => {
+                self.enum_statement(MemberVisibility::Public)?
             }
             Some((Token::Struct, _)) => self.struct_statement(MemberVisibility::Public)?,
             Some((Token::Class, _)) => self.class_statement(MemberVisibility::Public)?,
@@ -142,7 +139,7 @@ impl<'source> Parser<'source> {
         &mut self,
         visibility: MemberVisibility,
     ) -> Result<Statement, SyntaxError> {
-        let (token, variable_declaration_type) = match &self._lookahead {
+        let (token, declaration_type) = match &self.lookahead {
             Some((Token::Let, _)) => (Token::Let, VariableDeclarationType::Immutable),
             Some((Token::Var, _)) => (Token::Var, VariableDeclarationType::Mutable),
             Some((Token::Const, _)) => (Token::Const, VariableDeclarationType::Constant),
@@ -150,8 +147,7 @@ impl<'source> Parser<'source> {
         };
 
         self.eat_token(&token)?;
-        let declarations =
-            self.variable_declaration_list(&variable_declaration_type, true, false)?;
+        let declarations = self.variable_declaration_list(&declaration_type)?;
         Ok(ast::variable_statement(declarations, visibility))
     }
 
@@ -166,16 +162,12 @@ impl<'source> Parser<'source> {
     ) -> Result<Statement, SyntaxError> {
         self.eat_token(&Token::Shared)?;
 
-        let name = self.parse_simple_identifier()?;
-
-        // Type is mandatory for shared variables
+        let name = self.simple_identifier()?;
         let typ_expr = self.type_expression()?;
         let typ = match typ_expr {
             Some(t) => Some(Box::new(t)),
             None => return Err(self.error_unexpected_lookahead_token("type definition")),
         };
-
-        // Shared variables cannot have initializers
 
         let declaration = VariableDeclaration {
             name,
@@ -199,19 +191,23 @@ impl<'source> Parser<'source> {
     pub(crate) fn variable_declaration_list(
         &mut self,
         declaration_type: &VariableDeclarationType,
-        accept_initializer: bool,
-        is_shared: bool,
     ) -> Result<Vec<VariableDeclaration>, SyntaxError> {
-        let mut declarations =
-            vec![self.variable_declaration(declaration_type, accept_initializer, is_shared)?];
+        let mut declarations = vec![self.variable_declaration(declaration_type)?];
 
         while self.lookahead_is_comma() {
             self.eat_token(&Token::Comma)?;
-            declarations.push(self.variable_declaration(
-                declaration_type,
-                accept_initializer,
-                is_shared,
-            )?);
+            declarations.push(self.variable_declaration(declaration_type)?);
+        }
+
+        Ok(declarations)
+    }
+
+    fn for_loop_variable_list(&mut self) -> Result<Vec<VariableDeclaration>, SyntaxError> {
+        let mut declarations = vec![self.for_loop_variable()?];
+
+        while self.lookahead_is_comma() {
+            self.eat_token(&Token::Comma)?;
+            declarations.push(self.for_loop_variable()?);
         }
 
         Ok(declarations)
@@ -228,36 +224,11 @@ impl<'source> Parser<'source> {
     pub(crate) fn variable_declaration(
         &mut self,
         declaration_type: &VariableDeclarationType,
-        accept_initializer: bool,
-        is_shared: bool,
     ) -> Result<VariableDeclaration, SyntaxError> {
-        let name_expr = self.identifier()?;
-        let name_span = name_expr.span;
-        let name = if let ExpressionKind::Identifier(id, class_opt) = name_expr.node {
-            if let Some(class) = class_opt {
-                return Err(self
-                    .error_unexpected_token("a simple identifier", &format!("{}::{}", class, id)));
-            }
-            id
-        } else {
-            return Err(self.error_unexpected_token("identifier", &format!("{:?}", name_expr)));
-        };
-
+        let (name, name_span) = self.declaration_name()?;
         let typ = self.type_expression()?.map(Box::new);
+        let initializer = self.optional_initializer()?;
 
-        let initializer = if accept_initializer {
-            match &self._lookahead {
-                Some((Token::Assign, _)) => {
-                    self.eat_token(&Token::Assign)?;
-                    opt_expr(self.expression()?)
-                }
-                _ => None,
-            }
-        } else {
-            None
-        };
-
-        // Constants must have an initializer
         if matches!(declaration_type, VariableDeclarationType::Constant) && initializer.is_none() {
             return Err(SyntaxError::new(
                 SyntaxErrorKind::MissingConstantInitializer { name: name.clone() },
@@ -270,8 +241,43 @@ impl<'source> Parser<'source> {
             typ,
             initializer,
             declaration_type: declaration_type.clone(),
-            is_shared,
+            is_shared: false,
         })
+    }
+
+    fn for_loop_variable(&mut self) -> Result<VariableDeclaration, SyntaxError> {
+        let (name, _) = self.declaration_name()?;
+        let typ = self.type_expression()?.map(Box::new);
+        Ok(VariableDeclaration {
+            name,
+            typ,
+            initializer: None,
+            declaration_type: VariableDeclarationType::Immutable,
+            is_shared: false,
+        })
+    }
+
+    fn declaration_name(&mut self) -> Result<(String, crate::error::syntax::Span), SyntaxError> {
+        let name_expr = self.identifier()?;
+        let span = name_expr.span;
+        match name_expr.node {
+            ExpressionKind::Identifier(id, None) => Ok((id, span)),
+            ExpressionKind::Identifier(id, Some(class)) => {
+                Err(self
+                    .error_unexpected_token("a simple identifier", &format!("{}::{}", class, id)))
+            }
+            _ => Err(self.error_unexpected_token("identifier", &format!("{:?}", name_expr))),
+        }
+    }
+
+    fn optional_initializer(&mut self) -> Result<Option<Box<Expression>>, SyntaxError> {
+        match &self.lookahead {
+            Some((Token::Assign, _)) => {
+                self.eat_token(&Token::Assign)?;
+                Ok(opt_expr(self.expression()?))
+            }
+            _ => Ok(None),
+        }
     }
 
     pub(crate) fn statement_body(&mut self) -> Result<Statement, SyntaxError> {
@@ -286,7 +292,7 @@ impl<'source> Parser<'source> {
                 return Ok(ast::empty_statement());
             }
 
-            if self._lookahead.is_none() || self.lookahead_is_dedent() || self.lookahead_is_else() {
+            if self.lookahead.is_none() || self.lookahead_is_dedent() || self.lookahead_is_else() {
                 return Ok(ast::empty_statement());
             }
         } else if self.lookahead_is_expression_end() {
@@ -296,13 +302,13 @@ impl<'source> Parser<'source> {
                 return Ok(ast::empty_statement());
             }
         } else if self.match_lookahead_type(|t| t == &Token::If || t == &Token::Unless) {
-            // To support `else if`
+            // `else if` chains back into a fresh statement.
             return self.statement();
         } else {
             return Err(self.error_unexpected_lookahead_token("a colon or an expression end"));
         }
 
-        if self._lookahead.is_some() {
+        if self.lookahead.is_some() {
             return self.statement();
         }
 
@@ -325,66 +331,17 @@ impl<'source> Parser<'source> {
             self.eat_token(&Token::If)?;
         }
 
-        // Check for `if let` / `if var` desugaring
         if matches!(
-            &self._lookahead,
+            &self.lookahead,
             Some((Token::Let, _)) | Some((Token::Var, _))
         ) {
-            // Eat let/var and track mutability
-            let is_mutable = matches!(&self._lookahead, Some((Token::Var, _)));
-            let token = if is_mutable { Token::Var } else { Token::Let };
-            self.eat_token(&token)?;
-
-            let pattern = self.pattern()?;
-            self.eat_token(&Token::Assign)?;
-            let value = self.expression()?;
-            let then_body = self.statement_body()?;
-
-            self.try_eat_expression_end();
-
-            let else_body = if self.lookahead_is_else() {
-                self.eat_token(&Token::Else)?;
-                Some(self.statement_body()?)
-            } else {
-                None
-            };
-
-            // Desugar: if let Pattern = value: body [else: else_body]
-            // =>  match value { Pattern: body, <complement>: else_body_or_empty }
-            //
-            // For Option patterns like Some(x), use None as the complement
-            // instead of default, because the MIR lowering treats Some(x) as
-            // the catch-all "otherwise" target. Using default would overwrite it.
-            let else_pattern = if matches!(
-                &pattern,
-                Pattern::EnumVariant(parent, _)
-                    if matches!(parent.as_ref(), Pattern::Identifier(n) if n == "Some")
-            ) {
-                Pattern::Literal(crate::ast::literal::Literal::None)
-            } else {
-                Pattern::Default
-            };
-
-            let then_branch = MatchBranch {
-                patterns: vec![pattern],
-                guard: None,
-                body: Box::new(then_body),
-                is_mutable,
-            };
-            let else_branch = MatchBranch {
-                patterns: vec![else_pattern],
-                guard: None,
-                body: Box::new(else_body.unwrap_or_else(ast::empty_statement)),
-                is_mutable: false,
-            };
-            let match_expr = ast::match_expression(value, vec![then_branch, else_branch]);
-            return Ok(ast::expression_statement(match_expr));
+            return self.if_let_statement();
         }
 
         let condition = self.expression()?;
         let then_block = self.statement_body()?;
 
-        self.try_eat_expression_end();
+        self.try_eat_expression_end()?;
 
         let else_block = if self.lookahead_is_else() {
             self.eat_token(&Token::Else)?;
@@ -398,6 +355,45 @@ impl<'source> Parser<'source> {
         } else {
             Ok(ast::if_statement(condition, then_block, else_block))
         }
+    }
+
+    fn if_let_statement(&mut self) -> Result<Statement, SyntaxError> {
+        let is_mutable = matches!(&self.lookahead, Some((Token::Var, _)));
+        let token = if is_mutable { Token::Var } else { Token::Let };
+        self.eat_token(&token)?;
+
+        let pattern = self.pattern()?;
+        self.eat_token(&Token::Assign)?;
+        let value = self.expression()?;
+        let then_body = self.statement_body()?;
+
+        self.try_eat_expression_end()?;
+
+        let else_body = if self.lookahead_is_else() {
+            self.eat_token(&Token::Else)?;
+            Some(self.statement_body()?)
+        } else {
+            None
+        };
+
+        // `Some(x)` is the MIR catch-all, so use `None` as its complement; any
+        // other pattern falls through to `_` (Default).
+        let else_pattern = option_pattern_complement(&pattern);
+
+        let then_branch = MatchBranch {
+            patterns: vec![pattern],
+            guard: None,
+            body: Box::new(then_body),
+            is_mutable,
+        };
+        let else_branch = MatchBranch {
+            patterns: vec![else_pattern],
+            guard: None,
+            body: Box::new(else_body.unwrap_or_else(ast::empty_statement)),
+            is_mutable: false,
+        };
+        let match_expr = ast::match_expression(value, vec![then_branch, else_branch]);
+        Ok(ast::expression_statement(match_expr))
     }
 
     /*
@@ -414,94 +410,89 @@ impl<'source> Parser<'source> {
     */
     pub(crate) fn while_statement(
         &mut self,
-        mut while_statement_type: WhileStatementType,
+        statement_type: WhileStatementType,
     ) -> Result<Statement, SyntaxError> {
-        let condition;
-        let then_block;
-
-        if while_statement_type == WhileStatementType::Until {
-            self.eat_token(&Token::Until)?;
-            condition = self.expression()?;
-            then_block = self.statement_body()?;
-        } else if while_statement_type == WhileStatementType::Forever {
-            self.eat_token(&Token::Forever)?;
-            condition = ast::literal(ast::boolean(true));
-            then_block = self.statement_body()?;
-        } else if while_statement_type == WhileStatementType::DoWhile {
-            self.eat_token(&Token::Do)?;
-            then_block = self.statement_body()?;
-            match &self._lookahead {
-                Some((Token::While, _)) => {
-                    self.eat_token(&Token::While)?;
-                }
-                Some((Token::Until, _)) => {
-                    self.eat_token(&Token::Until)?;
-                    while_statement_type = WhileStatementType::DoUntil;
-                }
-                _ => return Err(self.error_unexpected_lookahead_token("while or until")),
+        let (condition, then_block, kind) = match statement_type {
+            WhileStatementType::Until => {
+                self.eat_token(&Token::Until)?;
+                (self.expression()?, self.statement_body()?, statement_type)
             }
-            condition = self.expression()?;
-        } else {
-            self.eat_token(&Token::While)?;
-
-            // Check for `while let` / `while var` desugaring
-            if matches!(
-                &self._lookahead,
-                Some((Token::Let, _)) | Some((Token::Var, _))
-            ) {
-                // Track mutability for `while var` vs `while let`
-                let is_mutable = matches!(&self._lookahead, Some((Token::Var, _)));
-                let token = if is_mutable { Token::Var } else { Token::Let };
-                self.eat_token(&token)?;
-
-                let pattern = self.pattern()?;
-                self.eat_token(&Token::Assign)?;
-                let value = self.expression()?;
+            WhileStatementType::Forever => {
+                self.eat_token(&Token::Forever)?;
                 let body = self.statement_body()?;
-
-                // Desugar: while let Pattern = value: body
-                // =>  forever: match value { Pattern: body, <complement>: break }
-                let break_pattern = if matches!(
-                    &pattern,
-                    Pattern::EnumVariant(parent, _)
-                        if matches!(parent.as_ref(), Pattern::Identifier(n) if n == "Some")
+                (ast::literal(ast::boolean(true)), body, statement_type)
+            }
+            WhileStatementType::DoWhile => self.do_loop()?,
+            WhileStatementType::While => {
+                self.eat_token(&Token::While)?;
+                if matches!(
+                    &self.lookahead,
+                    Some((Token::Let, _)) | Some((Token::Var, _))
                 ) {
-                    Pattern::Literal(crate::ast::literal::Literal::None)
-                } else {
-                    Pattern::Default
-                };
-
-                let match_branch = MatchBranch {
-                    patterns: vec![pattern],
-                    guard: None,
-                    body: Box::new(body),
-                    is_mutable,
-                };
-                let break_branch = MatchBranch {
-                    patterns: vec![break_pattern],
-                    guard: None,
-                    body: Box::new(ast::break_statement()),
-                    is_mutable: false,
-                };
-                let match_expr = ast::match_expression(value, vec![match_branch, break_branch]);
-                let match_stmt = ast::expression_statement(match_expr);
-                let loop_body = ast::block(vec![match_stmt]);
-
-                return Ok(ast::while_statement_with_type(
-                    ast::literal(ast::boolean(true)),
-                    loop_body,
-                    WhileStatementType::Forever,
+                    return self.while_let_statement();
+                }
+                (self.expression()?, self.statement_body()?, statement_type)
+            }
+            WhileStatementType::DoUntil => {
+                return Err(self.error_unexpected_lookahead_token(
+                    "do-until cannot be entered directly; it is produced by `do … until`",
                 ));
             }
+        };
 
-            condition = self.expression()?;
-            then_block = self.statement_body()?;
-        }
+        Ok(ast::while_statement_with_type(condition, then_block, kind))
+    }
+
+    fn do_loop(&mut self) -> Result<(Expression, Statement, WhileStatementType), SyntaxError> {
+        self.eat_token(&Token::Do)?;
+        let body = self.statement_body()?;
+
+        let kind = match &self.lookahead {
+            Some((Token::While, _)) => {
+                self.eat_token(&Token::While)?;
+                WhileStatementType::DoWhile
+            }
+            Some((Token::Until, _)) => {
+                self.eat_token(&Token::Until)?;
+                WhileStatementType::DoUntil
+            }
+            _ => return Err(self.error_unexpected_lookahead_token("while or until")),
+        };
+        let condition = self.expression()?;
+        Ok((condition, body, kind))
+    }
+
+    fn while_let_statement(&mut self) -> Result<Statement, SyntaxError> {
+        let is_mutable = matches!(&self.lookahead, Some((Token::Var, _)));
+        let token = if is_mutable { Token::Var } else { Token::Let };
+        self.eat_token(&token)?;
+
+        let pattern = self.pattern()?;
+        self.eat_token(&Token::Assign)?;
+        let value = self.expression()?;
+        let body = self.statement_body()?;
+
+        let break_pattern = option_pattern_complement(&pattern);
+
+        let match_branch = MatchBranch {
+            patterns: vec![pattern],
+            guard: None,
+            body: Box::new(body),
+            is_mutable,
+        };
+        let break_branch = MatchBranch {
+            patterns: vec![break_pattern],
+            guard: None,
+            body: Box::new(ast::break_statement()),
+            is_mutable: false,
+        };
+        let match_expr = ast::match_expression(value, vec![match_branch, break_branch]);
+        let loop_body = ast::block(vec![ast::expression_statement(match_expr)]);
 
         Ok(ast::while_statement_with_type(
-            condition,
-            then_block,
-            while_statement_type,
+            ast::literal(ast::boolean(true)),
+            loop_body,
+            WhileStatementType::Forever,
         ))
     }
 
@@ -514,9 +505,7 @@ impl<'source> Parser<'source> {
     pub(crate) fn for_statement(&mut self) -> Result<Statement, SyntaxError> {
         self.eat_token(&Token::For)?;
 
-        // For loop has immutable variable declarations without initializers
-        let variable_declarations =
-            self.variable_declaration_list(&VariableDeclarationType::Immutable, false, false)?;
+        let variable_declarations = self.for_loop_variable_list()?;
         self.eat_token(&Token::In)?;
         let iterable_expr = self.range_expression()?;
 
@@ -627,7 +616,7 @@ impl<'source> Parser<'source> {
             if self.match_lookahead_type(|t| t == &Token::Star) {
                 self.eat_token(&Token::Star)?;
                 kind = ImportPathKind::Wildcard;
-                break; // Wildcard must be the last part of the path
+                break;
             }
 
             if self.match_lookahead_type(|t| t == &Token::LBrace) {
@@ -636,13 +625,13 @@ impl<'source> Parser<'source> {
                 while self.lookahead_is_comma() {
                     self.eat_token(&Token::Comma)?;
                     if self.match_lookahead_type(|t| t == &Token::RBrace) {
-                        break; // Allow trailing comma
+                        break;
                     }
                     multi_imports.push(self.multi_import_segment()?);
                 }
                 self.eat_token(&Token::RBrace)?;
                 kind = ImportPathKind::Multi(multi_imports);
-                break; // Multi-import block must be the last part
+                break;
             }
 
             segments.push(self.identifier()?);
@@ -671,10 +660,10 @@ impl<'source> Parser<'source> {
     pub(crate) fn expression_statement(&mut self) -> Result<Statement, SyntaxError> {
         let expression = self.expression()?;
 
-        // Block expressions (like Match) consume their own Dedent, so there may not be
-        // an ExpressionStatementEnd token after them. Consume it if present, then return.
+        // Match block expressions consume their own Dedent; the trailing
+        // ExpressionStatementEnd may be absent.
         if matches!(expression.node, ExpressionKind::Match(..)) {
-            self.try_eat_expression_end();
+            self.try_eat_expression_end()?;
             return Ok(ast::expression_statement(expression));
         }
 
@@ -689,11 +678,23 @@ impl<'source> Parser<'source> {
     */
     pub(crate) fn block_statement(&mut self) -> Result<Statement, SyntaxError> {
         self.eat_token(&Token::Indent)?;
-        let body = match &self._lookahead {
-            Some((Token::Dedent, _)) => vec![], // Empty block
+        let body = match &self.lookahead {
+            Some((Token::Dedent, _)) => vec![],
             _ => self.statement_list()?,
         };
         self.eat_token(&Token::Dedent)?;
         Ok(ast::block(body))
+    }
+}
+
+fn option_pattern_complement(pattern: &Pattern) -> Pattern {
+    if matches!(
+        pattern,
+        Pattern::EnumVariant(parent, _)
+            if matches!(parent.as_ref(), Pattern::Identifier(n) if n == "Some")
+    ) {
+        Pattern::Literal(crate::ast::literal::Literal::None)
+    } else {
+        Pattern::Default
     }
 }

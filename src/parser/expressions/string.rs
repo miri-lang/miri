@@ -10,8 +10,6 @@ use super::super::literals::unescape_string;
 use super::super::Parser;
 
 impl<'source> Parser<'source> {
-    /*
-     */
     pub(crate) fn formatted_string_expression(&mut self) -> Result<Expression, SyntaxError> {
         let mut parts = Vec::new();
 
@@ -28,7 +26,7 @@ impl<'source> Parser<'source> {
         }
 
         // Check for immediate end (f-string with no expressions).
-        if matches!(&self._lookahead, Some((Token::FormattedStringEnd(_), _))) {
+        if matches!(&self.lookahead, Some((Token::FormattedStringEnd(_), _))) {
             let (end_token, _) = self.eat(
                 |t| matches!(t, Token::FormattedStringEnd(_)),
                 || "formatted string end".to_string(),
@@ -42,10 +40,10 @@ impl<'source> Parser<'source> {
             return Ok(ast::f_string(parts));
         }
 
-        while self._lookahead.is_some() {
+        while self.lookahead.is_some() {
             parts.push(self.expression()?);
 
-            if matches!(&self._lookahead, Some((Token::FormattedStringMiddle(_), _))) {
+            if matches!(&self.lookahead, Some((Token::FormattedStringMiddle(_), _))) {
                 let (mid_token, _) = self.eat(
                     |t| matches!(t, Token::FormattedStringMiddle(_)),
                     || "formatted string middle".to_string(),
@@ -56,7 +54,7 @@ impl<'source> Parser<'source> {
                         parts.push(ast::literal(ast::string_literal(&unescaped)));
                     }
                 }
-            } else if matches!(&self._lookahead, Some((Token::FormattedStringEnd(_), _))) {
+            } else if matches!(&self.lookahead, Some((Token::FormattedStringEnd(_), _))) {
                 let (end_token, _) = self.eat(
                     |t| matches!(t, Token::FormattedStringEnd(_)),
                     || "formatted string end".to_string(),

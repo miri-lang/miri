@@ -9,10 +9,8 @@ use crate::lexer::Token;
 use super::super::Parser;
 
 impl<'source> Parser<'source> {
-    /*
-     */
     pub(crate) fn unary_expression(&mut self) -> Result<Expression, SyntaxError> {
-        match &self._lookahead {
+        match &self.lookahead {
             Some((Token::Plus, _)) => self.create_unary_expression(&Token::Plus, UnaryOp::Plus),
             Some((Token::Minus, _)) => self.create_unary_expression(&Token::Minus, UnaryOp::Negate),
             Some((Token::Not, _)) => self.create_unary_expression(&Token::Not, UnaryOp::Not),

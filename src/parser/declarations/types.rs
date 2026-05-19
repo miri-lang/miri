@@ -10,8 +10,6 @@ use crate::lexer::Token;
 use super::super::Parser;
 
 impl<'source> Parser<'source> {
-    /*
-     */
     /// Parses an enum variant declaration (name with optional associated types).
     pub fn enum_value_expression(&mut self) -> Result<Expression, SyntaxError> {
         let identifier = self.identifier()?;
@@ -28,8 +26,6 @@ impl<'source> Parser<'source> {
         Ok(ast::enum_value_expression(identifier, types))
     }
 
-    /*
-     */
     pub(crate) fn type_statement(
         &mut self,
         visibility: MemberVisibility,
@@ -52,12 +48,10 @@ impl<'source> Parser<'source> {
         Ok(ast::type_statement(declarations, visibility))
     }
 
-    /*
-     */
     pub(crate) fn type_declaration(&mut self) -> Result<Expression, SyntaxError> {
         let name = self.identifier()?;
         let generic_types = self.generic_types_expression()?;
-        let kind = match self._lookahead {
+        let kind = match self.lookahead {
             Some((Token::Is, _)) => {
                 self.eat_token(&Token::Is)?;
                 TypeDeclarationKind::Is

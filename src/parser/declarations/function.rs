@@ -9,11 +9,11 @@ use crate::lexer::Token;
 
 use super::super::utils::is_guard;
 use super::super::Parser;
+use super::class::BodyMode;
 
 impl<'source> Parser<'source> {
     /// Parses function modifier tokens (`async`, `parallel`, `gpu`) and validates
-    /// that the resulting combination is legal. Returns a `FunctionProperties` struct
-    /// with the parsed modifiers and the given visibility.
+    /// that the resulting combination is legal.
     pub(crate) fn function_modifiers(
         &mut self,
         visibility: MemberVisibility,
@@ -26,7 +26,7 @@ impl<'source> Parser<'source> {
         };
 
         while self.lookahead_is_function_modifier() {
-            match &self._lookahead {
+            match &self.lookahead {
                 Some((Token::Async, _)) => {
                     self.eat_token(&Token::Async)?;
                     properties.is_async = true;
@@ -69,25 +69,19 @@ impl<'source> Parser<'source> {
         Ok(properties)
     }
 
-    /*
-     */
     pub(crate) fn function_declaration(
         &mut self,
         visibility: MemberVisibility,
     ) -> Result<Statement, SyntaxError> {
-        self.function_declaration_with_context(visibility, false)
+        self.function_declaration_with_mode(visibility, BodyMode::Required)
     }
 
-    /*
-     */
     pub(crate) fn runtime_function_declaration(&mut self) -> Result<Statement, SyntaxError> {
         self.eat_token(&Token::Runtime)?;
 
-        // Parse optional runtime name (string literal). Default to "core".
         let runtime_kind = if self.match_lookahead_type(|t| matches!(t, Token::String)) {
             let token = self.eat_token(&Token::String)?;
             let raw = &self.source[token.1.start..token.1.end];
-            // Strip surrounding quotes
             let name = &raw[1..raw.len() - 1];
             RuntimeKind::from_name(name).ok_or_else(|| {
                 SyntaxError::new(
@@ -103,7 +97,7 @@ impl<'source> Parser<'source> {
 
         self.eat_token(&Token::Fn)?;
 
-        let name = self.parse_simple_identifier()?;
+        let name = self.simple_identifier()?;
         let parameters = self.function_params_expression()?;
         let return_type = self.return_type_expression()?;
 
@@ -117,8 +111,6 @@ impl<'source> Parser<'source> {
         ))
     }
 
-    /*
-     */
     pub(crate) fn intrinsic_function_declaration(
         &mut self,
         visibility: MemberVisibility,
@@ -126,7 +118,7 @@ impl<'source> Parser<'source> {
         self.eat_token(&Token::Intrinsic)?;
         self.eat_token(&Token::Fn)?;
 
-        let name = self.parse_simple_identifier()?;
+        let name = self.simple_identifier()?;
         let generic_types = self.generic_types_expression()?;
         let parameters = self.function_params_expression()?;
         let return_type = self.return_type_expression()?;
@@ -142,97 +134,86 @@ impl<'source> Parser<'source> {
         ))
     }
 
-    /// Parses a function declaration, optionally allowing abstract functions (no body).
-    /// Abstract functions are only valid in traits and abstract classes.
-    pub(crate) fn function_declaration_with_context(
+    /// Parses a function declaration. `mode` controls whether an empty body
+    /// is treated as an abstract declaration (allowed in traits and abstract
+    /// classes) or rejected.
+    pub(crate) fn function_declaration_with_mode(
         &mut self,
         visibility: MemberVisibility,
-        allow_abstract: bool,
+        mode: BodyMode,
     ) -> Result<Statement, SyntaxError> {
         let properties = self.function_modifiers(visibility)?;
-
         self.eat_token(&Token::Fn)?;
 
-        let name = match &self._lookahead {
-            Some((Token::Identifier, _)) => {
-                let token = self.eat_token(&Token::Identifier)?;
-                self.source[token.1.start..token.1.end].to_string()
-            }
-            Some((Token::LessThan, _)) | Some((Token::LParen, _)) => {
-                // No name, it's a lambda
-                "".to_string()
-            }
-            _ => return Err(self.error_unexpected_lookahead_token("a function name, '(' or '<'")),
-        };
-
+        let name = self.function_name()?;
         let generic_types = self.generic_types_expression()?;
         let parameters = self.function_params_expression()?;
         let return_type = self.return_type_expression()?;
 
-        let body = if name.is_empty() {
-            // This is a lambda expression. Its body parsing is special.
-            if self.lookahead_is_colon() {
-                self.eat_token(&Token::Colon)?;
-                // An inline lambda body is a single expression, not a full statement.
-                // We parse it and wrap it in an ExpressionStatement for the AST.
-                let expr = self.expression()?;
-                Some(ast::expression_statement(expr))
-            } else {
-                // A block lambda body is a normal block statement, which statement_body handles correctly.
-                Some(self.statement_body()?)
-            }
-        } else {
-            // This is a named function. Parse its body.
-            let body_stmt = self.statement_body()?;
-
-            // Check if this is an abstract function (returns empty statement in abstract context)
-            if allow_abstract && matches!(body_stmt.node, StatementKind::Empty) {
-                // Abstract function - no body
-                None
-            } else {
-                Some(body_stmt)
-            }
-        };
-
         if name.is_empty() {
-            let body =
-                body.ok_or_else(|| self.error_unexpected_lookahead_token("a lambda body"))?;
-            return Ok(ast::expression_statement(ast::lambda_expression(
-                generic_types,
-                parameters,
-                return_type,
-                body,
-                properties,
-            )));
+            return self.finish_lambda(generic_types, parameters, return_type, properties);
         }
 
-        match body {
-            Some(body_stmt) => Ok(ast::function_declaration(
-                &name,
-                generic_types,
-                parameters,
-                return_type,
-                body_stmt,
-                properties,
-            )),
-            None => Ok(ast::abstract_function_declaration(
+        let body = self.statement_body()?;
+        if matches!(mode, BodyMode::Optional) && matches!(body.node, StatementKind::Empty) {
+            return Ok(ast::abstract_function_declaration(
                 &name,
                 generic_types,
                 parameters,
                 return_type,
                 properties,
-            )),
+            ));
+        }
+        Ok(ast::function_declaration(
+            &name,
+            generic_types,
+            parameters,
+            return_type,
+            body,
+            properties,
+        ))
+    }
+
+    fn function_name(&mut self) -> Result<String, SyntaxError> {
+        match &self.lookahead {
+            Some((Token::Identifier, _)) => {
+                let token = self.eat_token(&Token::Identifier)?;
+                Ok(self.source[token.1.start..token.1.end].to_string())
+            }
+            Some((Token::LessThan, _)) | Some((Token::LParen, _)) => Ok(String::new()),
+            _ => Err(self.error_unexpected_lookahead_token("a function name, '(' or '<'")),
         }
     }
 
-    /*
-     */
+    fn finish_lambda(
+        &mut self,
+        generic_types: Option<Vec<Expression>>,
+        parameters: Vec<Parameter>,
+        return_type: Option<Box<Expression>>,
+        properties: FunctionProperties,
+    ) -> Result<Statement, SyntaxError> {
+        let body = if self.lookahead_is_colon() {
+            self.eat_token(&Token::Colon)?;
+            let expr = self.expression()?;
+            ast::expression_statement(expr)
+        } else {
+            self.statement_body()?
+        };
+
+        Ok(ast::expression_statement(ast::lambda_expression(
+            generic_types,
+            parameters,
+            return_type,
+            body,
+            properties,
+        )))
+    }
+
     pub(crate) fn parameter_list(&mut self) -> Result<Vec<Parameter>, SyntaxError> {
         let mut parameters = vec![self.parameter()?];
 
         while self.lookahead_is_comma() {
             self.eat_token(&Token::Comma)?;
-            // Allow an optional trailing comma before the closing parenthesis.
             if self.lookahead_is_rparen() {
                 break;
             }
@@ -242,10 +223,8 @@ impl<'source> Parser<'source> {
         Ok(parameters)
     }
 
-    /*
-     */
     pub(crate) fn parameter(&mut self) -> Result<Parameter, SyntaxError> {
-        let name = self.parse_simple_identifier()?;
+        let name = self.simple_identifier()?;
 
         let is_out = if self.match_lookahead_type(|t| matches!(t, Token::Out)) {
             self.eat_token(&Token::Out)?;
@@ -257,22 +236,15 @@ impl<'source> Parser<'source> {
         let typ = match self.type_expression()? {
             Some(typ) => Box::new(typ),
             None if name == "self" => {
-                // `fn drop(self)` — bare self with no type annotation.
-                // Synthesize a `Self` type so the type checker can resolve it.
-                Box::new(crate::ast::factory::type_expr_non_null(
-                    crate::ast::factory::make_type(crate::ast::types::TypeKind::Custom(
-                        "Self".to_string(),
-                        None,
-                    )),
-                ))
+                // `fn drop(self)` — bare self synthesizes the enclosing `Self` type.
+                Box::new(ast::type_expr_non_null(ast::make_type(
+                    crate::ast::types::TypeKind::Custom("Self".to_string(), None),
+                )))
             }
-            None => {
-                // Miri doesn't support untyped parameters
-                return Err(self.error_missing_type_expression());
-            }
+            None => return Err(self.error_missing_type_expression()),
         };
 
-        let guard = if self._lookahead.is_some() && self.lookahead_is_guard() {
+        let guard = if self.lookahead.is_some() && self.lookahead_is_guard() {
             opt_expr(self.guard_expression()?)
         } else {
             None
@@ -294,10 +266,8 @@ impl<'source> Parser<'source> {
         })
     }
 
-    /*
-     */
     pub(crate) fn guard_expression(&mut self) -> Result<Expression, SyntaxError> {
-        let mut guard_op = match &self._lookahead {
+        let mut guard_op = match &self.lookahead {
             Some((Token::GreaterThan, _)) => GuardOp::GreaterThan,
             Some((Token::GreaterThanEqual, _)) => GuardOp::GreaterThanEqual,
             Some((Token::LessThan, _)) => GuardOp::LessThan,
@@ -308,7 +278,7 @@ impl<'source> Parser<'source> {
         };
 
         self.eat(is_guard, || "guard operator".to_string())?;
-        if self._lookahead.is_some() && self.lookahead_is_in() {
+        if self.lookahead.is_some() && self.lookahead_is_in() {
             self.eat_token(&Token::In)?;
             guard_op = GuardOp::NotIn;
         }

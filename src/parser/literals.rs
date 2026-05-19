@@ -52,6 +52,28 @@ fn strip_underscores(s: &str) -> Cow<'_, str> {
     }
 }
 
+fn format_with_input_precision(value: f32, input: &str) -> String {
+    if input.contains('e') || input.contains('E') {
+        let significand = input.split(['e', 'E']).next().unwrap_or("");
+        let decimal_digits = significand.split('.').nth(1).unwrap_or("").len();
+        format!("{:.1$e}", value, decimal_digits)
+    } else {
+        let decimal_digits = input.split('.').nth(1).unwrap_or("").len();
+        format!("{:.1$}", value, decimal_digits)
+    }
+}
+
+fn normalize_float_str(s: &str) -> String {
+    let s = s.to_lowercase();
+    if let Some((base, exp)) = s.split_once('e') {
+        let base = base.trim_end_matches('0').trim_end_matches('.');
+        let exp = exp.trim_start_matches('+');
+        format!("{}e{}", base, exp)
+    } else {
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    }
+}
+
 impl<'source> Parser<'source> {
     /*
         Literal
@@ -62,7 +84,7 @@ impl<'source> Parser<'source> {
             ;
     */
     pub(crate) fn literal(&mut self) -> Result<Literal, SyntaxError> {
-        match &self._lookahead {
+        match &self.lookahead {
             Some((Token::Int, _)) => self.integer_literal(&Token::Int),
             Some((Token::BinaryNumber, _)) => self.integer_literal(&Token::BinaryNumber),
             Some((Token::HexNumber, _)) => self.integer_literal(&Token::HexNumber),
@@ -100,61 +122,33 @@ impl<'source> Parser<'source> {
             ;
     */
     pub(crate) fn integer_literal(&mut self, token_type: &Token) -> Result<Literal, SyntaxError> {
-        match self.eat_token(token_type) {
-            Ok(token) => {
-                let raw = &self.source[token.1.start..token.1.end];
-                let str_value = strip_underscores(raw);
+        let token = self.eat_token(token_type)?;
+        let span = Span::new(token.1.start, token.1.end);
+        let raw = &self.source[token.1.start..token.1.end];
+        let str_value = strip_underscores(raw);
 
-                // Parse the value based on the token type
-                let value = match token_type {
-                    Token::Int => str_value.parse::<i128>().map_err(|_| {
-                        SyntaxError::new(
-                            SyntaxErrorKind::InvalidIntegerLiteral,
-                            Span::new(token.1.start, token.1.end),
-                        )
-                    })?,
-                    Token::BinaryNumber => {
-                        // Strip "0b" prefix and parse as base 2
-                        i128::from_str_radix(&str_value[2..], 2).map_err(|_| {
-                            SyntaxError::new(
-                                SyntaxErrorKind::InvalidBinaryLiteral,
-                                Span::new(token.1.start, token.1.end),
-                            )
-                        })?
-                    }
-                    Token::HexNumber => {
-                        // Strip "0x" prefix and parse as base 16
-                        i128::from_str_radix(&str_value[2..], 16).map_err(|_| {
-                            SyntaxError::new(
-                                SyntaxErrorKind::InvalidHexLiteral,
-                                Span::new(token.1.start, token.1.end),
-                            )
-                        })?
-                    }
-                    Token::OctalNumber => {
-                        // Strip "0o" prefix and parse as base 8
-                        i128::from_str_radix(&str_value[2..], 8).map_err(|_| {
-                            SyntaxError::new(
-                                SyntaxErrorKind::InvalidOctalLiteral,
-                                Span::new(token.1.start, token.1.end),
-                            )
-                        })?
-                    }
-                    _ => {
-                        return Err(SyntaxError::new(
-                            SyntaxErrorKind::UnexpectedToken {
-                                expected: "integer literal".to_string(),
-                                found: format!("{:?}", token_type),
-                            },
-                            Span::new(token.1.start, token.1.end),
-                        ));
-                    }
-                };
-
-                Ok(ast::int_literal(value))
+        let value = match token_type {
+            Token::Int => str_value
+                .parse::<i128>()
+                .map_err(|_| SyntaxError::new(SyntaxErrorKind::InvalidIntegerLiteral, span))?,
+            Token::BinaryNumber => i128::from_str_radix(&str_value[2..], 2)
+                .map_err(|_| SyntaxError::new(SyntaxErrorKind::InvalidBinaryLiteral, span))?,
+            Token::HexNumber => i128::from_str_radix(&str_value[2..], 16)
+                .map_err(|_| SyntaxError::new(SyntaxErrorKind::InvalidHexLiteral, span))?,
+            Token::OctalNumber => i128::from_str_radix(&str_value[2..], 8)
+                .map_err(|_| SyntaxError::new(SyntaxErrorKind::InvalidOctalLiteral, span))?,
+            _ => {
+                return Err(SyntaxError::new(
+                    SyntaxErrorKind::UnexpectedToken {
+                        expected: "integer literal".to_string(),
+                        found: format!("{:?}", token_type),
+                    },
+                    span,
+                ));
             }
-            Err(e) => Err(e),
-        }
+        };
+
+        Ok(ast::int_literal(value))
     }
 
     /*
@@ -163,55 +157,25 @@ impl<'source> Parser<'source> {
             ;
     */
     pub(crate) fn float_literal(&mut self) -> Result<Literal, SyntaxError> {
-        match self.eat_token(&Token::Float) {
-            Ok(token) => {
-                let err = SyntaxError::new(
-                    SyntaxErrorKind::InvalidFloatLiteral,
-                    Span::new(token.1.start, token.1.end),
-                );
-                let raw = &self.source[token.1.start..token.1.end];
-                let str_value = strip_underscores(raw);
-                let f32_value = str_value.parse::<f32>().map_err(|_| err.clone())?;
-                let uses_exponent = str_value.contains('e') || str_value.contains('E');
-                let f32_str = if uses_exponent {
-                    // Count digits after the decimal in the significand (before 'e')
-                    let significand = str_value.split(['e', 'E']).next().unwrap_or("");
-                    let decimal_digits = significand.split('.').nth(1).unwrap_or("").len();
-                    format!("{:.1$e}", f32_value, decimal_digits)
-                } else {
-                    let part_after_dot_len = str_value.split('.').nth(1).unwrap_or("").len();
-                    format!("{:.1$}", f32_value, part_after_dot_len)
-                };
+        let token = self.eat_token(&Token::Float)?;
+        let err = SyntaxError::new(
+            SyntaxErrorKind::InvalidFloatLiteral,
+            Span::new(token.1.start, token.1.end),
+        );
+        let raw = &self.source[token.1.start..token.1.end];
+        let str_value = strip_underscores(raw);
+        let f32_value = str_value.parse::<f32>().map_err(|_| err.clone())?;
+        let f32_str = format_with_input_precision(f32_value, &str_value);
 
-                fn normalize(s: &str) -> String {
-                    let s = s.to_lowercase();
-                    if let Some((base, exp)) = s.split_once('e') {
-                        let base = base.trim_end_matches('0').trim_end_matches('.');
-                        let exp = exp.trim_start_matches('+');
-                        format!("{}e{}", base, exp)
-                    } else {
-                        s.trim_end_matches('0').trim_end_matches('.').to_string()
-                    }
-                }
-
-                let normalized_input = normalize(&str_value);
-                let normalized_f32 = normalize(&f32_str);
-
-                // If the f32 representation matches the original string, return as f32
-                if normalized_input == normalized_f32 {
-                    Ok(ast::float32_literal(f32_value))
-                } else {
-                    // Otherwise, parse as f64
-                    let f64_value = str_value.parse::<f64>().map_err(|_| err.clone())?;
-                    if !f64_value.is_nan() {
-                        Ok(ast::float64_literal(f64_value))
-                    } else {
-                        Err(err)
-                    }
-                }
-            }
-            Err(e) => Err(e),
+        if normalize_float_str(&str_value) == normalize_float_str(&f32_str) {
+            return Ok(ast::float32_literal(f32_value));
         }
+
+        let f64_value = str_value.parse::<f64>().map_err(|_| err.clone())?;
+        if f64_value.is_nan() {
+            return Err(err);
+        }
+        Ok(ast::float64_literal(f64_value))
     }
 
     /*
@@ -221,23 +185,17 @@ impl<'source> Parser<'source> {
             ;
     */
     pub(crate) fn string_literal(&mut self) -> Result<Literal, SyntaxError> {
-        match self.eat_token(&Token::String) {
-            Ok(token) => {
-                let mut str_value = &self.source[token.1.start..token.1.end];
+        let token = self.eat_token(&Token::String)?;
+        let raw = &self.source[token.1.start..token.1.end];
 
-                // Strings that come from f-string expressions will have escaped quotes.
-                if str_value.starts_with('\\') {
-                    str_value = &str_value[2..str_value.len() - 1];
-                } else {
-                    str_value = &str_value[1..str_value.len() - 1];
-                }
+        // Strings that come from f-string expressions arrive with escaped quotes.
+        let inner = if raw.starts_with('\\') {
+            &raw[2..raw.len() - 1]
+        } else {
+            &raw[1..raw.len() - 1]
+        };
 
-                let unescaped = unescape_string(str_value);
-                let literal = ast::string_literal(&unescaped);
-                Ok(literal)
-            }
-            Err(e) => Err(e),
-        }
+        Ok(ast::string_literal(&unescape_string(inner)))
     }
 
     /*
@@ -247,22 +205,15 @@ impl<'source> Parser<'source> {
             ;
     */
     pub(crate) fn boolean_literal(&mut self, token_type: &Token) -> Result<Literal, SyntaxError> {
-        match self.eat_token(token_type) {
-            Ok(token) => {
-                let str_value = &self.source[token.1.start..token.1.end];
-                let literal = match str_value {
-                    "true" => ast::boolean(true),
-                    "false" => ast::boolean(false),
-                    _ => {
-                        return Err(SyntaxError::new(
-                            SyntaxErrorKind::InvalidBooleanLiteral,
-                            Span::new(token.1.start, token.1.end),
-                        ));
-                    }
-                };
-                Ok(literal)
-            }
-            Err(e) => Err(e),
+        let token = self.eat_token(token_type)?;
+        let str_value = &self.source[token.1.start..token.1.end];
+        match str_value {
+            "true" => Ok(ast::boolean(true)),
+            "false" => Ok(ast::boolean(false)),
+            _ => Err(SyntaxError::new(
+                SyntaxErrorKind::InvalidBooleanLiteral,
+                Span::new(token.1.start, token.1.end),
+            )),
         }
     }
 
