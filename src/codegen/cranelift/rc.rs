@@ -765,6 +765,10 @@ impl<'a> FunctionTranslator<'a> {
     ///
     /// Called by `translate_collection_index_write` before the new value is stored
     /// so that overwriting an existing slot does not leak the old value.
+    ///
+    /// Exhaustive over [`ElementShape`]: each managed shape routes to its own
+    /// helper. `Other` covers primitives that do not need a decref; the early
+    /// return below is the explicit no-op branch — no silent-skip catch-all.
     pub(crate) fn emit_managed_elem_decref(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
@@ -797,7 +801,6 @@ impl<'a> FunctionTranslator<'a> {
             return Ok(());
         }
         let ElementShape::UserClass(class_name) = shape else {
-            // Primitives need no decref.
             return Ok(());
         };
         let mut decref_name = String::with_capacity(9 + class_name.len());

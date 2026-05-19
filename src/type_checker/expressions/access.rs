@@ -1009,7 +1009,8 @@ impl TypeChecker {
         let params: Vec<Parameter> = method_info
             .params
             .iter()
-            .map(|(pname, ty)| {
+            .enumerate()
+            .map(|(i, (pname, ty))| {
                 let substituted_ty = if mapping.is_empty() {
                     ty.clone()
                 } else {
@@ -1020,7 +1021,7 @@ impl TypeChecker {
                     typ: Box::new(self.create_type_expression(substituted_ty)),
                     guard: None,
                     default_value: None,
-                    is_out: false,
+                    is_out: method_info.is_param_out(i),
                 }
             })
             .collect();
@@ -1144,12 +1145,13 @@ impl TypeChecker {
         let params: Vec<Parameter> = method_info
             .params
             .iter()
-            .map(|(pname, ty)| Parameter {
+            .enumerate()
+            .map(|(i, (pname, ty))| Parameter {
                 name: pname.clone(),
                 typ: Box::new(self.create_type_expression(substitute(ty))),
                 guard: None,
                 default_value: None,
-                is_out: false,
+                is_out: method_info.is_param_out(i),
             })
             .collect();
 
@@ -1265,7 +1267,8 @@ impl TypeChecker {
             let params: Vec<Parameter> = method_info
                 .params
                 .iter()
-                .map(|(pname, ty)| {
+                .enumerate()
+                .map(|(i, (pname, ty))| {
                     let substituted_ty = if mapping.is_empty() {
                         ty.clone()
                     } else {
@@ -1276,7 +1279,7 @@ impl TypeChecker {
                         typ: Box::new(self.create_type_expression(substituted_ty)),
                         guard: None,
                         default_value: None,
-                        is_out: false,
+                        is_out: method_info.is_param_out(i),
                     }
                 })
                 .collect();

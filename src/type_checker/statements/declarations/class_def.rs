@@ -541,6 +541,7 @@ impl TypeChecker {
                 )
             })
             .collect();
+        let is_out_flags: Vec<bool> = decl.params.iter().map(|p| p.is_out).collect();
 
         let method_is_abstract = decl.body.as_ref().is_none_or(|body| {
             matches!(&body.node, StatementKind::Empty)
@@ -551,6 +552,7 @@ impl TypeChecker {
             decl.name.clone(),
             MethodInfo {
                 params: param_types,
+                is_out_flags,
                 return_type: return_ty,
                 visibility: decl.properties.visibility.clone(),
                 is_constructor: decl.name == "init",
@@ -748,6 +750,24 @@ impl TypeChecker {
                             i + 1,
                             parent_substituted,
                             child_type
+                        ),
+                        name_expr.span,
+                    );
+                }
+                // `out` is an ABI-affecting modifier — a mismatch between parent
+                // and overriding child would let a vtable caller and callee
+                // disagree on whether a parameter is pointer-boxed.
+                let parent_out = parent_method.is_param_out(i);
+                let child_out = child_method.is_param_out(i);
+                if parent_out != child_out {
+                    self.report_error(
+                        format!(
+                            "Method '{}' has incompatible 'out' modifier for parameter '{}' (position {}): parent declares {}, child declares {}",
+                            method_name,
+                            child_name,
+                            i + 1,
+                            if parent_out { "out" } else { "no out" },
+                            if child_out { "out" } else { "no out" },
                         ),
                         name_expr.span,
                     );
@@ -1055,9 +1075,15 @@ impl TypeChecker {
                 .iter()
                 .zip(class_method.params.iter())
                 .all(|((_, t1), (_, t2))| kinds_compatible(t1, t2));
+        // `out` is an ABI-affecting modifier (scalar copy-in/copy-out via stack
+        // slot). A mismatch between the trait signature and the implementing
+        // class would cause a vtable caller and callee to disagree on whether
+        // a parameter is a pointer-boxed scalar — silent memory corruption.
+        let out_flags_match = (0..method_info.params.len())
+            .all(|i| method_info.is_param_out(i) == class_method.is_param_out(i));
         let return_match = kinds_compatible(&method_info.return_type, &class_method.return_type);
 
-        if !params_match || !return_match {
+        if !params_match || !out_flags_match || !return_match {
             let expected = format!(
                 "fn {}({}) -> {:?}",
                 method_name,

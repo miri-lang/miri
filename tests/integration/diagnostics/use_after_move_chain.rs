@@ -403,3 +403,38 @@ println(f"{xs.length()}")
         "dynamic fn 'target'",
     );
 }
+
+// ── 12.2.10  Inherited method field-store escape ─────────────────────────────
+
+#[test]
+fn test_chain_inherited_field_store_walks_to_base_class() {
+    // Child inherits `store` from Base. Calling `c.store(xs)` on a Child instance
+    // must (a) consume `xs` (the inherited summary is found through the base_class
+    // walk) and (b) render the chain naming the **base class** as the sink — the
+    // method is defined on Base, not Child, so the field-store sink is Base_store.
+    assert_compiler_error(
+        r#"
+use system.io
+use system.collections.list
+
+class Base
+    var data [int]
+    fn init()
+        self.data = List<int>()
+    fn store(items [int])
+        self.data = items
+
+class Child extends Base
+    var label String
+    fn init(lbl String)
+        super.init()
+        self.label = lbl
+
+let c = Child(lbl: "hi")
+let xs = List([1, 2, 3])
+c.store(xs)
+println(f"{xs.length()}")
+"#,
+        "Base_store",
+    );
+}

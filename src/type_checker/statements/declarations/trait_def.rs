@@ -221,6 +221,7 @@ impl TypeChecker {
                             )
                         })
                         .collect();
+                    let is_out_flags: Vec<bool> = decl.params.iter().map(|p| p.is_out).collect();
 
                     // Trait methods are abstract if they have no body
                     let method_is_abstract = decl.body.is_none();
@@ -229,6 +230,7 @@ impl TypeChecker {
                         decl.name.clone(),
                         MethodInfo {
                             params: param_types,
+                            is_out_flags,
                             return_type: return_ty,
                             visibility: decl.properties.visibility.clone(),
                             is_constructor: false,

@@ -185,6 +185,7 @@ impl fmt::Display for Terminator {
             TerminatorKind::VirtualCall {
                 vtable_slot,
                 args,
+                out_args: _,
                 destination,
                 target,
             } => {
@@ -255,6 +256,9 @@ pub enum TerminatorKind {
         vtable_slot: usize,
         /// Arguments: args[0] is the receiver, rest are method arguments.
         args: Vec<Operand>,
+        /// Which arguments are `out` parameters. `out_args[i]` is true when
+        /// the callee's i-th parameter is declared `out`. Empty means none.
+        out_args: Vec<bool>,
         destination: Place,
         target: Option<BasicBlock>,
     },
