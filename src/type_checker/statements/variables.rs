@@ -55,88 +55,89 @@ impl TypeChecker {
         span: Span,
     ) {
         for decl in decls {
-            // Shared Memory Validation
             if decl.is_shared {
-                if !context.in_gpu_function {
-                    self.report_error(
-                        "Shared variables can only be declared inside 'gpu' functions".to_string(),
-                        span,
-                    );
-                }
-
-                if let Some(typ_expr) = &decl.typ {
-                    let resolved_type = self.resolve_type_expression(typ_expr, context);
-                    let is_array = matches!(&resolved_type.kind, TypeKind::Array(_, _))
-                        || matches!(&resolved_type.kind, TypeKind::Custom(n, Some(_)) if BuiltinCollectionKind::from_name(n) == Some(BuiltinCollectionKind::Array));
-                    if !is_array {
-                        self.report_error(
-                            format!(
-                                "Shared variable '{}' must be an array, got {}",
-                                decl.name, resolved_type
-                            ),
-                            span,
-                        );
-                    }
-                } else {
-                    self.report_error(
-                        format!("Shared variable '{}' must have an explicit type", decl.name),
-                        span,
-                    );
-                }
-
-                if decl.initializer.is_some() {
-                    self.report_error(
-                        format!("Shared variable '{}' cannot have an initializer", decl.name),
-                        span,
-                    );
-                }
+                self.validate_shared_variable(decl, context, span);
             }
+            self.register_variable_decl(decl, visibility, context, span);
+        }
+    }
 
-            let inferred_type = self.determine_variable_type(decl, context, span);
-            let is_mutable = match decl.declaration_type {
-                VariableDeclarationType::Mutable => true,
-                VariableDeclarationType::Immutable | VariableDeclarationType::Constant => false,
-            };
-            let is_constant = matches!(decl.declaration_type, VariableDeclarationType::Constant);
-
-            // Extract compile-time constant value for constants with integer initializers
-            let const_value = if is_constant {
-                decl.initializer.as_ref().and_then(|init| {
-                    Self::try_eval_const_int_with_context(init, context)
-                        .map(|v| Literal::Integer(crate::ast::literal::IntegerLiteral::I128(v)))
-                })
-            } else {
-                None
-            };
-
-            self.check_shadowing(&decl.name, is_mutable, is_constant, context, span);
-
-            if context.scopes.len() == 1 {
-                self.global_scope.insert(
-                    decl.name.clone(),
-                    SymbolInfo::new(
-                        inferred_type.clone(),
-                        is_mutable,
-                        is_constant,
-                        visibility.clone(),
-                        self.current_module.clone(),
-                        const_value.clone(),
-                    ),
-                );
-            }
-
-            context.define(
-                decl.name.clone(),
-                SymbolInfo::new(
-                    inferred_type.clone(),
-                    is_mutable,
-                    is_constant,
-                    visibility.clone(),
-                    self.current_module.clone(),
-                    const_value,
-                ),
+    fn validate_shared_variable(
+        &mut self,
+        decl: &VariableDeclaration,
+        context: &mut Context,
+        span: Span,
+    ) {
+        if !context.in_gpu_function {
+            self.report_error(
+                "Shared variables can only be declared inside 'gpu' functions".to_string(),
+                span,
             );
         }
+
+        if let Some(typ_expr) = &decl.typ {
+            let resolved_type = self.resolve_type_expression(typ_expr, context);
+            let is_array = matches!(&resolved_type.kind, TypeKind::Array(_, _))
+                || matches!(&resolved_type.kind, TypeKind::Custom(n, Some(_)) if BuiltinCollectionKind::from_name(n) == Some(BuiltinCollectionKind::Array));
+            if !is_array {
+                self.report_error(
+                    format!(
+                        "Shared variable '{}' must be an array, got {}",
+                        decl.name, resolved_type
+                    ),
+                    span,
+                );
+            }
+        } else {
+            self.report_error(
+                format!("Shared variable '{}' must have an explicit type", decl.name),
+                span,
+            );
+        }
+
+        if decl.initializer.is_some() {
+            self.report_error(
+                format!("Shared variable '{}' cannot have an initializer", decl.name),
+                span,
+            );
+        }
+    }
+
+    fn register_variable_decl(
+        &mut self,
+        decl: &VariableDeclaration,
+        visibility: &MemberVisibility,
+        context: &mut Context,
+        span: Span,
+    ) {
+        let inferred_type = self.determine_variable_type(decl, context, span);
+        let is_mutable = matches!(decl.declaration_type, VariableDeclarationType::Mutable);
+        let is_constant = matches!(decl.declaration_type, VariableDeclarationType::Constant);
+
+        let const_value = if is_constant {
+            decl.initializer.as_ref().and_then(|init| {
+                Self::try_eval_const_int_with_context(init, context)
+                    .map(|v| Literal::Integer(crate::ast::literal::IntegerLiteral::I128(v)))
+            })
+        } else {
+            None
+        };
+
+        self.check_shadowing(&decl.name, is_mutable, is_constant, context, span);
+
+        let info = SymbolInfo::new(
+            inferred_type,
+            is_mutable,
+            is_constant,
+            visibility.clone(),
+            self.current_module.clone(),
+            const_value,
+        );
+
+        if context.scopes.len() == 1 {
+            self.global_scope.insert(decl.name.clone(), info.clone());
+        }
+        context.define(decl.name.clone(), info);
     }
 
     pub(crate) fn check_shadowing(

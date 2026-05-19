@@ -64,70 +64,30 @@ impl TypeChecker {
     ) -> Type {
         let subject_type = self.infer_expression(subject, context);
 
-        // Check exhaustiveness for Enums
+        self.check_exhaustiveness_enum(&subject_type, branches, span, context);
+        self.check_exhaustiveness_option(&subject_type, branches, span, context);
+
+        if branches.is_empty() {
+            return make_type(TypeKind::Void);
+        }
+
+        self.infer_match_body_type(&subject_type, branches, span, context)
+    }
+
+    /// Checks exhaustiveness for enum types in match expressions.
+    fn check_exhaustiveness_enum(
+        &mut self,
+        subject_type: &Type,
+        branches: &[MatchBranch],
+        span: Span,
+        context: &mut Context,
+    ) {
         if let TypeKind::Custom(name, _) = &subject_type.kind {
-            // Find enum definition
-            let mut enum_def_opt = None;
-
-            // Check local scopes first (reverse order)
-            for scope in context.type_definitions.iter().rev() {
-                if let Some(TypeDefinition::Enum(def)) = scope.get(name) {
-                    enum_def_opt = Some(def);
-                    break;
-                }
-            }
-
-            // Check global scope if not found locally
-            if enum_def_opt.is_none() {
-                if let Some(TypeDefinition::Enum(def)) = self.global_type_definitions.get(name) {
-                    enum_def_opt = Some(def);
-                }
-            }
-
+            let enum_def_opt = self.find_enum_definition(name, context);
             if let Some(enum_def) = enum_def_opt {
-                let mut remaining_variants: HashSet<String> =
-                    enum_def.variants.keys().cloned().collect();
-                let mut is_exhaustive = false;
-
-                for branch in branches {
-                    // Only unguarded patterns count toward exhaustiveness
-                    if branch.guard.is_none() {
-                        for pattern in &branch.patterns {
-                            match pattern {
-                                Pattern::Default => {
-                                    is_exhaustive = true;
-                                }
-                                Pattern::Identifier(_) => {
-                                    // Variable binding covers everything
-                                    is_exhaustive = true;
-                                }
-                                Pattern::Member(parent, member) => {
-                                    // Check if parent is the enum name
-                                    if let Pattern::Identifier(parent_name) = &**parent {
-                                        if parent_name == name {
-                                            remaining_variants.remove(member);
-                                        }
-                                    }
-                                }
-                                Pattern::EnumVariant(parent, _) => {
-                                    if let Pattern::Member(enum_name_pat, variant_name) = &**parent
-                                    {
-                                        if let Pattern::Identifier(enum_name_str) = &**enum_name_pat
-                                        {
-                                            if enum_name_str == name {
-                                                remaining_variants.remove(variant_name);
-                                            }
-                                        }
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    if is_exhaustive {
-                        break;
-                    }
-                }
+                let mut remaining_variants: HashSet<String> = enum_def.keys().cloned().collect();
+                let is_exhaustive =
+                    self.extract_covered_enum_variants(name, branches, &mut remaining_variants);
 
                 if !is_exhaustive && !remaining_variants.is_empty() {
                     let mut missing: Vec<_> = remaining_variants.into_iter().collect();
@@ -143,95 +103,169 @@ impl TypeChecker {
                 }
             }
         }
+    }
 
-        // Check exhaustiveness for Option types
-        if matches!(subject_type.kind, TypeKind::Option(_)) {
-            let mut has_some = false;
-            let mut has_none = false;
-            let mut is_exhaustive = false;
+    /// Finds an enum definition by name, checking local and global scopes.
+    fn find_enum_definition(
+        &self,
+        name: &str,
+        context: &Context,
+    ) -> Option<std::collections::BTreeMap<String, Vec<Type>>> {
+        for scope in context.type_definitions.iter().rev() {
+            if let Some(TypeDefinition::Enum(def)) = scope.get(name) {
+                return Some(def.variants.clone());
+            }
+        }
+        if let Some(TypeDefinition::Enum(def)) = self.global_type_definitions.get(name) {
+            return Some(def.variants.clone());
+        }
+        None
+    }
 
-            for branch in branches {
-                if branch.guard.is_none() {
-                    for pattern in &branch.patterns {
-                        match pattern {
-                            Pattern::Default => {
-                                is_exhaustive = true;
-                            }
-                            Pattern::Literal(crate::ast::literal::Literal::None) => {
-                                has_none = true;
-                            }
-                            Pattern::Identifier(_) => {
-                                // Variable binding covers everything
-                                is_exhaustive = true;
-                            }
-                            Pattern::Member(parent, member) => {
-                                if let Pattern::Identifier(parent_name) = &**parent {
-                                    if parent_name == "Option" {
-                                        match member.as_str() {
-                                            "Some" => has_some = true,
-                                            "None" => has_none = true,
-                                            _ => {}
-                                        }
-                                    }
-                                }
-                            }
-                            Pattern::EnumVariant(parent, _) => match &**parent {
-                                Pattern::Identifier(name) if name == "Some" => {
-                                    has_some = true;
-                                }
-                                Pattern::Member(enum_pat, variant) => {
-                                    if let Pattern::Identifier(name) = &**enum_pat {
-                                        if name == "Option" && variant == "Some" {
-                                            has_some = true;
-                                        }
-                                    }
-                                }
-                                _ => {}
-                            },
-                            _ => {}
+    /// Extracts covered enum variants from match branches and checks exhaustiveness.
+    fn extract_covered_enum_variants(
+        &self,
+        enum_name: &str,
+        branches: &[MatchBranch],
+        remaining_variants: &mut HashSet<String>,
+    ) -> bool {
+        let mut is_exhaustive = false;
+        for branch in branches {
+            if branch.guard.is_none() {
+                for pattern in &branch.patterns {
+                    match pattern {
+                        Pattern::Default | Pattern::Identifier(_) => {
+                            is_exhaustive = true;
                         }
+                        Pattern::Member(parent, member) => {
+                            if let Pattern::Identifier(parent_name) = &**parent {
+                                if parent_name == enum_name {
+                                    remaining_variants.remove(member);
+                                }
+                            }
+                        }
+                        Pattern::EnumVariant(parent, _) => {
+                            if let Pattern::Member(enum_name_pat, variant_name) = &**parent {
+                                if let Pattern::Identifier(enum_name_str) = &**enum_name_pat {
+                                    if enum_name_str == enum_name {
+                                        remaining_variants.remove(variant_name);
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
-                if is_exhaustive {
-                    break;
-                }
             }
-
-            if !(is_exhaustive || has_some && has_none) {
-                let mut missing = Vec::new();
-                if !has_some {
-                    missing.push("Some");
-                }
-                if !has_none {
-                    missing.push("None");
-                }
-                self.report_error(
-                    format!(
-                        "Non-exhaustive match on Option. Missing variants: {}",
-                        missing.join(", ")
-                    ),
-                    span,
-                );
+            if is_exhaustive {
+                break;
             }
         }
+        is_exhaustive
+    }
 
-        if branches.is_empty() {
-            return make_type(TypeKind::Void);
+    /// Checks exhaustiveness for Option types in match expressions.
+    fn check_exhaustiveness_option(
+        &mut self,
+        subject_type: &Type,
+        branches: &[MatchBranch],
+        span: Span,
+        _context: &Context,
+    ) {
+        if !matches!(subject_type.kind, TypeKind::Option(_)) {
+            return;
         }
 
+        let (has_some, has_none, is_exhaustive) = self.extract_option_coverage(branches);
+
+        if !(is_exhaustive || has_some && has_none) {
+            let mut missing = Vec::new();
+            if !has_some {
+                missing.push("Some");
+            }
+            if !has_none {
+                missing.push("None");
+            }
+            self.report_error(
+                format!(
+                    "Non-exhaustive match on Option. Missing variants: {}",
+                    missing.join(", ")
+                ),
+                span,
+            );
+        }
+    }
+
+    /// Extracts coverage information for Option variants from match branches.
+    fn extract_option_coverage(&self, branches: &[MatchBranch]) -> (bool, bool, bool) {
+        let mut has_some = false;
+        let mut has_none = false;
+        let mut is_exhaustive = false;
+
+        for branch in branches {
+            if branch.guard.is_none() {
+                for pattern in &branch.patterns {
+                    match pattern {
+                        Pattern::Default | Pattern::Identifier(_) => {
+                            is_exhaustive = true;
+                        }
+                        Pattern::Literal(crate::ast::literal::Literal::None) => {
+                            has_none = true;
+                        }
+                        Pattern::Member(parent, member) => {
+                            if let Pattern::Identifier(parent_name) = &**parent {
+                                if parent_name == "Option" {
+                                    match member.as_str() {
+                                        "Some" => has_some = true,
+                                        "None" => has_none = true,
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                        Pattern::EnumVariant(parent, _) => match &**parent {
+                            Pattern::Identifier(name) if name == "Some" => {
+                                has_some = true;
+                            }
+                            Pattern::Member(enum_pat, variant) => {
+                                if let Pattern::Identifier(name) = &**enum_pat {
+                                    if name == "Option" && variant == "Some" {
+                                        has_some = true;
+                                    }
+                                }
+                            }
+                            _ => {}
+                        },
+                        _ => {}
+                    }
+                }
+            }
+            if is_exhaustive {
+                break;
+            }
+        }
+        (has_some, has_none, is_exhaustive)
+    }
+
+    /// Infers the result type from match branches, checking type compatibility.
+    fn infer_match_body_type(
+        &mut self,
+        subject_type: &Type,
+        branches: &[MatchBranch],
+        span: Span,
+        context: &mut Context,
+    ) -> Type {
         let mut first_branch_type = None;
 
         for branch in branches {
             context.enter_scope();
             for pattern in &branch.patterns {
-                self.check_pattern(pattern, &subject_type, context, span, branch.is_mutable);
+                self.check_pattern(pattern, subject_type, context, span, branch.is_mutable);
             }
 
             let body_type = self.infer_statement_type(&branch.body, context);
             context.exit_scope();
 
-            // Void-typed arms are diverging (explicit return, panic, etc.) and do not
-            // contribute to the match result type — skip compatibility checking for them.
             if matches!(body_type.kind, TypeKind::Void) {
                 continue;
             }
@@ -315,282 +349,385 @@ impl TypeChecker {
     ) {
         match pattern {
             Pattern::Literal(lit) => {
-                // None literal on Option subject is the None variant match
-                if matches!(lit, crate::ast::literal::Literal::None)
-                    && matches!(subject_type.kind, TypeKind::Option(_))
-                {
-                    return;
+                self.check_pattern_literal(lit, subject_type, span, context);
+            }
+            Pattern::Identifier(name) => {
+                self.check_pattern_identifier(name, subject_type, is_mutable, context);
+            }
+            Pattern::Tuple(patterns) => {
+                self.check_pattern_tuple(patterns, subject_type, span, is_mutable, context);
+            }
+            Pattern::Member(parent, member) => {
+                self.check_pattern_member(parent, member, subject_type, span, context);
+            }
+            Pattern::Regex(_) => {
+                self.check_pattern_regex(subject_type, span);
+            }
+            Pattern::Default => {}
+            Pattern::EnumVariant(parent_pattern, bindings) => {
+                self.check_pattern_enum_variant(
+                    parent_pattern,
+                    bindings,
+                    subject_type,
+                    span,
+                    is_mutable,
+                    context,
+                );
+            }
+        }
+    }
+
+    /// Validates a literal pattern against the subject type.
+    fn check_pattern_literal(
+        &mut self,
+        lit: &crate::ast::literal::Literal,
+        subject_type: &Type,
+        span: Span,
+        context: &mut Context,
+    ) {
+        if matches!(lit, crate::ast::literal::Literal::None)
+            && matches!(subject_type.kind, TypeKind::Option(_))
+        {
+            return;
+        }
+        let lit_type = self.infer_literal(lit);
+        if !self.are_compatible(subject_type, &lit_type, context) {
+            self.report_error(
+                format!(
+                    "Pattern type mismatch: expected {}, got {}",
+                    subject_type, lit_type
+                ),
+                span,
+            );
+        }
+    }
+
+    /// Validates and binds an identifier pattern.
+    fn check_pattern_identifier(
+        &mut self,
+        name: &str,
+        subject_type: &Type,
+        is_mutable: bool,
+        context: &mut Context,
+    ) {
+        context.define(
+            name.to_string(),
+            SymbolInfo::new(
+                subject_type.clone(),
+                is_mutable,
+                false,
+                MemberVisibility::Public,
+                self.current_module.clone(),
+                None,
+            ),
+        );
+    }
+
+    /// Validates a tuple pattern with element count and type checking.
+    fn check_pattern_tuple(
+        &mut self,
+        patterns: &[Pattern],
+        subject_type: &Type,
+        span: Span,
+        is_mutable: bool,
+        context: &mut Context,
+    ) {
+        if let TypeKind::Tuple(elem_types) = &subject_type.kind {
+            if patterns.len() != elem_types.len() {
+                self.report_error(
+                    format!(
+                        "Tuple pattern length mismatch: expected {}, got {}",
+                        elem_types.len(),
+                        patterns.len()
+                    ),
+                    span,
+                );
+                return;
+            }
+
+            let elem_types_cloned = elem_types.clone();
+            for (i, pat) in patterns.iter().enumerate() {
+                let elem_type = self.resolve_type_expression(&elem_types_cloned[i], context);
+                self.check_pattern(pat, &elem_type, context, span, is_mutable);
+            }
+        } else {
+            self.report_error(
+                format!(
+                    "Expected tuple type for tuple pattern, got {}",
+                    subject_type
+                ),
+                span,
+            );
+        }
+    }
+
+    /// Validates a member pattern (e.g., `Option.None`).
+    fn check_pattern_member(
+        &mut self,
+        parent: &Pattern,
+        member: &str,
+        subject_type: &Type,
+        span: Span,
+        context: &mut Context,
+    ) {
+        if let Pattern::Identifier(parent_name) = parent {
+            if parent_name == "Option"
+                && member == "None"
+                && matches!(subject_type.kind, TypeKind::Option(_))
+            {
+                return;
+            }
+
+            let enum_def_opt = self.resolve_visible_type(parent_name, context).cloned();
+            if let Some(TypeDefinition::Enum(enum_def)) = enum_def_opt {
+                if !enum_def.variants.contains_key(member) {
+                    self.report_error(
+                        format!("Enum '{}' has no variant '{}'", parent_name, member),
+                        span,
+                    );
                 }
-                let lit_type = self.infer_literal(lit);
-                if !self.are_compatible(subject_type, &lit_type, context) {
+                let expected_type = self.build_enum_member_type(parent_name, subject_type);
+                if !self.are_compatible(subject_type, &expected_type, context) {
                     self.report_error(
                         format!(
                             "Pattern type mismatch: expected {}, got {}",
-                            subject_type, lit_type
+                            subject_type, expected_type
                         ),
                         span,
                     );
                 }
+            } else {
+                self.report_error(format!("'{}' is not an Enum", parent_name), span);
             }
-            Pattern::Identifier(name) => {
-                // Bind variable (mutable when `var` was used)
-                context.define(
-                    name.clone(),
-                    SymbolInfo::new(
-                        subject_type.clone(),
-                        is_mutable,
-                        false,
-                        MemberVisibility::Public,
-                        self.current_module.clone(),
-                        None,
-                    ),
-                );
+        } else {
+            self.report_error(
+                "Complex member patterns are not supported".to_string(),
+                span,
+            );
+        }
+    }
+
+    /// Builds the expected enum type for a member pattern.
+    fn build_enum_member_type(&self, enum_name: &str, subject_type: &Type) -> Type {
+        if let TypeKind::Custom(sub_name, sub_args) = &subject_type.kind {
+            if sub_name == enum_name {
+                return make_type(TypeKind::Custom(enum_name.to_string(), sub_args.clone()));
             }
-            Pattern::Tuple(patterns) => {
-                if let TypeKind::Tuple(elem_types) = &subject_type.kind {
-                    if patterns.len() != elem_types.len() {
-                        self.report_error(
-                            format!(
-                                "Tuple pattern length mismatch: expected {}, got {}",
-                                elem_types.len(),
-                                patterns.len()
-                            ),
-                            span,
-                        );
-                        return;
-                    }
+        }
+        make_type(TypeKind::Custom(enum_name.to_string(), None))
+    }
 
-                    // Clone to avoid borrowing issues
-                    let elem_types_cloned = elem_types.clone();
+    /// Validates a regex pattern requires string subject.
+    fn check_pattern_regex(&mut self, subject_type: &Type, span: Span) {
+        if !matches!(subject_type.kind, TypeKind::String) {
+            self.report_error(
+                format!(
+                    "Regex pattern requires string subject, got {}",
+                    subject_type
+                ),
+                span,
+            );
+        }
+    }
 
-                    for (i, pat) in patterns.iter().enumerate() {
-                        let elem_type =
-                            self.resolve_type_expression(&elem_types_cloned[i], context);
-                        self.check_pattern(pat, &elem_type, context, span, is_mutable);
-                    }
+    /// Validates an enum variant pattern with bindings.
+    fn check_pattern_enum_variant(
+        &mut self,
+        parent_pattern: &Pattern,
+        bindings: &[Pattern],
+        subject_type: &Type,
+        span: Span,
+        is_mutable: bool,
+        context: &mut Context,
+    ) {
+        if matches!(subject_type.kind, TypeKind::Option(_))
+            && self.is_option_some_pattern(parent_pattern)
+        {
+            self.check_pattern_option_some(bindings, subject_type, span, is_mutable, context);
+            return;
+        }
+
+        let (enum_name, variant_name) = match self.extract_enum_variant_name(parent_pattern, span) {
+            Some((e, v)) => (e, v),
+            None => return,
+        };
+
+        self.check_enum_variant_bindings(
+            &enum_name,
+            &variant_name,
+            bindings,
+            subject_type,
+            span,
+            is_mutable,
+            context,
+        );
+    }
+
+    /// Checks if a pattern is an `Option.Some` variant.
+    fn is_option_some_pattern(&self, parent_pattern: &Pattern) -> bool {
+        match parent_pattern {
+            Pattern::Identifier(name) => name == "Some",
+            Pattern::Member(enum_pat, variant) => {
+                if let Pattern::Identifier(name) = &**enum_pat {
+                    name == "Option" && variant == "Some"
                 } else {
-                    self.report_error(
-                        format!(
-                            "Expected tuple type for tuple pattern, got {}",
-                            subject_type
-                        ),
-                        span,
-                    );
+                    false
                 }
             }
-            Pattern::Member(parent, member) => {
-                // Option.None pattern
-                if let Pattern::Identifier(parent_name) = &**parent {
-                    if parent_name == "Option"
-                        && member == "None"
-                        && matches!(subject_type.kind, TypeKind::Option(_))
-                    {
-                        return;
-                    }
-                }
-                if let Pattern::Identifier(parent_name) = &**parent {
-                    let enum_def_opt = self.resolve_visible_type(parent_name, context).cloned();
-                    if let Some(TypeDefinition::Enum(enum_def)) = enum_def_opt {
-                        if !enum_def.variants.contains_key(member) {
-                            self.report_error(
-                                format!("Enum '{}' has no variant '{}'", parent_name, member),
-                                span,
-                            );
-                        }
-                        // Check if subject type matches the enum type
-                        // We construct the expected type from the enum name, preserving generic args if present in subject
-                        let expected_type = if let TypeKind::Custom(sub_name, sub_args) =
-                            &subject_type.kind
-                        {
-                            if sub_name == parent_name {
-                                make_type(TypeKind::Custom(parent_name.clone(), sub_args.clone()))
-                            } else {
-                                make_type(TypeKind::Custom(parent_name.clone(), None))
-                            }
-                        } else {
-                            make_type(TypeKind::Custom(parent_name.clone(), None))
-                        };
-                        if !self.are_compatible(subject_type, &expected_type, context) {
-                            self.report_error(
-                                format!(
-                                    "Pattern type mismatch: expected {}, got {}",
-                                    subject_type, expected_type
-                                ),
-                                span,
-                            );
-                        }
-                    } else {
-                        self.report_error(format!("'{}' is not an Enum", parent_name), span);
-                    }
+            _ => false,
+        }
+    }
+
+    /// Checks the bindings for an `Option.Some(x)` pattern.
+    fn check_pattern_option_some(
+        &mut self,
+        bindings: &[Pattern],
+        subject_type: &Type,
+        span: Span,
+        is_mutable: bool,
+        context: &mut Context,
+    ) {
+        if bindings.len() != 1 {
+            self.report_error(
+                format!("Some pattern expects 1 binding, got {}", bindings.len()),
+                span,
+            );
+            return;
+        }
+        if let TypeKind::Option(inner) = &subject_type.kind {
+            let inner_type = inner.as_ref().clone();
+            self.check_pattern(&bindings[0], &inner_type, context, span, is_mutable);
+        }
+    }
+
+    /// Extracts enum and variant names from a parent pattern.
+    fn extract_enum_variant_name(
+        &mut self,
+        parent_pattern: &Pattern,
+        span: Span,
+    ) -> Option<(String, String)> {
+        match parent_pattern {
+            Pattern::Member(enum_pat, variant) => {
+                if let Pattern::Identifier(name) = &**enum_pat {
+                    Some((name.clone(), variant.clone()))
                 } else {
                     self.report_error(
                         "Complex member patterns are not supported".to_string(),
                         span,
                     );
+                    None
                 }
             }
-            Pattern::Regex(_) => {
-                if !matches!(subject_type.kind, TypeKind::String) {
+            Pattern::Identifier(name) => {
+                self.report_error(
+                    format!("Expected enum variant pattern like EnumName.{}", name),
+                    span,
+                );
+                None
+            }
+            _ => {
+                self.report_error("Invalid enum variant pattern".to_string(), span);
+                None
+            }
+        }
+    }
+
+    /// Validates enum variant bindings and checks type compatibility.
+    #[allow(clippy::too_many_arguments)]
+    fn check_enum_variant_bindings(
+        &mut self,
+        enum_name: &str,
+        variant_name: &str,
+        bindings: &[Pattern],
+        subject_type: &Type,
+        span: Span,
+        is_mutable: bool,
+        context: &mut Context,
+    ) {
+        let enum_def_opt = self.resolve_visible_type(enum_name, context).cloned();
+        if let Some(TypeDefinition::Enum(enum_def)) = enum_def_opt {
+            if let Some(variant_types) = enum_def.variants.get(variant_name) {
+                if bindings.len() != variant_types.len() {
                     self.report_error(
                         format!(
-                            "Regex pattern requires string subject, got {}",
-                            subject_type
+                            "Enum variant '{}' expects {} bindings, got {}",
+                            variant_name,
+                            variant_types.len(),
+                            bindings.len()
+                        ),
+                        span,
+                    );
+                    return;
+                }
+
+                let variant_types_cloned = variant_types.clone();
+                let generic_mapping =
+                    self.build_generic_mapping(enum_name, subject_type, &enum_def);
+
+                for (binding, var_type) in bindings.iter().zip(variant_types_cloned.iter()) {
+                    let resolved_type = if generic_mapping.is_empty() {
+                        var_type.clone()
+                    } else {
+                        self.substitute_type(var_type, &generic_mapping)
+                    };
+                    self.check_pattern(binding, &resolved_type, context, span, is_mutable);
+                }
+
+                let expected_type = self.build_enum_variant_type(enum_name, subject_type);
+                if !self.are_compatible(subject_type, &expected_type, context) {
+                    self.report_error(
+                        format!(
+                            "Pattern type mismatch: expected {}, got {}",
+                            subject_type, expected_type
                         ),
                         span,
                     );
                 }
+            } else {
+                self.report_error(
+                    format!("Enum '{}' has no variant '{}'", enum_name, variant_name),
+                    span,
+                );
             }
-            Pattern::Default => {}
-            Pattern::EnumVariant(parent_pattern, bindings) => {
-                // Handle Option patterns: Some(x) or Option.Some(x)
-                if matches!(subject_type.kind, TypeKind::Option(_)) {
-                    let is_option_some = match &**parent_pattern {
-                        // Some(x) — bare identifier
-                        Pattern::Identifier(name) => name == "Some",
-                        // Option.Some(x) — qualified
-                        Pattern::Member(enum_pat, variant) => {
-                            if let Pattern::Identifier(name) = &**enum_pat {
-                                name == "Option" && variant == "Some"
-                            } else {
-                                false
-                            }
-                        }
-                        _ => false,
-                    };
-                    if is_option_some {
-                        if bindings.len() != 1 {
-                            self.report_error(
-                                format!("Some pattern expects 1 binding, got {}", bindings.len()),
-                                span,
-                            );
-                            return;
-                        }
-                        if let TypeKind::Option(inner) = &subject_type.kind {
-                            let inner_type = inner.as_ref().clone();
-                            self.check_pattern(
-                                &bindings[0],
-                                &inner_type,
-                                context,
-                                span,
-                                is_mutable,
-                            );
-                        }
-                        return;
-                    }
-                }
+        } else {
+            self.report_error(format!("'{}' is not an Enum", enum_name), span);
+        }
+    }
 
-                // Extract enum name and variant name from parent pattern
-                let (enum_name, variant_name) = match &**parent_pattern {
-                    Pattern::Member(enum_pat, variant) => {
-                        if let Pattern::Identifier(name) = &**enum_pat {
-                            (name.clone(), variant.clone())
-                        } else {
-                            self.report_error(
-                                "Complex member patterns are not supported".to_string(),
-                                span,
-                            );
-                            return;
-                        }
-                    }
-                    Pattern::Identifier(name) => {
-                        // Could be just a variant if subject type is known enum
-                        self.report_error(
-                            format!("Expected enum variant pattern like EnumName.{}", name),
-                            span,
-                        );
-                        return;
-                    }
-                    _ => {
-                        self.report_error("Invalid enum variant pattern".to_string(), span);
-                        return;
-                    }
-                };
-
-                // Look up enum definition (must be visible in scope)
-                let enum_def_opt = self.resolve_visible_type(&enum_name, context).cloned();
-                if let Some(TypeDefinition::Enum(enum_def)) = enum_def_opt {
-                    if let Some(variant_types) = enum_def.variants.get(&variant_name) {
-                        // Check binding count matches
-                        if bindings.len() != variant_types.len() {
-                            self.report_error(
-                                format!(
-                                    "Enum variant '{}' expects {} bindings, got {}",
-                                    variant_name,
-                                    variant_types.len(),
-                                    bindings.len()
-                                ),
-                                span,
-                            );
-                            return;
-                        }
-
-                        // Clone to avoid borrowing issues
-                        let variant_types_cloned = variant_types.clone();
-
-                        // Build generic mapping from subject_type's generic args
-                        let generic_mapping: HashMap<String, Type> =
-                            if let TypeKind::Custom(_, Some(ref args)) = &subject_type.kind {
-                                if let Some(ref generics) = enum_def.generics {
-                                    generics
-                                        .iter()
-                                        .zip(args.iter())
-                                        .filter_map(|(g, arg_expr)| {
-                                            self.extract_type_from_expression(arg_expr)
-                                                .ok()
-                                                .map(|ty| (g.name.clone(), ty))
-                                        })
-                                        .collect()
-                                } else {
-                                    HashMap::new()
-                                }
-                            } else {
-                                HashMap::new()
-                            };
-
-                        // Bind each pattern with its type (substituting generics if needed)
-                        for (binding, var_type) in bindings.iter().zip(variant_types_cloned.iter())
-                        {
-                            let resolved_type = if generic_mapping.is_empty() {
-                                var_type.clone()
-                            } else {
-                                self.substitute_type(var_type, &generic_mapping)
-                            };
-                            self.check_pattern(binding, &resolved_type, context, span, is_mutable);
-                        }
-
-                        // Check if subject type matches the enum type
-                        // Preserve generic args from subject_type
-                        let generic_args =
-                            if let TypeKind::Custom(sub_name, ref sub_args) = &subject_type.kind {
-                                if sub_name == &enum_name {
-                                    sub_args.clone()
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            };
-                        let expected_type =
-                            make_type(TypeKind::Custom(enum_name.clone(), generic_args));
-                        if !self.are_compatible(subject_type, &expected_type, context) {
-                            self.report_error(
-                                format!(
-                                    "Pattern type mismatch: expected {}, got {}",
-                                    subject_type, expected_type
-                                ),
-                                span,
-                            );
-                        }
-                    } else {
-                        self.report_error(
-                            format!("Enum '{}' has no variant '{}'", enum_name, variant_name),
-                            span,
-                        );
-                    }
-                } else {
-                    self.report_error(format!("'{}' is not an Enum", enum_name), span);
-                }
+    /// Builds a generic type mapping from subject type and enum definition.
+    fn build_generic_mapping(
+        &mut self,
+        _enum_name: &str,
+        subject_type: &Type,
+        enum_def: &crate::type_checker::context::EnumDefinition,
+    ) -> HashMap<String, Type> {
+        if let TypeKind::Custom(_, Some(ref args)) = &subject_type.kind {
+            if let Some(ref generics) = enum_def.generics {
+                return generics
+                    .iter()
+                    .zip(args.iter())
+                    .filter_map(|(g, arg_expr)| {
+                        self.extract_type_from_expression(arg_expr)
+                            .ok()
+                            .map(|ty| (g.name.clone(), ty))
+                    })
+                    .collect();
             }
         }
+        HashMap::new()
+    }
+
+    /// Builds the expected enum type for a variant pattern.
+    fn build_enum_variant_type(&self, enum_name: &str, subject_type: &Type) -> Type {
+        let generic_args = if let TypeKind::Custom(sub_name, ref sub_args) = &subject_type.kind {
+            if sub_name == enum_name {
+                sub_args.clone()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        make_type(TypeKind::Custom(enum_name.to_string(), generic_args))
     }
 }

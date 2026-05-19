@@ -61,94 +61,124 @@ impl TypeChecker {
         span: Span,
         context: &mut Context,
     ) -> Type {
-        if name == "None" {
-            return ast_factory::make_type(TypeKind::Option(Box::new(ast_factory::make_type(
-                TypeKind::Void,
-            ))));
-        }
-        if name == "Some" {
-            // fn<T>(value T): T?
-            let t_param = ast_factory::make_type(TypeKind::Generic(
-                "T".to_string(),
-                None,
-                TypeDeclarationKind::None,
-            ));
-            let t_expr = ast_factory::type_expr_non_null(t_param.clone());
-
-            let return_type = ast_factory::make_type(TypeKind::Option(Box::new(t_param)));
-
-            return ast_factory::make_type(TypeKind::Function(Box::new(FunctionTypeData {
-                generics: Some(vec![t_expr.clone()]),
-                params: vec![Parameter {
-                    name: "value".to_string(),
-                    typ: Box::new(t_expr),
-                    guard: None,
-                    default_value: None,
-                    is_out: false,
-                }],
-                return_type: Some(Box::new(ast_factory::type_expr_non_null(return_type))),
-            })));
-        }
-        if name == "Ok" {
-            // fn<T>(value T): result<T, Void>
-            let t_param = ast_factory::make_type(TypeKind::Generic(
-                "T".to_string(),
-                None,
-                TypeDeclarationKind::None,
-            ));
-            let t_expr = ast_factory::type_expr_non_null(t_param.clone());
-            let void_expr = ast_factory::type_expr_non_null(ast_factory::make_type(TypeKind::Void));
-
-            let return_type = ast_factory::make_type(TypeKind::Custom(
-                "Result".to_string(),
-                Some(vec![t_expr.clone(), void_expr]),
-            ));
-
-            return ast_factory::make_type(TypeKind::Function(Box::new(FunctionTypeData {
-                generics: Some(vec![t_expr.clone()]),
-                params: vec![Parameter {
-                    name: "value".to_string(),
-                    typ: Box::new(t_expr),
-                    guard: None,
-                    default_value: None,
-                    is_out: false,
-                }],
-                return_type: Some(Box::new(ast_factory::type_expr_non_null(return_type))),
-            })));
-        }
-        if name == "Err" {
-            // fn<E>(error E): result<Void, E>
-            let e_param = ast_factory::make_type(TypeKind::Generic(
-                "E".to_string(),
-                None,
-                TypeDeclarationKind::None,
-            ));
-            let e_expr = ast_factory::type_expr_non_null(e_param.clone());
-            let void_expr = ast_factory::type_expr_non_null(ast_factory::make_type(TypeKind::Void));
-
-            let return_type = ast_factory::make_type(TypeKind::Custom(
-                "Result".to_string(),
-                Some(vec![void_expr, e_expr.clone()]),
-            ));
-
-            return ast_factory::make_type(TypeKind::Function(Box::new(FunctionTypeData {
-                generics: Some(vec![e_expr.clone()]),
-                params: vec![Parameter {
-                    name: "error".to_string(),
-                    typ: Box::new(e_expr),
-                    guard: None,
-                    default_value: None,
-                    is_out: false,
-                }],
-                return_type: Some(Box::new(ast_factory::type_expr_non_null(return_type))),
-            })));
+        if let Some(ty) = self.try_builtin_identifier(name) {
+            return ty;
         }
 
-        // Handle 'self' keyword - refers to current class instance
         if name == "self" {
             return self.infer_self(span, context);
         }
 
+        if let Some(ty) = self.try_variable_lookup(name, span, context) {
+            return ty;
+        }
+
+        if let Some(ty) = self.try_type_constructor(name) {
+            return ty;
+        }
+
+        if let Some(ty) = self.try_class_member_suggestion(name, span, context) {
+            return ty;
+        }
+
+        self.report_undefined_identifier_error(name, span, context);
+        ast_factory::make_type(TypeKind::Error)
+    }
+
+    fn try_builtin_identifier(&self, name: &str) -> Option<Type> {
+        match name {
+            "None" => Some(ast_factory::make_type(TypeKind::Option(Box::new(
+                ast_factory::make_type(TypeKind::Void),
+            )))),
+            "Some" => Some(self.make_some_type()),
+            "Ok" => Some(self.make_ok_type()),
+            "Err" => Some(self.make_err_type()),
+            _ => None,
+        }
+    }
+
+    fn make_some_type(&self) -> Type {
+        let t_param = ast_factory::make_type(TypeKind::Generic(
+            "T".to_string(),
+            None,
+            TypeDeclarationKind::None,
+        ));
+        let t_expr = ast_factory::type_expr_non_null(t_param.clone());
+        let return_type = ast_factory::make_type(TypeKind::Option(Box::new(t_param)));
+
+        ast_factory::make_type(TypeKind::Function(Box::new(FunctionTypeData {
+            generics: Some(vec![t_expr.clone()]),
+            params: vec![Parameter {
+                name: "value".to_string(),
+                typ: Box::new(t_expr),
+                guard: None,
+                default_value: None,
+                is_out: false,
+            }],
+            return_type: Some(Box::new(ast_factory::type_expr_non_null(return_type))),
+        })))
+    }
+
+    fn make_ok_type(&self) -> Type {
+        let t_param = ast_factory::make_type(TypeKind::Generic(
+            "T".to_string(),
+            None,
+            TypeDeclarationKind::None,
+        ));
+        let t_expr = ast_factory::type_expr_non_null(t_param.clone());
+        let void_expr = ast_factory::type_expr_non_null(ast_factory::make_type(TypeKind::Void));
+
+        let return_type = ast_factory::make_type(TypeKind::Custom(
+            "Result".to_string(),
+            Some(vec![t_expr.clone(), void_expr]),
+        ));
+
+        ast_factory::make_type(TypeKind::Function(Box::new(FunctionTypeData {
+            generics: Some(vec![t_expr.clone()]),
+            params: vec![Parameter {
+                name: "value".to_string(),
+                typ: Box::new(t_expr),
+                guard: None,
+                default_value: None,
+                is_out: false,
+            }],
+            return_type: Some(Box::new(ast_factory::type_expr_non_null(return_type))),
+        })))
+    }
+
+    fn make_err_type(&self) -> Type {
+        let e_param = ast_factory::make_type(TypeKind::Generic(
+            "E".to_string(),
+            None,
+            TypeDeclarationKind::None,
+        ));
+        let e_expr = ast_factory::type_expr_non_null(e_param.clone());
+        let void_expr = ast_factory::type_expr_non_null(ast_factory::make_type(TypeKind::Void));
+
+        let return_type = ast_factory::make_type(TypeKind::Custom(
+            "Result".to_string(),
+            Some(vec![void_expr, e_expr.clone()]),
+        ));
+
+        ast_factory::make_type(TypeKind::Function(Box::new(FunctionTypeData {
+            generics: Some(vec![e_expr.clone()]),
+            params: vec![Parameter {
+                name: "error".to_string(),
+                typ: Box::new(e_expr),
+                guard: None,
+                default_value: None,
+                is_out: false,
+            }],
+            return_type: Some(Box::new(ast_factory::type_expr_non_null(return_type))),
+        })))
+    }
+
+    fn try_variable_lookup(
+        &mut self,
+        name: &str,
+        span: Span,
+        context: &mut Context,
+    ) -> Option<Type> {
         let info_opt = context
             .resolve_info(name)
             .cloned()
@@ -164,29 +194,38 @@ impl TypeChecker {
                     "Variable"
                 };
                 self.report_error(format!("{} '{}' is not visible", kind, name), span);
-                return ast_factory::make_type(TypeKind::Error);
+                return Some(ast_factory::make_type(TypeKind::Error));
             }
 
-            // Linearity Check: Ensure linear resources are used exactly once
             if let TypeKind::Linear(_) = &info.ty.kind {
                 if context.mark_consumed(name) {
                     self.report_error(format!("Use of moved value: '{}'", name), span);
-                    return ast_factory::make_type(TypeKind::Error);
+                    return Some(ast_factory::make_type(TypeKind::Error));
                 }
             }
 
-            return info.ty;
+            return Some(info.ty);
         }
 
-        // Check if it is a known type (struct/enum/alias) being used as a value (constructor/meta)
+        None
+    }
+
+    fn try_type_constructor(&self, name: &str) -> Option<Type> {
         if self.is_type_visible(name) {
-            return ast_factory::make_type(TypeKind::Meta(Box::new(ast_factory::make_type(
-                TypeKind::Custom(name.to_string(), None),
-            ))));
+            Some(ast_factory::make_type(TypeKind::Meta(Box::new(
+                ast_factory::make_type(TypeKind::Custom(name.to_string(), None)),
+            ))))
+        } else {
+            None
         }
+    }
 
-        // If we're inside a class method, check if the name matches a method or field
-        // on the current class and suggest `self.name()` or `self.name`.
+    fn try_class_member_suggestion(
+        &mut self,
+        name: &str,
+        span: Span,
+        context: &Context,
+    ) -> Option<Type> {
         if let Some(class_name) = &context.current_class {
             if let Some((member_kind, hint)) = self.find_self_member_hint(name, class_name) {
                 self.report_error_with_help(
@@ -194,14 +233,13 @@ impl TypeChecker {
                     span,
                     hint,
                 );
-                return ast_factory::make_type(TypeKind::Error);
+                return Some(ast_factory::make_type(TypeKind::Error));
             }
         }
+        None
+    }
 
-        // Determine what kind of entity the user likely intended.
-        // Types that exist but aren't imported get a specific message.
-        // Names starting with uppercase are likely types.
-        // Everything else defaults to "variable".
+    fn report_undefined_identifier_error(&mut self, name: &str, span: Span, context: &Context) {
         let entity_kind = if self.global_type_definitions.contains_key(name)
             || name.starts_with(|c: char| c.is_uppercase())
         {
@@ -229,7 +267,6 @@ impl TypeChecker {
         } else {
             self.report_error(format!("Undefined {}: {}", entity_kind, name), span);
         }
-        ast_factory::make_type(TypeKind::Error)
     }
 
     /// Infers the type of a 'self' expression.

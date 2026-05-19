@@ -45,6 +45,7 @@
 use crate::ast::factory::make_type;
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::*;
+use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, SymbolInfo};
 use crate::type_checker::TypeChecker;
 
@@ -60,11 +61,52 @@ impl TypeChecker {
     ) -> Type {
         context.enter_scope();
 
+        self.resolve_lambda_generics(generics, context);
+        let expected_return_type = self.setup_return_type_context(return_type_expr, context);
+        let old_loop_depth = context.loop_depth;
+        context.loop_depth = 0;
+
+        self.define_lambda_parameters(params, context);
+
+        let implicit_return_type = self.infer_lambda_body(body, context);
+        let final_return_type_expr = self.finalize_lambda_return_type(
+            return_type_expr,
+            expected_return_type,
+            implicit_return_type,
+            body,
+            context,
+        );
+
+        if return_type_expr.is_some() {
+            context.return_types.pop();
+            context.inferred_return_types.pop();
+        }
+
+        context.loop_depth = old_loop_depth;
+        context.exit_scope();
+
+        make_type(TypeKind::Function(Box::new(FunctionTypeData {
+            generics: generics.clone(),
+            params: params.to_vec(),
+            return_type: final_return_type_expr,
+        })))
+    }
+
+    fn resolve_lambda_generics(
+        &mut self,
+        generics: &Option<Vec<Expression>>,
+        context: &mut Context,
+    ) {
         if let Some(gens) = generics {
             self.define_generics(gens, context);
         }
+    }
 
-        // Determine expected return type
+    fn setup_return_type_context(
+        &mut self,
+        return_type_expr: &Option<Box<Expression>>,
+        context: &mut Context,
+    ) -> Option<Type> {
         let expected_return_type = return_type_expr
             .as_ref()
             .map(|rt_expr| self.resolve_type_expression(rt_expr, context));
@@ -73,14 +115,14 @@ impl TypeChecker {
             context.return_types.push(rt.clone());
             context.inferred_return_types.push(None);
         } else {
-            context.return_types.push(make_type(TypeKind::Void)); // Placeholder
+            context.return_types.push(make_type(TypeKind::Void));
             context.inferred_return_types.push(Some(Vec::new()));
         }
 
-        // Reset loop depth for function body as it's a new context
-        let old_loop_depth = context.loop_depth;
-        context.loop_depth = 0;
+        expected_return_type
+    }
 
+    fn define_lambda_parameters(&mut self, params: &[Parameter], context: &mut Context) {
         for param in params {
             let param_type = self.resolve_type_expression(&param.typ, context);
             context.define(
@@ -93,11 +135,12 @@ impl TypeChecker {
                     self.current_module.clone(),
                     None,
                 ),
-            ); // Parameters are immutable by default
+            );
         }
+    }
 
-        // Check body and infer implicit return type
-        let implicit_return_type = match &body.node {
+    fn infer_lambda_body(&mut self, body: &Statement, context: &mut Context) -> Type {
+        match &body.node {
             StatementKind::Block(stmts) => {
                 context.enter_scope();
                 let mut last_type = make_type(TypeKind::Void);
@@ -120,43 +163,53 @@ impl TypeChecker {
                 self.check_statement(body, context);
                 make_type(TypeKind::Void)
             }
-        };
+        }
+    }
 
-        // Finalize return type
-        let final_return_type_expr = if let Some(expected) = expected_return_type {
-            let is_void_implicit = matches!(implicit_return_type.kind, TypeKind::Void);
-            let is_void_expected = matches!(expected.kind, TypeKind::Void);
-            let is_error = matches!(expected.kind, TypeKind::Error)
-                || matches!(implicit_return_type.kind, TypeKind::Error);
+    fn finalize_lambda_return_type(
+        &mut self,
+        return_type_expr: &Option<Box<Expression>>,
+        expected_return_type: Option<Type>,
+        implicit_return_type: Type,
+        body: &Statement,
+        context: &mut Context,
+    ) -> Option<Box<Expression>> {
+        if let Some(expected) = expected_return_type {
+            self.validate_explicit_return_type(&expected, &implicit_return_type, body, context);
+            return_type_expr.clone()
+        } else {
+            let collected_returns = context
+                .inferred_return_types
+                .pop()
+                .unwrap_or_else(|| Some(Vec::new()))
+                .unwrap_or_default();
+            context.return_types.pop();
 
-            if is_error {
-                // Suppress cascade: a prior error already reported the root cause
-            } else if !is_void_expected && is_void_implicit {
-                // Check if the last statement was a return statement?
-                let ends_with_return = match &body.node {
-                    StatementKind::Block(stmts) => {
-                        if let Some(last) = stmts.last() {
-                            matches!(last.node, StatementKind::Return(_))
-                        } else {
-                            false
-                        }
-                    }
-                    StatementKind::Return(_) => true,
-                    _ => false,
-                };
+            let candidate =
+                self.unify_inferred_returns(implicit_return_type, collected_returns, context);
+            Some(Box::new(self.create_type_expression(candidate)))
+        }
+    }
 
-                if !ends_with_return {
-                    self.report_error(
-                        format!(
-                            "Invalid return type: expected {}, got {}",
-                            expected, implicit_return_type
-                        ),
-                        body.span,
-                    );
-                }
-            } else if !self.are_compatible(&expected, &implicit_return_type, context)
-                && !matches!(expected.kind, TypeKind::Void)
-            {
+    fn validate_explicit_return_type(
+        &mut self,
+        expected: &Type,
+        implicit_return_type: &Type,
+        body: &Statement,
+        context: &mut Context,
+    ) {
+        let is_void_implicit = matches!(implicit_return_type.kind, TypeKind::Void);
+        let is_void_expected = matches!(expected.kind, TypeKind::Void);
+        let is_error = matches!(expected.kind, TypeKind::Error)
+            || matches!(implicit_return_type.kind, TypeKind::Error);
+
+        if is_error {
+            return;
+        }
+
+        if !is_void_expected && is_void_implicit {
+            let ends_with_return = self.body_ends_with_return(body);
+            if !ends_with_return {
                 self.report_error(
                     format!(
                         "Invalid return type: expected {}, got {}",
@@ -165,36 +218,44 @@ impl TypeChecker {
                     body.span,
                 );
             }
-            return_type_expr.clone()
-        } else {
-            // Inference
-            let collected_returns = context
-                .inferred_return_types
-                .pop()
-                .unwrap_or_else(|| {
-                    // Should not happen if stack is balanced
-                    Some(Vec::new())
-                })
-                .unwrap_or_default();
-            context.return_types.pop(); // Pop the placeholder
+        } else if !self.are_compatible(expected, implicit_return_type, context)
+            && !matches!(expected.kind, TypeKind::Void)
+        {
+            self.report_error(
+                format!(
+                    "Invalid return type: expected {}, got {}",
+                    expected, implicit_return_type
+                ),
+                body.span,
+            );
+        }
+    }
 
-            let mut candidate = implicit_return_type;
-
-            for (ret_ty, ret_span) in collected_returns {
-                if matches!(candidate.kind, TypeKind::Void) {
-                    candidate = ret_ty;
-                } else if !matches!(ret_ty.kind, TypeKind::Void) {
-                    if !self.are_compatible(&candidate, &ret_ty, context) {
-                        self.report_error(
-                            format!(
-                                "Incompatible return types in lambda: {} and {}",
-                                candidate, ret_ty
-                            ),
-                            ret_span,
-                        );
-                    }
+    fn body_ends_with_return(&self, body: &Statement) -> bool {
+        match &body.node {
+            StatementKind::Block(stmts) => {
+                if let Some(last) = stmts.last() {
+                    matches!(last.node, StatementKind::Return(_))
                 } else {
-                    // candidate is not Void, ret_ty is Void.
+                    false
+                }
+            }
+            StatementKind::Return(_) => true,
+            _ => false,
+        }
+    }
+
+    fn unify_inferred_returns(
+        &mut self,
+        mut candidate: Type,
+        collected_returns: Vec<(Type, Span)>,
+        context: &mut Context,
+    ) -> Type {
+        for (ret_ty, ret_span) in collected_returns {
+            if matches!(candidate.kind, TypeKind::Void) {
+                candidate = ret_ty;
+            } else if !matches!(ret_ty.kind, TypeKind::Void) {
+                if !self.are_compatible(&candidate, &ret_ty, context) {
                     self.report_error(
                         format!(
                             "Incompatible return types in lambda: {} and {}",
@@ -203,23 +264,16 @@ impl TypeChecker {
                         ret_span,
                     );
                 }
+            } else {
+                self.report_error(
+                    format!(
+                        "Incompatible return types in lambda: {} and {}",
+                        candidate, ret_ty
+                    ),
+                    ret_span,
+                );
             }
-
-            Some(Box::new(self.create_type_expression(candidate)))
-        };
-
-        if return_type_expr.is_some() {
-            context.return_types.pop();
-            context.inferred_return_types.pop();
         }
-
-        context.loop_depth = old_loop_depth;
-        context.exit_scope();
-
-        make_type(TypeKind::Function(Box::new(FunctionTypeData {
-            generics: generics.clone(),
-            params: params.to_vec(),
-            return_type: final_return_type_expr,
-        })))
+        candidate
     }
 }

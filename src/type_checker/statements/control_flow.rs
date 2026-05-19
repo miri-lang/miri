@@ -80,13 +80,20 @@ impl TypeChecker {
             );
         }
 
-        // Snapshot state before branching
         let start_state = context.snapshot_linear_state();
+        let then_state = self.check_if_then_branch(then_block, context);
+        context.restore_linear_state(start_state);
+        let else_state = self.check_if_else_branch(else_block, context);
+        self.validate_and_merge_if_branches(&then_state, &else_state, cond.span, context);
+    }
 
-        // Check Then block
+    fn check_if_then_branch(
+        &mut self,
+        then_block: &Statement,
+        context: &mut Context,
+    ) -> Vec<Vec<(String, bool)>> {
         context.enter_scope();
         self.check_statement(then_block, context);
-        // Check for unconsumed locals in then block
         let unconsumed_then = context.get_unconsumed_linear_vars();
         for (name, span) in unconsumed_then {
             self.report_error(
@@ -95,12 +102,14 @@ impl TypeChecker {
             );
         }
         context.exit_scope();
+        context.snapshot_linear_state()
+    }
 
-        let then_state = context.snapshot_linear_state();
-
-        // Restore state for Else block
-        context.restore_linear_state(start_state);
-
+    fn check_if_else_branch(
+        &mut self,
+        else_block: &Option<Box<Statement>>,
+        context: &mut Context,
+    ) -> Vec<Vec<(String, bool)>> {
         if let Some(else_stmt) = else_block {
             context.enter_scope();
             self.check_statement(else_stmt, context);
@@ -113,12 +122,16 @@ impl TypeChecker {
             }
             context.exit_scope();
         }
+        context.snapshot_linear_state()
+    }
 
-        let else_state = context.snapshot_linear_state();
-
-        // Merge and Validate
-        // For a linear variable defined outside implementation of the blocks:
-        // If it was consumed in one branch, it must be consumed in the other.
+    fn validate_and_merge_if_branches(
+        &mut self,
+        then_state: &[Vec<(String, bool)>],
+        else_state: &[Vec<(String, bool)>],
+        cond_span: Span,
+        context: &mut Context,
+    ) {
         for (scope_idx, scope) in then_state.iter().enumerate() {
             if scope_idx >= else_state.len() {
                 break;
@@ -126,28 +139,20 @@ impl TypeChecker {
             let else_scope = &else_state[scope_idx];
 
             for (name, consumed_then) in scope {
-                // Find corresponding var in else_scope
                 if let Some((_, consumed_else)) = else_scope.iter().find(|(n, _)| n == name) {
                     if *consumed_then != *consumed_else {
-                        // We found a mismatch.
-                        // We need a span to report the error.
-                        // Ideally we point to the if statement or the variable.
-                        // We don't have the variable span handy easily here.
-                        // Use 'cond.span' as a proxy for the if statement.
                         self.report_error(
                              format!(
                                  "Linear variable '{}' is consumed in one branch but not the other. Linear variables must be consistently consumed.",
                                  name
                              ),
-                             cond.span,
+                             cond_span,
                          );
                     }
                 }
             }
         }
-
-        // Finalize state: If consistent, set to consumed (which is true in both).
-        context.restore_linear_state(then_state);
+        context.restore_linear_state(then_state.to_vec());
     }
 
     pub(crate) fn check_while(
@@ -216,176 +221,193 @@ impl TypeChecker {
         span: Span,
         context: &mut Context,
     ) {
-        if decls.len() == 1 {
-            let decl = &decls[0];
-            let var_type = if let Some(type_expr) = &decl.typ {
-                let declared_type = self.resolve_type_expression(type_expr, context);
-                if !self.are_compatible(&declared_type, element_type, context) {
-                    self.report_error(
-                        format!(
-                            "Type mismatch for loop variable '{}': expected {}, got {}",
-                            decl.name, declared_type, element_type
-                        ),
-                        type_expr.span,
-                    );
-                }
-                declared_type
-            } else {
-                element_type.clone()
-            };
-            let is_mutable = match decl.declaration_type {
-                VariableDeclarationType::Mutable => true,
-                VariableDeclarationType::Immutable | VariableDeclarationType::Constant => false,
-            };
-            context.define(
-                decl.name.clone(),
-                SymbolInfo::new(
-                    var_type,
-                    is_mutable,
-                    false,
-                    MemberVisibility::Public,
-                    self.current_module.clone(),
-                    None,
-                ),
-            );
-        } else if decls.len() == 2 {
-            if let TypeKind::Tuple(exprs) = &element_type.kind {
-                if exprs.len() == 2 {
-                    let key_type = self
-                        .extract_type_from_expression(&exprs[0])
-                        .unwrap_or(make_type(TypeKind::Error));
-                    let val_type = self
-                        .extract_type_from_expression(&exprs[1])
-                        .unwrap_or(make_type(TypeKind::Error));
+        match decls.len() {
+            1 => self.bind_single_loop_variable(&decls[0], element_type, context),
+            2 => self.bind_pair_loop_variables(decls, element_type, iterable_type, span, context),
+            _ => self.report_error("Invalid number of loop variables".to_string(), span),
+        }
+    }
 
-                    let is_mutable_0 = match decls[0].declaration_type {
-                        VariableDeclarationType::Mutable => true,
-                        VariableDeclarationType::Immutable | VariableDeclarationType::Constant => {
-                            false
-                        }
-                    };
-                    let is_mutable_1 = match decls[1].declaration_type {
-                        VariableDeclarationType::Mutable => true,
-                        VariableDeclarationType::Immutable | VariableDeclarationType::Constant => {
-                            false
-                        }
-                    };
-
-                    context.define(
-                        decls[0].name.clone(),
-                        SymbolInfo::new(
-                            key_type,
-                            is_mutable_0,
-                            false,
-                            MemberVisibility::Public,
-                            self.current_module.clone(),
-                            None,
-                        ),
-                    );
-                    context.define(
-                        decls[1].name.clone(),
-                        SymbolInfo::new(
-                            val_type,
-                            is_mutable_1,
-                            false,
-                            MemberVisibility::Public,
-                            self.current_module.clone(),
-                            None,
-                        ),
-                    );
-                } else {
-                    self.report_error(
-                        "Destructuring mismatch: expected tuple of size 2".to_string(),
-                        span,
-                    );
-                }
-            } else if matches!(&iterable_type.kind, TypeKind::Custom(_name, _) if iterable_type.kind.as_builtin_collection() == Some(BuiltinCollectionKind::Map))
-            {
-                // For Map iterables, `for k, v in map` means: k = key, v = value.
-                let val_type = match &iterable_type.kind {
-                    TypeKind::Map(_, _) => {
-                        unreachable!("collection types are normalized to Custom before this point")
-                    }
-                    TypeKind::Custom(name, Some(args))
-                        if BuiltinCollectionKind::from_name(name)
-                            == Some(BuiltinCollectionKind::Map)
-                            && args.len() == 2 =>
-                    {
-                        self.extract_type_from_expression(&args[1])
-                            .unwrap_or_else(|_| make_type(TypeKind::Error))
-                    }
-                    _ => make_type(TypeKind::Error),
-                };
-
-                let is_mutable_0 = match decls[0].declaration_type {
-                    VariableDeclarationType::Mutable => true,
-                    VariableDeclarationType::Immutable | VariableDeclarationType::Constant => false,
-                };
-                let is_mutable_1 = match decls[1].declaration_type {
-                    VariableDeclarationType::Mutable => true,
-                    VariableDeclarationType::Immutable | VariableDeclarationType::Constant => false,
-                };
-
-                context.define(
-                    decls[0].name.clone(),
-                    SymbolInfo::new(
-                        element_type.clone(),
-                        is_mutable_0,
-                        false,
-                        MemberVisibility::Public,
-                        self.current_module.clone(),
-                        None,
+    fn bind_single_loop_variable(
+        &mut self,
+        decl: &VariableDeclaration,
+        element_type: &Type,
+        context: &mut Context,
+    ) {
+        let var_type = if let Some(type_expr) = &decl.typ {
+            let declared_type = self.resolve_type_expression(type_expr, context);
+            if !self.are_compatible(&declared_type, element_type, context) {
+                self.report_error(
+                    format!(
+                        "Type mismatch for loop variable '{}': expected {}, got {}",
+                        decl.name, declared_type, element_type
                     ),
-                );
-                context.define(
-                    decls[1].name.clone(),
-                    SymbolInfo::new(
-                        val_type,
-                        is_mutable_1,
-                        false,
-                        MemberVisibility::Public,
-                        self.current_module.clone(),
-                        None,
-                    ),
-                );
-            } else {
-                // For non-tuple iterables (List, Array, String), the pattern
-                // `for x, idx in list` means: x = element, idx = loop index (int).
-                let is_mutable_0 = match decls[0].declaration_type {
-                    VariableDeclarationType::Mutable => true,
-                    VariableDeclarationType::Immutable | VariableDeclarationType::Constant => false,
-                };
-                let is_mutable_1 = match decls[1].declaration_type {
-                    VariableDeclarationType::Mutable => true,
-                    VariableDeclarationType::Immutable | VariableDeclarationType::Constant => false,
-                };
-
-                context.define(
-                    decls[0].name.clone(),
-                    SymbolInfo::new(
-                        element_type.clone(),
-                        is_mutable_0,
-                        false,
-                        MemberVisibility::Public,
-                        self.current_module.clone(),
-                        None,
-                    ),
-                );
-                context.define(
-                    decls[1].name.clone(),
-                    SymbolInfo::new(
-                        make_type(TypeKind::Int),
-                        is_mutable_1,
-                        false,
-                        MemberVisibility::Public,
-                        self.current_module.clone(),
-                        None,
-                    ),
+                    type_expr.span,
                 );
             }
+            declared_type
         } else {
-            self.report_error("Invalid number of loop variables".to_string(), span);
+            element_type.clone()
+        };
+        let is_mutable = matches!(decl.declaration_type, VariableDeclarationType::Mutable);
+        context.define(
+            decl.name.clone(),
+            SymbolInfo::new(
+                var_type,
+                is_mutable,
+                false,
+                MemberVisibility::Public,
+                self.current_module.clone(),
+                None,
+            ),
+        );
+    }
+
+    fn bind_pair_loop_variables(
+        &mut self,
+        decls: &[VariableDeclaration],
+        element_type: &Type,
+        iterable_type: &Type,
+        span: Span,
+        context: &mut Context,
+    ) {
+        if let TypeKind::Tuple(exprs) = &element_type.kind {
+            self.bind_tuple_destructure(decls, exprs, span, context);
+        } else if matches!(&iterable_type.kind, TypeKind::Custom(_name, _) if iterable_type.kind.as_builtin_collection() == Some(BuiltinCollectionKind::Map))
+        {
+            self.bind_map_iteration(decls, element_type, iterable_type, context);
+        } else {
+            self.bind_sequence_with_index(decls, element_type, context);
         }
+    }
+
+    fn bind_tuple_destructure(
+        &mut self,
+        decls: &[VariableDeclaration],
+        exprs: &[Expression],
+        span: Span,
+        context: &mut Context,
+    ) {
+        if exprs.len() != 2 {
+            self.report_error(
+                "Destructuring mismatch: expected tuple of size 2".to_string(),
+                span,
+            );
+            return;
+        }
+        let key_type = self
+            .extract_type_from_expression(&exprs[0])
+            .unwrap_or(make_type(TypeKind::Error));
+        let val_type = self
+            .extract_type_from_expression(&exprs[1])
+            .unwrap_or(make_type(TypeKind::Error));
+
+        let is_mutable_0 = matches!(decls[0].declaration_type, VariableDeclarationType::Mutable);
+        let is_mutable_1 = matches!(decls[1].declaration_type, VariableDeclarationType::Mutable);
+
+        context.define(
+            decls[0].name.clone(),
+            SymbolInfo::new(
+                key_type,
+                is_mutable_0,
+                false,
+                MemberVisibility::Public,
+                self.current_module.clone(),
+                None,
+            ),
+        );
+        context.define(
+            decls[1].name.clone(),
+            SymbolInfo::new(
+                val_type,
+                is_mutable_1,
+                false,
+                MemberVisibility::Public,
+                self.current_module.clone(),
+                None,
+            ),
+        );
+    }
+
+    fn bind_map_iteration(
+        &mut self,
+        decls: &[VariableDeclaration],
+        element_type: &Type,
+        iterable_type: &Type,
+        context: &mut Context,
+    ) {
+        let val_type = match &iterable_type.kind {
+            TypeKind::Map(_, _) => {
+                unreachable!("collection types are normalized to Custom before this point")
+            }
+            TypeKind::Custom(name, Some(args))
+                if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Map)
+                    && args.len() == 2 =>
+            {
+                self.extract_type_from_expression(&args[1])
+                    .unwrap_or_else(|_| make_type(TypeKind::Error))
+            }
+            _ => make_type(TypeKind::Error),
+        };
+
+        let is_mutable_0 = matches!(decls[0].declaration_type, VariableDeclarationType::Mutable);
+        let is_mutable_1 = matches!(decls[1].declaration_type, VariableDeclarationType::Mutable);
+
+        context.define(
+            decls[0].name.clone(),
+            SymbolInfo::new(
+                element_type.clone(),
+                is_mutable_0,
+                false,
+                MemberVisibility::Public,
+                self.current_module.clone(),
+                None,
+            ),
+        );
+        context.define(
+            decls[1].name.clone(),
+            SymbolInfo::new(
+                val_type,
+                is_mutable_1,
+                false,
+                MemberVisibility::Public,
+                self.current_module.clone(),
+                None,
+            ),
+        );
+    }
+
+    fn bind_sequence_with_index(
+        &mut self,
+        decls: &[VariableDeclaration],
+        element_type: &Type,
+        context: &mut Context,
+    ) {
+        let is_mutable_0 = matches!(decls[0].declaration_type, VariableDeclarationType::Mutable);
+        let is_mutable_1 = matches!(decls[1].declaration_type, VariableDeclarationType::Mutable);
+
+        context.define(
+            decls[0].name.clone(),
+            SymbolInfo::new(
+                element_type.clone(),
+                is_mutable_0,
+                false,
+                MemberVisibility::Public,
+                self.current_module.clone(),
+                None,
+            ),
+        );
+        context.define(
+            decls[1].name.clone(),
+            SymbolInfo::new(
+                make_type(TypeKind::Int),
+                is_mutable_1,
+                false,
+                MemberVisibility::Public,
+                self.current_module.clone(),
+                None,
+            ),
+        );
     }
 
     pub(crate) fn check_break(&mut self, context: &Context, span: Span) {

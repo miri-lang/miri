@@ -75,6 +75,70 @@ impl TypeChecker {
             properties,
         } = info;
 
+        self.register_function_symbol(
+            name,
+            generics,
+            params,
+            return_type_expr,
+            properties,
+            context,
+        );
+        context.enter_scope();
+
+        if let Some(gens) = generics {
+            self.define_generics(gens, context);
+        }
+
+        let return_type = self.resolve_function_return_type(return_type_expr, context);
+        context.return_types.push(return_type.clone());
+        context.inferred_return_types.push(None);
+
+        let old_loop_depth = context.loop_depth;
+        context.loop_depth = 0;
+        let infer_main_return = name == "main" && return_type_expr.is_none();
+
+        self.check_function_parameters(params, context);
+
+        let previous_in_gpu = context.in_gpu_function;
+        self.handle_gpu_function(
+            name,
+            generics,
+            params,
+            return_type_expr,
+            properties,
+            context,
+        );
+
+        let previous_in_function = context.in_function;
+        let previous_in_async = context.in_async_function;
+        context.in_function = true;
+        context.in_async_function = properties.is_async;
+
+        let const_value =
+            self.check_function_body(body, name, &return_type, infer_main_return, context);
+
+        if const_value.is_some() {
+            self.update_const_symbol(name, const_value, context);
+        }
+
+        context.in_gpu_function = previous_in_gpu;
+        context.in_function = previous_in_function;
+        context.in_async_function = previous_in_async;
+        context.loop_depth = old_loop_depth;
+        context.exit_scope();
+        context.return_types.pop();
+        context.inferred_return_types.pop();
+    }
+
+    fn register_function_symbol(
+        &mut self,
+        name: &str,
+        generics: &Option<Vec<Expression>>,
+        params: &[Parameter],
+        return_type_expr: &Option<Box<Expression>>,
+        properties: &FunctionProperties,
+        context: &mut Context,
+    ) {
         let func_type = make_type(TypeKind::Function(Box::new(FunctionTypeData {
             generics: generics.clone(),
             params: params.to_vec(),
@@ -95,8 +159,6 @@ impl TypeChecker {
             );
         }
 
-        // Don't register class methods as bare functions — they must be
-        // called via `self.method()`, not `method()`.
         if !context.in_class() {
             context.define(
                 name.to_string(),
@@ -110,29 +172,21 @@ impl TypeChecker {
                 ),
             );
         }
+    }
 
-        context.enter_scope();
-
-        if let Some(gens) = generics {
-            self.define_generics(gens, context);
-        }
-
-        let return_type = if let Some(rt_expr) = return_type_expr {
+    fn resolve_function_return_type(
+        &mut self,
+        return_type_expr: &Option<Box<Expression>>,
+        context: &mut Context,
+    ) -> Type {
+        if let Some(rt_expr) = return_type_expr {
             self.resolve_type_expression(rt_expr, context)
         } else {
             make_type(TypeKind::Void)
-        };
+        }
+    }
 
-        context.return_types.push(return_type.clone());
-        context.inferred_return_types.push(None);
-
-        // Reset loop depth for function body as it's a new context
-        let old_loop_depth = context.loop_depth;
-        context.loop_depth = 0;
-
-        // If this is 'main' with implicit return type, we might infer it from the body
-        let infer_main_return = name == "main" && return_type_expr.is_none();
-
+    fn check_function_parameters(&mut self, params: &[Parameter], context: &mut Context) {
         for param in params {
             let param_type = self.resolve_type_expression(&param.typ, context);
 
@@ -152,7 +206,7 @@ impl TypeChecker {
             context.define(
                 param.name.clone(),
                 SymbolInfo::new(
-                    param_type,
+                    param_type.clone(),
                     param.is_out,
                     false,
                     MemberVisibility::Public,
@@ -161,157 +215,197 @@ impl TypeChecker {
                 ),
             );
 
-            if let Some(guard) = &param.guard {
-                if let ExpressionKind::Guard(op, right) = &guard.node {
-                    let bin_op = match op {
-                        GuardOp::NotEqual => BinaryOp::NotEqual,
-                        GuardOp::LessThan => BinaryOp::LessThan,
-                        GuardOp::LessThanEqual => BinaryOp::LessThanEqual,
-                        GuardOp::GreaterThan => BinaryOp::GreaterThan,
-                        GuardOp::GreaterThanEqual => BinaryOp::GreaterThanEqual,
-                        GuardOp::In => BinaryOp::In,
-                        GuardOp::NotIn => BinaryOp::In, // Type check is same as In
-                        GuardOp::Not => BinaryOp::NotEqual, // Assumption: not is !=
-                    };
+            self.check_parameter_guard(param, &param_type, context);
+        }
+    }
 
-                    let left =
-                        crate::ast::factory::identifier_with_span(&param.name, param.typ.span);
-                    let guard_type = self.infer_binary(&left, &bin_op, right, guard.span, context);
+    fn check_parameter_guard(
+        &mut self,
+        param: &Parameter,
+        _param_type: &Type,
+        context: &mut Context,
+    ) {
+        if let Some(guard) = &param.guard {
+            if let ExpressionKind::Guard(op, right) = &guard.node {
+                let bin_op = match op {
+                    GuardOp::NotEqual => BinaryOp::NotEqual,
+                    GuardOp::LessThan => BinaryOp::LessThan,
+                    GuardOp::LessThanEqual => BinaryOp::LessThanEqual,
+                    GuardOp::GreaterThan => BinaryOp::GreaterThan,
+                    GuardOp::GreaterThanEqual => BinaryOp::GreaterThanEqual,
+                    GuardOp::In => BinaryOp::In,
+                    GuardOp::NotIn => BinaryOp::In,
+                    GuardOp::Not => BinaryOp::NotEqual,
+                };
 
-                    if !matches!(guard_type.kind, TypeKind::Boolean) {
-                        self.report_error(
-                            format!("Type mismatch: guard must be boolean, got {}", guard_type),
-                            guard.span,
-                        );
-                    }
+                let left = crate::ast::factory::identifier_with_span(&param.name, param.typ.span);
+                let guard_type = self.infer_binary(&left, &bin_op, right, guard.span, context);
+
+                if !matches!(guard_type.kind, TypeKind::Boolean) {
+                    self.report_error(
+                        format!("Type mismatch: guard must be boolean, got {}", guard_type),
+                        guard.span,
+                    );
                 }
             }
         }
+    }
 
-        // Handle GPU functions
-        let previous_in_gpu = context.in_gpu_function;
-        if properties.is_gpu {
-            context.in_gpu_function = true;
+    fn handle_gpu_function(
+        &mut self,
+        name: &str,
+        generics: &Option<Vec<Expression>>,
+        params: &[Parameter],
+        return_type_expr: &Option<Box<Expression>>,
+        properties: &FunctionProperties,
+        context: &mut Context,
+    ) {
+        if !properties.is_gpu {
+            return;
+        }
 
-            // Enforce NO explicit return type in source code
-            if let Some(rt_expr) = return_type_expr {
-                self.report_error(
-                    "GPU functions must not have an explicit return type".to_string(),
-                    rt_expr.span,
-                );
-            }
+        context.in_gpu_function = true;
 
-            // Implicitly set return type to Kernel
-            // Note: The `func_type` symbol stored in global_scope above was created using `return_type_expr`.
-            // We need to update that symbol to return `Kernel` so that calls to it are typed correctly.
-            let kernel_return_type = make_type(TypeKind::Custom("Kernel".to_string(), None));
+        if let Some(rt_expr) = return_type_expr {
+            self.report_error(
+                "GPU functions must not have an explicit return type".to_string(),
+                rt_expr.span,
+            );
+        }
 
-            if let Some(info) = self.global_scope.get_mut(name) {
-                if let TypeKind::Function(func) = &info.ty.kind {
-                    info.ty = make_type(TypeKind::Function(Box::new(FunctionTypeData {
-                        generics: func.generics.clone(),
-                        params: func.params.clone(),
-                        return_type: Some(Box::new(crate::ast::factory::type_expr_non_null(
-                            kernel_return_type.clone(),
-                        ))),
-                    })));
-                }
-            }
-            context.update_symbol_type(
-                name,
-                make_type(TypeKind::Function(Box::new(FunctionTypeData {
-                    generics: generics.clone(),
-                    params: params.to_vec(),
+        let kernel_return_type = make_type(TypeKind::Custom("Kernel".to_string(), None));
+
+        if let Some(info) = self.global_scope.get_mut(name) {
+            if let TypeKind::Function(func) = &info.ty.kind {
+                info.ty = make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                    generics: func.generics.clone(),
+                    params: func.params.clone(),
                     return_type: Some(Box::new(crate::ast::factory::type_expr_non_null(
                         kernel_return_type.clone(),
                     ))),
-                }))),
-            );
-
-            // Inject 'gpu_context' object (type GpuContext)
-            let gpu_context_type = make_type(TypeKind::Custom("GpuContext".to_string(), None));
-            context.define(
-                "gpu_context".to_string(),
-                SymbolInfo::new(
-                    gpu_context_type,
-                    false, // Immutable
-                    false,
-                    MemberVisibility::Public,
-                    self.current_module.clone(),
-                    None,
-                ),
-            );
+                })));
+            }
         }
 
-        // Track function context for await validation
-        let previous_in_function = context.in_function;
-        let previous_in_async = context.in_async_function;
-        context.in_function = true;
-        context.in_async_function = properties.is_async;
+        context.update_symbol_type(
+            name,
+            make_type(TypeKind::Function(Box::new(FunctionTypeData {
+                generics: generics.clone(),
+                params: params.to_vec(),
+                return_type: Some(Box::new(crate::ast::factory::type_expr_non_null(
+                    kernel_return_type.clone(),
+                ))),
+            }))),
+        );
 
+        let gpu_context_type = make_type(TypeKind::Custom("GpuContext".to_string(), None));
+        context.define(
+            "gpu_context".to_string(),
+            SymbolInfo::new(
+                gpu_context_type,
+                false,
+                false,
+                MemberVisibility::Public,
+                self.current_module.clone(),
+                None,
+            ),
+        );
+    }
+
+    fn check_function_body(
+        &mut self,
+        body: Option<&Statement>,
+        name: &str,
+        return_type: &Type,
+        infer_main_return: bool,
+        context: &mut Context,
+    ) -> Option<Literal> {
         let mut const_value: Option<Literal> = None;
 
-        // Only check function body if it exists (abstract functions have no body)
         if let Some(body) = body {
-            match &body.node {
-                StatementKind::Block(stmts) => {
-                    // Note: Do not enter a new scope here - the function body shares the scope with parameters.
+            const_value = self.extract_const_value(body);
+            self.validate_function_body(body, name, return_type, infer_main_return, context);
+        }
 
-                    // Check all statements. For the last expression of a non-void
-                    // function, suppress must_use: the value is the implicit return,
-                    // not a discarded result.
-                    let last_idx = stmts.len().saturating_sub(1);
-                    let is_non_void_return =
-                        !infer_main_return && !matches!(return_type.kind, TypeKind::Void);
-                    for (i, stmt) in stmts.iter().enumerate() {
-                        if i == last_idx
-                            && is_non_void_return
-                            && matches!(stmt.node, StatementKind::Expression(_))
-                        {
-                            context.suppress_must_use = true;
-                        }
-                        self.check_statement(stmt, context);
-                        context.suppress_must_use = false;
-                    }
+        const_value
+    }
 
-                    // For implicit return inference, find the last meaningful statement
-                    // (skip trailing empty blocks which can be created by trailing whitespace)
-                    if infer_main_return {
-                        // Find the last non-empty statement that could provide a return value
-                        let last_meaningful_stmt = stmts.iter().rev().find(|stmt| {
-                            !matches!(&stmt.node, StatementKind::Block(inner) if inner.is_empty())
-                        });
-
-                        if let Some(stmt) = last_meaningful_stmt {
-                            if let Some(expr_type) = self.resolve_implicit_return_type(stmt) {
-                                self.register_implicit_main_return(name, expr_type, context);
-                            }
-                        }
-                    } else if !matches!(return_type.kind, TypeKind::Void) {
-                        // For non-main functions with explicit return type, check the last expression
-                        if let Some(last_stmt) = stmts.last() {
-                            if let StatementKind::Expression(expr) = &last_stmt.node {
-                                let expr_type = self.infer_expression(expr, context);
-                                if !self.are_compatible(&return_type, &expr_type, context) {
-                                    self.report_error(
-                                        format!(
-                                            "Invalid return type: expected {}, got {}",
-                                            return_type, expr_type
-                                        ),
-                                        expr.span,
-                                    );
-                                }
-                            }
-                        }
+    fn extract_const_value(&self, body: &Statement) -> Option<Literal> {
+        if let StatementKind::Expression(expr) = &body.node {
+            if let ExpressionKind::Literal(lit) = &expr.node {
+                return Some(lit.clone());
+            }
+        } else if let StatementKind::Block(stmts) = &body.node {
+            if stmts.len() == 1 {
+                if let StatementKind::Expression(expr) = &stmts[0].node {
+                    if let ExpressionKind::Literal(lit) = &expr.node {
+                        return Some(lit.clone());
                     }
                 }
-                StatementKind::Expression(expr) => {
-                    let expr_type = self.infer_expression(expr, context);
+            }
+        }
+        None
+    }
 
-                    if !infer_main_return
-                        && !matches!(return_type.kind, TypeKind::Void)
-                        && !self.are_compatible(&return_type, &expr_type, context)
-                    {
+    fn validate_function_body(
+        &mut self,
+        body: &Statement,
+        name: &str,
+        return_type: &Type,
+        infer_main_return: bool,
+        context: &mut Context,
+    ) {
+        match &body.node {
+            StatementKind::Block(stmts) => {
+                self.validate_block_body(stmts, name, return_type, infer_main_return, context);
+            }
+            StatementKind::Expression(expr) => {
+                self.validate_expression_body(expr, name, return_type, infer_main_return, context);
+            }
+            _ => {
+                self.check_statement(body, context);
+            }
+        }
+
+        self.check_return_completeness(body, return_type);
+    }
+
+    fn validate_block_body(
+        &mut self,
+        stmts: &[Statement],
+        name: &str,
+        return_type: &Type,
+        infer_main_return: bool,
+        context: &mut Context,
+    ) {
+        let last_idx = stmts.len().saturating_sub(1);
+        let is_non_void_return = !infer_main_return && !matches!(return_type.kind, TypeKind::Void);
+        for (i, stmt) in stmts.iter().enumerate() {
+            if i == last_idx
+                && is_non_void_return
+                && matches!(stmt.node, StatementKind::Expression(_))
+            {
+                context.suppress_must_use = true;
+            }
+            self.check_statement(stmt, context);
+            context.suppress_must_use = false;
+        }
+
+        if infer_main_return {
+            let last_meaningful_stmt = stmts.iter().rev().find(
+                |stmt| !matches!(&stmt.node, StatementKind::Block(inner) if inner.is_empty()),
+            );
+
+            if let Some(stmt) = last_meaningful_stmt {
+                if let Some(expr_type) = self.resolve_implicit_return_type(stmt) {
+                    self.register_implicit_main_return(name, expr_type, context);
+                }
+            }
+        } else if !matches!(return_type.kind, TypeKind::Void) {
+            if let Some(last_stmt) = stmts.last() {
+                if let StatementKind::Expression(expr) = &last_stmt.node {
+                    let expr_type = self.infer_expression(expr, context);
+                    if !self.are_compatible(return_type, &expr_type, context) {
                         self.report_error(
                             format!(
                                 "Invalid return type: expected {}, got {}",
@@ -320,40 +414,54 @@ impl TypeChecker {
                             expr.span,
                         );
                     }
-
-                    if infer_main_return {
-                        // Implicit return for single-expression main
-                        self.register_implicit_main_return(name, expr_type, context);
-                    }
-                }
-                _ => {
-                    self.check_statement(body, context);
-                }
-            }
-
-            if let StatementKind::Expression(expr) = &body.node {
-                if let ExpressionKind::Literal(lit) = &expr.node {
-                    const_value = Some(lit.clone());
-                }
-            } else if let StatementKind::Block(stmts) = &body.node {
-                if stmts.len() == 1 {
-                    if let StatementKind::Expression(expr) = &stmts[0].node {
-                        if let ExpressionKind::Literal(lit) = &expr.node {
-                            const_value = Some(lit.clone());
-                        }
-                    }
-                }
-            }
-
-            if !matches!(return_type.kind, TypeKind::Void) {
-                let status = check_returns(body);
-                if status == ReturnStatus::None {
-                    self.report_error("Missing return statement".to_string(), body.span);
                 }
             }
         }
+    }
 
-        // If a constant value was found, update the symbol information
+    fn validate_expression_body(
+        &mut self,
+        expr: &Expression,
+        name: &str,
+        return_type: &Type,
+        infer_main_return: bool,
+        context: &mut Context,
+    ) {
+        let expr_type = self.infer_expression(expr, context);
+
+        if !infer_main_return
+            && !matches!(return_type.kind, TypeKind::Void)
+            && !self.are_compatible(return_type, &expr_type, context)
+        {
+            self.report_error(
+                format!(
+                    "Invalid return type: expected {}, got {}",
+                    return_type, expr_type
+                ),
+                expr.span,
+            );
+        }
+
+        if infer_main_return {
+            self.register_implicit_main_return(name, expr_type, context);
+        }
+    }
+
+    fn check_return_completeness(&mut self, body: &Statement, return_type: &Type) {
+        if !matches!(return_type.kind, TypeKind::Void) {
+            let status = check_returns(body);
+            if status == ReturnStatus::None {
+                self.report_error("Missing return statement".to_string(), body.span);
+            }
+        }
+    }
+
+    fn update_const_symbol(
+        &mut self,
+        name: &str,
+        const_value: Option<Literal>,
+        context: &mut Context,
+    ) {
         if const_value.is_some() {
             if let Some(info) = self.global_scope.get_mut(name) {
                 info.value = const_value.clone();
@@ -368,13 +476,5 @@ impl TypeChecker {
                 info.is_constant = true;
             }
         }
-
-        context.in_gpu_function = previous_in_gpu;
-        context.in_function = previous_in_function;
-        context.in_async_function = previous_in_async;
-        context.loop_depth = old_loop_depth;
-        context.exit_scope();
-        context.return_types.pop();
-        context.inferred_return_types.pop();
     }
 }

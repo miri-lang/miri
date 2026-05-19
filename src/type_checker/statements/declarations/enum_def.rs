@@ -50,6 +50,53 @@ impl TypeChecker {
         // Enter a scope for generic type parameters
         context.enter_scope();
 
+        let generic_defs = self.resolve_enum_generics(generics, context);
+
+        // Set up class context so `self` resolves correctly in method bodies
+        let self_type = make_type(TypeKind::Custom(name.clone(), None));
+        context.enter_class(name.clone(), None, self_type.clone());
+
+        // Resolve variants
+        let variant_map = self.collect_enum_variants(variants, context);
+
+        // Collect method signatures
+        let (method_map, method_statements) = self.collect_enum_methods(methods, context);
+
+        let generic_defs_opt = if generic_defs.is_empty() {
+            None
+        } else {
+            Some(generic_defs)
+        };
+
+        let enum_def = EnumDefinition {
+            variants: variant_map,
+            generics: generic_defs_opt,
+            methods: method_map,
+            module: self.current_module.clone(),
+            must_use,
+        };
+
+        context.define_type(name.clone(), TypeDefinition::Enum(enum_def.clone()));
+        if context.scopes.len() == 2 {
+            // scopes.len() == 2: base_scope + enum_scope
+            self.register_type_definition(name.clone(), TypeDefinition::Enum(enum_def));
+        }
+
+        // Define enum type symbol (constructor/type)
+        self.register_enum_symbol(&name, &self_type, visibility, context);
+
+        // PASS 2: Type-check method bodies
+        self.check_enum_method_bodies(method_statements, context);
+
+        context.exit_class();
+        context.exit_scope();
+    }
+
+    fn resolve_enum_generics(
+        &mut self,
+        generics: &Option<Vec<Expression>>,
+        context: &mut Context,
+    ) -> Vec<GenericDefinition> {
         let mut generic_defs = Vec::new();
         if let Some(gens) = generics {
             self.define_generics(gens, context);
@@ -68,12 +115,14 @@ impl TypeChecker {
                 }
             }
         }
+        generic_defs
+    }
 
-        // Set up class context so `self` resolves correctly in method bodies
-        let self_type = make_type(TypeKind::Custom(name.clone(), None));
-        context.enter_class(name.clone(), None, self_type.clone());
-
-        // Resolve variants
+    fn collect_enum_variants(
+        &mut self,
+        variants: &[Expression],
+        context: &mut Context,
+    ) -> BTreeMap<String, Vec<Type>> {
         let mut variant_map = BTreeMap::new();
         for variant in variants {
             if let ExpressionKind::EnumValue(variant_name_expr, associated_types) = &variant.node {
@@ -93,8 +142,14 @@ impl TypeChecker {
                 self.report_error("Invalid enum variant definition".to_string(), variant.span);
             }
         }
+        variant_map
+    }
 
-        // Collect method signatures
+    fn collect_enum_methods<'a>(
+        &mut self,
+        methods: &'a [Statement],
+        context: &mut Context,
+    ) -> (BTreeMap<String, MethodInfo>, Vec<&'a Statement>) {
         let mut method_map: BTreeMap<String, MethodInfo> = BTreeMap::new();
         let mut method_statements: Vec<&Statement> = Vec::with_capacity(methods.len());
         for method_stmt in methods {
@@ -124,33 +179,21 @@ impl TypeChecker {
                 method_statements.push(method_stmt);
             }
         }
+        (method_map, method_statements)
+    }
 
-        let generic_defs_opt = if generic_defs.is_empty() {
-            None
-        } else {
-            Some(generic_defs)
-        };
-
-        let enum_def = EnumDefinition {
-            variants: variant_map,
-            generics: generic_defs_opt,
-            methods: method_map,
-            module: self.current_module.clone(),
-            must_use,
-        };
-
-        context.define_type(name.clone(), TypeDefinition::Enum(enum_def.clone()));
-        if context.scopes.len() == 2 {
-            // scopes.len() == 2: base_scope + enum_scope
-            self.register_type_definition(name.clone(), TypeDefinition::Enum(enum_def));
-        }
-
-        // Define enum type symbol (constructor/type)
-        let enum_type_meta = make_type(TypeKind::Meta(Box::new(self_type)));
+    fn register_enum_symbol(
+        &mut self,
+        name: &str,
+        self_type: &Type,
+        visibility: &MemberVisibility,
+        context: &mut Context,
+    ) {
+        let enum_type_meta = make_type(TypeKind::Meta(Box::new(self_type.clone())));
 
         if context.scopes.len() == 2 {
             self.global_scope.insert(
-                name.clone(),
+                name.to_string(),
                 SymbolInfo::new(
                     enum_type_meta.clone(),
                     false,
@@ -162,7 +205,7 @@ impl TypeChecker {
             );
         }
         context.define(
-            name,
+            name.to_string(),
             SymbolInfo::new(
                 enum_type_meta,
                 false,
@@ -172,8 +215,13 @@ impl TypeChecker {
                 None,
             ),
         );
+    }
 
-        // PASS 2: Type-check method bodies
+    fn check_enum_method_bodies(
+        &mut self,
+        method_statements: Vec<&Statement>,
+        context: &mut Context,
+    ) {
         for stmt in method_statements {
             if let StatementKind::FunctionDeclaration(decl) = &stmt.node {
                 if decl.body.is_none() {
@@ -192,8 +240,5 @@ impl TypeChecker {
                 );
             }
         }
-
-        context.exit_class();
-        context.exit_scope();
     }
 }

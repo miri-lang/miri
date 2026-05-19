@@ -236,72 +236,7 @@ impl TypeChecker {
 
         match (&t1.kind, &t2.kind) {
             (TypeKind::Custom(n1, args1), TypeKind::Custom(n2, args2)) if n1 == n2 => {
-                match BuiltinCollectionKind::from_name(n1.as_str()) {
-                    Some(BuiltinCollectionKind::Array) => {
-                        // args: [inner_type_expr, size_expr]
-                        let (inner1, size1) = match args1.as_deref() {
-                            Some([i, s, ..]) => (i, s),
-                            _ => return Some(false),
-                        };
-                        let (inner2, size2) = match args2.as_deref() {
-                            Some([i, s, ..]) => (i, s),
-                            _ => return Some(false),
-                        };
-                        if !self.check_inner_type_compatible(inner1, inner2, context) {
-                            return Some(false);
-                        }
-                        match (
-                            Self::try_eval_const_int(size1),
-                            Self::try_eval_const_int(size2),
-                        ) {
-                            (Some(s1), Some(s2)) => Some(s1 == s2),
-                            _ => Some(size1 == size2),
-                        }
-                    }
-                    Some(BuiltinCollectionKind::List) | Some(BuiltinCollectionKind::Set) => {
-                        let inner1 = match args1.as_deref() {
-                            Some([i, ..]) => i,
-                            _ => return Some(false),
-                        };
-                        let inner2 = match args2.as_deref() {
-                            Some([i, ..]) => i,
-                            _ => return Some(false),
-                        };
-                        Some(self.check_inner_type_compatible(inner1, inner2, context))
-                    }
-                    Some(BuiltinCollectionKind::Map) => {
-                        let (k1, v1) = match args1.as_deref() {
-                            Some([k, v, ..]) => (k, v),
-                            _ => return Some(false),
-                        };
-                        let (k2, v2) = match args2.as_deref() {
-                            Some([k, v, ..]) => (k, v),
-                            _ => return Some(false),
-                        };
-                        if let (Ok(k2_t), Ok(v2_t)) = (
-                            self.extract_type_from_expression(k2),
-                            self.extract_type_from_expression(v2),
-                        ) {
-                            // Empty map compatible with any map type
-                            if matches!(k2_t.kind, TypeKind::Void)
-                                && matches!(v2_t.kind, TypeKind::Void)
-                            {
-                                return Some(true);
-                            }
-                            if let (Ok(k1_t), Ok(v1_t)) = (
-                                self.extract_type_from_expression(k1),
-                                self.extract_type_from_expression(v1),
-                            ) {
-                                return Some(
-                                    self.are_compatible(&k1_t, &k2_t, context)
-                                        && self.are_compatible(&v1_t, &v2_t, context),
-                                );
-                            }
-                        }
-                        Some(false)
-                    }
-                    None => None, // Not a builtin collection — fall through to custom-type check
-                }
+                self.check_builtin_collection(n1, args1, args2, context)
             }
             (TypeKind::Option(inner1), TypeKind::Option(inner2)) => {
                 if matches!(inner2.kind, TypeKind::Void) {
@@ -315,6 +250,107 @@ impl TypeChecker {
             }
             _ => None,
         }
+    }
+
+    /// Checks builtin collection (Array/List/Set/Map) compatibility.
+    fn check_builtin_collection(
+        &self,
+        name: &str,
+        args1: &Option<Vec<crate::ast::Expression>>,
+        args2: &Option<Vec<crate::ast::Expression>>,
+        context: &Context,
+    ) -> Option<bool> {
+        match BuiltinCollectionKind::from_name(name) {
+            Some(BuiltinCollectionKind::Array) => {
+                self.check_array_compatibility(args1, args2, context)
+            }
+            Some(BuiltinCollectionKind::List) | Some(BuiltinCollectionKind::Set) => {
+                self.check_list_set_compatibility(args1, args2, context)
+            }
+            Some(BuiltinCollectionKind::Map) => self.check_map_compatibility(args1, args2, context),
+            None => None,
+        }
+    }
+
+    /// Checks array type compatibility (element type and size).
+    fn check_array_compatibility(
+        &self,
+        args1: &Option<Vec<crate::ast::Expression>>,
+        args2: &Option<Vec<crate::ast::Expression>>,
+        context: &Context,
+    ) -> Option<bool> {
+        let (inner1, size1) = match args1.as_deref() {
+            Some([i, s, ..]) => (i, s),
+            _ => return Some(false),
+        };
+        let (inner2, size2) = match args2.as_deref() {
+            Some([i, s, ..]) => (i, s),
+            _ => return Some(false),
+        };
+        if !self.check_inner_type_compatible(inner1, inner2, context) {
+            return Some(false);
+        }
+        match (
+            Self::try_eval_const_int(size1),
+            Self::try_eval_const_int(size2),
+        ) {
+            (Some(s1), Some(s2)) => Some(s1 == s2),
+            _ => Some(size1 == size2),
+        }
+    }
+
+    /// Checks List/Set type compatibility (element type only).
+    fn check_list_set_compatibility(
+        &self,
+        args1: &Option<Vec<crate::ast::Expression>>,
+        args2: &Option<Vec<crate::ast::Expression>>,
+        context: &Context,
+    ) -> Option<bool> {
+        let inner1 = match args1.as_deref() {
+            Some([i, ..]) => i,
+            _ => return Some(false),
+        };
+        let inner2 = match args2.as_deref() {
+            Some([i, ..]) => i,
+            _ => return Some(false),
+        };
+        Some(self.check_inner_type_compatible(inner1, inner2, context))
+    }
+
+    /// Checks Map type compatibility (key and value types).
+    fn check_map_compatibility(
+        &self,
+        args1: &Option<Vec<crate::ast::Expression>>,
+        args2: &Option<Vec<crate::ast::Expression>>,
+        context: &Context,
+    ) -> Option<bool> {
+        let (k1, v1) = match args1.as_deref() {
+            Some([k, v, ..]) => (k, v),
+            _ => return Some(false),
+        };
+        let (k2, v2) = match args2.as_deref() {
+            Some([k, v, ..]) => (k, v),
+            _ => return Some(false),
+        };
+        if let (Ok(k2_t), Ok(v2_t)) = (
+            self.extract_type_from_expression(k2),
+            self.extract_type_from_expression(v2),
+        ) {
+            // Empty map compatible with any map type
+            if matches!(k2_t.kind, TypeKind::Void) && matches!(v2_t.kind, TypeKind::Void) {
+                return Some(true);
+            }
+            if let (Ok(k1_t), Ok(v1_t)) = (
+                self.extract_type_from_expression(k1),
+                self.extract_type_from_expression(v1),
+            ) {
+                return Some(
+                    self.are_compatible(&k1_t, &k2_t, context)
+                        && self.are_compatible(&v1_t, &v2_t, context),
+                );
+            }
+        }
+        Some(false)
     }
 
     /// Checks inner type compatibility for collections.
@@ -478,52 +514,66 @@ impl TypeChecker {
     /// Checks generic type compatibility.
     fn check_generic_compatibility(&self, t1: &Type, t2: &Type, context: &Context) -> Option<bool> {
         if let TypeKind::Generic(name1, constraint, kind) = &t1.kind {
-            // A generic type is always compatible with itself (same name).
-            if let TypeKind::Generic(name2, _, _) = &t2.kind {
-                if name1 == name2 {
-                    return Some(true);
-                }
-                // t2 is a free type variable (not bound in the current scope) — produced
-                // by identity-fill when an enum generic param couldn't be inferred from
-                // constructor arguments. Accept it as a wildcard to avoid false errors like
-                // "expected Result<U,E>, got Result<T,E>" when T is unresolved.
-                if constraint.is_none()
-                    && !matches!(
-                        context.resolve_type_definition(name2),
-                        Some(TypeDefinition::Generic(_))
-                    )
-                {
-                    return Some(true);
-                }
-            }
-            if let Some(c) = constraint {
-                return Some(self.satisfies_constraint(t2, c, kind, context));
-            }
-            // Unconstrained generic: any concrete type satisfies it.
-            // The caller already substituted known generics before calling are_compatible;
-            // if Generic("T") still appears here, T is either a live type parameter
-            // or a free variable from identity-fill — both accept any concrete type.
-            return Some(true);
+            return Some(self.check_generic_in_t1(name1, constraint, kind, t2, context));
         }
 
         if let TypeKind::Generic(name2, constraint2, kind) = &t2.kind {
-            if let Some(c) = constraint2 {
-                if matches!(kind, TypeDeclarationKind::Extends) {
-                    return Some(self.are_compatible(t1, c, context));
-                }
-                return Some(false);
-            }
-            // Unconstrained generic in actual (t2) position that is NOT bound in the
-            // current scope is a free type variable (identity fill) — accept as wildcard.
-            if !matches!(
-                context.resolve_type_definition(name2),
-                Some(TypeDefinition::Generic(_))
-            ) {
-                return Some(true);
-            }
+            return Some(self.check_generic_in_t2(name2, constraint2, kind, t1, context));
         }
 
         None
+    }
+
+    /// Checks compatibility when t1 is a generic type.
+    fn check_generic_in_t1(
+        &self,
+        name1: &str,
+        constraint: &Option<Box<Type>>,
+        kind: &TypeDeclarationKind,
+        t2: &Type,
+        context: &Context,
+    ) -> bool {
+        if let TypeKind::Generic(name2, _, _) = &t2.kind {
+            if name1 == name2 {
+                return true;
+            }
+            if constraint.is_none()
+                && !matches!(
+                    context.resolve_type_definition(name2),
+                    Some(TypeDefinition::Generic(_))
+                )
+            {
+                return true;
+            }
+        }
+        if let Some(c) = constraint {
+            return self.satisfies_constraint(t2, c, kind, context);
+        }
+        true
+    }
+
+    /// Checks compatibility when t2 is a generic type.
+    fn check_generic_in_t2(
+        &self,
+        name2: &str,
+        constraint2: &Option<Box<Type>>,
+        kind: &TypeDeclarationKind,
+        t1: &Type,
+        context: &Context,
+    ) -> bool {
+        if let Some(c) = constraint2 {
+            if matches!(kind, TypeDeclarationKind::Extends) {
+                return self.are_compatible(t1, c, context);
+            }
+            return false;
+        }
+        if !matches!(
+            context.resolve_type_definition(name2),
+            Some(TypeDefinition::Generic(_))
+        ) {
+            return true;
+        }
+        false
     }
 
     /// Checks if a type is a subtype of another (inheritance, interfaces, mixins).
