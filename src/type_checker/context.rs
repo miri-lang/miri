@@ -149,11 +149,24 @@ pub struct FieldInfo {
 #[derive(Debug, Clone)]
 pub struct MethodInfo {
     pub params: Vec<(String, Type)>,
+    /// Parallel to `params`: `true` when the parameter was declared `out`.
+    /// An empty `Vec` means "no out params" — read via [`MethodInfo::is_param_out`]
+    /// so that legacy construction sites that leave this empty stay safe.
+    pub is_out_flags: Vec<bool>,
     pub return_type: Type,
     pub visibility: MemberVisibility,
     pub is_constructor: bool,
     /// Whether this method is abstract (no body).
     pub is_abstract: bool,
+}
+
+impl MethodInfo {
+    /// Whether parameter `idx` (0-indexed into `params`, receiver excluded)
+    /// was declared `out`. False when `is_out_flags` is empty or shorter than
+    /// `params` — the canonical read path for the `is_out_flags` convention.
+    pub fn is_param_out(&self, idx: usize) -> bool {
+        self.is_out_flags.get(idx).copied().unwrap_or(false)
+    }
 }
 
 /// Definition of a class type.

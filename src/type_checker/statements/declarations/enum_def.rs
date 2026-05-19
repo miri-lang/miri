@@ -155,9 +155,11 @@ impl TypeChecker {
         for method_stmt in methods {
             if let StatementKind::FunctionDeclaration(decl) = &method_stmt.node {
                 let mut params = Vec::with_capacity(decl.params.len());
+                let mut is_out_flags = Vec::with_capacity(decl.params.len());
                 for param in &decl.params {
                     let param_ty = self.resolve_type_expression(&param.typ, context);
                     params.push((param.name.clone(), param_ty));
+                    is_out_flags.push(param.is_out);
                 }
 
                 let return_type = if let Some(ret_expr) = &decl.return_type {
@@ -170,6 +172,7 @@ impl TypeChecker {
                     decl.name.clone(),
                     MethodInfo {
                         params,
+                        is_out_flags,
                         return_type,
                         visibility: MemberVisibility::Public,
                         is_constructor: false,

@@ -823,25 +823,36 @@ impl<'a> UseAfterMoveChecker<'a> {
         class_name: &str,
         method_name: &str,
     ) -> Option<&EscapeSummary> {
-        let key = format!("{class_name}_{method_name}");
-        if let Some(s) = self.escape_summaries.get(&key) {
-            return Some(s);
-        }
-        // Walk base_class chain for inherited methods.
+        let owner = self.resolve_method_owner_class(class_name, method_name)?;
+        self.escape_summaries.get(&format!("{owner}_{method_name}"))
+    }
+
+    /// Walk the `base_class` chain to find the class that owns a registered
+    /// escape summary for `method_name`. Returns the first class whose
+    /// `"ClassName_method"` key is present in `escape_summaries`, or `None`
+    /// if no class in the chain has one.
+    fn resolve_method_owner_class<'b>(
+        &'b self,
+        class_name: &'b str,
+        method_name: &str,
+    ) -> Option<&'b str> {
         let mut current = class_name;
         loop {
+            let key = format!("{current}_{method_name}");
+            if self.escape_summaries.contains_key(&key) {
+                return Some(current);
+            }
             match self.type_definitions.get(current) {
                 Some(TypeDefinition::Class(cd)) => match &cd.base_class {
-                    Some(base) => {
-                        let base_key = format!("{base}_{method_name}");
-                        if let Some(s) = self.escape_summaries.get(&base_key) {
-                            return Some(s);
-                        }
-                        current = base.as_str();
-                    }
+                    Some(base) => current = base.as_str(),
                     None => return None,
                 },
-                _ => return None,
+                None
+                | Some(TypeDefinition::Struct(_))
+                | Some(TypeDefinition::Enum(_))
+                | Some(TypeDefinition::Generic(_))
+                | Some(TypeDefinition::Alias(_))
+                | Some(TypeDefinition::Trait(_)) => return None,
             }
         }
     }
@@ -913,11 +924,16 @@ impl<'a> UseAfterMoveChecker<'a> {
         }
     }
 
-    /// Returns the qualified `"ClassName_method"` key for a method-call callee.
+    /// Returns the qualified `"ClassName_method"` key for a method-call callee,
+    /// resolved to the **defining** class — walks the `base_class` chain so an
+    /// inherited method's chain key points at the class that actually has the
+    /// escape summary (mirrors [`Self::lookup_static_method_summary`]).
     ///
     /// Used so `build_chain` can look up the escape summary by its canonical key
-    /// rather than the bare method name.  Returns `None` for non-method callees
-    /// or when the receiver type is unresolved.
+    /// rather than the bare method name, and so the user-visible "consumed by"
+    /// label names the class that owns the field-store sink rather than the
+    /// receiver's static type. Returns `None` for non-method callees or when
+    /// the receiver type is unresolved.
     fn extract_method_chain_key(&self, callee: &Expression) -> Option<String> {
         let ExpressionKind::Member(obj_expr, method_expr) = &callee.node else {
             return None;
@@ -929,7 +945,10 @@ impl<'a> UseAfterMoveChecker<'a> {
         let TypeKind::Custom(type_name, _) = &receiver_ty.kind else {
             return None;
         };
-        Some(format!("{type_name}_{method_name}"))
+        let owner = self
+            .resolve_method_owner_class(type_name, method_name)
+            .unwrap_or(type_name);
+        Some(format!("{owner}_{method_name}"))
     }
 
     /// If `callee` is a method call (`Member(receiver, method_name)`), looks up

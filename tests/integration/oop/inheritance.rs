@@ -466,3 +466,21 @@ fn main()
         "-7",
     );
 }
+
+#[test]
+fn test_override_drops_out_modifier_is_rejected() {
+    // ABI safety: parent declares `out`, child override drops it. A vtable
+    // caller would box the scalar into a stack slot while the child callee
+    // treats the param as a plain int → silent memory corruption. Must error.
+    assert_compiler_error(
+        r#"
+abstract class Base
+    fn inc(n out int)
+
+class Child extends Base
+    fn inc(n int)
+        let _ = n
+    "#,
+        "incompatible 'out' modifier",
+    );
+}
