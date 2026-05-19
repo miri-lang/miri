@@ -93,7 +93,9 @@ pub fn resolve_type(tc: &TypeChecker, expr: &Expression) -> Type {
                 match name.as_str() {
                     "int" => Type::new(TypeKind::Int, expr.span),
                     "bool" => Type::new(TypeKind::Boolean, expr.span),
-                    "String" => Type::new(TypeKind::String, expr.span),
+                    s if s == crate::ast::types::STRING_TYPE_NAME => {
+                        Type::new(TypeKind::String, expr.span)
+                    }
                     "float" => Type::new(TypeKind::Float, expr.span),
                     "void" => Type::new(TypeKind::Void, expr.span),
                     // Fallback: Unknown primitive type - use Error type instead of panicking
@@ -200,8 +202,10 @@ pub fn bind_pattern(
                     match parent.as_ref() {
                         Pattern::Identifier(name) => name == "Some",
                         Pattern::Member(enum_pat, variant) => {
-                            matches!(enum_pat.as_ref(), Pattern::Identifier(n) if n == "Option")
-                                && variant == "Some"
+                            matches!(
+                                enum_pat.as_ref(),
+                                Pattern::Identifier(n) if n == crate::ast::types::OPTION_TYPE_NAME
+                            ) && variant == "Some"
                         }
                         _ => false,
                     }

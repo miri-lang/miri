@@ -80,6 +80,85 @@ pub enum Rvalue {
     Allocate(Operand, Operand, Operand),
 }
 
+fn write_comma_separated(f: &mut fmt::Formatter<'_>, ops: &[Operand]) -> fmt::Result {
+    if let Some((first, rest)) = ops.split_first() {
+        write!(f, "{}", first)?;
+        for op in rest {
+            write!(f, ", {}", op)?;
+        }
+    }
+    Ok(())
+}
+
+fn write_aggregate(
+    f: &mut fmt::Formatter<'_>,
+    kind: &AggregateKind,
+    ops: &[Operand],
+) -> fmt::Result {
+    match kind {
+        AggregateKind::Tuple => {
+            write!(f, "(")?;
+            write_comma_separated(f, ops)?;
+            write!(f, ")")
+        }
+        AggregateKind::FormattedString => {
+            write!(f, "f\"")?;
+            if let Some((first, rest)) = ops.split_first() {
+                write!(f, "{{{}}}", first)?;
+                for op in rest {
+                    write!(f, ", {{{}}}", op)?;
+                }
+            }
+            write!(f, "\"")
+        }
+        AggregateKind::Array | AggregateKind::List => {
+            write!(f, "[")?;
+            write_comma_separated(f, ops)?;
+            write!(f, "]")
+        }
+        AggregateKind::Set => {
+            write!(f, "{{")?;
+            write_comma_separated(f, ops)?;
+            write!(f, "}}")
+        }
+        AggregateKind::Map => {
+            write!(f, "{{")?;
+            let mut chunks = ops.chunks(2);
+            if let Some(first) = chunks.next() {
+                if first.len() == 2 {
+                    write!(f, "{}: {}", first[0], first[1])?;
+                }
+                for chunk in chunks {
+                    if chunk.len() == 2 {
+                        write!(f, ", {}: {}", chunk[0], chunk[1])?;
+                    }
+                }
+            }
+            write!(f, "}}")
+        }
+        AggregateKind::Struct(ty) | AggregateKind::Class(ty) => {
+            write!(f, "{} {{ ", ty)?;
+            write_comma_separated(f, ops)?;
+            write!(f, " }}")
+        }
+        AggregateKind::Enum(type_name, variant_name) => {
+            write!(f, "{}.{}(", type_name, variant_name)?;
+            write_comma_separated(f, ops)?;
+            write!(f, ")")
+        }
+        AggregateKind::Option => {
+            write!(f, "Some(")?;
+            write_comma_separated(f, ops)?;
+            write!(f, ")")
+        }
+        AggregateKind::Closure(name, _) => {
+            write!(f, "closure<{}>(", name)?;
+            write_comma_separated(f, ops)?;
+            write!(f, ")")
+        }
+    }
+}
+
 impl fmt::Display for Rvalue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -92,111 +171,10 @@ impl fmt::Display for Rvalue {
             Rvalue::GpuIntrinsic(intrinsic) => write!(f, "{}", intrinsic),
             Rvalue::MathIntrinsic(intrinsic, args) => {
                 write!(f, "{}(", intrinsic)?;
-                if let Some((first, rest)) = args.split_first() {
-                    write!(f, "{}", first)?;
-                    for op in rest {
-                        write!(f, ", {}", op)?;
-                    }
-                }
+                write_comma_separated(f, args)?;
                 write!(f, ")")
             }
-            Rvalue::Aggregate(kind, ops) => match kind {
-                AggregateKind::Tuple => {
-                    write!(f, "(")?;
-                    if let Some((first, rest)) = ops.split_first() {
-                        write!(f, "{}", first)?;
-                        for op in rest {
-                            write!(f, ", {}", op)?;
-                        }
-                    }
-                    write!(f, ")")
-                }
-                AggregateKind::FormattedString => {
-                    write!(f, "f\"")?;
-                    if let Some((first, rest)) = ops.split_first() {
-                        write!(f, "{{{}}}", first)?;
-                        for op in rest {
-                            write!(f, ", {{{}}}", op)?;
-                        }
-                    }
-                    write!(f, "\"")
-                }
-                AggregateKind::Array | AggregateKind::List => {
-                    write!(f, "[")?;
-                    if let Some((first, rest)) = ops.split_first() {
-                        write!(f, "{}", first)?;
-                        for op in rest {
-                            write!(f, ", {}", op)?;
-                        }
-                    }
-                    write!(f, "]")
-                }
-                AggregateKind::Set => {
-                    write!(f, "{{")?;
-                    if let Some((first, rest)) = ops.split_first() {
-                        write!(f, "{}", first)?;
-                        for op in rest {
-                            write!(f, ", {}", op)?;
-                        }
-                    }
-                    write!(f, "}}")
-                }
-                AggregateKind::Map => {
-                    write!(f, "{{")?;
-                    let mut chunks = ops.chunks(2);
-                    if let Some(first) = chunks.next() {
-                        if first.len() == 2 {
-                            write!(f, "{}: {}", first[0], first[1])?;
-                        }
-                        for chunk in chunks {
-                            if chunk.len() == 2 {
-                                write!(f, ", {}: {}", chunk[0], chunk[1])?;
-                            }
-                        }
-                    }
-                    write!(f, "}}")
-                }
-                AggregateKind::Struct(ty) | AggregateKind::Class(ty) => {
-                    write!(f, "{} {{ ", ty)?;
-                    if let Some((first, rest)) = ops.split_first() {
-                        write!(f, "{}", first)?;
-                        for op in rest {
-                            write!(f, ", {}", op)?;
-                        }
-                    }
-                    write!(f, " }}")
-                }
-                AggregateKind::Enum(type_name, variant_name) => {
-                    write!(f, "{}.{}(", type_name, variant_name)?;
-                    if let Some((first, rest)) = ops.split_first() {
-                        write!(f, "{}", first)?;
-                        for op in rest {
-                            write!(f, ", {}", op)?;
-                        }
-                    }
-                    write!(f, ")")
-                }
-                AggregateKind::Option => {
-                    write!(f, "Some(")?;
-                    if let Some((first, rest)) = ops.split_first() {
-                        write!(f, "{}", first)?;
-                        for op in rest {
-                            write!(f, ", {}", op)?;
-                        }
-                    }
-                    write!(f, ")")
-                }
-                AggregateKind::Closure(name, _) => {
-                    write!(f, "closure<{}>(", name)?;
-                    if let Some((first, rest)) = ops.split_first() {
-                        write!(f, "{}", first)?;
-                        for op in rest {
-                            write!(f, ", {}", op)?;
-                        }
-                    }
-                    write!(f, ")")
-                }
-            },
+            Rvalue::Aggregate(kind, ops) => write_aggregate(f, kind, ops),
             Rvalue::Phi(args) => {
                 write!(f, "phi(")?;
                 if let Some((first, rest)) = args.split_first() {
@@ -207,7 +185,6 @@ impl fmt::Display for Rvalue {
                 }
                 write!(f, ")")
             }
-
             Rvalue::Allocate(size, align, alloc) => {
                 write!(f, "alloc({}, {}, {})", size, align, alloc)
             }

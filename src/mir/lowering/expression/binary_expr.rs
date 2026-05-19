@@ -297,7 +297,7 @@ pub(crate) fn lower_binary_expr(
     //   BinaryOp::NotEqual → NOT Equatable::equals
     if let Some(lhs_ty) = ctx.type_checker.get_type(lhs.id) {
         let class_name = match &lhs_ty.kind {
-            TypeKind::String => Some("String".to_string()),
+            TypeKind::String => Some(crate::ast::types::STRING_TYPE_NAME.to_string()),
             TypeKind::Custom(name, _) => Some(name.clone()),
             _ => None,
         };

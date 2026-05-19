@@ -87,8 +87,10 @@ pub(crate) fn lower_match_expr(
                         continue;
                     }
                     Pattern::Member(parent, member)
-                        if matches!(&**parent, Pattern::Identifier(n) if n == "Option")
-                            && member == "None" =>
+                        if matches!(
+                            &**parent,
+                            Pattern::Identifier(n) if n == crate::ast::types::OPTION_TYPE_NAME
+                        ) && member == "None" =>
                     {
                         arm_discrs.push(0);
                         if seen_discrs.insert(0) {
@@ -100,8 +102,10 @@ pub(crate) fn lower_match_expr(
                         let is_some = match &**parent {
                             Pattern::Identifier(name) => name == "Some",
                             Pattern::Member(enum_pat, variant) => {
-                                matches!(&**enum_pat, Pattern::Identifier(n) if n == "Option")
-                                    && variant == "Some"
+                                matches!(
+                                    &**enum_pat,
+                                    Pattern::Identifier(n) if n == crate::ast::types::OPTION_TYPE_NAME
+                                ) && variant == "Some"
                             }
                             _ => false,
                         };

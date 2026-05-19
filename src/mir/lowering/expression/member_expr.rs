@@ -367,7 +367,7 @@ pub(crate) fn lower_member_expr(
     // Handle class method-as-property access (e.g. s.length, s.size).
     // Zero-arg methods on class types can be accessed as properties.
     let class_name = match &obj_ty.kind {
-        TypeKind::String => Some("String".to_string()),
+        TypeKind::String => Some(crate::ast::types::STRING_TYPE_NAME.to_string()),
         TypeKind::Custom(name, _) => Some(name.clone()),
         k => k.as_builtin_collection().map(|b| b.name().to_string()),
     };

@@ -4,13 +4,14 @@
 //! Method dispatch lowering — name mangling, inheritance resolution, `lower_call`.
 
 use crate::ast::expression::Expression;
+use crate::ast::types::{STRING_TYPE_NAME, TUPLE_TYPE_NAME};
 use crate::ast::{BuiltinCollectionKind, ExpressionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::{
     MathIntrinsic, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind,
 };
-use crate::runtime_fns::rt;
+use crate::runtime_fns::{cow_fn, rt};
 use crate::type_checker::context::{
     class_needs_vtable, vtable_slot_index, MethodInfo, TypeDefinition,
 };
@@ -25,7 +26,6 @@ struct CollectionIntrinsicCall<'a> {
     call_expr_id: usize,
     obj: &'a Expression,
     obj_ty: &'a Type,
-    class_name: &'a str,
     method_name: &'a str,
     args: &'a [Expression],
 }
@@ -69,7 +69,7 @@ fn type_kind_to_mangle_str(kind: &TypeKind) -> String {
         TypeKind::Float | TypeKind::F64 => "float".to_string(),
         TypeKind::F32 => "f32".to_string(),
         TypeKind::Boolean => "bool".to_string(),
-        TypeKind::String => "String".to_string(),
+        TypeKind::String => STRING_TYPE_NAME.to_string(),
         TypeKind::Void => "void".to_string(),
         TypeKind::Custom(name, None) => name.clone(),
         TypeKind::Custom(name, Some(_)) => name.clone(),
@@ -508,8 +508,8 @@ fn try_lower_method_call(
 
     let obj_ty = obj_ty_override.as_ref().unwrap_or(raw_obj_ty);
     let class_name = match &obj_ty.kind {
-        TypeKind::String => Some("String".to_string()),
-        TypeKind::Tuple(_) => Some("Tuple".to_string()),
+        TypeKind::String => Some(STRING_TYPE_NAME.to_string()),
+        TypeKind::Tuple(_) => Some(TUPLE_TYPE_NAME.to_string()),
         TypeKind::Custom(name, _) => Some(name.clone()),
         k => k.as_builtin_collection().map(|b| b.name().to_string()),
     };
@@ -532,7 +532,6 @@ fn try_lower_method_call(
         call_expr_id,
         obj,
         obj_ty,
-        class_name: &class_name,
         method_name,
         args,
     };
@@ -563,20 +562,14 @@ fn try_lower_method_call(
         // CoW check: emit miri_rt_{list,set,map}_cow before any mutation that goes
         // through general method dispatch (pop, remove, remove_at, clear, sort,
         // reverse for List; add, remove, clear for Set; set, remove, clear for Map).
-        let self_op = if is_collection_mutation_method(&class_name, method_name) {
-            let cow_fn = match class_name.as_str() {
-                "List" => rt::LIST_COW,
-                "Set" => rt::SET_COW,
-                "Map" => rt::MAP_COW,
-                _ => "",
-            };
-            if !cow_fn.is_empty() {
-                emit_cow_check(ctx, self_op, obj_ty, cow_fn, *span)
-            } else {
-                self_op
-            }
-        } else {
-            self_op
+        let self_op = match obj_ty
+            .kind
+            .as_builtin_collection()
+            .filter(|k| k.mutates_method(method_name))
+            .and_then(cow_fn)
+        {
+            Some(cow) => emit_cow_check(ctx, self_op, obj_ty, cow, *span),
+            None => self_op,
         };
 
         // Track the receiver local for Perceus-compatible temporary drop.
@@ -758,22 +751,6 @@ fn emit_cow_check(
     Operand::Move(Place::new(self_local))
 }
 
-/// True when `method_name` on `class_name` mutates the collection's data.
-///
-/// Methods handled by `try_lower_collection_intrinsic` (push, insert, set on List) are
-/// excluded here — they receive the CoW check inline in that function.
-fn is_collection_mutation_method(class_name: &str, method_name: &str) -> bool {
-    match class_name {
-        "List" => matches!(
-            method_name,
-            "pop" | "remove" | "remove_at" | "clear" | "sort" | "reverse"
-        ),
-        "Set" => matches!(method_name, "add" | "remove" | "clear"),
-        "Map" => matches!(method_name, "set" | "remove" | "clear"),
-        _ => false,
-    }
-}
-
 /// Lower optimized collection methods directly to MIR instructions or intrinsics.
 ///
 /// This prevents monomorphization conflicts when multiple instantiations (e.g., List<int>, List<bool>)
@@ -789,15 +766,16 @@ fn try_lower_collection_intrinsic(
         call_expr_id,
         obj,
         obj_ty,
-        class_name,
         method_name,
         args,
     } = call;
+    let builtin = obj_ty.kind.as_builtin_collection();
+    let is_indexable_collection = matches!(
+        builtin,
+        Some(BuiltinCollectionKind::List | BuiltinCollectionKind::Array)
+    ) || obj_ty.kind.is_tuple();
     // element_at / get on List, Array, Tuple: emit a direct index-read.
-    if args.len() == 1
-        && matches!(method_name, "element_at" | "get")
-        && matches!(class_name, "List" | "Array" | "Tuple")
-    {
+    if args.len() == 1 && matches!(method_name, "element_at" | "get") && is_indexable_collection {
         let obj_watermark = ctx.body.local_decls.len();
         let obj_op = lower_expression(ctx, obj, None)?;
         // Track the source local for potential cleanup of expression temps.
@@ -872,7 +850,7 @@ fn try_lower_collection_intrinsic(
     }
 
     // push(item) on List: emit miri_rt_list_push directly.
-    if args.len() == 1 && method_name == "push" && class_name == "List" {
+    if args.len() == 1 && method_name == "push" && builtin == Some(BuiltinCollectionKind::List) {
         let item_watermark = ctx.body.local_decls.len();
         let obj_op = lower_expression(ctx, obj, None)?;
         let obj_op = emit_cow_check(ctx, obj_op, obj_ty, rt::LIST_COW, *span);
@@ -924,7 +902,7 @@ fn try_lower_collection_intrinsic(
     }
 
     // insert(index, item) on List: emit miri_rt_list_insert directly.
-    if args.len() == 2 && method_name == "insert" && class_name == "List" {
+    if args.len() == 2 && method_name == "insert" && builtin == Some(BuiltinCollectionKind::List) {
         let item_watermark = ctx.body.local_decls.len();
         let obj_op = lower_expression(ctx, obj, None)?;
         let obj_op = emit_cow_check(ctx, obj_op, obj_ty, rt::LIST_COW, *span);
@@ -971,11 +949,17 @@ fn try_lower_collection_intrinsic(
     }
 
     // set(index, value) on List / Array: emit a direct indexed assignment.
-    if args.len() == 2 && method_name == "set" && matches!(class_name, "List" | "Array") {
+    if args.len() == 2
+        && method_name == "set"
+        && matches!(
+            builtin,
+            Some(BuiltinCollectionKind::List | BuiltinCollectionKind::Array)
+        )
+    {
         let obj_watermark = ctx.body.local_decls.len();
         let obj_op = lower_expression(ctx, obj, None)?;
         // CoW only for List (Arrays are fixed-size and share no aliasing semantics here).
-        let obj_op = if class_name == "List" {
+        let obj_op = if builtin == Some(BuiltinCollectionKind::List) {
             emit_cow_check(ctx, obj_op, obj_ty, rt::LIST_COW, *span)
         } else {
             obj_op
