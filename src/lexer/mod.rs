@@ -54,10 +54,18 @@ pub(crate) enum LexerWork {
 }
 
 /// Bracketing categories tracked for indentation suppression.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BracketLevel {
     Paren,
     Bracket,
     Brace,
+}
+
+/// One entry in the open-bracket stack: the kind of bracket and the
+/// `indent_level` that was active when it opened.
+struct OpenBracket {
+    kind: BracketLevel,
+    indent_baseline: usize,
 }
 
 /// Indentation-aware lexer for Miri source code.
@@ -71,9 +79,14 @@ pub struct Lexer<'source> {
     indent_stack: Vec<usize>,
     indent_level: usize,
     eof_handled: bool,
-    paren_level: usize,
-    bracket_level: usize,
-    curly_brace_level: usize,
+    /// Stack of currently-open bracket pairs (any of `(`, `[`, `{`), each
+    /// carrying the `indent_level` that was active when it opened. The
+    /// baseline is used to detect whether a newline inside the bracket lies
+    /// in a nested code block that the bracket itself opened (e.g. a
+    /// multi-statement lambda body passed as an argument) — only then should
+    /// `ExpressionStatementEnd` fire inside the bracket; otherwise the
+    /// newline is just whitespace continuing the expression.
+    open_brackets: Vec<OpenBracket>,
     previous_tokens: [Option<Token>; 2],
     previous_tokens_count: usize,
 }
@@ -102,9 +115,7 @@ impl<'source> Lexer<'source> {
             indent_stack: vec![0],
             indent_level: 0,
             eof_handled: false,
-            paren_level: 0,
-            bracket_level: 0,
-            curly_brace_level: 0,
+            open_brackets: Vec::new(),
             previous_tokens: [None, None],
             previous_tokens_count: 0,
         }
@@ -142,8 +153,8 @@ impl<'source> Lexer<'source> {
                 self.bump_open(level);
                 Step::Emit((token, Span::new(start, end)))
             }
-            LexAction::TrackClose(level) => {
-                self.bump_close(level);
+            LexAction::TrackClose(_level) => {
+                self.bump_close();
                 Step::Emit((token, Span::new(start, end)))
             }
             LexAction::Regex(quote) => self.dispatch_regex_literal(quote, start, end),
@@ -162,21 +173,14 @@ impl<'source> Lexer<'source> {
     }
 
     fn bump_open(&mut self, level: BracketLevel) {
-        match level {
-            BracketLevel::Paren => self.paren_level += 1,
-            BracketLevel::Bracket => self.bracket_level += 1,
-            BracketLevel::Brace => self.curly_brace_level += 1,
-        }
+        self.open_brackets.push(OpenBracket {
+            kind: level,
+            indent_baseline: self.indent_level,
+        });
     }
 
-    fn bump_close(&mut self, level: BracketLevel) {
-        match level {
-            BracketLevel::Paren => self.paren_level = self.paren_level.saturating_sub(1),
-            BracketLevel::Bracket => self.bracket_level = self.bracket_level.saturating_sub(1),
-            BracketLevel::Brace => {
-                self.curly_brace_level = self.curly_brace_level.saturating_sub(1)
-            }
-        }
+    fn bump_close(&mut self) {
+        self.open_brackets.pop();
     }
 
     fn dispatch_regex_literal(&mut self, quote: char, start: usize, end: usize) -> Step {
@@ -270,6 +274,13 @@ impl<'source> Lexer<'source> {
             return Ok(());
         }
 
+        // A line that begins with `.<ident-or-digit>` continues the previous
+        // expression as a member-access / method-call chain. Emit no
+        // statement terminator and apply no indent change for such lines.
+        if is_leading_dot_continuation(self.inner.source(), scan.content_start) {
+            return Ok(());
+        }
+
         self.apply_indent_change(scan.indent_len, token_end)?;
 
         if self.is_expression_statement_end() {
@@ -301,7 +312,7 @@ impl<'source> Lexer<'source> {
 
         if indent_len > last_indent {
             if self.is_outside_paired_tokens()
-                || (self.paren_level > 0 && self.prev_tokens_match_function_declaration())
+                || (self.has_open_paren() && self.prev_tokens_match_function_declaration())
             {
                 self.push_indent(token_end, indent_len);
             }
@@ -443,13 +454,37 @@ impl<'source> Lexer<'source> {
     }
 
     fn is_outside_paired_tokens(&self) -> bool {
-        self.paren_level == 0 && self.bracket_level == 0 && self.curly_brace_level == 0
+        self.open_brackets.is_empty()
     }
 
+    fn has_open_paren(&self) -> bool {
+        self.open_brackets
+            .iter()
+            .any(|b| b.kind == BracketLevel::Paren)
+    }
+
+    /// True when the current position sits inside a code block — i.e. inside
+    /// an indented scope where statements are separated by newlines. At the
+    /// top level of the file this is `indent_level > 0`; inside a bracket
+    /// pair it is `indent_level > baseline` where `baseline` is the
+    /// `indent_level` recorded when the innermost bracket opened. Argument
+    /// lists, binary expressions and collection literals do not push an
+    /// `Indent` token, so their continuation lines stay equal to the
+    /// baseline and are NOT treated as code blocks.
     fn is_inside_code_block(&self) -> bool {
-        self.indent_level > 0
+        let baseline = self
+            .open_brackets
+            .last()
+            .map(|b| b.indent_baseline)
+            .unwrap_or(0);
+        self.indent_level > baseline
     }
 
+    /// A newline terminates a statement either at top level (outside every
+    /// bracket pair) or inside a nested code block that the lexer opened
+    /// with an `Indent` token (e.g. a multi-statement lambda body passed as
+    /// an argument). Inside a plain `(...)`, `[...]`, or `{...}` with no
+    /// nested code block, a newline is whitespace and emits nothing.
     fn is_expression_statement_end(&self) -> bool {
         (self.is_outside_paired_tokens() || self.is_inside_code_block())
             && !self.match_previous_token(Token::ExpressionStatementEnd)
@@ -464,6 +499,9 @@ struct IndentScan {
     indent_len: usize,
     found_comment: bool,
     found_newline: bool,
+    /// Byte offset of the first non-whitespace, non-comment-introducer
+    /// character on the line — i.e. where the line's content begins.
+    content_start: usize,
 }
 
 fn scan_indent(src: &str, mut cursor: usize) -> IndentScan {
@@ -499,5 +537,23 @@ fn scan_indent(src: &str, mut cursor: usize) -> IndentScan {
         indent_len,
         found_comment,
         found_newline,
+        content_start: cursor,
     }
+}
+
+/// A continuation line starts with a `.` followed by an identifier or digit
+/// (e.g. `.foo()`, `.field`, `.0`). Such a line continues the previous
+/// expression as a member-access chain, so the lexer must suppress the
+/// statement terminator and any indent change between the lines.
+///
+/// `..` and `..=` (range operators) are explicitly NOT continuations.
+fn is_leading_dot_continuation(src: &str, content_start: usize) -> bool {
+    let bytes = src.as_bytes();
+    if bytes.get(content_start).copied() != Some(b'.') {
+        return false;
+    }
+    matches!(
+        bytes.get(content_start + 1).copied(),
+        Some(c) if c.is_ascii_alphanumeric() || c == b'_'
+    )
 }
