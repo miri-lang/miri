@@ -56,6 +56,21 @@ pub const OPTION_TYPE_NAME: &str = "Option";
 /// stdlib method-registry lookups.
 pub const STRING_TYPE_NAME: &str = "String";
 
+/// Canonical class name for the compiler-builtin `Dim3` struct used in GPU
+/// kernel context fields.
+pub const DIM3_TYPE_NAME: &str = "Dim3";
+
+/// Canonical class name for the compiler-builtin `GpuContext` struct made
+/// available inside `gpu fn` bodies.
+pub const GPU_CONTEXT_TYPE_NAME: &str = "GpuContext";
+
+/// Canonical class name for the opaque `Kernel` handle returned by `gpu fn`s.
+pub const KERNEL_TYPE_NAME: &str = "Kernel";
+
+/// Canonical class name for the stdlib `GpuArray<T>` type — the only managed
+/// container that is GPU-compatible inside `gpu fn` bodies.
+pub const GPU_ARRAY_TYPE_NAME: &str = "GpuArray";
+
 impl BuiltinCollectionKind {
     /// Returns the `BuiltinCollectionKind` for a class name, or `None` if the
     /// name does not match a built-in collection.
