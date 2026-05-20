@@ -2,3 +2,4 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 pub mod cranelift;
+pub mod wgsl;
