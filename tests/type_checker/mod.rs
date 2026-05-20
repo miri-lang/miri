@@ -15,6 +15,7 @@ pub mod function;
 pub mod generic_constraints;
 pub mod generics;
 pub mod gpu_launch;
+pub mod gpu_type_check;
 pub mod inherited_members;
 pub mod integer;
 pub mod lambda;

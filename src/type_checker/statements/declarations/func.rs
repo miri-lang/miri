@@ -40,10 +40,11 @@
 //! - Return type compatibility
 
 use crate::ast::factory::make_type;
-use crate::ast::types::TypeKind;
+use crate::ast::types::{TypeKind, GPU_CONTEXT_TYPE_NAME, KERNEL_TYPE_NAME};
 use crate::ast::*;
 use crate::type_checker::context::{Context, SymbolInfo};
 use crate::type_checker::statements::{check_returns, ReturnStatus};
+use crate::type_checker::utils::is_gpu_compatible;
 use crate::type_checker::TypeChecker;
 
 pub(crate) struct FunctionDeclarationInfo<'a> {
@@ -273,7 +274,7 @@ impl TypeChecker {
             );
         }
 
-        let kernel_return_type = make_type(TypeKind::Custom("Kernel".to_string(), None));
+        let kernel_return_type = make_type(TypeKind::Custom(KERNEL_TYPE_NAME.to_string(), None));
 
         if let Some(info) = self.global_scope.get_mut(name) {
             if let TypeKind::Function(func) = &info.ty.kind {
@@ -298,7 +299,7 @@ impl TypeChecker {
             }))),
         );
 
-        let gpu_context_type = make_type(TypeKind::Custom("GpuContext".to_string(), None));
+        let gpu_context_type = make_type(TypeKind::Custom(GPU_CONTEXT_TYPE_NAME.to_string(), None));
         context.define(
             "gpu_context".to_string(),
             SymbolInfo::new(
@@ -310,6 +311,32 @@ impl TypeChecker {
                 None,
             ),
         );
+
+        self.check_gpu_function_param_types(params, context);
+    }
+
+    /// Rejects `gpu fn` parameters whose declared type is not GPU-compatible.
+    ///
+    /// Runs after `check_function_parameters` has resolved each `param.typ` and
+    /// defined the parameter symbol, so the resolved type is already authoritative.
+    /// Mirrors [`Self::check_gpu_variable_type`] for the parameter list.
+    fn check_gpu_function_param_types(&mut self, params: &[Parameter], context: &mut Context) {
+        for param in params {
+            let param_type = self.resolve_type_expression(&param.typ, context);
+            if matches!(param_type.kind, TypeKind::Error) {
+                continue;
+            }
+            if is_gpu_compatible(&param_type.kind) {
+                continue;
+            }
+            self.report_error(
+                format!(
+                    "Parameter '{}' has type '{}' which is not GPU-compatible: only numeric primitives, booleans, and GPU types may appear in a 'gpu fn' signature",
+                    param.name, param_type
+                ),
+                param.typ.span,
+            );
+        }
     }
 
     fn check_function_body(

@@ -44,6 +44,7 @@ use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, SymbolInfo};
+use crate::type_checker::utils::is_gpu_compatible;
 use crate::type_checker::TypeChecker;
 
 impl TypeChecker {
@@ -111,6 +112,7 @@ impl TypeChecker {
         span: Span,
     ) {
         let inferred_type = self.determine_variable_type(decl, context, span);
+        self.check_gpu_variable_type(&decl.name, &inferred_type, context, span);
         let is_mutable = matches!(decl.declaration_type, VariableDeclarationType::Mutable);
         let is_constant = matches!(decl.declaration_type, VariableDeclarationType::Constant);
 
@@ -138,6 +140,31 @@ impl TypeChecker {
             self.global_scope.insert(decl.name.clone(), info.clone());
         }
         context.define(decl.name.clone(), info);
+    }
+
+    fn check_gpu_variable_type(
+        &mut self,
+        name: &str,
+        inferred_type: &Type,
+        context: &Context,
+        span: Span,
+    ) {
+        if !context.in_gpu_function {
+            return;
+        }
+        if matches!(inferred_type.kind, TypeKind::Error) {
+            return;
+        }
+        if is_gpu_compatible(&inferred_type.kind) {
+            return;
+        }
+        self.report_error(
+            format!(
+                "Variable '{}' has type '{}' which is not GPU-compatible: only numeric primitives, booleans, and GPU types may be used inside a 'gpu fn'",
+                name, inferred_type
+            ),
+            span,
+        );
     }
 
     pub(crate) fn check_shadowing(

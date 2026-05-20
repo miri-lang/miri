@@ -164,6 +164,31 @@ impl TypeChecker {
                 }
             }
         }
+        self.check_gpu_discarded_expression(&expr_type, context, span);
+    }
+
+    /// Inside a `gpu fn`, an expression-statement whose value is discarded
+    /// (e.g. `echo()` where `echo` returns `String`) must still produce a
+    /// GPU-compatible type — otherwise the call would have to materialize a
+    /// forbidden value at runtime. Variable bindings are validated elsewhere
+    /// (see [`Self::check_gpu_variable_type`]).
+    fn check_gpu_discarded_expression(&mut self, expr_type: &Type, context: &Context, span: Span) {
+        if !context.in_gpu_function {
+            return;
+        }
+        if matches!(expr_type.kind, TypeKind::Error) {
+            return;
+        }
+        if crate::type_checker::utils::is_gpu_compatible(&expr_type.kind) {
+            return;
+        }
+        self.report_error(
+            format!(
+                "Discarded value of type '{}' is not GPU-compatible: only numeric primitives, booleans, and GPU types may be produced inside a 'gpu fn'",
+                expr_type
+            ),
+            span,
+        );
     }
 
     fn check_runtime_fn_decl(

@@ -468,6 +468,33 @@ impl TypeChecker {
         }
     }
 
+    /// Inside a `gpu fn`, rejects member access on a receiver whose type is
+    /// not GPU-compatible (e.g. `"hello".length()`, `some_struct().field`).
+    ///
+    /// `Meta(_)` receivers are intentionally skipped: a type-as-value
+    /// (`SomeEnum.Variant`, `String.from(...)`) carries the type itself, not
+    /// a runtime value, so it cannot leak a forbidden allocation. The actual
+    /// dispatched-to call is still validated through the normal call-arg /
+    /// var-decl / discarded-expression checks.
+    fn check_gpu_member_receiver(&mut self, obj_type: &Type, context: &Context, span: Span) {
+        if !context.in_gpu_function {
+            return;
+        }
+        if matches!(obj_type.kind, TypeKind::Error | TypeKind::Meta(_)) {
+            return;
+        }
+        if crate::type_checker::utils::is_gpu_compatible(&obj_type.kind) {
+            return;
+        }
+        self.report_error(
+            format!(
+                "Receiver of type '{}' is not GPU-compatible: only numeric primitives, booleans, and GPU types may appear as a member-access receiver inside a 'gpu fn'",
+                obj_type
+            ),
+            span,
+        );
+    }
+
     /// Infers the type of a member access expression (`obj.prop`).
     ///
     /// Handles tuple indexing, struct/class field access, enum variant access,
@@ -497,6 +524,8 @@ impl TypeChecker {
         if matches!(obj_type.kind, TypeKind::Error) {
             return make_type(TypeKind::Error);
         }
+
+        self.check_gpu_member_receiver(&obj_type, context, obj.span);
 
         if let TypeKind::Tuple(element_types) = &obj_type.kind {
             if let ExpressionKind::Literal(Literal::Integer(val)) = &prop.node {
