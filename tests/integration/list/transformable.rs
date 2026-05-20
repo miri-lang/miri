@@ -412,3 +412,101 @@ println(f\"{l.max() ?? 0}\")
         "42\n42\n42",
     );
 }
+
+#[test]
+fn list_multiline_filter_then_map_chain() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.list
+use system.collections.transformable
+
+fn main()
+    let xs = List([1, 2, 3, 4, 5])
+    let squared_evens = xs
+        .filter(fn(x int) bool: x % 2 == 0)
+        .map(fn(x int) int: x * x)
+    println(f\"{squared_evens.sum() ?? 0}\")
+",
+        "20",
+    );
+}
+
+#[test]
+fn list_multiline_chain_inside_function_body() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.list
+use system.collections.transformable
+
+fn sum_squared_evens(xs [int]) int
+    xs
+        .filter(fn(x int) bool: x % 2 == 0)
+        .map(fn(x int) int: x * x)
+        .reduce(0, fn(a int, b int) int: a + b)
+
+fn main()
+    println(f\"{sum_squared_evens(List([1, 2, 3, 4, 5]))}\")
+",
+        "20",
+    );
+}
+
+#[test]
+fn list_multiline_chain_at_top_level() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.list
+use system.collections.transformable
+
+let result = List([1, 2, 3, 4, 5])
+    .filter(fn(x int) bool: x > 2)
+    .map(fn(x int) int: x + 10)
+println(f\"{result.length()}\")
+for item in result
+    println(f\"{item}\")
+",
+        "3\n13\n14\n15",
+    );
+}
+
+#[test]
+fn list_multiline_chain_with_many_steps() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.list
+use system.collections.transformable
+
+fn main()
+    let r = List([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+        .filter(fn(x int) bool: x % 2 == 0)
+        .map(fn(x int) int: x * 3)
+        .take(3)
+        .reduce(0, fn(a int, b int) int: a + b)
+    println(f\"{r}\")
+",
+        "36",
+    );
+}
+
+#[test]
+fn list_multiline_chain_with_blank_line_breaks_chain() {
+    assert_runs_with_output(
+        "
+use system.io
+use system.collections.list
+use system.collections.transformable
+
+fn main()
+    let xs = List([1, 2, 3, 4, 5])
+        .filter(fn(x int) bool: x > 2)
+
+    let total = xs.reduce(0, fn(a int, b int) int: a + b)
+    println(f\"{total}\")
+",
+        "12",
+    );
+}
