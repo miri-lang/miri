@@ -187,7 +187,7 @@ pub mod ffi {
             siglongjmp(catch_buf, 1);
         }
         eprintln!("Runtime error: {}", msg);
-        std::process::abort();
+        die();
     }
 
     /// Helper that formats the standard "assertion failed at <location>" prefix.
@@ -212,6 +212,20 @@ pub mod ffi {
         }
     }
 
+    /// Clean-exit termination for user-facing runtime errors.
+    ///
+    /// Flushes stderr (so the preceding `eprintln!` is visible), then calls
+    /// `libc::_exit(1)`. Skips atexit handlers — so the `MIRI_LEAK_CHECK`
+    /// observer does not fire on intentional error exits, and on macOS the
+    /// kernel does not invoke `ReportCrash`. Compared with
+    /// `std::process::abort()` (which raises SIGABRT), this keeps test
+    /// processes out of `~/Library/Logs/DiagnosticReports` and avoids the
+    /// crash-daemon contention that slows parallel test runs.
+    fn die() -> ! {
+        let _ = io::stderr().flush();
+        unsafe { libc::_exit(1) }
+    }
+
     /// Reports a failed `assert(cond)` and aborts.
     ///
     /// # Safety
@@ -225,7 +239,7 @@ pub mod ffi {
         let prefix = format_assert_prefix(location);
         let suffix = user_msg_suffix(user_msg);
         eprintln!("Runtime error: {}{}", prefix, suffix);
-        std::process::abort();
+        die();
     }
 
     /// Reports a failed `assert_eq(actual, expected)` and aborts.
@@ -257,7 +271,7 @@ pub mod ffi {
             "Runtime error: {}: expected {}, got {}{}",
             prefix, expected_s, actual_s, suffix
         );
-        std::process::abort();
+        die();
     }
 
     /// Reports a failed `assert_ne(a, b)` and aborts.
@@ -283,7 +297,19 @@ pub mod ffi {
             "Runtime error: {}: values must differ, both were {}{}",
             prefix, val_s, suffix
         );
-        std::process::abort();
+        die();
+    }
+
+    /// Reports an integer divide-by-zero error and `_exit(1)`s.
+    ///
+    /// Called from compiled Miri code in place of a Cranelift `trapz`
+    /// hardware-trap instruction so the process terminates cleanly without
+    /// raising SIGTRAP/SIGILL. Keeps macOS `ReportCrash` out of the picture.
+    #[no_mangle]
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe extern "C" fn miri_rt_div_by_zero_panic() {
+        eprintln!("Runtime error: division by zero");
+        die();
     }
 
     /// Invokes the zero-argument closure `closure_ptr` and verifies it panics.
@@ -320,7 +346,7 @@ pub mod ffi {
     ) {
         if closure_ptr.is_null() {
             eprintln!("Runtime error: assert_panics: null closure");
-            std::process::abort();
+            die();
         }
 
         let loc_str: String = if location.is_null() {
@@ -359,7 +385,7 @@ pub mod ffi {
                 "Runtime error: {}: assertion failed: assert_panics: closure did not panic",
                 loc_str
             );
-            std::process::abort();
+            die();
         }
 
         // siglongjmp landed here. Restore the previous catch frame so nested
@@ -377,7 +403,7 @@ pub mod ffi {
                     "Runtime error: {}: assertion failed: assert_panics: expected panic containing \"{}\", got \"{}\"",
                     loc_str, exp, captured
                 );
-                std::process::abort();
+                die();
             }
         }
     }

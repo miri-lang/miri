@@ -513,6 +513,54 @@ fn main()
 }
 
 #[test]
+fn test_list_of_tuple_with_string_index_write_no_leak() {
+    // Direct index-write on List<(int, String)>: the inner String inside the
+    // tuple element must be DecRef'd along with the outer tuple. Without the
+    // Tuple/Option route in emit_managed_elem_decref the old tuple (and the
+    // 100 non-immortal Strings it carries) would leak — MIRI_LEAK_CHECK=1
+    // catches it.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    var l = List([(0, "pre" + "fix")])
+    var i = 0
+    while i < 100
+        l[0] = (i, "pre" + "fix")
+        i = i + 1
+    println(f"{l[0].0}")
+"#,
+        "99",
+    );
+}
+
+#[test]
+fn test_list_of_optional_string_index_write_no_leak() {
+    // Direct index-write on List<String?>: the previous Some(String) must be
+    // DecRef'd before the new value lands. Same leak surface as the tuple
+    // case but routed through the Option arm of emit_decref_value /
+    // emit_drop_option.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.list
+
+fn main()
+    var l = List<String?>()
+    l.push(Some("pre" + "fix"))
+    var i = 0
+    while i < 100
+        l[0] = Some("pre" + "fix")
+        i = i + 1
+    println(f"{l.length()}")
+"#,
+        "1",
+    );
+}
+
+#[test]
 fn test_list_of_100_strings_clear_no_leak() {
     // List<String>: push 100 non-immortal (concatenated) strings then clear().
     // MIRI_LEAK_CHECK=1 catches any string that was not DecRef'd by elem_drop_fn.

@@ -138,6 +138,11 @@ pub mod rt {
     pub const ASSERT_EQ_FAIL: &str = "miri_rt_assert_eq_fail";
     /// Compiler-internal: formats and aborts on a failed `assert_ne(a, b)`.
     pub const ASSERT_NE_FAIL: &str = "miri_rt_assert_ne_fail";
+    /// Compiler-internal: prints "division by zero" and `_exit(1)`s.
+    /// Replaces the Cranelift `trapz` instruction so the process terminates
+    /// cleanly without raising SIGTRAP/SIGILL (which on macOS would spawn the
+    /// `ReportCrash` daemon and serialize parallel test runs).
+    pub const DIV_BY_ZERO_PANIC: &str = "miri_rt_div_by_zero_panic";
 
     // ── String ────────────────────────────────────────────────────────────────
     pub const STRING_NEW: &str = "miri_rt_string_new";
@@ -263,6 +268,7 @@ pub mod rt {
         ASSERT_FAIL,
         ASSERT_EQ_FAIL,
         ASSERT_NE_FAIL,
+        DIV_BY_ZERO_PANIC,
         // String
         STRING_NEW,
         STRING_FREE,
