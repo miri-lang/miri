@@ -761,20 +761,25 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Decrements the RC of the existing element at `elem_addr` when the element
-    /// type is a managed heap object (String, List, Array, Set, Map, or user-defined class).
+    /// type is a managed heap object (String, List, Array, Set, Map, user-defined
+    /// class, Tuple, or Option).
     ///
     /// Called by `translate_collection_index_write` before the new value is stored
     /// so that overwriting an existing slot does not leak the old value.
     ///
-    /// Exhaustive over [`ElementShape`]: each managed shape routes to its own
-    /// helper. `Other` covers primitives that do not need a decref; the early
-    /// return below is the explicit no-op branch — no silent-skip catch-all.
+    /// Routing: built-in collections / String use their per-shape runtime decref
+    /// helper (the fast path); user classes call `__decref_TypeName`; Tuple /
+    /// Option (the only `ElementShape::Other` variants that `is_field_managed`
+    /// reports as managed) inline through `emit_decref_value`, which dispatches
+    /// to `emit_type_drop` and recursively releases nested managed fields.
+    /// Primitive `Other` shapes are the explicit no-op branch.
     pub(crate) fn emit_managed_elem_decref(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         elem_addr: Value,
         elem_type_kind: &TypeKind,
         ptr_type: cl_types::Type,
+        type_ctx: &TypeCtx,
     ) -> Result<(), CodegenError> {
         let shape = Self::classify_element_shape(elem_type_kind);
         let builtin_decref = match shape {
@@ -800,24 +805,31 @@ impl<'a> FunctionTranslator<'a> {
             )?;
             return Ok(());
         }
-        let ElementShape::UserClass(class_name) = shape else {
+        if let ElementShape::UserClass(class_name) = shape {
+            let mut decref_name = String::with_capacity(9 + class_name.len());
+            decref_name.push_str("__decref_");
+            decref_name.push_str(class_name);
+            let old_val = builder.ins().load(ptr_type, MemFlags::new(), elem_addr, 0);
+            let sig = Signature {
+                params: vec![AbiParam::new(ptr_type)],
+                returns: vec![],
+                call_conv: builder.func.signature.call_conv,
+            };
+            let func_id = ctx
+                .module
+                .declare_function(&decref_name, Linkage::Import, &sig)
+                .map_err(|e| CodegenError::declare_function(decref_name.clone(), e.to_string()))?;
+            let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
+            builder.ins().call(local_func, &[old_val]);
             return Ok(());
-        };
-        let mut decref_name = String::with_capacity(9 + class_name.len());
-        decref_name.push_str("__decref_");
-        decref_name.push_str(class_name);
-        let old_val = builder.ins().load(ptr_type, MemFlags::new(), elem_addr, 0);
-        let sig = Signature {
-            params: vec![AbiParam::new(ptr_type)],
-            returns: vec![],
-            call_conv: builder.func.signature.call_conv,
-        };
-        let func_id = ctx
-            .module
-            .declare_function(&decref_name, Linkage::Import, &sig)
-            .map_err(|e| CodegenError::declare_function(decref_name.clone(), e.to_string()))?;
-        let local_func = ctx.module.declare_func_in_func(func_id, builder.func);
-        builder.ins().call(local_func, &[old_val]);
+        }
+        // `Other` shapes that `is_field_managed` flags as managed (Tuple, Option)
+        // are heap-allocated with an RC header. Route through the inline
+        // decref-and-drop emitter so nested managed payloads are released.
+        if is_field_managed(elem_type_kind) {
+            let old_val = builder.ins().load(ptr_type, MemFlags::new(), elem_addr, 0);
+            Self::emit_decref_value(builder, ctx, elem_type_kind, old_val, type_ctx)?;
+        }
         Ok(())
     }
 

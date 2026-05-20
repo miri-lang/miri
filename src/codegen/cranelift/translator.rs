@@ -1493,7 +1493,7 @@ impl<'a> FunctionTranslator<'a> {
         // type is unknown (None), skip — the historical fallback treated it as
         // a primitive and emitted no decref.
         if let Some(elem_kind) = elem_type_kind {
-            Self::emit_managed_elem_decref(builder, ctx, elem_addr, elem_kind, ptr_type)?;
+            Self::emit_managed_elem_decref(builder, ctx, elem_addr, elem_kind, ptr_type, type_ctx)?;
         }
         builder.ins().store(MemFlags::new(), value, elem_addr, 0);
 
