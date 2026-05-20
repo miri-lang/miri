@@ -2,11 +2,12 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 use super::utils::{parser_error_test, parser_test};
+use miri::ast::common::MemberVisibility;
 use miri::ast::factory::{
-    binary, boolean_literal, expression_statement, int_literal_expression,
-    string_literal_expression, tuple,
+    binary, block, boolean_literal, expression_statement, func, int_literal_expression,
+    let_variable, string_literal_expression, tuple, variable_statement,
 };
-use miri::ast::BinaryOp;
+use miri::ast::{opt_expr, BinaryOp};
 use miri::error::syntax::SyntaxErrorKind;
 
 #[test]
@@ -77,5 +78,49 @@ fn test_parse_mismatched_parentheses() {
             expected: ")".into(),
             found: "]".into(),
         },
+    );
+}
+
+/// An expression inside parentheses can span multiple lines: newlines between
+/// `(` and `)` do not terminate the statement.
+#[test]
+fn test_parenthesized_expression_spans_multiple_lines() {
+    parser_test(
+        "
+(1 +
+    2)
+",
+        vec![expression_statement(binary(
+            int_literal_expression(1),
+            BinaryOp::Add,
+            int_literal_expression(2),
+        ))],
+    );
+}
+
+/// Same rule applies when the parenthesised expression is nested inside an
+/// indented code block (function body, if body, etc.) — historically the
+/// indent-aware lexer emitted a stray `ExpressionStatementEnd` inside the
+/// parens, breaking the expression.
+#[test]
+fn test_parenthesized_expression_multiline_inside_indented_block() {
+    parser_test(
+        "
+fn main()
+    let x = (1 +
+        2)
+",
+        vec![func("main").build(block(vec![variable_statement(
+            vec![let_variable(
+                "x",
+                None,
+                opt_expr(binary(
+                    int_literal_expression(1),
+                    BinaryOp::Add,
+                    int_literal_expression(2),
+                )),
+            )],
+            MemberVisibility::Public,
+        )]))],
     );
 }
