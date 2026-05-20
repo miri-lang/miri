@@ -463,10 +463,7 @@ use system.io
 gpu fn my_kernel()
     print("hello")
 "#;
-    type_checker_error_test(
-        input,
-        "Host function 'print' cannot be called from a GPU kernel",
-    );
+    type_checker_error_test(input, "not GPU-compatible");
 }
 
 #[test]

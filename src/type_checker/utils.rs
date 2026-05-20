@@ -12,7 +12,11 @@
 use super::context::{Context, TypeDefinition};
 use super::TypeChecker;
 use crate::ast::factory::make_type;
-use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
+use crate::ast::types::{
+    BuiltinCollectionKind, Type, TypeKind, DIM3_TYPE_NAME, GPU_ARRAY_TYPE_NAME,
+    GPU_CONTEXT_TYPE_NAME, KERNEL_TYPE_NAME,
+};
+use crate::ast::ExpressionKind;
 use crate::ast::*;
 use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
@@ -83,6 +87,97 @@ fn is_resource_inner<'a>(
             .as_ref()
             .is_some_and(|c| is_resource_inner(&c.kind, type_definitions, visited)),
         _ => false,
+    }
+}
+
+/// Determines whether a type is permitted inside a `gpu fn` body.
+///
+/// GPU kernels execute on the device with no heap allocator, no I/O, and no
+/// string runtime — so only a strict subset of types may cross the call /
+/// variable boundary in kernel code:
+///
+/// - Numeric primitives (all signed/unsigned integer widths, `Float`, `F32`,
+///   `F64`) and `Boolean`.
+/// - `Void` and `Error` (for soft-fail propagation of upstream errors).
+/// - The compiler-builtin GPU types (`Dim3`, `GpuContext`, `Kernel`), the
+///   stdlib `GpuArray<T>`, the builtin `Array<T>`, and the fixed-size
+///   `[T; N]` form, where the element type `T` is itself GPU-compatible.
+/// - `Generic` parameters — actual compatibility is enforced at the
+///   instantiation site.
+///
+/// Everything else — `String`, heap collections (`List`, `Map`, `Set`),
+/// `Tuple`, `Option`, `Result`, `Future`, function values, raw pointers,
+/// user classes — is rejected. The check is structural and never
+/// dispatches on stdlib names by string match: GPU builtins are looked up
+/// via the canonical constants in [`crate::ast::types`].
+pub fn is_gpu_compatible(kind: &TypeKind) -> bool {
+    match kind {
+        TypeKind::Int
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::I128
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::U128
+        | TypeKind::Float
+        | TypeKind::F32
+        | TypeKind::F64
+        | TypeKind::Boolean
+        | TypeKind::Void
+        | TypeKind::Error => true,
+
+        TypeKind::Generic(_, _, _) => true,
+
+        TypeKind::Custom(name, type_args) => {
+            if name == DIM3_TYPE_NAME || name == GPU_CONTEXT_TYPE_NAME || name == KERNEL_TYPE_NAME {
+                return true;
+            }
+            if name == GPU_ARRAY_TYPE_NAME
+                || BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Array)
+            {
+                return first_type_arg_is_gpu_compatible(type_args.as_deref());
+            }
+            false
+        }
+
+        TypeKind::Array(elem_expr, _size) => first_expr_type_is_gpu_compatible(elem_expr),
+
+        TypeKind::String
+        | TypeKind::List(_)
+        | TypeKind::Map(_, _)
+        | TypeKind::Set(_)
+        | TypeKind::Tuple(_)
+        | TypeKind::Result(_, _)
+        | TypeKind::Future(_)
+        | TypeKind::Option(_)
+        | TypeKind::Linear(_)
+        | TypeKind::Meta(_)
+        | TypeKind::RawPtr
+        | TypeKind::Identifier
+        | TypeKind::Function(_) => false,
+    }
+}
+
+fn first_type_arg_is_gpu_compatible(args: Option<&[crate::ast::expression::Expression]>) -> bool {
+    let Some(args) = args else { return false };
+    let Some(first) = args.first() else {
+        return false;
+    };
+    first_expr_type_is_gpu_compatible(first)
+}
+
+/// After type resolution, generic args are wrapped as `ExpressionKind::Type`.
+/// Any other shape means the arg was never resolved — treat as not GPU-compatible
+/// so the bug surfaces loudly instead of silently admitting unknown types.
+fn first_expr_type_is_gpu_compatible(expr: &crate::ast::expression::Expression) -> bool {
+    if let ExpressionKind::Type(ty, _) = &expr.node {
+        is_gpu_compatible(&ty.kind)
+    } else {
+        false
     }
 }
 

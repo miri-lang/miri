@@ -48,6 +48,7 @@ use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, TypeDefinition};
+use crate::type_checker::utils::is_gpu_compatible;
 use crate::type_checker::TypeChecker;
 use std::collections::HashMap;
 
@@ -93,10 +94,24 @@ impl TypeChecker {
             }
         }
 
-        match &func_type.kind {
+        let callable = matches!(func_type.kind, TypeKind::Function(_) | TypeKind::Meta(_));
+        let arg_diagnostics: Vec<(Span, Type)> = if context.in_gpu_function && callable {
+            positional_args
+                .iter()
+                .map(|(expr, ty)| (expr.span, ty.clone()))
+                .chain(
+                    named_args
+                        .values()
+                        .map(|(expr, ty, _)| (expr.span, ty.clone())),
+                )
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        let result_type = match &func_type.kind {
             TypeKind::Function(func_data) => self.infer_function_call(
                 func_data,
-                func,
                 &positional_args,
                 named_args,
                 span,
@@ -114,6 +129,36 @@ impl TypeChecker {
                 );
                 make_type(TypeKind::Error)
             }
+        };
+
+        if context.in_gpu_function && callable {
+            self.check_gpu_call_args(&arg_diagnostics);
+        }
+
+        result_type
+    }
+
+    /// Verifies that every argument crossing into a call inside a `gpu fn`
+    /// carries a GPU-compatible type. The call's return type is intentionally
+    /// not checked here: a forbidden return surfaces either at the variable
+    /// declaration that binds it ([`Self::check_gpu_variable_type`]) or at the
+    /// next call site that consumes it as an argument. Reporting it here too
+    /// produced duplicate diagnostics for one mistake.
+    fn check_gpu_call_args(&mut self, args: &[(Span, Type)]) {
+        for (arg_span, arg_type) in args {
+            if matches!(arg_type.kind, TypeKind::Error) {
+                continue;
+            }
+            if is_gpu_compatible(&arg_type.kind) {
+                continue;
+            }
+            self.report_error(
+                format!(
+                    "Type '{}' is not GPU-compatible: only numeric primitives, booleans, and GPU types may cross a call boundary inside a 'gpu fn'",
+                    arg_type
+                ),
+                *arg_span,
+            );
         }
     }
 
@@ -121,7 +166,6 @@ impl TypeChecker {
     fn infer_function_call(
         &mut self,
         func_data: &crate::ast::types::FunctionTypeData,
-        func: &Expression,
         positional_args: &[(&Expression, Type)],
         mut named_args: HashMap<String, (&Expression, Type, Span)>,
         span: Span,
@@ -150,8 +194,6 @@ impl TypeChecker {
             context.exit_scope();
             self.store_generic_call_mapping(func_data, &generic_map, call_id);
         }
-
-        self.check_gpu_function_call(func, context, span);
 
         return_type
     }
@@ -281,19 +323,6 @@ impl TypeChecker {
             };
         if !ordered.is_empty() {
             self.call_generic_mappings.insert(call_id, ordered);
-        }
-    }
-
-    fn check_gpu_function_call(&mut self, func: &Expression, context: &Context, span: Span) {
-        if context.in_gpu_function {
-            if let ExpressionKind::Identifier(name, _) = &func.node {
-                if name == "print" {
-                    self.report_error(
-                        "Host function 'print' cannot be called from a GPU kernel".to_string(),
-                        span,
-                    );
-                }
-            }
         }
     }
 

@@ -6,7 +6,9 @@
 //! This module defines the standard library types and functions that are
 //! available in every Miri program without explicit imports.
 
-use crate::ast::types::{TypeDeclarationKind, TypeKind};
+use crate::ast::types::{
+    TypeDeclarationKind, TypeKind, DIM3_TYPE_NAME, GPU_CONTEXT_TYPE_NAME, KERNEL_TYPE_NAME,
+};
 use crate::ast::MemberVisibility;
 use std::collections::HashMap;
 
@@ -56,12 +58,13 @@ fn register_gpu_types(types: &mut HashMap<String, TypeDefinition>) {
         has_drop: false,
         module: "std".to_string(),
     });
-    types.insert("Dim3".to_string(), dim3_def);
+    types.insert(DIM3_TYPE_NAME.to_string(), dim3_def);
 
     // GpuContext: Context available within GPU kernels
-    let dim3_type = || crate::ast::factory::make_type(TypeKind::Custom("Dim3".to_string(), None));
+    let dim3_type =
+        || crate::ast::factory::make_type(TypeKind::Custom(DIM3_TYPE_NAME.to_string(), None));
     types.insert(
-        "GpuContext".to_string(),
+        GPU_CONTEXT_TYPE_NAME.to_string(),
         TypeDefinition::Struct(StructDefinition {
             fields: vec![
                 (
@@ -93,7 +96,7 @@ fn register_gpu_types(types: &mut HashMap<String, TypeDefinition>) {
 
     // Kernel: Opaque handle for GPU kernels
     types.insert(
-        "Kernel".to_string(),
+        KERNEL_TYPE_NAME.to_string(),
         TypeDefinition::Struct(StructDefinition {
             fields: vec![],
             generics: None,
