@@ -8,9 +8,21 @@
 
 Miri is built for **agentic engineering** — a world in which the majority of production code is generated, repaired, and shipped by autonomous agents. Humans declare intent. The compiler enforces the invariants agents are most likely to violate, and the toolchain emits structured artifacts agents can consume directly.
 
-## Current State (v0.3.0-beta.1)
+## Current State (v0.4.0-beta.2)
 
-Miri has reached its first Beta release. Building on the multi-file module system from Alpha 4, this release closes an important milestone - **Memory Safety (Perceus+)** - delivering value semantics, compiler-inferred ownership, optimized reference counting, copy-on-write collections, escape-based use-after-move analysis, and `out`-mode parameters. The programmer's only memory-related concept is `out`; everything else is inferred by the compiler.
+Miri's second Beta release lays down the **Core Standard Library** that every future stdlib module and the GPU preview will build on. Building on the memory-safety guarantees from Beta 1, this release ships `Result<T, E>` with compiler-enforced `must_use`, a backend-agnostic `system.math`, a focused four-trait taxonomy for collection transforms (`Queryable`, `Transformable`, `Foldable`, `Sequenced`), and an intrinsic-backed `system.testing` module so test assertions can live directly in `.mi` sources.
+
+**New in v0.4.0-beta.2:**
+- **`Result<T, E>`**: Enum with `Ok(T)` / `Err(E)` variants and `is_ok`, `is_err`, `unwrap_or` methods. The compiler enforces `must_use` semantics — ignoring a `Result` is a compile error. Auto-propagation forces every fallible API to be inspected.
+- **`system.math`**: `abs`, `min`, `max`, `pow`, `sqrt`, `floor`, `ceil`, `round`, `sin`, `cos`, `tan`, `log`, `exp` plus `PI`, `E`, `INF` as free functions. One source, two lowerings — calls inside `gpu fn` (M6.5) will route to WGSL/SPIR-V built-ins; calls on the CPU lower to `libm` / Cranelift intrinsics.
+- **Collection trait taxonomy**: Four focused traits replace the old kitchen-sink design.
+  - `Queryable<T>` — `is_empty`, `first`, `last`, `contains`, `index_of`.
+  - `Transformable<T>` — `map`, `filter`, `flat_map`.
+  - `Foldable<T>` — `reduce`, `any`, `all`, `count_where`, `sum`, `min`, `max`. Empty-collection-safe: `sum`/`min`/`max` return `T?` (`None` on empty).
+  - `Sequenced<T>` extends `Transformable<T>` — `take`, `skip`, `sorted_by`, `unique`, `reversed`, `zip`, `enumerate`.
+  - `List<T>` and `Array<T, N>` inherit default trait bodies; `Map<K, V>` and `Set<T>` keep ad-hoc `map`/`filter`/`reduce`. `GpuArray<T>` (M6.5) will implement the same traits without API churn.
+- **`system.testing`**: `assert(cond, msg?)`, `assert_eq<T>(actual, expected, msg?)`, `assert_ne<T>(a, b, msg?)`, and `assert_panics(f, expected?)` declared `intrinsic`. Failures abort with `Runtime error: assertion failed at <path>:<line>: <detail>`. `assert_panics` catches Miri-level `panic(...)` via a setjmp/longjmp frame.
+- **Trait & generic improvements**: Soft-cycle module loading, two-phase pre-pass for forward references, trait-default re-lowering per concrete class, nested generic args in `implements` / `extends` clauses, and base-class generic substitution (`class IntStack extends Stack<int>`).
 
 **Working Features:**
 - **Primitives & Variables**: `int`, `float`, `bool`, `String` via `let` (immutable) and `var` (mutable).
@@ -20,21 +32,24 @@ Miri has reached its first Beta release. Building on the multi-file module syste
 - **Structs**: Named fields, construction with named arguments, field access.
 - **Enums**: Variants with associated data, pattern matching with extraction.
 - **Tuples**: Construction, index access, destructuring in match.
-- **Collections**: `Array` (fixed-size `[T; N]`), `List` (dynamic `[T]`), `Map` (`{K: V}`), `Set` (`{T}`) — all with full method APIs and **value semantics enforced by Copy-on-Write**.
-- **Option Types**: `Type?`, `None`, `Some`, `if let` unwrapping.
+- **Collections**: `Array` (fixed-size `[T; N]`), `List` (dynamic `[T]`), `Map` (`{K: V}`), `Set` (`{T}`) — full method APIs, value semantics enforced by Copy-on-Write, and the four-trait functional pipeline (`map`/`filter`/`reduce`/`zip`/`enumerate`/`sum`/`min`/`max`/`take`/`skip`/`sorted_by`/`unique`/`reversed`).
+- **`Result<T, E>`**: Compiler-enforced `must_use`, `Ok` / `Err` pattern matching, `is_ok` / `is_err` / `unwrap_or` helpers.
+- **`system.math`**: Backend-agnostic numeric primitives + constants (`PI`, `E`, `INF`).
+- **`system.testing`**: Intrinsic `assert`, `assert_eq`, `assert_ne`, `assert_panics`.
+- **Option Types**: `Type?`, `None`, `Some`, `if let` unwrapping. `?? default` for fallback.
 - **Type Aliases**: `type ID is String`.
 - **Memory Safety (Perceus+)**: Compiler-inferred ownership with element-level reference counting, automatic IncRef/DecRef placement, RC elision on linear flow, and Copy-on-Write for collections and strings. No memory annotations required (only `out`).
 - **Use-After-Move Checking**: Resource types (any type defining `fn drop(self)`) are tracked strictly at every scope. Managed types (collections, strings, classes) are tracked at top level immediately and inside function bodies via escape inference — multi-hop diagnostic chains explain *why* a value is consumed (which call → which sink).
 - **Cloneable Trait & `.clone()`**: Built-in `Cloneable` trait with deep-copy semantics. All managed types implement it; user-defined classes get auto-generated `__clone_TypeName` helpers.
 - **User-Defined Destructors**: `fn drop(self)` on a struct or class declares a resource type. Drop fires automatically at scope exit before recursive field decref and free (RC=0 → user `drop` → field DecRef → free).
 - **Compilation Pipeline**: Full frontend (Lexer, Parser, Type Checker), MIR Lowering with 5 optimization passes, and Native Codegen (via Cranelift).
-- **Classes**: Full OOP with constructors (`init`), methods, field access, visibility modifiers (`private`, `protected`, `public`), inheritance with complete field layout, `super` method calls, and abstract class/method enforcement.
-- **Traits**: Declare shared interfaces with abstract and concrete (default) methods. Classes implement one or more traits; trait inheritance chains are fully validated by the type checker.
+- **Classes**: Full OOP with constructors (`init`), methods, field access, visibility modifiers (`private`, `protected`, `public`), inheritance with complete field layout (including base-class generic substitution), `super` method calls, and abstract class/method enforcement.
+- **Traits**: Declare shared interfaces with abstract and concrete (default) methods. Classes implement one or more traits; trait inheritance chains are fully validated by the type checker. Nested generic args in `implements` / `extends` clauses (`class Box<T> implements Iterable<List<T>>`) resolve correctly.
 - **Closures**: Non-capturing and capturing lambdas compiled to native code. Captures by value; closure represented as a fat pointer `(fn_ptr, env_ptr)`. Captured values are RC-tracked and released when the closure is dropped.
-- **Generics**: Generic function and generic struct/class monomorphization. Specialized copies emitted per unique type instantiation.
-- **Virtual Dispatch**: Vtable generation for class hierarchies; runtime method dispatch for polymorphic variables and trait objects.
+- **Generics**: Generic function and generic struct/class monomorphization. Specialized copies emitted per unique type instantiation. Per-instantiation vtables for `class<T> implements Trait`.
+- **Virtual Dispatch**: Vtable generation for class hierarchies; runtime method dispatch for polymorphic variables and trait objects. `out` parameters work across virtual / trait method calls.
 - **Multi-File Projects**: Programs can span multiple `.mi` files. The compiler discovers, parses, and links all files in a project automatically.
-- **Module System**: `use local.*` resolves to project files, `use system.*` resolves to stdlib. Supports selective imports (`use system.io.{println}`) and module aliasing (`use system.math as M`).
+- **Module System**: `use local.*` resolves to project files, `use system.*` resolves to stdlib. Supports selective imports (`use system.io.{println}`), module aliasing (`use system.math as M`), and soft-cycle loading for mutually-dependent stdlib modules.
 - **Cross-Module Visibility**: `public`, `private`, and `protected` modifiers are enforced across module boundaries. Private symbols are invisible to importers.
 - **Namespace Collision Detection**: Conflicting names across imports and local declarations are detected with clear error messages and suggestions.
 - **Circular Dependency Detection**: Circular import chains are detected and reported with clear diagnostics.
@@ -302,6 +317,72 @@ match x
     x if x > 10: print("Large")
     _: print("Other")
 ```
+
+### `Result<T, E>`
+
+```miri
+use system.io
+use system.result
+
+fn divide(a int, b int) Result<int, String>
+    if b == 0
+        return Result.Err("division by zero")
+    return Result.Ok(a / b)
+
+fn main()
+    match divide(10, 0)
+        Result.Ok(v): println(f"got {v}")
+        Result.Err(e): println(f"err: {e}")
+```
+
+Ignoring a `Result` value without inspecting it is a compile error — fallible APIs cannot be silently dropped.
+
+### `system.math`
+
+```miri
+use system.io
+use system.math as M
+use system.math.{sqrt, pow}
+
+fn main()
+    println(f"{sqrt(2.0)}")
+    println(f"{pow(2.0, 10.0)}")
+    println(f"{M.PI}")
+```
+
+### Functional Collection Pipelines
+
+```miri
+use system.io
+use system.collections.list
+
+fn main()
+    let xs = List([1, 2, 3, 4, 5])
+    let squared_evens = xs.filter(fn(x int) bool: x % 2 == 0).map(fn(x int) int: x * x)
+    println(f"{squared_evens.sum() ?? 0}")   // 20
+
+    let pairs = List([1, 2, 3]).zip(List([10, 20, 30]))
+    let indexed = List(["a", "b", "c"]).enumerate()
+```
+
+`sum` / `min` / `max` return `T?` — `None` on an empty collection. Combine with `?? default` for a one-shot fallback.
+
+### Testing
+
+```miri
+use system.io
+use system.testing
+
+fn add(a int, b int) int
+    a + b
+
+fn main()
+    assert_eq(add(2, 3), 5)
+    assert(add(1, 1) == 2, "addition should be commutative")
+    assert_panics(fn(): panic("boom"), "boom")
+```
+
+A failing `assert_eq` aborts with `Runtime error: assertion failed at <path>:<line>: expected 5, got 6`.
 
 ## Architecture
 
