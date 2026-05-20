@@ -11,7 +11,9 @@
 pub mod backend;
 pub mod cranelift;
 pub mod llvm;
+pub mod wgsl;
 
 pub use backend::{ArtifactFormat, Backend, CompiledArtifact};
 pub use cranelift::CraneliftBackend;
 pub use llvm::LlvmBackend;
+pub use wgsl::{WgslBackend, WgslOptions};
