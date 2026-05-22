@@ -602,11 +602,8 @@ impl<'source> Parser<'source> {
         if self.match_lookahead_type(|t| t == &Token::System) {
             let (_, span) = self.eat_token(&Token::System)?;
             segments.push(ast::identifier_with_span("system", span));
-        } else if self.match_lookahead_type(|t| t == &Token::Local) {
-            let (_, span) = self.eat_token(&Token::Local)?;
-            segments.push(ast::identifier_with_span("local", span));
         } else {
-            segments.push(self.identifier()?);
+            segments.push(self.import_path_segment()?);
         }
         let mut kind = ImportPathKind::Simple;
 
@@ -634,15 +631,27 @@ impl<'source> Parser<'source> {
                 break;
             }
 
-            segments.push(self.identifier()?);
+            segments.push(self.import_path_segment()?);
         }
         Ok(ast::import_path_expression(segments, kind))
+    }
+
+    fn import_path_segment(&mut self) -> Result<Expression, SyntaxError> {
+        if self.match_lookahead_type(|t| t == &Token::Gpu) {
+            let (_, span) = self.eat_token(&Token::Gpu)?;
+            return Ok(ast::identifier_with_span("gpu", span));
+        }
+        if self.match_lookahead_type(|t| t == &Token::Local) {
+            let (_, span) = self.eat_token(&Token::Local)?;
+            return Ok(ast::identifier_with_span("local", span));
+        }
+        self.identifier()
     }
 
     pub(crate) fn multi_import_segment(
         &mut self,
     ) -> Result<(Expression, Option<Box<Expression>>), SyntaxError> {
-        let path = self.identifier()?;
+        let path = self.import_path_segment()?;
         let alias = if self.match_lookahead_type(|t| t == &Token::As) {
             self.eat_token(&Token::As)?;
             Some(Box::new(self.identifier()?))

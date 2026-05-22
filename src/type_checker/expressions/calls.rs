@@ -440,6 +440,22 @@ impl TypeChecker {
                         span,
                         context,
                     );
+                } else {
+                    // No init method anywhere in the chain → MIR maps each
+                    // constructor argument directly onto a declared field
+                    // (`lower_class_constructor`). The type checker must
+                    // gate the same field/arg pairing here; otherwise a
+                    // layout-incompatible argument (e.g. `List<F32>` flowing
+                    // into a `List<float>` field) reaches codegen unchecked
+                    // and reads garbage at run time.
+                    self.validate_class_field_args(
+                        def,
+                        positional_args,
+                        &mut named_args,
+                        type_args,
+                        span,
+                        context,
+                    );
                 }
 
                 return make_type(TypeKind::Custom(name.clone(), type_args.clone()));
@@ -716,6 +732,100 @@ impl TypeChecker {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Mirrors `lower_class_constructor`'s positional/named arg mapping for
+    /// classes whose declaration has no `init` method: each constructor
+    /// argument feeds directly into a declared field (walking the inheritance
+    /// chain via `collect_class_fields_all`). Generic class parameters are
+    /// substituted from `type_args` so the comparison sees the concrete
+    /// element type (e.g. `data: List<T>` becomes `List<float>` when the
+    /// instantiation is `GpuArray<float>`).
+    fn validate_class_field_args(
+        &mut self,
+        def: &crate::type_checker::context::ClassDefinition,
+        positional_args: &[(&Expression, Type)],
+        named_args: &mut HashMap<String, (&Expression, Type, Span)>,
+        type_args: &Option<Vec<Expression>>,
+        span: Span,
+        context: &mut Context,
+    ) {
+        let mut generic_map = HashMap::new();
+        if let Some(generics) = &def.generics {
+            if let Some(targs) = type_args {
+                for (g, ta) in generics.iter().zip(targs.iter()) {
+                    let arg_ty = if self.extract_type_from_expression(ta).is_ok() {
+                        self.resolve_type_expression(ta, context)
+                    } else {
+                        crate::type_checker::generics::value_generic_marker_type(ta.clone())
+                    };
+                    generic_map.insert(g.name.clone(), arg_ty);
+                }
+            }
+        }
+
+        let all_fields: Vec<(String, crate::type_checker::context::FieldInfo)> =
+            crate::type_checker::context::collect_class_fields_all(
+                def,
+                &self.global_type_definitions,
+            )
+            .into_iter()
+            .map(|(n, f)| (n.to_string(), f.clone()))
+            .collect();
+
+        let mut pos_iter = positional_args.iter();
+
+        for (field_name, field_info) in &all_fields {
+            let concrete_field_type = if generic_map.is_empty() {
+                field_info.ty.clone()
+            } else {
+                self.substitute_type(&field_info.ty, &generic_map)
+            };
+
+            let (arg_expr, arg_type) = if let Some((expr, ty)) = pos_iter.next() {
+                (Some(*expr), Some(ty.clone()))
+            } else if let Some((expr, ty, _)) = named_args.remove(field_name.as_str()) {
+                (Some(expr), Some(ty))
+            } else {
+                // Field omitted from the constructor: lowering supplies a
+                // default value, so don't surface a type-mismatch here.
+                continue;
+            };
+
+            if let Some(arg_type) = arg_type {
+                if matches!(arg_type.kind, TypeKind::Error)
+                    || matches!(concrete_field_type.kind, TypeKind::Error)
+                {
+                    continue;
+                }
+                if !self.are_compatible(&concrete_field_type, &arg_type, context) {
+                    self.report_error(
+                        format!(
+                            "Type mismatch for field '{}': expected {}, got {}",
+                            field_name, concrete_field_type, arg_type
+                        ),
+                        arg_expr.map(|e| e.span).unwrap_or(span),
+                    );
+                }
+            }
+        }
+
+        if pos_iter.next().is_some() {
+            self.report_error(
+                format!(
+                    "Too many arguments for '{}' constructor: expected {}, got {}",
+                    def.name,
+                    all_fields.len(),
+                    positional_args.len()
+                ),
+                span,
+            );
+        }
+
+        for (arg_name, (_, _, arg_span)) in named_args.drain() {
+            self.report_error(format!("Unknown argument '{}'", arg_name), arg_span);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn validate_class_init_args(
         &mut self,
         def: &crate::type_checker::context::ClassDefinition,
@@ -730,8 +840,12 @@ impl TypeChecker {
         if let Some(generics) = &def.generics {
             if let Some(targs) = type_args {
                 for (g, ta) in generics.iter().zip(targs.iter()) {
-                    let concrete = self.resolve_type_expression(ta, context);
-                    generic_map.insert(g.name.clone(), concrete);
+                    let arg_ty = if self.extract_type_from_expression(ta).is_ok() {
+                        self.resolve_type_expression(ta, context)
+                    } else {
+                        crate::type_checker::generics::value_generic_marker_type(ta.clone())
+                    };
+                    generic_map.insert(g.name.clone(), arg_ty);
                 }
             }
         }

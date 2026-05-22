@@ -391,8 +391,19 @@ impl TypeChecker {
             let resolved_args: Vec<Expression> = args
                 .iter()
                 .map(|arg| {
-                    let ty = self.resolve_type_expression(arg, context);
-                    self.create_type_expression(ty)
+                    // Type generics resolve through the normal `Type → Type`
+                    // pipeline; value generics (a literal `3` in
+                    // `Foo<float, 3>`) carry through verbatim. Routing the
+                    // literal through `resolve_type_expression` would report
+                    // "Expected type expression" and collapse the slot to
+                    // `Error`, which then propagates into every field
+                    // substitution downstream.
+                    if self.extract_type_from_expression(arg).is_ok() {
+                        let ty = self.resolve_type_expression(arg, context);
+                        self.create_type_expression(ty)
+                    } else {
+                        arg.clone()
+                    }
                 })
                 .collect();
             make_type(TypeKind::Meta(Box::new(make_type(TypeKind::Custom(
