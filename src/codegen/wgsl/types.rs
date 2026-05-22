@@ -77,11 +77,32 @@ pub fn scalar(kind: &TypeKind) -> Result<WgslScalar, CodegenError> {
 }
 
 /// Extract the element type spelling from a buffer-like collection type.
+///
+/// Accepts canonical `TypeKind::List(elem)` and `TypeKind::Array(elem, _)` as
+/// well as the post-resolution `TypeKind::Custom(name, Some([elem, ...]))`
+/// shape that array literals and GPU-array values carry through the
+/// pipeline. The accepted `name`s are looked up via
+/// [`BuiltinCollectionKind::from_name`] and the canonical `GpuArray` constant
+/// so this dispatch never hard-codes stdlib name strings.
 pub fn buffer_element(kind: &TypeKind) -> Result<WgslScalar, CodegenError> {
     use crate::ast::expression::ExpressionKind;
+    use crate::ast::types::BuiltinCollectionKind;
     let elem_expr = match kind {
         TypeKind::List(elem) => elem,
         TypeKind::Array(elem, _) => elem,
+        TypeKind::Custom(name, Some(args))
+            if matches!(
+                BuiltinCollectionKind::from_name(name),
+                Some(BuiltinCollectionKind::Array) | Some(BuiltinCollectionKind::List)
+            ) || name == crate::ast::types::GPU_ARRAY_TYPE_NAME =>
+        {
+            args.first().ok_or_else(|| {
+                CodegenError::Internal(format!(
+                    "WGSL backend: buffer parameter {} missing element type argument",
+                    name
+                ))
+            })?
+        }
         TypeKind::Int
         | TypeKind::I8
         | TypeKind::I16

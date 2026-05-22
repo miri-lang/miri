@@ -100,6 +100,19 @@ pub fn for_statement(
     ))
 }
 
+/// Creates a `gpu for` loop statement.
+pub fn gpu_for_statement(
+    variable_declarations: Vec<VariableDeclaration>,
+    iterable: Expression,
+    body: Statement,
+) -> Statement {
+    stmt(StatementKind::GpuFor(
+        variable_declarations,
+        Box::new(iterable),
+        Box::new(body),
+    ))
+}
+
 /// Creates a return statement.
 pub fn return_statement(expression: Option<Box<Expression>>) -> Statement {
     stmt(StatementKind::Return(expression))

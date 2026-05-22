@@ -361,6 +361,10 @@ pub struct Context {
     pub inferred_return_types: Vec<Option<Vec<(Type, Span)>>>,
     /// Current depth of nested loops (used to validate break/continue).
     pub loop_depth: usize,
+    /// Current depth of nested `gpu for` bodies. Used to give a clearer error
+    /// for `break`/`continue` directly inside a `gpu for` than the generic
+    /// "outside of loop" message.
+    pub gpu_for_depth: usize,
     /// Whether we are currently inside a GPU function.
     pub in_gpu_function: bool,
     /// Whether we are currently inside any function.
@@ -391,6 +395,7 @@ impl Context {
             return_types: Vec::new(),
             inferred_return_types: Vec::new(),
             loop_depth: 0,
+            gpu_for_depth: 0,
             in_gpu_function: false,
             in_function: false,
             in_async_function: false,

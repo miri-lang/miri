@@ -99,6 +99,12 @@ pub enum StatementKind {
     /// A for loop.
     For(Vec<VariableDeclaration>, Box<Expression>, Box<Statement>),
 
+    /// A GPU parallel `for` loop: `gpu for <ident> in <range>`.
+    ///
+    /// Lowered to a synthesized anonymous `gpu fn` plus a `GpuLaunch`
+    /// terminator whose grid is derived from the range length.
+    GpuFor(Vec<VariableDeclaration>, Box<Expression>, Box<Statement>),
+
     /// A function declaration. Boxed to reduce enum size.
     FunctionDeclaration(Box<FunctionDeclarationData>),
 

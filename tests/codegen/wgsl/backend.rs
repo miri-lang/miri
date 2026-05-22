@@ -409,7 +409,7 @@ fn assign(place: Place, rvalue: Rvalue) -> Statement {
 }
 
 #[test]
-fn multi_block_goto_is_rejected() {
+fn linear_goto_chain_is_emitted() {
     let span = dummy_span();
     let mut body = single_buffer_kernel();
     let mut bb0 = BasicBlockData::new(None);
@@ -424,10 +424,43 @@ fn multi_block_goto_is_rejected() {
     body.basic_blocks.push(bb0);
     body.basic_blocks.push(bb1);
 
+    let backend = WgslBackend;
+    let artifact = backend
+        .compile(&[("k", &body)], &WgslOptions::default())
+        .expect("linear goto chains are supported");
+    let source = std::str::from_utf8(&artifact.bytes).expect("WGSL output is UTF-8");
+    assert!(
+        source.contains("@compute"),
+        "expected @compute attribute, got:\n{}",
+        source
+    );
+}
+
+#[test]
+fn back_edge_loop_is_rejected() {
+    let span = dummy_span();
+    let mut body = single_buffer_kernel();
+    let mut bb0 = BasicBlockData::new(None);
+    bb0.terminator = Some(Terminator::new(
+        TerminatorKind::Goto {
+            target: BasicBlock(1),
+        },
+        span,
+    ));
+    let mut bb1 = BasicBlockData::new(None);
+    bb1.terminator = Some(Terminator::new(
+        TerminatorKind::Goto {
+            target: BasicBlock(0),
+        },
+        span,
+    ));
+    body.basic_blocks.push(bb0);
+    body.basic_blocks.push(bb1);
+
     let msg = compile_err(&body);
     assert!(
-        msg.contains("Goto") && msg.contains("not yet supported"),
-        "expected Goto-not-supported error, got: {}",
+        msg.contains("back-edge"),
+        "expected back-edge rejection, got: {}",
         msg
     );
 }
