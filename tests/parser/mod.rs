@@ -22,6 +22,7 @@ pub mod for_loop;
 pub mod forever_loop;
 pub mod function_call;
 pub mod function_declaration;
+pub mod gpu_for_loop;
 pub mod if_statement;
 pub mod integer;
 pub mod lambda_expression;

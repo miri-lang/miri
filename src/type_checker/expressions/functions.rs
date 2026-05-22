@@ -65,6 +65,8 @@ impl TypeChecker {
         let expected_return_type = self.setup_return_type_context(return_type_expr, context);
         let old_loop_depth = context.loop_depth;
         context.loop_depth = 0;
+        let old_gpu_for_depth = context.gpu_for_depth;
+        context.gpu_for_depth = 0;
 
         self.define_lambda_parameters(params, context);
 
@@ -83,6 +85,7 @@ impl TypeChecker {
         }
 
         context.loop_depth = old_loop_depth;
+        context.gpu_for_depth = old_gpu_for_depth;
         context.exit_scope();
 
         make_type(TypeKind::Function(Box::new(FunctionTypeData {

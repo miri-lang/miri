@@ -11,6 +11,7 @@ pub mod constant;
 pub mod enums;
 pub mod function;
 pub mod gpu;
+pub mod gpu_for;
 pub mod gpu_launch;
 pub mod if_statement;
 pub mod literal;

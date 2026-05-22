@@ -50,6 +50,9 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
         StatementKind::For(decls, iterable, body) => {
             lower_for(ctx, &stmt.span, decls, iterable, body)
         }
+        StatementKind::GpuFor(decls, iterable, body) => {
+            super::gpu_for::lower_gpu_for(ctx, &stmt.span, stmt.id, decls, iterable, body)
+        }
         StatementKind::Struct(name_expr, _, _, _, _) => {
             lower_struct_decl(ctx, name_expr);
             Ok(())

@@ -100,10 +100,10 @@ impl<'source> Parser<'source> {
             Some((Token::Do, _)) => self.while_statement(WhileStatementType::DoWhile)?,
             Some((Token::Forever, _)) => self.while_statement(WhileStatementType::Forever)?,
             Some((Token::For, _)) => self.for_statement()?,
-            Some((Token::Async, _))
-            | Some((Token::Fn, _))
-            | Some((Token::Gpu, _))
-            | Some((Token::Parallel, _)) => self.function_declaration(MemberVisibility::Public)?,
+            Some((Token::Gpu, _)) => self.gpu_statement(MemberVisibility::Public)?,
+            Some((Token::Async, _)) | Some((Token::Fn, _)) | Some((Token::Parallel, _)) => {
+                self.function_declaration(MemberVisibility::Public)?
+            }
             Some((Token::Runtime, _)) => self.runtime_function_declaration()?,
             Some((Token::Intrinsic, _)) => {
                 self.intrinsic_function_declaration(MemberVisibility::Public)?
@@ -502,6 +502,113 @@ impl<'source> Parser<'source> {
             | 'for' VariableDeclarationList 'in' RangeExpression EXPRESSION_END BlockStatement
             ;
     */
+    /// Dispatches the two `gpu`-prefixed statement forms by examining the
+    /// token that follows `gpu`. `gpu for` becomes a [`StatementKind::GpuFor`];
+    /// anything else continues into the function declaration grammar with
+    /// `is_gpu` already set, so combinations like `gpu parallel fn` still
+    /// parse.
+    pub(crate) fn gpu_statement(
+        &mut self,
+        visibility: MemberVisibility,
+    ) -> Result<Statement, SyntaxError> {
+        self.eat_token(&Token::Gpu)?;
+
+        if self.match_lookahead_type(|t| t == &Token::For) {
+            return self.gpu_for_statement();
+        }
+
+        let mut properties = FunctionProperties {
+            is_async: false,
+            is_parallel: false,
+            is_gpu: true,
+            visibility,
+        };
+        self.continue_function_modifiers(&mut properties)?;
+        self.function_declaration_after_modifiers(
+            super::declarations::class::BodyMode::Required,
+            properties,
+        )
+    }
+
+    fn continue_function_modifiers(
+        &mut self,
+        properties: &mut FunctionProperties,
+    ) -> Result<(), SyntaxError> {
+        while self.lookahead_is_function_modifier() {
+            match &self.lookahead {
+                Some((Token::Async, _)) => {
+                    self.eat_token(&Token::Async)?;
+                    properties.is_async = true;
+                }
+                Some((Token::Parallel, _)) => {
+                    self.eat_token(&Token::Parallel)?;
+                    properties.is_parallel = true;
+                }
+                Some((Token::Gpu, _)) => {
+                    return Err(SyntaxError::new(
+                        SyntaxErrorKind::InvalidModifierCombination {
+                            combination: "gpu gpu".to_string(),
+                            reason: "The 'gpu' modifier may appear only once.".to_string(),
+                        },
+                        self.current_token_span(),
+                    ));
+                }
+                _ => {
+                    return Err(self.error_unexpected_lookahead_token(
+                        "function modifier (async or parallel) or 'fn'",
+                    ));
+                }
+            }
+        }
+        if properties.is_async && properties.is_gpu {
+            return Err(SyntaxError::new(
+                SyntaxErrorKind::InvalidModifierCombination {
+                    combination: "async gpu".to_string(),
+                    reason: "GPU kernels are inherently asynchronous.".to_string(),
+                },
+                self.current_token_span(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn gpu_for_statement(&mut self) -> Result<Statement, SyntaxError> {
+        self.eat_token(&Token::For)?;
+
+        let variable_declarations = self.for_loop_variable_list()?;
+        self.eat_token(&Token::In)?;
+        let iterable_expr = self.range_expression()?;
+
+        let iterable = if matches!(&iterable_expr.node, ExpressionKind::Range(_, _, _)) {
+            iterable_expr
+        } else {
+            let span = iterable_expr.span;
+            ast::range_with_span(
+                iterable_expr,
+                None,
+                RangeExpressionType::IterableObject,
+                span,
+            )
+        };
+
+        if let ExpressionKind::Range(_, _, range_type) = &iterable.node {
+            if *range_type != RangeExpressionType::IterableObject && variable_declarations.len() > 1
+            {
+                return Err(self.error_unexpected_token(
+                    "a single loop variable for a numeric range",
+                    &format!("{} variables", variable_declarations.len()),
+                ));
+            }
+        }
+
+        let body = self.statement_body()?;
+        Ok(ast::gpu_for_statement(
+            variable_declarations,
+            iterable,
+            body,
+        ))
+    }
+
     pub(crate) fn for_statement(&mut self) -> Result<Statement, SyntaxError> {
         self.eat_token(&Token::For)?;
 

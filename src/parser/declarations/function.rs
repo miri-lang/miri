@@ -143,6 +143,19 @@ impl<'source> Parser<'source> {
         mode: BodyMode,
     ) -> Result<Statement, SyntaxError> {
         let properties = self.function_modifiers(visibility)?;
+        self.function_declaration_after_modifiers(mode, properties)
+    }
+
+    /// Parses everything past the function modifiers: the `fn` keyword, the
+    /// name (or anonymous lambda), generics, parameter list, return type and
+    /// body. Callers that have already consumed one or more modifiers (e.g.
+    /// the `gpu for` vs `gpu fn` disambiguator) feed the partially-built
+    /// [`FunctionProperties`] through this entry point.
+    pub(crate) fn function_declaration_after_modifiers(
+        &mut self,
+        mode: BodyMode,
+        properties: FunctionProperties,
+    ) -> Result<Statement, SyntaxError> {
         self.eat_token(&Token::Fn)?;
 
         let name = self.function_name()?;
