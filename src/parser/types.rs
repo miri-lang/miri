@@ -288,15 +288,52 @@ impl<'source> Parser<'source> {
     fn custom_named_type(&mut self, type_name: String) -> Result<Type, SyntaxError> {
         match &self.lookahead {
             Some((Token::LessThan, _)) => {
-                let inner = self.multiple_element_type_expressions(
-                    "Generic type",
-                    &Token::LessThan,
-                    &Token::GreaterThan,
-                )?;
+                let inner = self.multiple_generic_arguments()?;
                 Ok(ast::make_type(TypeKind::Custom(type_name, Some(inner))))
             }
             _ => Ok(ast::make_type(TypeKind::Custom(type_name, None))),
         }
+    }
+
+    /// Parse the `< ... , ... >` argument list of a generic instantiation. Each
+    /// argument is either a type expression (the common case: `Foo<int>`,
+    /// `Foo<List<T>>`) or a value expression for compile-time value generics
+    /// (`Foo<3>`, `Foo<float, 3>`). The decision is structural: anything that
+    /// successfully parses as a type via `type_expression()` is treated as a
+    /// type arg; otherwise we fall back to `additive_expression()` and store
+    /// the value expression verbatim. Substitution downstream (e.g. through
+    /// `Array`'s size slot) walks the stored expressions and only swaps in
+    /// values where the surrounding type position expects an expression.
+    pub(crate) fn multiple_generic_arguments(&mut self) -> Result<Vec<Expression>, SyntaxError> {
+        self.eat_token(&Token::LessThan)?;
+        // Match the legacy "Generic type" error path when the argument list
+        // is empty (`Foo<>`). Falling straight into `generic_argument` would
+        // surface a confusing additive-expression error after the type
+        // expression branch returns None.
+        if let Some((Token::GreaterThan, _)) = &self.lookahead {
+            return Err(self.error_invalid_type_declaration("Generic type"));
+        }
+        let mut elements = vec![self.generic_argument()?];
+        while self.lookahead_is_comma() {
+            self.eat_token(&Token::Comma)?;
+            match &self.lookahead {
+                Some((Token::GreaterThan, _)) => break,
+                None => break,
+                _ => elements.push(self.generic_argument()?),
+            }
+        }
+        self.eat_token(&Token::GreaterThan)?;
+        Ok(elements)
+    }
+
+    fn generic_argument(&mut self) -> Result<Expression, SyntaxError> {
+        if let Some(type_expr) = self.type_expression()? {
+            return Ok(type_expr);
+        }
+        // Not a type — must be a value generic (e.g. integer literal for a
+        // const-size slot). Fall back to a regular expression. The type
+        // checker rejects values that flow into pure-type positions.
+        self.additive_expression()
     }
 
     pub(crate) fn identifier_to_type_name(&mut self) -> Result<(String, Span), SyntaxError> {

@@ -951,10 +951,8 @@ impl TypeChecker {
             if let Some(type_args) = type_args {
                 if generics.len() == type_args.len() {
                     for (param, arg_expr) in generics.iter().zip(type_args.iter()) {
-                        let arg_type = self
-                            .extract_type_from_expression(arg_expr)
-                            .unwrap_or(make_type(TypeKind::Error));
-                        mapping.insert(param.name.clone(), arg_type);
+                        let arg_ty = self.generic_arg_to_mapping_type(arg_expr);
+                        mapping.insert(param.name.clone(), arg_ty);
                     }
                 } else {
                     let orig_generics_opt = self
@@ -975,10 +973,8 @@ impl TypeChecker {
                                 .position(|g| g.name == base_generic.name)
                             {
                                 if let Some(arg_expr) = type_args.get(idx) {
-                                    let arg_type = self
-                                        .extract_type_from_expression(arg_expr)
-                                        .unwrap_or(make_type(TypeKind::Error));
-                                    mapping.insert(base_generic.name.clone(), arg_type);
+                                    let arg_ty = self.generic_arg_to_mapping_type(arg_expr);
+                                    mapping.insert(base_generic.name.clone(), arg_ty);
                                 }
                             }
                         }
@@ -987,6 +983,19 @@ impl TypeChecker {
             }
         }
         mapping
+    }
+
+    /// Convert a single generic-instantiation argument expression into the
+    /// `Type` that lives in the substitution map. Type arguments come back as
+    /// their own `Type`; value arguments (e.g. an integer literal for a
+    /// const-size slot) are wrapped in the value-generic marker so that
+    /// `substitute_value_generic_in_expr` can recover the original expression
+    /// later when it rewrites size-position identifiers.
+    fn generic_arg_to_mapping_type(&self, arg_expr: &Expression) -> Type {
+        if let Ok(arg_type) = self.extract_type_from_expression(arg_expr) {
+            return arg_type;
+        }
+        crate::type_checker::generics::value_generic_marker_type(arg_expr.clone())
     }
 
     fn report_class_member_not_found(

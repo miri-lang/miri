@@ -85,18 +85,51 @@ impl<'a> FunctionTranslator<'a> {
     /// Used when an empty `List<T>()` aggregate is assigned: there are no operands
     /// for `translate_rvalue` to inspect, so the caller provides the element kind
     /// extracted from the assignment target's type annotation.
+    ///
+    /// `elem_kind` may be a generic placeholder (e.g. `T` inside a generic class
+    /// method) — in that case there is no concrete `__decref_T` to register, so
+    /// the runtime keeps its default no-op elem_drop_fn.
     pub(crate) fn emit_list_drop_fn_for_elem_kind(
         builder: &mut FunctionBuilder,
         ctx: &mut ModuleCtx,
         elem_kind: &TypeKind,
         list_ptr: Value,
         ptr_type: cranelift_codegen::ir::Type,
+        type_definitions: &HashMap<String, TypeDefinition>,
     ) -> Result<(), CodegenError> {
+        if Self::is_unresolved_generic_elem(elem_kind, type_definitions) {
+            return Ok(());
+        }
         let shape = Self::classify_element_shape(elem_kind);
         if let Some(addr) = Self::elem_decref_addr_for_shape(builder, ctx, shape, ptr_type)? {
             Self::call_rt_list_set_elem_drop_fn(builder, ctx, list_ptr, addr)?;
         }
         Ok(())
+    }
+
+    /// True when `elem_kind` is a generic placeholder that has no concrete
+    /// `__decref_TypeName` symbol — either `TypeKind::Generic`, or a
+    /// `TypeKind::Custom(name, _)` whose `name` is unknown to the type-definition
+    /// table or known only as `TypeDefinition::Generic`. This guards the
+    /// elem-drop-fn override sites where emitting a reference to an undefined
+    /// symbol would later fail at link time.
+    fn is_unresolved_generic_elem(
+        elem_kind: &TypeKind,
+        type_definitions: &HashMap<String, TypeDefinition>,
+    ) -> bool {
+        match elem_kind {
+            TypeKind::Generic(_, _, _) => true,
+            TypeKind::Custom(name, _) => {
+                if BuiltinCollectionKind::from_name(name).is_some() {
+                    return false;
+                }
+                match type_definitions.get(name) {
+                    None | Some(TypeDefinition::Generic(_)) => true,
+                    Some(_) => false,
+                }
+            }
+            _ => false,
+        }
     }
 
     /// Sets `elem_drop_fn` on `set_ptr` based on the declared element type.
@@ -110,7 +143,11 @@ impl<'a> FunctionTranslator<'a> {
         elem_kind: &TypeKind,
         set_ptr: Value,
         ptr_type: cranelift_codegen::ir::Type,
+        type_definitions: &HashMap<String, TypeDefinition>,
     ) -> Result<(), CodegenError> {
+        if Self::is_unresolved_generic_elem(elem_kind, type_definitions) {
+            return Ok(());
+        }
         let shape = Self::classify_element_shape(elem_kind);
         if let Some(addr) = Self::elem_decref_addr_for_shape(builder, ctx, shape, ptr_type)? {
             Self::call_rt_set_set_elem_drop_fn(builder, ctx, set_ptr, addr)?;
@@ -130,6 +167,9 @@ impl<'a> FunctionTranslator<'a> {
         ptr_type: cranelift_codegen::ir::Type,
         type_definitions: &HashMap<String, TypeDefinition>,
     ) -> Result<(), CodegenError> {
+        if Self::is_unresolved_generic_elem(elem_kind, type_definitions) {
+            return Ok(());
+        }
         let shape = Self::classify_element_shape(elem_kind);
         if let Some(addr) =
             Self::elem_clone_addr_for_shape(builder, ctx, shape, type_definitions, ptr_type)?
@@ -150,6 +190,9 @@ impl<'a> FunctionTranslator<'a> {
         ptr_type: cranelift_codegen::ir::Type,
         type_definitions: &HashMap<String, TypeDefinition>,
     ) -> Result<(), CodegenError> {
+        if Self::is_unresolved_generic_elem(elem_kind, type_definitions) {
+            return Ok(());
+        }
         let shape = Self::classify_element_shape(elem_kind);
         if let Some(addr) =
             Self::elem_clone_addr_for_shape(builder, ctx, shape, type_definitions, ptr_type)?
@@ -611,6 +654,24 @@ impl<'a> FunctionTranslator<'a> {
             TypeDefinition::Class(class_def) => {
                 use crate::type_checker::context::collect_class_fields_all;
                 let all_fields = collect_class_fields_all(class_def, type_ctx.type_definitions);
+                // Generic classes share a single bare-name `__drop_TypeName` thunk
+                // across every `<T>` instantiation, so a field whose type is a bare
+                // generic parameter has no concrete kind at thunk-emission time.
+                // We cannot DecRef it without instantiation-specific monomorphization.
+                // Reject explicitly so the leak does not silently ship.
+                if class_def.generics.is_some() {
+                    for (field_name, fi) in &all_fields {
+                        if Self::is_unresolved_generic_elem(&fi.ty.kind, type_ctx.type_definitions)
+                        {
+                            return Err(CodegenError::Internal(format!(
+                                "generic class '{type_name}' has a bare-generic field '{field_name}' \
+                                 whose drop semantics depend on the instantiation; \
+                                 bare-name drop thunks cannot encode this. Use a concrete wrapper \
+                                 type (e.g. `List<T>`) or wait for per-instantiation mangling."
+                            )));
+                        }
+                    }
+                }
                 let managed_fields: Vec<(usize, TypeKind)> = all_fields
                     .iter()
                     .enumerate()

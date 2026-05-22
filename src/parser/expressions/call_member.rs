@@ -80,24 +80,17 @@ impl<'source> Parser<'source> {
             return Ok(None);
         }
 
-        let args = self.multiple_element_type_expressions(
-            "Generic arguments",
-            &Token::LessThan,
-            &Token::GreaterThan,
-        )?;
+        let args = self.multiple_generic_arguments()?;
         let end = args
             .last()
             .map(|a| a.span.end)
             .unwrap_or(expression.span.end);
         let span = Span::new(expression.span.start, end);
-        Ok(Some(IdNode::new(
-            0,
-            ExpressionKind::TypeDeclaration(
-                Box::new(expression),
-                Some(args),
-                TypeDeclarationKind::None,
-                None,
-            ),
+        Ok(Some(ast::type_declaration_expression_with_span(
+            expression,
+            Some(args),
+            TypeDeclarationKind::None,
+            None,
             span,
         )))
     }

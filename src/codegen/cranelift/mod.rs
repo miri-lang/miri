@@ -16,6 +16,7 @@ mod translator;
 mod types;
 mod vtable;
 
+use crate::ast::types::BuiltinCollectionKind;
 use crate::codegen::backend::{ArtifactFormat, Backend, CompiledArtifact};
 use crate::codegen::cranelift::translator::needs_out_pointer;
 use crate::error::CodegenError;
@@ -540,24 +541,38 @@ impl CraneliftBackend {
         ctx: &mut Context,
         isa: &Arc<dyn TargetIsa>,
     ) -> Result<(), CodegenError> {
-        // Collect all non-generic concrete Struct/Class/Enum types and sort for
-        // deterministic output.  We include types without managed fields so that
-        // __decref_TypeName can be generated for them — it is needed as elem_drop_fn
-        // when such types are stored in a List, Set, or Map.
+        // Collect all Struct/Class/Enum types and sort for deterministic output.
+        // We include types without managed fields so that `__decref_TypeName` can be
+        // generated for them — it is needed as elem_drop_fn when such types are
+        // stored in a List, Set, or Map. Generic Classes are accepted: the drop
+        // thunk is keyed by bare type name (no generic args mangled in), so one
+        // thunk serves every instantiation. Struct/Enum stay non-generic because
+        // their field DecRef sequences may depend on element layout.
+        //
+        // Builtin collection class names (`List`, `Map`, `Set`, `Array`, `Tuple`)
+        // and `String` are skipped: their drop / decref / clone paths route through
+        // dedicated runtime helpers (`miri_rt_list_free`, …) inside `emit_type_drop`
+        // before any `__drop_TypeName` thunk is consulted, so emitting one would be
+        // dead code that bloats the object file.
         let mut managed_names: Vec<&str> = self
             .type_definitions
             .iter()
             .filter_map(|(name, def)| {
-                // Skip generic types — they are not concrete instantiations.
-                let has_generics = match def {
+                let skip_generic = match def {
                     TypeDefinition::Struct(sd) => sd.generics.is_some(),
-                    TypeDefinition::Class(cd) => cd.generics.is_some(),
+                    TypeDefinition::Class(_) => false,
                     TypeDefinition::Enum(ed) => ed.generics.is_some(),
                     TypeDefinition::Generic(_)
                     | TypeDefinition::Alias(_)
                     | TypeDefinition::Trait(_) => return None,
                 };
-                if has_generics {
+                if skip_generic {
+                    return None;
+                }
+                if BuiltinCollectionKind::from_name(name).is_some()
+                    || name == "String"
+                    || name == "Tuple"
+                {
                     return None;
                 }
                 Some(name.as_str())
