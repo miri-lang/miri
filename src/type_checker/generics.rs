@@ -18,6 +18,57 @@ use crate::ast::{Expression, ExpressionKind};
 use crate::error::syntax::Span;
 use std::collections::HashMap;
 
+/// Sentinel `TypeKind::Custom` name used to smuggle a value-generic argument
+/// (e.g. the `3` in `Foo<float, 3>`) through the existing
+/// `HashMap<String, Type>` substitution map. Generic params can be either
+/// type-typed or value-typed in their declared class, but `substitute_type`
+/// is keyed by name → `Type`; wrapping the value expression as
+/// `Custom("__value_generic__", Some([expr]))` lets us look up value
+/// generics out of the same map in size-expression positions
+/// (`substitute_value_generic_in_expr`) without threading a second mapping
+/// through every callsite of `substitute_type`.
+pub(crate) const VALUE_GENERIC_MARKER: &str = "__value_generic__";
+
+/// Wrap a value-generic argument expression as a sentinel `Type` so it can
+/// share the `HashMap<String, Type>` mapping used for type generics.
+pub(crate) fn value_generic_marker_type(expr: Expression) -> Type {
+    make_type(TypeKind::Custom(
+        VALUE_GENERIC_MARKER.to_string(),
+        Some(vec![expr]),
+    ))
+}
+
+/// If `ty` is a value-generic marker wrapping a stored expression, return
+/// a borrow of that expression. Otherwise `None`.
+pub(crate) fn extract_value_generic(ty: &Type) -> Option<&Expression> {
+    match &ty.kind {
+        TypeKind::Custom(name, Some(args)) if name == VALUE_GENERIC_MARKER && args.len() == 1 => {
+            Some(&args[0])
+        }
+        _ => None,
+    }
+}
+
+/// Walk `expr` and substitute identifier references that name a value generic
+/// in `mapping` with the stored expression. Identifiers that resolve to type
+/// generics are left untouched — those flow through `substitute_type`. Used
+/// by `substitute_array` (and any other size-position substitution) so that
+/// e.g. `Array<T, Size>` inside a class body lowers to `Array<float, 3>` when
+/// the class is instantiated as `Wrap<float, 3>`.
+pub(crate) fn substitute_value_generic_in_expr(
+    expr: &Expression,
+    mapping: &HashMap<String, Type>,
+) -> Expression {
+    if let ExpressionKind::Identifier(name, None) = &expr.node {
+        if let Some(ty) = mapping.get(name) {
+            if let Some(value_expr) = extract_value_generic(ty) {
+                return value_expr.clone();
+            }
+        }
+    }
+    expr.clone()
+}
+
 impl TypeChecker {
     /// Infers generic type parameters from argument types.
     ///
@@ -231,6 +282,15 @@ impl TypeChecker {
     ) -> Type {
         if args.is_none() {
             if let Some(subst) = mapping.get(name) {
+                // Bare value-generic reference (e.g. `Size` parsed as a type
+                // name inside a position the type checker reaches): pull the
+                // original value expression out of the marker so the caller
+                // doesn't see the synthetic `Custom("__value_generic__", …)`.
+                if let Some(value_expr) = extract_value_generic(subst) {
+                    if let Ok(value_ty) = self.extract_type_from_expression(value_expr) {
+                        return value_ty;
+                    }
+                }
                 return subst.clone();
             }
         }
@@ -239,11 +299,20 @@ impl TypeChecker {
             args_vec
                 .iter()
                 .map(|arg| {
-                    let arg_type = self
-                        .extract_type_from_expression(arg)
-                        .unwrap_or(make_type(TypeKind::Error));
-                    let subst_arg = self.substitute_type(&arg_type, mapping);
-                    self.create_type_expression(subst_arg)
+                    if self.extract_type_from_expression(arg).is_ok() {
+                        let arg_type = self
+                            .extract_type_from_expression(arg)
+                            .unwrap_or(make_type(TypeKind::Error));
+                        let subst_arg = self.substitute_type(&arg_type, mapping);
+                        self.create_type_expression(subst_arg)
+                    } else {
+                        // Value-generic position (e.g. the `Size` slot in a
+                        // resolved `Custom("Array", [..., Identifier("Size")])`).
+                        // Rewrite identifier references through the value-generic
+                        // marker mapping and keep the expression verbatim
+                        // otherwise.
+                        substitute_value_generic_in_expr(arg, mapping)
+                    }
                 })
                 .collect()
         });
@@ -306,12 +375,10 @@ impl TypeChecker {
             .extract_type_from_expression(elem_expr)
             .unwrap_or(make_type(TypeKind::Error));
         let subst_elem = self.substitute_type(&elem, mapping);
+        let subst_size = substitute_value_generic_in_expr(size_expr, mapping);
         make_type(TypeKind::Custom(
             "Array".to_string(),
-            Some(vec![
-                self.create_type_expression(subst_elem),
-                size_expr.clone(),
-            ]),
+            Some(vec![self.create_type_expression(subst_elem), subst_size]),
         ))
     }
 
@@ -420,6 +487,15 @@ impl TypeChecker {
 
         if let (Some(args_vec), Some(params_vec)) = (args, params) {
             for (i, arg_expr) in args_vec.iter().enumerate() {
+                // Skip value-generic args (e.g. the `3` in `Foo<float, 3>`):
+                // they aren't type expressions, so `resolve_type_expression`
+                // would report "Expected type expression". Constraints on
+                // value generics aren't modeled today; trying to validate one
+                // as if it were a type produces a spurious error at every
+                // instantiation site.
+                if self.extract_type_from_expression(arg_expr).is_err() {
+                    continue;
+                }
                 let param_def = &params_vec[i];
                 let arg_type = self.resolve_type_expression(arg_expr, context);
 

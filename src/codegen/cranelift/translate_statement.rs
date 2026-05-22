@@ -206,6 +206,7 @@ impl<'a> FunctionTranslator<'a> {
             &elem_ty.kind,
             set_ptr,
             ptr_type,
+            type_ctx.type_definitions,
         )?;
         FunctionTranslator::emit_set_clone_fn_for_elem_kind(
             builder,
@@ -800,6 +801,7 @@ impl<'a> FunctionTranslator<'a> {
             &elem_ty.kind,
             list_ptr,
             ptr_type,
+            type_ctx.type_definitions,
         )?;
         FunctionTranslator::emit_list_clone_fn_for_elem_kind(
             builder,

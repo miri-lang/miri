@@ -71,6 +71,28 @@ fn test_use_statement_multi_import() {
 }
 
 #[test]
+fn test_use_statement_multi_import_gpu_contextual_keyword() {
+    parser_test(
+        "use system.{gpu, io}",
+        vec![use_statement(
+            import_path_multi(
+                "system",
+                vec![(identifier("gpu"), None), (identifier("io"), None)],
+            ),
+            None,
+        )],
+    );
+}
+
+#[test]
+fn test_use_statement_local_contextual_keyword_in_dot_segment() {
+    parser_test(
+        "use system.local",
+        vec![use_statement(import_path("system.local"), None)],
+    );
+}
+
+#[test]
 fn test_error_on_trailing_dot() {
     parser_error_test(
         "use calc.path.some_module.",

@@ -354,6 +354,10 @@ impl TypeChecker {
     }
 
     /// Checks inner type compatibility for collections.
+    fn is_float_kind(kind: &TypeKind) -> bool {
+        matches!(kind, TypeKind::Float | TypeKind::F32 | TypeKind::F64)
+    }
+
     fn check_inner_type_compatible(
         &self,
         inner1: &crate::ast::Expression,
@@ -370,6 +374,19 @@ impl TypeChecker {
                 if matches!(t2_inner.kind, TypeKind::Int)
                     && self.is_integer(&t1_inner)
                     && !matches!(t1_inner.kind, TypeKind::Int)
+                {
+                    return false;
+                }
+                // Same rule for floats: collection storage is laid out at the
+                // exact element width, so mixing `Float`/`F32`/`F64` across
+                // a List/Array/Set/Map boundary produces silent layout
+                // mismatch (a 4-byte literal stored into an 8-byte slot, or
+                // vice versa, reads garbage on the other side). Scalar
+                // widening still passes through `are_compatible`; this guard
+                // only fires for collection inner types.
+                if Self::is_float_kind(&t1_inner.kind)
+                    && Self::is_float_kind(&t2_inner.kind)
+                    && t1_inner.kind != t2_inner.kind
                 {
                     return false;
                 }
