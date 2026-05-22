@@ -255,15 +255,85 @@ impl<'a> BodyEmitter<'a> {
     }
 
     fn emit_blocks(&mut self) -> Result<(), CodegenError> {
-        for block in &self.body.basic_blocks {
+        let mut visited = std::collections::HashSet::new();
+        self.emit_from(crate::mir::BasicBlock(0), None, &mut visited)
+    }
+
+    /// Emits MIR basic blocks starting at `start`, following `Goto` chains
+    /// linearly and structurizing a `SwitchInt(cond, [(true, then)], otherwise=merge)`
+    /// terminator into a WGSL `if` statement. Stops when reaching `stop` (if any)
+    /// or a `Return`. Rejects back-edges (loops) since WGSL has no `goto` and
+    /// structured loop emission is a follow-up.
+    fn emit_from(
+        &mut self,
+        start: crate::mir::BasicBlock,
+        stop: Option<crate::mir::BasicBlock>,
+        visited: &mut std::collections::HashSet<crate::mir::BasicBlock>,
+    ) -> Result<(), CodegenError> {
+        let mut cur = start;
+        loop {
+            if Some(cur) == stop {
+                return Ok(());
+            }
+            if !visited.insert(cur) {
+                return Err(CodegenError::Internal(format!(
+                    "WGSL backend: back-edge to bb{} not yet supported (loops are a follow-up)",
+                    cur.0
+                )));
+            }
+            let block = &self.body.basic_blocks[cur.0];
             for stmt in &block.statements {
                 self.emit_statement(&stmt.kind)?;
             }
-            if let Some(term) = &block.terminator {
-                self.emit_terminator(&term.kind)?;
+            let term = block.terminator.as_ref().ok_or_else(|| {
+                CodegenError::Internal(format!("WGSL backend: block bb{} has no terminator", cur.0))
+            })?;
+            match &term.kind {
+                TerminatorKind::Return => {
+                    return Ok(());
+                }
+                TerminatorKind::Unreachable => {
+                    self.write_indent()?;
+                    writeln!(self.output, "// unreachable").map_err(emit_err)?;
+                    return Ok(());
+                }
+                TerminatorKind::Goto { target } => {
+                    cur = *target;
+                }
+                TerminatorKind::SwitchInt {
+                    discr,
+                    targets,
+                    otherwise,
+                } => {
+                    if targets.len() == 1 && targets[0].0 == crate::mir::Discriminant::bool_true() {
+                        let then_bb = targets[0].1;
+                        let merge_bb = *otherwise;
+                        let cond_str = self.render_operand(discr)?;
+                        self.write_indent()?;
+                        writeln!(self.output, "if (bool({})) {{", cond_str).map_err(emit_err)?;
+                        self.indent += 1;
+                        self.emit_from(then_bb, Some(merge_bb), visited)?;
+                        self.indent -= 1;
+                        self.write_indent()?;
+                        writeln!(self.output, "}}").map_err(emit_err)?;
+                        cur = merge_bb;
+                    } else {
+                        return Err(CodegenError::Internal(format!(
+                            "WGSL backend: SwitchInt shape not supported (targets={:?})",
+                            targets
+                        )));
+                    }
+                }
+                TerminatorKind::Call { .. }
+                | TerminatorKind::GpuLaunch { .. }
+                | TerminatorKind::VirtualCall { .. } => {
+                    return Err(CodegenError::Internal(format!(
+                        "WGSL backend: terminator {:?} not yet supported",
+                        term.kind
+                    )));
+                }
             }
         }
-        Ok(())
     }
 
     fn emit_statement(&mut self, kind: &StatementKind) -> Result<(), CodegenError> {
@@ -280,24 +350,6 @@ impl<'a> BodyEmitter<'a> {
             | StatementKind::DecRef(_)
             | StatementKind::Dealloc(_)
             | StatementKind::Nop => Ok(()),
-        }
-    }
-
-    fn emit_terminator(&mut self, kind: &TerminatorKind) -> Result<(), CodegenError> {
-        match kind {
-            TerminatorKind::Return => Ok(()),
-            TerminatorKind::Unreachable => {
-                self.write_indent()?;
-                writeln!(self.output, "// unreachable").map_err(emit_err)
-            }
-            TerminatorKind::Goto { .. }
-            | TerminatorKind::SwitchInt { .. }
-            | TerminatorKind::Call { .. }
-            | TerminatorKind::GpuLaunch { .. }
-            | TerminatorKind::VirtualCall { .. } => Err(CodegenError::Internal(format!(
-                "WGSL backend: terminator {:?} not yet supported",
-                kind
-            ))),
         }
     }
 

@@ -42,6 +42,7 @@ fn is_wrappable_stmt(stmt: &Statement) -> bool {
             | StatementKind::If(..)
             | StatementKind::While(..)
             | StatementKind::For(..)
+            | StatementKind::GpuFor(..)
             | StatementKind::Block(..)
             | StatementKind::Return(..)
             | StatementKind::Break

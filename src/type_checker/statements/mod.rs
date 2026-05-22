@@ -78,6 +78,9 @@ impl TypeChecker {
             StatementKind::For(decls, iterable, body) => {
                 self.check_for(decls, iterable, body, context)
             }
+            StatementKind::GpuFor(decls, iterable, body) => {
+                self.check_gpu_for(decls, iterable, body, context, statement.span)
+            }
             StatementKind::Break => self.check_break(context, statement.span),
             StatementKind::Continue => self.check_continue(context, statement.span),
             StatementKind::Return(expr) => self.check_return(expr, context, statement.span),

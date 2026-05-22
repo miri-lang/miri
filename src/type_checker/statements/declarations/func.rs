@@ -96,6 +96,8 @@ impl TypeChecker {
 
         let old_loop_depth = context.loop_depth;
         context.loop_depth = 0;
+        let old_gpu_for_depth = context.gpu_for_depth;
+        context.gpu_for_depth = 0;
         let infer_main_return = name == "main" && return_type_expr.is_none();
 
         self.check_function_parameters(params, context);
@@ -126,6 +128,7 @@ impl TypeChecker {
         context.in_function = previous_in_function;
         context.in_async_function = previous_in_async;
         context.loop_depth = old_loop_depth;
+        context.gpu_for_depth = old_gpu_for_depth;
         context.exit_scope();
         context.return_types.pop();
         context.inferred_return_types.pop();

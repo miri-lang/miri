@@ -960,7 +960,7 @@ fn collect_callees_from_stmt(
             collect_callees_from_expr(cond, types, known, out);
             collect_callees_from_stmt(body, types, known, out);
         }
-        StatementKind::For(_, iter, body) => {
+        StatementKind::For(_, iter, body) | StatementKind::GpuFor(_, iter, body) => {
             collect_callees_from_expr(iter, types, known, out);
             collect_callees_from_stmt(body, types, known, out);
         }
@@ -1279,7 +1279,7 @@ fn walk_stmt_for_escapes(
                 return_aliases,
             );
         }
-        StatementKind::For(_, iter, body) => {
+        StatementKind::For(_, iter, body) | StatementKind::GpuFor(_, iter, body) => {
             walk_for_for_escapes(
                 iter,
                 body,
@@ -1459,7 +1459,7 @@ fn walk_stmt_for_rule4(
             walk_expr_for_rule4(cond, params, summaries, direct_escapes);
             walk_stmt_for_rule4(body, params, summaries, direct_escapes);
         }
-        StatementKind::For(_, iter, body) => {
+        StatementKind::For(_, iter, body) | StatementKind::GpuFor(_, iter, body) => {
             walk_expr_for_rule4(iter, params, summaries, direct_escapes);
             walk_stmt_for_rule4(body, params, summaries, direct_escapes);
         }
@@ -1737,7 +1737,9 @@ fn find_hop_in_stmt(
             }
         }
         StatementKind::While(_, body, _) => find_hop_in_stmt(param_name, body, summaries, types),
-        StatementKind::For(_, _, body) => find_hop_in_stmt(param_name, body, summaries, types),
+        StatementKind::For(_, _, body) | StatementKind::GpuFor(_, _, body) => {
+            find_hop_in_stmt(param_name, body, summaries, types)
+        }
         _ => None,
     }
 }

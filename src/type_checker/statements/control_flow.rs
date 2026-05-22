@@ -213,6 +213,88 @@ impl TypeChecker {
         context.exit_scope();
     }
 
+    /// Type-checks a `gpu for <ident> in <range>` statement.
+    ///
+    /// Restrictions enforced beyond `check_for`:
+    /// - The iterable must be a numeric range (`a..b` or `a..=b`).
+    /// - Both range bounds must be integer literals. The baseline MIR
+    ///   lowering rejects variable bounds because they require scalar
+    ///   uniform/push-constant ABI support that the WGSL backend has not
+    ///   landed yet; enforcing the restriction here surfaces the limit at
+    ///   type-check time instead of as a late MIR error.
+    /// - The loop body is checked with `context.in_gpu_function = true`, so
+    ///   discarded values and variable types are validated against
+    ///   [`is_gpu_compatible`](crate::type_checker::utils::is_gpu_compatible).
+    /// - `break` / `continue` in the body's immediate scope are rejected:
+    ///   the GPU dispatch is not an iterative loop, so loop-control statements
+    ///   have no meaning at the kernel level. Nested CPU `for`/`while` inside
+    ///   the body still permit them via their own `enter_loop`.
+    pub(crate) fn check_gpu_for(
+        &mut self,
+        decls: &[VariableDeclaration],
+        iterable: &Expression,
+        body: &Statement,
+        context: &mut Context,
+        stmt_span: Span,
+    ) {
+        let ExpressionKind::Range(start, Some(end), range_type) = &iterable.node else {
+            self.report_error(
+                "'gpu for' requires a bounded numeric range like 'a..b' or 'a..=b'".to_string(),
+                iterable.span,
+            );
+            return;
+        };
+        if !matches!(
+            range_type,
+            RangeExpressionType::Exclusive | RangeExpressionType::Inclusive
+        ) {
+            self.report_error(
+                "'gpu for' requires a bounded numeric range like 'a..b' or 'a..=b'".to_string(),
+                iterable.span,
+            );
+            return;
+        }
+        if !is_int_literal(start) || !is_int_literal(end) {
+            self.report_error(
+                "'gpu for' baseline requires Int-literal range bounds (variable bounds are a follow-up)"
+                    .to_string(),
+                iterable.span,
+            );
+            return;
+        }
+
+        let iterable_type = self.infer_expression(iterable, context);
+        let element_type = self.get_iterable_element_type(&iterable_type, iterable.span);
+
+        if decls.len() != 1 {
+            self.report_error(
+                "'gpu for' requires exactly one loop variable".to_string(),
+                stmt_span,
+            );
+        }
+
+        context.enter_scope();
+        let outer_in_gpu = context.in_gpu_function;
+        context.in_gpu_function = true;
+        context.gpu_for_depth += 1;
+
+        self.bind_loop_variables(decls, &element_type, &iterable_type, iterable.span, context);
+        self.check_statement(body, context);
+
+        context.gpu_for_depth -= 1;
+        context.in_gpu_function = outer_in_gpu;
+
+        let unconsumed = context.get_unconsumed_linear_vars();
+        for (name, span) in unconsumed {
+            self.report_error(
+                format!("Linear variable '{}' must be consumed exactly once", name),
+                span,
+            );
+        }
+
+        context.exit_scope();
+    }
+
     pub(crate) fn bind_loop_variables(
         &mut self,
         decls: &[VariableDeclaration],
@@ -412,13 +494,23 @@ impl TypeChecker {
 
     pub(crate) fn check_break(&mut self, context: &Context, span: Span) {
         if context.loop_depth == 0 {
-            self.report_error("Break statement outside of loop".to_string(), span);
+            let msg = if context.gpu_for_depth > 0 {
+                "'break' is not supported inside a 'gpu for' body: the GPU dispatch is not an iterative loop, so loop-control statements have no meaning at the kernel level"
+            } else {
+                "Break statement outside of loop"
+            };
+            self.report_error(msg.to_string(), span);
         }
     }
 
     pub(crate) fn check_continue(&mut self, context: &Context, span: Span) {
         if context.loop_depth == 0 {
-            self.report_error("Continue statement outside of loop".to_string(), span);
+            let msg = if context.gpu_for_depth > 0 {
+                "'continue' is not supported inside a 'gpu for' body: the GPU dispatch is not an iterative loop, so loop-control statements have no meaning at the kernel level"
+            } else {
+                "Continue statement outside of loop"
+            };
+            self.report_error(msg.to_string(), span);
         }
     }
 
@@ -456,4 +548,11 @@ impl TypeChecker {
             );
         }
     }
+}
+
+fn is_int_literal(expr: &Expression) -> bool {
+    matches!(
+        &expr.node,
+        ExpressionKind::Literal(crate::ast::literal::Literal::Integer(_))
+    )
 }
