@@ -9,7 +9,7 @@ use crate::ast::factory::{
 use crate::ast::statement::{Statement, StatementKind};
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::Program;
-use crate::cli::args::CpuBackend;
+use crate::cli::args::{BuildTarget, CpuBackend};
 use crate::codegen::Backend;
 use crate::error::compiler::CompilerError;
 use crate::error::syntax::Span;
@@ -335,6 +335,8 @@ pub struct BuildOptions {
     pub opt_level: u8,
     /// Which CPU backend to use for code generation.
     pub cpu_backend: CpuBackend,
+    /// Target environment for the produced artifact.
+    pub target: BuildTarget,
 }
 
 /// Orchestrates the full compilation pipeline from source to executable.
@@ -461,6 +463,7 @@ impl Pipeline {
             release: false,
             opt_level: 0,
             cpu_backend: CpuBackend::Cranelift,
+            target: BuildTarget::Native,
         };
 
         self.build(source, &build_opts)?;
@@ -499,6 +502,13 @@ impl Pipeline {
         pipeline_result.type_checker.entry_source = Some(std::rc::Rc::from(source));
         pipeline_result.type_checker.entry_source_path = self.source_path().map(std::rc::Rc::from);
         let mir_bodies = self.lower_to_mir(&pipeline_result, opts.release)?;
+
+        match opts.target {
+            BuildTarget::Native => {}
+            BuildTarget::WebGpu => {
+                return crate::codegen::web_gpu::emit_bundle(&mir_bodies, opts.out_path.as_ref());
+            }
+        }
 
         let (object_bytes, required_runtimes) = match opts.cpu_backend {
             CpuBackend::Cranelift => {

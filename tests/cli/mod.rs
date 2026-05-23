@@ -2,6 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 pub mod build;
+pub mod build_web_gpu;
 pub mod help;
 pub mod run;
 pub mod test_cmd;

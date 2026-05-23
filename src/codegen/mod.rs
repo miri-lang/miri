@@ -11,6 +11,7 @@
 pub mod backend;
 pub mod cranelift;
 pub mod llvm;
+pub mod web_gpu;
 pub mod wgsl;
 
 pub use backend::{ArtifactFormat, Backend, CompiledArtifact};
