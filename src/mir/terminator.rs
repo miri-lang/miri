@@ -168,14 +168,19 @@ impl fmt::Display for Terminator {
                 kernel,
                 grid,
                 block,
+                args,
                 destination,
                 target,
             } => {
                 write!(
                     f,
-                    "{} = launch({}, grid: {}, block: {}) -> ",
+                    "{} = launch({}, grid: {}, block: {}",
                     destination, kernel, grid, block
                 )?;
+                for arg in args {
+                    write!(f, ", {}", arg)?;
+                }
+                write!(f, ") -> ")?;
                 if let Some(t) = target {
                     write!(f, "{}", t)
                 } else {
@@ -239,10 +244,16 @@ pub enum TerminatorKind {
         target: Option<BasicBlock>,
     },
     /// GPU Kernel Launch.
+    ///
+    /// `args` are the host-side capture operands marshaled into the kernel's
+    /// storage buffers (binding 0..N in declaration order). Baseline assumes
+    /// every capture is read/write — the runtime unconditionally copies each
+    /// buffer back to host memory after dispatch.
     GpuLaunch {
         kernel: Operand,
         grid: Operand,
         block: Operand,
+        args: Vec<Operand>,
         destination: Place,
         target: Option<BasicBlock>,
     },

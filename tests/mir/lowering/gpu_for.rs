@@ -40,7 +40,7 @@ fn synthesize_kernel_names(source: &str) -> Vec<String> {
         .ast
         .body
         .iter()
-        .find_map(|s| matches!(s.node, StatementKind::FunctionDeclaration(_)).then_some(s))
+        .find(|s| matches!(s.node, StatementKind::FunctionDeclaration(_)))
         .expect("a function declaration");
     let (_body, lambdas) =
         lower_function(func_stmt, &result.type_checker, false, false).expect("lowering");
@@ -98,7 +98,7 @@ fn main()
         .ast
         .body
         .iter()
-        .find_map(|s| matches!(s.node, StatementKind::FunctionDeclaration(_)).then_some(s))
+        .find(|s| matches!(s.node, StatementKind::FunctionDeclaration(_)))
         .unwrap();
     let (_body, lambdas) =
         lower_function(func_stmt, &result.type_checker, false, false).expect("lowering");
@@ -121,6 +121,106 @@ fn main()
     assert!(
         captured_names.contains(&"dst"),
         "expected 'dst' captured into kernel, got {captured_names:?}"
+    );
+}
+
+#[test]
+fn test_gpu_launch_terminator_carries_capture_args() {
+    let body = mir_lower_code(
+        "
+use system.gpu
+use system.collections.array
+
+fn main()
+    let a = [1, 2, 3, 4]
+    let b = [5, 6, 7, 8]
+    var dst = [0, 0, 0, 0]
+    gpu for i in 0..4
+        dst[i] = a[i] + b[i]
+",
+    );
+    let args = body
+        .basic_blocks
+        .iter()
+        .find_map(|bb| match bb.terminator.as_ref().map(|t| &t.kind) {
+            Some(TerminatorKind::GpuLaunch { args, .. }) => Some(args.clone()),
+            _ => None,
+        })
+        .expect("expected GpuLaunch terminator");
+    assert!(
+        !args.is_empty(),
+        "GpuLaunch.args must be populated with capture operands, got empty"
+    );
+}
+
+#[test]
+fn test_gpu_for_rejects_scalar_capture() {
+    // Scalars are `is_gpu_compatible` (so the body type-checks fine), but
+    // the runtime dispatcher marshals every capture as a `MiriArray`
+    // pointer. A scalar capture would be reinterpreted as a heap pointer,
+    // causing UB at dispatch. The MIR lowering must surface this as a
+    // diagnostic instead of silently producing miscompiled code.
+    let pipeline = Pipeline::new();
+    let source = "
+use system.gpu
+use system.collections.array
+
+fn main()
+    let scale = 7
+    var dst = [0, 0, 0, 0]
+    gpu for i in 0..4
+        dst[i] = scale
+";
+    let result = pipeline.frontend(source).expect("frontend");
+    let func_stmt = result
+        .ast
+        .body
+        .iter()
+        .find(|s| matches!(s.node, StatementKind::FunctionDeclaration(_)))
+        .expect("a function declaration");
+    let err = lower_function(func_stmt, &result.type_checker, false, false)
+        .expect_err("expected lowering to reject scalar capture in `gpu for`");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("non-buffer") && msg.contains("scale"),
+        "expected diagnostic about non-buffer capture 'scale', got: {msg}"
+    );
+}
+
+#[test]
+fn test_gpu_for_rejects_gpu_array_capture_until_class_unwrap_lands() {
+    // `GpuArray<T, N>` is a stdlib class wrapping an `Array` field. A local
+    // of class type stores a payload pointer past the malloc/RC header
+    // whose offset 0 is either a vtable pointer or the inner `data` field
+    // — *not* a `MiriArray` header. Routing it through the dispatcher
+    // would silently read garbage as the device buffer. Until the
+    // dispatcher learns to unwrap that indirection, the MIR lowering must
+    // surface this as a diagnostic instead of accepting it as a buffer
+    // capture.
+    let pipeline = Pipeline::new();
+    let source = "
+use system.gpu
+use system.collections.array
+
+fn main()
+    let g = GpuArray<int, 4>(data: [1, 2, 3, 4])
+    var dst = [0, 0, 0, 0]
+    gpu for i in 0..4
+        dst[i] = g.length()
+";
+    let result = pipeline.frontend(source).expect("frontend");
+    let func_stmt = result
+        .ast
+        .body
+        .iter()
+        .find(|s| matches!(s.node, StatementKind::FunctionDeclaration(_)))
+        .expect("a function declaration");
+    let err = lower_function(func_stmt, &result.type_checker, false, false)
+        .expect_err("expected lowering to reject GpuArray capture in `gpu for`");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("non-buffer") && msg.contains("'g'"),
+        "expected diagnostic about non-buffer capture 'g', got: {msg}"
     );
 }
 

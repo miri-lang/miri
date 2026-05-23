@@ -316,11 +316,15 @@ impl SSABuilder {
                 kernel,
                 grid,
                 block: grid_block,
+                args,
                 ..
             } => {
                 self.rewrite_operand(kernel);
                 self.rewrite_operand(grid);
                 self.rewrite_operand(grid_block);
+                for arg in args {
+                    self.rewrite_operand(arg);
+                }
             }
             TerminatorKind::Return | TerminatorKind::Goto { .. } | TerminatorKind::Unreachable => {}
         }

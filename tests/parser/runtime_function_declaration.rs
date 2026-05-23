@@ -74,11 +74,24 @@ fn test_runtime_function_declaration_multiple_params() {
 }
 
 #[test]
+fn test_runtime_function_declaration_explicit_gpu() {
+    parser_test(
+        "runtime \"gpu\" fn miri_gpu_init()\n",
+        vec![runtime_function_declaration(
+            RuntimeKind::Gpu,
+            "miri_gpu_init",
+            vec![],
+            None,
+        )],
+    );
+}
+
+#[test]
 fn test_runtime_function_declaration_unknown_runtime() {
     parser_error_test(
-        "runtime \"gpu\" fn miri_rt_launch()\n",
+        "runtime \"webgl\" fn miri_rt_launch()\n",
         &SyntaxErrorKind::UnknownRuntime {
-            name: "gpu".to_string(),
+            name: "webgl".to_string(),
         },
     );
 }
