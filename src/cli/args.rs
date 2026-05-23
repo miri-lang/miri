@@ -63,6 +63,12 @@ pub enum Commands {
         /// CPU backend to use for code generation
         #[arg(long, value_enum, default_value_t = CpuBackend::Cranelift)]
         cpu_backend: CpuBackend,
+
+        /// Build target. `native` (default) emits an executable for the host
+        /// platform. `web-gpu` emits a browser-runnable HTML bundle that
+        /// dispatches `gpu fn` kernels through WebGPU/WGSL.
+        #[arg(long, value_enum, default_value_t = BuildTarget::Native)]
+        target: BuildTarget,
     },
 
     /// Check a Miri source file for errors (type-check only, no code generation)
@@ -104,4 +110,15 @@ pub enum TestFormat {
     #[default]
     Pretty,
     Json,
+}
+
+/// Selectable build target.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BuildTarget {
+    /// Native executable for the host platform.
+    #[default]
+    Native,
+    /// Browser-runnable WebGPU bundle (HTML + WGSL + JS runtime).
+    #[value(name = "web-gpu")]
+    WebGpu,
 }
