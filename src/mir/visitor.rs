@@ -125,12 +125,16 @@ pub trait Visitor {
                 kernel,
                 grid,
                 block: grid_block,
+                args,
                 destination,
-                ..
+                target: _,
             } => {
                 self.visit_operand(kernel, block);
                 self.visit_operand(grid, block);
                 self.visit_operand(grid_block, block);
+                for arg in args {
+                    self.visit_operand(arg, block);
+                }
                 self.visit_place(destination, PlaceContext::MutatingUse, block);
             }
             TerminatorKind::VirtualCall {
@@ -302,12 +306,16 @@ pub trait MutVisitor {
                 kernel,
                 grid,
                 block: grid_block,
+                args,
                 destination,
-                ..
+                target: _,
             } => {
                 self.visit_operand(kernel, block);
                 self.visit_operand(grid, block);
                 self.visit_operand(grid_block, block);
+                for arg in args {
+                    self.visit_operand(arg, block);
+                }
                 self.visit_place(destination, PlaceContext::MutatingUse, block);
             }
             TerminatorKind::VirtualCall {

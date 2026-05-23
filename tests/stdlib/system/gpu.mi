@@ -1,0 +1,19 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+//
+// Smoke tests for `system.gpu`. The Item 3 ABI category surfaces
+// `is_gpu_available()` as the minimal cross-layer integration: parser
+// accepts `runtime "gpu" fn`, pipeline links `libmiri_runtime_gpu.a`,
+// and the FFI call returns without panicking.
+
+use system.gpu
+use system.io
+use system.testing
+
+fn test_is_gpu_available_returns_a_bool()
+    let available = is_gpu_available()
+    assert(available == true or available == false, "is_gpu_available returns a bool")
+
+fn main()
+    test_is_gpu_available_returns_a_bool()
+    println("system.gpu: OK")

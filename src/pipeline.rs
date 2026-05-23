@@ -95,6 +95,21 @@ fn collect_runtime_info(
     // RuntimeFunctionDeclaration in user code.
     required_runtimes.insert(RuntimeKind::Core);
 
+    // Link the "gpu" runtime when the program contains any `gpu for` /
+    // `gpu fn` construct. The Cranelift backend lowers `GpuLaunch` to a
+    // call into `miri_gpu_launch_inline`, which lives there.
+    if program_uses_gpu(program.body.iter().chain(imported_stmts.iter())) {
+        required_runtimes.insert(RuntimeKind::Gpu);
+        #[cfg(feature = "cranelift")]
+        if let Some(ptr_ty) = ptr_ty {
+            imports.push(crate::codegen::cranelift::RuntimeImport {
+                name: "miri_gpu_launch_inline".to_string(),
+                param_types: vec![ptr_ty],
+                return_type: Some(cranelift_codegen::ir::types::I8),
+            });
+        }
+    }
+
     let all_stmts = program.body.iter().chain(imported_stmts.iter());
 
     for stmt in all_stmts {
@@ -170,6 +185,46 @@ fn collect_runtime_info(
         #[cfg(feature = "cranelift")]
         imports,
         required_runtimes,
+    }
+}
+
+/// Walks the AST looking for any GPU construct: `gpu for` statements or
+/// function declarations carrying `is_gpu: true`. Used by
+/// `collect_runtime_info` to decide whether to link `libmiri_runtime_gpu`.
+fn program_uses_gpu<'a, I: IntoIterator<Item = &'a Statement>>(stmts: I) -> bool {
+    for stmt in stmts {
+        if stmt_uses_gpu(stmt) {
+            return true;
+        }
+    }
+    false
+}
+
+fn stmt_uses_gpu(stmt: &Statement) -> bool {
+    match &stmt.node {
+        StatementKind::GpuFor(_, _, _) => true,
+        StatementKind::FunctionDeclaration(decl) => {
+            decl.properties.is_gpu || decl.body.as_ref().is_some_and(|b| stmt_uses_gpu(b))
+        }
+        StatementKind::Block(stmts) => stmts.iter().any(stmt_uses_gpu),
+        StatementKind::If(_, then_branch, else_branch, _) => {
+            stmt_uses_gpu(then_branch) || else_branch.as_ref().is_some_and(|s| stmt_uses_gpu(s))
+        }
+        StatementKind::While(_, body, _) | StatementKind::For(_, _, body) => stmt_uses_gpu(body),
+        StatementKind::Class(class_data) => class_data.body.iter().any(stmt_uses_gpu),
+        StatementKind::Struct(_, _, _, methods, _)
+        | StatementKind::Enum(_, _, _, methods, _, _)
+        | StatementKind::Trait(_, _, _, methods, _) => methods.iter().any(stmt_uses_gpu),
+        StatementKind::Empty
+        | StatementKind::Break
+        | StatementKind::Continue
+        | StatementKind::Expression(_)
+        | StatementKind::Variable(_, _)
+        | StatementKind::Return(_)
+        | StatementKind::Use(_, _)
+        | StatementKind::Type(_, _)
+        | StatementKind::RuntimeFunctionDeclaration(..)
+        | StatementKind::IntrinsicFunctionDeclaration(..) => false,
     }
 }
 
@@ -1489,6 +1544,9 @@ impl Pipeline {
             let lib_dir = runtime_library_dir(runtime)?;
             cmd.arg(format!("-L{}", lib_dir.display()));
             cmd.arg(format!("-l{}", runtime.library_name()));
+            for arg in runtime.extra_link_args() {
+                cmd.arg(arg);
+            }
         }
 
         let status = cmd.status().map_err(|e| {
@@ -1593,4 +1651,54 @@ fn runtime_library_dir(runtime: &RuntimeKind) -> Result<PathBuf, CompilerError> 
         "Could not find runtime library '{}'. Set MIRI_RUNTIME_DIR or build the runtime with `cargo build --release`.",
         runtime.library_name()
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::program_uses_gpu;
+    use crate::pipeline::Pipeline;
+
+    fn detects_gpu(source: &str) -> bool {
+        let pipeline = Pipeline::new();
+        let result = pipeline.frontend_script(source).expect("frontend");
+        program_uses_gpu(result.ast.body.iter())
+    }
+
+    #[test]
+    fn program_uses_gpu_finds_gpu_for_at_top_level() {
+        assert!(detects_gpu(
+            "
+use system.gpu
+use system.collections.array
+
+let dst = [0, 0, 0, 0]
+gpu for i in 0..4
+    let x = i
+"
+        ));
+    }
+
+    #[test]
+    fn program_uses_gpu_walks_into_class_body() {
+        assert!(detects_gpu(
+            "
+use system.gpu
+
+class Worker
+    gpu fn kernel()
+        let x = 1
+"
+        ));
+    }
+
+    #[test]
+    fn program_uses_gpu_false_for_cpu_only_program() {
+        assert!(!detects_gpu(
+            "
+use system.io
+fn main()
+    println(\"hello\")
+"
+        ));
+    }
 }

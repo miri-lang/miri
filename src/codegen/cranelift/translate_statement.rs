@@ -267,9 +267,22 @@ impl<'a> FunctionTranslator<'a> {
                 builder.ins().trap(trap_code);
                 Ok(())
             }
-            TerminatorKind::GpuLaunch { .. } => Err(CodegenError::Internal(
-                "GPU launches not supported in CPU backend".to_string(),
-            )),
+            TerminatorKind::GpuLaunch {
+                kernel,
+                grid,
+                block: grid_block,
+                args,
+                destination: _,
+                target,
+            } => {
+                crate::codegen::cranelift::gpu_launch::translate(
+                    builder, ctx, kernel, grid, grid_block, args, locals, type_ctx,
+                )?;
+                if let Some(t) = target {
+                    builder.ins().jump(blocks[t], &[]);
+                }
+                Ok(())
+            }
             TerminatorKind::VirtualCall {
                 vtable_slot,
                 args,

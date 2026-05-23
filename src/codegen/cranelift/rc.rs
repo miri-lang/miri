@@ -1075,7 +1075,8 @@ impl<'a> FunctionTranslator<'a> {
         let ptr = builder.block_params(entry_block)[0];
 
         let mut string_literals = HashMap::new();
-        let mut module_ctx = empty_module_ctx(module, &mut string_literals);
+        let empty_kernel_registry = HashMap::new();
+        let mut module_ctx = empty_module_ctx(module, &mut string_literals, &empty_kernel_registry);
         let empty_captures = HashMap::new();
         let empty_out_ptr_vars = HashMap::new();
         let type_ctx = TypeCtx {

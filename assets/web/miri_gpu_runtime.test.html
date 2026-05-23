@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <title>Miri WebGPU runtime — smoke tests</title>
+    <style>
+        body { font-family: -apple-system, system-ui, sans-serif; max-width: 64rem; margin: 2rem auto; padding: 0 1rem; }
+        h1 { margin-bottom: 0.25rem; }
+        h1 + p { color: #555; margin-top: 0; }
+        #results { border-collapse: collapse; margin-top: 1rem; width: 100%; }
+        #results th, #results td { border: 1px solid #ddd; padding: 0.4rem 0.75rem; text-align: left; font-size: 0.95rem; }
+        #results th { background: #f3f3f3; }
+        .pass { color: #0a7d28; font-weight: 600; }
+        .fail { color: #b00020; font-weight: 600; }
+        pre.detail { white-space: pre-wrap; margin: 0.25rem 0; font-size: 0.8rem; color: #555; }
+        #summary { margin-top: 1rem; padding: 0.75rem 1rem; border-radius: 4px; }
+        #summary.pass { background: #e7f5ec; }
+        #summary.fail { background: #fdecef; }
+    </style>
+</head>
+<body>
+    <h1>Miri WebGPU runtime — smoke tests</h1>
+    <p>Open in a WebGPU-capable browser (Chrome 113+, Edge 113+, Safari 18+ TP). All cases must report PASS.</p>
+    <table id="results">
+        <thead>
+            <tr><th>Case</th><th>Status</th><th>Detail</th></tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+    <div id="summary">Running…</div>
+
+    <script type="module">
+        import { initGpu, runKernel, MiriGpuError } from "./miri_gpu_runtime.js";
+
+        const VECTOR_ADD_WGSL = `
+@group(0) @binding(0) var<storage, read_write> a: array<i32>;
+@group(0) @binding(1) var<storage, read_write> b: array<i32>;
+@group(0) @binding(2) var<storage, read_write> dst: array<i32>;
+
+@compute @workgroup_size(256, 1, 1)
+fn vector_add(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i < arrayLength(&dst)) {
+        dst[i] = a[i] + b[i];
+    }
+}`;
+
+        const SCALAR_MUL_WGSL = `
+@group(0) @binding(0) var<storage, read_write> src: array<f32>;
+@group(0) @binding(1) var<storage, read_write> factor: array<f32>;
+@group(0) @binding(2) var<storage, read_write> dst: array<f32>;
+
+@compute @workgroup_size(64, 1, 1)
+fn scale(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i < arrayLength(&dst)) {
+        dst[i] = src[i] * factor[0];
+    }
+}`;
+
+        const BOUNDS_GUARD_WGSL = `
+@group(0) @binding(0) var<storage, read_write> dst: array<i32>;
+
+@compute @workgroup_size(256, 1, 1)
+fn fill_identity(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i < arrayLength(&dst)) {
+        dst[i] = i32(i);
+    }
+}`;
+
+        const cases = [
+            {
+                name: "vector_add: i32, length 1024",
+                async run(device) {
+                    const length = 1024;
+                    const a = new Int32Array(length).map((_, i) => i);
+                    const b = new Int32Array(length).map((_, i) => i * 2);
+                    const expected = new Int32Array(length).map((_, i) => i + i * 2);
+                    const workgroups = Math.ceil(length / 256);
+                    const [dst] = await runKernel({
+                        device,
+                        wgsl: VECTOR_ADD_WGSL,
+                        entryPoint: "vector_add",
+                        inputs: [a, b],
+                        outputs: [
+                            {
+                                length,
+                                type: Int32Array,
+                                initialData: new Int32Array(length),
+                            },
+                        ],
+                        workgroups,
+                    });
+                    assertArrayEqual(dst, expected);
+                },
+            },
+            {
+                name: "scalar_multiply: f32 * scalar, length 256",
+                async run(device) {
+                    const length = 256;
+                    const src = new Float32Array(length).map((_, i) => i * 0.5);
+                    const factor = new Float32Array([3.0]);
+                    const expected = new Float32Array(length).map((_, i) => i * 0.5 * 3.0);
+                    const workgroups = Math.ceil(length / 64);
+                    const [dst] = await runKernel({
+                        device,
+                        wgsl: SCALAR_MUL_WGSL,
+                        entryPoint: "scale",
+                        inputs: [src, factor],
+                        outputs: [
+                            {
+                                length,
+                                type: Float32Array,
+                                initialData: new Float32Array(length),
+                            },
+                        ],
+                        workgroups,
+                    });
+                    assertArrayApprox(dst, expected, 1e-5);
+                },
+            },
+            {
+                name: "bounds_guard: oversized grid does not write past dst",
+                async run(device) {
+                    const length = 100;
+                    const sentinel = 0xdeadbeef | 0;
+                    const initial = new Int32Array(length + 8).fill(sentinel);
+                    const expected = new Int32Array(length + 8);
+                    for (let i = 0; i < length; i++) expected[i] = i;
+                    for (let i = length; i < expected.length; i++) expected[i] = sentinel;
+                    const workgroups = Math.ceil(length / 256);
+                    const dstBufferLength = length;
+                    const [dst] = await runKernel({
+                        device,
+                        wgsl: BOUNDS_GUARD_WGSL,
+                        entryPoint: "fill_identity",
+                        inputs: [],
+                        outputs: [
+                            {
+                                length: dstBufferLength,
+                                type: Int32Array,
+                                initialData: initial.slice(0, dstBufferLength),
+                            },
+                        ],
+                        workgroups,
+                    });
+                    const expectedDst = expected.slice(0, dstBufferLength);
+                    assertArrayEqual(dst, expectedDst);
+                },
+            },
+            {
+                name: "rejects invalid WGSL with MiriGpuError",
+                async run(device) {
+                    let threw = false;
+                    try {
+                        await runKernel({
+                            device,
+                            wgsl: "this is not WGSL",
+                            entryPoint: "main",
+                            inputs: [],
+                            outputs: [{ length: 4, type: Int32Array }],
+                            workgroups: 1,
+                        });
+                    } catch (err) {
+                        threw = true;
+                        if (!(err instanceof MiriGpuError || /WGSL|shader|parse/i.test(err.message))) {
+                            throw new Error(`expected shader compilation error, got: ${err}`);
+                        }
+                    }
+                    if (!threw) throw new Error("expected compilation error, kernel succeeded");
+                },
+            },
+        ];
+
+        function assertArrayEqual(actual, expected) {
+            if (actual.length !== expected.length) {
+                throw new Error(`length mismatch: ${actual.length} vs ${expected.length}`);
+            }
+            for (let i = 0; i < expected.length; i++) {
+                if (actual[i] !== expected[i]) {
+                    throw new Error(`mismatch at [${i}]: ${actual[i]} vs ${expected[i]}`);
+                }
+            }
+        }
+
+        function assertArrayApprox(actual, expected, eps) {
+            if (actual.length !== expected.length) {
+                throw new Error(`length mismatch: ${actual.length} vs ${expected.length}`);
+            }
+            for (let i = 0; i < expected.length; i++) {
+                if (Math.abs(actual[i] - expected[i]) > eps) {
+                    throw new Error(`approx mismatch at [${i}]: ${actual[i]} vs ${expected[i]} (eps=${eps})`);
+                }
+            }
+        }
+
+        function record(name, status, detail) {
+            const tbody = document.querySelector("#results tbody");
+            const row = document.createElement("tr");
+            row.innerHTML = `<td>${escapeHtml(name)}</td><td class="${status}">${status.toUpperCase()}</td><td><pre class="detail">${escapeHtml(detail ?? "")}</pre></td>`;
+            tbody.appendChild(row);
+        }
+
+        function escapeHtml(s) {
+            return String(s).replace(/[&<>"']/g, (c) => ({
+                "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;",
+            }[c]));
+        }
+
+        async function main() {
+            const summary = document.getElementById("summary");
+            let device;
+            try {
+                ({ device } = await initGpu());
+            } catch (err) {
+                record("initGpu", "fail", String(err));
+                summary.textContent = `FAIL: ${err.message}`;
+                summary.classList.add("fail");
+                return;
+            }
+
+            let passed = 0;
+            let failed = 0;
+            for (const c of cases) {
+                try {
+                    await c.run(device);
+                    record(c.name, "pass", "");
+                    passed++;
+                } catch (err) {
+                    record(c.name, "fail", err.stack ?? String(err));
+                    failed++;
+                }
+            }
+            summary.textContent = `${passed} passing, ${failed} failing of ${cases.length}`;
+            summary.classList.add(failed === 0 ? "pass" : "fail");
+        }
+
+        main();
+    </script>
+</body>
+</html>
