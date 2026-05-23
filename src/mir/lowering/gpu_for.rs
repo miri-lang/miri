@@ -21,7 +21,7 @@ use std::collections::HashSet;
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::{IntegerLiteral, Literal};
 use crate::ast::statement::{Statement, StatementKind, VariableDeclaration};
-use crate::ast::types::{Type, TypeKind, DIM3_TYPE_NAME};
+use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind, DIM3_TYPE_NAME};
 use crate::ast::RangeExpressionType;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
@@ -70,7 +70,20 @@ pub fn lower_gpu_for(
             ));
         };
         let ty = ctx.body.local_decls[outer_local.0].ty.clone();
-        captures.push(CaptureInfo { name, ty });
+        if !is_gpu_buffer_capture(&ty.kind) {
+            return Err(LoweringError::unsupported_expression(
+                format!(
+                    "gpu for: capture '{}' has non-buffer type; baseline only accepts `Array<T, N>`, `[T; N]`, or `GpuArray<T>` captures (scalar/string/collection captures need uniform/push-constant lowering, follow-up)",
+                    name
+                ),
+                *span,
+            ));
+        }
+        captures.push(CaptureInfo {
+            name,
+            ty,
+            outer_local,
+        });
     }
 
     // Use the AST statement's globally-unique id so kernel names cannot
@@ -88,13 +101,71 @@ pub fn lower_gpu_for(
         captures: Vec::new(),
     });
 
-    emit_gpu_launch(ctx, &kernel_name, length, *span);
+    emit_gpu_launch(ctx, &kernel_name, length, &captures, *span);
     Ok(())
 }
 
 struct CaptureInfo {
     name: String,
     ty: Type,
+    outer_local: Local,
+}
+
+/// Returns `true` for types whose runtime representation is a host-side
+/// `MiriArray`-shaped buffer that the GPU dispatcher can marshal as a
+/// storage binding. Scalars and non-buffer managed types pass the broader
+/// `is_gpu_compatible` predicate (used for kernel-body type checking) but
+/// would be misinterpreted as MiriArray pointers by `gpu_launch::translate`.
+///
+/// `GpuArray<T, N>` is intentionally **excluded** here even though it is
+/// `is_gpu_compatible`: it is a stdlib class wrapping an `Array` field, so
+/// the local stores a class payload pointer whose offset 0 is either a
+/// vtable pointer (if the class has one) or the inner `data` field — not
+/// a `MiriArray` header. Routing it through the dispatcher would silently
+/// read garbage as the device data pointer / length. Re-enable once the
+/// dispatcher unwraps the class indirection (M8a follow-up).
+fn is_gpu_buffer_capture(kind: &TypeKind) -> bool {
+    match kind {
+        TypeKind::Array(_, _) => true,
+        TypeKind::Custom(name, _) => {
+            BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Array)
+        }
+        // Listed explicitly so a new `TypeKind` variant must be classified
+        // here on purpose (PRINCIPLES §3.5). Every kind below currently
+        // ships through the kernel body but cannot be marshaled as a
+        // storage buffer by the dispatcher.
+        TypeKind::Int
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::I128
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::U128
+        | TypeKind::Float
+        | TypeKind::F32
+        | TypeKind::F64
+        | TypeKind::Boolean
+        | TypeKind::Void
+        | TypeKind::Error
+        | TypeKind::Generic(_, _, _)
+        | TypeKind::String
+        | TypeKind::List(_)
+        | TypeKind::Map(_, _)
+        | TypeKind::Set(_)
+        | TypeKind::Tuple(_)
+        | TypeKind::Result(_, _)
+        | TypeKind::Future(_)
+        | TypeKind::Option(_)
+        | TypeKind::Linear(_)
+        | TypeKind::Meta(_)
+        | TypeKind::RawPtr
+        | TypeKind::Identifier
+        | TypeKind::Function(_) => false,
+    }
 }
 
 fn extract_literal_range(
@@ -228,7 +299,24 @@ fn visit_stmt(
             visit_stmt(body, bound, ctx, seen, ordered);
             *bound = scope_snapshot;
         }
-        _ => {}
+        // Listed explicitly so a new `StatementKind` variant cannot be
+        // silently dropped from capture collection (PRINCIPLES §3.5, §5.4).
+        // None of these shapes can introduce a captured outer-scope
+        // identifier into a `gpu for` body: control-flow markers carry no
+        // expression, and nested declarations open a fresh scope that the
+        // GPU type check rejects anyway.
+        StatementKind::Empty
+        | StatementKind::Break
+        | StatementKind::Continue
+        | StatementKind::Use(_, _)
+        | StatementKind::Type(_, _)
+        | StatementKind::FunctionDeclaration(_)
+        | StatementKind::Enum(_, _, _, _, _, _)
+        | StatementKind::Struct(_, _, _, _, _)
+        | StatementKind::Class(_)
+        | StatementKind::Trait(_, _, _, _, _)
+        | StatementKind::RuntimeFunctionDeclaration(_, _, _, _)
+        | StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => {}
     }
 }
 
@@ -501,7 +589,13 @@ fn build_kernel_body(
     Ok(ctx.body)
 }
 
-fn emit_gpu_launch(ctx: &mut LoweringContext, kernel_name: &str, length: i64, span: Span) {
+fn emit_gpu_launch(
+    ctx: &mut LoweringContext,
+    kernel_name: &str,
+    length: i64,
+    captures: &[CaptureInfo],
+    span: Span,
+) {
     let dim3_ty = Type::new(TypeKind::Custom(DIM3_TYPE_NAME.to_string(), None), span);
     let void_ty = Type::new(TypeKind::Void, span);
 
@@ -542,6 +636,11 @@ fn emit_gpu_launch(ctx: &mut LoweringContext, kernel_name: &str, length: i64, sp
         literal: Literal::Identifier(kernel_name.to_string()),
     }));
 
+    let arg_ops: Vec<Operand> = captures
+        .iter()
+        .map(|c| Operand::Copy(Place::new(c.outer_local)))
+        .collect();
+
     let dest_local = ctx.push_temp(void_ty, span);
     let after_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
@@ -549,6 +648,7 @@ fn emit_gpu_launch(ctx: &mut LoweringContext, kernel_name: &str, length: i64, sp
             kernel: kernel_op,
             grid: Operand::Copy(Place::new(grid_local)),
             block: Operand::Copy(Place::new(block_local)),
+            args: arg_ops,
             destination: Place::new(dest_local),
             target: Some(after_bb),
         },

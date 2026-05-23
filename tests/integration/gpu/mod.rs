@@ -3,4 +3,5 @@
 
 pub use crate::integration::utils;
 
+pub mod launch;
 pub mod stub;

@@ -7,6 +7,7 @@
 //! Cranelift is a fast code generator suitable for both JIT and AOT compilation.
 
 mod closure;
+mod gpu_launch;
 pub mod layout;
 mod predicates;
 mod rc;
@@ -217,10 +218,17 @@ impl Backend for CraneliftBackend {
         self.declare_runtime_imports(&mut module)?;
         self.generate_type_drop_functions(&mut module, &mut ctx, &isa)?;
         self.generate_lambda_destructors(&mut module, &mut ctx, &isa, bodies)?;
-        self.predeclare_user_functions(&mut module, &isa, bodies)?;
+        let kernel_registry =
+            crate::codegen::cranelift::gpu_launch::build_kernel_registry(&mut module, bodies)?;
+        let cpu_bodies: Vec<(&str, &Body)> = bodies
+            .iter()
+            .copied()
+            .filter(|(_, b)| b.execution_model != crate::mir::ExecutionModel::GpuKernel)
+            .collect();
+        self.predeclare_user_functions(&mut module, &isa, &cpu_bodies)?;
 
         let mut string_literals = HashMap::new();
-        for (name, body) in bodies {
+        for (name, body) in &cpu_bodies {
             self.compile_function(
                 &mut module,
                 &mut ctx,
@@ -228,6 +236,7 @@ impl Backend for CraneliftBackend {
                 body,
                 &isa,
                 &mut string_literals,
+                &kernel_registry,
             )?;
         }
 
@@ -480,6 +489,7 @@ impl CraneliftBackend {
     /// * `body` - The MIR Body to translate.
     /// * `isa` - The TargetIsa for code generation.
     /// * `string_literals` - A map to collect and deduplicate string literals found in the function.
+    #[allow(clippy::too_many_arguments)]
     fn compile_function(
         &self,
         module: &mut ObjectModule,
@@ -488,13 +498,14 @@ impl CraneliftBackend {
         body: &Body,
         isa: &Arc<dyn TargetIsa>,
         string_literals: &mut HashMap<String, String>,
+        kernel_registry: &HashMap<String, crate::codegen::cranelift::gpu_launch::KernelEmit>,
     ) -> Result<(), CodegenError> {
         // Create function translator
         let mut translator = FunctionTranslator::new(isa, body, &self.type_definitions);
 
         // Translate MIR to Cranelift IR
         translator
-            .translate(body, module, string_literals)
+            .translate(body, module, string_literals, kernel_registry)
             .map_err(|e| CodegenError::translation(name, e.to_string()))?;
 
         // Get the function signature and declare it

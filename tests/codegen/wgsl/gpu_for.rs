@@ -15,9 +15,9 @@ fn synthesize_gpu_for_kernel(source: &str) -> Vec<u8> {
         .ast
         .body
         .iter()
-        .find_map(|stmt| match &stmt.node {
-            StatementKind::FunctionDeclaration(decl) if decl.name == "main" => Some(stmt),
-            _ => None,
+        .find(|stmt| match &stmt.node {
+            StatementKind::FunctionDeclaration(decl) => decl.name == "main",
+            _ => false,
         })
         .expect("source must contain 'fn main'");
 

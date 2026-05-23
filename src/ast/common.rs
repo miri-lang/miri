@@ -40,6 +40,9 @@ pub enum RuntimeKind {
     /// The core runtime (`miri-runtime-core`), providing string, allocation,
     /// I/O, and collection primitives.
     Core,
+    /// The GPU runtime (`miri-runtime-gpu`), providing the wgpu/WebGPU host
+    /// driver for `gpu fn` and `gpu for` constructs.
+    Gpu,
 }
 
 impl RuntimeKind {
@@ -49,6 +52,7 @@ impl RuntimeKind {
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "core" => Some(Self::Core),
+            "gpu" => Some(Self::Gpu),
             _ => None,
         }
     }
@@ -57,6 +61,7 @@ impl RuntimeKind {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Core => "core",
+            Self::Gpu => "gpu",
         }
     }
 
@@ -65,6 +70,45 @@ impl RuntimeKind {
     pub fn library_name(&self) -> &'static str {
         match self {
             Self::Core => "miri_runtime_core",
+            Self::Gpu => "miri_runtime_gpu",
+        }
+    }
+
+    /// Extra linker arguments required by a runtime's transitive
+    /// dependencies. Kept on the enum rather than in `pipeline.rs` so
+    /// that adding a new runtime does not force a pipeline edit
+    /// (PRINCIPLES §1.1, §2.2).
+    pub fn extra_link_args(&self) -> &'static [&'static str] {
+        match self {
+            Self::Core => &[],
+            Self::Gpu => {
+                if cfg!(target_os = "macos") {
+                    &[
+                        "-framework",
+                        "Foundation",
+                        "-framework",
+                        "CoreFoundation",
+                        "-framework",
+                        "CoreGraphics",
+                        "-framework",
+                        "CoreText",
+                        "-framework",
+                        "AppKit",
+                        "-framework",
+                        "Metal",
+                        "-framework",
+                        "MetalKit",
+                        "-framework",
+                        "QuartzCore",
+                        "-framework",
+                        "IOKit",
+                        "-framework",
+                        "IOSurface",
+                    ]
+                } else {
+                    &[]
+                }
+            }
         }
     }
 }

@@ -96,6 +96,7 @@ mi_suite_test!(
     test_system_collections_sequenced,
     "collections/sequenced.mi"
 );
+mi_suite_test!(test_system_gpu, "gpu.mi");
 
 /// Recursively collect every `.mi` file under `root`, returning paths relative
 /// to `base` with forward-slash separators. Used by the drift check below.
@@ -140,6 +141,7 @@ fn every_mi_file_is_wired() {
         "collections/transformable.mi",
         "collections/foldable.mi",
         "collections/sequenced.mi",
+        "gpu.mi",
     ];
 
     let root = stdlib_test_root();

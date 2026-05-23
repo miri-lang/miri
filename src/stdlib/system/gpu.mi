@@ -1,5 +1,15 @@
 use system.collections.array
 
+runtime "gpu" fn miri_gpu_is_available() bool
+
+/// Returns `true` when the GPU runtime has been initialized and a
+/// device is reachable, `false` otherwise.
+///
+/// Probes the global runtime context without forcing initialization;
+/// safe to call from any program that imports `system.gpu`.
+public fn is_gpu_available() bool
+    return miri_gpu_is_available()
+
 /// Host-side stub for a GPU-resident array.
 ///
 /// In this milestone the elements live on the host inside an underlying

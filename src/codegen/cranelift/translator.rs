@@ -58,6 +58,8 @@ pub(crate) struct ModuleCtx<'a> {
     pub(crate) module: &'a mut ObjectModule,
     pub(crate) string_literals: &'a mut HashMap<String, String>,
     pub(crate) cached_funcs: HashMap<&'static str, cranelift_module::FuncId>,
+    pub(crate) kernel_registry:
+        &'a HashMap<String, crate::codegen::cranelift::gpu_launch::KernelEmit>,
 }
 
 /// Context for type information during translation.
@@ -88,11 +90,13 @@ pub(crate) struct CallSite<'a> {
 pub(crate) fn empty_module_ctx<'a>(
     module: &'a mut ObjectModule,
     string_literals: &'a mut HashMap<String, String>,
+    kernel_registry: &'a HashMap<String, crate::codegen::cranelift::gpu_launch::KernelEmit>,
 ) -> ModuleCtx<'a> {
     ModuleCtx {
         module,
         string_literals,
         cached_funcs: HashMap::new(),
+        kernel_registry,
     }
 }
 
@@ -179,6 +183,7 @@ impl<'a> FunctionTranslator<'a> {
         body: &Body,
         module: &mut ObjectModule,
         string_literals: &mut HashMap<String, String>,
+        kernel_registry: &HashMap<String, crate::codegen::cranelift::gpu_launch::KernelEmit>,
     ) -> Result<(), CodegenError> {
         self.build_signature(body)?;
         let mut builder = FunctionBuilder::new(&mut self.func, &mut self.builder_ctx);
@@ -187,7 +192,7 @@ impl<'a> FunctionTranslator<'a> {
         let out_param_ptr_vars =
             Self::setup_entry_params(&mut builder, body, &locals, &blocks, self.ptr_type);
 
-        let mut module_ctx = empty_module_ctx(module, string_literals);
+        let mut module_ctx = empty_module_ctx(module, string_literals, kernel_registry);
         let type_ctx = TypeCtx {
             local_types: &self.local_types,
             type_definitions: self.type_definitions,

@@ -1,0 +1,21 @@
+[package]
+name = "miri-runtime-gpu"
+version = "0.4.0-beta.2"
+edition = "2021"
+description = "GPU compute runtime for the Miri programming language"
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+wgpu = "0.20"
+pollster = "0.3"
+parking_lot = "0.12"
+once_cell = "1"
+log = "0.4"
+
+[features]
+default = []
+vulkan = ["wgpu/vulkan-portability"]
+metal = []
+dx12 = ["wgpu/dx12"]
