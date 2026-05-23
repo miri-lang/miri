@@ -8,7 +8,7 @@ use std::fs;
 use std::path::PathBuf;
 use walkdir::WalkDir;
 
-use miri::cli::{Cli, Commands, CpuBackend, TestFormat};
+use miri::cli::{Cli, Commands, TestFormat};
 use miri::pipeline::{BuildOptions, Pipeline};
 
 pub fn main() -> Result<()> {
@@ -25,13 +25,16 @@ pub fn main() -> Result<()> {
                 release,
                 opt_level,
                 cpu_backend,
+                target,
             } => build_file(
                 path,
-                out,
-                release,
-                opt_level,
-                cpu_backend,
-                cli.verbose,
+                BuildOptions {
+                    out_path: out,
+                    release,
+                    opt_level,
+                    cpu_backend,
+                    target,
+                },
                 cli.verify_mir,
             ),
             Commands::Check { path } => check_file(path, cli.verbose, cli.verify_mir),
@@ -80,15 +83,7 @@ fn run_file(
     }
 }
 
-fn build_file(
-    path: PathBuf,
-    out: Option<PathBuf>,
-    release: bool,
-    opt_level: u8,
-    cpu_backend: CpuBackend,
-    _verbose: u8,
-    verify_mir: bool,
-) -> Result<()> {
+fn build_file(path: PathBuf, build_options: BuildOptions, verify_mir: bool) -> Result<()> {
     let source = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read file: {}", path.display()))?;
 
@@ -98,12 +93,6 @@ fn build_file(
         pipeline = pipeline.with_source_dir(dir.to_path_buf());
     }
     pipeline = pipeline.with_source_path(abs_path.display().to_string());
-    let build_options = BuildOptions {
-        out_path: out,
-        release,
-        opt_level,
-        cpu_backend,
-    };
 
     match pipeline.build(&source, &build_options) {
         Ok(artifact_path) => {
