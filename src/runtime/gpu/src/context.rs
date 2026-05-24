@@ -6,7 +6,7 @@
 use once_cell::sync::OnceCell;
 use parking_lot::RwLock;
 use std::sync::Arc;
-use wgpu::{Adapter, Device, Instance, Queue};
+use wgpu::{Adapter, Device, Features, Instance, Queue};
 
 static GPU_CONTEXT: OnceCell<Arc<GpuContext>> = OnceCell::new();
 
@@ -19,6 +19,12 @@ pub enum GpuError {
     ShaderCompilationFailed(String),
     KernelNotFound(String),
     InvalidDimensions,
+    /// A kernel referenced a scalar type (e.g. WGSL `i64`/`u64`/`f64`) that
+    /// the active adapter does not advertise via the matching wgpu feature
+    /// (`SHADER_INT64` / `SHADER_F64`). The compiler cannot silently widen or
+    /// truncate widths because that corrupts host/device buffer round-trips,
+    /// so the launch is refused with this error before submission.
+    UnsupportedScalar(String),
 }
 
 #[repr(C)]
@@ -63,6 +69,18 @@ pub struct GpuContext {
     pub device: Device,
     pub queue: Queue,
     pub info: RwLock<GpuDeviceInfo>,
+    /// Subset of `OPTIONAL_SHADER_FEATURES` actually granted by the adapter
+    /// at device creation. Cached so launch sites can refuse kernels that
+    /// reference unsupported scalars without re-querying the device.
+    pub enabled_shader_features: Features,
+}
+
+/// Optional wgpu features the runtime tries to enable when the adapter
+/// reports them as supported. Only features that change the set of WGSL
+/// scalars a kernel may use go in here, so the launch-site gate stays
+/// focused on type-level correctness.
+fn optional_shader_features() -> Features {
+    Features::SHADER_INT64 | Features::SHADER_F64
 }
 
 impl GpuContext {
@@ -78,16 +96,18 @@ impl GpuContext {
         }))
         .ok_or(GpuError::NoAdapter)?;
 
+        let required_shader_features = optional_shader_features() & adapter.features();
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("Miri GPU Device"),
-                required_features: wgpu::Features::empty(),
+                required_features: required_shader_features,
                 required_limits: wgpu::Limits::default(),
             },
             None,
         ))
         .map_err(|err| GpuError::DeviceCreationFailed(err.to_string()))?;
 
+        let enabled_shader_features = device.features() & optional_shader_features();
         let info = build_device_info(&adapter);
         Ok(Self {
             instance,
@@ -95,6 +115,7 @@ impl GpuContext {
             device,
             queue,
             info: RwLock::new(info),
+            enabled_shader_features,
         })
     }
 

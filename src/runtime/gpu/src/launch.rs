@@ -13,7 +13,7 @@ use crate::context::{init_gpu_context, GpuContext, GpuError};
 use once_cell::sync::OnceCell;
 use parking_lot::RwLock;
 use std::sync::Arc;
-use wgpu::{BufferUsages, Device, Queue};
+use wgpu::{BufferUsages, Device, Features, Queue};
 
 /// Routes through the shared `context::GPU_CONTEXT` so a successful
 /// `gpu for` dispatch makes `miri_gpu_is_available()` (and therefore
@@ -69,6 +69,9 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
     let wgsl = decode_utf8(desc.wgsl_ptr, desc.wgsl_len)?;
     let entry_point = decode_utf8(desc.entry_ptr, desc.entry_len)?;
 
+    let ctx = ensure_context()?;
+    check_required_shader_features(wgsl, ctx.enabled_shader_features)?;
+
     let kernel = ensure_kernel(
         entry_point,
         wgsl,
@@ -76,7 +79,6 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
         [desc.block_x, desc.block_y, desc.block_z],
     )?;
 
-    let ctx = ensure_context()?;
     let device = &ctx.device;
     let queue = &ctx.queue;
 
@@ -140,6 +142,54 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
         readback_into_host(device, queue, &storage_buffers[i], host_ptr, byte_len)?;
     }
     Ok(())
+}
+
+/// Refuse to dispatch a kernel whose WGSL references a 64-bit scalar
+/// (`i64`/`u64`/`f64`) when the device was not booted with the matching
+/// wgpu feature. Without this gate, naga's shader-module compilation would
+/// reject the kernel later with a generic message; surfacing the cause
+/// upfront keeps the diagnostic source-relevant (which scalar) instead of
+/// pipeline-relevant (which wgpu validator rule fired).
+fn check_required_shader_features(wgsl: &str, enabled: Features) -> Result<(), GpuError> {
+    let needs_int64 = wgsl_uses_scalar(wgsl, "i64") || wgsl_uses_scalar(wgsl, "u64");
+    let needs_f64 = wgsl_uses_scalar(wgsl, "f64");
+    if needs_int64 && !enabled.contains(Features::SHADER_INT64) {
+        return Err(GpuError::UnsupportedScalar(
+            "kernel uses i64/u64 but the adapter does not support Features::SHADER_INT64".into(),
+        ));
+    }
+    if needs_f64 && !enabled.contains(Features::SHADER_F64) {
+        return Err(GpuError::UnsupportedScalar(
+            "kernel uses f64 but the adapter does not support Features::SHADER_F64".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// True when `wgsl` contains `name` as a whole identifier token. Treats any
+/// non-`[A-Za-z0-9_]` character as a token boundary, so a name like
+/// `xi64y` does not match `i64`. The WGSL emitter never produces 64-bit
+/// keywords as substrings of user-derived identifiers, so this scan is
+/// stable against the entire output of the WGSL backend.
+fn wgsl_uses_scalar(wgsl: &str, name: &str) -> bool {
+    let bytes = wgsl.as_bytes();
+    let needle = name.as_bytes();
+    if needle.is_empty() || bytes.len() < needle.len() {
+        return false;
+    }
+    let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    for start in 0..=bytes.len() - needle.len() {
+        if &bytes[start..start + needle.len()] != needle {
+            continue;
+        }
+        let prev_ok = start == 0 || !is_ident(bytes[start - 1]);
+        let next = start + needle.len();
+        let next_ok = next == bytes.len() || !is_ident(bytes[next]);
+        if prev_ok && next_ok {
+            return true;
+        }
+    }
+    false
 }
 
 unsafe fn decode_utf8<'a>(ptr: *const u8, len: usize) -> Result<&'a str, GpuError> {
