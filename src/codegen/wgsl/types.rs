@@ -7,12 +7,21 @@ use crate::ast::types::TypeKind;
 use crate::error::CodegenError;
 
 /// WGSL scalar types representable in a compute shader.
+///
+/// `I64`/`U64`/`F64` require host wgpu features (`SHADER_INT64`/`SHADER_F64`)
+/// and naga validator capabilities (`SHADER_INT64`/`FLOAT64`) at the launch
+/// site. The emitter and the GPU runtime cooperate so an adapter that lacks
+/// the matching feature fails the dispatch with `UnsupportedScalar` instead
+/// of silently truncating element widths.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WgslScalar {
     I32,
     U32,
     F32,
     Bool,
+    I64,
+    U64,
+    F64,
 }
 
 impl WgslScalar {
@@ -23,6 +32,9 @@ impl WgslScalar {
             WgslScalar::U32 => "u32",
             WgslScalar::F32 => "f32",
             WgslScalar::Bool => "bool",
+            WgslScalar::I64 => "i64",
+            WgslScalar::U64 => "u64",
+            WgslScalar::F64 => "f64",
         }
     }
 
@@ -33,25 +45,33 @@ impl WgslScalar {
             WgslScalar::U32 => "0u",
             WgslScalar::F32 => "0.0",
             WgslScalar::Bool => "false",
+            WgslScalar::I64 => "0li",
+            WgslScalar::U64 => "0lu",
+            WgslScalar::F64 => "0.0lf",
         }
     }
 }
 
 /// Map a scalar MIR/AST type kind to its WGSL scalar representation.
 ///
+/// Miri's default `Int` maps to host Cranelift `i64`, so it must reach the
+/// kernel as WGSL `i64` for buffer element widths to align. Likewise the
+/// default `Float` is host `f64` and maps to WGSL `f64`. Narrower fixed-width
+/// types keep their native widths.
+///
 /// Returns `Err(CodegenError::Internal)` for non-scalar inputs; callers wrap
 /// pointer/buffer types in `array<T>` themselves.
 pub fn scalar(kind: &TypeKind) -> Result<WgslScalar, CodegenError> {
     match kind {
-        TypeKind::I32 | TypeKind::I8 | TypeKind::I16 | TypeKind::Int => Ok(WgslScalar::I32),
+        TypeKind::I32 | TypeKind::I8 | TypeKind::I16 => Ok(WgslScalar::I32),
         TypeKind::U32 | TypeKind::U8 | TypeKind::U16 => Ok(WgslScalar::U32),
-        TypeKind::F32 | TypeKind::Float => Ok(WgslScalar::F32),
+        TypeKind::F32 => Ok(WgslScalar::F32),
         TypeKind::Boolean => Ok(WgslScalar::Bool),
-        TypeKind::I64
-        | TypeKind::I128
-        | TypeKind::U64
+        TypeKind::Int | TypeKind::I64 => Ok(WgslScalar::I64),
+        TypeKind::U64 => Ok(WgslScalar::U64),
+        TypeKind::Float | TypeKind::F64 => Ok(WgslScalar::F64),
+        TypeKind::I128
         | TypeKind::U128
-        | TypeKind::F64
         | TypeKind::String
         | TypeKind::Void
         | TypeKind::Identifier

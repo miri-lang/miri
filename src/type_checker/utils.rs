@@ -181,6 +181,124 @@ fn first_expr_type_is_gpu_compatible(expr: &crate::ast::expression::Expression) 
     }
 }
 
+/// Determines whether a scalar type is permitted as the element of a WGSL
+/// storage buffer.
+///
+/// Stricter than [`is_gpu_compatible`]: `Boolean` is a valid scalar for kernel
+/// locals (WGSL `bool`) but WGSL forbids `bool` in `var<storage>` bindings, so
+/// an `Array<Boolean, N>` captured by a `gpu for` would round-trip as invalid
+/// shader source. The other rejected types are non-scalar or have no fixed
+/// runtime representation on the device.
+///
+/// Returns `false` for `Generic` so an unresolved generic element type cannot
+/// silently slip through as a buffer element; the instantiation site is where
+/// the concrete element must be checked.
+pub fn is_gpu_buffer_element(kind: &TypeKind) -> bool {
+    match kind {
+        TypeKind::Int
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::Float
+        | TypeKind::F32
+        | TypeKind::F64 => true,
+        TypeKind::I128
+        | TypeKind::U128
+        | TypeKind::Boolean
+        | TypeKind::Void
+        | TypeKind::Error
+        | TypeKind::String
+        | TypeKind::List(_)
+        | TypeKind::Array(_, _)
+        | TypeKind::Map(_, _)
+        | TypeKind::Set(_)
+        | TypeKind::Tuple(_)
+        | TypeKind::Result(_, _)
+        | TypeKind::Future(_)
+        | TypeKind::Option(_)
+        | TypeKind::Linear(_)
+        | TypeKind::Meta(_)
+        | TypeKind::RawPtr
+        | TypeKind::Identifier
+        | TypeKind::Function(_)
+        | TypeKind::Generic(_, _, _)
+        | TypeKind::Custom(_, _) => false,
+    }
+}
+
+/// Returns the element type spelling and a human-readable kind label for a
+/// captured collection-shaped type that would lower to a WGSL storage buffer.
+///
+/// Recognizes the canonical `TypeKind::Array(elem, _)` / `TypeKind::List(elem)`
+/// shapes and the post-resolution `TypeKind::Custom(name, args)` envelopes for
+/// the builtin `Array` and `List` collections (looked up via
+/// `BuiltinCollectionKind::from_name`) and the `GpuArray<T>` stub.
+///
+/// Returns `None` for non-collection types — the caller treats those as
+/// non-buffer captures and is responsible for the (scalar-by-scalar) GPU
+/// compatibility check that already runs over the body.
+pub fn captured_buffer_element(kind: &TypeKind) -> Option<Type> {
+    match kind {
+        TypeKind::Array(elem_expr, _) | TypeKind::List(elem_expr) => {
+            extract_element_type(elem_expr)
+        }
+        TypeKind::Custom(name, Some(args)) => {
+            let is_collection = matches!(
+                BuiltinCollectionKind::from_name(name),
+                Some(BuiltinCollectionKind::Array) | Some(BuiltinCollectionKind::List)
+            ) || name == GPU_ARRAY_TYPE_NAME;
+            if !is_collection {
+                return None;
+            }
+            args.first().and_then(extract_element_type)
+        }
+        TypeKind::Int
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::I128
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::U128
+        | TypeKind::Float
+        | TypeKind::F32
+        | TypeKind::F64
+        | TypeKind::Boolean
+        | TypeKind::Void
+        | TypeKind::Error
+        | TypeKind::String
+        | TypeKind::Map(_, _)
+        | TypeKind::Set(_)
+        | TypeKind::Tuple(_)
+        | TypeKind::Result(_, _)
+        | TypeKind::Future(_)
+        | TypeKind::Option(_)
+        | TypeKind::Linear(_)
+        | TypeKind::Meta(_)
+        | TypeKind::RawPtr
+        | TypeKind::Identifier
+        | TypeKind::Function(_)
+        | TypeKind::Generic(_, _, _)
+        | TypeKind::Custom(_, None) => None,
+    }
+}
+
+fn extract_element_type(expr: &crate::ast::expression::Expression) -> Option<Type> {
+    if let ExpressionKind::Type(ty, _) = &expr.node {
+        Some((**ty).clone())
+    } else {
+        None
+    }
+}
+
 /// Determines whether a type is auto-copy given available type definitions.
 ///
 /// A type is auto-copy when:

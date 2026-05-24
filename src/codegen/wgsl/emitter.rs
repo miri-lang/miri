@@ -510,7 +510,7 @@ fn dimension_field(dim: Dimension) -> &'static str {
 fn render_constant(c: &Constant) -> Result<String, CodegenError> {
     match &c.literal {
         Literal::Integer(i) => Ok(render_integer(i, &c.ty.kind)),
-        Literal::Float(f) => Ok(render_float(f)),
+        Literal::Float(f) => Ok(render_float(f, &c.ty.kind)),
         Literal::Boolean(b) => Ok(b.to_string()),
         Literal::None | Literal::String(_) | Literal::Identifier(_) | Literal::Regex(_) => {
             Err(CodegenError::Internal(format!(
@@ -521,22 +521,85 @@ fn render_constant(c: &Constant) -> Result<String, CodegenError> {
     }
 }
 
+/// WGSL integer-literal suffixes encode width and signedness — `u` for u32,
+/// `li` for i64, `lu` for u64, bare for i32 — so the parser cannot widen
+/// an `i32` literal into a 64-bit storage element by mistake.
 fn render_integer(i: &IntegerLiteral, ty: &TypeKind) -> String {
-    let is_unsigned = matches!(
-        ty,
-        TypeKind::U8 | TypeKind::U16 | TypeKind::U32 | TypeKind::U64 | TypeKind::U128
-    );
     let value = i.to_i128();
-    if is_unsigned {
-        format!("{}u", value)
-    } else {
-        value.to_string()
+    match ty {
+        TypeKind::U8 | TypeKind::U16 | TypeKind::U32 | TypeKind::U128 => format!("{}u", value),
+        TypeKind::U64 => format!("{}lu", value),
+        TypeKind::Int | TypeKind::I64 => format!("{}li", value),
+        TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I128
+        | TypeKind::Float
+        | TypeKind::F32
+        | TypeKind::F64
+        | TypeKind::Boolean
+        | TypeKind::Void
+        | TypeKind::Error
+        | TypeKind::Identifier
+        | TypeKind::RawPtr
+        | TypeKind::String
+        | TypeKind::List(_)
+        | TypeKind::Array(_, _)
+        | TypeKind::Map(_, _)
+        | TypeKind::Tuple(_)
+        | TypeKind::Set(_)
+        | TypeKind::Result(_, _)
+        | TypeKind::Future(_)
+        | TypeKind::Function(_)
+        | TypeKind::Generic(_, _, _)
+        | TypeKind::Custom(_, _)
+        | TypeKind::Meta(_)
+        | TypeKind::Option(_)
+        | TypeKind::Linear(_) => value.to_string(),
     }
 }
 
-fn render_float(f: &FloatLiteral) -> String {
-    match f {
+/// WGSL float-literal suffixes: bare → AbstractFloat (unifies to f32 unless
+/// a context demands otherwise), `f` → f32, `lf` → f64. We tag based on the
+/// resolved Miri type so a literal feeding an `f64` storage element keeps
+/// its width through naga's type checker.
+fn render_float(f: &FloatLiteral, ty: &TypeKind) -> String {
+    let body = match f {
         FloatLiteral::F32(bits) => format!("{:?}", f32::from_bits(*bits)),
         FloatLiteral::F64(bits) => format!("{:?}", f64::from_bits(*bits)),
+    };
+    match ty {
+        TypeKind::F32 => body,
+        TypeKind::Float | TypeKind::F64 => format!("{}lf", body),
+        TypeKind::Int
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::I128
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::U128
+        | TypeKind::Boolean
+        | TypeKind::Void
+        | TypeKind::Error
+        | TypeKind::Identifier
+        | TypeKind::RawPtr
+        | TypeKind::String
+        | TypeKind::List(_)
+        | TypeKind::Array(_, _)
+        | TypeKind::Map(_, _)
+        | TypeKind::Tuple(_)
+        | TypeKind::Set(_)
+        | TypeKind::Result(_, _)
+        | TypeKind::Future(_)
+        | TypeKind::Function(_)
+        | TypeKind::Generic(_, _, _)
+        | TypeKind::Custom(_, _)
+        | TypeKind::Meta(_)
+        | TypeKind::Option(_)
+        | TypeKind::Linear(_) => body,
     }
 }

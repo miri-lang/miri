@@ -280,6 +280,7 @@ impl TypeChecker {
 
         self.bind_loop_variables(decls, &element_type, &iterable_type, iterable.span, context);
         self.check_statement(body, context);
+        self.check_gpu_for_capture_buffer_elements(decls, body, context);
 
         context.gpu_for_depth -= 1;
         context.in_gpu_function = outer_in_gpu;
