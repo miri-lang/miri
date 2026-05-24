@@ -104,3 +104,124 @@ gpu for i in 0..4
 "#,
     );
 }
+
+#[test]
+fn test_gpu_for_rejects_bool_buffer_capture() {
+    type_checker_error_test(
+        r#"
+use system.gpu
+use system.collections.array
+
+var flags = [true, false, true, false]
+gpu for i in 0..4
+    flags[i] = not flags[i]
+"#,
+        "bool",
+    );
+}
+
+#[test]
+fn test_gpu_for_bool_buffer_diagnostic_cites_storage_buffer() {
+    type_checker_error_test(
+        r#"
+use system.gpu
+use system.collections.array
+
+var flags = [true, false, true, false]
+gpu for i in 0..4
+    flags[i] = not flags[i]
+"#,
+        "storage buffer",
+    );
+}
+
+#[test]
+fn test_gpu_for_rejects_string_buffer_capture() {
+    type_checker_error_test(
+        r#"
+use system.gpu
+use system.collections.array
+
+var labels = ["a", "b", "c", "d"]
+gpu for i in 0..4
+    let _ = labels[i]
+"#,
+        "not a valid WGSL storage-buffer element",
+    );
+}
+
+#[test]
+fn test_gpu_for_accepts_int_buffer_capture() {
+    type_checker_test(
+        r#"
+use system.gpu
+use system.collections.array
+
+var dst = [0, 0, 0, 0]
+let src = [1, 2, 3, 4]
+gpu for i in 0..4
+    dst[i] = src[i] * 2
+"#,
+    );
+}
+
+#[test]
+fn test_gpu_for_accepts_f32_buffer_capture() {
+    type_checker_test(
+        r#"
+use system.gpu
+use system.collections.array
+
+var dst = [0.0, 0.0, 0.0, 0.0]
+let src = [1.0, 2.0, 3.0, 4.0]
+gpu for i in 0..4
+    dst[i] = src[i] * 2.0
+"#,
+    );
+}
+
+#[test]
+fn test_gpu_for_accepts_f64_buffer_capture() {
+    type_checker_test(
+        r#"
+use system.gpu
+use system.collections.array
+
+var dst = [3.141592653589793, 2.718281828459045, 1.4142135623730951, 0.5772156649015329]
+let src = [3.141592653589793, 2.718281828459045, 1.4142135623730951, 0.5772156649015329]
+gpu for i in 0..4
+    dst[i] = src[i] * 2.0
+"#,
+    );
+}
+
+#[test]
+fn test_gpu_for_rejects_bool_buffer_captured_inside_if_branch() {
+    type_checker_error_test(
+        r#"
+use system.gpu
+use system.collections.array
+
+var flags = [true, false, true, false]
+gpu for i in 0..4
+    if i > 0
+        flags[i] = not flags[i]
+"#,
+        "not a valid WGSL storage-buffer element",
+    );
+}
+
+#[test]
+fn test_gpu_for_diagnostic_message_lists_numeric_scalars() {
+    type_checker_error_test(
+        r#"
+use system.gpu
+use system.collections.array
+
+var labels = ["a", "b", "c", "d"]
+gpu for i in 0..4
+    let _ = labels[i]
+"#,
+        "numeric scalar (i32 / u32 / i64 / u64 / f32 / f64)",
+    );
+}
