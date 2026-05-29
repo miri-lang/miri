@@ -77,8 +77,8 @@ impl CompiledKernel {
             .device
             .create_pipeline_layout(&PipelineLayoutDescriptor {
                 label: Some(&format!("{}_pipeline_layout", name)),
-                bind_group_layouts: &[&bind_group_layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&bind_group_layout)],
+                immediate_size: 0,
             });
         let pipeline = ctx
             .device
@@ -86,8 +86,9 @@ impl CompiledKernel {
                 label: Some(&format!("{}_pipeline", name)),
                 layout: Some(&pipeline_layout),
                 module: &shader_module,
-                entry_point,
+                entry_point: Some(entry_point),
                 compilation_options: Default::default(),
+                cache: None,
             });
         let id = NEXT_KERNEL_ID.fetch_add(1, Ordering::SeqCst);
         Ok(Self {
