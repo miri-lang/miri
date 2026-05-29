@@ -39,8 +39,7 @@ println(\"dispatched\")
 /// expected layout.
 #[test]
 fn vector_add_int_round_trips_through_device() {
-    assert_runs_with_output(
-        "
+    let source = "
 use system.io
 use system.gpu
 use system.collections.array
@@ -51,9 +50,15 @@ var dst = [0, 0, 0, 0]
 gpu for i in 0..4
     dst[i] = a[i] + b[i]
 println(f'{dst[0]} {dst[1]} {dst[2]} {dst[3]}')
-",
-        "11 22 33 44",
-    );
+";
+    // Native dispatch stores `int` as WGSL `i64`; without a `SHADER_INT64`
+    // adapter the device read-back is all zeros, so we drop to a smoke run
+    // rather than assert values (mirrors `gpu/helpers.rs`).
+    if super::helpers::gpu_adapter_available() {
+        assert_runs_with_output(source, "11 22 33 44");
+    } else {
+        assert_runs(source);
+    }
 }
 
 /// End-to-end value-correctness check for scalar multiply: every element
@@ -61,8 +66,7 @@ println(f'{dst[0]} {dst[1]} {dst[2]} {dst[3]}')
 /// written to `dst`.
 #[test]
 fn scalar_multiply_int_round_trips_through_device() {
-    assert_runs_with_output(
-        "
+    let source = "
 use system.io
 use system.gpu
 use system.collections.array
@@ -72,7 +76,11 @@ var dst = [0, 0, 0, 0, 0, 0, 0, 0]
 gpu for i in 0..8
     dst[i] = src[i] * 7
 println(f'{dst[0]} {dst[7]}')
-",
-        "7 56",
-    );
+";
+    // Same `SHADER_INT64` dependency as `vector_add_int_round_trips_through_device`.
+    if super::helpers::gpu_adapter_available() {
+        assert_runs_with_output(source, "7 56");
+    } else {
+        assert_runs(source);
+    }
 }
