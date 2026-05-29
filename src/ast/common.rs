@@ -106,7 +106,10 @@ impl RuntimeKind {
                         "IOSurface",
                     ]
                 } else {
-                    &[]
+                    // Linux: naga/wgpu/hexf pull in libm transcendentals
+                    // (`log2f`, `exp2`, `sin`, ...) that the system linker
+                    // does not resolve implicitly the way macOS does.
+                    &["-lm"]
                 }
             }
         }
