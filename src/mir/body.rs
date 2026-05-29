@@ -269,6 +269,32 @@ pub enum BindingResidency {
     Gpu,
 }
 
+/// Stable identifier for the device buffer backing a `gpu`-resident binding.
+///
+/// Assigned at lowering to every local whose residency is
+/// [`BindingResidency::Gpu`]. The runtime keys a persistent device buffer on
+/// this id so kernel launches that capture the same binding share one buffer
+/// across dispatches. Ids are unique across the whole
+/// compilation; `0` is reserved by the runtime as the host-resident
+/// sentinel, so allocation starts at `1`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DeviceHandleId(pub u64);
+
+impl DeviceHandleId {
+    /// Allocates a fresh, compilation-unique handle id.
+    pub fn fresh() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        Self(NEXT.fetch_add(1, Ordering::SeqCst))
+    }
+}
+
+impl fmt::Display for DeviceHandleId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "#{}", self.0)
+    }
+}
+
 /// Declaration of a local variable.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LocalDecl {
@@ -281,6 +307,10 @@ pub struct LocalDecl {
     /// [`StorageClass`], which classifies the memory address space inside
     /// a single residency.
     pub residency: BindingResidency,
+    /// Persistent device buffer id for a `gpu`-resident binding. `None` for
+    /// host-resident locals; `Some` is assigned at lowering whenever
+    /// `residency` is [`BindingResidency::Gpu`].
+    pub device_handle: Option<DeviceHandleId>,
     /// Resolved MIR-level type, free of AST expression nodes.
     ///
     /// Derived from `ty` at construction time via [`MirType::from_type_kind`].
@@ -301,6 +331,7 @@ impl LocalDecl {
             is_user_variable: false,
             storage_class: StorageClass::Stack,
             residency: BindingResidency::Host,
+            device_handle: None,
             mir_ty,
         }
     }

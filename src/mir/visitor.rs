@@ -126,6 +126,7 @@ pub trait Visitor {
                 grid,
                 block: grid_block,
                 args,
+                arg_handles: _,
                 destination,
                 target: _,
             } => {
@@ -307,6 +308,7 @@ pub trait MutVisitor {
                 grid,
                 block: grid_block,
                 args,
+                arg_handles: _,
                 destination,
                 target: _,
             } => {

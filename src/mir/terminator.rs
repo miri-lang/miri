@@ -3,6 +3,7 @@
 
 use crate::error::syntax::Span;
 use crate::mir::block::BasicBlock;
+use crate::mir::body::DeviceHandleId;
 use crate::mir::operand::Operand;
 use crate::mir::place::Place;
 use std::fmt;
@@ -169,6 +170,7 @@ impl fmt::Display for Terminator {
                 grid,
                 block,
                 args,
+                arg_handles: _,
                 destination,
                 target,
             } => {
@@ -254,6 +256,12 @@ pub enum TerminatorKind {
         grid: Operand,
         block: Operand,
         args: Vec<Operand>,
+        /// Persistent device-buffer id for each capture in `args`, in the same
+        /// order. `Some` marks a `gpu`-resident capture whose device buffer
+        /// survives across launches; `None` marks a host-resident capture
+        /// uploaded and read back per launch. Empty means every capture is
+        /// host-resident.
+        arg_handles: Vec<Option<DeviceHandleId>>,
         destination: Place,
         target: Option<BasicBlock>,
     },

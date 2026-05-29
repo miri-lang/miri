@@ -441,6 +441,7 @@ fn try_lower_kernel_launch(
                                 grid: grid_op,
                                 block: block_op,
                                 args: Vec::new(),
+                                arg_handles: Vec::new(),
                                 destination,
                                 target: Some(target_bb),
                             },

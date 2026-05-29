@@ -22,6 +22,7 @@ pub mod accelerable;
 pub mod cross_residency;
 pub mod helpers;
 pub mod launch;
+pub mod persistent_buffer;
 pub mod residency;
 pub mod stub;
 pub mod wgsl;

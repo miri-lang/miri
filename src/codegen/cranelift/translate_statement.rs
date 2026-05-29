@@ -272,11 +272,20 @@ impl<'a> FunctionTranslator<'a> {
                 grid,
                 block: grid_block,
                 args,
+                arg_handles,
                 destination: _,
                 target,
             } => {
                 crate::codegen::cranelift::gpu_launch::translate(
-                    builder, ctx, kernel, grid, grid_block, args, locals, type_ctx,
+                    builder,
+                    ctx,
+                    kernel,
+                    grid,
+                    grid_block,
+                    args,
+                    arg_handles,
+                    locals,
+                    type_ctx,
                 )?;
                 if let Some(t) = target {
                     builder.ins().jump(blocks[t], &[]);

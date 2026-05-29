@@ -15,6 +15,7 @@ use crate::codegen::cranelift::translator::{ModuleCtx, TypeCtx};
 use crate::codegen::wgsl::{WgslBackend, WgslOptions};
 use crate::codegen::Backend;
 use crate::error::CodegenError;
+use crate::mir::body::DeviceHandleId;
 use crate::mir::{Body, ExecutionModel, Local, Operand, Place};
 use cranelift_codegen::ir::{
     types as cl_types, AbiParam, InstBuilder, MemFlags, StackSlotData, StackSlotKind, Value,
@@ -112,7 +113,8 @@ mod desc_layout {
     pub(super) const NUM_BUFS: i32 = 56;
     pub(super) const BUF_DATA_PTRS: i32 = 64;
     pub(super) const BUF_BYTE_LENS: i32 = 72;
-    pub(super) const DESC_SIZE: u32 = 80;
+    pub(super) const BUF_HANDLE_IDS: i32 = 80;
+    pub(super) const DESC_SIZE: u32 = 88;
 }
 
 /// Field offsets within `runtime::core::MiriArray` (`repr(C)`):
@@ -133,6 +135,7 @@ pub(crate) fn translate(
     grid_op: &Operand,
     block_op: &Operand,
     args: &[Operand],
+    arg_handles: &[Option<DeviceHandleId>],
     locals: &HashMap<Local, cranelift_frontend::Variable>,
     type_ctx: &TypeCtx,
 ) -> Result<(), CodegenError> {
@@ -161,6 +164,7 @@ pub(crate) fn translate(
         locals,
         type_ctx,
     )?;
+    populate_handle_ids(builder, arg_handles, num_bufs, slots.handle_ids_addr);
 
     let (grid_x, grid_y, grid_z) = load_dim3_components(builder, grid_op, locals, type_ctx)?;
     let (block_x, block_y, block_z) = load_dim3_components(builder, block_op, locals, type_ctx)?;
@@ -168,9 +172,12 @@ pub(crate) fn translate(
     populate_descriptor(
         builder,
         module_ctx.module,
-        slots.desc_addr,
-        slots.data_ptrs_addr,
-        slots.byte_lens_addr,
+        DescriptorSlots {
+            desc_addr: slots.desc_addr,
+            data_ptrs_addr: slots.data_ptrs_addr,
+            byte_lens_addr: slots.byte_lens_addr,
+            handle_ids_addr: slots.handle_ids_addr,
+        },
         &kernel,
         ptr_ty,
         num_bufs,
@@ -208,6 +215,7 @@ fn extract_kernel_name(kernel_op: &Operand) -> Result<String, CodegenError> {
 struct LaunchSlots {
     data_ptrs_addr: Value,
     byte_lens_addr: Value,
+    handle_ids_addr: Value,
     desc_addr: Value,
 }
 
@@ -226,6 +234,11 @@ fn allocate_launch_slots(
         (num_bufs.max(1) as u32) * 8,
         8,
     ));
+    let handle_ids_slot = builder.create_sized_stack_slot(StackSlotData::new(
+        StackSlotKind::ExplicitSlot,
+        (num_bufs.max(1) as u32) * 8,
+        8,
+    ));
     let desc_slot = builder.create_sized_stack_slot(StackSlotData::new(
         StackSlotKind::ExplicitSlot,
         desc_layout::DESC_SIZE,
@@ -234,7 +247,30 @@ fn allocate_launch_slots(
     LaunchSlots {
         data_ptrs_addr: builder.ins().stack_addr(ptr_ty, data_ptrs_slot, 0),
         byte_lens_addr: builder.ins().stack_addr(ptr_ty, byte_lens_slot, 0),
+        handle_ids_addr: builder.ins().stack_addr(ptr_ty, handle_ids_slot, 0),
         desc_addr: builder.ins().stack_addr(ptr_ty, desc_slot, 0),
+    }
+}
+
+/// Stores each capture's `DeviceHandleId` (or `0` for a host-resident
+/// capture) into the handle-ids stack array the runtime reads to decide
+/// whether a buffer persists across launches.
+fn populate_handle_ids(
+    builder: &mut FunctionBuilder,
+    arg_handles: &[Option<DeviceHandleId>],
+    num_bufs: usize,
+    handle_ids_addr: Value,
+) {
+    for i in 0..num_bufs {
+        let id = arg_handles
+            .get(i)
+            .copied()
+            .flatten()
+            .map_or(0, |handle| handle.0);
+        let id_value = builder.ins().iconst(cl_types::I64, id as i64);
+        builder
+            .ins()
+            .store(MemFlags::new(), id_value, handle_ids_addr, (i as i32) * 8);
     }
 }
 
@@ -283,19 +319,31 @@ fn populate_capture_arrays(
     Ok(())
 }
 
+/// Stack addresses the descriptor's pointer fields reference.
+struct DescriptorSlots {
+    desc_addr: Value,
+    data_ptrs_addr: Value,
+    byte_lens_addr: Value,
+    handle_ids_addr: Value,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn populate_descriptor(
     builder: &mut FunctionBuilder,
     module: &mut ObjectModule,
-    desc_addr: Value,
-    data_ptrs_addr: Value,
-    byte_lens_addr: Value,
+    slots: DescriptorSlots,
     kernel: &KernelEmit,
     ptr_ty: cl_types::Type,
     num_bufs: usize,
     grid_xyz: [Value; 3],
     block_xyz: [Value; 3],
 ) {
+    let DescriptorSlots {
+        desc_addr,
+        data_ptrs_addr,
+        byte_lens_addr,
+        handle_ids_addr,
+    } = slots;
     let wgsl_ptr = data_pointer(builder, module, kernel.wgsl_data, ptr_ty);
     let entry_ptr = data_pointer(builder, module, kernel.name_data, ptr_ty);
     let wgsl_len = builder.ins().iconst(cl_types::I64, kernel.wgsl_len as i64);
@@ -320,6 +368,7 @@ fn populate_descriptor(
     store(num_bufs_v, desc_layout::NUM_BUFS);
     store(data_ptrs_addr, desc_layout::BUF_DATA_PTRS);
     store(byte_lens_addr, desc_layout::BUF_BYTE_LENS);
+    store(handle_ids_addr, desc_layout::BUF_HANDLE_IDS);
 }
 
 fn declare_launch_fn(

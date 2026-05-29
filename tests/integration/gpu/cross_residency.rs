@@ -10,6 +10,7 @@
 //   * passing a gpu-resident value to a host call (`println(gpu_g)`) is
 //     rejected (§6.4).
 
+use super::helpers::gpu_adapter_available;
 use super::utils::*;
 
 #[test]
@@ -161,9 +162,7 @@ fn main()
 #[test]
 fn vector_add_demo_compiles_and_runs() {
     // §16.1 — compiles end-to-end without GpuArray<T> and without to_host().
-    // Runs regardless of GPU adapter: a launch failure leaves the host buffer
-    // untouched but the program still exits successfully (value correctness is
-    // asserted separately under an adapter-gated, ignored test).
+    // Value correctness is asserted by `vector_add_demo_value_correctness`.
     assert_runs(
         "
 use system.gpu
@@ -205,8 +204,11 @@ fn main()
 }
 
 #[test]
-#[ignore = "requires a GPU adapter; value correctness only meaningful with a device"]
 fn vector_add_demo_value_correctness() {
+    if !gpu_adapter_available() {
+        eprintln!("[gpu] skipped vector_add_demo_value_correctness: no suitable adapter");
+        return;
+    }
     assert_runs_with_output(
         "
 use system.gpu
@@ -228,8 +230,13 @@ fn main()
 }
 
 #[test]
-#[ignore = "requires a GPU adapter; value correctness only meaningful with a device"]
 fn two_readbacks_produce_independent_host_arrays() {
+    if !gpu_adapter_available() {
+        eprintln!(
+            "[gpu] skipped two_readbacks_produce_independent_host_arrays: no suitable adapter"
+        );
+        return;
+    }
     assert_runs_with_output(
         "
 use system.gpu
