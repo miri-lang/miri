@@ -256,6 +256,19 @@ impl fmt::Display for StorageClass {
     }
 }
 
+/// Where a binding's value physically lives. Mirrors
+/// [`crate::ast::statement::BindingResidency`] at the MIR level. The
+/// default is [`BindingResidency::Host`]; lowering stamps `Gpu` on locals
+/// introduced by `gpu let` / `gpu var`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum BindingResidency {
+    /// Standard host-side binding.
+    #[default]
+    Host,
+    /// Device-resident binding.
+    Gpu,
+}
+
 /// Declaration of a local variable.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LocalDecl {
@@ -264,6 +277,10 @@ pub struct LocalDecl {
     pub name: Option<Rc<str>>,
     pub is_user_variable: bool,
     pub storage_class: StorageClass,
+    /// Where the binding's value lives (host / device). Orthogonal to
+    /// [`StorageClass`], which classifies the memory address space inside
+    /// a single residency.
+    pub residency: BindingResidency,
     /// Resolved MIR-level type, free of AST expression nodes.
     ///
     /// Derived from `ty` at construction time via [`MirType::from_type_kind`].
@@ -283,6 +300,7 @@ impl LocalDecl {
             name: None,
             is_user_variable: false,
             storage_class: StorageClass::Stack,
+            residency: BindingResidency::Host,
             mir_ty,
         }
     }
@@ -291,12 +309,20 @@ impl LocalDecl {
 impl fmt::Display for Body {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for (i, decl) in self.local_decls.iter().enumerate() {
-            let prefix = if decl.storage_class == StorageClass::Stack {
+            let storage_prefix = if decl.storage_class == StorageClass::Stack {
                 String::new()
             } else {
                 format!("{} ", decl.storage_class)
             };
-            write!(f, "    {}let _{}: {};", prefix, i, decl.ty)?;
+            let residency_prefix = match decl.residency {
+                BindingResidency::Host => "",
+                BindingResidency::Gpu => "gpu ",
+            };
+            write!(
+                f,
+                "    {}{}let _{}: {};",
+                residency_prefix, storage_prefix, i, decl.ty
+            )?;
             if let Some(name) = &decl.name {
                 write!(f, " // {}", name)?;
             }

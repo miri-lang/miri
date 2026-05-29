@@ -205,6 +205,7 @@ fn test_parse_shared_variable_declaration() {
         initializer: None,
         declaration_type: VariableDeclarationType::Mutable, // Shared is mutable
         is_shared: true,
+        residency: miri::ast::statement::BindingResidency::Host,
     };
 
     parser_test(

@@ -140,6 +140,7 @@ pub fn let_variable(
         initializer: init,
         declaration_type: VariableDeclarationType::Immutable,
         is_shared: false,
+        residency: crate::ast::statement::BindingResidency::Host,
     }
 }
 
@@ -155,6 +156,7 @@ pub fn var(
         initializer: init,
         declaration_type: VariableDeclarationType::Mutable,
         is_shared: false,
+        residency: crate::ast::statement::BindingResidency::Host,
     }
 }
 
@@ -170,6 +172,7 @@ pub fn const_variable(
         initializer: init,
         declaration_type: VariableDeclarationType::Constant,
         is_shared: false,
+        residency: crate::ast::statement::BindingResidency::Host,
     }
 }
 

@@ -38,7 +38,7 @@ pub use backend::{
     GpuMemoryAccess, GpuMemoryScope,
 };
 pub use block::{BasicBlock, BasicBlockData};
-pub use body::{Body, ExecutionModel, LocalDecl, StorageClass};
+pub use body::{BindingResidency, Body, ExecutionModel, LocalDecl, StorageClass};
 pub use declaration::{
     ClassDecl, Declaration, EnumDecl, FieldDecl, MethodDecl, StructDecl, TraitDecl, TypeAliasDecl,
     VariantDecl,

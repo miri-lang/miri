@@ -28,6 +28,7 @@
 //! - [`AliasDefinition`]: Type aliases with optional generics
 //! - [`GenericDefinition`]: Generic type parameters with constraints
 
+use crate::ast::statement::BindingResidency;
 use crate::ast::{literal::Literal, types::*, MemberVisibility};
 use crate::error::syntax::Span;
 use std::collections::{BTreeMap, HashMap};
@@ -50,6 +51,10 @@ pub struct SymbolInfo {
     /// original symbol name (`"add"`) so MIR lowering can emit the right call target.
     pub original_name: Option<String>,
     pub is_intrinsic: bool,
+    /// Where the binding's value lives (host / device). Set from the AST
+    /// `VariableDeclaration::residency` for local variables; defaults to
+    /// [`BindingResidency::Host`] for every other symbol kind.
+    pub residency: BindingResidency,
 }
 
 impl SymbolInfo {
@@ -71,6 +76,7 @@ impl SymbolInfo {
             value,
             original_name: None,
             is_intrinsic: false,
+            residency: BindingResidency::Host,
         }
     }
 
@@ -85,6 +91,7 @@ impl SymbolInfo {
             value: None,
             original_name: None,
             is_intrinsic: true,
+            residency: BindingResidency::Host,
         }
     }
 }

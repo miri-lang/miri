@@ -47,6 +47,7 @@ impl<'source> Parser<'source> {
             initializer: None,
             declaration_type: VariableDeclarationType::Mutable,
             is_shared: false,
+            residency: crate::ast::statement::BindingResidency::Host,
         };
         Ok(ast::variable_statement(vec![decl], visibility))
     }
