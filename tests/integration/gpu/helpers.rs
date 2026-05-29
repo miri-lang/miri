@@ -25,9 +25,9 @@ use wgpu::util::DeviceExt;
 use wgpu::{
     BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor, BindGroupLayoutEntry,
     BindingType, BufferBindingType, BufferDescriptor, BufferUsages, CommandEncoderDescriptor,
-    ComputePassDescriptor, ComputePipelineDescriptor, DeviceDescriptor, Features, Instance,
-    InstanceDescriptor, Limits, Maintain, MapMode, PipelineLayoutDescriptor, PowerPreference,
-    RequestAdapterOptions, ShaderModuleDescriptor, ShaderSource, ShaderStages,
+    ComputePassDescriptor, ComputePipelineDescriptor, DeviceDescriptor, Features, Instance, Limits,
+    MapMode, PipelineLayoutDescriptor, PollType, PowerPreference, RequestAdapterOptions,
+    ShaderModuleDescriptor, ShaderSource, ShaderStages,
 };
 
 /// Result of running the frontend, lowering, and WGSL backend on a Miri
@@ -162,26 +162,24 @@ struct DeviceContext {
 /// When the adapter does not expose it (older Metal, software fallbacks),
 /// we return `None` and the caller skips, leaving the suite green.
 fn try_init_wgpu() -> Option<DeviceContext> {
-    let instance = Instance::new(InstanceDescriptor {
-        backends: wgpu::Backends::all(),
-        ..Default::default()
-    });
+    let instance = Instance::default();
     let adapter = pollster::block_on(instance.request_adapter(&RequestAdapterOptions {
         power_preference: PowerPreference::LowPower,
         compatible_surface: None,
         force_fallback_adapter: false,
-    }))?;
+    }))
+    .ok()?;
     if !adapter.features().contains(Features::SHADER_INT64) {
         return None;
     }
-    let (device, queue) = pollster::block_on(adapter.request_device(
-        &DeviceDescriptor {
-            label: Some("miri gpu_wgsl test device"),
-            required_features: Features::SHADER_INT64,
-            required_limits: Limits::default(),
-        },
-        None,
-    ))
+    let (device, queue) = pollster::block_on(adapter.request_device(&DeviceDescriptor {
+        label: Some("miri gpu_wgsl test device"),
+        required_features: Features::SHADER_INT64,
+        required_limits: Limits::default(),
+        experimental_features: wgpu::ExperimentalFeatures::default(),
+        memory_hints: wgpu::MemoryHints::default(),
+        trace: wgpu::Trace::Off,
+    }))
     .ok()?;
     Some(DeviceContext { device, queue })
 }
@@ -217,7 +215,7 @@ fn dispatch_compute(
         pass.dispatch_workgroups(grid_x, 1, 1);
     }
     ctx.queue.submit(std::iter::once(encoder.finish()));
-    ctx.device.poll(Maintain::Wait);
+    let _ = ctx.device.poll(PollType::wait_indefinitely());
 
     storage_buffers
         .iter()
@@ -289,16 +287,17 @@ fn build_pipeline(
         .device
         .create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("gpu_wgsl_test_pl"),
-            bind_group_layouts: &[bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(bind_group_layout)],
+            immediate_size: 0,
         });
     ctx.device
         .create_compute_pipeline(&ComputePipelineDescriptor {
             label: Some("gpu_wgsl_test_pipeline"),
             layout: Some(&pipeline_layout),
             module,
-            entry_point,
+            entry_point: Some(entry_point),
             compilation_options: Default::default(),
+            cache: None,
         })
 }
 
@@ -343,7 +342,7 @@ fn readback(ctx: &DeviceContext, src: &wgpu::Buffer, byte_len: usize) -> Vec<u8>
     slice.map_async(MapMode::Read, move |result| {
         let _ = tx.send(result);
     });
-    ctx.device.poll(Maintain::Wait);
+    let _ = ctx.device.poll(PollType::wait_indefinitely());
     rx.recv()
         .expect("map_async channel closed")
         .expect("map_async failed");
