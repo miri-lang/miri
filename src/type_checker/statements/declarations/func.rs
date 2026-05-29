@@ -40,7 +40,10 @@
 //! - Return type compatibility
 
 use crate::ast::factory::make_type;
-use crate::ast::types::{TypeKind, GPU_CONTEXT_TYPE_NAME, KERNEL_TYPE_NAME};
+use crate::ast::types::{
+    TypeKind, GPU_CONTEXT_DEPRECATED_IDENT, GPU_CONTEXT_TYPE_NAME, KERNEL_CONTEXT_IDENT,
+    KERNEL_TYPE_NAME,
+};
 use crate::ast::*;
 use crate::type_checker::context::{Context, SymbolInfo};
 use crate::type_checker::statements::{check_returns, ReturnStatus};
@@ -302,20 +305,33 @@ impl TypeChecker {
             }))),
         );
 
-        let gpu_context_type = make_type(TypeKind::Custom(GPU_CONTEXT_TYPE_NAME.to_string(), None));
-        context.define(
-            "gpu_context".to_string(),
+        self.define_kernel_context(context);
+
+        self.check_gpu_function_param_types(params, context);
+    }
+
+    /// Binds the implicit kernel context inside a `gpu fn` body.
+    ///
+    /// `kernel` is the canonical identifier; `gpu_context` is the deprecated
+    /// alias kept for one release. Both resolve to the same `GpuContext` type;
+    /// a use of the alias is flagged when its type is inferred.
+    fn define_kernel_context(&mut self, context: &mut Context) {
+        let context_type = || make_type(TypeKind::Custom(GPU_CONTEXT_TYPE_NAME.to_string(), None));
+        let symbol = |ty| {
             SymbolInfo::new(
-                gpu_context_type,
+                ty,
                 false,
                 false,
                 MemberVisibility::Public,
                 self.current_module.clone(),
                 None,
-            ),
+            )
+        };
+        context.define(KERNEL_CONTEXT_IDENT.to_string(), symbol(context_type()));
+        context.define(
+            GPU_CONTEXT_DEPRECATED_IDENT.to_string(),
+            symbol(context_type()),
         );
-
-        self.check_gpu_function_param_types(params, context);
     }
 
     /// Rejects `gpu fn` parameters whose declared type is not GPU-compatible.

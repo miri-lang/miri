@@ -294,3 +294,18 @@ pub fn type_checker_warning_test(source: &str, expected_warning: &str) {
         );
     }
 }
+
+pub fn count_warnings_with_code(source: &str, code: &str) -> usize {
+    let pipeline = Pipeline::new();
+    let result = match pipeline.frontend(source) {
+        Ok(res) => res,
+        Err(e) => panic!("Type check failed unexpectedly: {}", e),
+    };
+
+    result
+        .type_checker
+        .warnings
+        .iter()
+        .filter(|w| w.code == Some(code))
+        .count()
+}

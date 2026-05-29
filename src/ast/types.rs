@@ -75,6 +75,14 @@ pub const GPU_CONTEXT_TYPE_NAME: &str = "GpuContext";
 /// Canonical class name for the opaque `Kernel` handle returned by `gpu fn`s.
 pub const KERNEL_TYPE_NAME: &str = "Kernel";
 
+/// Canonical implicit identifier bound to the kernel context inside `gpu fn`
+/// bodies. Exposes `thread_idx` / `block_idx` / `block_dim` / `grid_dim`.
+pub const KERNEL_CONTEXT_IDENT: &str = "kernel";
+
+/// Deprecated spelling of [`KERNEL_CONTEXT_IDENT`]. Still bound for one release
+/// so existing kernels keep compiling; every use emits a rename diagnostic.
+pub const GPU_CONTEXT_DEPRECATED_IDENT: &str = "gpu_context";
+
 /// Canonical class name for the stdlib `GpuArray<T>` type — the only managed
 /// container that is GPU-compatible inside `gpu fn` bodies.
 pub const GPU_ARRAY_TYPE_NAME: &str = "GpuArray";

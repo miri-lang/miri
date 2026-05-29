@@ -470,7 +470,7 @@ gpu fn my_kernel()
 fn test_gpu_function_can_use_builtins() {
     let input = "
 gpu fn my_kernel()
-    let x = gpu_context.thread_idx.x
+    let x = kernel.thread_idx.x
 ";
     type_checker_test(input);
 }
@@ -479,7 +479,7 @@ gpu fn my_kernel()
 fn test_gpu_function_block_dim() {
     let input = "
 gpu fn my_kernel()
-    let x = gpu_context.block_dim.x
+    let x = kernel.block_dim.x
 ";
     type_checker_test(input);
 }
