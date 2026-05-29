@@ -94,6 +94,10 @@ impl TypeChecker {
             }
         }
 
+        if !context.in_gpu_function {
+            self.reject_gpu_resident_call_args(func, args, context);
+        }
+
         let callable = matches!(func_type.kind, TypeKind::Function(_) | TypeKind::Meta(_));
         let arg_diagnostics: Vec<(Span, Type)> = if context.in_gpu_function && callable {
             positional_args
@@ -136,6 +140,38 @@ impl TypeChecker {
         }
 
         result_type
+    }
+
+    /// Rejects a gpu-resident binding passed as an argument to a host call
+    /// (GPU_DRAFT §6.4). A host function reads its arguments on the host, so a
+    /// gpu-resident value would need an implicit readback — the design forbids
+    /// any implicit fence outside cross-residency assignment. The reader must
+    /// copy to host first (`let h = g`) and pass the copy.
+    fn reject_gpu_resident_call_args(
+        &mut self,
+        func: &Expression,
+        args: &[Expression],
+        context: &Context,
+    ) {
+        let callee = match &func.node {
+            ExpressionKind::Identifier(name, _) => format!("'{name}'"),
+            _ => "this host function".to_string(),
+        };
+        for arg in args {
+            let value = match &arg.node {
+                ExpressionKind::NamedArgument(_, inner) => inner.as_ref(),
+                _ => arg,
+            };
+            let Some(name) = self.gpu_resident_identifier(value, context) else {
+                continue;
+            };
+            let name = name.to_string();
+            self.report_error_with_help(
+                format!("cannot pass gpu-resident '{name}' to host function {callee}"),
+                arg.span,
+                format!("copy it to host first: 'let h = {name}', then pass 'h'"),
+            );
+        }
     }
 
     /// Verifies that every argument crossing into a call inside a `gpu fn`
