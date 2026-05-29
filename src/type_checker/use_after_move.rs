@@ -14,7 +14,7 @@
 
 use crate::ast::expression::{ExpressionKind, LeftHandSideExpression};
 use crate::ast::pattern::Pattern;
-use crate::ast::statement::StatementKind;
+use crate::ast::statement::{BindingResidency, StatementKind};
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::*;
 use crate::error::diagnostic::{Diagnostic, Severity};
@@ -56,6 +56,12 @@ pub struct UseAfterMoveChecker<'a> {
     /// The set is snapshotted on entry to a function body and restored on exit
     /// so an inner function does not see its caller's bindings.
     fn_bindings: HashSet<String>,
+    /// Names currently bound as gpu-resident locals (`gpu let` / `gpu var`).
+    /// A gpu binding owns a device buffer and is linear per residency (§6.5);
+    /// `gpu let b = a` where `a` is gpu-resident is a move that consumes `a`
+    /// (D24), whereas a cross-residency `let h = a` is a copy (D23). Snapshotted
+    /// and restored alongside `fn_bindings`.
+    gpu_bindings: HashSet<String>,
 }
 
 impl<'a> UseAfterMoveChecker<'a> {
@@ -72,6 +78,7 @@ impl<'a> UseAfterMoveChecker<'a> {
             warnings: vec![],
             in_function_body: false,
             fn_bindings: HashSet::new(),
+            gpu_bindings: HashSet::new(),
         }
     }
 
@@ -121,6 +128,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         let Some(body) = &decl.body else { return };
         let prev_in_fn = self.in_function_body;
         let prev_bindings = std::mem::take(&mut self.fn_bindings);
+        let prev_gpu = std::mem::take(&mut self.gpu_bindings);
         self.in_function_body = true;
         for p in &decl.params {
             self.fn_bindings.insert(p.name.clone());
@@ -129,6 +137,7 @@ impl<'a> UseAfterMoveChecker<'a> {
         self.check_stmt(body, &mut fn_consumed);
         self.in_function_body = prev_in_fn;
         self.fn_bindings = prev_bindings;
+        self.gpu_bindings = prev_gpu;
     }
 
     fn check_variable_stmt(
@@ -140,19 +149,31 @@ impl<'a> UseAfterMoveChecker<'a> {
             if let Some(init) = &decl.initializer {
                 self.check_expr(init, consumed);
                 if let ExpressionKind::Identifier(src, _) = &init.node {
-                    if let Some(ty) = self.types.get(&init.id) {
-                        if is_resource(&ty.kind, self.type_definitions) {
-                            consumed.insert(
-                                src.clone(),
-                                ConsumedInfo {
-                                    by_fn: format!("assignment to '{}'", decl.name),
-                                    at_span: init.span,
-                                    chain: vec![],
-                                },
-                            );
-                        }
+                    let gpu_move =
+                        decl.residency == BindingResidency::Gpu && self.gpu_bindings.contains(src);
+                    let resource = self
+                        .types
+                        .get(&init.id)
+                        .is_some_and(|ty| is_resource(&ty.kind, self.type_definitions));
+                    if gpu_move || resource {
+                        let by_fn = if gpu_move {
+                            format!("move to gpu binding '{}'", decl.name)
+                        } else {
+                            format!("assignment to '{}'", decl.name)
+                        };
+                        consumed.insert(
+                            src.clone(),
+                            ConsumedInfo {
+                                by_fn,
+                                at_span: init.span,
+                                chain: vec![],
+                            },
+                        );
                     }
                 }
+            }
+            if decl.residency == BindingResidency::Gpu {
+                self.gpu_bindings.insert(decl.name.clone());
             }
             self.fn_bindings.insert(decl.name.clone());
         }
@@ -187,11 +208,13 @@ impl<'a> UseAfterMoveChecker<'a> {
     ) {
         self.check_expr(iter, consumed);
         let prev_bindings = self.fn_bindings.clone();
+        let prev_gpu = self.gpu_bindings.clone();
         for d in decls {
             self.fn_bindings.insert(d.name.clone());
         }
         self.check_stmt(body, consumed);
         self.fn_bindings = prev_bindings;
+        self.gpu_bindings = prev_gpu;
     }
 
     /// Processes a block's statement list with scope-exit warning for unconsumed resource vars.
