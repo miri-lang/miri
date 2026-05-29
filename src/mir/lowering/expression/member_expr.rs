@@ -4,7 +4,7 @@
 //! Expression lowering - converts AST expressions to MIR.
 
 use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::{Type, TypeKind, GPU_CONTEXT_DEPRECATED_IDENT, KERNEL_CONTEXT_IDENT};
 use crate::error::lowering::LoweringError;
 use crate::mir::{
     AggregateKind, Constant, Dimension, GpuIntrinsic, Operand, Place, PlaceElem, Rvalue,
@@ -16,6 +16,14 @@ use std::rc::Rc;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::{ensure_place, resolve_type};
+
+/// Returns the kernel-context field name in `<kernel>.<field>` intermediate
+/// identifiers (e.g. `"thread_idx"` for `"kernel.thread_idx"`), or `None` when
+/// `sym` is not a kernel-context member access.
+fn kernel_context_field(sym: &str) -> Option<&str> {
+    sym.strip_prefix(KERNEL_CONTEXT_IDENT)
+        .and_then(|rest| rest.strip_prefix('.'))
+}
 
 pub(crate) fn lower_member_expr(
     ctx: &mut LoweringContext,
@@ -69,24 +77,25 @@ pub(crate) fn lower_member_expr(
 
     let obj_operand = lower_expression(ctx, obj, None)?;
 
-    // Handle GPU Intrinsics (gpu_context.thread_idx.x, etc.)
-    // This uses a two-step lowering: gpu_context.thread_idx => intermediate identifier,
-    // then intermediate_identifier.x => actual GpuIntrinsic rvalue.
+    // Handle kernel-context intrinsics (`kernel.thread_idx.x`, etc.).
+    // Two-step lowering: `kernel.thread_idx` => intermediate identifier
+    // `kernel.thread_idx`, then `<that>.x` => the actual GpuIntrinsic rvalue.
+    // `gpu_context` is the deprecated alias and folds into the same path.
     if let Operand::Constant(c) = &obj_operand {
         if let crate::ast::literal::Literal::Identifier(sym) = &c.literal {
-            if sym == "gpu_context" {
+            if sym == KERNEL_CONTEXT_IDENT || sym == GPU_CONTEXT_DEPRECATED_IDENT {
                 if let ExpressionKind::Identifier(prop_name, _) = &prop.node {
                     // Return intermediate identifier for chained access
                     return Ok(Operand::Constant(Box::new(Constant {
                         span: expr.span,
                         ty: Type::new(TypeKind::Void, expr.span),
                         literal: crate::ast::literal::Literal::Identifier(format!(
-                            "gpu_context.{}",
-                            prop_name
+                            "{}.{}",
+                            KERNEL_CONTEXT_IDENT, prop_name
                         )),
                     })));
                 }
-            } else if sym.starts_with("gpu_context.") {
+            } else if let Some(field) = kernel_context_field(sym) {
                 if let ExpressionKind::Identifier(prop_name, _) = &prop.node {
                     let dim = match prop_name.as_str() {
                         "x" => Dimension::X,
@@ -100,17 +109,11 @@ pub(crate) fn lower_member_expr(
                         }
                     };
 
-                    let rvalue = match sym.as_str() {
-                        "gpu_context.thread_idx" => {
-                            Rvalue::GpuIntrinsic(GpuIntrinsic::ThreadIdx(dim))
-                        }
-                        "gpu_context.block_idx" => {
-                            Rvalue::GpuIntrinsic(GpuIntrinsic::BlockIdx(dim))
-                        }
-                        "gpu_context.block_dim" => {
-                            Rvalue::GpuIntrinsic(GpuIntrinsic::BlockDim(dim))
-                        }
-                        "gpu_context.grid_dim" => Rvalue::GpuIntrinsic(GpuIntrinsic::GridDim(dim)),
+                    let rvalue = match field {
+                        "thread_idx" => Rvalue::GpuIntrinsic(GpuIntrinsic::ThreadIdx(dim)),
+                        "block_idx" => Rvalue::GpuIntrinsic(GpuIntrinsic::BlockIdx(dim)),
+                        "block_dim" => Rvalue::GpuIntrinsic(GpuIntrinsic::BlockDim(dim)),
+                        "grid_dim" => Rvalue::GpuIntrinsic(GpuIntrinsic::GridDim(dim)),
                         _ => {
                             return Err(LoweringError::unsupported_expression(
                                 format!("Unknown GPU intrinsic: {}", sym),

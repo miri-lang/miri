@@ -43,7 +43,9 @@
 //! - Generic type instantiation
 
 use crate::ast::factory as ast_factory;
-use crate::ast::types::{Type, TypeDeclarationKind, TypeKind};
+use crate::ast::types::{
+    Type, TypeDeclarationKind, TypeKind, GPU_CONTEXT_DEPRECATED_IDENT, KERNEL_CONTEXT_IDENT,
+};
 use crate::ast::*;
 use crate::error::format::find_best_match;
 use crate::error::syntax::Span;
@@ -65,6 +67,10 @@ impl TypeChecker {
             return ty;
         }
 
+        if name == GPU_CONTEXT_DEPRECATED_IDENT && context.in_gpu_function {
+            self.report_gpu_context_deprecation(span);
+        }
+
         if name == "self" {
             return self.infer_self(span, context);
         }
@@ -83,6 +89,22 @@ impl TypeChecker {
 
         self.report_undefined_identifier_error(name, span, context);
         ast_factory::make_type(TypeKind::Error)
+    }
+
+    fn report_gpu_context_deprecation(&mut self, span: Span) {
+        self.report_warning(
+            "W0004",
+            "Deprecated Kernel Context Identifier".to_string(),
+            format!(
+                "`{}` is deprecated; use `{}` instead",
+                GPU_CONTEXT_DEPRECATED_IDENT, KERNEL_CONTEXT_IDENT
+            ),
+            span,
+            Some(format!(
+                "Rename `{}` to `{}`. The alias is removed one release after this.",
+                GPU_CONTEXT_DEPRECATED_IDENT, KERNEL_CONTEXT_IDENT
+            )),
+        );
     }
 
     fn try_builtin_identifier(&self, name: &str) -> Option<Type> {

@@ -154,13 +154,59 @@ gpu fn my_kernel()
 }
 
 #[test]
-fn test_gpu_function_allows_gpu_context_field_access() {
+fn test_gpu_function_allows_kernel_field_access() {
     let input = "
+gpu fn my_kernel()
+    let tx = kernel.thread_idx.x
+    let bx = kernel.block_idx.x
+    let bd = kernel.block_dim.x
+    let gd = kernel.grid_dim.x
+";
+    type_checker_test(input);
+}
+
+#[test]
+fn test_gpu_context_alias_still_type_checks() {
+    let input = "
+gpu fn my_kernel()
+    let tx = gpu_context.thread_idx.x
+";
+    type_checker_test(input);
+}
+
+#[test]
+fn test_gpu_context_alias_emits_one_deprecation_per_use() {
+    let one_use = "
+gpu fn my_kernel()
+    let tx = gpu_context.thread_idx.x
+";
+    assert_eq!(count_warnings_with_code(one_use, "W0004"), 1);
+
+    let two_uses = "
 gpu fn my_kernel()
     let tx = gpu_context.thread_idx.x
     let bx = gpu_context.block_idx.x
 ";
-    type_checker_test(input);
+    assert_eq!(count_warnings_with_code(two_uses, "W0004"), 2);
+}
+
+#[test]
+fn test_kernel_identifier_emits_no_deprecation() {
+    let input = "
+gpu fn my_kernel()
+    let tx = kernel.thread_idx.x
+";
+    assert_eq!(count_warnings_with_code(input, "W0004"), 0);
+}
+
+#[test]
+fn test_gpu_context_outside_gpu_fn_is_not_deprecated() {
+    let input = "
+fn host()
+    let gpu_context = 5
+    let x = gpu_context + 1
+";
+    assert_eq!(count_warnings_with_code(input, "W0004"), 0);
 }
 
 #[test]
