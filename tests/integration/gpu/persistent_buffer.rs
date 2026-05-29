@@ -1,0 +1,138 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+//
+// Persistent device buffer per `gpu`-resident binding (GPU_DRAFT §7.1, §7.2,
+// §16.2). A `gpu var` binding's device buffer is allocated and uploaded once,
+// then reused across every kernel launch that captures it; only a
+// cross-residency readback (`let h = g`) fences and copies back. The
+// residency cost counters in `src/runtime/gpu/` make this observable from
+// source, so these tests assert the exact upload / launch / readback / fence
+// budget end-to-end through native dispatch.
+
+use super::helpers::gpu_adapter_available;
+use super::utils::*;
+
+/// §16.2 — the two-stage pipeline pays exactly one upload, two launches, and
+/// one readback (one fence). `host[7] = (7*7)*2 = 98`.
+#[test]
+fn two_stage_pipeline_reuses_one_device_buffer() {
+    if !gpu_adapter_available() {
+        eprintln!("[gpu] skipped two_stage_pipeline_reuses_one_device_buffer: no suitable adapter");
+        return;
+    }
+    assert_runs_with_output(
+        "
+use system.gpu
+use system.io
+
+fn main()
+    gpu_reset_telemetry()
+    gpu var data = [0, 0, 0, 0, 0, 0, 0, 0]
+
+    gpu for i in 0..8
+        data[i] = i * i
+
+    gpu for i in 0..8
+        data[i] = data[i] * 2
+
+    let host = data
+    println(f'{host[7]} {gpu_uploads()} {gpu_launches()} {gpu_readbacks()} {gpu_fences()}')
+",
+        "98 1 2 1 1",
+    );
+}
+
+/// Adding a third `gpu for` block that captures the same binding adds one
+/// launch and zero uploads.
+#[test]
+fn third_capture_adds_launch_not_upload() {
+    if !gpu_adapter_available() {
+        eprintln!("[gpu] skipped third_capture_adds_launch_not_upload: no suitable adapter");
+        return;
+    }
+    assert_runs_with_output(
+        "
+use system.gpu
+use system.io
+
+fn main()
+    gpu_reset_telemetry()
+    gpu var data = [0, 0, 0, 0, 0, 0, 0, 0]
+
+    gpu for i in 0..8
+        data[i] = i * i
+
+    gpu for i in 0..8
+        data[i] = data[i] * 2
+
+    gpu for i in 0..8
+        data[i] = data[i] + 1
+
+    let host = data
+    println(f'{host[7]} {gpu_uploads()} {gpu_launches()}')
+",
+        "99 1 3",
+    );
+}
+
+/// A `gpu` binding declared inside a function called more than once must
+/// start each runtime lifetime fresh: the second call re-uploads its host
+/// bytes instead of reusing the first call's stale device buffer. The kernel
+/// reads `data[i]` on the RHS, so a stale buffer would corrupt the result.
+#[test]
+fn redeclared_binding_in_repeated_call_reuploads() {
+    if !gpu_adapter_available() {
+        eprintln!(
+            "[gpu] skipped redeclared_binding_in_repeated_call_reuploads: no suitable adapter"
+        );
+        return;
+    }
+    assert_runs_with_output(
+        "
+use system.gpu
+use system.io
+
+fn run() int
+    gpu var data = [0, 0, 0, 0]
+    gpu for i in 0..4
+        data[i] = data[i] + 5
+    let host = data
+    return host[3]
+
+fn main()
+    gpu_reset_telemetry()
+    let a = run()
+    let b = run()
+    println(f'{a} {b} {gpu_uploads()} {gpu_launches()}')
+",
+        "5 5 2 2",
+    );
+}
+
+/// A `gpu`-resident binding survives two readbacks, each fencing once and
+/// producing an independent host array (D23). The reuse means a single
+/// upload still covers both stages.
+#[test]
+fn two_readbacks_each_fence_and_survive() {
+    if !gpu_adapter_available() {
+        eprintln!("[gpu] skipped two_readbacks_each_fence_and_survive: no suitable adapter");
+        return;
+    }
+    assert_runs_with_output(
+        "
+use system.gpu
+use system.io
+
+fn main()
+    gpu_reset_telemetry()
+    gpu var arr = [0, 0, 0, 0]
+    gpu for i in 0..4
+        arr[i] = i * i
+
+    let h = arr
+    let h2 = arr
+    println(f'{h[3]} {h2[3]} {gpu_uploads()} {gpu_readbacks()}')
+",
+        "9 9 1 2",
+    );
+}

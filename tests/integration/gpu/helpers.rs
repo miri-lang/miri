@@ -152,6 +152,15 @@ pub fn assert_gpu_compute_i64(source: &str, inputs: &[&[i64]], expected: &[&[i64
     }
 }
 
+/// Whether a wgpu adapter exposing `Features::SHADER_INT64` is reachable. The
+/// native `miri_gpu_launch_inline` path stores `int` as `i64`, so a compiled
+/// program that asserts post-dispatch values needs this feature. Tests that
+/// run such a program skip when it returns `false`, keeping the suite green on
+/// adapter-less or older devices.
+pub fn gpu_adapter_available() -> bool {
+    try_init_wgpu().is_some()
+}
+
 struct DeviceContext {
     device: wgpu::Device,
     queue: wgpu::Queue,

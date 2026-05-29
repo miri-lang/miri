@@ -1,15 +1,18 @@
 //! High-level `gpu for` launch helper.
 //!
 //! `miri_gpu_launch_inline` is the single FFI entry Cranelift emits at
-//! each `TerminatorKind::GpuLaunch`. It bundles init / compile / cache
-//! / dispatch / sync / readback so the compiler can stay backend-agnostic
-//! about wgpu specifics.
+//! each `TerminatorKind::GpuLaunch`. It bundles init / compile / cache /
+//! dispatch so the compiler can stay backend-agnostic about wgpu specifics.
+//! A `gpu`-resident capture reuses its persistent device buffer and is
+//! neither re-uploaded nor read back here; only `miri_gpu_readback` fences
+//! and copies device bytes to the host.
 //!
 //! Kernel compilation is cached by name in the existing `KernelRegistry`
 //! so repeated dispatches of the same kernel pay the compile cost once.
 
 use crate::compute::{get_kernel_by_name, CompiledKernel};
 use crate::context::{init_gpu_context, GpuContext, GpuError};
+use crate::{device_table, telemetry};
 use once_cell::sync::OnceCell;
 use parking_lot::RwLock;
 use std::sync::Arc;
@@ -39,13 +42,21 @@ pub struct GpuLaunchDesc {
     pub num_bufs: usize,
     pub buf_data_ptrs: *const *mut u8,
     pub buf_byte_lens: *const usize,
+    /// Per-capture `DeviceHandleId`. A non-zero id marks a `gpu`-resident
+    /// binding whose device buffer persists across launches; `0` marks a
+    /// host-resident capture that is uploaded and read back per launch.
+    pub buf_handle_ids: *const u64,
 }
 
 /// Launches a GPU kernel inline. Returns 1 on success, 0 on failure.
 ///
-/// On success, every capture buffer pointed to by `buf_data_ptrs[i]` is
-/// overwritten with the post-dispatch device contents (baseline assumes
-/// every capture is read/write, matching the current `gpu for` lowering).
+/// Each capture's persistence is keyed on its `buf_handle_ids[i]`:
+///   * `gpu`-resident capture (non-zero id) — the device buffer is allocated
+///     and uploaded on first capture, then reused on every later launch with
+///     no upload and no fence. The launch never copies it back; only a
+///     cross-residency readback (`miri_gpu_readback`) fences and reads it.
+///   * host-resident capture (`0`) — uploaded transiently and copied back to
+///     host memory after the launch, matching the pre-residency behavior.
 ///
 /// # Safety
 /// `desc` must point to a fully initialized `GpuLaunchDesc`. The pointer
@@ -84,25 +95,10 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
 
     let buf_data_ptrs = std::slice::from_raw_parts(desc.buf_data_ptrs, desc.num_bufs);
     let buf_byte_lens = std::slice::from_raw_parts(desc.buf_byte_lens, desc.num_bufs);
+    let buf_handle_ids = std::slice::from_raw_parts(desc.buf_handle_ids, desc.num_bufs);
 
-    let storage_buffers: Vec<wgpu::Buffer> = (0..desc.num_bufs)
-        .map(|i| {
-            let host_ptr = buf_data_ptrs[i];
-            let byte_len = buf_byte_lens[i];
-            let padded = align_to_4(byte_len.max(4));
-            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("miri_gpu_launch_inline storage"),
-                size: padded as u64,
-                usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            if byte_len > 0 && !host_ptr.is_null() {
-                let bytes = std::slice::from_raw_parts(host_ptr as *const u8, byte_len);
-                queue.write_buffer(&buffer, 0, bytes);
-            }
-            buffer
-        })
-        .collect();
+    let (storage_buffers, transient_captures) =
+        prepare_capture_buffers(device, queue, buf_handle_ids, buf_data_ptrs, buf_byte_lens);
 
     let entries: Vec<wgpu::BindGroupEntry> = storage_buffers
         .iter()
@@ -131,17 +127,102 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
         pass.dispatch_workgroups(desc.grid_x, desc.grid_y, desc.grid_z);
     }
     queue.submit(std::iter::once(encoder.finish()));
-    let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    telemetry::record_launch();
 
-    for i in 0..desc.num_bufs {
-        let byte_len = buf_byte_lens[i];
-        let host_ptr = buf_data_ptrs[i];
-        if byte_len == 0 || host_ptr.is_null() {
-            continue;
+    // A pure `gpu`-resident launch fences nothing: device-side ordering on
+    // the queue guarantees a later launch sees this one's writes, and the
+    // bytes stay on the device until an explicit readback. Only a transient
+    // host capture forces a host-visible copy back, which needs a fence.
+    if !transient_captures.is_empty() {
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        telemetry::record_fence();
+        for i in transient_captures {
+            readback_into_host(
+                device,
+                queue,
+                &storage_buffers[i],
+                buf_data_ptrs[i],
+                buf_byte_lens[i],
+            )?;
         }
-        readback_into_host(device, queue, &storage_buffers[i], host_ptr, byte_len)?;
     }
     Ok(())
+}
+
+/// Builds the storage buffer for every capture and reports which captures are
+/// transient (host-resident, handle `0`). A `gpu`-resident capture reuses or
+/// allocates its persistent buffer; a transient one allocates fresh and is
+/// scheduled for post-dispatch readback.
+///
+/// # Safety
+/// The three slices must be `num_bufs` long and their host pointers valid for
+/// the matching byte lengths.
+unsafe fn prepare_capture_buffers(
+    device: &Device,
+    queue: &Queue,
+    buf_handle_ids: &[u64],
+    buf_data_ptrs: &[*mut u8],
+    buf_byte_lens: &[usize],
+) -> (Vec<wgpu::Buffer>, Vec<usize>) {
+    let mut storage_buffers = Vec::with_capacity(buf_handle_ids.len());
+    let mut transient_captures = Vec::new();
+    for i in 0..buf_handle_ids.len() {
+        let buffer = if buf_handle_ids[i] != device_table::HOST_HANDLE {
+            persistent_capture_buffer(
+                device,
+                queue,
+                buf_handle_ids[i],
+                buf_data_ptrs[i],
+                buf_byte_lens[i],
+            )
+        } else {
+            transient_captures.push(i);
+            new_storage_buffer_with_upload(device, queue, buf_data_ptrs[i], buf_byte_lens[i])
+        };
+        storage_buffers.push(buffer);
+    }
+    (storage_buffers, transient_captures)
+}
+
+/// Returns the resident device buffer for `handle`, allocating and uploading
+/// it on first capture and reusing it (no upload) on every later launch.
+unsafe fn persistent_capture_buffer(
+    device: &Device,
+    queue: &Queue,
+    handle: u64,
+    host_ptr: *mut u8,
+    byte_len: usize,
+) -> wgpu::Buffer {
+    if let Some((existing, _)) = device_table::resident_buffer(handle) {
+        return existing;
+    }
+    let buffer = new_storage_buffer_with_upload(device, queue, host_ptr, byte_len);
+    device_table::insert_resident(handle, buffer.clone(), byte_len);
+    buffer
+}
+
+/// Allocates a storage buffer sized for `byte_len`. When there are host bytes
+/// to copy, uploads them and records one upload in the telemetry counters; an
+/// empty or null capture allocates the buffer without an upload.
+unsafe fn new_storage_buffer_with_upload(
+    device: &Device,
+    queue: &Queue,
+    host_ptr: *mut u8,
+    byte_len: usize,
+) -> wgpu::Buffer {
+    let padded = align_to_4(byte_len.max(4));
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("miri_gpu_launch_inline storage"),
+        size: padded as u64,
+        usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    if byte_len > 0 && !host_ptr.is_null() {
+        let bytes = std::slice::from_raw_parts(host_ptr as *const u8, byte_len);
+        queue.write_buffer(&buffer, 0, bytes);
+        telemetry::record_upload();
+    }
+    buffer
 }
 
 /// Refuse to dispatch a kernel whose WGSL references a 64-bit scalar
@@ -361,4 +442,82 @@ unsafe fn readback_into_host(
 
 fn align_to_4(value: usize) -> usize {
     (value + 3) & !3
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn readback_with_null_array_fails() {
+        let result = unsafe { miri_gpu_readback(1, std::ptr::null()) };
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn readback_of_unbacked_handle_is_a_noop_success() {
+        // A handle never captured by a launch has no resident buffer; the
+        // host array is already authoritative, so the readback succeeds
+        // without touching the device.
+        let mut bytes = [0u8; 16];
+        let header = MiriArrayHeader {
+            data: bytes.as_mut_ptr(),
+            elem_count: 4,
+            elem_size: 4,
+        };
+        let result = unsafe { miri_gpu_readback(u64::MAX, &header) };
+        assert_eq!(result, 1);
+    }
+}
+
+/// Leading fields of `runtime::core::MiriArray` (`repr(C)`), mirrored here so
+/// the GPU readback can recover a capture's host pointer and byte length from
+/// the array passed by the compiler. Kept in sync with the layout the
+/// Cranelift launch dispatcher reads (`miri_array_layout`).
+#[repr(C)]
+pub struct MiriArrayHeader {
+    pub data: *mut u8,
+    pub elem_count: usize,
+    pub elem_size: usize,
+}
+
+/// Cross-residency readback: fences outstanding writes to the device buffer
+/// owned by `handle` and copies its contents into the host array `arr`. This
+/// is the only operation that fences device work.
+///
+/// A `handle` with no resident buffer (e.g. a binding never captured by a
+/// launch) leaves `arr` untouched and succeeds — its host bytes are already
+/// the authoritative copy.
+///
+/// # Safety
+/// `arr` must point to a valid `MiriArrayHeader` whose `data` covers
+/// `elem_count * elem_size` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn miri_gpu_readback(handle: u64, arr: *const MiriArrayHeader) -> u8 {
+    if arr.is_null() {
+        return 0;
+    }
+    let header = &*arr;
+    let host_byte_len = header.elem_count.saturating_mul(header.elem_size);
+    if host_byte_len == 0 || header.data.is_null() {
+        return 1;
+    }
+    let Some((buffer, resident_byte_len)) = device_table::resident_buffer(handle) else {
+        return 1;
+    };
+    let byte_len = host_byte_len.min(resident_byte_len);
+    let Ok(ctx) = init_gpu_context() else {
+        return 0;
+    };
+    match readback_into_host(&ctx.device, &ctx.queue, &buffer, header.data, byte_len) {
+        Ok(()) => {
+            telemetry::record_fence();
+            telemetry::record_readback();
+            1
+        }
+        Err(err) => {
+            log::error!("miri_gpu_readback failed: {:?}", err);
+            0
+        }
+    }
 }

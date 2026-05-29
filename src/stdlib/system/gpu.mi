@@ -2,6 +2,12 @@ use system.collections.array
 
 runtime "gpu" fn miri_gpu_is_available() bool
 
+runtime "gpu" fn miri_gpu_telemetry_reset()
+runtime "gpu" fn miri_gpu_telemetry_uploads() int
+runtime "gpu" fn miri_gpu_telemetry_launches() int
+runtime "gpu" fn miri_gpu_telemetry_readbacks() int
+runtime "gpu" fn miri_gpu_telemetry_fences() int
+
 /// Returns `true` when the GPU runtime has been initialized and a
 /// device is reachable, `false` otherwise.
 ///
@@ -9,6 +15,31 @@ runtime "gpu" fn miri_gpu_is_available() bool
 /// safe to call from any program that imports `system.gpu`.
 public fn is_gpu_available() bool
     return miri_gpu_is_available()
+
+/// Resets the residency cost counters to zero. Call before a pipeline to
+/// measure its uploads / launches / readbacks / fences in isolation.
+public fn gpu_reset_telemetry()
+    miri_gpu_telemetry_reset()
+
+/// Number of host-to-device uploads recorded since the last reset. A
+/// `gpu`-resident binding pays one upload on the first launch that captures
+/// it and none thereafter.
+public fn gpu_uploads() int
+    return miri_gpu_telemetry_uploads()
+
+/// Number of kernel launches recorded since the last reset.
+public fn gpu_launches() int
+    return miri_gpu_telemetry_launches()
+
+/// Number of device-to-host readbacks recorded since the last reset. Only a
+/// cross-residency assignment (`let h = g`) reads back.
+public fn gpu_readbacks() int
+    return miri_gpu_telemetry_readbacks()
+
+/// Number of host-side fences recorded since the last reset. Only a readback
+/// fences; reuse and launch never do.
+public fn gpu_fences() int
+    return miri_gpu_telemetry_fences()
 
 /// Host-side stub for a GPU-resident array.
 ///
