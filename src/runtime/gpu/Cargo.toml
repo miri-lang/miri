@@ -8,7 +8,7 @@ description = "GPU compute runtime for the Miri programming language"
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
-wgpu = "0.20"
+wgpu = "29.0"
 pollster = "0.3"
 parking_lot = "0.12"
 once_cell = "1"

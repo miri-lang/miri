@@ -131,7 +131,7 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
         pass.dispatch_workgroups(desc.grid_x, desc.grid_y, desc.grid_z);
     }
     queue.submit(std::iter::once(encoder.finish()));
-    device.poll(wgpu::Maintain::Wait);
+    let _ = device.poll(wgpu::PollType::wait_indefinitely());
 
     for i in 0..desc.num_bufs {
         let byte_len = buf_byte_lens[i];
@@ -269,8 +269,8 @@ fn compile_kernel_inline(
         .device
         .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some(&format!("{}_pl", cache_name)),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
         });
     let pipeline = ctx
         .device
@@ -278,8 +278,9 @@ fn compile_kernel_inline(
             label: Some(&format!("{}_pipeline", cache_name)),
             layout: Some(&pipeline_layout),
             module: &module,
-            entry_point,
+            entry_point: Some(entry_point),
             compilation_options: Default::default(),
+            cache: None,
         });
     Ok(CompiledKernel {
         id: next_kernel_id(),
@@ -346,7 +347,7 @@ unsafe fn readback_into_host(
     slice.map_async(wgpu::MapMode::Read, move |result| {
         let _ = tx.send(result);
     });
-    device.poll(wgpu::Maintain::Wait);
+    let _ = device.poll(wgpu::PollType::wait_indefinitely());
     rx.recv()
         .map_err(|_| GpuError::BufferCreationFailed)?
         .map_err(|_| GpuError::BufferCreationFailed)?;

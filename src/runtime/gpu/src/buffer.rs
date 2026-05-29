@@ -145,7 +145,7 @@ impl GpuBuffer {
         slice.map_async(wgpu::MapMode::Read, move |result| {
             let _ = tx.send(result);
         });
-        ctx.device.poll(wgpu::Maintain::Wait);
+        let _ = ctx.device.poll(wgpu::PollType::wait_indefinitely());
         rx.recv()
             .map_err(|_| GpuError::BufferCreationFailed)?
             .map_err(|_| GpuError::BufferCreationFailed)?;
@@ -157,11 +157,7 @@ impl GpuBuffer {
 }
 
 fn elem_count_from_bytes(bytes: usize, elem_size: usize) -> usize {
-    if elem_size == 0 {
-        0
-    } else {
-        bytes / elem_size
-    }
+    bytes.checked_div(elem_size).unwrap_or(0)
 }
 
 pub fn get_buffer(id: u64) -> Option<Arc<GpuBuffer>> {

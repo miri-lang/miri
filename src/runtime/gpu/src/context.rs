@@ -85,26 +85,23 @@ fn optional_shader_features() -> Features {
 
 impl GpuContext {
     pub fn new() -> Result<Self, GpuError> {
-        let instance = Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
-            ..Default::default()
-        });
+        let instance = Instance::default();
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,
         }))
-        .ok_or(GpuError::NoAdapter)?;
+        .map_err(|_| GpuError::NoAdapter)?;
 
         let required_shader_features = optional_shader_features() & adapter.features();
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("Miri GPU Device"),
-                required_features: required_shader_features,
-                required_limits: wgpu::Limits::default(),
-            },
-            None,
-        ))
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("Miri GPU Device"),
+            required_features: required_shader_features,
+            required_limits: wgpu::Limits::default(),
+            experimental_features: wgpu::ExperimentalFeatures::default(),
+            memory_hints: wgpu::MemoryHints::default(),
+            trace: wgpu::Trace::Off,
+        }))
         .map_err(|err| GpuError::DeviceCreationFailed(err.to_string()))?;
 
         let enabled_shader_features = device.features() & optional_shader_features();
@@ -157,7 +154,7 @@ fn encode_device_type(device_type: wgpu::DeviceType) -> u8 {
 
 fn encode_backend(backend: wgpu::Backend) -> u8 {
     match backend {
-        wgpu::Backend::Empty => 0,
+        wgpu::Backend::Noop => 0,
         wgpu::Backend::Vulkan => 1,
         wgpu::Backend::Metal => 2,
         wgpu::Backend::Dx12 => 3,
@@ -244,7 +241,7 @@ pub extern "C" fn miri_gpu_max_buffer_size() -> u64 {
 #[no_mangle]
 pub extern "C" fn miri_gpu_sync() {
     if let Ok(ctx) = get_gpu_context() {
-        ctx.device.poll(wgpu::Maintain::Wait);
+        let _ = ctx.device.poll(wgpu::PollType::wait_indefinitely());
     }
 }
 
@@ -253,7 +250,7 @@ pub extern "C" fn miri_gpu_sync() {
 #[no_mangle]
 pub extern "C" fn miri_gpu_shutdown() {
     if let Ok(ctx) = get_gpu_context() {
-        ctx.device.poll(wgpu::Maintain::Wait);
+        let _ = ctx.device.poll(wgpu::PollType::wait_indefinitely());
     }
 }
 
@@ -289,7 +286,7 @@ mod tests {
 
     #[test]
     fn device_info_encodes_backend_exhaustively() {
-        assert_eq!(encode_backend(wgpu::Backend::Empty), 0);
+        assert_eq!(encode_backend(wgpu::Backend::Noop), 0);
         assert_eq!(encode_backend(wgpu::Backend::Vulkan), 1);
         assert_eq!(encode_backend(wgpu::Backend::Metal), 2);
         assert_eq!(encode_backend(wgpu::Backend::Dx12), 3);
