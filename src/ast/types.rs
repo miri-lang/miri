@@ -26,6 +26,14 @@ pub enum BuiltinCollectionKind {
 /// compiler. Mirrors the role of [`BuiltinCollectionKind`] / [`RESULT_TYPE_NAME`].
 pub const CLONEABLE_TRAIT_NAME: &str = "Cloneable";
 
+/// Canonical name of the stdlib `Accelerable` capability trait.
+///
+/// The residency gate dispatches on this trait to decide whether a type may
+/// back a `gpu let` / `gpu var` binding — it never matches a GPU-eligible type
+/// name. Centralized so the gate and any future marshalling registry share one
+/// spelling. Mirrors [`CLONEABLE_TRAIT_NAME`].
+pub const ACCELERABLE_TRAIT_NAME: &str = "Accelerable";
+
 /// Canonical class name for the built-in `Result<T, E>` sum type.
 ///
 /// `TypeKind::Result(ok, err)` is normalized to

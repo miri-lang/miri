@@ -43,6 +43,7 @@
 //! - Generic type instantiation
 
 use crate::ast::factory as ast_factory;
+use crate::ast::statement::BindingResidency;
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::*;
 use crate::error::syntax::Span;
@@ -63,6 +64,11 @@ impl TypeChecker {
     ) -> Type {
         let left_ty = self.infer_expression(left, context);
         let right_ty = self.infer_expression(right, context);
+
+        if let Some(error) = self.detect_residency_mismatch(left, op, right, context) {
+            self.report_error(error, span);
+            return ast_factory::make_type(TypeKind::Error);
+        }
 
         if matches!(op, BinaryOp::Div | BinaryOp::Mod) {
             let is_zero = match &right.node {
@@ -214,5 +220,79 @@ impl TypeChecker {
                 self.report_error("Division by zero".to_string(), rhs.span);
             }
         }
+    }
+
+    /// Returns the mixed-residency diagnostic when `left` and `right`
+    /// reference identifiers whose binding residencies differ. Returns
+    /// `None` otherwise (including when either operand is a non-identifier
+    /// expression — those carry no recorded residency yet).
+    fn detect_residency_mismatch(
+        &self,
+        left: &Expression,
+        op: &BinaryOp,
+        right: &Expression,
+        context: &Context,
+    ) -> Option<String> {
+        let (left_name, left_residency) = identifier_residency(left, context)?;
+        let (right_name, right_residency) = identifier_residency(right, context)?;
+        if left_residency == right_residency {
+            return None;
+        }
+        let action = binary_op_action(op)?;
+        let (gpu_name, host_name) = match (left_residency, right_residency) {
+            (BindingResidency::Gpu, BindingResidency::Host) => (left_name, right_name),
+            (BindingResidency::Host, BindingResidency::Gpu) => (right_name, left_name),
+            // Two equal residencies were filtered above; both arms are the only
+            // remaining mixed combinations.
+            (BindingResidency::Host, BindingResidency::Host)
+            | (BindingResidency::Gpu, BindingResidency::Gpu) => return None,
+        };
+        Some(format!(
+            "cannot {action} gpu-resident '{gpu_name}' and host-resident '{host_name}'; \
+             bring both to the same residency first."
+        ))
+    }
+}
+
+/// Returns `(name, residency)` when `expr` is a bare identifier reference
+/// to a known symbol. Returns `None` for compound expressions, unresolved
+/// names, or qualified `Type::id` paths.
+fn identifier_residency<'a>(
+    expr: &'a Expression,
+    context: &Context,
+) -> Option<(&'a str, BindingResidency)> {
+    let ExpressionKind::Identifier(name, None) = &expr.node else {
+        return None;
+    };
+    let info = context.resolve_info(name)?;
+    Some((name.as_str(), info.residency))
+}
+
+/// Maps a binary operator to the verb used in the mixed-residency
+/// diagnostic. Returns `None` for operators where mixed-residency operands
+/// have no meaningful verb (currently only the arithmetic operators are
+/// diagnosed).
+fn binary_op_action(op: &BinaryOp) -> Option<&'static str> {
+    match op {
+        BinaryOp::Add => Some("add"),
+        BinaryOp::Sub => Some("subtract"),
+        BinaryOp::Mul => Some("multiply"),
+        BinaryOp::Div => Some("divide"),
+        BinaryOp::Mod => Some("take the remainder of"),
+        BinaryOp::BitwiseAnd
+        | BinaryOp::BitwiseOr
+        | BinaryOp::BitwiseXor
+        | BinaryOp::Equal
+        | BinaryOp::NotEqual
+        | BinaryOp::LessThan
+        | BinaryOp::LessThanEqual
+        | BinaryOp::GreaterThan
+        | BinaryOp::GreaterThanEqual
+        | BinaryOp::And
+        | BinaryOp::Or
+        | BinaryOp::In
+        | BinaryOp::NullCoalesce
+        | BinaryOp::Not
+        | BinaryOp::Range => None,
     }
 }

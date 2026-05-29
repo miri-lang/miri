@@ -18,7 +18,9 @@
 
 pub use crate::integration::utils;
 
+pub mod accelerable;
 pub mod helpers;
 pub mod launch;
+pub mod residency;
 pub mod stub;
 pub mod wgsl;
