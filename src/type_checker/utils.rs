@@ -1517,6 +1517,24 @@ impl TypeChecker {
         }
     }
 
+    /// Returns the binding name when `expr` is a bare identifier whose symbol
+    /// is gpu-resident. Compound expressions, unresolved names, and host
+    /// bindings yield `None`. Shared by the element-cross-read, host-call, and
+    /// cross-residency-assignment checks (GPU_DRAFT §6.4).
+    pub(crate) fn gpu_resident_identifier<'a>(
+        &self,
+        expr: &'a Expression,
+        context: &Context,
+    ) -> Option<&'a str> {
+        let ExpressionKind::Identifier(name, None) = &expr.node else {
+            return None;
+        };
+        match context.resolve_info(name)?.residency {
+            BindingResidency::Gpu => Some(name.as_str()),
+            BindingResidency::Host => None,
+        }
+    }
+
     pub(crate) fn report_error(&mut self, message: String, span: Span) {
         let key = (message.clone(), span);
         if self.reported_errors.insert(key) {

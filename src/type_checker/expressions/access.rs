@@ -70,6 +70,24 @@ impl TypeChecker {
             return make_type(TypeKind::Error);
         }
 
+        if !context.in_gpu_function {
+            if let Some(name) = self.gpu_resident_identifier(obj, context) {
+                let name = name.to_string();
+                self.report_error_with_help(
+                    format!(
+                        "cannot read element of gpu-resident '{name}' from host context; \
+                         a per-element read would require a readback"
+                    ),
+                    span,
+                    format!(
+                        "copy '{name}' to host first, then index the host copy: \
+                         'let h = {name}' then 'let v = h[0]'"
+                    ),
+                );
+                return make_type(TypeKind::Error);
+            }
+        }
+
         let index_type = self.infer_expression(index, context);
 
         // Check for Range index (Slicing)
