@@ -26,6 +26,7 @@ use crate::ast::RangeExpressionType;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::backend::{BackendMetadata, GpuBodyMetadata};
+use crate::mir::body::DeviceHandleId;
 use crate::mir::lambda::LambdaInfo;
 use crate::mir::{
     AggregateKind, BinOp, Body, Constant, Dimension, Discriminant, ExecutionModel, GpuIntrinsic,
@@ -640,6 +641,10 @@ fn emit_gpu_launch(
         .iter()
         .map(|c| Operand::Copy(Place::new(c.outer_local)))
         .collect();
+    let arg_handles: Vec<Option<DeviceHandleId>> = captures
+        .iter()
+        .map(|c| ctx.body.local_decls[c.outer_local.0].device_handle)
+        .collect();
 
     let dest_local = ctx.push_temp(void_ty, span);
     let after_bb = ctx.new_basic_block();
@@ -649,6 +654,7 @@ fn emit_gpu_launch(
             grid: Operand::Copy(Place::new(grid_local)),
             block: Operand::Copy(Place::new(block_local)),
             args: arg_ops,
+            arg_handles,
             destination: Place::new(dest_local),
             target: Some(after_bb),
         },
