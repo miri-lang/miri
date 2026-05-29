@@ -4,8 +4,9 @@ use system.collections.transformable
 use system.collections.foldable
 use system.collections.sequenced
 use system.memory
+use system.accelerator
 
-public class List<T> implements Queryable<T>, Iterable<T>, Cloneable, Transformable<T>, Foldable<T>, Sequenced<T>
+public class List<T> implements Queryable<T>, Iterable<T>, Cloneable, Transformable<T>, Foldable<T>, Sequenced<T>, Accelerable
 
     runtime "core" fn miri_rt_list_new(elem_size int) Self
     runtime "core" fn miri_rt_list_free(l Self)

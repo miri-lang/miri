@@ -1,0 +1,38 @@
+/// Cross-accelerator capability surface.
+///
+/// `Accelerable` and `AcceleratorBindingKind` are not GPU-specific: the same
+/// trait gates residency for every accelerator backend — GPU today (`gpu let`),
+/// and TPU/NPU/FPGA via future residency keywords (`tpu let`, `npu let`) that
+/// reuse it unchanged. Kept out of `system.gpu` so the capability is importable
+/// without pulling in the GPU runtime surface.
+
+/// How an `Accelerable` value is bound into a kernel's resource interface.
+///
+/// `Storage` is a read/write device buffer, `Uniform` a small read-only block,
+/// `PushConstant` an inline immediate. The set may grow for future accelerators
+/// (e.g. `TpuTile`) without changing the `Accelerable` surface.
+public enum AcceleratorBindingKind
+    Storage
+    Uniform
+    PushConstant
+
+/// Capability marker for types that may be made accelerator-resident.
+///
+/// A value may back a `gpu let` / `gpu var` binding only if its type implements
+/// `Accelerable`. The compiler gates residency by *trait dispatch* — it asks the
+/// type table "does this type implement `Accelerable`?", never by matching a
+/// stdlib type name. Adding a new accelerator-eligible container (e.g.
+/// `Tensor<T, Rank>`) is therefore an `.mi` edit that names this trait, never a
+/// compiler edit. The type checker additionally verifies that every field of an
+/// implementing type is itself accelerable, so the capability cannot be declared
+/// on a type that could never live on a device.
+///
+/// `byte_size` and `binding_kind` are runtime-marshalling discriminators. Until
+/// Miri traits carry associated values, the marshalling layer reads the concrete
+/// answers from a registry derived from the type table; the defaults below are
+/// forward-compatible placeholders so implementors need no boilerplate today.
+public trait Accelerable
+    public fn byte_size() int
+        return 0
+    public fn binding_kind() AcceleratorBindingKind
+        return AcceleratorBindingKind.Storage

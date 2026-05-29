@@ -175,6 +175,7 @@ impl<'source> Parser<'source> {
             initializer: None,
             declaration_type: VariableDeclarationType::Mutable,
             is_shared: true,
+            residency: crate::ast::statement::BindingResidency::Host,
         };
 
         self.eat_statement_end()?;
@@ -242,6 +243,7 @@ impl<'source> Parser<'source> {
             initializer,
             declaration_type: declaration_type.clone(),
             is_shared: false,
+            residency: crate::ast::statement::BindingResidency::Host,
         })
     }
 
@@ -254,6 +256,7 @@ impl<'source> Parser<'source> {
             initializer: None,
             declaration_type: VariableDeclarationType::Immutable,
             is_shared: false,
+            residency: crate::ast::statement::BindingResidency::Host,
         })
     }
 
@@ -502,11 +505,14 @@ impl<'source> Parser<'source> {
             | 'for' VariableDeclarationList 'in' RangeExpression EXPRESSION_END BlockStatement
             ;
     */
-    /// Dispatches the two `gpu`-prefixed statement forms by examining the
-    /// token that follows `gpu`. `gpu for` becomes a [`StatementKind::GpuFor`];
-    /// anything else continues into the function declaration grammar with
-    /// `is_gpu` already set, so combinations like `gpu parallel fn` still
-    /// parse.
+    /// Dispatches the `gpu`-prefixed statement forms by examining the token
+    /// that follows `gpu`:
+    ///   * `gpu for ...` → [`StatementKind::GpuFor`].
+    ///   * `gpu let ...` / `gpu var ...` → an ordinary variable statement
+    ///     whose declarations carry [`BindingResidency::Gpu`].
+    ///   * anything else continues into the function declaration grammar
+    ///     with `is_gpu` already set, so combinations like `gpu parallel fn`
+    ///     still parse.
     pub(crate) fn gpu_statement(
         &mut self,
         visibility: MemberVisibility,
@@ -515,6 +521,20 @@ impl<'source> Parser<'source> {
 
         if self.match_lookahead_type(|t| t == &Token::For) {
             return self.gpu_for_statement();
+        }
+
+        if self.match_lookahead_type(|t| matches!(t, Token::Let | Token::Var)) {
+            return self.gpu_variable_statement(visibility);
+        }
+
+        if self.match_lookahead_type(|t| t == &Token::Const) {
+            return Err(SyntaxError::new(
+                SyntaxErrorKind::InvalidModifierCombination {
+                    combination: "gpu const".to_string(),
+                    reason: "Residency on a compile-time constant has no meaning.".to_string(),
+                },
+                self.current_token_span(),
+            ));
         }
 
         let mut properties = FunctionProperties {
@@ -528,6 +548,31 @@ impl<'source> Parser<'source> {
             super::declarations::class::BodyMode::Required,
             properties,
         )
+    }
+
+    /// Parses `let`/`var` after the `gpu` keyword has been consumed and
+    /// stamps every declaration with [`BindingResidency::Gpu`]. `gpu const`
+    /// is rejected — residency on a compile-time constant has no meaning.
+    fn gpu_variable_statement(
+        &mut self,
+        visibility: MemberVisibility,
+    ) -> Result<Statement, SyntaxError> {
+        let stmt = self.variable_statement(visibility)?;
+        let span = stmt.span;
+        let StatementKind::Variable(decls, vis) = stmt.node else {
+            return Err(self.error_unexpected_lookahead_token("let or var after 'gpu'"));
+        };
+        let decls = decls
+            .into_iter()
+            .map(|mut d| {
+                d.residency = crate::ast::statement::BindingResidency::Gpu;
+                d
+            })
+            .collect();
+        Ok(crate::ast::factory::stmt_with_span(
+            StatementKind::Variable(decls, vis),
+            span,
+        ))
     }
 
     fn continue_function_modifiers(

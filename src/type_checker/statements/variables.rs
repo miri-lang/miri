@@ -40,11 +40,12 @@
 //! - Return type compatibility
 
 use crate::ast::factory::make_type;
+use crate::ast::statement::BindingResidency;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, SymbolInfo};
-use crate::type_checker::utils::is_gpu_compatible;
+use crate::type_checker::utils::{is_accelerable, is_gpu_compatible};
 use crate::type_checker::TypeChecker;
 
 impl TypeChecker {
@@ -113,6 +114,7 @@ impl TypeChecker {
     ) {
         let inferred_type = self.determine_variable_type(decl, context, span);
         self.check_gpu_variable_type(&decl.name, &inferred_type, context, span);
+        self.check_gpu_residency_type(decl, &inferred_type, span);
         let is_mutable = matches!(decl.declaration_type, VariableDeclarationType::Mutable);
         let is_constant = matches!(decl.declaration_type, VariableDeclarationType::Constant);
 
@@ -127,7 +129,7 @@ impl TypeChecker {
 
         self.check_shadowing(&decl.name, is_mutable, is_constant, context, span);
 
-        let info = SymbolInfo::new(
+        let mut info = SymbolInfo::new(
             inferred_type,
             is_mutable,
             is_constant,
@@ -135,6 +137,7 @@ impl TypeChecker {
             self.current_module.clone(),
             const_value,
         );
+        info.residency = decl.residency;
 
         if context.scopes.len() == 1 {
             self.global_scope.insert(decl.name.clone(), info.clone());
@@ -162,6 +165,35 @@ impl TypeChecker {
             format!(
                 "Variable '{}' has type '{}' which is not GPU-compatible: only numeric primitives, booleans, and GPU types may be used inside a 'gpu fn'",
                 name, inferred_type
+            ),
+            span,
+        );
+    }
+
+    /// Rejects a `gpu let` / `gpu var` binding whose type does not implement the
+    /// `Accelerable` trait, and therefore cannot be made gpu-resident.
+    ///
+    /// Gating is by trait dispatch (see [`is_accelerable`]); host bindings are
+    /// never constrained.
+    fn check_gpu_residency_type(
+        &mut self,
+        decl: &VariableDeclaration,
+        inferred_type: &Type,
+        span: Span,
+    ) {
+        if decl.residency != BindingResidency::Gpu {
+            return;
+        }
+        if matches!(inferred_type.kind, TypeKind::Error) {
+            return;
+        }
+        if is_accelerable(&inferred_type.kind, &self.global_type_definitions) {
+            return;
+        }
+        self.report_error(
+            format!(
+                "'{}' does not implement 'Accelerable' and cannot be gpu-resident.",
+                inferred_type
             ),
             span,
         );

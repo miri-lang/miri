@@ -13,8 +13,8 @@ use super::context::{Context, TypeDefinition};
 use super::TypeChecker;
 use crate::ast::factory::make_type;
 use crate::ast::types::{
-    BuiltinCollectionKind, Type, TypeKind, DIM3_TYPE_NAME, GPU_ARRAY_TYPE_NAME,
-    GPU_CONTEXT_TYPE_NAME, KERNEL_TYPE_NAME,
+    BuiltinCollectionKind, Type, TypeKind, ACCELERABLE_TRAIT_NAME, DIM3_TYPE_NAME,
+    GPU_ARRAY_TYPE_NAME, GPU_CONTEXT_TYPE_NAME, KERNEL_TYPE_NAME,
 };
 use crate::ast::ExpressionKind;
 use crate::ast::*;
@@ -159,6 +159,140 @@ pub fn is_gpu_compatible(kind: &TypeKind) -> bool {
         | TypeKind::RawPtr
         | TypeKind::Identifier
         | TypeKind::Function(_) => false,
+    }
+}
+
+/// Determines whether a type may back a gpu-resident binding (`gpu let` /
+/// `gpu var`).
+///
+/// A type is *accelerable* when its bytes can be marshalled to device memory:
+/// - an `AccelerableScalar` primitive — `int`, `i32`/`i64`, `u32`/`u64`,
+///   `f32`/`f64`, `bool`;
+/// - a nominal type whose definition implements the stdlib `Accelerable` trait,
+///   provided every type argument is itself accelerable (this enforces the
+///   `T : AccelerableScalar` element bound on the stdlib `Array` / `List` impls
+///   without naming those types);
+/// - a tuple whose every element type is accelerable.
+///
+/// Dispatch is by the `Accelerable` trait, never by stdlib type name, so a
+/// future GPU-eligible container (e.g. `Tensor<T, Rank>`) becomes accelerable by
+/// shipping its `.mi` impl with no compiler edit (PRINCIPLES §1.4 / §5.3).
+pub fn is_accelerable(
+    kind: &TypeKind,
+    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+) -> bool {
+    accelerable_inner(kind, type_definitions, false)
+}
+
+/// True when a type does not *preclude* accelerability: it is accelerable, or a
+/// generic parameter whose concrete accelerability is enforced where the generic
+/// is instantiated.
+///
+/// Used to validate an `implements Accelerable` declaration, where field types
+/// may legitimately be generic parameters (`class Box<T> implements Accelerable`
+/// with a `T` field is sound — `Box<String>` is rejected at the use site, not
+/// here). The residency gate uses [`is_accelerable`] instead, which requires a
+/// concrete accelerable type.
+pub fn permits_accelerable(
+    kind: &TypeKind,
+    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+) -> bool {
+    accelerable_inner(kind, type_definitions, true)
+}
+
+/// Shared core of [`is_accelerable`] and [`permits_accelerable`]. `allow_generic`
+/// decides whether an unresolved generic parameter counts as accelerable: `false`
+/// at a residency binding (the type must be concrete), `true` when validating an
+/// impl declaration (the generic is resolved at the instantiation site).
+fn accelerable_inner(
+    kind: &TypeKind,
+    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+    allow_generic: bool,
+) -> bool {
+    match kind {
+        TypeKind::Int
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::F32
+        | TypeKind::F64
+        | TypeKind::Boolean => true,
+
+        TypeKind::Generic(_, _, _) => allow_generic,
+
+        TypeKind::Tuple(elements) => elements
+            .iter()
+            .all(|elem| expr_type_is_accelerable(elem, type_definitions, allow_generic)),
+
+        TypeKind::Custom(name, args) => {
+            type_implements_accelerable(name, type_definitions)
+                && type_args_are_accelerable(args.as_deref(), type_definitions, allow_generic)
+        }
+
+        TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I128
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U128
+        | TypeKind::Float
+        | TypeKind::Void
+        | TypeKind::Error
+        | TypeKind::String
+        | TypeKind::List(_)
+        | TypeKind::Array(_, _)
+        | TypeKind::Map(_, _)
+        | TypeKind::Set(_)
+        | TypeKind::Result(_, _)
+        | TypeKind::Future(_)
+        | TypeKind::Option(_)
+        | TypeKind::Linear(_)
+        | TypeKind::Meta(_)
+        | TypeKind::RawPtr
+        | TypeKind::Identifier
+        | TypeKind::Function(_) => false,
+    }
+}
+
+/// Trait-dispatch core of [`is_accelerable`]: does the named type's definition
+/// list the `Accelerable` trait? Only class definitions carry a trait list; the
+/// stdlib `Array` / `List` classes opt in via `implements ... Accelerable`.
+fn type_implements_accelerable(
+    name: &str,
+    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+) -> bool {
+    match type_definitions.get(name) {
+        Some(TypeDefinition::Class(def)) => def
+            .traits
+            .iter()
+            .any(|trait_name| trait_name == ACCELERABLE_TRAIT_NAME),
+        _ => false,
+    }
+}
+
+/// Every type-valued generic argument must itself be accelerable. Value generics
+/// (e.g. the `Size` of `Array<T, Size>`) are not types and impose no constraint.
+fn type_args_are_accelerable(
+    args: Option<&[crate::ast::expression::Expression]>,
+    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+    allow_generic: bool,
+) -> bool {
+    let Some(args) = args else { return true };
+    args.iter().all(|arg| match &arg.node {
+        ExpressionKind::Type(ty, _) => accelerable_inner(&ty.kind, type_definitions, allow_generic),
+        _ => true,
+    })
+}
+
+fn expr_type_is_accelerable(
+    expr: &crate::ast::expression::Expression,
+    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+    allow_generic: bool,
+) -> bool {
+    match &expr.node {
+        ExpressionKind::Type(ty, _) => accelerable_inner(&ty.kind, type_definitions, allow_generic),
+        _ => false,
     }
 }
 

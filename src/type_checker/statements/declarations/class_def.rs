@@ -40,13 +40,14 @@
 //! - Return type compatibility
 
 use crate::ast::factory::make_type;
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::{Type, TypeKind, ACCELERABLE_TRAIT_NAME};
 use crate::ast::*;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{
     ClassDefinition, Context, FieldInfo, MethodInfo, SymbolInfo, TypeDefinition,
 };
 use crate::type_checker::statements::declarations::FunctionDeclarationInfo;
+use crate::type_checker::utils::permits_accelerable;
 use crate::type_checker::TypeChecker;
 use std::collections::{BTreeMap, HashMap};
 
@@ -89,6 +90,8 @@ impl TypeChecker {
         context.enter_class(name.clone(), base_class_name.clone(), class_type);
 
         let (fields, methods, method_statements) = self.check_class_collect_members(body, context);
+
+        self.check_accelerable_impl(&name, &trait_names, &fields, name_expr);
 
         self.run_class_validations(
             &name,
@@ -368,6 +371,35 @@ impl TypeChecker {
     }
 
     /// Validate traits and extract their names and generic arguments
+    /// Rejects an `implements Accelerable` declaration whose type cannot actually
+    /// live on an accelerator: every field must itself be accelerable (or a
+    /// generic parameter, whose concrete accelerability is enforced at the
+    /// instantiation site). This stops a type from claiming the capability while
+    /// holding, say, a `String` or `Map<K, V>` field.
+    fn check_accelerable_impl(
+        &mut self,
+        name: &str,
+        trait_names: &[String],
+        fields: &[(String, FieldInfo)],
+        name_expr: &Expression,
+    ) {
+        if !trait_names.iter().any(|t| t == ACCELERABLE_TRAIT_NAME) {
+            return;
+        }
+        for (field_name, field) in fields {
+            if permits_accelerable(&field.ty.kind, &self.global_type_definitions) {
+                continue;
+            }
+            self.report_error(
+                format!(
+                    "'{}' implements 'Accelerable' but field '{}' has type '{}', which is not accelerable; every field of an 'Accelerable' type must itself be accelerable.",
+                    name, field_name, field.ty
+                ),
+                name_expr.span,
+            );
+        }
+    }
+
     fn check_class_traits(
         &mut self,
         traits: &[Expression],

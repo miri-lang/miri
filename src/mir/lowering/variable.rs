@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::ast::statement::VariableDeclaration;
+use crate::ast::statement::{BindingResidency as AstResidency, VariableDeclaration};
 use crate::error::syntax::Span;
+use crate::mir::body::BindingResidency as MirResidency;
 use crate::mir::types::MirType;
 use crate::mir::{Place, Rvalue, StatementKind as MirStatementKind, StorageClass};
 
@@ -41,6 +42,11 @@ pub fn lower_variable(
         if decl.is_shared {
             ctx.body.local_decls[local.0].storage_class = StorageClass::GpuShared;
         }
+
+        ctx.body.local_decls[local.0].residency = match decl.residency {
+            AstResidency::Host => MirResidency::Host,
+            AstResidency::Gpu => MirResidency::Gpu,
+        };
 
         if let Some(init_expr) = init_expr_opt {
             let dest = Place::new(local);

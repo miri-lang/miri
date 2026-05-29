@@ -54,6 +54,20 @@ pub enum VariableDeclarationType {
     Constant,
 }
 
+/// Where a binding's value physically lives. Residency is a binding
+/// attribute orthogonal to the value's type — the same `Array<int, 3>`
+/// can be either host- or gpu-resident. The `gpu` keyword on a `let` /
+/// `var` is the only source of `Gpu`; absence of the keyword means
+/// `Host`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum BindingResidency {
+    /// Standard host-side binding (`let x = ...`, `var x = ...`).
+    #[default]
+    Host,
+    /// Device-resident binding (`gpu let x = ...`, `gpu var x = ...`).
+    Gpu,
+}
+
 /// Represents a variable declaration
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct VariableDeclaration {
@@ -62,6 +76,7 @@ pub struct VariableDeclaration {
     pub initializer: Option<Box<Expression>>,
     pub declaration_type: VariableDeclarationType,
     pub is_shared: bool,
+    pub residency: BindingResidency,
 }
 
 /// Represents a statement kind

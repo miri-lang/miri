@@ -5,6 +5,7 @@ use system.collections.transformable
 use system.collections.foldable
 use system.collections.sequenced
 use system.memory
+use system.accelerator
 
 /// A fixed-size array with elements of a single type.
 ///
@@ -20,7 +21,7 @@ use system.memory
 ///     for x in a
 ///         println(f"{x}")
 
-public class Array<T, Size> implements Queryable<T>, Iterable<T>, Cloneable, Transformable<T>, Foldable<T>, Sequenced<T>
+public class Array<T, Size> implements Queryable<T>, Iterable<T>, Cloneable, Transformable<T>, Foldable<T>, Sequenced<T>, Accelerable
 
     runtime "core" fn miri_rt_array_new(count int, elem_size int) Self
     runtime "core" fn miri_rt_array_free(a Self)
