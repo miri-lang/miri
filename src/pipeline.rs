@@ -9,8 +9,8 @@ use crate::ast::factory::{
 use crate::ast::statement::{Statement, StatementKind};
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::Program;
-use crate::cli::args::{BuildTarget, CpuBackend};
 use crate::codegen::Backend;
+use crate::codegen::{BuildTarget, CpuBackend};
 use crate::error::compiler::CompilerError;
 use crate::error::syntax::Span;
 use crate::lexer::Lexer;
