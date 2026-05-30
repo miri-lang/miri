@@ -609,6 +609,23 @@ impl Pipeline {
         Ok(out_path)
     }
 
+    /// Extract an identifier name from an expression, if it is a simple identifier.
+    fn identifier_name(expr: &crate::ast::Expression) -> Option<&str> {
+        if let ExpressionKind::Identifier(name, _) = &expr.node {
+            Some(name.as_str())
+        } else {
+            None
+        }
+    }
+
+    fn mangle_method_name(class_name: &str, method_name: &str) -> String {
+        let mut mangled = String::with_capacity(class_name.len() + 1 + method_name.len());
+        mangled.push_str(class_name);
+        mangled.push('_');
+        mangled.push_str(method_name);
+        mangled
+    }
+
     fn lower_to_mir(
         &self,
         result: &PipelineResult,
@@ -617,6 +634,63 @@ impl Pipeline {
         let mut bodies = Vec::new();
         let mut lowered_names = std::collections::HashSet::new();
 
+        self.lower_program_bodies(result, is_release, &mut bodies, &mut lowered_names)?;
+        self.lower_imported_bodies(result, is_release, &mut bodies, &mut lowered_names)?;
+        self.lower_inherited_methods(result, is_release, &mut bodies, &mut lowered_names)?;
+        self.lower_trait_default_methods(result, is_release, &mut bodies, &mut lowered_names)?;
+
+        if bodies.is_empty() {
+            return Err(CompilerError::Codegen(
+                "No functions found to compile".to_string(),
+            ));
+        }
+
+        self.lower_monomorphized_generics(result, is_release, &mut bodies, &mut lowered_names)?;
+
+        // Insert Perceus RC operations on all function bodies, exactly once,
+        // after all optimization passes have converged.
+        for (_name, body) in &mut bodies {
+            mir::optimization::insert_rc(body);
+        }
+
+        // Elide redundant IncRef/DecRef pairs identified by the RC elision pass.
+        // This runs after Perceus to remove pairs that are provably net-zero.
+        for (_name, body) in &mut bodies {
+            mir::optimization::elide_rc(body);
+        }
+
+        // Optional MIR verification pass: check RC invariants after Perceus.
+        // Enabled by setting the MIRI_VERIFY_MIR environment variable to any
+        // non-empty value, or by configuring it on the Pipeline instance.
+        if self.verify_mir || std::env::var("MIRI_VERIFY_MIR").is_ok() {
+            let mut all_violations = Vec::new();
+            for (name, body) in &bodies {
+                let violations = mir::verify::verify_body(body);
+                for v in violations {
+                    all_violations.push(format!("  fn {}: {}", name, v));
+                }
+            }
+            if !all_violations.is_empty() {
+                return Err(CompilerError::MirVerification(format!(
+                    "RC invariant violations detected in {} function(s):\n{}",
+                    all_violations.len(),
+                    all_violations.join("\n")
+                )));
+            }
+        }
+
+        Ok(bodies)
+    }
+
+    /// Lower top-level functions and the methods of every class/trait/struct/enum
+    /// declared in the user's program AST.
+    fn lower_program_bodies(
+        &self,
+        result: &PipelineResult,
+        is_release: bool,
+        bodies: &mut Vec<(String, mir::Body)>,
+        lowered_names: &mut std::collections::HashSet<String>,
+    ) -> Result<(), CompilerError> {
         // Lower functions and class methods from the program AST
         for stmt in &result.ast.body {
             match &stmt.node {
@@ -634,12 +708,9 @@ impl Pipeline {
                     }
                 }
                 StatementKind::Class(class_data) => {
-                    let class_name =
-                        if let ExpressionKind::Identifier(name, _) = &class_data.name.node {
-                            name.as_str()
-                        } else {
-                            continue;
-                        };
+                    let Some(class_name) = Self::identifier_name(&class_data.name) else {
+                        continue;
+                    };
 
                     let self_type =
                         Type::new(TypeKind::Custom(class_name.to_string(), None), stmt.span);
@@ -672,12 +743,7 @@ impl Pipeline {
                                 method_decl.name
                             );
 
-                            let mut mangled = String::with_capacity(
-                                class_name.len() + 1 + method_decl.name.len(),
-                            );
-                            mangled.push_str(class_name);
-                            mangled.push('_');
-                            mangled.push_str(&method_decl.name);
+                            let mangled = Self::mangle_method_name(class_name, &method_decl.name);
                             if lowered_names.contains(&mangled) {
                                 continue;
                             }
@@ -706,9 +772,7 @@ impl Pipeline {
                 }
                 StatementKind::Trait(name_expr, _generics, _parent_traits, body, _vis) => {
                     // Compile default (non-abstract) trait methods as `TraitName_methodName`.
-                    let trait_name = if let ExpressionKind::Identifier(name, _) = &name_expr.node {
-                        name.as_str()
-                    } else {
+                    let Some(trait_name) = Self::identifier_name(name_expr) else {
                         continue;
                     };
 
@@ -722,12 +786,7 @@ impl Pipeline {
                                 continue;
                             }
 
-                            let mut mangled = String::with_capacity(
-                                trait_name.len() + 1 + method_decl.name.len(),
-                            );
-                            mangled.push_str(trait_name);
-                            mangled.push('_');
-                            mangled.push_str(&method_decl.name);
+                            let mangled = Self::mangle_method_name(trait_name, &method_decl.name);
                             if lowered_names.contains(&mangled) {
                                 continue;
                             }
@@ -760,9 +819,7 @@ impl Pipeline {
                     // declare `self` explicitly in their param list, so lower_class_method
                     // would double-add it. lower_function treats `self` as a regular param
                     // with synthesized type Custom("Self") which Perceus skips RC-tracking.
-                    let struct_name = if let ExpressionKind::Identifier(name, _) = &name_expr.node {
-                        name.as_str()
-                    } else {
+                    let Some(struct_name) = Self::identifier_name(name_expr) else {
                         continue;
                     };
 
@@ -772,12 +829,7 @@ impl Pipeline {
                                 continue;
                             }
 
-                            let mut mangled = String::with_capacity(
-                                struct_name.len() + 1 + method_decl.name.len(),
-                            );
-                            mangled.push_str(struct_name);
-                            mangled.push('_');
-                            mangled.push_str(&method_decl.name);
+                            let mangled = Self::mangle_method_name(struct_name, &method_decl.name);
                             if lowered_names.contains(&mangled) {
                                 continue;
                             }
@@ -807,9 +859,7 @@ impl Pipeline {
                 StatementKind::Enum(name_expr, _generics, _variants, methods, _vis, _must_use) => {
                     // Compile enum methods as `EnumName_methodName` using lower_class_method.
                     // Enum methods have no explicit `self` in their param list (like class methods).
-                    let enum_name = if let ExpressionKind::Identifier(name, _) = &name_expr.node {
-                        name.as_str()
-                    } else {
+                    let Some(enum_name) = Self::identifier_name(name_expr) else {
                         continue;
                     };
 
@@ -824,11 +874,7 @@ impl Pipeline {
                                 continue;
                             }
 
-                            let mut mangled =
-                                String::with_capacity(enum_name.len() + 1 + method_decl.name.len());
-                            mangled.push_str(enum_name);
-                            mangled.push('_');
-                            mangled.push_str(&method_decl.name);
+                            let mangled = Self::mangle_method_name(enum_name, &method_decl.name);
                             if lowered_names.contains(&mangled) {
                                 continue;
                             }
@@ -858,7 +904,18 @@ impl Pipeline {
                 _ => {}
             }
         }
+        Ok(())
+    }
 
+    /// Lower functions and methods imported from stdlib `.mi` modules that were
+    /// not already lowered from the program AST.
+    fn lower_imported_bodies(
+        &self,
+        result: &PipelineResult,
+        is_release: bool,
+        bodies: &mut Vec<(String, mir::Body)>,
+        lowered_names: &mut std::collections::HashSet<String>,
+    ) -> Result<(), CompilerError> {
         // Lower functions and class methods imported from stdlib modules
         for stmt in &result.type_checker.imported_statements {
             match &stmt.node {
@@ -877,12 +934,9 @@ impl Pipeline {
                 }
                 StatementKind::Class(class_data) => {
                     // Extract the class name string
-                    let class_name =
-                        if let ExpressionKind::Identifier(name, _) = &class_data.name.node {
-                            name.as_str()
-                        } else {
-                            continue;
-                        };
+                    let Some(class_name) = Self::identifier_name(&class_data.name) else {
+                        continue;
+                    };
 
                     // Build the `self` type for this class
                     let self_type =
@@ -917,12 +971,7 @@ impl Pipeline {
                                 method_decl.name
                             );
 
-                            let mut mangled = String::with_capacity(
-                                class_name.len() + 1 + method_decl.name.len(),
-                            );
-                            mangled.push_str(class_name);
-                            mangled.push('_');
-                            mangled.push_str(&method_decl.name);
+                            let mangled = Self::mangle_method_name(class_name, &method_decl.name);
                             if lowered_names.contains(&mangled) {
                                 continue;
                             }
@@ -950,9 +999,7 @@ impl Pipeline {
                     }
                 }
                 StatementKind::Enum(name_expr, _generics, _variants, methods, _vis, _must_use) => {
-                    let enum_name = if let ExpressionKind::Identifier(name, _) = &name_expr.node {
-                        name.as_str()
-                    } else {
+                    let Some(enum_name) = Self::identifier_name(name_expr) else {
                         continue;
                     };
 
@@ -965,11 +1012,7 @@ impl Pipeline {
                                 continue;
                             }
 
-                            let mut mangled =
-                                String::with_capacity(enum_name.len() + 1 + method_decl.name.len());
-                            mangled.push_str(enum_name);
-                            mangled.push('_');
-                            mangled.push_str(&method_decl.name);
+                            let mangled = Self::mangle_method_name(enum_name, &method_decl.name);
                             if lowered_names.contains(&mangled) {
                                 continue;
                             }
@@ -999,9 +1042,7 @@ impl Pipeline {
                 StatementKind::Trait(name_expr, _generics, _parent_traits, body, _vis) => {
                     // Compile default (non-abstract) trait methods imported from stdlib
                     // as `TraitName_methodName`, mirroring the in-program AST trait pass.
-                    let trait_name = if let ExpressionKind::Identifier(name, _) = &name_expr.node {
-                        name.as_str()
-                    } else {
+                    let Some(trait_name) = Self::identifier_name(name_expr) else {
                         continue;
                     };
 
@@ -1014,12 +1055,7 @@ impl Pipeline {
                                 continue;
                             }
 
-                            let mut mangled = String::with_capacity(
-                                trait_name.len() + 1 + method_decl.name.len(),
-                            );
-                            mangled.push_str(trait_name);
-                            mangled.push('_');
-                            mangled.push_str(&method_decl.name);
+                            let mangled = Self::mangle_method_name(trait_name, &method_decl.name);
                             if lowered_names.contains(&mangled) {
                                 continue;
                             }
@@ -1049,20 +1085,24 @@ impl Pipeline {
                 _ => {}
             }
         }
+        Ok(())
+    }
 
-        // ── Per-concrete-class inherited-method compilation ──────────────────────
-        //
-        // When a concrete class C (e.g. Array, Car) inherits a non-abstract method
-        // from an abstract ancestor B (e.g. Collection, Vehicle), `resolve_inherited_method`
-        // returns C's name so that static dispatch calls `C_method` instead of `B_method`.
-        // `B_method` internally uses virtual dispatch for abstract sub-calls, which
-        // crashes for objects that carry no vtable pointer (Array, List).
-        //
-        // We therefore re-lower B's method body with self_type = C, naming the
-        // result `C_method`.  The compiled code calls `C_length`, `C_element_at`,
-        // etc. via *static* dispatch — correct and efficient for every concrete type.
-        //
-        // This pass covers both user-defined and stdlib classes.
+    /// Re-lower abstract-ancestor methods per concrete class.
+    ///
+    /// When a concrete class C inherits a non-abstract method from an abstract
+    /// ancestor B, `resolve_inherited_method` returns C's name so static dispatch
+    /// calls `C_method` instead of `B_method`. `B_method` uses virtual dispatch for
+    /// abstract sub-calls, which crashes for objects with no vtable (Array, List).
+    /// We re-lower B's method body with self_type = C, naming the result `C_method`,
+    /// so calls resolve via static dispatch. Covers user-defined and stdlib classes.
+    fn lower_inherited_methods(
+        &self,
+        result: &PipelineResult,
+        is_release: bool,
+        bodies: &mut Vec<(String, mir::Body)>,
+        lowered_names: &mut std::collections::HashSet<String>,
+    ) -> Result<(), CompilerError> {
         {
             use crate::type_checker::context::TypeDefinition;
 
@@ -1080,10 +1120,7 @@ impl Pipeline {
 
             for stmt in all_stmts {
                 if let StatementKind::Class(class_data) = &stmt.node {
-                    let class_name = if let ExpressionKind::Identifier(n, _) = &class_data.name.node
-                    {
-                        n.as_str()
-                    } else {
+                    let Some(class_name) = Self::identifier_name(&class_data.name) else {
                         continue;
                     };
                     let is_abstract = matches!(
@@ -1116,10 +1153,7 @@ impl Pipeline {
 
             for stmt in all_stmts2 {
                 if let StatementKind::Class(class_data) = &stmt.node {
-                    let class_name = if let ExpressionKind::Identifier(n, _) = &class_data.name.node
-                    {
-                        n.as_str()
-                    } else {
+                    let Some(class_name) = Self::identifier_name(&class_data.name) else {
                         continue;
                     };
                     let cd = match result.type_checker.global_type_definitions.get(class_name) {
@@ -1187,17 +1221,26 @@ impl Pipeline {
                 }
             }
         }
+        Ok(())
+    }
 
-        // ── Per-concrete-class trait-default re-lowering ─────────────────────────
-        //
-        // Mirrors the abstract-class pass above for traits. When a concrete class C
-        // implements a trait T with a non-abstract default method M, we synthesize
-        // `C_M` by re-lowering T.M's body with self_type = C. This lets
-        // `resolve_inherited_method` return C as the defining class (concrete-caller
-        // rule), so calls dispatch statically to `C_M`. Inside C_M, self-calls like
-        // `self.length()` also dispatch statically because self_type is concrete —
-        // avoiding the slot-mismatch issue between per-trait and combined-vtable
-        // method layouts.
+    /// Re-lower trait default methods per concrete class.
+    ///
+    /// Mirrors `lower_inherited_methods` for traits. When a concrete class C
+    /// implements a trait T with a non-abstract default method M, we synthesize
+    /// `C_M` by re-lowering T.M's body with self_type = C. This lets
+    /// `resolve_inherited_method` return C as the defining class (concrete-caller
+    /// rule), so calls dispatch statically to `C_M`. Inside C_M, self-calls like
+    /// `self.length()` also dispatch statically because self_type is concrete —
+    /// avoiding the slot-mismatch issue between per-trait and combined-vtable
+    /// method layouts.
+    fn lower_trait_default_methods(
+        &self,
+        result: &PipelineResult,
+        is_release: bool,
+        bodies: &mut Vec<(String, mir::Body)>,
+        lowered_names: &mut std::collections::HashSet<String>,
+    ) -> Result<(), CompilerError> {
         {
             use crate::type_checker::context::TypeDefinition;
 
@@ -1214,9 +1257,7 @@ impl Pipeline {
 
             for stmt in all_stmts {
                 if let StatementKind::Trait(name_expr, _gens, _parents, body, _vis) = &stmt.node {
-                    let trait_name = if let ExpressionKind::Identifier(n, _) = &name_expr.node {
-                        n.as_str()
-                    } else {
+                    let Some(trait_name) = Self::identifier_name(name_expr) else {
                         continue;
                     };
                     let entry = trait_default_methods
@@ -1245,9 +1286,7 @@ impl Pipeline {
                     StatementKind::Class(cd) => cd,
                     _ => continue,
                 };
-                let class_name = if let ExpressionKind::Identifier(n, _) = &class_data.name.node {
-                    n.as_str()
-                } else {
+                let Some(class_name) = Self::identifier_name(&class_data.name) else {
                     continue;
                 };
                 let cd = match result.type_checker.global_type_definitions.get(class_name) {
@@ -1349,15 +1388,19 @@ impl Pipeline {
                 }
             }
         }
+        Ok(())
+    }
 
-        if bodies.is_empty() {
-            return Err(CompilerError::Codegen(
-                "No functions found to compile".to_string(),
-            ));
-        }
-
-        // Monomorphization pass: collect all calls to mangled generic function names,
-        // then re-lower the original generic function for each unique instantiation.
+    /// Monomorphize generic functions: collect every call to a mangled generic name
+    /// in the already-lowered bodies, then re-lower the original generic for each
+    /// unique instantiation.
+    fn lower_monomorphized_generics(
+        &self,
+        result: &PipelineResult,
+        is_release: bool,
+        bodies: &mut Vec<(String, mir::Body)>,
+        lowered_names: &mut std::collections::HashSet<String>,
+    ) -> Result<(), CompilerError> {
         {
             // Build a map from original function name → AST statement for quick lookup.
             let mut ast_func_map: std::collections::HashMap<&str, &Statement> =
@@ -1403,7 +1446,7 @@ impl Pipeline {
 
             // Scan all lowered bodies for calls to names containing "__" that look
             // like mangled generics (base__type1__type2…).
-            for (_, body) in &bodies {
+            for (_, body) in &*bodies {
                 for block in &body.basic_blocks {
                     if let Some(term) = &block.terminator {
                         if let mir::TerminatorKind::Call {
@@ -1466,40 +1509,7 @@ impl Pipeline {
                 }
             }
         }
-
-        // Insert Perceus RC operations on all function bodies, exactly once,
-        // after all optimization passes have converged.
-        for (_name, body) in &mut bodies {
-            mir::optimization::insert_rc(body);
-        }
-
-        // Elide redundant IncRef/DecRef pairs identified by the RC elision pass.
-        // This runs after Perceus to remove pairs that are provably net-zero.
-        for (_name, body) in &mut bodies {
-            mir::optimization::elide_rc(body);
-        }
-
-        // Optional MIR verification pass: check RC invariants after Perceus.
-        // Enabled by setting the MIRI_VERIFY_MIR environment variable to any
-        // non-empty value, or by configuring it on the Pipeline instance.
-        if self.verify_mir || std::env::var("MIRI_VERIFY_MIR").is_ok() {
-            let mut all_violations = Vec::new();
-            for (name, body) in &bodies {
-                let violations = mir::verify::verify_body(body);
-                for v in violations {
-                    all_violations.push(format!("  fn {}: {}", name, v));
-                }
-            }
-            if !all_violations.is_empty() {
-                return Err(CompilerError::MirVerification(format!(
-                    "RC invariant violations detected in {} function(s):\n{}",
-                    all_violations.len(),
-                    all_violations.join("\n")
-                )));
-            }
-        }
-
-        Ok(bodies)
+        Ok(())
     }
 
     /// Get MIR as a string for debugging purposes (pre-RC).
