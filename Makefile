@@ -72,12 +72,18 @@ audit:
 		| awk -F: '{print "  "$$1":"$$2}' \
 		| sort -u || true
 	@echo
-	@echo "§5.3 — stdlib name leaks in dispatch (codegen/mir/type_checker dispatch only):"
+	@echo "§5.3 — stdlib name leaks in compiler code (all of src/ except src/stdlib"
+	@echo "        and src/ast/types.rs, the sanctioned single home for the name constants;"
+	@echo "        comment lines filtered out). Count per file — any non-zero is a candidate"
+	@echo "        for routing through the type table instead of a string literal:"
 	@grep -rEn --include='*.rs' --exclude-dir=target \
-		'"(List|Set|Option|Map|String|Array)"' \
-		src/codegen/ src/mir/ src/type_checker/dispatch* src/type_checker/method* 2>/dev/null \
-		| awk -F: '{print "  "$$1":"$$2}' \
-		| sort -u || true
+		'"(List|Set|Option|Map|String|Array)"' src/ 2>/dev/null \
+		| grep -v '/stdlib/' \
+		| grep -v 'src/ast/types.rs:' \
+		| grep -vE ':[0-9]+:[[:space:]]*///?' \
+		| awk -F: '{c[$$1]++} END {for (f in c) print c[f]"\t"f}' \
+		| sort -rn \
+		| awk '{print "  "$$1"\t"$$2}' || true
 	@echo
 	@echo "§3.5 — broad '_ =>' arms in Miri-defined match sites:"
 	@grep -rn --include='*.rs' --exclude-dir=target '_ =>' \

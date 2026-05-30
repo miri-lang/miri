@@ -78,8 +78,9 @@ A task is **not done** until each acceptance criterion has gone through all thre
 - **Integration Tests**: Located in `tests/integration/`. Use helpers in `tests/integration/utils.rs`:
     - `assert_runs(code)`: High-level success check.
     - `assert_runs_with_output(code, expected)`: Check for specific output.
-    - `assert_compiler_error(code, "message")`: Test negative cases.
-    - `assert_runtime_error(code, "message")`: Test runtime panics.
+    - `assert_compiler_error(code, "message")`: Test negative cases (compile-time).
+    - `assert_runtime_error(code, "message")`: Expect a runtime error carrying `message`.
+    - `assert_runtime_crash(code)`: Expect the program to crash/abort at runtime.
 - **Running Tests**:
     - **CRITICAL**: The integration test binary is named `mod`, NOT `integration`. Always use `--test mod`.
     - Full suite: `cargo test --test mod`
@@ -98,7 +99,7 @@ A task is **not done** until each acceptance criterion has gone through all thre
 ## 5. Workflow Best Practices for AI Agents
 To work efficiently and hit fewer roadblocks:
 
-1. **Research First**: Use `grep_search` to find examples of similar patterns (e.g., "how is `if` implemented in MIR?").
+1. **Research First**: Use `Grep` (or the `miri-explorer` agent) to find examples of similar patterns (e.g., "how is `if` implemented in MIR?").
 2. **Incremental Changes**: Complete one phase (e.g., Type Checker) with passing tests before moving to the next (e.g., MIR lowering).
 3. **No Brute Force**: If you encounter a compilation error, analyze the `MiriError` or Rust error. Don't just `sed` the code.
 4. **Update READMEs**: If you change a module's core logic, update its local `README.md`.
