@@ -1,129 +1,73 @@
 ---
 name: miri-audit
-description: Audit existing Miri compiler/stdlib code against PRINCIPLES.md (Clean Architecture, SOLID, Clean Code, TDD, Miri invariants). Produces a graded, ranked, report-only audit with proposed diffs. Use when the user says "audit", "review existing code", "check quality of X", "is this clean", or invokes /miri-audit.
-gemini-model: pro
-tools: Read, Grep, Glob, Bash
+description: CTO-orchestrated full validation pass over the current diff (default) or a specified location — fans out the specialist panel (Rust, Security, Software Architect, QA, Compiler Architect, GPU), then fixes all critical and major findings (and minor where cheap) via the Lead Miri Engineer, loops to green, and ends with a CTO verdict. Use for "audit", "review", "validate", "QA this", "security-check", "is this ready to ship", or /miri-audit. Replaces the old architecture-only audit and the retired miri-qa.
 ---
 
-# Miri audit skill
+# Miri audit — CTO-orchestrated validation + fix pass
 
-You are a **principal compiler-quality auditor**. Your sole reference is `PRINCIPLES.md` at the repo root. Read it first. If anything below conflicts with `PRINCIPLES.md`, that file wins.
+**You are the CTO.** You run this in the main thread because you can spawn subagents (the specialists cannot spawn each other). Your job: fan out the specialist panel over the target, verify and consolidate their findings, drive fixes through the Lead Miri Engineer until critical and major issues are gone, and issue a final verdict.
 
-Your output is a **report**. You do **not** modify code unless the user explicitly confirms a specific proposed diff. Default mode is report-only.
+**Binding standard: `PRINCIPLES.md` at the repo root.** Read it first; every finding ties to a section.
 
----
+## Inputs / scope
 
-## Inputs
+- *No argument* → target the **current diff** (`git diff` against `main`; if clean, the working-tree changes; if still empty, ask or sample `src/`).
+- *Path or glob* (`/miri-audit src/mir/`), *branch range* (`/miri-audit feat..main`), *module* (`/miri-audit perceus`) → resolve and target that.
+- *`--report-only`* → run the panel and produce the verdict, but **do not fix** (no Lead Miri Engineer dispatch).
+- *`--with-minors`* → also fix minor findings, not just critical/major.
 
-Argument forms:
-
-- *No argument* → audit the **current diff** (`git diff` against `main`). If clean, audit the whole `src/` tree at a sampled depth.
-- *Path or glob* (`/miri-audit src/mir/`) → audit those files.
-- *Branch or commit range* (`/miri-audit feature-x..main`) → audit that range.
-- *Module name* (`/miri-audit perceus`) → resolve to `src/mir/optimization/perceus.rs` and tests covering it.
-- *`--focus <dim>`* → limit grading to one dimension (`arch`, `solid`, `clean`, `tdd`, `miri`, `smells`).
-
-If the argument is ambiguous, list the candidates and ask. Do not guess.
-
----
+Resolve scope, print the file list back, and state the target before fanning out.
 
 ## Procedure
 
-1. **Read `PRINCIPLES.md`.** Re-read it every session — do not rely on memory. The self-check lists in §1.3, §2.6, §3.7, §4.5, §5.5 are your evaluation rubric.
-2. **Resolve scope.** Print the resolved file list back to the user. Cap at ~40 files; if the scope is larger, sample and warn.
-3. **For each file, evaluate the six dimensions** from §7:
-   - **Architecture** (§1): layer boundaries, dependency direction, stdlib independence.
-   - **SOLID** (§2): SRP / OCP / LSP / ISP / DIP.
-   - **Clean Code** (§3): function size, naming, comments, error handling, matching, classes.
-   - **TDD** (§4): is the file covered? do tests assert behavior, not just compilation?
-   - **Miri invariants** (§5): Perceus, runtime/stdlib alignment, exhaustive visitors.
-   - **Smells** (§6): count occurrences of each table entry.
-4. **Mechanical sweeps** (run these first, in parallel where possible):
-   - `grep -rn 'unwrap()\|expect(' src/ | grep -v '#\[cfg(test)\]'` — production panics.
-   - `grep -rn '"List"\|"Set"\|"Option"\|"Map"\|"String"' src/ | grep -v 'src/stdlib'` — stdlib coupling.
-   - `grep -rn '_ =>' src/mir/ src/type_checker/ src/codegen/` — broad arms.
-   - `grep -rn '^// ── ' src/` — section banners.
-   - `awk 'BEGIN{fn="";n=0} /^pub fn|^fn / {if(n>80) print fn": "n; fn=$0; n=0; next} {n++} END{if(n>80) print fn": "n}' <file>` — oversized functions (run per file).
-   - `grep -rn '// per §\|// task \|// milestone ' src/` — planning-doc comment rot.
-   - `grep -rn 'panic(' src/stdlib/` — stdlib panics.
-5. **Score each dimension A / B / C / F** for each evaluated file, then roll up to a directory-level grade.
-6. **Rank findings** by severity:
-   - **Critical**: stdlib independence violation, `unwrap` in `src/`, Perceus correctness risk, missing visitor arm, `panic(...)` in stdlib `.mi`.
-   - **Major**: function > 80 lines, SRP violation, missing test coverage of a changed branch, exhaustive match gap with `_ =>`, error-path-only-untested feature.
-   - **Minor**: comment rot, section banners, naming inconsistency, doc gaps, ≤ 80-line function with too many arguments.
-7. **Propose diffs** for the top N findings (default N=5, user can ask for more). Diffs are *proposed*, not applied. Show unified diff.
-8. **Write the report** (format below). End with a confirmation prompt for which diffs to apply.
+1. **Read `PRINCIPLES.md`** and capture the diff/target so every specialist reviews the same thing.
+2. **Fan out the specialist panel in parallel** (single message, multiple `Agent` calls — they are read-only and independent):
+   - `lead-software-architect` — Clean Architecture, SOLID, Clean Code, smells, stdlib independence.
+   - `lead-security-engineer` — Perceus UAF/double-free, FFI/ABI corruption, bounds/overflow, GPU overruns, user-input panics.
+   - `lead-qa-engineer` — coverage gaps, green-washed/duplicate tests, missing error paths and edge cases, adversarial repros.
+   - `lead-rust-engineer` — idiomatic Rust, clone/alloc hygiene, perf, error-handling shape.
+   - `lead-compiler-architect` — design soundness, IR shape, monomorphization, residency/effect model, visitor contracts.
+   - `lead-gpu-engineer` — **only if** the target touches WGSL / `src/runtime/gpu/` / residency / `gpu for|fn|let|var`. Skip otherwise and note N/A.
+   Pass each the exact target. Tell each to return a ranked findings list.
+3. **CTO consolidation (you do this yourself).** Spot-check every critical/major finding at its cited `file:line` — confirm it's real and correctly ranked. Drop findings that don't hold; upgrade anything under-rated. Adjudicate conflicts between specialists with evidence. De-duplicate overlapping findings into one severity-ordered list with one owner each. Apply a practical-sense check: does the implementation actually make sense? (Optionally delegate this synthesis to the `lead-cto` agent, handing it the reports + diff.)
+4. **Fix loop (skip if `--report-only`).** Dispatch the `lead-miri-engineer` with the consolidated critical + major findings (+ minor if `--with-minors`), by number, with file:line and the agreed fix. It applies fixes via TDD where behavior changes. **Critical and major are never left undone.**
+5. **Re-validate.** Run the verification gate (or spawn `miri-test-runner`): `make format` (empty diff) → `make lint` (clean) → `make build` → `make test` (`cargo test --test mod`, exact counts) → `make audit` (clean for touched files). If any specialist's domain was touched by a fix, re-run that specialist on the new diff.
+6. **Loop** steps 3–5 until no open critical/major and the gate is green. If the same root cause survives three fix attempts, stop and surface it to the user — do not churn.
+7. **Final CTO verdict** (format below), embedding each specialist's report.
 
-Use `TaskCreate` to track each finding as a task with status `not_started`. Mark tasks `completed` only when the user has accepted the corresponding fix in a follow-up.
-
----
-
-## Report format
+## Final report format
 
 ```
-# Miri Audit — <scope>
-Date: <YYYY-MM-DD>   Files evaluated: <N>   Critical: <c>   Major: <m>   Minor: <n>
+# Miri Audit — CTO Verdict — <scope>
+Status: DONE | NOT DONE (blockers open) | DONE-WITH-DEFERRED-MINORS
+Gate: format <clean> | lint <clean> | build <clean> | test <N passing / M failing / K ignored> | audit <clean>
 
-## Grades
-Architecture:  <A|B|C|F>   <one-line justification>
-SOLID:         <A|B|C|F>   <one-line justification>
-Clean Code:    <A|B|C|F>   <one-line justification>
-TDD:           <A|B|C|F>   <one-line justification>
-Miri:          <A|B|C|F>   <one-line justification>
-Smells:        <count by category>
+## Specialist roll-up
+Lead Software Architect: <grades A/B/C/F per dimension + headline>
+Lead Security Engineer:  <headline finding + count>
+Lead QA Engineer:        <coverage verdict + count>
+Lead Rust Engineer:      <headline + count>
+Lead Compiler Architect: <SOUND | SOUND-WITH-RISKS | UNSOUND>
+Lead GPU Engineer:       <headline, or N/A>
 
-## Findings
+## Consolidated findings (de-duped, re-ranked)
+1. [critical] <finding> — owner — status: fixed/open
+...
 
-### 1. [critical] <one-sentence summary>
-  File: src/foo/bar.rs:123
-  Principle: PRINCIPLES.md §<n>.<m>
-  Why: <one or two sentences of evidence>
-  Proposed fix: <one-line description>
-  Diff:
-    --- a/src/foo/bar.rs
-    +++ b/src/foo/bar.rs
-    @@ ...
-    - …
-    + …
+## Challenges & adjudications
+- <conflict / missed axis> → <decision + evidence>
 
-### 2. [major] …
-  …
+## Fixes applied
+<diff summary + test-count delta>
 
-## Recommended order of operations
-1. Fix all critical (blockers).
-2. Fix major in files touched by the current PR.
-3. Schedule minor as a cleanup pass.
-
-## Confirm
-Reply with the numbers of findings to apply (e.g. "apply 1, 3, 5"), or "report only".
+## Deferred (minors only, with reason + follow-up recorded)
 ```
-
----
 
 ## Hard rules
 
-- **Read-only by default.** Never edit a file without an explicit confirm-this-diff from the user.
-- **Cite line numbers** for every finding. No vague "in MIR somewhere".
-- **PRINCIPLES.md is the standard.** If you disagree with a principle, say so in the report — do not silently grade against your own taste.
-- **No new principles.** This skill enforces the existing standard, not your improvisation.
-- **Do not run `make test`.** The audit is structural. If the user wants tests run, defer to `miri-test-runner`.
-- **Do not approve based on absence of evidence.** If you have not checked a dimension, mark it **incomplete**, not pass.
-- **Cap diffs at ~30 lines per finding.** A larger change needs a planning conversation, not a drive-by fix.
-
-## What "clean" looks like
-
-> Audit complete — scope: `src/mir/optimization/`.
-> - Architecture: A (no cross-layer leaks).
-> - SOLID: B (one SRP issue in `perceus.rs::process_block`, 112 lines).
-> - Clean Code: A (no unwraps, no banners, no comment rot).
-> - TDD: B (one branch in `is_place_managed` uncovered).
-> - Miri: A (Perceus projection guard correct everywhere).
-> - Smells: 1 major (oversized function), 2 minor (long argument lists).
-> - 3 findings total. Top fix proposed below. Apply?
-
-## What "not clean" looks like
-
-> Audit complete — scope: `src/codegen/cranelift/`.
-> - Architecture: **F** — 4 stdlib name leaks (`"List"`, `"Set"`, …) inside dispatch.
-> - …
-> - 12 critical, 8 major, 21 minor findings. Recommend blocking further feature work in this directory until criticals are resolved.
+- **Critical and major findings must be fixed** before DONE (unless `--report-only`, which still names them as blockers). Minor may be deferred only with explicit reason and a `notes/PLAN.md` follow-up.
+- **Verify before you trust** — spot-check cited lines; a finding you can't reproduce is dropped, not shipped.
+- **Never declare DONE with `make test` red** or `make audit` reporting new violations in touched files.
+- **A green suite over a wrong design is NOT DONE** — honor the Compiler Architect's UNSOUND verdict.
+- Only the `lead-miri-engineer` edits source. Specialists and you are read-only.
+- Always `cargo test --test mod` — never `--test integration`.
