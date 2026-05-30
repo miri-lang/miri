@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 //! I/O primitives for the Miri runtime.
 //!
 //! Provides standard output and error stream operations callable from

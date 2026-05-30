@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 //! Generic hash map implementation for Miri runtime.
 //!
 //! Implements a type-erased hash map using open addressing with linear probing.

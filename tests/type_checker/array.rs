@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 use super::utils::{
     type_checker_error_test, type_checker_error_with_help_test, type_checker_test,
     type_checker_vars_type_test,

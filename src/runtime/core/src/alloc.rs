@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 //! Memory allocation primitives for the Miri runtime.
 //!
 //! Wraps Rust's global allocator behind a C-compatible FFI interface.

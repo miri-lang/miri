@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 //! Miri Runtime Core
 //!
 //! Provides fundamental runtime services for compiled Miri programs:

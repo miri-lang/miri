@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 //! FFI functions that produce new `MiriString` values from existing ones.
 //!
 //! Every function in this module allocates and returns a fresh `MiriString`.
