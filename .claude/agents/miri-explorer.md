@@ -12,13 +12,13 @@ Research-only agent. Never edits. Answers structural questions about the Miri co
 ## Orientation map
 
 - `src/lexer/`, `src/parser/` — tokenization, AST
-- `src/typechecker/` — inference, generics, trait resolution
+- `src/type_checker/` — inference, generics, trait resolution
 - `src/mir/lowering/` — AST → MIR; `control_flow.rs` holds intercepted method dispatch
 - `src/mir/optimization/perceus.rs` — RC insertion (`is_place_managed`, `obj_op_is_copy`, `emit_temp_drop`)
 - `src/codegen/` — Cranelift lowering
-- `src/runtime/core/` — Rust runtime (separate crate, built as release staticlib)
-- `stdlib/*.mi` — Miri stdlib; `runtime "core" fn` = FFI declarations
-- `tests/integration/` — integration tests with helpers `assert_runs`, `assert_runs_with_output`, `assert_compiler_error`, `assert_runtime_error`
+- `src/runtime/{core,gpu}/` — Rust runtimes (separate crates, built as release staticlibs)
+- `src/stdlib/**/*.mi` — Miri stdlib (nested dirs); `runtime "core"/"gpu" fn` = FFI declarations
+- `tests/integration/` — integration tests with helpers `assert_runs`, `assert_runs_with_output`, `assert_compiler_error`, `assert_runtime_error`, `assert_runtime_crash`
 
 ## Report format
 
