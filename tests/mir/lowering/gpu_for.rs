@@ -87,8 +87,8 @@ use system.gpu
 use system.collections.array
 
 fn main()
-    let a = [1, 2, 3, 4]
-    var dst = [0, 0, 0, 0]
+    gpu let a = [1, 2, 3, 4]
+    gpu var dst = [0, 0, 0, 0]
     gpu for i in 0..4
         for j in 0..i
             dst[i] = a[i]
@@ -132,9 +132,9 @@ use system.gpu
 use system.collections.array
 
 fn main()
-    let a = [1, 2, 3, 4]
-    let b = [5, 6, 7, 8]
-    var dst = [0, 0, 0, 0]
+    gpu let a = [1, 2, 3, 4]
+    gpu let b = [5, 6, 7, 8]
+    gpu var dst = [0, 0, 0, 0]
     gpu for i in 0..4
         dst[i] = a[i] + b[i]
 ",
@@ -167,7 +167,7 @@ use system.collections.array
 
 fn main()
     let scale = 7
-    var dst = [0, 0, 0, 0]
+    gpu var dst = [0, 0, 0, 0]
     gpu for i in 0..4
         dst[i] = scale
 ";
@@ -204,7 +204,7 @@ use system.collections.array
 
 fn main()
     let g = GpuArray<int, 4>(data: [1, 2, 3, 4])
-    var dst = [0, 0, 0, 0]
+    gpu var dst = [0, 0, 0, 0]
     gpu for i in 0..4
         dst[i] = g.length()
 ";

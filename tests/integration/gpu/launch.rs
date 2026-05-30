@@ -23,9 +23,9 @@ use system.io
 use system.gpu
 use system.collections.array
 
-let a = [1, 2, 3, 4]
-let b = [10, 20, 30, 40]
-var dst = [0, 0, 0, 0]
+gpu let a = [1, 2, 3, 4]
+gpu let b = [10, 20, 30, 40]
+gpu var dst = [0, 0, 0, 0]
 gpu for i in 0..4
     dst[i] = a[i] + b[i]
 println(\"dispatched\")
@@ -44,12 +44,13 @@ use system.io
 use system.gpu
 use system.collections.array
 
-let a = [1, 2, 3, 4]
-let b = [10, 20, 30, 40]
-var dst = [0, 0, 0, 0]
+gpu let a = [1, 2, 3, 4]
+gpu let b = [10, 20, 30, 40]
+gpu var dst = [0, 0, 0, 0]
 gpu for i in 0..4
     dst[i] = a[i] + b[i]
-println(f'{dst[0]} {dst[1]} {dst[2]} {dst[3]}')
+let host = dst
+println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 ";
     // Native dispatch stores `int` as WGSL `i64`; without a `SHADER_INT64`
     // adapter the device read-back is all zeros, so we drop to a smoke run
@@ -71,11 +72,12 @@ use system.io
 use system.gpu
 use system.collections.array
 
-let src = [1, 2, 3, 4, 5, 6, 7, 8]
-var dst = [0, 0, 0, 0, 0, 0, 0, 0]
+gpu let src = [1, 2, 3, 4, 5, 6, 7, 8]
+gpu var dst = [0, 0, 0, 0, 0, 0, 0, 0]
 gpu for i in 0..8
     dst[i] = src[i] * 7
-println(f'{dst[0]} {dst[7]}')
+let host = dst
+println(f'{host[0]} {host[7]}')
 ";
     // Same `SHADER_INT64` dependency as `vector_add_int_round_trips_through_device`.
     if super::helpers::gpu_adapter_available() {

@@ -112,7 +112,7 @@ fn test_gpu_for_rejects_bool_buffer_capture() {
 use system.gpu
 use system.collections.array
 
-var flags = [true, false, true, false]
+gpu var flags = [true, false, true, false]
 gpu for i in 0..4
     flags[i] = not flags[i]
 "#,
@@ -127,7 +127,7 @@ fn test_gpu_for_bool_buffer_diagnostic_cites_storage_buffer() {
 use system.gpu
 use system.collections.array
 
-var flags = [true, false, true, false]
+gpu var flags = [true, false, true, false]
 gpu for i in 0..4
     flags[i] = not flags[i]
 "#,
@@ -142,7 +142,7 @@ fn test_gpu_for_rejects_string_buffer_capture() {
 use system.gpu
 use system.collections.array
 
-var labels = ["a", "b", "c", "d"]
+gpu var labels = ["a", "b", "c", "d"]
 gpu for i in 0..4
     let _ = labels[i]
 "#,
@@ -157,8 +157,8 @@ fn test_gpu_for_accepts_int_buffer_capture() {
 use system.gpu
 use system.collections.array
 
-var dst = [0, 0, 0, 0]
-let src = [1, 2, 3, 4]
+gpu var dst = [0, 0, 0, 0]
+gpu let src = [1, 2, 3, 4]
 gpu for i in 0..4
     dst[i] = src[i] * 2
 "#,
@@ -172,8 +172,8 @@ fn test_gpu_for_accepts_f32_buffer_capture() {
 use system.gpu
 use system.collections.array
 
-var dst = [0.0, 0.0, 0.0, 0.0]
-let src = [1.0, 2.0, 3.0, 4.0]
+gpu var dst = [0.0, 0.0, 0.0, 0.0]
+gpu let src = [1.0, 2.0, 3.0, 4.0]
 gpu for i in 0..4
     dst[i] = src[i] * 2.0
 "#,
@@ -187,8 +187,8 @@ fn test_gpu_for_accepts_f64_buffer_capture() {
 use system.gpu
 use system.collections.array
 
-var dst = [3.141592653589793, 2.718281828459045, 1.4142135623730951, 0.5772156649015329]
-let src = [3.141592653589793, 2.718281828459045, 1.4142135623730951, 0.5772156649015329]
+gpu var dst = [3.141592653589793, 2.718281828459045, 1.4142135623730951, 0.5772156649015329]
+gpu let src = [3.141592653589793, 2.718281828459045, 1.4142135623730951, 0.5772156649015329]
 gpu for i in 0..4
     dst[i] = src[i] * 2.0
 "#,
@@ -202,7 +202,7 @@ fn test_gpu_for_rejects_bool_buffer_captured_inside_if_branch() {
 use system.gpu
 use system.collections.array
 
-var flags = [true, false, true, false]
+gpu var flags = [true, false, true, false]
 gpu for i in 0..4
     if i > 0
         flags[i] = not flags[i]
@@ -218,7 +218,7 @@ fn test_gpu_for_diagnostic_message_lists_numeric_scalars() {
 use system.gpu
 use system.collections.array
 
-var labels = ["a", "b", "c", "d"]
+gpu var labels = ["a", "b", "c", "d"]
 gpu for i in 0..4
     let _ = labels[i]
 "#,

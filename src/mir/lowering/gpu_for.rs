@@ -26,7 +26,7 @@ use crate::ast::RangeExpressionType;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::backend::{BackendMetadata, GpuBodyMetadata};
-use crate::mir::body::DeviceHandleId;
+use crate::mir::body::{BindingResidency, DeviceHandleId};
 use crate::mir::lambda::LambdaInfo;
 use crate::mir::{
     AggregateKind, BinOp, Body, Constant, Dimension, Discriminant, ExecutionModel, GpuIntrinsic,
@@ -77,6 +77,17 @@ pub fn lower_gpu_for(
                     "gpu for: capture '{}' has non-buffer type; baseline only accepts `Array<T, N>`, `[T; N]`, or `GpuArray<T>` captures (scalar/string/collection captures need uniform/push-constant lowering, follow-up)",
                     name
                 ),
+                *span,
+            ));
+        }
+        // Only a gpu-resident buffer may be marshaled as a kernel storage
+        // binding. Host-resident buffer captures are rejected upstream with a
+        // source-cited §6.4 diagnostic, so this guard is unreachable in
+        // well-typed programs; it keeps MIR lowering from ever uploading a
+        // host buffer implicitly (GPU_DRAFT §10.5 — no silent promotion).
+        if ctx.body.local_decls[outer_local.0].residency != BindingResidency::Gpu {
+            return Err(LoweringError::unsupported_expression(
+                format!("gpu for: capture '{}' is not gpu-resident", name),
                 *span,
             ));
         }

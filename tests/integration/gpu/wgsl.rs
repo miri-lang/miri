@@ -31,9 +31,9 @@ use system.gpu
 use system.collections.array
 
 fn main()
-    let a = [1, 2, 3, 4]
-    let b = [10, 20, 30, 40]
-    var dst = [0, 0, 0, 0]
+    gpu let a = [1, 2, 3, 4]
+    gpu let b = [10, 20, 30, 40]
+    gpu var dst = [0, 0, 0, 0]
     gpu for i in 0..4
         dst[i] = a[i] + b[i]
 ",
@@ -50,10 +50,10 @@ use system.gpu
 use system.collections.array
 
 fn main()
-    let a = [1, 2, 3, 4]
-    let b = [10, 20, 30, 40]
-    let c = [100, 200, 300, 400]
-    var dst = [0, 0, 0, 0]
+    gpu let a = [1, 2, 3, 4]
+    gpu let b = [10, 20, 30, 40]
+    gpu let c = [100, 200, 300, 400]
+    gpu var dst = [0, 0, 0, 0]
     gpu for i in 0..4
         dst[i] = a[i] * b[i] + c[i]
 ",
@@ -85,7 +85,7 @@ use system.gpu
 use system.collections.array
 
 fn main()
-    var dst = [999, 999, 999, 999, 999, 999, 999, 999]
+    gpu var dst = [999, 999, 999, 999, 999, 999, 999, 999]
     gpu for i in 0..7
         dst[i] = i + 100
 ",
@@ -104,8 +104,8 @@ use system.gpu
 use system.collections.array
 
 fn main()
-    let a = [1, 2, 3, 4, 5, 6, 7, 8]
-    var dst = [0, 0, 0, 0]
+    gpu let a = [1, 2, 3, 4, 5, 6, 7, 8]
+    gpu var dst = [0, 0, 0, 0]
     gpu for i in 0..1
         dst[0] = a[0] + a[1] + a[2] + a[3] + a[4] + a[5] + a[6] + a[7]
 ",
@@ -128,9 +128,9 @@ use system.gpu
 use system.collections.array
 
 fn main()
-    let a = [1.0, 2.0, 3.0, 4.0]
-    let b = [0.5, 1.5, 2.5, 3.5]
-    var dst = [0.0, 0.0, 0.0, 0.0]
+    gpu let a = [1.0, 2.0, 3.0, 4.0]
+    gpu let b = [0.5, 1.5, 2.5, 3.5]
+    gpu var dst = [0.0, 0.0, 0.0, 0.0]
     gpu for i in 0..4
         dst[i] = a[i] + b[i]
 ",
@@ -156,9 +156,9 @@ use system.gpu
 use system.collections.array
 
 fn main()
-    let a = [1, 2, 3, 4]
-    let b = [10, 20, 30, 40]
-    var dst = [0, 0, 0, 0]
+    gpu let a = [1, 2, 3, 4]
+    gpu let b = [10, 20, 30, 40]
+    gpu var dst = [0, 0, 0, 0]
     gpu for i in 0..4
         dst[i] = a[i] + b[i]
 ",
@@ -173,8 +173,8 @@ use system.gpu
 use system.collections.array
 
 fn main()
-    let src = [1, 2, 3, 4]
-    var dst = [0, 0, 0, 0]
+    gpu let src = [1, 2, 3, 4]
+    gpu var dst = [0, 0, 0, 0]
     gpu for i in 0..4
         dst[i] = src[i] * 7
 ",
@@ -189,9 +189,9 @@ use system.gpu
 use system.collections.array
 
 fn main()
-    let a = [100, 200, 300, 400]
-    let b = [1, 2, 3, 4]
-    var dst = [0, 0, 0, 0]
+    gpu let a = [100, 200, 300, 400]
+    gpu let b = [1, 2, 3, 4]
+    gpu var dst = [0, 0, 0, 0]
     gpu for i in 0..4
         dst[i] = a[i] - b[i]
 ",
@@ -206,9 +206,9 @@ use system.gpu
 use system.collections.array
 
 fn main()
-    let a = [1.0, 2.0, 3.0, 4.0]
-    let b = [0.5, 1.5, 2.5, 3.5]
-    var dst = [0.0, 0.0, 0.0, 0.0]
+    gpu let a = [1.0, 2.0, 3.0, 4.0]
+    gpu let b = [0.5, 1.5, 2.5, 3.5]
+    gpu var dst = [0.0, 0.0, 0.0, 0.0]
     gpu for i in 0..4
         dst[i] = a[i] + b[i]
 ",
@@ -223,8 +223,8 @@ use system.gpu
 use system.collections.array
 
 fn main()
-    let a = [1.0, 2.0, 3.0, 4.0]
-    var dst = [0.0, 0.0, 0.0, 0.0]
+    gpu let a = [1.0, 2.0, 3.0, 4.0]
+    gpu var dst = [0.0, 0.0, 0.0, 0.0]
     gpu for i in 0..4
         dst[i] = a[i] * 2.5
 ",
@@ -243,9 +243,9 @@ use system.gpu
 use system.collections.array
 
 fn main()
-    let a = [3.141592653589793, 2.718281828459045, 1.4142135623730951, 0.5772156649015329]
-    let b = [3.141592653589793, 2.718281828459045, 1.4142135623730951, 0.5772156649015329]
-    var dst = [3.141592653589793, 2.718281828459045, 1.4142135623730951, 0.5772156649015329]
+    gpu let a = [3.141592653589793, 2.718281828459045, 1.4142135623730951, 0.5772156649015329]
+    gpu let b = [3.141592653589793, 2.718281828459045, 1.4142135623730951, 0.5772156649015329]
+    gpu var dst = [3.141592653589793, 2.718281828459045, 1.4142135623730951, 0.5772156649015329]
     gpu for i in 0..4
         dst[i] = a[i] + b[i]
 ",
@@ -262,7 +262,7 @@ fn main()
 use system.gpu
 use system.collections.array
 
-var flags = [true, false, true, false]
+gpu var flags = [true, false, true, false]
 gpu for i in 0..4
     flags[i] = not flags[i]
 ",
@@ -280,7 +280,7 @@ gpu for i in 0..4
 use system.gpu
 use system.collections.array
 
-var labels = [\"a\", \"b\", \"c\", \"d\"]
+gpu var labels = [\"a\", \"b\", \"c\", \"d\"]
 gpu for i in 0..4
     let _ = labels[i]
 ",
