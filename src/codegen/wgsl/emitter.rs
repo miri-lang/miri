@@ -129,7 +129,13 @@ struct BufferBinding {
 fn collect_buffer_bindings(body: &Body) -> Result<Vec<BufferBinding>, CodegenError> {
     let mut bindings = Vec::new();
     for (next_index, param_idx) in (1..=body.arg_count).enumerate() {
-        let decl = &body.local_decls[param_idx];
+        let decl = body.local_decls.get(param_idx).ok_or_else(|| {
+            CodegenError::Internal(format!(
+                "WGSL backend: local_decls length {} <= param_idx {}",
+                body.local_decls.len(),
+                param_idx
+            ))
+        })?;
         match decl.storage_class {
             StorageClass::GpuGlobal | StorageClass::StorageBuffer => {}
             StorageClass::UniformBuffer => {
