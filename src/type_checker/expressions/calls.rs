@@ -774,7 +774,7 @@ impl TypeChecker {
     /// chain via `collect_class_fields_all`). Generic class parameters are
     /// substituted from `type_args` so the comparison sees the concrete
     /// element type (e.g. `data: List<T>` becomes `List<float>` when the
-    /// instantiation is `GpuArray<float>`).
+    /// instantiation is `Wrap<float>`).
     fn validate_class_field_args(
         &mut self,
         def: &crate::type_checker::context::ClassDefinition,

@@ -3,8 +3,7 @@
 
 //! GPU integration tests.
 //!
-//! Three test surfaces share this directory:
-//!   * `stub` — host-only `GpuArray<T, Size>` wrapper. No GPU touched.
+//! Test surfaces sharing this directory:
 //!   * `launch` — full Cranelift → `miri_gpu_launch_inline` → `wgpu` native
 //!     dispatch path. Owns end-to-end value correctness for `gpu for`
 //!     kernels now that the WGSL scalar mapping aligns host and device
@@ -25,5 +24,4 @@ pub mod helpers;
 pub mod launch;
 pub mod persistent_buffer;
 pub mod residency;
-pub mod stub;
 pub mod wgsl;

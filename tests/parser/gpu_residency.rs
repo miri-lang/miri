@@ -35,13 +35,13 @@ fn test_gpu_var_parses_with_gpu_residency_and_is_mutable() {
 }
 
 #[test]
-fn test_plain_let_defaults_to_host_residency() {
+fn test_plain_let_is_host_resident_by_default() {
     let decls = declarations("let h = 0");
     assert_eq!(decls[0].residency, BindingResidency::Host);
 }
 
 #[test]
-fn test_plain_var_defaults_to_host_residency() {
+fn test_plain_var_is_host_resident_by_default() {
     let decls = declarations("var h = 0");
     assert_eq!(decls[0].residency, BindingResidency::Host);
 }

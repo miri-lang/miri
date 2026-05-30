@@ -40,32 +40,3 @@ public fn gpu_readbacks() int
 /// fences; reuse and launch never do.
 public fn gpu_fences() int
     return miri_gpu_telemetry_fences()
-
-/// Host-side stub for a GPU-resident array.
-///
-/// In this milestone the elements live on the host inside an underlying
-/// `Array<T, Size>`. The wrapper exists so kernel-launch code can switch on a
-/// distinct nominal type once the WGSL backend dispatches `gpu fn` bodies.
-///
-/// The `Size` value generic preserves the fixed-size contract of GPU buffers
-/// and pins the element layout end-to-end: literal `[1.5, 2.5, 3.5]` is
-/// `Array<f32, 3>`, so `GpuArray<f32, 3>(data: [...])` flows in directly
-/// without a `List` round-trip (which would also force the type checker into
-/// the `List<float>` storage-vs-literal-width trap fixed by the prior bug).
-///
-/// Functional transforms (`map` / `filter` / `reduce`) are deferred: they
-/// require per-instantiation monomorphization of trait defaults on generic
-/// classes, which the codegen does not yet provide. Tracked as a follow-up.
-///
-/// Resource semantics (`fn drop(self)`) are deferred to M8a — M6.5 relies on
-/// the underlying `Array<T, Size>` to release storage when the wrapper goes
-/// out of scope.
-public class GpuArray<T, Size>
-
-    var data Array<T, Size>
-
-    public fn length() int: self.data.length()
-
-    /// Returns the underlying elements on the host.
-    public fn to_host() Array<T, Size>
-        return self.data

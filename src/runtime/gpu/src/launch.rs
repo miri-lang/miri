@@ -137,7 +137,7 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
         let _ = device.poll(wgpu::PollType::wait_indefinitely());
         telemetry::record_fence();
         for i in transient_captures {
-            readback_into_host(
+            readback_device_buffer(
                 device,
                 queue,
                 &storage_buffers[i],
@@ -403,7 +403,7 @@ fn next_kernel_id() -> u64 {
     NEXT.fetch_add(1, Ordering::SeqCst)
 }
 
-unsafe fn readback_into_host(
+unsafe fn readback_device_buffer(
     device: &Device,
     queue: &Queue,
     src: &wgpu::Buffer,
@@ -509,7 +509,7 @@ pub unsafe extern "C" fn miri_gpu_readback(handle: u64, arr: *const MiriArrayHea
     let Ok(ctx) = init_gpu_context() else {
         return 0;
     };
-    match readback_into_host(&ctx.device, &ctx.queue, &buffer, header.data, byte_len) {
+    match readback_device_buffer(&ctx.device, &ctx.queue, &buffer, header.data, byte_len) {
         Ok(()) => {
             telemetry::record_fence();
             telemetry::record_readback();
