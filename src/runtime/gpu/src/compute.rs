@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 //! Compute kernel compilation and dispatch.
 //!
 //! Kernels are compiled from WGSL source produced by Miri's WGSL

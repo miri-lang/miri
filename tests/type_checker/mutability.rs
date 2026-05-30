@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 use crate::type_checker::utils::{type_checker_error_test, type_checker_test};
 
 #[test]

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 use miri_runtime_core::io::{
     miri_rt_eprint, miri_rt_eprintln, miri_rt_get_line_end, miri_rt_print, miri_rt_println,
 };

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 use miri_runtime_core::alloc::{miri_alloc, miri_alloc_zeroed, miri_free, miri_realloc};
 use std::ptr;
 

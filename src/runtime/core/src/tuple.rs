@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 //! Tuple support for Miri runtime.
 //!
 //! Tuples are heap-allocated by the Cranelift backend with the layout:

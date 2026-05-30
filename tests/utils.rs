@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 use assert_cmd::{pkg_name, Command};
 use std::io::Write;
 use std::path::PathBuf;

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 //! FFI functions for querying `MiriString` properties.
 //!
 //! All functions are null-safe: a null pointer is treated as an empty string.

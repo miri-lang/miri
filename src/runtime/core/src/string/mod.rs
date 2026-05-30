@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 //! String implementation for the Miri runtime.
 //!
 //! Provides a UTF-8 string type (`MiriString`) with a C-compatible FFI interface.

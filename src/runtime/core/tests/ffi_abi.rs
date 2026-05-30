@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 //! FFI ABI test suite.
 //!
 //! Verifies that each `miri_rt_*` and `miri_alloc*` symbol is correctly exported

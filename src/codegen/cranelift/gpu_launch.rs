@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 //! `TerminatorKind::GpuLaunch` → Cranelift call into `miri_gpu_launch_inline`.
 //!
 //! Each `gpu fn` kernel body is compiled to WGSL by the WGSL backend; the

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 //! Generic hash set implementation for Miri runtime.
 //!
 //! Implements a type-erased hash set using open addressing with linear probing.
