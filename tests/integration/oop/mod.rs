@@ -13,4 +13,5 @@ pub mod inherited_arg_count;
 pub mod invalid_targets;
 pub mod super_calls;
 pub mod traits;
+pub mod value_generics;
 pub mod visibility;

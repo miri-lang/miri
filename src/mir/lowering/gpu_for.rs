@@ -13,8 +13,8 @@
 //!   backend, which is a follow-up.
 //! - Only one loop variable is accepted.
 //! - The body may reference outer-scope variables whose types are GPU
-//!   buffers (`Array<T, N>`, `GpuArray<T, N>`); all such captures are
-//!   exposed as read-write storage buffers.
+//!   buffers (`Array<T, N>`); all such captures are exposed as read-write
+//!   storage buffers.
 
 use std::collections::HashSet;
 
@@ -74,7 +74,7 @@ pub fn lower_gpu_for(
         if !is_gpu_buffer_capture(&ty.kind) {
             return Err(LoweringError::unsupported_expression(
                 format!(
-                    "gpu for: capture '{}' has non-buffer type; baseline only accepts `Array<T, N>`, `[T; N]`, or `GpuArray<T>` captures (scalar/string/collection captures need uniform/push-constant lowering, follow-up)",
+                    "gpu for: capture '{}' has non-buffer type; baseline only accepts `Array<T, N>` or `[T; N]` captures (scalar/string/collection captures need uniform/push-constant lowering, follow-up)",
                     name
                 ),
                 *span,
@@ -128,14 +128,6 @@ struct CaptureInfo {
 /// storage binding. Scalars and non-buffer managed types pass the broader
 /// `is_gpu_compatible` predicate (used for kernel-body type checking) but
 /// would be misinterpreted as MiriArray pointers by `gpu_launch::translate`.
-///
-/// `GpuArray<T, N>` is intentionally **excluded** here even though it is
-/// `is_gpu_compatible`: it is a stdlib class wrapping an `Array` field, so
-/// the local stores a class payload pointer whose offset 0 is either a
-/// vtable pointer (if the class has one) or the inner `data` field — not
-/// a `MiriArray` header. Routing it through the dispatcher would silently
-/// read garbage as the device data pointer / length. Re-enable once the
-/// dispatcher unwraps the class indirection (M8a follow-up).
 fn is_gpu_buffer_capture(kind: &TypeKind) -> bool {
     match kind {
         TypeKind::Array(_, _) => true,
