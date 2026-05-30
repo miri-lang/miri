@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+pub mod analysis;
 pub mod common;
 pub mod expression;
 pub mod factory;
@@ -10,6 +11,7 @@ pub mod normalize;
 pub mod operator;
 pub mod pattern;
 pub mod program;
+pub mod script;
 pub mod statement;
 pub mod types;
 
