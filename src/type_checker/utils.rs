@@ -14,7 +14,7 @@ use super::TypeChecker;
 use crate::ast::factory::make_type;
 use crate::ast::types::{
     BuiltinCollectionKind, Type, TypeKind, ACCELERABLE_TRAIT_NAME, DIM3_TYPE_NAME,
-    GPU_ARRAY_TYPE_NAME, GPU_CONTEXT_TYPE_NAME, KERNEL_TYPE_NAME,
+    GPU_CONTEXT_TYPE_NAME, KERNEL_TYPE_NAME,
 };
 use crate::ast::ExpressionKind;
 use crate::ast::*;
@@ -100,8 +100,8 @@ fn is_resource_inner<'a>(
 ///   `F64`) and `Boolean`.
 /// - `Void` and `Error` (for soft-fail propagation of upstream errors).
 /// - The compiler-builtin GPU types (`Dim3`, `GpuContext`, `Kernel`), the
-///   stdlib `GpuArray<T>`, the builtin `Array<T>`, and the fixed-size
-///   `[T; N]` form, where the element type `T` is itself GPU-compatible.
+///   builtin `Array<T>`, and the fixed-size `[T; N]` form, where the element
+///   type `T` is itself GPU-compatible.
 /// - `Generic` parameters — actual compatibility is enforced at the
 ///   instantiation site.
 ///
@@ -136,9 +136,7 @@ pub fn is_gpu_compatible(kind: &TypeKind) -> bool {
             if name == DIM3_TYPE_NAME || name == GPU_CONTEXT_TYPE_NAME || name == KERNEL_TYPE_NAME {
                 return true;
             }
-            if name == GPU_ARRAY_TYPE_NAME
-                || BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Array)
-            {
+            if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Array) {
                 return first_type_arg_is_gpu_compatible(type_args.as_deref());
             }
             false
@@ -371,7 +369,7 @@ pub fn is_gpu_buffer_element(kind: &TypeKind) -> bool {
 /// Recognizes the canonical `TypeKind::Array(elem, _)` / `TypeKind::List(elem)`
 /// shapes and the post-resolution `TypeKind::Custom(name, args)` envelopes for
 /// the builtin `Array` and `List` collections (looked up via
-/// `BuiltinCollectionKind::from_name`) and the `GpuArray<T>` stub.
+/// `BuiltinCollectionKind::from_name`).
 ///
 /// Returns `None` for non-collection types — the caller treats those as
 /// non-buffer captures and is responsible for the (scalar-by-scalar) GPU
@@ -385,7 +383,7 @@ pub fn captured_buffer_element(kind: &TypeKind) -> Option<Type> {
             let is_collection = matches!(
                 BuiltinCollectionKind::from_name(name),
                 Some(BuiltinCollectionKind::Array) | Some(BuiltinCollectionKind::List)
-            ) || name == GPU_ARRAY_TYPE_NAME;
+            );
             if !is_collection {
                 return None;
             }
@@ -430,13 +428,10 @@ pub fn captured_buffer_element(kind: &TypeKind) -> Option<Type> {
 /// `Array<T, N>` / `[T; N]`.
 ///
 /// Kept in lock-step with `gpu_for::is_gpu_buffer_capture` (the MIR predicate
-/// that decides what actually becomes a storage binding). Two deliberate
-/// exclusions follow from that. `List<T>` is dynamic and has no fixed device
-/// storage layout — it can never be a `gpu for` capture, so annotating it with
-/// `gpu let` would not help; it is rejected as a non-buffer capture at MIR
-/// lowering instead. `GpuArray<T, N>` is a stdlib class wrapping an `Array`
-/// field with its own (deferred) device-marshaling story, and it cannot be
-/// made gpu-resident because it does not implement `Accelerable`.
+/// that decides what actually becomes a storage binding). `List<T>` is dynamic
+/// and has no fixed device storage layout — it can never be a `gpu for`
+/// capture, so annotating it with `gpu let` would not help; it is rejected as
+/// a non-buffer capture at MIR lowering instead.
 ///
 /// The residency capture rule (GPU_DRAFT §6.4) therefore governs only the
 /// plain `Array` captures a `gpu let` can produce.
@@ -1738,13 +1733,9 @@ mod tests {
     }
 
     #[test]
-    fn residency_gated_buffer_rejects_list_gpu_array_and_scalar() {
+    fn residency_gated_buffer_rejects_list_and_scalar() {
         assert!(!is_residency_gated_buffer(&TypeKind::Custom(
             "List".to_string(),
-            None
-        )));
-        assert!(!is_residency_gated_buffer(&TypeKind::Custom(
-            GPU_ARRAY_TYPE_NAME.to_string(),
             None
         )));
         assert!(!is_residency_gated_buffer(&TypeKind::Int));

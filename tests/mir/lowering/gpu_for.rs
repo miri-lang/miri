@@ -15,11 +15,11 @@ use system.gpu
 use system.collections.array
 
 fn main()
-    let a = GpuArray<int, 4>(data: [1, 2, 3, 4])
-    let b = GpuArray<int, 4>(data: [5, 6, 7, 8])
-    var dst = GpuArray<int, 4>(data: [0, 0, 0, 0])
+    gpu let a = [1, 2, 3, 4]
+    gpu let b = [5, 6, 7, 8]
+    gpu var dst = [0, 0, 0, 0]
     gpu for i in 0..4
-        let x = i
+        dst[i] = a[i] + b[i]
 ",
     );
     let has_launch = body.basic_blocks.iter().any(|bb| {
@@ -184,43 +184,6 @@ fn main()
     assert!(
         msg.contains("non-buffer") && msg.contains("scale"),
         "expected diagnostic about non-buffer capture 'scale', got: {msg}"
-    );
-}
-
-#[test]
-fn test_gpu_for_rejects_gpu_array_capture_until_class_unwrap_lands() {
-    // `GpuArray<T, N>` is a stdlib class wrapping an `Array` field. A local
-    // of class type stores a payload pointer past the malloc/RC header
-    // whose offset 0 is either a vtable pointer or the inner `data` field
-    // — *not* a `MiriArray` header. Routing it through the dispatcher
-    // would silently read garbage as the device buffer. Until the
-    // dispatcher learns to unwrap that indirection, the MIR lowering must
-    // surface this as a diagnostic instead of accepting it as a buffer
-    // capture.
-    let pipeline = Pipeline::new();
-    let source = "
-use system.gpu
-use system.collections.array
-
-fn main()
-    let g = GpuArray<int, 4>(data: [1, 2, 3, 4])
-    gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
-        dst[i] = g.length()
-";
-    let result = pipeline.frontend(source).expect("frontend");
-    let func_stmt = result
-        .ast
-        .body
-        .iter()
-        .find(|s| matches!(s.node, StatementKind::FunctionDeclaration(_)))
-        .expect("a function declaration");
-    let err = lower_function(func_stmt, &result.type_checker, false, false)
-        .expect_err("expected lowering to reject GpuArray capture in `gpu for`");
-    let msg = format!("{err}");
-    assert!(
-        msg.contains("non-buffer") && msg.contains("'g'"),
-        "expected diagnostic about non-buffer capture 'g', got: {msg}"
     );
 }
 

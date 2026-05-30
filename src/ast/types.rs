@@ -83,10 +83,6 @@ pub const KERNEL_CONTEXT_IDENT: &str = "kernel";
 /// so existing kernels keep compiling; every use emits a rename diagnostic.
 pub const GPU_CONTEXT_DEPRECATED_IDENT: &str = "gpu_context";
 
-/// Canonical class name for the stdlib `GpuArray<T>` type — the only managed
-/// container that is GPU-compatible inside `gpu fn` bodies.
-pub const GPU_ARRAY_TYPE_NAME: &str = "GpuArray";
-
 impl BuiltinCollectionKind {
     /// Returns the `BuiltinCollectionKind` for a class name, or `None` if the
     /// name does not match a built-in collection.

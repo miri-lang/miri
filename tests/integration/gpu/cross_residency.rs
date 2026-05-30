@@ -161,8 +161,9 @@ fn main()
 
 #[test]
 fn vector_add_demo_compiles_and_runs() {
-    // §16.1 — compiles end-to-end without GpuArray<T> and without to_host().
-    // Value correctness is asserted by `vector_add_demo_value_correctness`.
+    // §16.1 — compiles end-to-end on the residency surface: `gpu let` inputs,
+    // a `gpu var` output, and a readback (`let host = dst`). Value correctness
+    // is asserted by `vector_add_demo_value_correctness`.
     assert_runs(
         "
 use system.gpu
