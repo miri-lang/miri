@@ -11,6 +11,7 @@ The CLI provides the interface for evaluating, compiling, and testing Miri progr
 -   **`miri run <file.mi>`**: Compiles and executes a specified Miri program.
 -   **`miri build <file.mi>`**: Compiles a Miri program to a native executable binary.
 -   **`miri check <file.mi>`**: Runs the frontend (Lexer, Parser, Type Checker) to validate code correctness without generating an executable.
+-   **`miri test`**: Runs Miri test files in a directory, with optional name filtering and selectable output format (pretty/json).
 
 ## Architecture
 

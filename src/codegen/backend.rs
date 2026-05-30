@@ -5,10 +5,32 @@
 //!
 //! This module defines the `Backend` trait that all code generators implement,
 //! enabling support for multiple backends (Cranelift, LLVM, GPU backends).
+//! It also defines the selection enums `CpuBackend` and `BuildTarget` for CLI integration.
 
 use crate::mir::Body;
 use std::error::Error;
 use std::fmt::Debug;
+
+/// CPU backend for code generation.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CpuBackend {
+    /// Cranelift: Fast compilation, good for development (default)
+    #[default]
+    Cranelift,
+    /// LLVM: Optimized compilation
+    Llvm,
+}
+
+/// Selectable build target.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BuildTarget {
+    /// Native executable for the host platform.
+    #[default]
+    Native,
+    /// Browser-runnable WebGPU bundle (HTML + WGSL + JS runtime).
+    #[value(name = "web-gpu")]
+    WebGpu,
+}
 
 /// The format of a compiled artifact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

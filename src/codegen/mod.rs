@@ -14,7 +14,7 @@ pub mod llvm;
 pub mod web_gpu;
 pub mod wgsl;
 
-pub use backend::{ArtifactFormat, Backend, CompiledArtifact};
+pub use backend::{ArtifactFormat, Backend, BuildTarget, CompiledArtifact, CpuBackend};
 pub use cranelift::CraneliftBackend;
 pub use llvm::LlvmBackend;
 pub use wgsl::{WgslBackend, WgslOptions};
