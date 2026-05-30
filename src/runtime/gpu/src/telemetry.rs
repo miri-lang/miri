@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 //! Cost-model telemetry for GPU residency.
 //!
 //! Four process-wide counters make the residency cost model observable from

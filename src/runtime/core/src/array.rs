@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 //! Fixed-size array implementation for Miri runtime.
 //!
 //! Unlike `MiriList`, a `MiriArray` has a fixed element count determined at

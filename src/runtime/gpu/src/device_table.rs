@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 //! Persistent device buffers keyed by a binding's `DeviceHandleId`.
 //!
 //! A `gpu`-resident binding (`gpu let` / `gpu var`) carries a stable handle

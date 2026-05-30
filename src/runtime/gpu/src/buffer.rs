@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 //! GPU buffer allocation, transfer, and FFI handles.
 
 use crate::context::{get_gpu_context, GpuError};

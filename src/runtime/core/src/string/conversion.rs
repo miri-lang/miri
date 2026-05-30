@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 //! FFI functions for converting primitive types to `MiriString`.
 //!
 //! These functions are called from compiled Miri code during formatted string

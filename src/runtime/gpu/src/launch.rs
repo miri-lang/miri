@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 //! High-level `gpu for` launch helper.
 //!
 //! `miri_gpu_launch_inline` is the single FFI entry Cranelift emits at

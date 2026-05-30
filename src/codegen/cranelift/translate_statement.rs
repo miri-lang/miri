@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 use crate::ast::expression::ExpressionKind;
 use crate::ast::literal::Literal;
 use crate::ast::types::TypeKind;

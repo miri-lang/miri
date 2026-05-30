@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 //! Reference counting header utilities for heap-allocated Miri values.
 //!
 //! All heap-allocated types (strings, arrays, lists, user classes) share

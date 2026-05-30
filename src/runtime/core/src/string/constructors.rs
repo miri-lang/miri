@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 //! FFI functions for creating, cloning, and freeing `MiriString` values.
 
 use super::{into_raw_ptr, MiriString};

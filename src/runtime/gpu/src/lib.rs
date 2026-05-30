@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 //! Miri GPU runtime.
 //!
 //! Independent Cargo crate providing the wgpu host driver for Miri's

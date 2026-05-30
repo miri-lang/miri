@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
 //! GPU context: instance, adapter, device, queue.
 //!
 //! A single process-wide `GpuContext` is held in a `OnceCell`. All
