@@ -232,9 +232,11 @@ fn main()
     }
 
     /// f64 literals (don't round-trip in f32) bind storage buffers as
-    /// `array<f64>`. Requires the `enable shader_f64;` directive — naga
-    /// rejects the kernel if the directive is missing or the elements
-    /// disagree on width.
+    /// `array<f64>`. WGSL has no `enable` extension for 64-bit scalars —
+    /// naga gates `f64` through validator `Capabilities::FLOAT64` and the
+    /// device gates it through `Features::SHADER_F64`, so the shader source
+    /// carries no directive. naga still rejects the kernel if the storage
+    /// elements disagree on width.
     #[test]
     fn f64_buffer_add_emits_naga_valid_wgsl() {
         assert_gpu_wgsl_valid(
