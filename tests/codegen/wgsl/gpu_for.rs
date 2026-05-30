@@ -66,9 +66,9 @@ use system.gpu
 use system.collections.array
 
 fn main()
-    let a = [1, 2, 3, 4]
-    let b = [5, 6, 7, 8]
-    var dst = [0, 0, 0, 0]
+    gpu let a = [1, 2, 3, 4]
+    gpu let b = [5, 6, 7, 8]
+    gpu var dst = [0, 0, 0, 0]
     gpu for i in 0..4
         dst[i] = a[i] + b[i]
 ",
@@ -85,9 +85,9 @@ use system.gpu
 use system.collections.array
 
 fn main()
-    let a = [1, 2, 3, 4]
-    let b = [5, 6, 7, 8]
-    var dst = [0, 0, 0, 0]
+    gpu let a = [1, 2, 3, 4]
+    gpu let b = [5, 6, 7, 8]
+    gpu var dst = [0, 0, 0, 0]
     gpu for i in 0..4
         dst[i] = a[i] + b[i]
 ",
@@ -118,9 +118,9 @@ use system.gpu
 use system.collections.array
 
 fn main()
-    let a = [1, 2, 3, 4]
-    let b = [5, 6, 7, 8]
-    var dst = [0, 0, 0, 0]
+    gpu let a = [1, 2, 3, 4]
+    gpu let b = [5, 6, 7, 8]
+    gpu var dst = [0, 0, 0, 0]
     gpu for i in 0..4
         dst[i] = a[i] + b[i]
 ",

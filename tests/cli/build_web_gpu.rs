@@ -16,9 +16,9 @@ const GPU_FOR_SOURCE: &str = r#"use system.io
 use system.gpu
 use system.collections.array
 
-let a = [1, 2, 3, 4]
-let b = [10, 20, 30, 40]
-var dst = [0, 0, 0, 0]
+gpu let a = [1, 2, 3, 4]
+gpu let b = [10, 20, 30, 40]
+gpu var dst = [0, 0, 0, 0]
 gpu for i in 0..4
     dst[i] = a[i] + b[i]
 println("done")
