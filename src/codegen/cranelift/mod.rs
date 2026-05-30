@@ -17,7 +17,7 @@ mod translator;
 mod types;
 mod vtable;
 
-use crate::ast::types::BuiltinCollectionKind;
+use crate::ast::types::{BuiltinCollectionKind, STRING_TYPE_NAME, TUPLE_TYPE_NAME};
 use crate::codegen::backend::{ArtifactFormat, Backend, CompiledArtifact};
 use crate::codegen::cranelift::translator::needs_out_pointer;
 use crate::error::CodegenError;
@@ -581,8 +581,8 @@ impl CraneliftBackend {
                     return None;
                 }
                 if BuiltinCollectionKind::from_name(name).is_some()
-                    || name == "String"
-                    || name == "Tuple"
+                    || name == STRING_TYPE_NAME
+                    || name == TUPLE_TYPE_NAME
                 {
                     return None;
                 }
