@@ -5,6 +5,7 @@ use clap::{ArgAction, Parser, Subcommand};
 use std::path::PathBuf;
 
 use crate::cli::version::version_ref;
+pub use crate::codegen::{BuildTarget, CpuBackend};
 
 /// Top-level CLI argument definition parsed by clap.
 #[derive(Parser, Debug)]
@@ -20,12 +21,8 @@ pub struct Cli {
     ///
     /// When enabled, the compiler checks RC invariants (StorageLive/Dead balance,
     /// no RC ops on parameters) and reports any violations as errors. Disabled
-    /// by default. Also enabled by setting MIRI_VERIFY_MIR=1 in the environment.
-    #[arg(
-        long,
-        global = true,
-        help = "Enable MIR verification after RC insertion"
-    )]
+    /// by default. Also enabled by setting MIRI_VERIFY_MIR to any non-empty value in the environment.
+    #[arg(long, global = true)]
     pub verify_mir: bool,
 }
 
@@ -94,31 +91,12 @@ pub enum Commands {
     },
 }
 
-/// CPU backend for code generation.
-#[derive(clap::ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum CpuBackend {
-    /// Cranelift: Fast compilation, good for development (default)
-    #[default]
-    Cranelift,
-    /// LLVM: Optimized compilation
-    Llvm,
-}
-
 /// Output format for test results.
-#[derive(clap::ValueEnum, Clone, Debug, Default)]
+#[derive(clap::ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TestFormat {
+    /// Pretty-printed test output (default)
     #[default]
     Pretty,
+    /// JSON-formatted test output
     Json,
-}
-
-/// Selectable build target.
-#[derive(clap::ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum BuildTarget {
-    /// Native executable for the host platform.
-    #[default]
-    Native,
-    /// Browser-runnable WebGPU bundle (HTML + WGSL + JS runtime).
-    #[value(name = "web-gpu")]
-    WebGpu,
 }
