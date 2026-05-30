@@ -425,6 +425,61 @@ pub fn captured_buffer_element(kind: &TypeKind) -> Option<Type> {
     }
 }
 
+/// Returns `true` for capture types the GPU dispatcher marshals as a plain
+/// `var<storage>` binding from a host `MiriArray`-shaped buffer: fixed-size
+/// `Array<T, N>` / `[T; N]`.
+///
+/// Kept in lock-step with `gpu_for::is_gpu_buffer_capture` (the MIR predicate
+/// that decides what actually becomes a storage binding). Two deliberate
+/// exclusions follow from that. `List<T>` is dynamic and has no fixed device
+/// storage layout — it can never be a `gpu for` capture, so annotating it with
+/// `gpu let` would not help; it is rejected as a non-buffer capture at MIR
+/// lowering instead. `GpuArray<T, N>` is a stdlib class wrapping an `Array`
+/// field with its own (deferred) device-marshaling story, and it cannot be
+/// made gpu-resident because it does not implement `Accelerable`.
+///
+/// The residency capture rule (GPU_DRAFT §6.4) therefore governs only the
+/// plain `Array` captures a `gpu let` can produce.
+pub fn is_residency_gated_buffer(kind: &TypeKind) -> bool {
+    match kind {
+        TypeKind::Array(_, _) => true,
+        TypeKind::Custom(name, _) => {
+            BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Array)
+        }
+        TypeKind::List(_)
+        | TypeKind::Int
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::I128
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::U128
+        | TypeKind::Float
+        | TypeKind::F32
+        | TypeKind::F64
+        | TypeKind::Boolean
+        | TypeKind::Void
+        | TypeKind::Error
+        | TypeKind::String
+        | TypeKind::Map(_, _)
+        | TypeKind::Set(_)
+        | TypeKind::Tuple(_)
+        | TypeKind::Result(_, _)
+        | TypeKind::Future(_)
+        | TypeKind::Option(_)
+        | TypeKind::Linear(_)
+        | TypeKind::Meta(_)
+        | TypeKind::RawPtr
+        | TypeKind::Identifier
+        | TypeKind::Function(_)
+        | TypeKind::Generic(_, _, _) => false,
+    }
+}
+
 fn extract_element_type(expr: &crate::ast::expression::Expression) -> Option<Type> {
     if let ExpressionKind::Type(ty, _) = &expr.node {
         Some((**ty).clone())
@@ -1669,6 +1724,30 @@ mod tests {
             methods: BTreeMap::<String, MethodInfo>::new(),
             module: "test".to_string(),
         })
+    }
+
+    // `gpu for` residency-gated buffer classification (must track the MIR
+    // `is_gpu_buffer_capture` predicate: fixed-size `Array` only).
+
+    #[test]
+    fn residency_gated_buffer_accepts_array() {
+        assert!(is_residency_gated_buffer(&TypeKind::Custom(
+            "Array".to_string(),
+            None
+        )));
+    }
+
+    #[test]
+    fn residency_gated_buffer_rejects_list_gpu_array_and_scalar() {
+        assert!(!is_residency_gated_buffer(&TypeKind::Custom(
+            "List".to_string(),
+            None
+        )));
+        assert!(!is_residency_gated_buffer(&TypeKind::Custom(
+            GPU_ARRAY_TYPE_NAME.to_string(),
+            None
+        )));
+        assert!(!is_residency_gated_buffer(&TypeKind::Int));
     }
 
     // Generic-parameter classification by constraint.
