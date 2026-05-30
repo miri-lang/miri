@@ -6,11 +6,11 @@
 //!
 //! These helpers stage everything wgpu needs (bind groups, storage buffers,
 //! readback, grid calculation) from the test harness, bypassing the
-//! Cranelift `miri_gpu_launch_inline` path. They exist because the native
-//! dispatch path has a documented `int → i32` width mismatch — see
-//! `super::launch` and PLAN M6.5 task "WGSL int-width fix". Once that lands,
-//! these helpers shrink to shader-level naga validation only (PLAN M6.5 task
-//! "Helper-shrink").
+//! Cranelift `miri_gpu_launch_inline` path. The WGSL scalar mapping now aligns
+//! host and device widths (`int → i64`, `float → f64`), so `super::launch`
+//! owns end-to-end value coverage; these helpers cover kernel shapes whose
+//! native-dispatch variants are still being designed and shrink to
+//! shader-level naga validation once those land (PLAN M6.5 "Helper-shrink").
 
 use std::sync::mpsc;
 
