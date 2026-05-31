@@ -62,13 +62,3 @@ pub fn release(handle_id: u64) -> bool {
 pub extern "C" fn miri_gpu_release(handle_id: u64) {
     let _ = release(handle_id);
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn release_of_absent_handle_is_a_noop() {
-        assert!(!release(u64::MAX));
-    }
-}

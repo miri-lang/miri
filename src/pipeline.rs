@@ -191,7 +191,7 @@ fn collect_runtime_info(
 /// Walks the AST looking for any GPU construct: `gpu for` statements or
 /// function declarations carrying `is_gpu: true`. Used by
 /// `collect_runtime_info` to decide whether to link `libmiri_runtime_gpu`.
-fn program_uses_gpu<'a, I: IntoIterator<Item = &'a Statement>>(stmts: I) -> bool {
+pub fn program_uses_gpu<'a, I: IntoIterator<Item = &'a Statement>>(stmts: I) -> bool {
     for stmt in stmts {
         if stmt_uses_gpu(stmt) {
             return true;
@@ -1677,54 +1677,4 @@ fn runtime_library_dir(runtime: &RuntimeKind) -> Result<PathBuf, CompilerError> 
         "Could not find runtime library '{}'. Set MIRI_RUNTIME_DIR or build the runtime with `cargo build --release`.",
         runtime.library_name()
     )))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::program_uses_gpu;
-    use crate::pipeline::Pipeline;
-
-    fn detects_gpu(source: &str) -> bool {
-        let pipeline = Pipeline::new();
-        let result = pipeline.frontend_script(source).expect("frontend");
-        program_uses_gpu(result.ast.body.iter())
-    }
-
-    #[test]
-    fn program_uses_gpu_finds_gpu_for_at_top_level() {
-        assert!(detects_gpu(
-            "
-use system.gpu
-use system.collections.array
-
-let dst = [0, 0, 0, 0]
-gpu for i in 0..4
-    let x = i
-"
-        ));
-    }
-
-    #[test]
-    fn program_uses_gpu_walks_into_class_body() {
-        assert!(detects_gpu(
-            "
-use system.gpu
-
-class Worker
-    gpu fn kernel()
-        let x = 1
-"
-        ));
-    }
-
-    #[test]
-    fn program_uses_gpu_false_for_cpu_only_program() {
-        assert!(!detects_gpu(
-            "
-use system.io
-fn main()
-    println(\"hello\")
-"
-        ));
-    }
 }

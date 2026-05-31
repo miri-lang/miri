@@ -4,12 +4,14 @@
 pub mod array;
 pub mod await_expression;
 pub mod boolean;
+pub mod builtins;
 pub mod class;
 pub mod conditional_expression;
 pub mod constant;
 pub mod constructor;
 pub mod control_flow;
 pub mod division_by_zero;
+pub mod escape_analysis;
 pub mod float;
 pub mod function;
 pub mod generic_constraints;

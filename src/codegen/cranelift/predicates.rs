@@ -21,7 +21,7 @@ impl<'a> FunctionTranslator<'a> {
     /// `TypeKind::Custom` form (where `BuiltinCollectionKind::from_name` is
     /// `Some`) into a single `ElementShape::Builtin` representation so
     /// dispatch sites match once.
-    pub(crate) fn classify_element_shape(kind: &TypeKind) -> ElementShape<'_> {
+    pub fn classify_element_shape(kind: &TypeKind) -> ElementShape<'_> {
         match kind {
             TypeKind::String => ElementShape::String,
             TypeKind::List(_) => ElementShape::Builtin(BuiltinCollectionKind::List),
@@ -235,12 +235,12 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Returns true if the given type is a List (dynamic collection).
-    pub(crate) fn is_list_type(kind: &TypeKind) -> bool {
+    pub fn is_list_type(kind: &TypeKind) -> bool {
         kind.as_builtin_collection() == Some(BuiltinCollectionKind::List)
     }
 
     /// Returns true if the type kind is an unsigned integer.
-    pub(crate) fn is_unsigned_type_kind(kind: &TypeKind) -> bool {
+    pub fn is_unsigned_type_kind(kind: &TypeKind) -> bool {
         matches!(
             kind,
             TypeKind::U8 | TypeKind::U16 | TypeKind::U32 | TypeKind::U64 | TypeKind::U128
@@ -248,17 +248,17 @@ impl<'a> FunctionTranslator<'a> {
     }
 
     /// Returns true if the given type is an Array, List, Map, or Set collection.
-    pub(crate) fn is_collection_type(kind: &TypeKind) -> bool {
+    pub fn is_collection_type(kind: &TypeKind) -> bool {
         kind.as_builtin_collection().is_some()
     }
 
     /// Returns true if the given type is a Map.
-    pub(crate) fn is_map_type(kind: &TypeKind) -> bool {
+    pub fn is_map_type(kind: &TypeKind) -> bool {
         kind.as_builtin_collection() == Some(BuiltinCollectionKind::Map)
     }
 
     /// Returns true if the given type is a Set.
-    pub(crate) fn is_set_type(kind: &TypeKind) -> bool {
+    pub fn is_set_type(kind: &TypeKind) -> bool {
         kind.as_builtin_collection() == Some(BuiltinCollectionKind::Set)
     }
 

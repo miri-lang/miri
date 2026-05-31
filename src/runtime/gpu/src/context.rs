@@ -11,7 +11,7 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 use wgpu::{Adapter, Device, Features, Instance, Queue};
 
-static GPU_CONTEXT: OnceCell<Arc<GpuContext>> = OnceCell::new();
+pub static GPU_CONTEXT: OnceCell<Arc<GpuContext>> = OnceCell::new();
 
 #[derive(Debug, Clone)]
 pub enum GpuError {
@@ -145,7 +145,7 @@ fn build_device_info(adapter: &Adapter) -> GpuDeviceInfo {
     info
 }
 
-fn encode_device_type(device_type: wgpu::DeviceType) -> u8 {
+pub fn encode_device_type(device_type: wgpu::DeviceType) -> u8 {
     match device_type {
         wgpu::DeviceType::Other => 0,
         wgpu::DeviceType::IntegratedGpu => 1,
@@ -155,7 +155,7 @@ fn encode_device_type(device_type: wgpu::DeviceType) -> u8 {
     }
 }
 
-fn encode_backend(backend: wgpu::Backend) -> u8 {
+pub fn encode_backend(backend: wgpu::Backend) -> u8 {
     match backend {
         wgpu::Backend::Noop => 0,
         wgpu::Backend::Vulkan => 1,
@@ -254,46 +254,5 @@ pub extern "C" fn miri_gpu_sync() {
 pub extern "C" fn miri_gpu_shutdown() {
     if let Ok(ctx) = get_gpu_context() {
         let _ = ctx.device.poll(wgpu::PollType::wait_indefinitely());
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn miri_gpu_init_is_pure() {
-        let _ = miri_gpu_init();
-    }
-
-    #[test]
-    fn miri_gpu_is_available_matches_context_presence() {
-        // The two functions must agree: `is_available` is the contract
-        // exposed to Miri source via `system.gpu.is_gpu_available()`.
-        let observed = miri_gpu_is_available();
-        let actual_presence = u8::from(GPU_CONTEXT.get().is_some());
-        assert_eq!(
-            observed, actual_presence,
-            "is_available must mirror GPU_CONTEXT state without reinitializing"
-        );
-    }
-
-    #[test]
-    fn device_info_encodes_device_type_exhaustively() {
-        assert_eq!(encode_device_type(wgpu::DeviceType::Other), 0);
-        assert_eq!(encode_device_type(wgpu::DeviceType::IntegratedGpu), 1);
-        assert_eq!(encode_device_type(wgpu::DeviceType::DiscreteGpu), 2);
-        assert_eq!(encode_device_type(wgpu::DeviceType::VirtualGpu), 3);
-        assert_eq!(encode_device_type(wgpu::DeviceType::Cpu), 4);
-    }
-
-    #[test]
-    fn device_info_encodes_backend_exhaustively() {
-        assert_eq!(encode_backend(wgpu::Backend::Noop), 0);
-        assert_eq!(encode_backend(wgpu::Backend::Vulkan), 1);
-        assert_eq!(encode_backend(wgpu::Backend::Metal), 2);
-        assert_eq!(encode_backend(wgpu::Backend::Dx12), 3);
-        assert_eq!(encode_backend(wgpu::Backend::Gl), 4);
-        assert_eq!(encode_backend(wgpu::Backend::BrowserWebGpu), 5);
     }
 }

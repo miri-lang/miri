@@ -234,7 +234,7 @@ unsafe fn new_storage_buffer_with_upload(
 /// reject the kernel later with a generic message; surfacing the cause
 /// upfront keeps the diagnostic source-relevant (which scalar) instead of
 /// pipeline-relevant (which wgpu validator rule fired).
-fn check_required_shader_features(wgsl: &str, enabled: Features) -> Result<(), GpuError> {
+pub fn check_required_shader_features(wgsl: &str, enabled: Features) -> Result<(), GpuError> {
     let needs_int64 = wgsl_uses_scalar(wgsl, "i64") || wgsl_uses_scalar(wgsl, "u64");
     let needs_f64 = wgsl_uses_scalar(wgsl, "f64");
     if needs_int64 && !enabled.contains(Features::SHADER_INT64) {
@@ -255,7 +255,7 @@ fn check_required_shader_features(wgsl: &str, enabled: Features) -> Result<(), G
 /// `xi64y` does not match `i64`. The WGSL emitter never produces 64-bit
 /// keywords as substrings of user-derived identifiers, so this scan is
 /// stable against the entire output of the WGSL backend.
-fn wgsl_uses_scalar(wgsl: &str, name: &str) -> bool {
+pub fn wgsl_uses_scalar(wgsl: &str, name: &str) -> bool {
     let bytes = wgsl.as_bytes();
     let needle = name.as_bytes();
     if needle.is_empty() || bytes.len() < needle.len() {
@@ -445,71 +445,6 @@ unsafe fn readback_device_buffer(
 
 fn align_to_4(value: usize) -> usize {
     (value + 3) & !3
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn readback_with_null_array_fails() {
-        let result = unsafe { miri_gpu_readback(1, std::ptr::null()) };
-        assert_eq!(result, 0);
-    }
-
-    #[test]
-    fn scalar_scan_matches_whole_tokens_only() {
-        assert!(wgsl_uses_scalar("var<storage> a: array<i64>;", "i64"));
-        assert!(wgsl_uses_scalar("let x = f64(1.0);", "f64"));
-        assert!(!wgsl_uses_scalar("var v: vec4<f32>;", "f64"));
-        // A 64-bit keyword embedded in a longer identifier is not a match.
-        assert!(!wgsl_uses_scalar("var xi64y: i32;", "i64"));
-        assert!(!wgsl_uses_scalar("var i64x: i32;", "i64"));
-    }
-
-    #[test]
-    fn i64_kernel_refused_without_shader_int64() {
-        let wgsl = "@group(0) @binding(0) var<storage, read_write> a: array<i64>;";
-        let err = check_required_shader_features(wgsl, Features::empty())
-            .expect_err("i64 kernel must be refused when SHADER_INT64 is absent");
-        assert!(matches!(err, GpuError::UnsupportedScalar(_)));
-    }
-
-    #[test]
-    fn f64_kernel_refused_without_shader_f64() {
-        let wgsl = "@group(0) @binding(0) var<storage, read_write> a: array<f64>;";
-        let err = check_required_shader_features(wgsl, Features::SHADER_INT64)
-            .expect_err("f64 kernel must be refused when SHADER_F64 is absent");
-        assert!(matches!(err, GpuError::UnsupportedScalar(_)));
-    }
-
-    #[test]
-    fn scalar_kernel_passes_when_features_present() {
-        let wgsl = "var<storage> a: array<i64>; var<storage> b: array<f64>;";
-        let enabled = Features::SHADER_INT64 | Features::SHADER_F64;
-        assert!(check_required_shader_features(wgsl, enabled).is_ok());
-    }
-
-    #[test]
-    fn i32_kernel_needs_no_64bit_feature() {
-        let wgsl = "@group(0) @binding(0) var<storage, read_write> a: array<i32>;";
-        assert!(check_required_shader_features(wgsl, Features::empty()).is_ok());
-    }
-
-    #[test]
-    fn readback_of_unbacked_handle_is_a_noop_success() {
-        // A handle never captured by a launch has no resident buffer; the
-        // host array is already authoritative, so the readback succeeds
-        // without touching the device.
-        let mut bytes = [0u8; 16];
-        let header = MiriArrayHeader {
-            data: bytes.as_mut_ptr(),
-            elem_count: 4,
-            elem_size: 4,
-        };
-        let result = unsafe { miri_gpu_readback(u64::MAX, &header) };
-        assert_eq!(result, 1);
-    }
 }
 
 /// Leading fields of `runtime::core::MiriArray` (`repr(C)`), mirrored here so

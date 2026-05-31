@@ -29,7 +29,7 @@ static RC_ALLOC_BALANCE: AtomicIsize = AtomicIsize::new(0);
 /// Closures use `libc::malloc` directly (not `alloc_with_rc`) because their layout
 /// has an extra `malloc_ptr` header word. This separate counter lets the leak-check
 /// atexit handler catch closure-only leaks that `RC_ALLOC_BALANCE` would miss.
-static CLOSURE_ALLOC_BALANCE: AtomicIsize = AtomicIsize::new(0);
+pub static CLOSURE_ALLOC_BALANCE: AtomicIsize = AtomicIsize::new(0);
 
 /// Registers an `atexit` handler that checks the allocation balance.
 /// Called once on first allocation. Prints a diagnostic to stderr if
@@ -173,48 +173,4 @@ pub unsafe extern "C" fn miri_rt_closure_free_track() {
 pub unsafe extern "C" fn miri_rt_test_simulate_closure_leak() {
     ensure_leak_check_registered();
     CLOSURE_ALLOC_BALANCE.fetch_add(1, Ordering::SeqCst);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn closure_alloc_track_increments_balance() {
-        let before = CLOSURE_ALLOC_BALANCE.load(Ordering::SeqCst);
-        unsafe { miri_rt_closure_alloc_track() };
-        let after = CLOSURE_ALLOC_BALANCE.load(Ordering::SeqCst);
-        assert_eq!(
-            after,
-            before + 1,
-            "alloc_track must increment CLOSURE_ALLOC_BALANCE"
-        );
-        // Restore balance so other tests are unaffected.
-        unsafe { miri_rt_closure_free_track() };
-    }
-
-    #[test]
-    fn closure_free_track_decrements_balance() {
-        let before = CLOSURE_ALLOC_BALANCE.load(Ordering::SeqCst);
-        unsafe { miri_rt_closure_alloc_track() };
-        unsafe { miri_rt_closure_free_track() };
-        let after = CLOSURE_ALLOC_BALANCE.load(Ordering::SeqCst);
-        assert_eq!(
-            after, before,
-            "balanced alloc+free must leave CLOSURE_ALLOC_BALANCE unchanged"
-        );
-    }
-
-    #[test]
-    fn unmatched_alloc_leaves_nonzero_balance() {
-        let before = CLOSURE_ALLOC_BALANCE.load(Ordering::SeqCst);
-        unsafe { miri_rt_closure_alloc_track() };
-        let mid = CLOSURE_ALLOC_BALANCE.load(Ordering::SeqCst);
-        assert_ne!(
-            mid, before,
-            "unmatched alloc_track must leave a non-zero residual"
-        );
-        // Restore.
-        unsafe { miri_rt_closure_free_track() };
-    }
 }
