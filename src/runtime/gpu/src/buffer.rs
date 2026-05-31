@@ -31,7 +31,7 @@ impl BufferUsage {
     pub const MAP_READ: Self = Self(64);
     pub const MAP_WRITE: Self = Self(128);
 
-    fn to_wgpu(self) -> BufferUsages {
+    pub fn to_wgpu(self) -> BufferUsages {
         let mut usage = BufferUsages::empty();
         if self.0 & Self::STORAGE.0 != 0 {
             usage |= BufferUsages::STORAGE;
@@ -159,7 +159,7 @@ impl GpuBuffer {
     }
 }
 
-fn elem_count_from_bytes(bytes: usize, elem_size: usize) -> usize {
+pub fn elem_count_from_bytes(bytes: usize, elem_size: usize) -> usize {
     bytes.checked_div(elem_size).unwrap_or(0)
 }
 
@@ -335,28 +335,5 @@ pub unsafe extern "C" fn miri_gpu_buffer_free(handle: *mut GpuBufferHandle) {
         let id = (*handle).id;
         remove_buffer(id);
         let _ = Box::from_raw(handle);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn usage_flags_compose_into_wgpu_bitset() {
-        let usage = BufferUsage(BufferUsage::STORAGE.0 | BufferUsage::COPY_DST.0);
-        let wgpu_usage = usage.to_wgpu();
-        assert!(wgpu_usage.contains(BufferUsages::STORAGE));
-        assert!(wgpu_usage.contains(BufferUsages::COPY_DST));
-    }
-
-    #[test]
-    fn elem_count_from_bytes_zero_elem_size_returns_zero() {
-        assert_eq!(elem_count_from_bytes(64, 0), 0);
-    }
-
-    #[test]
-    fn elem_count_from_bytes_divides_by_elem_size() {
-        assert_eq!(elem_count_from_bytes(64, 4), 16);
     }
 }

@@ -5,4 +5,5 @@ pub mod common;
 pub mod factory;
 pub mod literal;
 pub mod normalize;
+pub mod script;
 pub mod types;

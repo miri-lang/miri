@@ -1,13 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
+use miri::ast::factory::make_type;
 use miri::ast::types::Type;
+use miri::ast::types::{TypeDeclarationKind, TypeKind};
 use miri::ast::{Statement, StatementKind};
 use miri::error::compiler::CompilerError;
 use miri::lexer::Lexer;
 use miri::parser::Parser;
 use miri::pipeline::Pipeline;
+use miri::type_checker::context::{
+    ClassDefinition, FieldInfo, MethodInfo, StructDefinition, TraitDefinition, TypeDefinition,
+};
+use miri::type_checker::utils::{is_residency_gated_buffer, is_resource};
 use miri::type_checker::TypeChecker;
+use std::collections::{BTreeMap, HashMap};
 
 pub fn type_checker_test(source: &str) {
     let pipeline = Pipeline::new();
@@ -308,4 +315,124 @@ pub fn count_warnings_with_code(source: &str, code: &str) -> usize {
         .iter()
         .filter(|w| w.code == Some(code))
         .count()
+}
+
+fn struct_def(has_drop: bool) -> TypeDefinition {
+    TypeDefinition::Struct(StructDefinition {
+        fields: vec![],
+        generics: None,
+        module: "test".to_string(),
+        has_drop,
+    })
+}
+
+fn class_def(has_drop: bool) -> TypeDefinition {
+    TypeDefinition::Class(ClassDefinition {
+        name: "C".to_string(),
+        generics: None,
+        base_class: None,
+        base_class_args: None,
+        traits: vec![],
+        fields: vec![] as Vec<(String, FieldInfo)>,
+        methods: BTreeMap::<String, MethodInfo>::new(),
+        module: "test".to_string(),
+        is_abstract: false,
+        has_drop,
+    })
+}
+
+fn trait_def() -> TypeDefinition {
+    TypeDefinition::Trait(TraitDefinition {
+        name: "T".to_string(),
+        generics: None,
+        parent_traits: vec![],
+        parent_trait_args: BTreeMap::new(),
+        methods: BTreeMap::<String, MethodInfo>::new(),
+        module: "test".to_string(),
+    })
+}
+
+// `gpu for` residency-gated buffer classification (must track the MIR
+// `is_gpu_buffer_capture` predicate: fixed-size `Array` only).
+
+#[test]
+fn residency_gated_buffer_accepts_array() {
+    assert!(is_residency_gated_buffer(&TypeKind::Custom(
+        "Array".to_string(),
+        None
+    )));
+}
+
+#[test]
+fn residency_gated_buffer_rejects_list_and_scalar() {
+    assert!(!is_residency_gated_buffer(&TypeKind::Custom(
+        "List".to_string(),
+        None
+    )));
+    assert!(!is_residency_gated_buffer(&TypeKind::Int));
+}
+
+// Generic-parameter classification by constraint.
+
+#[test]
+fn unbounded_generic_is_not_resource() {
+    let defs: HashMap<String, TypeDefinition> = HashMap::new();
+    let g = TypeKind::Generic("T".to_string(), None, TypeDeclarationKind::None);
+    assert!(!is_resource(&g, &defs));
+}
+
+#[test]
+fn generic_bounded_by_managed_class_is_not_resource() {
+    let mut defs = HashMap::new();
+    defs.insert("Greeter".to_string(), class_def(false));
+    let bound = make_type(TypeKind::Custom("Greeter".to_string(), None));
+    let g = TypeKind::Generic(
+        "T".to_string(),
+        Some(Box::new(bound)),
+        TypeDeclarationKind::Extends,
+    );
+    assert!(!is_resource(&g, &defs));
+}
+
+#[test]
+fn generic_bounded_by_resource_class_is_resource() {
+    let mut defs = HashMap::new();
+    defs.insert("Conn".to_string(), class_def(true));
+    let bound = make_type(TypeKind::Custom("Conn".to_string(), None));
+    let g = TypeKind::Generic(
+        "T".to_string(),
+        Some(Box::new(bound)),
+        TypeDeclarationKind::Extends,
+    );
+    assert!(is_resource(&g, &defs));
+}
+
+#[test]
+fn generic_bounded_by_resource_struct_is_resource() {
+    let mut defs = HashMap::new();
+    defs.insert("Handle".to_string(), struct_def(true));
+    let bound = make_type(TypeKind::Custom("Handle".to_string(), None));
+    let g = TypeKind::Generic(
+        "T".to_string(),
+        Some(Box::new(bound)),
+        TypeDeclarationKind::Extends,
+    );
+    assert!(is_resource(&g, &defs));
+}
+
+#[test]
+fn generic_bounded_by_trait_is_not_resource() {
+    // Traits have no `has_drop` axis today, so a trait-bounded generic is
+    // managed-typed.  If a future feature attaches resource
+    // semantics to a trait, this test will fail and the classification
+    // strategy must be revisited.
+    let mut defs = HashMap::new();
+    defs.insert("Drawable".to_string(), trait_def());
+    let bound = make_type(TypeKind::Custom("Drawable".to_string(), None));
+    let g = TypeKind::Generic(
+        "T".to_string(),
+        Some(Box::new(bound)),
+        TypeDeclarationKind::Implements,
+    );
+    assert!(!is_resource(&g, &defs));
 }

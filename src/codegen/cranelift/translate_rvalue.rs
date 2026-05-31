@@ -1727,7 +1727,7 @@ impl<'a> FunctionTranslator<'a> {
     /// True when an operand references the whole base local rather than a
     /// projected component (field / index / deref). Used to gate code paths
     /// that interpret the operand's value as a full aggregate.
-    fn operand_has_no_projection(operand: &Operand) -> bool {
+    pub fn operand_has_no_projection(operand: &Operand) -> bool {
         match operand {
             Operand::Copy(place) | Operand::Move(place) => place.projection.is_empty(),
             Operand::Constant(_) => true,
@@ -1835,40 +1835,5 @@ impl<'a> FunctionTranslator<'a> {
         };
 
         Ok(result)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ast::literal::Literal;
-    use crate::ast::types::Type;
-    use crate::error::syntax::Span;
-    use crate::mir::{Local, Place};
-
-    fn ty(kind: TypeKind) -> Type {
-        Type::new(kind, Span::default())
-    }
-
-    #[test]
-    fn operand_has_no_projection_recognizes_bare_locals_and_constants() {
-        let bare = Operand::Copy(Place {
-            local: Local(0),
-            projection: Vec::new(),
-        });
-        assert!(FunctionTranslator::operand_has_no_projection(&bare));
-
-        let projected = Operand::Copy(Place {
-            local: Local(0),
-            projection: vec![crate::mir::PlaceElem::Field(0)],
-        });
-        assert!(!FunctionTranslator::operand_has_no_projection(&projected));
-
-        let constant = Operand::Constant(Box::new(Constant {
-            span: Span::default(),
-            ty: ty(TypeKind::Int),
-            literal: Literal::Integer(crate::ast::literal::IntegerLiteral::I64(42)),
-        }));
-        assert!(FunctionTranslator::operand_has_no_projection(&constant));
     }
 }

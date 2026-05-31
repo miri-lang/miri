@@ -75,7 +75,7 @@ impl OptimizationPass for RcElision {
 /// Process one basic block, removing provably redundant (IncRef, DecRef) pairs.
 ///
 /// Returns true if any statements were removed.
-fn elide_block(
+pub fn elide_block(
     block: &mut crate::mir::block::BasicBlockData,
     has_drop_types: &HashSet<String>,
     local_decls: &[crate::mir::LocalDecl],
@@ -177,7 +177,11 @@ fn type_has_destructor(
 }
 
 /// Find the first `DecRef(local)` at or after `start_pos`, with no projection.
-fn find_decref(stmts: &[crate::mir::Statement], local: Local, start_pos: usize) -> Option<usize> {
+pub fn find_decref(
+    stmts: &[crate::mir::Statement],
+    local: Local,
+    start_pos: usize,
+) -> Option<usize> {
     for (i, stmt) in stmts.iter().enumerate().skip(start_pos) {
         if let StatementKind::DecRef(p) = &stmt.kind {
             if p.local == local && p.projection.is_empty() {
@@ -189,7 +193,7 @@ fn find_decref(stmts: &[crate::mir::Statement], local: Local, start_pos: usize) 
 }
 
 /// Returns true if `DecRef(local)` appears in statements `[start, end)`.
-fn decref_in_range(
+pub fn decref_in_range(
     stmts: &[crate::mir::Statement],
     local: Local,
     start: usize,
@@ -236,218 +240,4 @@ pub fn count_all_rc_ops(body: &Body) -> (usize, usize) {
         }
     }
     (incref, decref)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::error::syntax::Span;
-    use crate::mir::statement::StatementKind;
-    use crate::mir::terminator::TerminatorKind;
-    use crate::mir::{Place, Statement};
-
-    fn span() -> Span {
-        Span::new(0, 0)
-    }
-
-    fn make_incref(local: Local) -> Statement {
-        Statement {
-            kind: StatementKind::IncRef(Place {
-                local,
-                projection: vec![],
-            }),
-            span: span(),
-        }
-    }
-
-    fn make_decref(local: Local) -> Statement {
-        Statement {
-            kind: StatementKind::DecRef(Place {
-                local,
-                projection: vec![],
-            }),
-            span: span(),
-        }
-    }
-
-    fn make_assign(dest: Local, src: Local) -> Statement {
-        Statement {
-            kind: StatementKind::Assign(
-                Place {
-                    local: dest,
-                    projection: vec![],
-                },
-                crate::mir::Rvalue::Use(Operand::Copy(Place {
-                    local: src,
-                    projection: vec![],
-                })),
-            ),
-            span: span(),
-        }
-    }
-
-    fn make_nop() -> Statement {
-        Statement {
-            kind: StatementKind::StorageLive(Place {
-                local: Local(99),
-                projection: vec![],
-            }),
-            span: span(),
-        }
-    }
-
-    fn make_local_decls_string(count: usize) -> Vec<crate::mir::LocalDecl> {
-        use crate::ast::types::{Type, TypeKind};
-        use crate::mir::LocalDecl;
-        let string_ty = Type::new(TypeKind::String, span());
-        (0..count)
-            .map(|_| LocalDecl::new(string_ty.clone(), span()))
-            .collect()
-    }
-
-    // ─── decref_in_range ─────────────────────────────────────────────────────
-
-    #[test]
-    fn test_decref_in_range_finds_in_range() {
-        let l = Local(0);
-        let stmts = vec![make_decref(l)];
-        assert!(decref_in_range(&stmts, l, 0, 1));
-    }
-
-    #[test]
-    fn test_decref_in_range_empty_range_returns_false() {
-        let l = Local(0);
-        let stmts = vec![make_decref(l)];
-        assert!(!decref_in_range(&stmts, l, 0, 0));
-    }
-
-    #[test]
-    fn test_decref_in_range_target_after_end_returns_false() {
-        let l = Local(0);
-        let stmts = vec![make_nop(), make_nop(), make_decref(l)];
-        // range [0, 2) does not cover position 2
-        assert!(!decref_in_range(&stmts, l, 0, 2));
-    }
-
-    #[test]
-    fn test_decref_in_range_different_local_returns_false() {
-        let l0 = Local(0);
-        let l1 = Local(1);
-        let stmts = vec![make_decref(l1)];
-        assert!(!decref_in_range(&stmts, l0, 0, 1));
-    }
-
-    #[test]
-    fn test_decref_in_range_end_clamps_to_len() {
-        let l = Local(0);
-        let stmts = vec![make_decref(l)];
-        // end=100 should clamp to stmts.len()=1 — the DecRef at [0] is in [0,1)
-        assert!(decref_in_range(&stmts, l, 0, 100));
-    }
-
-    // ─── find_decref ─────────────────────────────────────────────────────────
-
-    #[test]
-    fn test_find_decref_finds_at_start() {
-        let l = Local(0);
-        let stmts = vec![make_decref(l)];
-        assert_eq!(find_decref(&stmts, l, 0), Some(0));
-    }
-
-    #[test]
-    fn test_find_decref_finds_after_skip() {
-        let l = Local(0);
-        let stmts = vec![make_nop(), make_decref(l)];
-        assert_eq!(find_decref(&stmts, l, 1), Some(1));
-    }
-
-    #[test]
-    fn test_find_decref_not_found_returns_none() {
-        let l = Local(0);
-        let stmts = vec![make_nop(), make_nop()];
-        assert_eq!(find_decref(&stmts, l, 0), None);
-    }
-
-    #[test]
-    fn test_find_decref_skips_before_start() {
-        let l = Local(0);
-        let stmts = vec![make_decref(l), make_nop()];
-        // start=1 skips the DecRef at 0
-        assert_eq!(find_decref(&stmts, l, 1), None);
-    }
-
-    // ─── elide_block: decref_in_range safety gate ────────────────────────────
-
-    fn make_block(stmts: Vec<Statement>) -> crate::mir::block::BasicBlockData {
-        crate::mir::block::BasicBlockData {
-            statements: stmts,
-            terminator: Some(crate::mir::Terminator {
-                kind: TerminatorKind::Return,
-                span: span(),
-            }),
-            is_cleanup: false,
-        }
-    }
-
-    /// If DecRef(src) appears between the copy and DecRef(dest), elision must
-    /// NOT fire — src could be freed before dest's alias is cleaned up.
-    #[test]
-    fn test_elision_blocked_by_decref_in_range() {
-        // Pattern:
-        //   0: IncRef(src)
-        //   1: dest = Copy(src)
-        //   2: DecRef(src)     ← src freed before dest's DecRef
-        //   3: DecRef(dest)
-        let src = Local(1);
-        let dest = Local(2);
-
-        let mut block = make_block(vec![
-            make_incref(src),
-            make_assign(dest, src),
-            make_decref(src),
-            make_decref(dest),
-        ]);
-        let has_drop: HashSet<String> = HashSet::new();
-        let local_decls = make_local_decls_string(3);
-
-        let changed = elide_block(&mut block, &has_drop, &local_decls);
-
-        assert!(
-            !changed,
-            "elide_block must not fire when DecRef(src) precedes DecRef(dest)"
-        );
-        assert_eq!(
-            block.statements.len(),
-            4,
-            "all 4 statements must be preserved"
-        );
-    }
-
-    /// Confirm that without the DecRef(src) in range, the pair IS elided.
-    #[test]
-    fn test_elision_fires_without_decref_in_range() {
-        // Pattern:
-        //   0: IncRef(src)
-        //   1: dest = Copy(src)
-        //   2: DecRef(dest)    ← no DecRef(src) in [2, 2) — safe
-        let src = Local(1);
-        let dest = Local(2);
-
-        let mut block = make_block(vec![
-            make_incref(src),
-            make_assign(dest, src),
-            make_decref(dest),
-        ]);
-        let has_drop: HashSet<String> = HashSet::new();
-        let local_decls = make_local_decls_string(3);
-
-        let changed = elide_block(&mut block, &has_drop, &local_decls);
-
-        assert!(changed, "elide_block must fire for a clean linear pair");
-        assert_eq!(
-            block.statements.len(),
-            1,
-            "only the Assign should remain after elision"
-        );
-    }
 }
