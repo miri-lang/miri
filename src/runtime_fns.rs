@@ -314,16 +314,3 @@ pub fn cow_fn(kind: BuiltinCollectionKind) -> Option<&'static str> {
         BuiltinCollectionKind::Array => None,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cow_fn_returns_correct_values() {
-        assert_eq!(cow_fn(BuiltinCollectionKind::List), Some(rt::LIST_COW));
-        assert_eq!(cow_fn(BuiltinCollectionKind::Set), Some(rt::SET_COW));
-        assert_eq!(cow_fn(BuiltinCollectionKind::Map), Some(rt::MAP_COW));
-        assert_eq!(cow_fn(BuiltinCollectionKind::Array), None);
-    }
-}

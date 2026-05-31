@@ -13,7 +13,7 @@ mod predicates;
 mod rc;
 pub mod translate_rvalue;
 pub mod translate_statement;
-mod translator;
+pub mod translator;
 mod types;
 mod vtable;
 

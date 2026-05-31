@@ -63,17 +63,17 @@ pub(crate) struct ModuleCtx<'a> {
 }
 
 /// Context for type information during translation.
-pub(crate) struct TypeCtx<'a> {
-    pub(crate) local_types: &'a [&'a Type],
-    pub(crate) type_definitions: &'a HashMap<String, TypeDefinition>,
-    pub(crate) ptr_type: cl_types::Type,
+pub struct TypeCtx<'a> {
+    pub local_types: &'a [&'a Type],
+    pub type_definitions: &'a HashMap<String, TypeDefinition>,
+    pub ptr_type: cl_types::Type,
     /// Maps each closure local to the ordered AST types of its captured variables.
     /// Used by `read_place` and `resolve_projected_type_kind` to translate
     /// `Field(i)` projections on closure locals into the correct capture type.
-    pub(crate) closure_capture_ast_types: &'a HashMap<crate::mir::Local, Vec<Type>>,
+    pub closure_capture_ast_types: &'a HashMap<crate::mir::Local, Vec<Type>>,
     /// For scalar `out` parameters: maps each param Local to the Cranelift Variable
     /// that holds the incoming pointer. Used by the Return terminator to write back.
-    pub(crate) out_param_ptr_vars: &'a HashMap<Local, Variable>,
+    pub out_param_ptr_vars: &'a HashMap<Local, Variable>,
 }
 
 /// One Cranelift runtime call site: which symbol to declare-and-call, its
@@ -108,7 +108,7 @@ pub(crate) fn empty_module_ctx<'a>(
 /// `Builtin(BuiltinCollectionKind)` variant so dispatch sites match once
 /// per shape instead of duplicating arms for each spelling.
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum ElementShape<'a> {
+pub enum ElementShape<'a> {
     /// String element — uses `miri_rt_string_decref_element`.
     String,
     /// Built-in collection element (List/Array/Set/Map) — uses the matching
@@ -127,7 +127,7 @@ pub(crate) enum ElementShape<'a> {
 /// their mutations are visible to callers without extra indirection.
 /// Primitive scalars (int, bool, floats) are passed by value and need a pointer
 /// so that callee modifications propagate back.
-pub(crate) fn needs_out_pointer(kind: &TypeKind) -> bool {
+pub fn needs_out_pointer(kind: &TypeKind) -> bool {
     matches!(
         kind,
         TypeKind::Int
@@ -1564,7 +1564,7 @@ impl<'a> FunctionTranslator<'a> {
 }
 
 /// Returns true if a field type is managed (heap-allocated, needs DecRef on drop).
-pub(crate) fn is_field_managed(kind: &TypeKind) -> bool {
+pub fn is_field_managed(kind: &TypeKind) -> bool {
     matches!(
         kind,
         TypeKind::Option(_)
@@ -1580,199 +1580,6 @@ pub(crate) fn is_field_managed(kind: &TypeKind) -> bool {
 
 /// Returns true if a closure capture type is managed and needs DecRef when the closure drops.
 /// Like `is_field_managed` but also includes `Function` (closures can capture other closures).
-pub(crate) fn is_capture_managed(kind: &TypeKind) -> bool {
+pub fn is_capture_managed(kind: &TypeKind) -> bool {
     matches!(kind, TypeKind::Function(_)) || is_field_managed(kind)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ast::expression::{Expression, ExpressionKind};
-    use crate::ast::types::Type;
-    use crate::error::syntax::Span;
-
-    fn ty(kind: TypeKind) -> Type {
-        Type::new(kind, Span::default())
-    }
-
-    fn expr_ty(kind: TypeKind) -> Expression {
-        Expression {
-            id: 0,
-            node: ExpressionKind::Type(Box::new(ty(kind)), false),
-            span: Span::default(),
-        }
-    }
-
-    #[test]
-    fn needs_out_pointer_yes_for_scalars() {
-        for k in [
-            TypeKind::Int,
-            TypeKind::I8,
-            TypeKind::U8,
-            TypeKind::I16,
-            TypeKind::U16,
-            TypeKind::I32,
-            TypeKind::U32,
-            TypeKind::I64,
-            TypeKind::U64,
-            TypeKind::I128,
-            TypeKind::U128,
-            TypeKind::F32,
-            TypeKind::F64,
-            TypeKind::Float,
-            TypeKind::Boolean,
-        ] {
-            assert!(needs_out_pointer(&k), "{:?} should need an out pointer", k);
-        }
-    }
-
-    #[test]
-    fn needs_out_pointer_no_for_managed() {
-        assert!(!needs_out_pointer(&TypeKind::String));
-        assert!(!needs_out_pointer(&TypeKind::List(Box::new(expr_ty(
-            TypeKind::Int
-        )))));
-        assert!(!needs_out_pointer(&TypeKind::Custom(
-            "MyClass".to_string(),
-            None
-        )));
-        assert!(!needs_out_pointer(&TypeKind::Void));
-    }
-
-    #[test]
-    fn classify_element_shape_built_in_canonical() {
-        let int_expr = Box::new(expr_ty(TypeKind::Int));
-        assert!(matches!(
-            FunctionTranslator::classify_element_shape(&TypeKind::String),
-            ElementShape::String
-        ));
-        assert!(matches!(
-            FunctionTranslator::classify_element_shape(&TypeKind::List(int_expr.clone())),
-            ElementShape::Builtin(BuiltinCollectionKind::List)
-        ));
-        assert!(matches!(
-            FunctionTranslator::classify_element_shape(&TypeKind::Array(
-                int_expr.clone(),
-                Box::new(expr_ty(TypeKind::Int))
-            )),
-            ElementShape::Builtin(BuiltinCollectionKind::Array)
-        ));
-        assert!(matches!(
-            FunctionTranslator::classify_element_shape(&TypeKind::Set(int_expr.clone())),
-            ElementShape::Builtin(BuiltinCollectionKind::Set)
-        ));
-        assert!(matches!(
-            FunctionTranslator::classify_element_shape(&TypeKind::Map(
-                int_expr.clone(),
-                int_expr.clone()
-            )),
-            ElementShape::Builtin(BuiltinCollectionKind::Map)
-        ));
-    }
-
-    #[test]
-    fn classify_element_shape_custom_collapses_to_builtin() {
-        let name = BuiltinCollectionKind::List.name().to_string();
-        let list_custom = TypeKind::Custom(name, Some(vec![expr_ty(TypeKind::Int)]));
-        assert!(matches!(
-            FunctionTranslator::classify_element_shape(&list_custom),
-            ElementShape::Builtin(BuiltinCollectionKind::List)
-        ));
-    }
-
-    #[test]
-    fn classify_element_shape_custom_user_class() {
-        let user = TypeKind::Custom("MyClass".to_string(), None);
-        let shape = FunctionTranslator::classify_element_shape(&user);
-        assert!(
-            matches!(shape, ElementShape::UserClass("MyClass")),
-            "expected UserClass(\"MyClass\"), got {:?}",
-            shape
-        );
-    }
-
-    #[test]
-    fn classify_element_shape_primitives_are_other() {
-        for k in [
-            TypeKind::Int,
-            TypeKind::Boolean,
-            TypeKind::F32,
-            TypeKind::Void,
-        ] {
-            assert!(matches!(
-                FunctionTranslator::classify_element_shape(&k),
-                ElementShape::Other
-            ));
-        }
-    }
-
-    #[test]
-    fn is_field_managed_classifies_heap_types() {
-        let int_expr = Box::new(expr_ty(TypeKind::Int));
-        assert!(is_field_managed(&TypeKind::String));
-        assert!(is_field_managed(&TypeKind::List(int_expr.clone())));
-        assert!(is_field_managed(&TypeKind::Custom(
-            "MyClass".to_string(),
-            None
-        )));
-        assert!(!is_field_managed(&TypeKind::Int));
-        assert!(!is_field_managed(&TypeKind::Boolean));
-    }
-
-    #[test]
-    fn is_capture_managed_includes_functions() {
-        use crate::ast::types::FunctionTypeData;
-        let fn_kind = TypeKind::Function(Box::new(FunctionTypeData {
-            generics: None,
-            params: Vec::new(),
-            return_type: None,
-        }));
-        assert!(is_capture_managed(&fn_kind));
-        // Reuses is_field_managed for everything else.
-        assert!(is_capture_managed(&TypeKind::String));
-        assert!(!is_capture_managed(&TypeKind::Int));
-    }
-
-    #[test]
-    fn is_unsigned_type_kind_only_unsigned_integers() {
-        for k in [
-            TypeKind::U8,
-            TypeKind::U16,
-            TypeKind::U32,
-            TypeKind::U64,
-            TypeKind::U128,
-        ] {
-            assert!(FunctionTranslator::is_unsigned_type_kind(&k));
-        }
-        for k in [
-            TypeKind::I8,
-            TypeKind::Int,
-            TypeKind::F32,
-            TypeKind::Boolean,
-        ] {
-            assert!(!FunctionTranslator::is_unsigned_type_kind(&k));
-        }
-    }
-
-    #[test]
-    fn is_list_set_map_collection_type_predicates() {
-        let int_expr = Box::new(expr_ty(TypeKind::Int));
-        assert!(FunctionTranslator::is_list_type(&TypeKind::List(
-            int_expr.clone()
-        )));
-        assert!(!FunctionTranslator::is_list_type(&TypeKind::Set(
-            int_expr.clone()
-        )));
-        assert!(FunctionTranslator::is_set_type(&TypeKind::Set(
-            int_expr.clone()
-        )));
-        assert!(FunctionTranslator::is_map_type(&TypeKind::Map(
-            int_expr.clone(),
-            int_expr.clone()
-        )));
-        assert!(FunctionTranslator::is_collection_type(&TypeKind::List(
-            int_expr.clone()
-        )));
-        assert!(!FunctionTranslator::is_collection_type(&TypeKind::String));
-    }
 }

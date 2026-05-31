@@ -30,7 +30,7 @@ use crate::error::type_error::TypeError;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
-mod builtins;
+pub mod builtins;
 mod compatibility;
 pub mod context;
 pub mod escape_analysis;
