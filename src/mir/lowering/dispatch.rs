@@ -301,112 +301,104 @@ fn try_lower_module_alias_call(
     args: &[Expression],
     dest: Option<Place>,
 ) -> Result<Option<Operand>, LoweringError> {
-    if let ExpressionKind::Identifier(alias_name, _) = &obj_expr.node {
-        if let Some(module_path) = ctx.type_checker.module_aliases.get(alias_name.as_str()) {
-            if module_path == "system.math" {
-                if let ExpressionKind::Identifier(func_name, _) = &method_expr.node {
-                    if let Some(intrinsic) = MathIntrinsic::from_name(func_name.as_str()) {
-                        let mut arg_ops = Vec::with_capacity(args.len());
-                        for arg in args {
-                            arg_ops.push(lower_expression(ctx, arg, None)?);
-                        }
+    let ExpressionKind::Identifier(alias_name, _) = &obj_expr.node else {
+        return Ok(None);
+    };
+    let ExpressionKind::Identifier(func_name, _) = &method_expr.node else {
+        return Ok(None);
+    };
+    let Some(module_path) = ctx
+        .type_checker
+        .module_aliases
+        .get(alias_name.as_str())
+        .cloned()
+    else {
+        return Ok(None);
+    };
 
-                        let return_ty = ctx
-                            .type_checker
-                            .get_type(call_expr_id)
-                            .cloned()
-                            .unwrap_or_else(|| Type::new(TypeKind::Void, *span));
-                        let (target, ret_op) = if let Some(ref d) = dest {
-                            (d.clone(), Operand::Copy(d.clone()))
-                        } else {
-                            let temp = ctx.push_temp(return_ty, *span);
-                            (Place::new(temp), Operand::Copy(Place::new(temp)))
-                        };
-
-                        ctx.push_statement(crate::mir::Statement {
-                            kind: StatementKind::Assign(
-                                target,
-                                Rvalue::MathIntrinsic(intrinsic, arg_ops),
-                            ),
-                            span: *span,
-                        });
-                        return Ok(Some(ret_op));
-                    }
-                }
-            }
-        }
-
-        let is_module_alias = ctx
-            .type_checker
-            .module_aliases
-            .contains_key(alias_name.as_str());
-        if is_module_alias {
-            if let ExpressionKind::Identifier(func_name, _) = &method_expr.node {
-                let mangled = if let Some(generic_args) =
-                    ctx.type_checker.call_generic_mappings.get(&call_expr_id)
-                {
-                    mangle_generic_name(func_name, generic_args)
-                } else {
-                    func_name.clone()
-                };
-
-                let func_op = Operand::Constant(Box::new(crate::mir::Constant {
-                    span: *span,
-                    ty: Type::new(TypeKind::Identifier, *span),
-                    literal: crate::ast::literal::Literal::Identifier(mangled),
-                }));
-
-                // Lower all arguments.
-                let mut arg_ops = Vec::with_capacity(args.len());
-                for arg in args {
-                    arg_ops.push(lower_expression(ctx, arg, None)?);
-                }
-
-                // Inject allocator if the target function expects it.
-                if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
-                    let already_has_alloc = arg_ops.iter().any(|op| {
-                        if let Operand::Copy(p) | Operand::Move(p) = op {
-                            p.local == alloc_local
-                        } else {
-                            false
-                        }
-                    });
-                    if !already_has_alloc {
-                        arg_ops.push(Operand::Copy(Place::new(alloc_local)));
-                    }
-                }
-
-                // Prepare return destination.
-                let return_ty = ctx
-                    .type_checker
-                    .get_type(call_expr_id)
-                    .cloned()
-                    .unwrap_or_else(|| Type::new(TypeKind::Void, *span));
-                let (destination, result_op) = if let Some(d) = dest {
-                    (d.clone(), Operand::Copy(d))
-                } else {
-                    let temp = ctx.push_temp(return_ty, *span);
-                    let p = Place::new(temp);
-                    (p.clone(), Operand::Copy(p))
-                };
-
-                let target_bb = ctx.new_basic_block();
-                ctx.set_terminator(crate::mir::Terminator::new(
-                    TerminatorKind::Call {
-                        func: func_op,
-                        args: arg_ops,
-                        out_args: Vec::new(),
-                        destination,
-                        target: Some(target_bb),
-                    },
-                    *span,
-                ));
-                ctx.set_current_block(target_bb);
-                return Ok(Some(result_op));
-            }
+    if module_path == "system.math" {
+        if let Some(intrinsic) = MathIntrinsic::from_name(func_name.as_str()) {
+            return lower_math_intrinsic_call(ctx, span, call_expr_id, intrinsic, args, dest)
+                .map(Some);
         }
     }
-    Ok(None)
+    lower_aliased_function_call(ctx, span, call_expr_id, func_name, args, dest)
+}
+
+/// Lower a `system.math` intrinsic call to a `MathIntrinsic` rvalue.
+fn lower_math_intrinsic_call(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    call_expr_id: usize,
+    intrinsic: MathIntrinsic,
+    args: &[Expression],
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let arg_ops = lower_plain_args(ctx, args)?;
+    let return_ty = ctx
+        .type_checker
+        .get_type(call_expr_id)
+        .cloned()
+        .unwrap_or_else(|| Type::new(TypeKind::Void, *span));
+    let (target, ret_op) = call_destination(ctx, return_ty, dest, *span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(target, Rvalue::MathIntrinsic(intrinsic, arg_ops)),
+        span: *span,
+    });
+    Ok(ret_op)
+}
+
+/// Lower a direct call to a function reached through a module alias.
+fn lower_aliased_function_call(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    call_expr_id: usize,
+    func_name: &str,
+    args: &[Expression],
+    dest: Option<Place>,
+) -> Result<Option<Operand>, LoweringError> {
+    let mangled = match ctx.type_checker.call_generic_mappings.get(&call_expr_id) {
+        Some(generic_args) => mangle_generic_name(func_name, generic_args),
+        None => func_name.to_string(),
+    };
+    let func_op = runtime_fn_operand(&mangled, *span);
+
+    let mut arg_ops = lower_plain_args(ctx, args)?;
+    push_allocator_arg(ctx, &mut arg_ops);
+
+    let return_ty = ctx
+        .type_checker
+        .get_type(call_expr_id)
+        .cloned()
+        .unwrap_or_else(|| Type::new(TypeKind::Void, *span));
+    let (destination, result_op) = call_destination(ctx, return_ty, dest, *span);
+
+    emit_call_terminator(ctx, func_op, arg_ops, Vec::new(), destination, *span);
+    Ok(Some(result_op))
+}
+
+/// Lower call arguments with plain expression lowering (no coercion).
+fn lower_plain_args(
+    ctx: &mut LoweringContext,
+    args: &[Expression],
+) -> Result<Vec<Operand>, LoweringError> {
+    let mut arg_ops = Vec::with_capacity(args.len());
+    for arg in args {
+        arg_ops.push(lower_expression(ctx, arg, None)?);
+    }
+    Ok(arg_ops)
+}
+
+/// Append the implicit `allocator` argument unless it is already present.
+fn push_allocator_arg(ctx: &LoweringContext, arg_ops: &mut Vec<Operand>) {
+    if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
+        let already_has_alloc = arg_ops.iter().any(
+            |op| matches!(op, Operand::Copy(p) | Operand::Move(p) if p.local == alloc_local),
+        );
+        if !already_has_alloc {
+            arg_ops.push(Operand::Copy(Place::new(alloc_local)));
+        }
+    }
 }
 
 /// Lower a GPU kernel launch: `kernel_handle.launch(grid, block)`.
