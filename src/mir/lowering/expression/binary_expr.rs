@@ -249,65 +249,86 @@ fn lower_option_equality(
     op: &crate::ast::operator::BinaryOp,
 ) -> Result<Operand, LoweringError> {
     let is_eq = matches!(op, crate::ast::operator::BinaryOp::Equal);
-    let result_ty = Type::new(TypeKind::Boolean, expr.span);
-    let result_local = ctx.push_temp(result_ty, expr.span);
-
-    let ptr_eq_bb = ctx.new_basic_block();
-    let check_null_bb = ctx.new_basic_block();
-    let compare_inner_bb = ctx.new_basic_block();
+    let result_local = ctx.push_temp(Type::new(TypeKind::Boolean, expr.span), expr.span);
     let final_bb = ctx.new_basic_block();
 
-    // 1. ptr_eq = (lhs == rhs)
-    let ptr_eq_local = ctx.push_temp(Type::new(TypeKind::Boolean, expr.span), expr.span);
+    emit_option_ptr_eq_check(ctx, &lhs_op, &rhs_op, result_local, is_eq, final_bb, expr.span);
+    emit_option_lhs_null_check(ctx, &lhs_op, &rhs_op, result_local, is_eq, final_bb, expr.span);
+    emit_option_inner_compare(ctx, lhs_op, rhs_op, result_local, is_eq, final_bb, expr.span);
+
+    ctx.set_current_block(final_bb);
+    finalize_option_comparison(ctx, result_local, dest, expr.span)
+}
+
+fn emit_option_ptr_eq_check(
+    ctx: &mut LoweringContext,
+    lhs_op: &Operand,
+    rhs_op: &Operand,
+    result_local: Local,
+    is_eq: bool,
+    final_bb: crate::mir::BasicBlock,
+    span: crate::error::syntax::Span,
+) {
+    let ptr_eq_bb = ctx.new_basic_block();
+    let check_null_bb = ctx.new_basic_block();
+    let ptr_eq_local = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(
             Place::new(ptr_eq_local),
             Rvalue::BinaryOp(BinOp::Eq, Box::new(lhs_op.clone()), Box::new(rhs_op.clone())),
         ),
-        span: expr.span,
+        span,
     });
-
     ctx.set_terminator(Terminator::new(
         TerminatorKind::SwitchInt {
             discr: Operand::Copy(Place::new(ptr_eq_local)),
             targets: vec![(Discriminant::bool_true(), ptr_eq_bb)],
             otherwise: check_null_bb,
         },
-        expr.span,
+        span,
     ));
 
-    // ptr_eq_bb: pointers are equal
     ctx.set_current_block(ptr_eq_bb);
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(
             Place::new(result_local),
             Rvalue::Use(Operand::Constant(Box::new(Constant {
-                span: expr.span,
-                ty: Type::new(TypeKind::Boolean, expr.span),
+                span,
+                ty: Type::new(TypeKind::Boolean, span),
                 literal: crate::ast::literal::Literal::Boolean(is_eq),
             }))),
         ),
-        span: expr.span,
+        span,
     });
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Goto { target: final_bb },
-        expr.span,
+        span,
     ));
 
-    // check_null_bb: check if lhs is null
     ctx.set_current_block(check_null_bb);
-    let lhs_null_local = ctx.push_temp(Type::new(TypeKind::Boolean, expr.span), expr.span);
+}
+
+fn emit_option_lhs_null_check(
+    ctx: &mut LoweringContext,
+    lhs_op: &Operand,
+    rhs_op: &Operand,
+    result_local: Local,
+    is_eq: bool,
+    final_bb: crate::mir::BasicBlock,
+    span: crate::error::syntax::Span,
+) {
     let null_val = Operand::Constant(Box::new(Constant {
-        span: expr.span,
+        span,
         ty: lhs_op.ty(&ctx.body).clone(),
         literal: crate::ast::literal::Literal::None,
     }));
+    let lhs_null_local = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(
             Place::new(lhs_null_local),
-            Rvalue::BinaryOp(BinOp::Eq, Box::new(lhs_op.clone()), Box::new(null_val.clone())),
+            Rvalue::BinaryOp(BinOp::Eq, Box::new(lhs_op.clone()), Box::new(null_val)),
         ),
-        span: expr.span,
+        span,
     });
 
     let lhs_was_null_bb = ctx.new_basic_block();
@@ -318,73 +339,86 @@ fn lower_option_equality(
             targets: vec![(Discriminant::bool_true(), lhs_was_null_bb)],
             otherwise: check_rhs_null_bb,
         },
-        expr.span,
+        span,
     ));
 
-    // lhs_was_null_bb: lhs is null, rhs is not (ptr_eq was false)
     ctx.set_current_block(lhs_was_null_bb);
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(
             Place::new(result_local),
             Rvalue::Use(Operand::Constant(Box::new(Constant {
-                span: expr.span,
-                ty: Type::new(TypeKind::Boolean, expr.span),
+                span,
+                ty: Type::new(TypeKind::Boolean, span),
                 literal: crate::ast::literal::Literal::Boolean(!is_eq),
             }))),
         ),
-        span: expr.span,
+        span,
     });
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Goto { target: final_bb },
-        expr.span,
+        span,
     ));
 
-    // check_rhs_null_bb: lhs is not null, check rhs
     ctx.set_current_block(check_rhs_null_bb);
-    let rhs_null_local = ctx.push_temp(Type::new(TypeKind::Boolean, expr.span), expr.span);
+    let null_val2 = Operand::Constant(Box::new(Constant {
+        span,
+        ty: rhs_op.ty(&ctx.body).clone(),
+        literal: crate::ast::literal::Literal::None,
+    }));
+    let rhs_null_local = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(
             Place::new(rhs_null_local),
-            Rvalue::BinaryOp(BinOp::Eq, Box::new(rhs_op.clone()), Box::new(null_val.clone())),
+            Rvalue::BinaryOp(BinOp::Eq, Box::new(rhs_op.clone()), Box::new(null_val2)),
         ),
-        span: expr.span,
+        span,
     });
 
     let rhs_was_null_bb = ctx.new_basic_block();
+    let compare_inner_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::SwitchInt {
             discr: Operand::Copy(Place::new(rhs_null_local)),
             targets: vec![(Discriminant::bool_true(), rhs_was_null_bb)],
             otherwise: compare_inner_bb,
         },
-        expr.span,
+        span,
     ));
 
-    // rhs_was_null_bb: rhs is null, lhs is not
     ctx.set_current_block(rhs_was_null_bb);
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(
             Place::new(result_local),
             Rvalue::Use(Operand::Constant(Box::new(Constant {
-                span: expr.span,
-                ty: Type::new(TypeKind::Boolean, expr.span),
+                span,
+                ty: Type::new(TypeKind::Boolean, span),
                 literal: crate::ast::literal::Literal::Boolean(!is_eq),
             }))),
         ),
-        span: expr.span,
+        span,
     });
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Goto { target: final_bb },
-        expr.span,
+        span,
     ));
 
-    // compare_inner_bb: both non-null, compare contents
     ctx.set_current_block(compare_inner_bb);
-    let lhs_place = crate::mir::lowering::helpers::ensure_place(ctx, lhs_op, expr.span);
+}
+
+fn emit_option_inner_compare(
+    ctx: &mut LoweringContext,
+    lhs_op: Operand,
+    rhs_op: Operand,
+    result_local: Local,
+    is_eq: bool,
+    final_bb: crate::mir::BasicBlock,
+    span: crate::error::syntax::Span,
+) {
+    let lhs_place = crate::mir::lowering::helpers::ensure_place(ctx, lhs_op, span);
     let mut lhs_inner = lhs_place;
     lhs_inner.projection.push(crate::mir::PlaceElem::Field(0));
 
-    let rhs_place = crate::mir::lowering::helpers::ensure_place(ctx, rhs_op, expr.span);
+    let rhs_place = crate::mir::lowering::helpers::ensure_place(ctx, rhs_op, span);
     let mut rhs_inner = rhs_place;
     rhs_inner.projection.push(crate::mir::PlaceElem::Field(0));
 
@@ -398,15 +432,20 @@ fn lower_option_equality(
                 Box::new(Operand::Copy(rhs_inner)),
             ),
         ),
-        span: expr.span,
+        span,
     });
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Goto { target: final_bb },
-        expr.span,
+        span,
     ));
+}
 
-    ctx.set_current_block(final_bb);
-
+fn finalize_option_comparison(
+    ctx: &mut LoweringContext,
+    result_local: Local,
+    dest: Option<Place>,
+    span: crate::error::syntax::Span,
+) -> Result<Operand, LoweringError> {
     let (target, ret_op) = if let Some(d) = dest {
         (d.clone(), Operand::Copy(d))
     } else {
@@ -422,7 +461,7 @@ fn lower_option_equality(
                 target,
                 Rvalue::Use(Operand::Copy(Place::new(result_local))),
             ),
-            span: expr.span,
+            span,
         });
     }
 

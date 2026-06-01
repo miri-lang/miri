@@ -9,7 +9,7 @@ use crate::ast::{BuiltinCollectionKind, ExpressionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::{
-    MathIntrinsic, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind,
+    Local, MathIntrinsic, Operand, Place, Rvalue, StatementKind, Terminator, TerminatorKind,
 };
 use crate::runtime_fns::{cow_fn, rt};
 use crate::type_checker::context::{
@@ -458,6 +458,138 @@ fn try_lower_kernel_launch(
     Ok(None)
 }
 
+/// Emit a virtual method call through a vtable slot.
+#[allow(clippy::too_many_arguments)]
+fn emit_virtual_method_call(
+    ctx: &mut LoweringContext,
+    vtable_slot: usize,
+    self_op: Operand,
+    user_args: &[Expression],
+    method_info: &MethodInfo,
+    destination: &Place,
+    op: &Operand,
+    obj_temp_local: Option<Local>,
+    obj_watermark: usize,
+    span: Span,
+) -> Result<Option<Operand>, LoweringError> {
+    let mut call_args = vec![self_op];
+    let arg_watermark = ctx.body.local_decls.len();
+    for arg in user_args {
+        call_args.push(lower_expression(ctx, arg, None)?);
+    }
+    if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
+        call_args.push(Operand::Copy(Place::new(alloc_local)));
+    }
+
+    let out_args = build_method_out_args(method_info, user_args.len(), call_args.len());
+    let target_bb = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::VirtualCall {
+            vtable_slot,
+            args: call_args.clone(),
+            out_args,
+            destination: destination.clone(),
+            target: Some(target_bb),
+        },
+        span,
+    ));
+    ctx.set_current_block(target_bb);
+    if let Some(local) = obj_temp_local {
+        ctx.emit_temp_drop(local, obj_watermark, span);
+    }
+    emit_closure_arg_drops(ctx, &call_args[1..], arg_watermark, span);
+    Ok(Some(op.clone()))
+}
+
+/// Emit a static method call (direct function call).
+#[allow(clippy::too_many_arguments)]
+fn emit_static_method_call(
+    ctx: &mut LoweringContext,
+    defining_class: &str,
+    method_name: &str,
+    self_op: Operand,
+    user_args: &[Expression],
+    method_info: &MethodInfo,
+    destination: &Place,
+    op: &Operand,
+    obj_temp_local: Option<Local>,
+    obj_watermark: usize,
+    span: Span,
+) -> Result<Option<Operand>, LoweringError> {
+    let mut mangled_name = String::with_capacity(defining_class.len() + 1 + method_name.len());
+    mangled_name.push_str(defining_class);
+    mangled_name.push('_');
+    mangled_name.push_str(method_name);
+    let mut call_args = vec![self_op];
+    let arg_watermark = ctx.body.local_decls.len();
+    for arg in user_args {
+        call_args.push(lower_expression(ctx, arg, None)?);
+    }
+    if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
+        call_args.push(Operand::Copy(Place::new(alloc_local)));
+    }
+
+    let func_op = Operand::Constant(Box::new(crate::mir::Constant {
+        span,
+        ty: Type::new(TypeKind::Identifier, span),
+        literal: crate::ast::literal::Literal::Identifier(mangled_name),
+    }));
+
+    let out_args = build_method_out_args(method_info, user_args.len(), call_args.len());
+    let target_bb = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func: func_op,
+            args: call_args.clone(),
+            out_args,
+            destination: destination.clone(),
+            target: Some(target_bb),
+        },
+        span,
+    ));
+    ctx.set_current_block(target_bb);
+    if let Some(local) = obj_temp_local {
+        ctx.emit_temp_drop(local, obj_watermark, span);
+    }
+    emit_closure_arg_drops(ctx, &call_args[1..], arg_watermark, span);
+    Ok(Some(op.clone()))
+}
+
+/// Resolve the receiver type override for inherited methods in abstract classes.
+fn resolve_receiver_override(
+    ctx: &LoweringContext,
+    raw_obj_ty: &Type,
+    obj: &Expression,
+) -> Option<Type> {
+    if let TypeKind::Custom(name, _) = &raw_obj_ty.kind {
+        let needs_override = matches!(
+            ctx.type_checker.global_type_definitions.get(name.as_str()),
+            Some(TypeDefinition::Class(cd)) if cd.is_abstract
+        ) || matches!(
+            ctx.type_checker.global_type_definitions.get(name.as_str()),
+            Some(TypeDefinition::Trait(_))
+        );
+        if needs_override {
+            if let ExpressionKind::Identifier(var_name, _) = &obj.node {
+                if let Some(&local) = ctx.variable_map.get(var_name.as_str()) {
+                    return Some(ctx.body.local_decls[local.0].ty.clone());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Extract the class name from a type, handling builtins and custom types.
+fn extract_class_name(obj_ty: &Type) -> Option<String> {
+    match &obj_ty.kind {
+        TypeKind::String => Some(STRING_TYPE_NAME.to_string()),
+        TypeKind::Tuple(_) => Some(TUPLE_TYPE_NAME.to_string()),
+        TypeKind::Custom(name, _) => Some(name.clone()),
+        k => k.as_builtin_collection().map(|b| b.name().to_string()),
+    }
+}
+
 /// Lower a method call on a class or trait object.
 ///
 /// This handles inheritance resolution, virtual vs static dispatch, and specialized
@@ -476,47 +608,10 @@ fn try_lower_method_call(
         None => return Ok(None),
     };
 
-    // Concrete receiver resolution for inherited methods inside abstract classes
-    // or trait default methods. When the AST-recorded receiver type is an abstract
-    // class or trait — i.e. the method body was type-checked against the abstract
-    // interface — the actual local's type is the concrete class supplied by the
-    // per-concrete re-lowering pass (e.g. self_type = "Array" instead of
-    // "Queryable"). Using the local's type here routes self-calls through static
-    // dispatch on the concrete class rather than vtable dispatch.
-    let obj_ty_override: Option<Type> = if let TypeKind::Custom(name, _) = &raw_obj_ty.kind {
-        let needs_override = matches!(
-            ctx.type_checker.global_type_definitions.get(name.as_str()),
-            Some(TypeDefinition::Class(cd)) if cd.is_abstract
-        ) || matches!(
-            ctx.type_checker.global_type_definitions.get(name.as_str()),
-            Some(TypeDefinition::Trait(_))
-        );
-        if needs_override {
-            if let ExpressionKind::Identifier(var_name, _) = &obj.node {
-                if let Some(&local) = ctx.variable_map.get(var_name.as_str()) {
-                    Some(ctx.body.local_decls[local.0].ty.clone())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
+    let obj_ty_override = resolve_receiver_override(ctx, raw_obj_ty, obj);
     let obj_ty = obj_ty_override.as_ref().unwrap_or(raw_obj_ty);
-    let class_name = match &obj_ty.kind {
-        TypeKind::String => Some(STRING_TYPE_NAME.to_string()),
-        TypeKind::Tuple(_) => Some(TUPLE_TYPE_NAME.to_string()),
-        TypeKind::Custom(name, _) => Some(name.clone()),
-        k => k.as_builtin_collection().map(|b| b.name().to_string()),
-    };
 
-    let class_name = match class_name {
+    let class_name = match extract_class_name(obj_ty) {
         Some(name) => name,
         None => return Ok(None),
     };
@@ -589,8 +684,6 @@ fn try_lower_method_call(
             (p.clone(), Operand::Copy(p))
         };
 
-        let target_bb = ctx.new_basic_block();
-
         // Virtual dispatch: when the receiver's static type is an abstract class
         // or a trait, look up the function pointer through the vtable at runtime.
         let use_virtual_dispatch = !matches!(&obj.node, ExpressionKind::Super)
@@ -610,74 +703,34 @@ fn try_lower_method_call(
                 method_name,
                 &ctx.type_checker.global_type_definitions,
             ) {
-                let mut call_args = vec![self_op];
-                let arg_watermark = ctx.body.local_decls.len();
-                for arg in args {
-                    call_args.push(lower_expression(ctx, arg, None)?);
-                }
-                if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
-                    call_args.push(Operand::Copy(Place::new(alloc_local)));
-                }
-
-                let out_args = build_method_out_args(&method_info, args.len(), call_args.len());
-
-                ctx.set_terminator(Terminator::new(
-                    TerminatorKind::VirtualCall {
-                        vtable_slot: slot,
-                        args: call_args.clone(),
-                        out_args,
-                        destination,
-                        target: Some(target_bb),
-                    },
+                return emit_virtual_method_call(
+                    ctx,
+                    slot,
+                    self_op,
+                    args,
+                    &method_info,
+                    &destination,
+                    &op,
+                    obj_temp_local,
+                    obj_watermark,
                     *span,
-                ));
-                ctx.set_current_block(target_bb);
-                if let Some(local) = obj_temp_local {
-                    ctx.emit_temp_drop(local, obj_watermark, *span);
-                }
-                emit_closure_arg_drops(ctx, &call_args[1..], arg_watermark, *span);
-                return Ok(Some(op));
+                );
             }
         }
 
-        // Static dispatch path.
-        let mut mangled_name = String::with_capacity(defining_class.len() + 1 + method_name.len());
-        mangled_name.push_str(&defining_class);
-        mangled_name.push('_');
-        mangled_name.push_str(method_name);
-        let mut call_args = vec![self_op];
-        let arg_watermark = ctx.body.local_decls.len();
-        for arg in args {
-            call_args.push(lower_expression(ctx, arg, None)?);
-        }
-        if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
-            call_args.push(Operand::Copy(Place::new(alloc_local)));
-        }
-
-        let func_op = Operand::Constant(Box::new(crate::mir::Constant {
-            span: *span,
-            ty: Type::new(TypeKind::Identifier, *span),
-            literal: crate::ast::literal::Literal::Identifier(mangled_name),
-        }));
-
-        let out_args = build_method_out_args(&method_info, args.len(), call_args.len());
-
-        ctx.set_terminator(Terminator::new(
-            TerminatorKind::Call {
-                func: func_op,
-                args: call_args.clone(),
-                out_args,
-                destination,
-                target: Some(target_bb),
-            },
+        return emit_static_method_call(
+            ctx,
+            &defining_class,
+            method_name,
+            self_op,
+            args,
+            &method_info,
+            &destination,
+            &op,
+            obj_temp_local,
+            obj_watermark,
             *span,
-        ));
-        ctx.set_current_block(target_bb);
-        if let Some(local) = obj_temp_local {
-            ctx.emit_temp_drop(local, obj_watermark, *span);
-        }
-        emit_closure_arg_drops(ctx, &call_args[1..], arg_watermark, *span);
-        return Ok(Some(op));
+        );
     }
 
     Ok(None)
@@ -849,6 +902,184 @@ fn lower_collection_element_access(
     Ok(op)
 }
 
+/// Lower list.push(item) to miri_rt_list_push.
+fn lower_list_push(
+    ctx: &mut LoweringContext,
+    obj: &Expression,
+    obj_ty: &Type,
+    item_arg: &Expression,
+    span: &Span,
+) -> Result<Option<Operand>, LoweringError> {
+    let item_watermark = ctx.body.local_decls.len();
+    let obj_op = lower_expression(ctx, obj, None)?;
+    let obj_op = emit_cow_check(ctx, obj_op, obj_ty, rt::LIST_COW, *span);
+    let item_op = lower_expression(ctx, item_arg, None)?;
+
+    let item_op_src = match &item_op {
+        Operand::Copy(p) | Operand::Move(p) => Some(p.local),
+        _ => None,
+    };
+    let item_copy = match item_op {
+        Operand::Move(p) => Operand::Copy(p),
+        other => other,
+    };
+    let item_ty = item_copy.ty(&ctx.body).clone();
+    let item_local = ctx.push_temp(item_ty, item_arg.span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(Place::new(item_local), Rvalue::Use(item_copy)),
+        span: item_arg.span,
+    });
+    let func_op = Operand::Constant(Box::new(crate::mir::Constant {
+        span: *span,
+        ty: Type::new(TypeKind::Identifier, *span),
+        literal: crate::ast::literal::Literal::Identifier(rt::LIST_PUSH.to_string()),
+    }));
+    let target_bb = ctx.new_basic_block();
+    let dummy_dest = ctx.push_temp(Type::new(TypeKind::Void, *span), *span);
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func: func_op,
+            args: vec![obj_op, Operand::Copy(Place::new(item_local))],
+            out_args: Vec::new(),
+            destination: Place::new(dummy_dest),
+            target: Some(target_bb),
+        },
+        *span,
+    ));
+    ctx.set_current_block(target_bb);
+    if let Some(src) = item_op_src {
+        ctx.emit_temp_drop(src, item_watermark, item_arg.span);
+    }
+    Ok(Some(Operand::Copy(Place::new(dummy_dest))))
+}
+
+/// Lower list.insert(index, item) to miri_rt_list_insert.
+fn lower_list_insert(
+    ctx: &mut LoweringContext,
+    obj: &Expression,
+    obj_ty: &Type,
+    index_arg: &Expression,
+    item_arg: &Expression,
+    span: &Span,
+) -> Result<Option<Operand>, LoweringError> {
+    let item_watermark = ctx.body.local_decls.len();
+    let obj_op = lower_expression(ctx, obj, None)?;
+    let obj_op = emit_cow_check(ctx, obj_op, obj_ty, rt::LIST_COW, *span);
+    let index_op = lower_expression(ctx, index_arg, None)?;
+    let item_op = lower_expression(ctx, item_arg, None)?;
+
+    let item_op_src = match &item_op {
+        Operand::Copy(p) | Operand::Move(p) => Some(p.local),
+        _ => None,
+    };
+    let item_copy = match item_op {
+        Operand::Move(p) => Operand::Copy(p),
+        other => other,
+    };
+    let item_ty = item_copy.ty(&ctx.body).clone();
+    let item_local = ctx.push_temp(item_ty, item_arg.span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(Place::new(item_local), Rvalue::Use(item_copy)),
+        span: item_arg.span,
+    });
+    let func_op = Operand::Constant(Box::new(crate::mir::Constant {
+        span: *span,
+        ty: Type::new(TypeKind::Identifier, *span),
+        literal: crate::ast::literal::Literal::Identifier(rt::LIST_INSERT.to_string()),
+    }));
+    let target_bb = ctx.new_basic_block();
+    let result_temp = ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span);
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func: func_op,
+            args: vec![obj_op, index_op, Operand::Copy(Place::new(item_local))],
+            out_args: Vec::new(),
+            destination: Place::new(result_temp),
+            target: Some(target_bb),
+        },
+        *span,
+    ));
+    ctx.set_current_block(target_bb);
+    if let Some(src) = item_op_src {
+        ctx.emit_temp_drop(src, item_watermark, item_arg.span);
+    }
+    Ok(Some(Operand::Copy(Place::new(result_temp))))
+}
+
+/// Lower list/array.set(index, value) to a direct indexed assignment.
+fn lower_collection_set(
+    ctx: &mut LoweringContext,
+    obj: &Expression,
+    obj_ty: &Type,
+    index_arg: &Expression,
+    item_arg: &Expression,
+    builtin: Option<BuiltinCollectionKind>,
+    span: &Span,
+) -> Result<Option<Operand>, LoweringError> {
+    let obj_watermark = ctx.body.local_decls.len();
+    let obj_op = lower_expression(ctx, obj, None)?;
+    let obj_op = if builtin == Some(BuiltinCollectionKind::List) {
+        emit_cow_check(ctx, obj_op, obj_ty, rt::LIST_COW, *span)
+    } else {
+        obj_op
+    };
+    let obj_op_src = match &obj_op {
+        Operand::Copy(p) | Operand::Move(p) => Some(p.local),
+        _ => None,
+    };
+    let index_op = lower_expression(ctx, index_arg, None)?;
+    let item_op = lower_expression(ctx, item_arg, None)?;
+
+    let item_op_src = match &item_op {
+        Operand::Copy(p) | Operand::Move(p) => Some(p.local),
+        _ => None,
+    };
+    let obj_op = match obj_op {
+        Operand::Move(p) => Operand::Copy(p),
+        other => other,
+    };
+    let item_op = match item_op {
+        Operand::Move(p) => Operand::Copy(p),
+        other => other,
+    };
+    let obj_local = ctx.push_temp(obj_ty.clone(), *span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(Place::new(obj_local), Rvalue::Use(obj_op)),
+        span: *span,
+    });
+    let index_local = match index_op {
+        Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => p.local,
+        _ => {
+            let temp = ctx.push_temp(Type::new(TypeKind::Int, index_arg.span), index_arg.span);
+            ctx.push_statement(crate::mir::Statement {
+                kind: StatementKind::Assign(Place::new(temp), Rvalue::Use(index_op)),
+                span: index_arg.span,
+            });
+            temp
+        }
+    };
+    let mut indexed_place = Place::new(obj_local);
+    indexed_place
+        .projection
+        .push(crate::mir::PlaceElem::Index(index_local));
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(indexed_place, Rvalue::Use(item_op)),
+        span: *span,
+    });
+    ctx.emit_temp_drop(obj_local, obj_watermark, *span);
+    if let Some(src_local) = obj_op_src {
+        ctx.emit_temp_drop(src_local, obj_watermark, *span);
+    }
+    if let Some(item_src) = item_op_src {
+        ctx.emit_temp_drop(item_src, obj_watermark, *span);
+    }
+    Ok(Some(Operand::Constant(Box::new(crate::mir::Constant {
+        span: *span,
+        ty: Type::new(TypeKind::Void, *span),
+        literal: crate::ast::literal::Literal::None,
+    }))))
+}
+
 /// Lower optimized collection methods directly to MIR instructions or intrinsics.
 ///
 /// This prevents monomorphization conflicts when multiple instantiations (e.g., List<int>, List<bool>)
@@ -877,106 +1108,14 @@ fn try_lower_collection_intrinsic(
             .map(Some);
     }
 
-    // push(item) on List: emit miri_rt_list_push directly.
     if args.len() == 1 && method_name == "push" && builtin == Some(BuiltinCollectionKind::List) {
-        let item_watermark = ctx.body.local_decls.len();
-        let obj_op = lower_expression(ctx, obj, None)?;
-        let obj_op = emit_cow_check(ctx, obj_op, obj_ty, rt::LIST_COW, *span);
-        let item_op = lower_expression(ctx, &args[0], None)?;
-        // Capture the source local before Move→Copy conversion so we can emit
-        // StorageDead for fresh temps after the call.  This gives Perceus the
-        // DecRef that balances the IncRef it inserts for the Copy use below.
-        let item_op_src = match &item_op {
-            Operand::Copy(p) | Operand::Move(p) => Some(p.local),
-            _ => None,
-        };
-        // Force Copy semantics so Perceus emits IncRef for managed sources.
-        let item_copy = match item_op {
-            Operand::Move(p) => Operand::Copy(p),
-            other => other,
-        };
-        let item_ty = item_copy.ty(&ctx.body).clone();
-        let item_local = ctx.push_temp(item_ty, args[0].span);
-        ctx.push_statement(crate::mir::Statement {
-            kind: StatementKind::Assign(Place::new(item_local), Rvalue::Use(item_copy)),
-            span: args[0].span,
-        });
-        let func_op = Operand::Constant(Box::new(crate::mir::Constant {
-            span: *span,
-            ty: Type::new(TypeKind::Identifier, *span),
-            literal: crate::ast::literal::Literal::Identifier(rt::LIST_PUSH.to_string()),
-        }));
-        let target_bb = ctx.new_basic_block();
-        let dummy_dest = ctx.push_temp(Type::new(TypeKind::Void, *span), *span);
-        ctx.set_terminator(Terminator::new(
-            TerminatorKind::Call {
-                func: func_op,
-                args: vec![obj_op, Operand::Copy(Place::new(item_local))],
-                out_args: Vec::new(),
-                destination: Place::new(dummy_dest),
-                target: Some(target_bb),
-            },
-            *span,
-        ));
-        ctx.set_current_block(target_bb);
-        // Release the source local if it was a fresh temp (e.g. a literal or
-        // function-call result).  Perceus then inserts the DecRef that balances
-        // the IncRef from the Copy in the Assign above, leaving the list with
-        // exactly one reference to the pushed element.
-        if let Some(src) = item_op_src {
-            ctx.emit_temp_drop(src, item_watermark, args[0].span);
-        }
-        return Ok(Some(Operand::Copy(Place::new(dummy_dest))));
+        return lower_list_push(ctx, obj, obj_ty, &args[0], span);
     }
 
-    // insert(index, item) on List: emit miri_rt_list_insert directly.
     if args.len() == 2 && method_name == "insert" && builtin == Some(BuiltinCollectionKind::List) {
-        let item_watermark = ctx.body.local_decls.len();
-        let obj_op = lower_expression(ctx, obj, None)?;
-        let obj_op = emit_cow_check(ctx, obj_op, obj_ty, rt::LIST_COW, *span);
-        let index_op = lower_expression(ctx, &args[0], None)?;
-        let item_op = lower_expression(ctx, &args[1], None)?;
-        // Capture the source local before Move→Copy conversion.
-        let item_op_src = match &item_op {
-            Operand::Copy(p) | Operand::Move(p) => Some(p.local),
-            _ => None,
-        };
-        // Force Copy semantics so Perceus emits IncRef for managed sources.
-        let item_copy = match item_op {
-            Operand::Move(p) => Operand::Copy(p),
-            other => other,
-        };
-        let item_ty = item_copy.ty(&ctx.body).clone();
-        let item_local = ctx.push_temp(item_ty, args[1].span);
-        ctx.push_statement(crate::mir::Statement {
-            kind: StatementKind::Assign(Place::new(item_local), Rvalue::Use(item_copy)),
-            span: args[1].span,
-        });
-        let func_op = Operand::Constant(Box::new(crate::mir::Constant {
-            span: *span,
-            ty: Type::new(TypeKind::Identifier, *span),
-            literal: crate::ast::literal::Literal::Identifier(rt::LIST_INSERT.to_string()),
-        }));
-        let target_bb = ctx.new_basic_block();
-        let result_temp = ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span);
-        ctx.set_terminator(Terminator::new(
-            TerminatorKind::Call {
-                func: func_op,
-                args: vec![obj_op, index_op, Operand::Copy(Place::new(item_local))],
-                out_args: Vec::new(),
-                destination: Place::new(result_temp),
-                target: Some(target_bb),
-            },
-            *span,
-        ));
-        ctx.set_current_block(target_bb);
-        if let Some(src) = item_op_src {
-            ctx.emit_temp_drop(src, item_watermark, args[1].span);
-        }
-        return Ok(Some(Operand::Copy(Place::new(result_temp))));
+        return lower_list_insert(ctx, obj, obj_ty, &args[0], &args[1], span);
     }
 
-    // set(index, value) on List / Array: emit a direct indexed assignment.
     if args.len() == 2
         && method_name == "set"
         && matches!(
@@ -984,79 +1123,7 @@ fn try_lower_collection_intrinsic(
             Some(BuiltinCollectionKind::List | BuiltinCollectionKind::Array)
         )
     {
-        let obj_watermark = ctx.body.local_decls.len();
-        let obj_op = lower_expression(ctx, obj, None)?;
-        // CoW only for List (Arrays are fixed-size and share no aliasing semantics here).
-        let obj_op = if builtin == Some(BuiltinCollectionKind::List) {
-            emit_cow_check(ctx, obj_op, obj_ty, rt::LIST_COW, *span)
-        } else {
-            obj_op
-        };
-        let obj_op_src = match &obj_op {
-            Operand::Copy(p) | Operand::Move(p) => Some(p.local),
-            _ => None,
-        };
-        let index_op = lower_expression(ctx, &args[0], None)?;
-        let item_op = lower_expression(ctx, &args[1], None)?;
-        // Capture the item source local before converting Move→Copy so we can
-        // emit StorageDead for it after the assignment.  This gives Perceus the
-        // matching DecRef for the IncRef it inserts for the Copy use below.
-        let item_op_src = match &item_op {
-            Operand::Copy(p) | Operand::Move(p) => Some(p.local),
-            _ => None,
-        };
-        // Use Copy semantics so Perceus inserts IncRef; the StorageDead
-        // provides the matching DecRef.
-        let obj_op = match obj_op {
-            Operand::Move(p) => Operand::Copy(p),
-            other => other,
-        };
-        let item_op = match item_op {
-            Operand::Move(p) => Operand::Copy(p),
-            other => other,
-        };
-        let obj_local = ctx.push_temp(obj_ty.clone(), *span);
-        ctx.push_statement(crate::mir::Statement {
-            kind: StatementKind::Assign(Place::new(obj_local), Rvalue::Use(obj_op)),
-            span: *span,
-        });
-        let index_local = match index_op {
-            Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => p.local,
-            _ => {
-                let temp = ctx.push_temp(Type::new(TypeKind::Int, args[0].span), args[0].span);
-                ctx.push_statement(crate::mir::Statement {
-                    kind: StatementKind::Assign(Place::new(temp), Rvalue::Use(index_op)),
-                    span: args[0].span,
-                });
-                temp
-            }
-        };
-        let mut indexed_place = Place::new(obj_local);
-        indexed_place
-            .projection
-            .push(crate::mir::PlaceElem::Index(index_local));
-        ctx.push_statement(crate::mir::Statement {
-            kind: StatementKind::Assign(indexed_place, Rvalue::Use(item_op)),
-            span: *span,
-        });
-        // Release the obj_local temp — triggers DecRef to match the IncRef above.
-        ctx.emit_temp_drop(obj_local, obj_watermark, *span);
-        // Release the obj source local if it was a fresh temp from expression lowering.
-        if let Some(src_local) = obj_op_src {
-            ctx.emit_temp_drop(src_local, obj_watermark, *span);
-        }
-        // Release the item source local so Perceus inserts the matching DecRef for
-        // the IncRef it inserted when the Copy was used in the indexed assignment.
-        // Without this, a concat result (e.g. "x"+"y") would have RC=2 after the
-        // assignment instead of RC=1, leaking on every subsequent overwrite.
-        if let Some(item_src) = item_op_src {
-            ctx.emit_temp_drop(item_src, obj_watermark, *span);
-        }
-        return Ok(Some(Operand::Constant(Box::new(crate::mir::Constant {
-            span: *span,
-            ty: Type::new(TypeKind::Void, *span),
-            literal: crate::ast::literal::Literal::None,
-        }))));
+        return lower_collection_set(ctx, obj, obj_ty, &args[0], &args[1], builtin, span);
     }
 
     Ok(None)
@@ -1111,49 +1178,137 @@ fn lower_direct_call(
     args: &[Expression],
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    // Record the watermark before lowering the callee expression so we can
-    // detect and drop any managed temp it creates (e.g. the closure struct
-    // returned by `make_counter(...)` in `make_counter(...)()` chains).
     let func_watermark = ctx.body.local_decls.len();
     let mut func_op = lower_expression(ctx, func, None)?;
 
-    // Mangle generic function names.
-    if let ExpressionKind::Identifier(func_name, _) = &func.node {
-        if let Some(generic_args) = ctx.type_checker.call_generic_mappings.get(&call_expr_id) {
-            let mangled = mangle_generic_name(func_name, generic_args);
-            func_op = Operand::Constant(Box::new(crate::mir::Constant {
-                span: func.span,
-                ty: crate::ast::types::Type::new(TypeKind::Identifier, func.span),
-                literal: crate::ast::literal::Literal::Identifier(mangled),
-            }));
-        }
-    }
+    apply_generic_mangling(ctx, &func.node, call_expr_id, &mut func_op, func.span);
 
-    // Resolve parameter types for argument coercion.
     let is_generic_call = ctx
         .type_checker
         .call_generic_mappings
         .contains_key(&call_expr_id);
-    let func_ty = ctx.type_checker.get_type(func.id);
-    let param_types = if is_generic_call {
-        None
-    } else if let Some(ty) = func_ty {
-        if let TypeKind::Function(func_data) = &ty.kind {
-            Some(func_data.params.clone())
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    let param_types = resolve_param_types(ctx, func.id, is_generic_call);
 
     let arg_watermark = ctx.body.local_decls.len();
+    let mut arg_ops = lower_and_coerce_args(ctx, args, &param_types);
+
+    fill_default_args(ctx, &mut arg_ops, &param_types)?;
+
+    inject_allocator_arg(ctx, &func.node, &func_op, &mut arg_ops);
+
+    let return_ty = ctx
+        .type_checker
+        .get_type(call_expr_id)
+        .cloned()
+        .unwrap_or(Type::new(TypeKind::Void, *span));
+
+    let (destination, op) = if let Some(d) = dest {
+        (d.clone(), Operand::Copy(d))
+    } else {
+        let temp = ctx.push_temp(return_ty, *span);
+        let p = Place::new(temp);
+        (p.clone(), Operand::Copy(p))
+    };
+
+    let is_indirect_call = !matches!(
+        func_op,
+        Operand::Constant(ref c) if matches!(c.literal, crate::ast::literal::Literal::Identifier(_))
+    );
+    let func_op_for_drop = func_op.clone();
+    let out_args: Vec<bool> = if let Some(params) = &param_types {
+        arg_ops
+            .iter()
+            .enumerate()
+            .map(|(i, _)| params.get(i).is_some_and(|p| p.is_out))
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let target_bb = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func: func_op,
+            args: arg_ops.clone(),
+            out_args,
+            destination: destination.clone(),
+            target: Some(target_bb),
+        },
+        *span,
+    ));
+    ctx.set_current_block(target_bb);
+
+    let dest_local = destination.local;
+    for arg_op in &arg_ops {
+        if let Operand::Copy(place) | Operand::Move(place) = arg_op {
+            if place.local != dest_local {
+                ctx.emit_temp_drop(place.local, arg_watermark, *span);
+            }
+        }
+    }
+
+    if is_indirect_call {
+        if let Operand::Copy(place) | Operand::Move(place) = &func_op_for_drop {
+            if place.local != dest_local {
+                ctx.emit_temp_drop(place.local, func_watermark, *span);
+            }
+        }
+    }
+
+    Ok(op)
+}
+
+fn apply_generic_mangling(
+    ctx: &mut LoweringContext,
+    func_node: &ExpressionKind,
+    call_expr_id: usize,
+    func_op: &mut Operand,
+    func_span: Span,
+) {
+    if let ExpressionKind::Identifier(func_name, _) = func_node {
+        if let Some(generic_args) = ctx.type_checker.call_generic_mappings.get(&call_expr_id) {
+            let mangled = mangle_generic_name(func_name, generic_args);
+            *func_op = Operand::Constant(Box::new(crate::mir::Constant {
+                span: func_span,
+                ty: crate::ast::types::Type::new(TypeKind::Identifier, func_span),
+                literal: crate::ast::literal::Literal::Identifier(mangled),
+            }));
+        }
+    }
+}
+
+fn resolve_param_types(
+    ctx: &LoweringContext,
+    func_id: usize,
+    is_generic_call: bool,
+) -> Option<Vec<crate::ast::common::Parameter>> {
+    if is_generic_call {
+        return None;
+    }
+    let func_ty = ctx.type_checker.get_type(func_id)?;
+    if let TypeKind::Function(func_data) = &func_ty.kind {
+        Some(func_data.params.clone())
+    } else {
+        None
+    }
+}
+
+fn lower_and_coerce_args(
+    ctx: &mut LoweringContext,
+    args: &[Expression],
+    param_types: &Option<Vec<crate::ast::common::Parameter>>,
+) -> Vec<Operand> {
     let mut arg_ops = Vec::with_capacity(args.len());
     for (i, arg) in args.iter().enumerate() {
-        let mut op = lower_expression(ctx, arg, None)?;
+        let mut op = lower_expression(ctx, arg, None).unwrap_or_else(|_| {
+            Operand::Constant(Box::new(crate::mir::Constant {
+                span: arg.span,
+                ty: Type::new(TypeKind::Void, arg.span),
+                literal: crate::ast::literal::Literal::None,
+            }))
+        });
 
-        // Apply parameter type coercion.
-        if let Some(params) = &param_types {
+        if let Some(params) = param_types {
             if i < params.len() {
                 let target_ty = super::resolve_type(ctx.type_checker, &params[i].typ);
                 let op_ty = op.ty(&ctx.body).clone();
@@ -1171,26 +1326,38 @@ fn lower_direct_call(
             }
         }
 
-        // Ensure managed arguments are passed as Copy to trigger IncRef.
         let op = match op {
             Operand::Move(p) => Operand::Copy(p),
             other => other,
         };
         arg_ops.push(op);
     }
+    arg_ops
+}
 
-    // Fill in default values for missing arguments.
-    if let Some(params) = &param_types {
-        for param in params.iter().skip(args.len()) {
+fn fill_default_args(
+    ctx: &mut LoweringContext,
+    arg_ops: &mut Vec<Operand>,
+    param_types: &Option<Vec<crate::ast::common::Parameter>>,
+) -> Result<(), LoweringError> {
+    if let Some(params) = param_types {
+        for param in params.iter().skip(arg_ops.len()) {
             if let Some(default_expr) = &param.default_value {
                 let default_op = lower_expression(ctx, default_expr, None)?;
                 arg_ops.push(default_op);
             }
         }
     }
+    Ok(())
+}
 
-    // Implicit Allocator Injection.
-    let is_runtime_fn = if let ExpressionKind::Identifier(name, _) = &func.node {
+fn inject_allocator_arg(
+    ctx: &mut LoweringContext,
+    func_node: &ExpressionKind,
+    func_op: &Operand,
+    arg_ops: &mut Vec<Operand>,
+) {
+    let is_runtime_fn = if let ExpressionKind::Identifier(name, _) = func_node {
         name.starts_with("miri_")
     } else {
         false
@@ -1200,95 +1367,35 @@ fn lower_direct_call(
         Operand::Constant(ref c) if matches!(c.literal, crate::ast::literal::Literal::Identifier(_))
     );
 
-    if !is_runtime_fn && !is_indirect_call {
-        // Skip allocator injection for math functions which are handled as intrinsics
-        let is_math_fn = if let ExpressionKind::Identifier(name, _) = &func.node {
-            MathIntrinsic::from_name(name.as_str()).is_some()
-                && ctx
-                    .type_checker
-                    .get_variable_module(name.as_str())
-                    .map(|m| m == "system.math")
-                    .unwrap_or(false)
-        } else {
-            false
-        };
-
-        if !is_math_fn {
-            if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
-                let already_has_alloc = arg_ops.iter().any(|op| {
-                    if let Operand::Copy(p) | Operand::Move(p) = op {
-                        p.local == alloc_local
-                    } else {
-                        false
-                    }
-                });
-                if !already_has_alloc {
-                    arg_ops.push(Operand::Copy(Place::new(alloc_local)));
-                }
-            }
-        }
+    if is_runtime_fn || is_indirect_call {
+        return;
     }
 
-    // Determine return destination.
-    let mut return_ty = Type::new(TypeKind::Void, *span);
-    if let Some(ty) = ctx.type_checker.get_type(call_expr_id) {
-        return_ty = ty.clone();
-    }
-
-    let (destination, op) = if let Some(d) = dest {
-        (d.clone(), Operand::Copy(d))
+    let is_math_fn = if let ExpressionKind::Identifier(name, _) = func_node {
+        MathIntrinsic::from_name(name.as_str()).is_some()
+            && ctx
+                .type_checker
+                .get_variable_module(name.as_str())
+                .map(|m| m == "system.math")
+                .unwrap_or(false)
     } else {
-        let temp = ctx.push_temp(return_ty, *span);
-        let p = Place::new(temp);
-        (p.clone(), Operand::Copy(p))
+        false
     };
 
-    let target_bb = ctx.new_basic_block();
-    let func_op_for_drop = func_op.clone();
-    // Build out_args flags from param_types (empty vec if no param info or generic).
-    let out_args: Vec<bool> = if let Some(params) = &param_types {
-        arg_ops
-            .iter()
-            .enumerate()
-            .map(|(i, _)| params.get(i).is_some_and(|p| p.is_out))
-            .collect()
-    } else {
-        Vec::new()
-    };
-
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::Call {
-            func: func_op,
-            args: arg_ops.clone(),
-            out_args,
-            destination: destination.clone(),
-            target: Some(target_bb),
-        },
-        *span,
-    ));
-    ctx.set_current_block(target_bb);
-
-    // Release managed temporaries created while lowering the call arguments.
-    let dest_local = destination.local;
-    for arg_op in &arg_ops {
-        if let Operand::Copy(place) | Operand::Move(place) = arg_op {
-            if place.local != dest_local {
-                ctx.emit_temp_drop(place.local, arg_watermark, *span);
-            }
-        }
+    if is_math_fn {
+        return;
     }
 
-    // For indirect calls (closure calls), also drop any managed temp that was
-    // created while lowering the callee expression.  This handles chains like
-    // `make_counter(...)()` where `make_counter(...)` returns a closure into a
-    // temp that is used as the callee and never otherwise dropped.
-    if is_indirect_call {
-        if let Operand::Copy(place) | Operand::Move(place) = &func_op_for_drop {
-            if place.local != dest_local {
-                ctx.emit_temp_drop(place.local, func_watermark, *span);
+    if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
+        let already_has_alloc = arg_ops.iter().any(|op| {
+            if let Operand::Copy(p) | Operand::Move(p) = op {
+                p.local == alloc_local
+            } else {
+                false
             }
+        });
+        if !already_has_alloc {
+            arg_ops.push(Operand::Copy(Place::new(alloc_local)));
         }
     }
-
-    Ok(op)
 }
