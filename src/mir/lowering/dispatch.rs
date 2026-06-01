@@ -1027,49 +1027,22 @@ fn lower_collection_set(
     } else {
         obj_op
     };
-    let obj_op_src = match &obj_op {
-        Operand::Copy(p) | Operand::Move(p) => Some(p.local),
-        _ => None,
-    };
+    let obj_op_src = operand_src_local(&obj_op);
     let index_op = lower_expression(ctx, index_arg, None)?;
     let item_op = lower_expression(ctx, item_arg, None)?;
+    let item_op_src = operand_src_local(&item_op);
 
-    let item_op_src = match &item_op {
-        Operand::Copy(p) | Operand::Move(p) => Some(p.local),
-        _ => None,
-    };
-    let obj_op = match obj_op {
-        Operand::Move(p) => Operand::Copy(p),
-        other => other,
-    };
-    let item_op = match item_op {
-        Operand::Move(p) => Operand::Copy(p),
-        other => other,
-    };
-    let obj_local = ctx.push_temp(obj_ty.clone(), *span);
-    ctx.push_statement(crate::mir::Statement {
-        kind: StatementKind::Assign(Place::new(obj_local), Rvalue::Use(obj_op)),
-        span: *span,
-    });
-    let index_local = match index_op {
-        Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => p.local,
-        _ => {
-            let temp = ctx.push_temp(Type::new(TypeKind::Int, index_arg.span), index_arg.span);
-            ctx.push_statement(crate::mir::Statement {
-                kind: StatementKind::Assign(Place::new(temp), Rvalue::Use(index_op)),
-                span: index_arg.span,
-            });
-            temp
-        }
-    };
+    let obj_local = store_operand_temp(ctx, move_to_copy(obj_op), obj_ty.clone(), *span);
+    let index_local = materialize_index_local(ctx, index_op, index_arg.span);
     let mut indexed_place = Place::new(obj_local);
     indexed_place
         .projection
         .push(crate::mir::PlaceElem::Index(index_local));
     ctx.push_statement(crate::mir::Statement {
-        kind: StatementKind::Assign(indexed_place, Rvalue::Use(item_op)),
+        kind: StatementKind::Assign(indexed_place, Rvalue::Use(move_to_copy(item_op))),
         span: *span,
     });
+
     ctx.emit_temp_drop(obj_local, obj_watermark, *span);
     if let Some(src_local) = obj_op_src {
         ctx.emit_temp_drop(src_local, obj_watermark, *span);
@@ -1077,11 +1050,16 @@ fn lower_collection_set(
     if let Some(item_src) = item_op_src {
         ctx.emit_temp_drop(item_src, obj_watermark, *span);
     }
-    Ok(Some(Operand::Constant(Box::new(crate::mir::Constant {
-        span: *span,
-        ty: Type::new(TypeKind::Void, *span),
+    Ok(Some(void_none_operand(*span)))
+}
+
+/// A `void`-typed `None` constant operand (a unit return value).
+fn void_none_operand(span: Span) -> Operand {
+    Operand::Constant(Box::new(crate::mir::Constant {
+        span,
+        ty: Type::new(TypeKind::Void, span),
         literal: crate::ast::literal::Literal::None,
-    }))))
+    }))
 }
 
 /// Lower optimized collection methods directly to MIR instructions or intrinsics.
