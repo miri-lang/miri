@@ -41,55 +41,18 @@ pub(crate) fn lower_conditional_expr(
     let else_bb = ctx.new_basic_block();
     let join_bb = ctx.new_basic_block();
 
-    // For `if`: true -> then, false -> else
-    // For `unless`: true -> else, false -> then
-    let (true_target, false_target) = match if_type {
-        crate::ast::statement::IfStatementType::If => (then_bb, else_bb),
-        crate::ast::statement::IfStatementType::Unless => (else_bb, then_bb),
-    };
+    emit_conditional_switch(ctx, cond_op, if_type, then_bb, else_bb, cond_expr.span);
 
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::SwitchInt {
-            discr: cond_op,
-            targets: vec![(Discriminant::bool_true(), true_target)],
-            otherwise: false_target,
-        },
-        cond_expr.span,
-    ));
-
-    // Then block
     ctx.set_current_block(then_bb);
-    let then_watermark = ctx.body.local_decls.len();
-    let then_op = lower_expression(ctx, then_expr, None)?;
-    ctx.push_statement(crate::mir::Statement {
-        kind: MirStatementKind::Assign(Place::new(result_local), Rvalue::Use(then_op.clone())),
-        span: then_expr.span,
-    });
-    // Drop any managed temp created during the then branch (e.g. an inline
-    // constructor like `List([1, 2, 3])`). Perceus inserts IncRef for the
-    // Copy before the Assign, so we need a matching StorageDead/DecRef for
-    // the source temp. Only fires for fresh temps (local >= watermark) and
-    // only for Copy operands (Move operands have no matching IncRef).
-    if let Operand::Copy(p) = &then_op {
-        ctx.emit_temp_drop(p.local, then_watermark, then_expr.span);
-    }
+    emit_conditional_branch_value(ctx, then_expr, result_local)?;
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Goto { target: join_bb },
         then_expr.span,
     ));
 
-    // Else block
     ctx.set_current_block(else_bb);
     if let Some(else_expr) = else_expr_opt {
-        let else_watermark = ctx.body.local_decls.len();
-        let else_op = lower_expression(ctx, else_expr, None)?;
-        ctx.push_statement(crate::mir::Statement {
-            kind: MirStatementKind::Assign(Place::new(result_local), Rvalue::Use(else_op.clone())),
-            span: else_expr.span,
-        });
-        if let Operand::Copy(p) = &else_op {
-            ctx.emit_temp_drop(p.local, else_watermark, else_expr.span);
-        }
+        emit_conditional_branch_value(ctx, else_expr, result_local)?;
     }
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Goto { target: join_bb },
@@ -98,4 +61,48 @@ pub(crate) fn lower_conditional_expr(
 
     ctx.set_current_block(join_bb);
     Ok(Operand::Copy(Place::new(result_local)))
+}
+
+/// Emit the `SwitchInt` selecting the then/else block. For `unless` the
+/// true/false targets are swapped.
+fn emit_conditional_switch(
+    ctx: &mut LoweringContext,
+    cond_op: Operand,
+    if_type: &crate::ast::statement::IfStatementType,
+    then_bb: crate::mir::BasicBlock,
+    else_bb: crate::mir::BasicBlock,
+    cond_span: crate::error::syntax::Span,
+) {
+    let (true_target, false_target) = match if_type {
+        crate::ast::statement::IfStatementType::If => (then_bb, else_bb),
+        crate::ast::statement::IfStatementType::Unless => (else_bb, then_bb),
+    };
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::SwitchInt {
+            discr: cond_op,
+            targets: vec![(Discriminant::bool_true(), true_target)],
+            otherwise: false_target,
+        },
+        cond_span,
+    ));
+}
+
+/// Lower a conditional branch value into `result_local`, dropping any fresh
+/// managed temp created (e.g. an inline `List([..])`) to balance Perceus's
+/// IncRef on the Copy. Does not emit the branch's terminator.
+fn emit_conditional_branch_value(
+    ctx: &mut LoweringContext,
+    branch_expr: &Expression,
+    result_local: crate::mir::Local,
+) -> Result<(), LoweringError> {
+    let watermark = ctx.body.local_decls.len();
+    let op = lower_expression(ctx, branch_expr, None)?;
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(Place::new(result_local), Rvalue::Use(op.clone())),
+        span: branch_expr.span,
+    });
+    if let Operand::Copy(p) = &op {
+        ctx.emit_temp_drop(p.local, watermark, branch_expr.span);
+    }
+    Ok(())
 }
