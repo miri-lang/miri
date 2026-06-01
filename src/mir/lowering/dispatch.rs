@@ -602,33 +602,19 @@ fn try_lower_method_call(
     args: &[Expression],
     dest: Option<Place>,
 ) -> Result<Option<Operand>, LoweringError> {
-    let raw_obj_ty = match ctx.type_checker.get_type(obj.id) {
-        Some(ty) => ty,
-        None => return Ok(None),
+    let Some((obj_ty, class_name, method_name)) = resolve_method_receiver(ctx, obj, method_expr)
+    else {
+        return Ok(None);
     };
 
-    let obj_ty_override = resolve_receiver_override(ctx, raw_obj_ty, obj);
-    let obj_ty = obj_ty_override.as_ref().unwrap_or(raw_obj_ty);
-
-    let class_name = match extract_class_name(obj_ty) {
-        Some(name) => name,
-        None => return Ok(None),
-    };
-
-    let method_name = match &method_expr.node {
-        ExpressionKind::Identifier(name, _) => name,
-        _ => return Ok(None),
-    };
-
-    // 1. Try specialized collection optimizations: emit direct index-reads or
-    // runtime intrinsic calls to avoid monomorphization conflicts and enable
-    // better RC analysis.
+    // 1. Try specialized collection optimizations (direct index-reads / runtime
+    // intrinsic calls) to avoid monomorphization conflicts and aid RC analysis.
     let call = CollectionIntrinsicCall {
         span,
         call_expr_id,
         obj,
-        obj_ty,
-        method_name,
+        obj_ty: &obj_ty,
+        method_name: &method_name,
         args,
     };
     if let Some(op) = try_lower_collection_intrinsic(ctx, call, dest.clone())? {
@@ -636,103 +622,156 @@ fn try_lower_method_call(
     }
 
     // 2. Regular inherited method resolution and dispatch.
-    if let Some((defining_class, method_info)) = resolve_inherited_method(
+    let Some((defining_class, method_info)) = resolve_inherited_method(
         &ctx.type_checker.global_type_definitions,
         &class_name,
-        method_name,
-    ) {
-        let return_ty = method_info.return_type.clone();
+        &method_name,
+    ) else {
+        return Ok(None);
+    };
 
-        // For `super.method()`, the receiver must be `self`.
-        let obj_watermark = ctx.body.local_decls.len();
-        let self_op = if matches!(&obj.node, ExpressionKind::Super) {
-            if let Some(&self_local) = ctx.variable_map.get("self") {
-                Operand::Copy(Place::new(self_local))
-            } else {
-                lower_expression(ctx, obj, None)?
-            }
-        } else {
-            lower_expression(ctx, obj, None)?
-        };
-
-        // CoW check: emit miri_rt_{list,set,map}_cow before any mutation that goes
-        // through general method dispatch (pop, remove, remove_at, clear, sort,
-        // reverse for List; add, remove, clear for Set; set, remove, clear for Map).
-        let self_op = match obj_ty
-            .kind
-            .as_builtin_collection()
-            .filter(|k| k.mutates_method(method_name))
-            .and_then(cow_fn)
-        {
-            Some(cow) => emit_cow_check(ctx, self_op, obj_ty, cow, *span),
-            None => self_op,
-        };
-
-        // Track the receiver local for Perceus-compatible temporary drop.
-        let obj_temp_local = if let Operand::Copy(ref p) = self_op {
-            Some(p.local)
-        } else {
-            None
-        };
-
-        let (destination, op) = if let Some(d) = dest {
-            (d.clone(), Operand::Copy(d))
-        } else {
-            let temp = ctx.push_temp(return_ty, *span);
-            let p = Place::new(temp);
-            (p.clone(), Operand::Copy(p))
-        };
-
-        // Virtual dispatch: when the receiver's static type is an abstract class
-        // or a trait, look up the function pointer through the vtable at runtime.
-        let use_virtual_dispatch = !matches!(&obj.node, ExpressionKind::Super)
-            && ((class_needs_vtable(&class_name, &ctx.type_checker.global_type_definitions)
-                && matches!(
-                    ctx.type_checker.global_type_definitions.get(&class_name),
-                    Some(TypeDefinition::Class(cd)) if cd.is_abstract
-                ))
-                || matches!(
-                    ctx.type_checker.global_type_definitions.get(&class_name),
-                    Some(TypeDefinition::Trait(_))
-                ));
-
-        if use_virtual_dispatch {
-            if let Some(slot) = vtable_slot_index(
-                &class_name,
-                method_name,
-                &ctx.type_checker.global_type_definitions,
-            ) {
-                return emit_virtual_method_call(
-                    ctx,
-                    slot,
-                    self_op,
-                    args,
-                    &method_info,
-                    &destination,
-                    &op,
-                    obj_temp_local,
-                    obj_watermark,
-                    *span,
-                );
-            }
-        }
-
-        return emit_static_method_call(
-            ctx,
-            &defining_class,
-            method_name,
-            self_op,
+    emit_resolved_method_call(
+        ctx,
+        ResolvedMethod {
+            span,
+            obj,
+            obj_ty: &obj_ty,
+            class_name: &class_name,
+            method_name: &method_name,
+            defining_class: &defining_class,
+            method_info: &method_info,
             args,
-            &method_info,
-            &destination,
-            &op,
-            obj_temp_local,
-            obj_watermark,
-            *span,
-        );
-    }
+        },
+        dest,
+    )
+}
 
-    Ok(None)
+/// Resolve a method call's receiver type (applying abstract/trait overrides),
+/// class name, and method name. Returns owned values to avoid borrowing `ctx`.
+fn resolve_method_receiver(
+    ctx: &LoweringContext,
+    obj: &Expression,
+    method_expr: &Expression,
+) -> Option<(Type, String, String)> {
+    let raw_obj_ty = ctx.type_checker.get_type(obj.id)?.clone();
+    let obj_ty = resolve_receiver_override(ctx, &raw_obj_ty, obj).unwrap_or(raw_obj_ty);
+    let class_name = extract_class_name(&obj_ty)?;
+    let method_name = match &method_expr.node {
+        ExpressionKind::Identifier(name, _) => name.clone(),
+        _ => return None,
+    };
+    Some((obj_ty, class_name, method_name))
+}
+
+/// A method call whose receiver type and target method have been resolved.
+struct ResolvedMethod<'a> {
+    span: &'a Span,
+    obj: &'a Expression,
+    obj_ty: &'a Type,
+    class_name: &'a str,
+    method_name: &'a str,
+    defining_class: &'a str,
+    method_info: &'a MethodInfo,
+    args: &'a [Expression],
+}
+
+/// Emit a resolved user-method call via virtual (vtable) or static dispatch.
+fn emit_resolved_method_call(
+    ctx: &mut LoweringContext,
+    m: ResolvedMethod,
+    dest: Option<Place>,
+) -> Result<Option<Operand>, LoweringError> {
+    let return_ty = m.method_info.return_type.clone();
+    let obj_watermark = ctx.body.local_decls.len();
+    let (self_op, obj_temp_local) =
+        prepare_method_self(ctx, m.obj, m.obj_ty, m.method_name, *m.span)?;
+    let (destination, op) = call_destination(ctx, return_ty, dest, *m.span);
+
+    if should_use_virtual_dispatch(ctx, m.obj, m.class_name) {
+        if let Some(slot) =
+            vtable_slot_index(m.class_name, m.method_name, &ctx.type_checker.global_type_definitions)
+        {
+            return emit_virtual_method_call(
+                ctx,
+                slot,
+                self_op,
+                m.args,
+                m.method_info,
+                &destination,
+                &op,
+                obj_temp_local,
+                obj_watermark,
+                *m.span,
+            );
+        }
+    }
+    emit_static_method_call(
+        ctx,
+        m.defining_class,
+        m.method_name,
+        self_op,
+        m.args,
+        m.method_info,
+        &destination,
+        &op,
+        obj_temp_local,
+        obj_watermark,
+        *m.span,
+    )
+}
+
+/// Lower the receiver, apply a CoW check for mutating collection methods, and
+/// return the self operand plus the receiver temp local (for Perceus drops).
+fn prepare_method_self(
+    ctx: &mut LoweringContext,
+    obj: &Expression,
+    obj_ty: &Type,
+    method_name: &str,
+    span: Span,
+) -> Result<(Operand, Option<Local>), LoweringError> {
+    let self_op = lower_method_receiver(ctx, obj)?;
+    let self_op = match obj_ty
+        .kind
+        .as_builtin_collection()
+        .filter(|k| k.mutates_method(method_name))
+        .and_then(cow_fn)
+    {
+        Some(cow) => emit_cow_check(ctx, self_op, obj_ty, cow, span),
+        None => self_op,
+    };
+    let obj_temp_local = if let Operand::Copy(ref p) = self_op {
+        Some(p.local)
+    } else {
+        None
+    };
+    Ok((self_op, obj_temp_local))
+}
+
+/// Lower a method receiver, resolving `super` to the `self` binding.
+fn lower_method_receiver(
+    ctx: &mut LoweringContext,
+    obj: &Expression,
+) -> Result<Operand, LoweringError> {
+    if matches!(&obj.node, ExpressionKind::Super) {
+        if let Some(&self_local) = ctx.variable_map.get("self") {
+            return Ok(Operand::Copy(Place::new(self_local)));
+        }
+    }
+    lower_expression(ctx, obj, None)
+}
+
+/// True when the receiver's static type requires vtable (virtual) dispatch:
+/// an abstract class with a vtable, or a trait-typed receiver. `super` calls
+/// always dispatch statically.
+fn should_use_virtual_dispatch(ctx: &LoweringContext, obj: &Expression, class_name: &str) -> bool {
+    if matches!(&obj.node, ExpressionKind::Super) {
+        return false;
+    }
+    let defs = &ctx.type_checker.global_type_definitions;
+    let abstract_with_vtable = class_needs_vtable(class_name, defs)
+        && matches!(defs.get(class_name), Some(TypeDefinition::Class(cd)) if cd.is_abstract);
+    let is_trait = matches!(defs.get(class_name), Some(TypeDefinition::Trait(_)));
+    abstract_with_vtable || is_trait
 }
 
 /// Build the `out_args` flag list for a method call's argument vector.
