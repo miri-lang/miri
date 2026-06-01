@@ -233,7 +233,15 @@ fn extract_loop_types(
     decls: &[VariableDeclaration],
     iterable_ty: &Option<Type>,
 ) -> (Type, bool, Option<crate::mir::Local>) {
-    let is_map = match iterable_ty.as_ref().map(|t| &t.kind) {
+    let is_map = iterable_is_map(iterable_ty);
+    let elem_ty = resolve_loop_elem_type(ctx, span, iterable_ty);
+    let idx_loop_var = resolve_loop_index_var(ctx, span, decls, is_map, iterable_ty);
+    (elem_ty, is_map, idx_loop_var)
+}
+
+/// True when the iterable is a `Map` (normalized to `Custom("Map", ..)`).
+fn iterable_is_map(iterable_ty: &Option<Type>) -> bool {
+    match iterable_ty.as_ref().map(|t| &t.kind) {
         Some(TypeKind::Map(_, _)) => {
             unreachable!("collection types are normalized to Custom before this point")
         }
@@ -243,53 +251,73 @@ fn extract_loop_types(
             true
         }
         _ => false,
+    }
+}
+
+/// Resolve the element type produced by iterating the loop's iterable.
+fn resolve_loop_elem_type(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    iterable_ty: &Option<Type>,
+) -> Type {
+    let Some(ty) = iterable_ty else {
+        return Type::new(TypeKind::Int, *span);
     };
-    let elem_ty = if let Some(ty) = iterable_ty {
-        match &ty.kind {
-            TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => {
-                unreachable!("collection types are normalized to Custom before this point")
-            }
-            TypeKind::Tuple(elem_type_exprs) if !elem_type_exprs.is_empty() => {
-                super::resolve_type(ctx.type_checker, &elem_type_exprs[0])
-            }
-            TypeKind::Custom(name, Some(args))
-                if (BuiltinCollectionKind::from_name(name).is_some()
-                    || name == crate::ast::types::TUPLE_TYPE_NAME)
-                    && !args.is_empty() =>
-            {
-                super::resolve_type(ctx.type_checker, &args[0])
-            }
-            _ => ty.clone(),
+    match &ty.kind {
+        TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => {
+            unreachable!("collection types are normalized to Custom before this point")
         }
+        TypeKind::Tuple(elem_type_exprs) if !elem_type_exprs.is_empty() => {
+            super::resolve_type(ctx.type_checker, &elem_type_exprs[0])
+        }
+        TypeKind::Custom(name, Some(args))
+            if (BuiltinCollectionKind::from_name(name).is_some()
+                || name == crate::ast::types::TUPLE_TYPE_NAME)
+                && !args.is_empty() =>
+        {
+            super::resolve_type(ctx.type_checker, &args[0])
+        }
+        _ => ty.clone(),
+    }
+}
+
+/// Allocate the optional second loop variable (index, or map value), if present.
+fn resolve_loop_index_var(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    decls: &[VariableDeclaration],
+    is_map: bool,
+    iterable_ty: &Option<Type>,
+) -> Option<crate::mir::Local> {
+    if decls.len() <= 1 {
+        return None;
+    }
+    let var_ty = if is_map {
+        resolve_map_value_type(ctx, span, iterable_ty)
     } else {
         Type::new(TypeKind::Int, *span)
     };
+    Some(ctx.push_local(decls[1].name.clone(), var_ty, *span))
+}
 
-    let idx_loop_var = if decls.len() > 1 {
-        let idx_decl = &decls[1];
-        let var_ty = if is_map {
-            match iterable_ty.as_ref().map(|t| &t.kind) {
-                Some(TypeKind::Map(_, _)) => {
-                    unreachable!("collection types are normalized to Custom before this point")
-                }
-                Some(TypeKind::Custom(name, Some(args)))
-                    if BuiltinCollectionKind::from_name(name)
-                        == Some(BuiltinCollectionKind::Map)
-                        && args.len() == 2 =>
-                {
-                    super::resolve_type(ctx.type_checker, &args[1])
-                }
-                _ => Type::new(TypeKind::Int, *span),
-            }
-        } else {
-            Type::new(TypeKind::Int, *span)
-        };
-        Some(ctx.push_local(idx_decl.name.clone(), var_ty, *span))
-    } else {
-        None
-    };
-
-    (elem_ty, is_map, idx_loop_var)
+/// Resolve a map's value type for the second loop variable, else default Int.
+fn resolve_map_value_type(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    iterable_ty: &Option<Type>,
+) -> Type {
+    match iterable_ty.as_ref().map(|t| &t.kind) {
+        Some(TypeKind::Map(_, _)) => {
+            unreachable!("collection types are normalized to Custom before this point")
+        }
+        Some(TypeKind::Custom(name, Some(args)))
+            if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Map)
+                && args.len() == 2 =>
+        {
+            super::resolve_type(ctx.type_checker, &args[1])
+        }
+        _ => Type::new(TypeKind::Int, *span),
+    }
 }
 
 /// Register loop variable for managed types, or use push_local for primitives.
