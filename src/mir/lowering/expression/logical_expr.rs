@@ -190,31 +190,54 @@ fn lower_null_coalesce(
     rhs: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    // Determine the inner type T from Option<T>
-    let lhs_checked_ty = ctx.type_checker.get_type(lhs.id).cloned();
-    let inner_ty = if let Some(ref ty) = lhs_checked_ty {
-        if let TypeKind::Option(inner) = &ty.kind {
-            inner.as_ref().clone()
-        } else {
-            ty.clone()
-        }
-    } else {
-        Type::new(TypeKind::Int, expr.span)
-    };
-
+    let inner_ty = coalesce_inner_type(ctx, lhs, expr);
     let result_local = ctx.push_temp(inner_ty.clone(), expr.span);
-
-    // Evaluate LHS
     let lhs_op = lower_expression(ctx, lhs, None)?;
+    let is_none_local = emit_none_comparison(ctx, &lhs_op, &inner_ty, expr);
 
-    // Create None constant for comparison
+    let rhs_bb = ctx.new_basic_block();
+    let some_bb = ctx.new_basic_block();
+    let final_bb = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::SwitchInt {
+            discr: Operand::Copy(Place::new(is_none_local)),
+            targets: vec![(Discriminant::bool_true(), rhs_bb)], // None → rhs
+            otherwise: some_bb,                                 // Some → use lhs
+        },
+        expr.span,
+    ));
+
+    emit_coalesce_some_branch(ctx, lhs_op, result_local, some_bb, final_bb, expr);
+    emit_logical_rhs(ctx, rhs, result_local, rhs_bb, final_bb, expr)?;
+
+    ctx.set_current_block(final_bb);
+    Ok(finish_logical_result(ctx, result_local, dest, expr))
+}
+
+/// The inner type `T` of `Option<T>` for the coalesce result temp; the lhs type
+/// itself if it is not an Option, else `Int` when untyped.
+fn coalesce_inner_type(ctx: &LoweringContext, lhs: &Expression, expr: &Expression) -> Type {
+    let Some(ty) = ctx.type_checker.get_type(lhs.id).cloned() else {
+        return Type::new(TypeKind::Int, expr.span);
+    };
+    match &ty.kind {
+        TypeKind::Option(inner) => inner.as_ref().clone(),
+        _ => ty,
+    }
+}
+
+/// Emit `lhs == None` and return the boolean result local.
+fn emit_none_comparison(
+    ctx: &mut LoweringContext,
+    lhs_op: &Operand,
+    inner_ty: &Type,
+    expr: &Expression,
+) -> crate::mir::Local {
     let none_val = Operand::Constant(Box::new(Constant {
         span: expr.span,
         ty: inner_ty.clone(),
         literal: crate::ast::literal::Literal::None,
     }));
-
-    // Compare LHS with None
     let is_none_local = ctx.push_temp(Type::new(TypeKind::Boolean, expr.span), expr.span);
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(
@@ -223,31 +246,21 @@ fn lower_null_coalesce(
         ),
         span: expr.span,
     });
+    is_none_local
+}
 
-    let rhs_bb = ctx.new_basic_block();
-    let some_bb = ctx.new_basic_block();
-    let final_bb = ctx.new_basic_block();
-
-    // If None → evaluate RHS, else → use LHS
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::SwitchInt {
-            discr: Operand::Copy(Place::new(is_none_local)),
-            targets: vec![(Discriminant::bool_true(), rhs_bb)], // is_none == true → rhs
-            otherwise: some_bb,                                 // is_none == false → use lhs
-        },
-        expr.span,
-    ));
-
-    // Some block: extract the payload by projecting Field(0)
+/// Some branch: project the Option payload (`Field(0)`) into `result_local`.
+fn emit_coalesce_some_branch(
+    ctx: &mut LoweringContext,
+    lhs_op: Operand,
+    result_local: crate::mir::Local,
+    some_bb: crate::mir::BasicBlock,
+    final_bb: crate::mir::BasicBlock,
+    expr: &Expression,
+) {
     ctx.set_current_block(some_bb);
-
-    // Convert lhs_op to a Place so we can project it
-    let lhs_place = crate::mir::lowering::helpers::ensure_place(ctx, lhs_op, expr.span);
-    let mut payload_place = lhs_place;
-    payload_place
-        .projection
-        .push(crate::mir::PlaceElem::Field(0));
-
+    let mut payload_place = crate::mir::lowering::helpers::ensure_place(ctx, lhs_op, expr.span);
+    payload_place.projection.push(crate::mir::PlaceElem::Field(0));
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(
             Place::new(result_local),
@@ -259,32 +272,4 @@ fn lower_null_coalesce(
         TerminatorKind::Goto { target: final_bb },
         expr.span,
     ));
-
-    // RHS block: evaluate RHS and assign to result
-    ctx.set_current_block(rhs_bb);
-    let rhs_op = lower_expression(ctx, rhs, None)?;
-    ctx.push_statement(crate::mir::Statement {
-        kind: MirStatementKind::Assign(Place::new(result_local), Rvalue::Use(rhs_op)),
-        span: expr.span,
-    });
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::Goto { target: final_bb },
-        expr.span,
-    ));
-
-    ctx.set_current_block(final_bb);
-
-    // DPS: write result into destination if provided
-    if let Some(ref d) = dest {
-        ctx.push_statement(crate::mir::Statement {
-            kind: MirStatementKind::Assign(
-                d.clone(),
-                Rvalue::Use(Operand::Copy(Place::new(result_local))),
-            ),
-            span: expr.span,
-        });
-        return Ok(Operand::Copy(d.clone()));
-    }
-
-    Ok(Operand::Copy(Place::new(result_local)))
 }
