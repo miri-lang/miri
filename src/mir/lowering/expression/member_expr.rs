@@ -25,6 +25,173 @@ fn kernel_context_field(sym: &str) -> Option<&str> {
         .and_then(|rest| rest.strip_prefix('.'))
 }
 
+/// Extract integer index from an IntegerLiteral.
+fn extract_integer_index(val: &crate::ast::literal::IntegerLiteral) -> usize {
+    match val {
+        crate::ast::literal::IntegerLiteral::I8(v) => *v as usize,
+        crate::ast::literal::IntegerLiteral::I16(v) => *v as usize,
+        crate::ast::literal::IntegerLiteral::I32(v) => *v as usize,
+        crate::ast::literal::IntegerLiteral::I64(v) => *v as usize,
+        crate::ast::literal::IntegerLiteral::I128(v) => *v as usize,
+        crate::ast::literal::IntegerLiteral::U8(v) => *v as usize,
+        crate::ast::literal::IntegerLiteral::U16(v) => *v as usize,
+        crate::ast::literal::IntegerLiteral::U32(v) => *v as usize,
+        crate::ast::literal::IntegerLiteral::U64(v) => *v as usize,
+        crate::ast::literal::IntegerLiteral::U128(v) => *v as usize,
+    }
+}
+
+/// Lower a field access on a tuple type.
+fn lower_tuple_field_access(
+    ctx: &mut LoweringContext,
+    mut obj_place: Place,
+    idx: usize,
+    elements: &[Expression],
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    obj_place.projection.push(PlaceElem::Field(idx));
+    let element_ty = resolve_type(ctx.type_checker, &elements[idx]);
+
+    let operand = if ctx.is_type_auto_copy(&element_ty) {
+        Operand::Copy(obj_place.clone())
+    } else {
+        Operand::Move(obj_place.clone())
+    };
+
+    if let Some(d) = dest {
+        ctx.push_statement(crate::mir::Statement {
+            kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(operand)),
+            span: expr.span,
+        });
+        Ok(Operand::Copy(d))
+    } else {
+        Ok(operand)
+    }
+}
+
+/// Lower a field access on a struct or class type.
+fn lower_custom_field_access(
+    ctx: &mut LoweringContext,
+    mut place: Place,
+    idx: usize,
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    place.projection.push(PlaceElem::Field(idx));
+
+    if let Some(d) = dest {
+        ctx.push_statement(crate::mir::Statement {
+            kind: MirStatementKind::Assign(
+                d.clone(),
+                Rvalue::Use(Operand::Copy(place)),
+            ),
+            span: expr.span,
+        });
+        Ok(Operand::Copy(d))
+    } else {
+        Ok(Operand::Copy(place))
+    }
+}
+
+/// Lower a unit enum variant access (e.g., Status.Ok).
+fn lower_enum_unit_variant(
+    ctx: &mut LoweringContext,
+    type_name: &str,
+    variant_name: &str,
+    discriminant: usize,
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let ty = resolve_type(ctx.type_checker, expr);
+    let discr_op = Operand::Constant(Box::new(Constant {
+        span: expr.span,
+        ty: Type::new(TypeKind::Int, expr.span),
+        literal: crate::ast::literal::Literal::Integer(
+            crate::ast::literal::IntegerLiteral::I32(discriminant as i32),
+        ),
+    }));
+
+    let enum_type_rc: Rc<str> = Rc::from(type_name);
+    let enum_variant_rc: Rc<str> = Rc::from(variant_name);
+
+    if let Some(d) = dest {
+        ctx.push_statement(crate::mir::Statement {
+            kind: MirStatementKind::Assign(
+                d.clone(),
+                Rvalue::Aggregate(
+                    AggregateKind::Enum(enum_type_rc, enum_variant_rc),
+                    vec![discr_op],
+                ),
+            ),
+            span: expr.span,
+        });
+        Ok(Operand::Copy(d))
+    } else {
+        let temp = ctx.push_temp(ty, expr.span);
+        ctx.push_statement(crate::mir::Statement {
+            kind: MirStatementKind::Assign(
+                Place::new(temp),
+                Rvalue::Aggregate(
+                    AggregateKind::Enum(enum_type_rc, enum_variant_rc),
+                    vec![discr_op],
+                ),
+            ),
+            span: expr.span,
+        });
+        Ok(Operand::Copy(Place::new(temp)))
+    }
+}
+
+/// Lower a zero-argument method accessed as a property (e.g., s.length).
+fn lower_zero_arg_method_as_property(
+    ctx: &mut LoweringContext,
+    class_name: &str,
+    method_name: &str,
+    return_ty: &Type,
+    obj_operand: Operand,
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let mut mangled_name = String::with_capacity(class_name.len() + 1 + method_name.len());
+    mangled_name.push_str(class_name);
+    mangled_name.push('_');
+    mangled_name.push_str(method_name);
+
+    let func_op = Operand::Constant(Box::new(Constant {
+        span: expr.span,
+        ty: Type::new(TypeKind::Identifier, expr.span),
+        literal: crate::ast::literal::Literal::Identifier(mangled_name),
+    }));
+
+    let mut call_args = vec![obj_operand];
+    if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
+        call_args.push(Operand::Copy(Place::new(alloc_local)));
+    }
+
+    let (destination, op) = if let Some(d) = dest {
+        (d.clone(), Operand::Copy(d))
+    } else {
+        let temp = ctx.push_temp(return_ty.clone(), expr.span);
+        let p = Place::new(temp);
+        (p.clone(), Operand::Copy(p))
+    };
+
+    let target_bb = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func: func_op,
+            args: call_args,
+            out_args: Vec::new(),
+            destination,
+            target: Some(target_bb),
+        },
+        expr.span,
+    ));
+    ctx.set_current_block(target_bb);
+    Ok(op)
+}
+
 fn try_module_alias_constant(
     ctx: &mut LoweringContext,
     obj: &Expression,
@@ -68,6 +235,45 @@ fn try_module_alias_constant(
     Ok(None)
 }
 
+/// Handle GPU intrinsics accessed via kernel context (e.g., kernel.thread_idx.x).
+fn emit_gpu_intrinsic_assign(
+    ctx: &mut LoweringContext,
+    rvalue: Rvalue,
+    dest: Option<Place>,
+    expr: &Expression,
+) -> Operand {
+    match &dest {
+        Some(d) => {
+            ctx.push_statement(crate::mir::Statement {
+                kind: MirStatementKind::Assign(d.clone(), rvalue),
+                span: expr.span,
+            });
+            Operand::Copy(d.clone())
+        }
+        None => {
+            let temp = ctx.push_temp(Type::new(TypeKind::Int, expr.span), expr.span);
+            ctx.push_statement(crate::mir::Statement {
+                kind: MirStatementKind::Assign(Place::new(temp), rvalue),
+                span: expr.span,
+            });
+            Operand::Copy(Place::new(temp))
+        }
+    }
+}
+
+/// Try to match a GPU dimension name (x, y, z) to a Dimension enum.
+fn try_parse_gpu_dimension(name: &str) -> Result<Dimension, LoweringError> {
+    match name {
+        "x" => Ok(Dimension::X),
+        "y" => Ok(Dimension::Y),
+        "z" => Ok(Dimension::Z),
+        _ => Err(LoweringError::unsupported_expression(
+            format!("Invalid GPU dimension: {}", name),
+            crate::error::syntax::Span::default(),
+        )),
+    }
+}
+
 fn try_gpu_intrinsic(
     ctx: &mut LoweringContext,
     obj_operand: &Operand,
@@ -90,17 +296,7 @@ fn try_gpu_intrinsic(
                 }
             } else if let Some(field) = kernel_context_field(sym) {
                 if let ExpressionKind::Identifier(prop_name, _) = &prop.node {
-                    let dim = match prop_name.as_str() {
-                        "x" => Dimension::X,
-                        "y" => Dimension::Y,
-                        "z" => Dimension::Z,
-                        _ => {
-                            return Err(LoweringError::unsupported_expression(
-                                format!("Invalid GPU dimension: {}", prop_name),
-                                expr.span,
-                            ));
-                        }
-                    };
+                    let dim = try_parse_gpu_dimension(prop_name.as_str())?;
 
                     let rvalue = match field {
                         "thread_idx" => Rvalue::GpuIntrinsic(GpuIntrinsic::ThreadIdx(dim)),
@@ -115,24 +311,7 @@ fn try_gpu_intrinsic(
                         }
                     };
 
-                    match &dest {
-                        Some(d) => {
-                            ctx.push_statement(crate::mir::Statement {
-                                kind: MirStatementKind::Assign(d.clone(), rvalue),
-                                span: expr.span,
-                            });
-                            return Ok(Some(Operand::Copy(d.clone())));
-                        }
-                        None => {
-                            let temp =
-                                ctx.push_temp(Type::new(TypeKind::Int, expr.span), expr.span);
-                            ctx.push_statement(crate::mir::Statement {
-                                kind: MirStatementKind::Assign(Place::new(temp), rvalue),
-                                span: expr.span,
-                            });
-                            return Ok(Some(Operand::Copy(Place::new(temp))));
-                        }
-                    }
+                    return Ok(Some(emit_gpu_intrinsic_assign(ctx, rvalue, dest, expr)));
                 }
             }
         }
@@ -169,73 +348,22 @@ pub(crate) fn lower_member_expr(
     // Handle Tuple Member Access
     if let TypeKind::Tuple(elements) = &obj_ty.kind {
         if let ExpressionKind::Literal(crate::ast::literal::Literal::Integer(val)) = &prop.node {
-            let idx = match val {
-                crate::ast::literal::IntegerLiteral::I8(v) => *v as usize,
-                crate::ast::literal::IntegerLiteral::I16(v) => *v as usize,
-                crate::ast::literal::IntegerLiteral::I32(v) => *v as usize,
-                crate::ast::literal::IntegerLiteral::I64(v) => *v as usize,
-                crate::ast::literal::IntegerLiteral::I128(v) => *v as usize,
-                crate::ast::literal::IntegerLiteral::U8(v) => *v as usize,
-                crate::ast::literal::IntegerLiteral::U16(v) => *v as usize,
-                crate::ast::literal::IntegerLiteral::U32(v) => *v as usize,
-                crate::ast::literal::IntegerLiteral::U64(v) => *v as usize,
-                crate::ast::literal::IntegerLiteral::U128(v) => *v as usize,
-            };
-
+            let idx = extract_integer_index(val);
             let obj_place = ensure_place(ctx, obj_operand, obj.span);
-
-            let mut target_place = obj_place;
-            target_place.projection.push(PlaceElem::Field(idx));
-
-            let element_ty = resolve_type(ctx.type_checker, &elements[idx]);
-
-            let operand = if ctx.is_type_auto_copy(&element_ty) {
-                Operand::Copy(target_place.clone())
-            } else {
-                Operand::Move(target_place.clone())
-            };
-
-            if let Some(d) = dest {
-                ctx.push_statement(crate::mir::Statement {
-                    kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(operand)),
-                    span: expr.span,
-                });
-                return Ok(Operand::Copy(d));
-            } else {
-                return Ok(operand);
-            }
+            return lower_tuple_field_access(
+                ctx, obj_place, idx, elements, expr, dest,
+            );
         }
     }
 
     if let TypeKind::Custom(struct_name, _) = &obj_ty.kind {
-        // Find field index
-        // We need to look up the struct definition in the type checker.
-        // The type checker doesn't expose a direct "get_field_index" method,
-        // but we can look up the definition.
-        // Note: Global type definitions are available.
         if let Some(crate::type_checker::context::TypeDefinition::Struct(def)) =
             ctx.type_checker.global_type_definitions.get(struct_name)
         {
             if let ExpressionKind::Identifier(field_name, _) = &prop.node {
                 if let Some(idx) = def.fields.iter().position(|(f, _, _)| f == field_name) {
                     let place = ensure_place(ctx, obj_operand, obj.span);
-
-                    // Create new place with projection
-                    let mut new_place = place.clone();
-                    new_place.projection.push(PlaceElem::Field(idx));
-
-                    if let Some(d) = dest {
-                        ctx.push_statement(crate::mir::Statement {
-                            kind: MirStatementKind::Assign(
-                                d.clone(),
-                                Rvalue::Use(Operand::Copy(new_place)),
-                            ),
-                            span: expr.span,
-                        });
-                        return Ok(Operand::Copy(d));
-                    } else {
-                        return Ok(Operand::Copy(new_place));
-                    }
+                    return lower_custom_field_access(ctx, place, idx, expr, dest);
                 } else {
                     return Err(LoweringError::unsupported_lhs(
                         format!(
@@ -248,13 +376,10 @@ pub(crate) fn lower_member_expr(
             }
         }
 
-        // Also check for class field access
         if let Some(crate::type_checker::context::TypeDefinition::Class(def)) =
             ctx.type_checker.global_type_definitions.get(struct_name)
         {
             if let ExpressionKind::Identifier(field_name, _) = &prop.node {
-                // Compute global field index across the full inheritance chain.
-                // Base class fields come before derived class fields.
                 let all_fields = crate::type_checker::context::collect_class_fields_all(
                     def,
                     &ctx.type_checker.global_type_definitions,
@@ -264,31 +389,12 @@ pub(crate) fn lower_member_expr(
                     .position(|(n, _)| *n == field_name.as_str())
                 {
                     let place = ensure_place(ctx, obj_operand, obj.span);
-
-                    // Create new place with projection
-                    let mut new_place = place.clone();
-                    new_place.projection.push(PlaceElem::Field(idx));
-
-                    if let Some(d) = dest {
-                        ctx.push_statement(crate::mir::Statement {
-                            kind: MirStatementKind::Assign(
-                                d.clone(),
-                                Rvalue::Use(Operand::Copy(new_place)),
-                            ),
-                            span: expr.span,
-                        });
-                        return Ok(Operand::Copy(d));
-                    } else {
-                        return Ok(Operand::Copy(new_place));
-                    }
+                    return lower_custom_field_access(ctx, place, idx, expr, dest);
                 }
-                // If field not found, might be a method call, which is handled in Call
             }
         }
     }
 
-    // 3. Handle Enum Unit Variant Access (e.g., Status.Ok)
-    // Check if obj is a type identifier and prop is an enum variant
     if let ExpressionKind::Identifier(type_name, _) = &obj.node {
         if let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) =
             ctx.type_checker.global_type_definitions.get(type_name)
@@ -300,7 +406,6 @@ pub(crate) fn lower_member_expr(
                     .enumerate()
                     .find(|(_, (name, _))| name.as_str() == variant_name)
                 {
-                    // Unit variant: create Aggregate with just discriminant
                     let associated_types = match enum_def.variants.get(variant_name) {
                         Some(types) => types,
                         None => {
@@ -314,48 +419,15 @@ pub(crate) fn lower_member_expr(
                         }
                     };
                     if associated_types.is_empty() {
-                        let ty = resolve_type(ctx.type_checker, expr);
-
-                        // Create discriminant constant
-                        let discr_op = Operand::Constant(Box::new(Constant {
-                            span: expr.span,
-                            ty: Type::new(TypeKind::Int, expr.span),
-                            literal: crate::ast::literal::Literal::Integer(
-                                crate::ast::literal::IntegerLiteral::I32(discriminant as i32),
-                            ),
-                        }));
-
-                        let enum_type_rc: Rc<str> = Rc::from(type_name.as_str());
-                        let enum_variant_rc: Rc<str> = Rc::from(variant_name.as_str());
-
-                        if let Some(d) = dest {
-                            ctx.push_statement(crate::mir::Statement {
-                                kind: MirStatementKind::Assign(
-                                    d.clone(),
-                                    Rvalue::Aggregate(
-                                        AggregateKind::Enum(enum_type_rc, enum_variant_rc),
-                                        vec![discr_op],
-                                    ),
-                                ),
-                                span: expr.span,
-                            });
-                            return Ok(Operand::Copy(d));
-                        } else {
-                            let temp = ctx.push_temp(ty, expr.span);
-                            ctx.push_statement(crate::mir::Statement {
-                                kind: MirStatementKind::Assign(
-                                    Place::new(temp),
-                                    Rvalue::Aggregate(
-                                        AggregateKind::Enum(enum_type_rc, enum_variant_rc),
-                                        vec![discr_op],
-                                    ),
-                                ),
-                                span: expr.span,
-                            });
-                            return Ok(Operand::Copy(Place::new(temp)));
-                        }
+                        return lower_enum_unit_variant(
+                            ctx,
+                            type_name,
+                            variant_name,
+                            discriminant,
+                            expr,
+                            dest,
+                        );
                     }
-                    // Variant with associated values - handled in Call
                 }
             }
         }
@@ -381,8 +453,6 @@ pub(crate) fn lower_member_expr(
         }
     }
 
-    // Handle class method-as-property access (e.g. s.length, s.size).
-    // Zero-arg methods on class types can be accessed as properties.
     let class_name = match &obj_ty.kind {
         TypeKind::String => Some(crate::ast::types::STRING_TYPE_NAME.to_string()),
         TypeKind::Custom(name, _) => Some(name.clone()),
@@ -395,47 +465,16 @@ pub(crate) fn lower_member_expr(
                 ctx.type_checker.global_type_definitions.get(&class_name)
             {
                 if let Some(method_info) = class_def.methods.get(prop_name.as_str()) {
-                    // Only treat zero-arg methods as property access
                     if method_info.params.is_empty() {
-                        let mut mangled_name =
-                            String::with_capacity(class_name.len() + 1 + prop_name.len());
-                        mangled_name.push_str(&class_name);
-                        mangled_name.push('_');
-                        mangled_name.push_str(prop_name);
-                        let return_ty = method_info.return_type.clone();
-
-                        let func_op = Operand::Constant(Box::new(Constant {
-                            span: expr.span,
-                            ty: crate::ast::types::Type::new(TypeKind::Identifier, expr.span),
-                            literal: crate::ast::literal::Literal::Identifier(mangled_name),
-                        }));
-
-                        let mut call_args = vec![obj_operand];
-                        if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
-                            call_args.push(Operand::Copy(Place::new(alloc_local)));
-                        }
-
-                        let (destination, op) = if let Some(d) = dest {
-                            (d.clone(), Operand::Copy(d))
-                        } else {
-                            let temp = ctx.push_temp(return_ty, expr.span);
-                            let p = Place::new(temp);
-                            (p.clone(), Operand::Copy(p))
-                        };
-
-                        let target_bb = ctx.new_basic_block();
-                        ctx.set_terminator(Terminator::new(
-                            TerminatorKind::Call {
-                                func: func_op,
-                                args: call_args,
-                                out_args: Vec::new(),
-                                destination,
-                                target: Some(target_bb),
-                            },
-                            expr.span,
-                        ));
-                        ctx.set_current_block(target_bb);
-                        return Ok(op);
+                        return lower_zero_arg_method_as_property(
+                            ctx,
+                            &class_name,
+                            prop_name,
+                            &method_info.return_type,
+                            obj_operand,
+                            expr,
+                            dest,
+                        );
                     }
                 }
             }

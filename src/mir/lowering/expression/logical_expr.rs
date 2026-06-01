@@ -14,6 +14,70 @@ use crate::mir::{
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::lower_expression;
 
+/// Emit short-circuit AND branching and short-circuit assignment.
+fn emit_and_short_circuit(
+    ctx: &mut LoweringContext,
+    result_local: crate::mir::Local,
+    result_ty: &Type,
+    rhs_bb: crate::mir::BasicBlock,
+    done_bb: crate::mir::BasicBlock,
+    expr: &Expression,
+) {
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::SwitchInt {
+            discr: Operand::Copy(Place::new(result_local)),
+            targets: vec![(Discriminant::bool_true(), rhs_bb)],
+            otherwise: done_bb,
+        },
+        expr.span,
+    ));
+
+    ctx.set_current_block(done_bb);
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            Place::new(result_local),
+            Rvalue::Use(Operand::Constant(Box::new(Constant {
+                span: expr.span,
+                ty: result_ty.clone(),
+                literal: crate::ast::literal::Literal::Boolean(false),
+            }))),
+        ),
+        span: expr.span,
+    });
+}
+
+/// Emit short-circuit OR branching and short-circuit assignment.
+fn emit_or_short_circuit(
+    ctx: &mut LoweringContext,
+    result_local: crate::mir::Local,
+    result_ty: &Type,
+    rhs_bb: crate::mir::BasicBlock,
+    done_bb: crate::mir::BasicBlock,
+    expr: &Expression,
+) {
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::SwitchInt {
+            discr: Operand::Copy(Place::new(result_local)),
+            targets: vec![(Discriminant::bool_false(), rhs_bb)],
+            otherwise: done_bb,
+        },
+        expr.span,
+    ));
+
+    ctx.set_current_block(done_bb);
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            Place::new(result_local),
+            Rvalue::Use(Operand::Constant(Box::new(Constant {
+                span: expr.span,
+                ty: result_ty.clone(),
+                literal: crate::ast::literal::Literal::Boolean(true),
+            }))),
+        ),
+        span: expr.span,
+    });
+}
+
 pub(crate) fn lower_logical_expr(
     ctx: &mut LoweringContext,
     expr: &Expression,
@@ -41,56 +105,17 @@ pub(crate) fn lower_logical_expr(
     let rhs_bb = ctx.new_basic_block();
     let done_bb = ctx.new_basic_block();
 
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(Place::new(result_local), Rvalue::Use(lhs_op)),
+        span: expr.span,
+    });
+
     match op {
         crate::ast::operator::BinaryOp::And => {
-            // and: if lhs is true, evaluate rhs; else return false
-            ctx.set_terminator(Terminator::new(
-                TerminatorKind::SwitchInt {
-                    discr: lhs_op.clone(),
-                    targets: vec![(Discriminant::bool_true(), rhs_bb)], // true -> evaluate rhs
-                    otherwise: done_bb,                                 // false -> done with false
-                },
-                expr.span,
-            ));
-
-            // In done_bb after short-circuit (lhs was false), assign false
-            ctx.set_current_block(done_bb);
-            ctx.push_statement(crate::mir::Statement {
-                kind: MirStatementKind::Assign(
-                    Place::new(result_local),
-                    Rvalue::Use(Operand::Constant(Box::new(Constant {
-                        span: expr.span,
-                        ty: result_ty.clone(),
-                        literal: crate::ast::literal::Literal::Boolean(false),
-                    }))),
-                ),
-                span: expr.span,
-            });
+            emit_and_short_circuit(ctx, result_local, &result_ty, rhs_bb, done_bb, expr);
         }
         crate::ast::operator::BinaryOp::Or => {
-            // or: if lhs is false, evaluate rhs; else return true
-            ctx.set_terminator(Terminator::new(
-                TerminatorKind::SwitchInt {
-                    discr: lhs_op.clone(),
-                    targets: vec![(Discriminant::bool_false(), rhs_bb)], // false -> evaluate rhs
-                    otherwise: done_bb,                                  // true -> done with true
-                },
-                expr.span,
-            ));
-
-            // In done_bb after short-circuit (lhs was true), assign true
-            ctx.set_current_block(done_bb);
-            ctx.push_statement(crate::mir::Statement {
-                kind: MirStatementKind::Assign(
-                    Place::new(result_local),
-                    Rvalue::Use(Operand::Constant(Box::new(Constant {
-                        span: expr.span,
-                        ty: result_ty.clone(),
-                        literal: crate::ast::literal::Literal::Boolean(true),
-                    }))),
-                ),
-                span: expr.span,
-            });
+            emit_or_short_circuit(ctx, result_local, &result_ty, rhs_bb, done_bb, expr);
         }
         _ => {
             return Err(LoweringError::unsupported_operator(
