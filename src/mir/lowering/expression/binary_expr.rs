@@ -27,71 +27,132 @@ fn try_lower_binary_trait_method(
     op: &crate::ast::operator::BinaryOp,
     arg_watermark: usize,
 ) -> Result<Option<Operand>, LoweringError> {
-    if let Some(lhs_ty) = ctx.type_checker.get_type(lhs.id) {
-        let class_name = match &lhs_ty.kind {
-            TypeKind::String => Some(crate::ast::types::STRING_TYPE_NAME.to_string()),
-            TypeKind::Custom(name, _) => Some(name.clone()),
-            _ => None,
-        };
+    let Some(class_name) = binary_trait_class_name(ctx, lhs) else {
+        return Ok(None);
+    };
+    let Some((method_name, negate)) = binary_op_trait_method(op) else {
+        return Ok(None);
+    };
+    if !class_has_trait_method(ctx, &class_name, method_name) {
+        return Ok(None);
+    }
 
-        if let Some(class_name) = class_name {
-            let op_mapping = match op {
-                crate::ast::operator::BinaryOp::Add => Some(("Addable", "concat", false)),
-                crate::ast::operator::BinaryOp::Mul => Some(("Multiplicable", "repeat", false)),
-                crate::ast::operator::BinaryOp::Equal => Some(("Equatable", "equals", false)),
-                crate::ast::operator::BinaryOp::NotEqual => Some(("Equatable", "equals", true)),
-                _ => None,
-            };
+    let call = BinTraitCall {
+        lhs_op,
+        rhs_op,
+        dest,
+        arg_watermark,
+    };
+    emit_binary_trait_call(ctx, &class_name, method_name, negate, call, expr).map(Some)
+}
 
-            if let Some((_trait_name, method_name, negate)) = op_mapping {
-                if let Some(crate::type_checker::context::TypeDefinition::Class(class_def)) =
-                    ctx.type_checker.global_type_definitions.get(&class_name)
-                {
-                    if class_def.methods.contains_key(method_name) {
-                        use crate::ast::literal::Literal;
+/// The class name implementing a binary operator trait for the lhs type
+/// (`String` or a user `Custom` type), else None.
+fn binary_trait_class_name(ctx: &LoweringContext, lhs: &Expression) -> Option<String> {
+    match &ctx.type_checker.get_type(lhs.id)?.kind {
+        TypeKind::String => Some(crate::ast::types::STRING_TYPE_NAME.to_string()),
+        TypeKind::Custom(name, _) => Some(name.clone()),
+        _ => None,
+    }
+}
 
-                        let mangled_name = format!("{}_{}", class_name, method_name);
-                        let alloc_op = ctx.variable_map.get("allocator").map(|&al| Operand::Copy(Place::new(al)));
-                        let mut call_args = vec![lhs_op, rhs_op];
-                        if let Some(alloc) = alloc_op {
-                            call_args.push(alloc);
-                        }
+/// Map a binary operator to its trait method name and whether to negate the
+/// result (`Add→concat`, `Mul→repeat`, `Equal→equals`, `NotEqual→!equals`).
+fn binary_op_trait_method(op: &crate::ast::operator::BinaryOp) -> Option<(&'static str, bool)> {
+    match op {
+        crate::ast::operator::BinaryOp::Add => Some(("concat", false)),
+        crate::ast::operator::BinaryOp::Mul => Some(("repeat", false)),
+        crate::ast::operator::BinaryOp::Equal => Some(("equals", false)),
+        crate::ast::operator::BinaryOp::NotEqual => Some(("equals", true)),
+        _ => None,
+    }
+}
 
-                        let arg_locals: Vec<Local> = call_args
-                            .iter()
-                            .filter_map(|op| match op {
-                                Operand::Copy(p) | Operand::Move(p) => Some(p.local),
-                                _ => None,
-                            })
-                            .collect();
+/// True when `class_name` is a class defining `method_name`.
+fn class_has_trait_method(ctx: &LoweringContext, class_name: &str, method_name: &str) -> bool {
+    matches!(
+        ctx.type_checker.global_type_definitions.get(class_name),
+        Some(crate::type_checker::context::TypeDefinition::Class(cd))
+            if cd.methods.contains_key(method_name)
+    )
+}
 
-                        let method_info = &class_def.methods[method_name];
-                        let return_ty = method_info.return_type.clone();
-                        let func_op = Operand::Constant(Box::new(Constant {
-                            span: expr.span,
-                            ty: Type::new(TypeKind::Identifier, expr.span),
-                            literal: Literal::Identifier(mangled_name),
-                        }));
+/// The operands + bookkeeping for emitting a binary-operator trait call.
+struct BinTraitCall {
+    lhs_op: Operand,
+    rhs_op: Operand,
+    dest: Option<Place>,
+    arg_watermark: usize,
+}
 
-                        if negate {
-                            return_negated_method_call(ctx, func_op, call_args, arg_locals, return_ty, expr, dest, arg_watermark).map(Some)
-                        } else {
-                            return_method_call(ctx, func_op, call_args, arg_locals, return_ty, expr, dest, arg_watermark).map(Some)
-                        }
-                    } else {
-                        Ok(None)
-                    }
-                } else {
-                    Ok(None)
-                }
-            } else {
-                Ok(None)
-            }
-        } else {
-            Ok(None)
+/// Emit `Class_method(lhs, rhs, alloc?)`, negating the boolean result for `!=`.
+fn emit_binary_trait_call(
+    ctx: &mut LoweringContext,
+    class_name: &str,
+    method_name: &str,
+    negate: bool,
+    call: BinTraitCall,
+    expr: &Expression,
+) -> Result<Operand, LoweringError> {
+    let mangled_name = format!("{}_{}", class_name, method_name);
+    let (call_args, arg_locals) = build_trait_call_args(ctx, call.lhs_op, call.rhs_op);
+
+    let return_ty = match ctx.type_checker.global_type_definitions.get(class_name) {
+        Some(crate::type_checker::context::TypeDefinition::Class(cd)) => {
+            cd.methods[method_name].return_type.clone()
         }
+        _ => unreachable!(),
+    };
+    let func_op = Operand::Constant(Box::new(Constant {
+        span: expr.span,
+        ty: Type::new(TypeKind::Identifier, expr.span),
+        literal: crate::ast::literal::Literal::Identifier(mangled_name),
+    }));
+
+    if negate {
+        return_negated_method_call(
+            ctx,
+            func_op,
+            call_args,
+            arg_locals,
+            return_ty,
+            expr,
+            call.dest,
+            call.arg_watermark,
+        )
     } else {
-        Ok(None)
+        return_method_call(
+            ctx,
+            func_op,
+            call_args,
+            arg_locals,
+            return_ty,
+            expr,
+            call.dest,
+            call.arg_watermark,
+        )
+    }
+}
+
+/// Build `[lhs, rhs, alloc?]` and the list of arg locals (for temp cleanup).
+fn build_trait_call_args(
+    ctx: &LoweringContext,
+    lhs_op: Operand,
+    rhs_op: Operand,
+) -> (Vec<Operand>, Vec<Local>) {
+    let mut call_args = vec![lhs_op, rhs_op];
+    if let Some(&al) = ctx.variable_map.get("allocator") {
+        call_args.push(Operand::Copy(Place::new(al)));
+    }
+    let arg_locals: Vec<Local> = call_args.iter().filter_map(operand_local).collect();
+    (call_args, arg_locals)
+}
+
+/// The local backing a place operand, if any.
+fn operand_local(op: &Operand) -> Option<Local> {
+    match op {
+        Operand::Copy(p) | Operand::Move(p) => Some(p.local),
+        _ => None,
     }
 }
 
