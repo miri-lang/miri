@@ -93,7 +93,10 @@ fn lower_branch_into_join(
         .terminator
         .is_none()
     {
-        ctx.set_terminator(Terminator::new(TerminatorKind::Goto { target: join_bb }, span));
+        ctx.set_terminator(Terminator::new(
+            TerminatorKind::Goto { target: join_bb },
+            span,
+        ));
     }
     Ok(())
 }
@@ -354,10 +357,7 @@ fn setup_loop_variable(
 }
 
 /// Determine the iterable class and its method symbols if it implements Iterable.
-fn resolve_iterable_class(
-    ctx: &LoweringContext,
-    iterable_id: usize,
-) -> Option<String> {
+fn resolve_iterable_class(ctx: &LoweringContext, iterable_id: usize) -> Option<String> {
     ctx.type_checker
         .get_type(iterable_id)
         .and_then(|ty| match &ty.kind {
@@ -698,7 +698,16 @@ fn lower_for_over_iterable(
     let iterable_class = resolve_iterable_class(ctx, iterable.id);
 
     ctx.set_current_block(header_bb);
-    emit_loop_header(ctx, list_local, &iterable_class, idx_var, &idx_ty, body_bb, exit_bb, span)?;
+    emit_loop_header(
+        ctx,
+        list_local,
+        &iterable_class,
+        idx_var,
+        &idx_ty,
+        body_bb,
+        exit_bb,
+        span,
+    )?;
 
     ctx.enter_loop(exit_bb, increment_bb);
     ctx.set_current_block(body_bb);
@@ -730,7 +739,15 @@ fn lower_for_over_iterable(
     ctx.exit_loop();
 
     ctx.set_current_block(increment_bb);
-    emit_loop_increment(ctx, loop_var, elem_is_managed, idx_var, &idx_ty, header_bb, span);
+    emit_loop_increment(
+        ctx,
+        loop_var,
+        elem_is_managed,
+        idx_var,
+        &idx_ty,
+        header_bb,
+        span,
+    );
 
     ctx.set_current_block(exit_bb);
     ctx.emit_temp_drop(list_local, 0, *span);

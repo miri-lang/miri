@@ -21,7 +21,11 @@ fn emit_guard_and_branch(
     ctx: &mut LoweringContext,
     guard: &Expression,
     arm_idx: usize,
-    branch_blocks: &[(crate::mir::BasicBlock, &crate::ast::pattern::MatchBranch, Vec<u128>)],
+    branch_blocks: &[(
+        crate::mir::BasicBlock,
+        &crate::ast::pattern::MatchBranch,
+        Vec<u128>,
+    )],
     this_discrs: &[u128],
     join_bb: crate::mir::BasicBlock,
 ) -> Result<(), LoweringError> {
@@ -311,14 +315,7 @@ pub(crate) fn lower_match_expr(
         }
 
         if let Some(guard) = &branch.guard {
-            emit_guard_and_branch(
-                ctx,
-                guard,
-                arm_idx,
-                &branch_blocks,
-                this_discrs,
-                join_bb,
-            )?;
+            emit_guard_and_branch(ctx, guard, arm_idx, &branch_blocks, this_discrs, join_bb)?;
         }
 
         // Lower branch body and assign result to result_local

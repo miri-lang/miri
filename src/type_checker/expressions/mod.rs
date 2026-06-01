@@ -92,9 +92,7 @@ impl TypeChecker {
             ExpressionKind::Assignment(lhs, op, rhs) => {
                 self.infer_assignment(lhs, op, rhs, span, context)
             }
-            ExpressionKind::Call(func, args) => {
-                self.infer_call(func, args, span, context, expr_id)
-            }
+            ExpressionKind::Call(func, args) => self.infer_call(func, args, span, context, expr_id),
             ExpressionKind::Range(start, end, kind) => {
                 self.infer_range(start, end, kind, span, context)
             }
@@ -111,16 +109,14 @@ impl TypeChecker {
                 self.infer_conditional(then_expr, cond_expr, else_expr, span, context)
             }
             ExpressionKind::FormattedString(parts) => self.infer_formatted_string(parts, context),
-            ExpressionKind::Lambda(lambda) => {
-                self.infer_lambda(
-                    &lambda.generics,
-                    &lambda.params,
-                    &lambda.return_type,
-                    &lambda.body,
-                    &lambda.properties,
-                    context,
-                )
-            }
+            ExpressionKind::Lambda(lambda) => self.infer_lambda(
+                &lambda.generics,
+                &lambda.params,
+                &lambda.return_type,
+                &lambda.body,
+                &lambda.properties,
+                context,
+            ),
             ExpressionKind::TypeDeclaration(expr, generics, kind, target) => {
                 self.infer_generic_instantiation(expr, generics, kind, target, span, context)
             }

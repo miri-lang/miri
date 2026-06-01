@@ -82,10 +82,7 @@ fn lower_custom_field_access(
 
     if let Some(d) = dest {
         ctx.push_statement(crate::mir::Statement {
-            kind: MirStatementKind::Assign(
-                d.clone(),
-                Rvalue::Use(Operand::Copy(place)),
-            ),
+            kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(Operand::Copy(place))),
             span: expr.span,
         });
         Ok(Operand::Copy(d))
@@ -107,9 +104,9 @@ fn lower_enum_unit_variant(
     let discr_op = Operand::Constant(Box::new(Constant {
         span: expr.span,
         ty: Type::new(TypeKind::Int, expr.span),
-        literal: crate::ast::literal::Literal::Integer(
-            crate::ast::literal::IntegerLiteral::I32(discriminant as i32),
-        ),
+        literal: crate::ast::literal::Literal::Integer(crate::ast::literal::IntegerLiteral::I32(
+            discriminant as i32,
+        )),
     }));
 
     let enum_type_rc: Rc<str> = Rc::from(type_name);
@@ -200,7 +197,11 @@ fn try_module_alias_constant(
     dest: Option<Place>,
 ) -> Result<Option<Operand>, LoweringError> {
     if let ExpressionKind::Identifier(alias_name, _) = &obj.node {
-        if ctx.type_checker.module_aliases.contains_key(alias_name.as_str()) {
+        if ctx
+            .type_checker
+            .module_aliases
+            .contains_key(alias_name.as_str())
+        {
             if let ExpressionKind::Identifier(prop_name, _) = &prop.node {
                 let constant_val = match prop_name.as_str() {
                     "PI" => Some(std::f64::consts::PI),
@@ -350,9 +351,7 @@ pub(crate) fn lower_member_expr(
         if let ExpressionKind::Literal(crate::ast::literal::Literal::Integer(val)) = &prop.node {
             let idx = extract_integer_index(val);
             let obj_place = ensure_place(ctx, obj_operand, obj.span);
-            return lower_tuple_field_access(
-                ctx, obj_place, idx, elements, expr, dest,
-            );
+            return lower_tuple_field_access(ctx, obj_place, idx, elements, expr, dest);
         }
     }
 
