@@ -68,36 +68,33 @@ pub fn lower_if(
         *span,
     ));
 
-    // Lower then block
     ctx.set_current_block(then_bb);
-    lower_statement(ctx, then_block)?;
-    // If the block didn't terminate itself (e.g. return), goto join
-    if ctx.body.basic_blocks[ctx.current_block.0]
-        .terminator
-        .is_none()
-    {
-        ctx.set_terminator(Terminator::new(
-            TerminatorKind::Goto { target: join_bb },
-            *span,
-        ));
-    }
+    lower_branch_into_join(ctx, Some(then_block), join_bb, *span)?;
 
-    // Lower else block
     ctx.set_current_block(else_bb);
-    if let Some(else_stmt) = else_block_opt {
-        lower_statement(ctx, else_stmt)?;
-    }
-    if ctx.body.basic_blocks[ctx.current_block.0]
-        .terminator
-        .is_none()
-    {
-        ctx.set_terminator(Terminator::new(
-            TerminatorKind::Goto { target: join_bb },
-            *span,
-        ));
-    }
+    lower_branch_into_join(ctx, else_block_opt.as_deref(), join_bb, *span)?;
 
     ctx.set_current_block(join_bb);
+    Ok(())
+}
+
+/// Lower an optional branch statement and, if it didn't terminate itself,
+/// `goto join_bb`.
+fn lower_branch_into_join(
+    ctx: &mut LoweringContext,
+    stmt: Option<&Statement>,
+    join_bb: crate::mir::BasicBlock,
+    span: Span,
+) -> Result<(), LoweringError> {
+    if let Some(s) = stmt {
+        lower_statement(ctx, s)?;
+    }
+    if ctx.body.basic_blocks[ctx.current_block.0]
+        .terminator
+        .is_none()
+    {
+        ctx.set_terminator(Terminator::new(TerminatorKind::Goto { target: join_bb }, span));
+    }
     Ok(())
 }
 
