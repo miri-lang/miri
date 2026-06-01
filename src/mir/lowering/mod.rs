@@ -22,7 +22,7 @@ pub mod loops;
 pub mod statement;
 pub mod variable;
 
-use crate::ast::expression::ExpressionKind;
+use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::statement::{Statement, StatementKind};
 use crate::ast::types::{Type, TypeKind};
 use crate::error::lowering::LoweringError;
@@ -56,6 +56,26 @@ pub use statement::lower_statement;
 ///
 /// Returns `LoweringError` if the statement is not a function declaration,
 /// if expression lowering fails, or if the resulting MIR fails validation.
+/// Resolve a function's return type: explicit annotation, then the type
+/// checker's inferred function type, else `void`.
+fn resolve_function_return_type(
+    tc: &TypeChecker,
+    ret_type_expr: Option<&Expression>,
+    name: &str,
+    span: crate::error::syntax::Span,
+) -> Type {
+    if let Some(ret_expr) = ret_type_expr {
+        return resolve_type(tc, ret_expr);
+    }
+    match tc.get_variable_type(name).map(|t| &t.kind) {
+        Some(TypeKind::Function(func)) => match &func.return_type {
+            Some(rt) => resolve_type(tc, rt),
+            None => Type::new(TypeKind::Void, span),
+        },
+        _ => Type::new(TypeKind::Void, span),
+    }
+}
+
 pub fn lower_function(
     ast_func: &Statement,
     tc: &TypeChecker,
@@ -74,22 +94,8 @@ pub fn lower_function(
     let body_stmt = &decl.body;
     let props = &decl.properties;
 
-    // Resolve return type: explicit annotation > type checker inference > void
-    let ret_ty = if let Some(ret_expr) = ret_type_expr {
-        resolve_type(tc, ret_expr)
-    } else if let Some(ty) = tc.get_variable_type(name) {
-        if let TypeKind::Function(func) = &ty.kind {
-            if let Some(rt) = &func.return_type {
-                resolve_type(tc, rt)
-            } else {
-                Type::new(TypeKind::Void, ast_func.span)
-            }
-        } else {
-            Type::new(TypeKind::Void, ast_func.span)
-        }
-    } else {
-        Type::new(TypeKind::Void, ast_func.span)
-    };
+    let ret_ty =
+        resolve_function_return_type(tc, ret_type_expr.as_deref(), name, ast_func.span);
 
     let execution_model = resolve_execution_model(props);
 
