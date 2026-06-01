@@ -1190,61 +1190,80 @@ fn lower_direct_call(
         .get_type(call_expr_id)
         .cloned()
         .unwrap_or(Type::new(TypeKind::Void, *span));
-
-    let (destination, op) = if let Some(d) = dest {
-        (d.clone(), Operand::Copy(d))
-    } else {
-        let temp = ctx.push_temp(return_ty, *span);
-        let p = Place::new(temp);
-        (p.clone(), Operand::Copy(p))
-    };
+    let (destination, op) = call_destination(ctx, return_ty, dest, *span);
 
     let is_indirect_call = !matches!(
         func_op,
         Operand::Constant(ref c) if matches!(c.literal, crate::ast::literal::Literal::Identifier(_))
     );
     let func_op_for_drop = func_op.clone();
-    let out_args: Vec<bool> = if let Some(params) = &param_types {
-        arg_ops
-            .iter()
-            .enumerate()
-            .map(|(i, _)| params.get(i).is_some_and(|p| p.is_out))
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let out_args = build_out_args(&param_types, &arg_ops);
 
-    let target_bb = ctx.new_basic_block();
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::Call {
-            func: func_op,
-            args: arg_ops.clone(),
-            out_args,
-            destination: destination.clone(),
-            target: Some(target_bb),
-        },
-        *span,
-    ));
-    ctx.set_current_block(target_bb);
-
-    let dest_local = destination.local;
-    for arg_op in &arg_ops {
-        if let Operand::Copy(place) | Operand::Move(place) = arg_op {
-            if place.local != dest_local {
-                ctx.emit_temp_drop(place.local, arg_watermark, *span);
-            }
-        }
-    }
-
+    emit_call_terminator(ctx, func_op, arg_ops.clone(), out_args, destination.clone(), *span);
+    emit_direct_call_drops(ctx, &arg_ops, arg_watermark, destination.local, *span);
     if is_indirect_call {
         if let Operand::Copy(place) | Operand::Move(place) = &func_op_for_drop {
-            if place.local != dest_local {
+            if place.local != destination.local {
                 ctx.emit_temp_drop(place.local, func_watermark, *span);
             }
         }
     }
-
     Ok(op)
+}
+
+/// Emit a `Call` terminator to `destination` and advance to its successor block.
+fn emit_call_terminator(
+    ctx: &mut LoweringContext,
+    func_op: Operand,
+    args: Vec<Operand>,
+    out_args: Vec<bool>,
+    destination: Place,
+    span: Span,
+) {
+    let target_bb = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func: func_op,
+            args,
+            out_args,
+            destination,
+            target: Some(target_bb),
+        },
+        span,
+    ));
+    ctx.set_current_block(target_bb);
+}
+
+/// Build the per-arg `out` flag list for a direct call.
+fn build_out_args(
+    param_types: &Option<Vec<crate::ast::common::Parameter>>,
+    arg_ops: &[Operand],
+) -> Vec<bool> {
+    match param_types {
+        Some(params) => arg_ops
+            .iter()
+            .enumerate()
+            .map(|(i, _)| params.get(i).is_some_and(|p| p.is_out))
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
+/// Drop each freshly-created argument temp (skipping the call destination).
+fn emit_direct_call_drops(
+    ctx: &mut LoweringContext,
+    arg_ops: &[Operand],
+    arg_watermark: usize,
+    dest_local: Local,
+    span: Span,
+) {
+    for arg_op in arg_ops {
+        if let Operand::Copy(place) | Operand::Move(place) = arg_op {
+            if place.local != dest_local {
+                ctx.emit_temp_drop(place.local, arg_watermark, span);
+            }
+        }
+    }
 }
 
 fn apply_generic_mangling(
