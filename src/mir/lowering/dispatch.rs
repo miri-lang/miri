@@ -843,52 +843,23 @@ fn lower_collection_element_access(
 ) -> Result<Operand, LoweringError> {
     let obj_watermark = ctx.body.local_decls.len();
     let obj_op = lower_expression(ctx, obj, None)?;
-    let obj_op_src = match &obj_op {
-        Operand::Copy(p) | Operand::Move(p) => Some(p.local),
-        _ => None,
-    };
+    let obj_op_src = operand_src_local(&obj_op);
     let index_op = lower_expression(ctx, &args[0], None)?;
 
-    let obj_op = match obj_op {
-        Operand::Move(p) => Operand::Copy(p),
-        other => other,
-    };
-    let obj_local = ctx.push_temp(obj_ty.clone(), *span);
-    ctx.push_statement(crate::mir::Statement {
-        kind: StatementKind::Assign(Place::new(obj_local), Rvalue::Use(obj_op)),
-        span: *span,
-    });
-
-    let index_local = match index_op {
-        Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => p.local,
-        _ => {
-            let temp = ctx.push_temp(Type::new(TypeKind::Int, args[0].span), args[0].span);
-            ctx.push_statement(crate::mir::Statement {
-                kind: StatementKind::Assign(Place::new(temp), Rvalue::Use(index_op)),
-                span: args[0].span,
-            });
-            temp
-        }
-    };
+    let obj_local = store_operand_temp(ctx, move_to_copy(obj_op), obj_ty.clone(), *span);
+    let index_local = materialize_index_local(ctx, index_op, args[0].span);
 
     let mut indexed_place = Place::new(obj_local);
     indexed_place
         .projection
         .push(crate::mir::PlaceElem::Index(index_local));
 
-    let elem_ty = if let Some(t) = ctx.type_checker.get_type(call_expr_id) {
-        t.clone()
-    } else {
-        Type::new(TypeKind::Int, *span)
-    };
-
-    let (destination, op) = if let Some(d) = dest {
-        (d.clone(), Operand::Copy(d))
-    } else {
-        let temp = ctx.push_temp(elem_ty, *span);
-        let p = Place::new(temp);
-        (p.clone(), Operand::Copy(p))
-    };
+    let elem_ty = ctx
+        .type_checker
+        .get_type(call_expr_id)
+        .cloned()
+        .unwrap_or_else(|| Type::new(TypeKind::Int, *span));
+    let (destination, op) = call_destination(ctx, elem_ty, dest, *span);
 
     ctx.push_statement(crate::mir::Statement {
         kind: StatementKind::Assign(destination, Rvalue::Use(Operand::Copy(indexed_place))),
@@ -902,7 +873,68 @@ fn lower_collection_element_access(
     Ok(op)
 }
 
+/// Materialize an index operand into a bare local, spilling to a temp when it is
+/// a projected place or a constant.
+fn materialize_index_local(ctx: &mut LoweringContext, index_op: Operand, span: Span) -> Local {
+    match index_op {
+        Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => p.local,
+        _ => store_operand_temp(ctx, index_op, Type::new(TypeKind::Int, span), span),
+    }
+}
+
+/// Resolve a call's destination place + return operand, using `dest` when given.
+fn call_destination(
+    ctx: &mut LoweringContext,
+    return_ty: Type,
+    dest: Option<Place>,
+    span: Span,
+) -> (Place, Operand) {
+    match dest {
+        Some(d) => (d.clone(), Operand::Copy(d)),
+        None => {
+            let temp = ctx.push_temp(return_ty, span);
+            let p = Place::new(temp);
+            (p.clone(), Operand::Copy(p))
+        }
+    }
+}
+
 /// Lower list.push(item) to miri_rt_list_push.
+/// The source local backing a place operand, if any.
+fn operand_src_local(op: &Operand) -> Option<Local> {
+    match op {
+        Operand::Copy(p) | Operand::Move(p) => Some(p.local),
+        _ => None,
+    }
+}
+
+/// Convert a `Move` operand into a `Copy` of the same place.
+fn move_to_copy(op: Operand) -> Operand {
+    match op {
+        Operand::Move(p) => Operand::Copy(p),
+        other => other,
+    }
+}
+
+/// Store an operand into a fresh temp of `ty`, returning the temp local.
+fn store_operand_temp(ctx: &mut LoweringContext, op: Operand, ty: Type, span: Span) -> Local {
+    let local = ctx.push_temp(ty, span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(Place::new(local), Rvalue::Use(op)),
+        span,
+    });
+    local
+}
+
+/// Build a runtime-function callee constant for `name`.
+fn runtime_fn_operand(name: &str, span: Span) -> Operand {
+    Operand::Constant(Box::new(crate::mir::Constant {
+        span,
+        ty: Type::new(TypeKind::Identifier, span),
+        literal: crate::ast::literal::Literal::Identifier(name.to_string()),
+    }))
+}
+
 fn lower_list_push(
     ctx: &mut LoweringContext,
     obj: &Expression,
@@ -915,25 +947,11 @@ fn lower_list_push(
     let obj_op = emit_cow_check(ctx, obj_op, obj_ty, rt::LIST_COW, *span);
     let item_op = lower_expression(ctx, item_arg, None)?;
 
-    let item_op_src = match &item_op {
-        Operand::Copy(p) | Operand::Move(p) => Some(p.local),
-        _ => None,
-    };
-    let item_copy = match item_op {
-        Operand::Move(p) => Operand::Copy(p),
-        other => other,
-    };
+    let item_op_src = operand_src_local(&item_op);
+    let item_copy = move_to_copy(item_op);
     let item_ty = item_copy.ty(&ctx.body).clone();
-    let item_local = ctx.push_temp(item_ty, item_arg.span);
-    ctx.push_statement(crate::mir::Statement {
-        kind: StatementKind::Assign(Place::new(item_local), Rvalue::Use(item_copy)),
-        span: item_arg.span,
-    });
-    let func_op = Operand::Constant(Box::new(crate::mir::Constant {
-        span: *span,
-        ty: Type::new(TypeKind::Identifier, *span),
-        literal: crate::ast::literal::Literal::Identifier(rt::LIST_PUSH.to_string()),
-    }));
+    let item_local = store_operand_temp(ctx, item_copy, item_ty, item_arg.span);
+    let func_op = runtime_fn_operand(rt::LIST_PUSH, *span);
     let target_bb = ctx.new_basic_block();
     let dummy_dest = ctx.push_temp(Type::new(TypeKind::Void, *span), *span);
     ctx.set_terminator(Terminator::new(
@@ -968,25 +986,11 @@ fn lower_list_insert(
     let index_op = lower_expression(ctx, index_arg, None)?;
     let item_op = lower_expression(ctx, item_arg, None)?;
 
-    let item_op_src = match &item_op {
-        Operand::Copy(p) | Operand::Move(p) => Some(p.local),
-        _ => None,
-    };
-    let item_copy = match item_op {
-        Operand::Move(p) => Operand::Copy(p),
-        other => other,
-    };
+    let item_op_src = operand_src_local(&item_op);
+    let item_copy = move_to_copy(item_op);
     let item_ty = item_copy.ty(&ctx.body).clone();
-    let item_local = ctx.push_temp(item_ty, item_arg.span);
-    ctx.push_statement(crate::mir::Statement {
-        kind: StatementKind::Assign(Place::new(item_local), Rvalue::Use(item_copy)),
-        span: item_arg.span,
-    });
-    let func_op = Operand::Constant(Box::new(crate::mir::Constant {
-        span: *span,
-        ty: Type::new(TypeKind::Identifier, *span),
-        literal: crate::ast::literal::Literal::Identifier(rt::LIST_INSERT.to_string()),
-    }));
+    let item_local = store_operand_temp(ctx, item_copy, item_ty, item_arg.span);
+    let func_op = runtime_fn_operand(rt::LIST_INSERT, *span);
     let target_bb = ctx.new_basic_block();
     let result_temp = ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span);
     ctx.set_terminator(Terminator::new(
