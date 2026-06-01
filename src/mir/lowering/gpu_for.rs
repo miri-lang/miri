@@ -58,45 +58,7 @@ pub fn lower_gpu_for(
     let (start, end, range_type) = extract_literal_range(iterable, *span)?;
     let length = compute_range_length(start, end, range_type, *span)?;
 
-    let capture_names = collect_outer_captures(body, &loop_var_name, ctx);
-    let mut captures: Vec<CaptureInfo> = Vec::with_capacity(capture_names.len());
-    for name in capture_names {
-        let Some(&outer_local) = ctx.variable_map.get(name.as_str()) else {
-            return Err(LoweringError::unsupported_expression(
-                format!(
-                    "gpu for: captured variable '{}' is not visible at the loop site",
-                    name
-                ),
-                *span,
-            ));
-        };
-        let ty = ctx.body.local_decls[outer_local.0].ty.clone();
-        if !is_gpu_buffer_capture(&ty.kind) {
-            return Err(LoweringError::unsupported_expression(
-                format!(
-                    "gpu for: capture '{}' has non-buffer type; baseline only accepts `Array<T, N>` or `[T; N]` captures (scalar/string/collection captures need uniform/push-constant lowering, follow-up)",
-                    name
-                ),
-                *span,
-            ));
-        }
-        // Only a gpu-resident buffer may be marshaled as a kernel storage
-        // binding. Host-resident buffer captures are rejected upstream with a
-        // source-cited §6.4 diagnostic, so this guard is unreachable in
-        // well-typed programs; it keeps MIR lowering from ever uploading a
-        // host buffer implicitly (GPU_DRAFT §10.5 — no silent promotion).
-        if ctx.body.local_decls[outer_local.0].residency != BindingResidency::Gpu {
-            return Err(LoweringError::unsupported_expression(
-                format!("gpu for: capture '{}' is not gpu-resident", name),
-                *span,
-            ));
-        }
-        captures.push(CaptureInfo {
-            name,
-            ty,
-            outer_local,
-        });
-    }
+    let captures = collect_capture_infos(ctx, body, &loop_var_name, *span)?;
 
     // Use the AST statement's globally-unique id so kernel names cannot
     // collide between different `gpu for` sites (across functions and
@@ -121,6 +83,49 @@ struct CaptureInfo {
     name: String,
     ty: Type,
     outer_local: Local,
+}
+
+/// Collect and validate the outer-variable captures of a `gpu for` body. Only
+/// gpu-resident buffer (`Array`-shaped) captures are accepted; everything else
+/// is rejected with a source-cited diagnostic.
+fn collect_capture_infos(
+    ctx: &LoweringContext,
+    body: &Statement,
+    loop_var_name: &str,
+    span: Span,
+) -> Result<Vec<CaptureInfo>, LoweringError> {
+    let capture_names = collect_outer_captures(body, loop_var_name, ctx);
+    let mut captures: Vec<CaptureInfo> = Vec::with_capacity(capture_names.len());
+    for name in capture_names {
+        let Some(&outer_local) = ctx.variable_map.get(name.as_str()) else {
+            return Err(LoweringError::unsupported_expression(
+                format!("gpu for: captured variable '{}' is not visible at the loop site", name),
+                span,
+            ));
+        };
+        let ty = ctx.body.local_decls[outer_local.0].ty.clone();
+        if !is_gpu_buffer_capture(&ty.kind) {
+            return Err(LoweringError::unsupported_expression(
+                format!("gpu for: capture '{}' has non-buffer type; baseline only accepts `Array<T, N>` or `[T; N]` captures (scalar/string/collection captures need uniform/push-constant lowering, follow-up)", name),
+                span,
+            ));
+        }
+        // Only a gpu-resident buffer may be marshaled as a kernel storage
+        // binding; host buffers are rejected upstream (§6.4) so this guards
+        // against any implicit upload (GPU_DRAFT §10.5 — no silent promotion).
+        if ctx.body.local_decls[outer_local.0].residency != BindingResidency::Gpu {
+            return Err(LoweringError::unsupported_expression(
+                format!("gpu for: capture '{}' is not gpu-resident", name),
+                span,
+            ));
+        }
+        captures.push(CaptureInfo {
+            name,
+            ty,
+            outer_local,
+        });
+    }
+    Ok(captures)
 }
 
 /// Returns `true` for types whose runtime representation is a host-side
