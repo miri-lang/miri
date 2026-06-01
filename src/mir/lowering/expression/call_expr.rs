@@ -26,7 +26,33 @@ pub(crate) fn lower_call_expr(
     let ExpressionKind::Call(func, args) = &expr.node else {
         unreachable!()
     };
-    // Handle Some(value) constructor — allocate an Option box
+
+    if let Some(op) = try_lower_option_some(ctx, func, args, expr, dest.clone())? {
+        return Ok(op);
+    }
+
+    if let Some(op) = try_lower_testing_intrinsic(ctx, func, args, expr, dest.clone())? {
+        return Ok(op);
+    }
+
+    if let Some(op) = try_lower_gpu_or_math_intrinsic(ctx, func, args, expr, dest.clone())? {
+        return Ok(op);
+    }
+
+    if let Some(op) = try_lower_enum_variant(ctx, func, args, expr, dest.clone())? {
+        return Ok(op);
+    }
+
+    lower_call(ctx, &expr.span, expr.id, func, args, dest)
+}
+
+fn try_lower_option_some(
+    ctx: &mut LoweringContext,
+    func: &Expression,
+    args: &[Expression],
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Option<Operand>, LoweringError> {
     let is_option_some = match &func.node {
         ExpressionKind::Identifier(name, _) => name == "Some",
         ExpressionKind::Member(enum_expr, variant_expr) => {
@@ -43,109 +69,150 @@ pub(crate) fn lower_call_expr(
         _ => false,
     };
 
-    if is_option_some && args.len() == 1 {
-        let arg_watermark = ctx.body.local_decls.len();
-        let inner_val = lower_expression(ctx, &args[0], None)?;
-        let target = if let Some(d) = dest {
-            d
-        } else {
-            let ty = resolve_type(ctx.type_checker, expr);
-            Place::new(ctx.push_temp(ty, expr.span))
-        };
-        ctx.push_statement(crate::mir::Statement {
-            kind: MirStatementKind::Assign(
-                target.clone(),
-                Rvalue::Aggregate(AggregateKind::Option, vec![inner_val.clone()]),
-            ),
-            span: expr.span,
-        });
-        // Release any managed temp created to hold the inner value — the
-        // Aggregate IncRef already transferred ownership into the Option.
-        if let Operand::Copy(ref p) | Operand::Move(ref p) = inner_val {
-            ctx.emit_temp_drop(p.local, arg_watermark, expr.span);
-        }
-        return Ok(Operand::Copy(target));
+    if !is_option_some || args.len() != 1 {
+        return Ok(None);
     }
 
-    // Check for `system.testing` assertion intrinsics. They are declared
-    // with `intrinsic fn` (no body) so the lowering synthesizes the
-    // failure-path MIR here, embedding the call-site source location in
-    // the runtime diagnostic.
+    let arg_watermark = ctx.body.local_decls.len();
+    let inner_val = lower_expression(ctx, &args[0], None)?;
+    let target = if let Some(d) = dest {
+        d
+    } else {
+        let ty = resolve_type(ctx.type_checker, expr);
+        Place::new(ctx.push_temp(ty, expr.span))
+    };
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            target.clone(),
+            Rvalue::Aggregate(AggregateKind::Option, vec![inner_val.clone()]),
+        ),
+        span: expr.span,
+    });
+    if let Operand::Copy(ref p) | Operand::Move(ref p) = inner_val {
+        ctx.emit_temp_drop(p.local, arg_watermark, expr.span);
+    }
+    Ok(Some(Operand::Copy(target)))
+}
+
+fn try_lower_testing_intrinsic(
+    ctx: &mut LoweringContext,
+    func: &Expression,
+    args: &[Expression],
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Option<Operand>, LoweringError> {
     if let ExpressionKind::Identifier(name, _) = &func.node {
         if testing_intrinsic::is_testing_intrinsic(name.as_str())
             && testing_intrinsic::is_from_testing_module(ctx, name.as_str())
         {
-            return testing_intrinsic::lower_testing_intrinsic(
-                ctx,
-                expr,
-                name.as_str(),
-                args,
-                dest,
-            );
+            return Ok(Some(testing_intrinsic::lower_testing_intrinsic(
+                ctx, expr, name.as_str(), args, dest,
+            )?));
         }
     }
+    Ok(None)
+}
 
-    // Check for legacy GPU intrinsic function names (gpu_thread_idx_x etc.)
+fn try_lower_gpu_or_math_intrinsic(
+    ctx: &mut LoweringContext,
+    func: &Expression,
+    args: &[Expression],
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Option<Operand>, LoweringError> {
     if let ExpressionKind::Identifier(name, _) = &func.node {
-        let intrinsic_rvalue = match name.as_str() {
-            "gpu_thread_idx_x" => Some(Rvalue::GpuIntrinsic(GpuIntrinsic::ThreadIdx(Dimension::X))),
-            "gpu_thread_idx_y" => Some(Rvalue::GpuIntrinsic(GpuIntrinsic::ThreadIdx(Dimension::Y))),
-            "gpu_thread_idx_z" => Some(Rvalue::GpuIntrinsic(GpuIntrinsic::ThreadIdx(Dimension::Z))),
-            "gpu_block_idx_x" => Some(Rvalue::GpuIntrinsic(GpuIntrinsic::BlockIdx(Dimension::X))),
-            "gpu_block_idx_y" => Some(Rvalue::GpuIntrinsic(GpuIntrinsic::BlockIdx(Dimension::Y))),
-            "gpu_block_idx_z" => Some(Rvalue::GpuIntrinsic(GpuIntrinsic::BlockIdx(Dimension::Z))),
-            _ => None,
-        };
-
-        if let Some(rvalue) = intrinsic_rvalue {
-            let (target, ret_op) = if let Some(ref d) = dest {
-                (d.clone(), Operand::Copy(d.clone()))
-            } else {
-                let temp = ctx.push_temp(Type::new(TypeKind::Int, expr.span), expr.span);
-                (Place::new(temp), Operand::Copy(Place::new(temp)))
-            };
-            ctx.push_statement(crate::mir::Statement {
-                kind: MirStatementKind::Assign(target, rvalue),
-                span: expr.span,
-            });
-            return Ok(ret_op);
+        if let Some(op) = try_lower_gpu_intrinsic(ctx, name, expr, dest.clone())? {
+            return Ok(Some(op));
         }
 
-        if let Some(intrinsic) = MathIntrinsic::from_name(name.as_str()) {
-            // ONLY lower to intrinsic if it's explicitly from system.math
-            let is_from_math_module = ctx
-                .type_checker
-                .get_variable_module(name.as_str())
-                .map(|m| m == "system.math")
-                .unwrap_or(false);
-
-            if is_from_math_module {
-                let mut arg_ops = Vec::with_capacity(args.len());
-                for arg in args {
-                    arg_ops.push(lower_expression(ctx, arg, None)?);
-                }
-
-                let return_ty = resolve_type(ctx.type_checker, expr);
-                let (target, ret_op) = if let Some(ref d) = dest {
-                    (d.clone(), Operand::Copy(d.clone()))
-                } else {
-                    let temp = ctx.push_temp(return_ty, expr.span);
-                    (Place::new(temp), Operand::Copy(Place::new(temp)))
-                };
-
-                ctx.push_statement(crate::mir::Statement {
-                    kind: MirStatementKind::Assign(
-                        target,
-                        Rvalue::MathIntrinsic(intrinsic, arg_ops),
-                    ),
-                    span: expr.span,
-                });
-                return Ok(ret_op);
-            }
+        if let Some(op) = try_lower_math_intrinsic(ctx, name, args, expr, dest)? {
+            return Ok(Some(op));
         }
     }
+    Ok(None)
+}
 
-    // Check for enum variant with associated values (e.g., Event.Click(1, 2))
+fn try_lower_gpu_intrinsic(
+    ctx: &mut LoweringContext,
+    name: &str,
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Option<Operand>, LoweringError> {
+    let intrinsic_rvalue = match name {
+        "gpu_thread_idx_x" => Some(Rvalue::GpuIntrinsic(GpuIntrinsic::ThreadIdx(Dimension::X))),
+        "gpu_thread_idx_y" => Some(Rvalue::GpuIntrinsic(GpuIntrinsic::ThreadIdx(Dimension::Y))),
+        "gpu_thread_idx_z" => Some(Rvalue::GpuIntrinsic(GpuIntrinsic::ThreadIdx(Dimension::Z))),
+        "gpu_block_idx_x" => Some(Rvalue::GpuIntrinsic(GpuIntrinsic::BlockIdx(Dimension::X))),
+        "gpu_block_idx_y" => Some(Rvalue::GpuIntrinsic(GpuIntrinsic::BlockIdx(Dimension::Y))),
+        "gpu_block_idx_z" => Some(Rvalue::GpuIntrinsic(GpuIntrinsic::BlockIdx(Dimension::Z))),
+        _ => None,
+    };
+
+    let Some(rvalue) = intrinsic_rvalue else {
+        return Ok(None);
+    };
+
+    let (target, ret_op) = if let Some(ref d) = dest {
+        (d.clone(), Operand::Copy(d.clone()))
+    } else {
+        let temp = ctx.push_temp(Type::new(TypeKind::Int, expr.span), expr.span);
+        (Place::new(temp), Operand::Copy(Place::new(temp)))
+    };
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(target, rvalue),
+        span: expr.span,
+    });
+    Ok(Some(ret_op))
+}
+
+fn try_lower_math_intrinsic(
+    ctx: &mut LoweringContext,
+    name: &str,
+    args: &[Expression],
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Option<Operand>, LoweringError> {
+    let Some(intrinsic) = MathIntrinsic::from_name(name) else {
+        return Ok(None);
+    };
+
+    let is_from_math_module = ctx
+        .type_checker
+        .get_variable_module(name)
+        .map(|m| m == "system.math")
+        .unwrap_or(false);
+
+    if !is_from_math_module {
+        return Ok(None);
+    }
+
+    let mut arg_ops = Vec::with_capacity(args.len());
+    for arg in args {
+        arg_ops.push(lower_expression(ctx, arg, None)?);
+    }
+
+    let return_ty = resolve_type(ctx.type_checker, expr);
+    let (target, ret_op) = if let Some(ref d) = dest {
+        (d.clone(), Operand::Copy(d.clone()))
+    } else {
+        let temp = ctx.push_temp(return_ty, expr.span);
+        (Place::new(temp), Operand::Copy(Place::new(temp)))
+    };
+
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(target, Rvalue::MathIntrinsic(intrinsic, arg_ops)),
+        span: expr.span,
+    });
+    Ok(Some(ret_op))
+}
+
+fn try_lower_enum_variant(
+    ctx: &mut LoweringContext,
+    func: &Expression,
+    args: &[Expression],
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Option<Operand>, LoweringError> {
     if let ExpressionKind::Member(enum_expr, variant_expr) = &func.node {
         if let ExpressionKind::Identifier(type_name, _) = &enum_expr.node {
             if let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) =
@@ -158,8 +225,6 @@ pub(crate) fn lower_call_expr(
                         .enumerate()
                         .find(|(_, (name, _))| name.as_str() == variant_name)
                     {
-                        // Variant with associated values.
-                        // Create discriminant constant
                         let discr_op = Operand::Constant(Box::new(Constant {
                             span: expr.span,
                             ty: Type::new(TypeKind::Int, expr.span),
@@ -168,15 +233,12 @@ pub(crate) fn lower_call_expr(
                             ),
                         }));
 
-                        // Lower all arguments
                         let arg_watermark = ctx.body.local_decls.len();
                         let mut ops = vec![discr_op];
                         for arg in args {
                             ops.push(lower_expression(ctx, arg, None)?);
                         }
 
-                        // DPS: use the caller-provided destination if given,
-                        // otherwise allocate a fresh temp.
                         let target = if let Some(d) = dest {
                             d
                         } else {
@@ -197,20 +259,16 @@ pub(crate) fn lower_call_expr(
                             ),
                             span: expr.span,
                         });
-                        // Release any managed temps that were created for the
-                        // args — Aggregate IncRef transferred ownership into the enum.
                         for op in ops.iter().skip(1) {
-                            // skip the discriminant constant
                             if let Operand::Copy(ref p) | Operand::Move(ref p) = op {
                                 ctx.emit_temp_drop(p.local, arg_watermark, expr.span);
                             }
                         }
-                        return Ok(Operand::Copy(target));
+                        return Ok(Some(Operand::Copy(target)));
                     }
                 }
             }
         }
     }
-
-    lower_call(ctx, &expr.span, expr.id, func, args, dest)
+    Ok(None)
 }
