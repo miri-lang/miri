@@ -44,6 +44,7 @@
 
 use crate::ast::types::Type;
 use crate::ast::*;
+use crate::error::syntax::Span;
 use crate::type_checker::context::Context;
 use crate::type_checker::TypeChecker;
 
@@ -65,74 +66,91 @@ impl TypeChecker {
     /// This is the main entry point for expression type checking. It delegates to specific
     /// handler methods based on the expression kind.
     pub(crate) fn infer_expression(&mut self, expr: &Expression, context: &mut Context) -> Type {
-        let ty = match &expr.node {
+        let ty = self.infer_expression_kind(&expr.node, expr.span, expr.id, context);
+        self.types.insert(expr.id, ty.clone());
+        ty
+    }
+
+    /// Dispatches expression type inference based on expression kind.
+    fn infer_expression_kind(
+        &mut self,
+        kind: &ExpressionKind,
+        span: Span,
+        expr_id: usize,
+        context: &mut Context,
+    ) -> Type {
+        match kind {
             ExpressionKind::Literal(lit) => self.infer_literal(lit),
             ExpressionKind::Binary(left, op, right) => {
-                self.infer_binary(left, op, right, expr.span, context)
+                self.infer_binary(left, op, right, span, context)
             }
             ExpressionKind::Logical(left, op, right) => {
-                self.infer_logical(left, op, right, expr.span, context)
+                self.infer_logical(left, op, right, span, context)
             }
-            ExpressionKind::Unary(op, operand) => self.infer_unary(op, operand, expr.span, context),
-            ExpressionKind::Identifier(name, _) => self.infer_identifier(name, expr.span, context),
+            ExpressionKind::Unary(op, operand) => self.infer_unary(op, operand, span, context),
+            ExpressionKind::Identifier(name, _) => self.infer_identifier(name, span, context),
             ExpressionKind::Assignment(lhs, op, rhs) => {
-                self.infer_assignment(lhs, op, rhs, expr.span, context)
+                self.infer_assignment(lhs, op, rhs, span, context)
             }
             ExpressionKind::Call(func, args) => {
-                self.infer_call(func, args, expr.span, context, expr.id)
+                self.infer_call(func, args, span, context, expr_id)
             }
             ExpressionKind::Range(start, end, kind) => {
-                self.infer_range(start, end, kind, expr.span, context)
+                self.infer_range(start, end, kind, span, context)
             }
             ExpressionKind::List(elements) => self.infer_list(elements, context),
             ExpressionKind::Map(entries) => self.infer_map(entries, context),
             ExpressionKind::Set(elements) => self.infer_set(elements, context),
             ExpressionKind::Tuple(elements) => self.infer_tuple(elements, context),
-            ExpressionKind::Index(obj, index) => self.infer_index(obj, index, expr.span, context),
-            ExpressionKind::Member(obj, prop) => self.infer_member(obj, prop, expr.span, context),
+            ExpressionKind::Index(obj, index) => self.infer_index(obj, index, span, context),
+            ExpressionKind::Member(obj, prop) => self.infer_member(obj, prop, span, context),
             ExpressionKind::Match(subject, branches) => {
-                self.infer_match(subject, branches, expr.span, context)
+                self.infer_match(subject, branches, span, context)
             }
             ExpressionKind::Conditional(then_expr, cond_expr, else_expr, _) => {
-                self.infer_conditional(then_expr, cond_expr, else_expr, expr.span, context)
+                self.infer_conditional(then_expr, cond_expr, else_expr, span, context)
             }
             ExpressionKind::FormattedString(parts) => self.infer_formatted_string(parts, context),
-            ExpressionKind::Lambda(lambda) => self.infer_lambda(
-                &lambda.generics,
-                &lambda.params,
-                &lambda.return_type,
-                &lambda.body,
-                &lambda.properties,
-                context,
-            ),
+            ExpressionKind::Lambda(lambda) => {
+                self.infer_lambda(
+                    &lambda.generics,
+                    &lambda.params,
+                    &lambda.return_type,
+                    &lambda.body,
+                    &lambda.properties,
+                    context,
+                )
+            }
             ExpressionKind::TypeDeclaration(expr, generics, kind, target) => {
-                self.infer_generic_instantiation(expr, generics, kind, target, expr.span, context)
+                self.infer_generic_instantiation(expr, generics, kind, target, span, context)
             }
             ExpressionKind::NamedArgument(_, value) => self.infer_expression(value, context),
             ExpressionKind::EnumValue(name, values) => {
-                self.infer_enum_value(name, values, expr.span, context)
+                self.infer_enum_value(name, values, span, context)
             }
-            ExpressionKind::Super => self.infer_super(expr.span, context),
+            ExpressionKind::Super => self.infer_super(span, context),
             ExpressionKind::Block(statements, final_expr) => {
-                // Type check all statements, then the final expression determines the type
-                for stmt in statements {
-                    self.infer_statement_type(stmt, context);
-                }
-                self.infer_expression(final_expr, context)
+                self.infer_block(statements, final_expr, context)
             }
             ExpressionKind::Array(elements, size) => self.infer_array(elements, size, context),
-            // These expression kinds are handled elsewhere (parser, type expressions, etc.)
-            // and should not appear as top-level inferred expressions. Guard, GenericType,
-            // Type, StructMember, and ImportPath are structural AST nodes that are
-            // consumed by their parent expressions during type checking.
             ExpressionKind::Guard(_, _)
             | ExpressionKind::GenericType(_, _, _)
             | ExpressionKind::Type(_, _)
             | ExpressionKind::StructMember(_, _)
             | ExpressionKind::ImportPath(_, _) => Self::error_type(),
-        };
+        }
+    }
 
-        self.types.insert(expr.id, ty.clone());
-        ty
+    /// Infers the type of a block expression.
+    fn infer_block(
+        &mut self,
+        statements: &[Statement],
+        final_expr: &Box<Expression>,
+        context: &mut Context,
+    ) -> Type {
+        for stmt in statements {
+            self.infer_statement_type(stmt, context);
+        }
+        self.infer_expression(final_expr, context)
     }
 }

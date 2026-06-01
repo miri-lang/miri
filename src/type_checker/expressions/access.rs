@@ -231,60 +231,92 @@ impl TypeChecker {
         span: Span,
         context: &mut Context,
     ) {
-        if let ExpressionKind::Range(start, end, _range_type) = &index.node {
-            if let Some(size) = array_size {
-                if let Some(start_val) = Self::try_eval_const_int_with_context(start, context) {
-                    if start_val < 0 {
-                        self.report_error(
-                            "Slice start index must be a non-negative integer".to_string(),
-                            start.span,
-                        );
-                    } else if start_val > size {
-                        self.report_error(
-                            format!(
-                                "Slice start index out of bounds: index {} but array has {} elements",
-                                start_val, size
-                            ),
-                            start.span,
-                        );
-                    }
-                }
-                if let Some(end_expr) = end {
-                    if let Some(end_val) = Self::try_eval_const_int_with_context(end_expr, context)
-                    {
-                        if end_val < 0 {
-                            self.report_error(
-                                "Slice end index must be a non-negative integer".to_string(),
-                                end_expr.span,
-                            );
-                        } else if end_val > size {
-                            self.report_error(
-                                format!(
-                                    "Slice end index out of bounds: index {} but array has {} elements",
-                                    end_val, size
-                                ),
-                                end_expr.span,
-                            );
-                        }
-                    }
-                }
-            }
+        let ExpressionKind::Range(start, end, _range_type) = &index.node else {
+            return;
+        };
 
+        if let Some(size) = array_size {
+            self.check_slice_start_bounds(start, size, context);
             if let Some(end_expr) = end {
-                if let (Some(s), Some(e)) = (
-                    Self::try_eval_const_int_with_context(start, context),
-                    Self::try_eval_const_int_with_context(end_expr, context),
-                ) {
-                    if s > e {
-                        self.report_error(
-                            format!(
-                                "Slice start index ({}) is greater than end index ({})",
-                                s, e
-                            ),
-                            span,
-                        );
-                    }
-                }
+                self.check_slice_end_bounds(end_expr, size, context);
+            }
+        }
+
+        if let Some(end_expr) = end {
+            self.check_slice_range_order(start, end_expr, span, context);
+        }
+    }
+
+    /// Validates the start index of a slice against the array size.
+    fn check_slice_start_bounds(
+        &mut self,
+        start: &Expression,
+        size: i128,
+        context: &mut Context,
+    ) {
+        if let Some(start_val) = Self::try_eval_const_int_with_context(start, context) {
+            if start_val < 0 {
+                self.report_error(
+                    "Slice start index must be a non-negative integer".to_string(),
+                    start.span,
+                );
+            } else if start_val > size {
+                self.report_error(
+                    format!(
+                        "Slice start index out of bounds: index {} but array has {} elements",
+                        start_val, size
+                    ),
+                    start.span,
+                );
+            }
+        }
+    }
+
+    /// Validates the end index of a slice against the array size.
+    fn check_slice_end_bounds(
+        &mut self,
+        end_expr: &Expression,
+        size: i128,
+        context: &mut Context,
+    ) {
+        if let Some(end_val) = Self::try_eval_const_int_with_context(end_expr, context) {
+            if end_val < 0 {
+                self.report_error(
+                    "Slice end index must be a non-negative integer".to_string(),
+                    end_expr.span,
+                );
+            } else if end_val > size {
+                self.report_error(
+                    format!(
+                        "Slice end index out of bounds: index {} but array has {} elements",
+                        end_val, size
+                    ),
+                    end_expr.span,
+                );
+            }
+        }
+    }
+
+    /// Validates that the slice start is not greater than the end.
+    fn check_slice_range_order(
+        &mut self,
+        start: &Expression,
+        end_expr: &Expression,
+        span: Span,
+        context: &mut Context,
+    ) {
+        if let (Some(s), Some(e)) = (
+            Self::try_eval_const_int_with_context(start, context),
+            Self::try_eval_const_int_with_context(end_expr, context),
+        ) {
+            if s > e {
+                self.report_error(
+                    format!(
+                        "Slice start index ({}) is greater than end index ({})",
+                        s, e
+                    ),
+                    span,
+                );
             }
         }
     }
@@ -348,51 +380,83 @@ impl TypeChecker {
         }
 
         if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Array) {
-            if let Some(idx_val) = Self::try_eval_const_int_with_context(index, context) {
-                if idx_val < 0 {
-                    self.report_error(
-                        "Array index must be a non-negative integer".to_string(),
-                        index.span,
-                    );
-                    return make_type(TypeKind::Error);
-                }
-                if let Some(size_expr) = args.as_deref().and_then(|a| a.get(1)) {
-                    if let Some(size_val) = Self::try_eval_const_int(size_expr) {
-                        let idx = idx_val as usize;
-                        let size = size_val as usize;
-                        if idx >= size {
-                            self.report_error(
-                                format!(
-                                    "Array index out of bounds: index {} but array has {} elements",
-                                    idx, size
-                                ),
-                                span,
-                            );
-                            return make_type(TypeKind::Error);
-                        }
-                    }
-                }
+            if let Err(result_type) = self.validate_array_bounds(index, args, span, context) {
+                return result_type;
             }
         }
 
+        self.resolve_collection_element_type(args, context)
+    }
+
+    /// Validates array index bounds. Returns Err with element type on success or error type on failure.
+    fn validate_array_bounds(
+        &mut self,
+        index: &Expression,
+        args: &Option<Vec<Expression>>,
+        span: Span,
+        context: &mut Context,
+    ) -> Result<(), Type> {
+        let Some(idx_val) = Self::try_eval_const_int_with_context(index, context) else {
+            return Ok(());
+        };
+
+        if idx_val < 0 {
+            self.report_error(
+                "Array index must be a non-negative integer".to_string(),
+                index.span,
+            );
+            return Err(make_type(TypeKind::Error));
+        }
+
+        let Some(size_expr) = args.as_deref().and_then(|a| a.get(1)) else {
+            return Ok(());
+        };
+
+        let Some(size_val) = Self::try_eval_const_int(size_expr) else {
+            return Ok(());
+        };
+
+        let idx = idx_val as usize;
+        let size = size_val as usize;
+        if idx >= size {
+            self.report_error(
+                format!(
+                    "Array index out of bounds: index {} but array has {} elements",
+                    idx, size
+                ),
+                span,
+            );
+            return Err(make_type(TypeKind::Error));
+        }
+
+        Ok(())
+    }
+
+    /// Resolves the element type of a collection.
+    fn resolve_collection_element_type(
+        &mut self,
+        args: &Option<Vec<Expression>>,
+        context: &mut Context,
+    ) -> Type {
         if let Some(args) = args {
             if let Some(inner_type_expr) = args.first() {
                 return self.resolve_type_expression(inner_type_expr, context);
             }
-        } else if let Some(TypeDefinition::Generic(g)) = context.resolve_type_definition("T") {
-            return make_type(TypeKind::Generic(
+        }
+
+        if let Some(TypeDefinition::Generic(g)) = context.resolve_type_definition("T") {
+            make_type(TypeKind::Generic(
                 g.name.clone(),
                 g.constraint.clone().map(Box::new),
                 g.kind,
-            ));
+            ))
         } else {
-            return make_type(TypeKind::Generic(
+            make_type(TypeKind::Generic(
                 "T".to_string(),
                 None,
                 TypeDeclarationKind::None,
-            ));
+            ))
         }
-        make_type(TypeKind::Error)
     }
 
     fn infer_index_map(
@@ -583,39 +647,16 @@ impl TypeChecker {
             if name == "Kernel" && prop_name == "launch" {
                 return self.infer_member_kernel_launch();
             }
-        }
 
-        if let Some(name) = type_name {
-            let def_opt = self
-                .resolve_visible_type(&name, context)
-                .or_else(|| {
-                    if BuiltinCollectionKind::from_name(&name).is_some() {
-                        self.global_type_definitions.get(&name)
-                    } else {
-                        None
-                    }
-                })
-                .cloned();
-
-            if let Some(TypeDefinition::Struct(def)) = &def_opt {
-                return self.infer_member_struct(def, &name, prop_name, &type_args, span, context);
-            } else if let Some(TypeDefinition::Class(def)) = &def_opt {
-                return self.infer_member_class(def, &name, prop_name, &type_args, span, context);
-            } else if let Some(TypeDefinition::Trait(trait_def)) = &def_opt {
-                return self.infer_member_trait(&name, trait_def, prop_name, span, context);
-            } else if let Some(TypeDefinition::Enum(enum_def)) = &def_opt {
-                return self.infer_member_enum(enum_def, &name, prop_name, obj_type, span, context);
-            } else if def_opt.is_none() {
-                if let Some(module) = self.suggest_module_for_type(&name) {
-                    self.report_error_with_help(
-                        format!("Type '{}' does not have members", obj_type),
-                        span,
-                        format!("Consider importing '{}' to use {} methods", module, name),
-                    );
-                } else {
-                    self.report_error(format!("Type '{}' does not have members", obj_type), span);
-                }
-                return make_type(TypeKind::Error);
+            if let Some(result) = self.dispatch_type_definition_member(
+                &name,
+                prop_name,
+                obj_type,
+                &type_args,
+                span,
+                context,
+            ) {
+                return result;
             }
         }
 
@@ -626,6 +667,57 @@ impl TypeChecker {
             _ => {
                 self.report_error(format!("Type '{}' does not have members", obj_type), span);
                 make_type(TypeKind::Error)
+            }
+        }
+    }
+
+    /// Dispatches member access to the appropriate type definition handler.
+    /// Returns Some with the result type, or None if no definition was found.
+    fn dispatch_type_definition_member(
+        &mut self,
+        type_name: &str,
+        prop_name: &str,
+        obj_type: &Type,
+        type_args: &Option<Vec<Expression>>,
+        span: Span,
+        context: &mut Context,
+    ) -> Option<Type> {
+        let def_opt = self
+            .resolve_visible_type(type_name, context)
+            .or_else(|| {
+                if BuiltinCollectionKind::from_name(type_name).is_some() {
+                    self.global_type_definitions.get(type_name)
+                } else {
+                    None
+                }
+            })
+            .cloned();
+
+        match def_opt {
+            Some(TypeDefinition::Struct(def)) => {
+                Some(self.infer_member_struct(&def, type_name, prop_name, type_args, span, context))
+            }
+            Some(TypeDefinition::Class(def)) => {
+                Some(self.infer_member_class(&def, type_name, prop_name, type_args, span, context))
+            }
+            Some(TypeDefinition::Trait(trait_def)) => {
+                Some(self.infer_member_trait(type_name, &trait_def, prop_name, span, context))
+            }
+            Some(TypeDefinition::Enum(enum_def)) => Some(self.infer_member_enum(
+                &enum_def, type_name, prop_name, obj_type, span, context,
+            )),
+            Some(TypeDefinition::Generic(_)) | Some(TypeDefinition::Alias(_)) => None,
+            None => {
+                if let Some(module) = self.suggest_module_for_type(type_name) {
+                    self.report_error_with_help(
+                        format!("Type '{}' does not have members", obj_type),
+                        span,
+                        format!("Consider importing '{}' to use {} methods", module, type_name),
+                    );
+                } else {
+                    self.report_error(format!("Type '{}' does not have members", obj_type), span);
+                }
+                Some(make_type(TypeKind::Error))
             }
         }
     }
@@ -682,26 +774,7 @@ impl TypeChecker {
                 Some(vec![*elem.clone(), *size.clone()]),
             ),
             TypeKind::Tuple(element_type_exprs) => {
-                if !element_type_exprs.is_empty() {
-                    let resolved_types: Vec<Type> = element_type_exprs
-                        .iter()
-                        .map(|t| self.resolve_type_expression(t, context))
-                        .collect();
-                    let first_type = &resolved_types[0];
-                    let is_homogeneous = resolved_types
-                        .iter()
-                        .all(|t| self.are_compatible(t, first_type, context));
-                    if is_homogeneous {
-                        (
-                            Some("Tuple".to_string()),
-                            Some(vec![self.create_type_expression(first_type.clone())]),
-                        )
-                    } else {
-                        (None, None)
-                    }
-                } else {
-                    (None, None)
-                }
+                self.extract_tuple_member_type(element_type_exprs, context)
             }
             TypeKind::Custom(name, args) => (Some(name.clone()), args.clone()),
             TypeKind::Result(ok, err) => (
@@ -709,10 +782,9 @@ impl TypeChecker {
                 Some(vec![*ok.clone(), *err.clone()]),
             ),
             TypeKind::Option(_) => (None, None),
-            TypeKind::Generic(_, Some(constraint), _) => match &constraint.kind {
-                TypeKind::Custom(name, args) => (Some(name.clone()), args.clone()),
-                _ => (None, None),
-            },
+            TypeKind::Generic(_, Some(constraint), _) => {
+                self.extract_constrained_generic_member_type(constraint)
+            }
             TypeKind::Generic(name, None, _) => {
                 self.report_error(
                     format!(
@@ -723,6 +795,46 @@ impl TypeChecker {
                 );
                 (None, None)
             }
+            _ => (None, None),
+        }
+    }
+
+    /// Extracts member type info from a tuple type.
+    fn extract_tuple_member_type(
+        &mut self,
+        element_type_exprs: &[Expression],
+        context: &mut Context,
+    ) -> (Option<String>, Option<Vec<Expression>>) {
+        if element_type_exprs.is_empty() {
+            return (None, None);
+        }
+
+        let resolved_types: Vec<Type> = element_type_exprs
+            .iter()
+            .map(|t| self.resolve_type_expression(t, context))
+            .collect();
+        let first_type = &resolved_types[0];
+        let is_homogeneous = resolved_types
+            .iter()
+            .all(|t| self.are_compatible(t, first_type, context));
+
+        if is_homogeneous {
+            (
+                Some("Tuple".to_string()),
+                Some(vec![self.create_type_expression(first_type.clone())]),
+            )
+        } else {
+            (None, None)
+        }
+    }
+
+    /// Extracts member type from a constrained generic.
+    fn extract_constrained_generic_member_type(
+        &self,
+        constraint: &Type,
+    ) -> (Option<String>, Option<Vec<Expression>>) {
+        match &constraint.kind {
+            TypeKind::Custom(name, args) => (Some(name.clone()), args.clone()),
             _ => (None, None),
         }
     }
@@ -1301,67 +1413,99 @@ impl TypeChecker {
         span: Span,
         _context: &mut Context,
     ) -> Type {
-        if let Some(method_info) = enum_def.methods.get(prop_name) {
-            let type_args: Option<Vec<crate::ast::Expression>> =
-                if let TypeKind::Custom(_, args) = &obj_type.kind {
-                    args.clone()
-                } else {
-                    None
-                };
-            let mut mapping = HashMap::new();
-            if let (Some(args), Some(generics)) = (&type_args, &enum_def.generics) {
-                if generics.len() == args.len() {
-                    for (param, arg_expr) in generics.iter().zip(args.iter()) {
-                        let arg_type = self
-                            .extract_type_from_expression(arg_expr)
-                            .unwrap_or(make_type(TypeKind::Error));
-                        mapping.insert(param.name.clone(), arg_type);
-                    }
+        let Some(method_info) = enum_def.methods.get(prop_name) else {
+            self.report_error(
+                format!("Enum '{}' has no method '{}'", name, prop_name),
+                span,
+            );
+            return make_type(TypeKind::Error);
+        };
+
+        let type_args = self.extract_type_args_from_type(obj_type);
+        let generic_mapping = self.build_enum_method_generic_mapping(enum_def, &type_args);
+
+        let params = self.build_enum_method_params(method_info, &generic_mapping);
+        let return_type_expr = self.build_enum_method_return_type(method_info, &generic_mapping);
+
+        make_type(TypeKind::Function(Box::new(FunctionTypeData {
+            generics: None,
+            params,
+            return_type: return_type_expr,
+        })))
+    }
+
+    /// Extracts type arguments from a custom type.
+    fn extract_type_args_from_type(&self, obj_type: &Type) -> Option<Vec<crate::ast::Expression>> {
+        if let TypeKind::Custom(_, args) = &obj_type.kind {
+            args.clone()
+        } else {
+            None
+        }
+    }
+
+    /// Builds a generic type mapping for an enum method.
+    fn build_enum_method_generic_mapping(
+        &mut self,
+        enum_def: &crate::type_checker::context::EnumDefinition,
+        type_args: &Option<Vec<crate::ast::Expression>>,
+    ) -> HashMap<String, Type> {
+        let mut mapping = HashMap::new();
+        if let (Some(args), Some(generics)) = (type_args, &enum_def.generics) {
+            if generics.len() == args.len() {
+                for (param, arg_expr) in generics.iter().zip(args.iter()) {
+                    let arg_type = self
+                        .extract_type_from_expression(arg_expr)
+                        .unwrap_or(make_type(TypeKind::Error));
+                    mapping.insert(param.name.clone(), arg_type);
                 }
             }
-
-            let params: Vec<Parameter> = method_info
-                .params
-                .iter()
-                .enumerate()
-                .map(|(i, (pname, ty))| {
-                    let substituted_ty = if mapping.is_empty() {
-                        ty.clone()
-                    } else {
-                        self.substitute_type(ty, &mapping)
-                    };
-                    Parameter {
-                        name: pname.clone(),
-                        typ: Box::new(self.create_type_expression(substituted_ty)),
-                        guard: None,
-                        default_value: None,
-                        is_out: method_info.is_param_out(i),
-                    }
-                })
-                .collect();
-
-            let return_type_expr = if matches!(method_info.return_type.kind, TypeKind::Void) {
-                None
-            } else {
-                let substituted_ret = if mapping.is_empty() {
-                    method_info.return_type.clone()
-                } else {
-                    self.substitute_type(&method_info.return_type, &mapping)
-                };
-                Some(Box::new(self.create_type_expression(substituted_ret)))
-            };
-
-            return make_type(TypeKind::Function(Box::new(FunctionTypeData {
-                generics: None,
-                params,
-                return_type: return_type_expr,
-            })));
         }
-        self.report_error(
-            format!("Enum '{}' has no method '{}'", name, prop_name),
-            span,
-        );
-        make_type(TypeKind::Error)
+        mapping
+    }
+
+    /// Builds parameters for an enum method.
+    fn build_enum_method_params(
+        &mut self,
+        method_info: &crate::type_checker::context::MethodInfo,
+        mapping: &HashMap<String, Type>,
+    ) -> Vec<Parameter> {
+        method_info
+            .params
+            .iter()
+            .enumerate()
+            .map(|(i, (pname, ty))| {
+                let substituted_ty = if mapping.is_empty() {
+                    ty.clone()
+                } else {
+                    self.substitute_type(ty, mapping)
+                };
+                Parameter {
+                    name: pname.clone(),
+                    typ: Box::new(self.create_type_expression(substituted_ty)),
+                    guard: None,
+                    default_value: None,
+                    is_out: method_info.is_param_out(i),
+                }
+            })
+            .collect()
+    }
+
+    /// Builds the return type expression for an enum method.
+    fn build_enum_method_return_type(
+        &mut self,
+        method_info: &crate::type_checker::context::MethodInfo,
+        mapping: &HashMap<String, Type>,
+    ) -> Option<Box<crate::ast::Expression>> {
+        if matches!(method_info.return_type.kind, TypeKind::Void) {
+            None
+        } else {
+            let substituted_ret = if mapping.is_empty() {
+                method_info.return_type.clone()
+            } else {
+                self.substitute_type(&method_info.return_type, mapping)
+            };
+            Some(Box::new(self.create_type_expression(substituted_ret)))
+        }
     }
 
     fn infer_member_meta(
@@ -1371,57 +1515,71 @@ impl TypeChecker {
         span: Span,
         context: &mut Context,
     ) -> Type {
-        if let TypeKind::Custom(name, _) = &inner_type.kind {
-            let def_opt = self.resolve_visible_type(name, context).cloned();
-
-            if let Some(TypeDefinition::Enum(def)) = &def_opt {
-                if let Some(variant_types) = def.variants.get(prop_name) {
-                    let type_args = if let TypeKind::Custom(_, args) = &inner_type.kind {
-                        args.clone()
-                    } else {
-                        None
-                    };
-
-                    if variant_types.is_empty() {
-                        return make_type(TypeKind::Custom(name.clone(), type_args));
-                    }
-
-                    let variant_types_clone = variant_types.clone();
-                    return self.infer_member_enum_variant(
-                        name,
-                        &variant_types_clone,
-                        def,
-                        &type_args,
-                    );
-                }
-
-                let candidates: Vec<&str> = def.variants.keys().map(|s| s.as_str()).collect();
-                if let Some(suggestion) = find_best_match(prop_name, &candidates) {
-                    self.report_error_with_help(
-                        format!("Enum '{}' has no variant '{}'", name, prop_name),
-                        span,
-                        format!("Did you mean '{}'?", suggestion),
-                    );
-                } else {
-                    self.report_error(
-                        format!("Enum '{}' has no variant '{}'", name, prop_name),
-                        span,
-                    );
-                }
-                return make_type(TypeKind::Error);
-            }
-
+        let TypeKind::Custom(name, _) = &inner_type.kind else {
             self.report_error(
-                format!("Type '{}' does not have static members", name),
+                format!("Type '{}' does not have static members", inner_type),
                 span,
             );
             return make_type(TypeKind::Error);
+        };
+
+        let def_opt = self.resolve_visible_type(name, context).cloned();
+
+        if let Some(TypeDefinition::Enum(def)) = &def_opt {
+            return self.infer_member_enum_variant_from_meta(
+                name, prop_name, inner_type, &def, span,
+            );
         }
 
         self.report_error(
-            format!("Type '{}' does not have static members", inner_type),
+            format!("Type '{}' does not have static members", name),
             span,
         );
+        make_type(TypeKind::Error)
+    }
+
+    /// Handles enum variant access from a meta type.
+    fn infer_member_enum_variant_from_meta(
+        &mut self,
+        enum_name: &str,
+        prop_name: &str,
+        inner_type: &Type,
+        def: &crate::type_checker::context::EnumDefinition,
+        span: Span,
+    ) -> Type {
+        if let Some(variant_types) = def.variants.get(prop_name) {
+            let type_args = if let TypeKind::Custom(_, args) = &inner_type.kind {
+                args.clone()
+            } else {
+                None
+            };
+
+            if variant_types.is_empty() {
+                return make_type(TypeKind::Custom(enum_name.to_string(), type_args));
+            }
+
+            let variant_types_clone = variant_types.clone();
+            return self.infer_member_enum_variant(
+                enum_name,
+                &variant_types_clone,
+                def,
+                &type_args,
+            );
+        }
+
+        let candidates: Vec<&str> = def.variants.keys().map(|s| s.as_str()).collect();
+        if let Some(suggestion) = find_best_match(prop_name, &candidates) {
+            self.report_error_with_help(
+                format!("Enum '{}' has no variant '{}'", enum_name, prop_name),
+                span,
+                format!("Did you mean '{}'?", suggestion),
+            );
+        } else {
+            self.report_error(
+                format!("Enum '{}' has no variant '{}'", enum_name, prop_name),
+                span,
+            );
+        }
         make_type(TypeKind::Error)
     }
 
