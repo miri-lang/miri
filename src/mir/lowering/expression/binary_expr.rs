@@ -535,17 +535,7 @@ pub(crate) fn lower_binary_expr(
     let lhs_op = lower_expression(ctx, lhs, None)?;
     let rhs_op = lower_expression(ctx, rhs, None)?;
 
-    let is_option_eq = if let Some(lhs_ty) = ctx.type_checker.get_type(lhs.id) {
-        matches!(&lhs_ty.kind, TypeKind::Option(_))
-            && matches!(
-                op,
-                crate::ast::operator::BinaryOp::Equal | crate::ast::operator::BinaryOp::NotEqual
-            )
-    } else {
-        false
-    };
-
-    if is_option_eq {
+    if is_option_equality(ctx, lhs, op) {
         return lower_option_equality(ctx, lhs_op, rhs_op, expr, dest, op);
     }
 
@@ -562,6 +552,33 @@ pub(crate) fn lower_binary_expr(
         return Ok(result);
     }
 
+    emit_binary_op(ctx, op, lhs_op, rhs_op, expr, dest)
+}
+
+/// True when comparing an `Option` with `==`/`!=` (handled specially).
+fn is_option_equality(
+    ctx: &LoweringContext,
+    lhs: &Expression,
+    op: &crate::ast::operator::BinaryOp,
+) -> bool {
+    ctx.type_checker.get_type(lhs.id).is_some_and(|lhs_ty| {
+        matches!(&lhs_ty.kind, TypeKind::Option(_))
+            && matches!(
+                op,
+                crate::ast::operator::BinaryOp::Equal | crate::ast::operator::BinaryOp::NotEqual
+            )
+    })
+}
+
+/// Emit a plain `BinaryOp` rvalue into `dest` (or a fresh temp).
+fn emit_binary_op(
+    ctx: &mut LoweringContext,
+    op: &crate::ast::operator::BinaryOp,
+    lhs_op: Operand,
+    rhs_op: Operand,
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
     let bin_op = op_to_binop(op, expr.span)?;
     let result_ty = binary_result_type(ctx, op, expr);
 
@@ -579,6 +596,5 @@ pub(crate) fn lower_binary_expr(
         ),
         span: expr.span,
     });
-
     Ok(ret_op)
 }
