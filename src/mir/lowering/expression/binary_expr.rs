@@ -183,6 +183,26 @@ fn return_method_call(
     Ok(ret_op)
 }
 
+/// Pick the runtime membership-test function for the collection `rhs`.
+fn resolve_contains_fn(ctx: &LoweringContext, rhs: &Expression) -> &'static str {
+    match ctx.type_checker.get_type(rhs.id).map(|t| &t.kind) {
+        Some(TypeKind::Set(_)) | Some(TypeKind::Map(_, _)) => {
+            unreachable!("collection types are normalized to Custom before this point")
+        }
+        Some(TypeKind::Custom(name, _))
+            if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Set) =>
+        {
+            rt::SET_CONTAINS
+        }
+        Some(TypeKind::Custom(name, _))
+            if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Map) =>
+        {
+            rt::MAP_CONTAINS_KEY
+        }
+        _ => "__contains",
+    }
+}
+
 fn lower_in_operator(
     ctx: &mut LoweringContext,
     lhs: &Expression,
@@ -201,23 +221,7 @@ fn lower_in_operator(
         (Place::new(temp), Operand::Copy(Place::new(temp)))
     };
 
-    let fn_name = match ctx.type_checker.get_type(rhs.id).map(|t| &t.kind) {
-        Some(TypeKind::Set(_)) | Some(TypeKind::Map(_, _)) => {
-            unreachable!("collection types are normalized to Custom before this point")
-        }
-        Some(TypeKind::Custom(name, _))
-            if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Set) =>
-        {
-            rt::SET_CONTAINS
-        }
-        Some(TypeKind::Custom(name, _))
-            if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Map) =>
-        {
-            rt::MAP_CONTAINS_KEY
-        }
-        _ => "__contains",
-    };
-
+    let fn_name = resolve_contains_fn(ctx, rhs);
     let contains_fn = Operand::Constant(Box::new(Constant {
         span: expr.span,
         ty: Type::new(TypeKind::Identifier, expr.span),
