@@ -14,6 +14,70 @@ use crate::mir::{
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::lower_expression;
 
+/// Emit short-circuit AND branching and short-circuit assignment.
+fn emit_and_short_circuit(
+    ctx: &mut LoweringContext,
+    result_local: crate::mir::Local,
+    result_ty: &Type,
+    rhs_bb: crate::mir::BasicBlock,
+    done_bb: crate::mir::BasicBlock,
+    expr: &Expression,
+) {
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::SwitchInt {
+            discr: Operand::Copy(Place::new(result_local)),
+            targets: vec![(Discriminant::bool_true(), rhs_bb)],
+            otherwise: done_bb,
+        },
+        expr.span,
+    ));
+
+    ctx.set_current_block(done_bb);
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            Place::new(result_local),
+            Rvalue::Use(Operand::Constant(Box::new(Constant {
+                span: expr.span,
+                ty: result_ty.clone(),
+                literal: crate::ast::literal::Literal::Boolean(false),
+            }))),
+        ),
+        span: expr.span,
+    });
+}
+
+/// Emit short-circuit OR branching and short-circuit assignment.
+fn emit_or_short_circuit(
+    ctx: &mut LoweringContext,
+    result_local: crate::mir::Local,
+    result_ty: &Type,
+    rhs_bb: crate::mir::BasicBlock,
+    done_bb: crate::mir::BasicBlock,
+    expr: &Expression,
+) {
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::SwitchInt {
+            discr: Operand::Copy(Place::new(result_local)),
+            targets: vec![(Discriminant::bool_false(), rhs_bb)],
+            otherwise: done_bb,
+        },
+        expr.span,
+    ));
+
+    ctx.set_current_block(done_bb);
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            Place::new(result_local),
+            Rvalue::Use(Operand::Constant(Box::new(Constant {
+                span: expr.span,
+                ty: result_ty.clone(),
+                literal: crate::ast::literal::Literal::Boolean(true),
+            }))),
+        ),
+        span: expr.span,
+    });
+}
+
 pub(crate) fn lower_logical_expr(
     ctx: &mut LoweringContext,
     expr: &Expression,
@@ -22,92 +86,70 @@ pub(crate) fn lower_logical_expr(
     let ExpressionKind::Logical(lhs, op, rhs) = &expr.node else {
         unreachable!()
     };
-    // Handle null coalescing operator (??) separately
     if matches!(op, crate::ast::operator::BinaryOp::NullCoalesce) {
         return lower_null_coalesce(ctx, expr, lhs, rhs, dest);
     }
 
-    // Short-circuit evaluation for logical operators:
-    // - and: if lhs is false, skip rhs and return false
-    // - or: if lhs is true, skip rhs and return true
-
+    // Short-circuit: `and` skips rhs when lhs is false; `or` when lhs is true.
     let result_ty = Type::new(TypeKind::Boolean, expr.span);
     let result_local = ctx.push_temp(result_ty.clone(), expr.span);
-
-    // Evaluate LHS
     let lhs_op = lower_expression(ctx, lhs, None)?;
 
-    // Create blocks for short-circuit evaluation
     let rhs_bb = ctx.new_basic_block();
     let done_bb = ctx.new_basic_block();
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(Place::new(result_local), Rvalue::Use(lhs_op)),
+        span: expr.span,
+    });
+    emit_logical_short_circuit(ctx, op, result_local, &result_ty, rhs_bb, done_bb, expr)?;
 
-    match op {
-        crate::ast::operator::BinaryOp::And => {
-            // and: if lhs is true, evaluate rhs; else return false
-            ctx.set_terminator(Terminator::new(
-                TerminatorKind::SwitchInt {
-                    discr: lhs_op.clone(),
-                    targets: vec![(Discriminant::bool_true(), rhs_bb)], // true -> evaluate rhs
-                    otherwise: done_bb,                                 // false -> done with false
-                },
-                expr.span,
-            ));
-
-            // In done_bb after short-circuit (lhs was false), assign false
-            ctx.set_current_block(done_bb);
-            ctx.push_statement(crate::mir::Statement {
-                kind: MirStatementKind::Assign(
-                    Place::new(result_local),
-                    Rvalue::Use(Operand::Constant(Box::new(Constant {
-                        span: expr.span,
-                        ty: result_ty.clone(),
-                        literal: crate::ast::literal::Literal::Boolean(false),
-                    }))),
-                ),
-                span: expr.span,
-            });
-        }
-        crate::ast::operator::BinaryOp::Or => {
-            // or: if lhs is false, evaluate rhs; else return true
-            ctx.set_terminator(Terminator::new(
-                TerminatorKind::SwitchInt {
-                    discr: lhs_op.clone(),
-                    targets: vec![(Discriminant::bool_false(), rhs_bb)], // false -> evaluate rhs
-                    otherwise: done_bb,                                  // true -> done with true
-                },
-                expr.span,
-            ));
-
-            // In done_bb after short-circuit (lhs was true), assign true
-            ctx.set_current_block(done_bb);
-            ctx.push_statement(crate::mir::Statement {
-                kind: MirStatementKind::Assign(
-                    Place::new(result_local),
-                    Rvalue::Use(Operand::Constant(Box::new(Constant {
-                        span: expr.span,
-                        ty: result_ty.clone(),
-                        literal: crate::ast::literal::Literal::Boolean(true),
-                    }))),
-                ),
-                span: expr.span,
-            });
-        }
-        _ => {
-            return Err(LoweringError::unsupported_operator(
-                format!("{:?}", op),
-                expr.span,
-            ));
-        }
-    }
-
-    // Create final join block
     let final_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Goto { target: final_bb },
         expr.span,
     ));
+    emit_logical_rhs(ctx, rhs, result_local, rhs_bb, final_bb, expr)?;
 
-    // Evaluate RHS in rhs_bb
+    ctx.set_current_block(final_bb);
+    Ok(finish_logical_result(ctx, result_local, dest, expr))
+}
+
+/// Dispatch to the `and`/`or` short-circuit emitter for `op`.
+fn emit_logical_short_circuit(
+    ctx: &mut LoweringContext,
+    op: &crate::ast::operator::BinaryOp,
+    result_local: crate::mir::Local,
+    result_ty: &Type,
+    rhs_bb: crate::mir::BasicBlock,
+    done_bb: crate::mir::BasicBlock,
+    expr: &Expression,
+) -> Result<(), LoweringError> {
+    match op {
+        crate::ast::operator::BinaryOp::And => {
+            emit_and_short_circuit(ctx, result_local, result_ty, rhs_bb, done_bb, expr)
+        }
+        crate::ast::operator::BinaryOp::Or => {
+            emit_or_short_circuit(ctx, result_local, result_ty, rhs_bb, done_bb, expr)
+        }
+        _ => {
+            return Err(LoweringError::unsupported_operator(
+                format!("{:?}", op),
+                expr.span,
+            ))
+        }
+    }
+    Ok(())
+}
+
+/// Evaluate the RHS in `rhs_bb`, store it into `result_local`, and goto join.
+fn emit_logical_rhs(
+    ctx: &mut LoweringContext,
+    rhs: &Expression,
+    result_local: crate::mir::Local,
+    rhs_bb: crate::mir::BasicBlock,
+    final_bb: crate::mir::BasicBlock,
+    expr: &Expression,
+) -> Result<(), LoweringError> {
     ctx.set_current_block(rhs_bb);
     let rhs_op = lower_expression(ctx, rhs, None)?;
     ctx.push_statement(crate::mir::Statement {
@@ -118,14 +160,18 @@ pub(crate) fn lower_logical_expr(
         TerminatorKind::Goto { target: final_bb },
         expr.span,
     ));
+    Ok(())
+}
 
-    ctx.set_current_block(final_bb);
-
-    // DPS: if a destination was provided (e.g. the variable being initialised in
-    // `let var = a and b`), write the result into it so the caller's variable is
-    // populated.  Without this the Logical arm ignores `dest` and the variable
-    // stays at its zero-initialised default (false).
-    if let Some(ref d) = dest {
+/// Return the boolean result, copying into `dest` (DPS) when provided so that
+/// `let v = a and b` populates `v` rather than leaving its zero default.
+fn finish_logical_result(
+    ctx: &mut LoweringContext,
+    result_local: crate::mir::Local,
+    dest: Option<Place>,
+    expr: &Expression,
+) -> Operand {
+    if let Some(d) = dest {
         ctx.push_statement(crate::mir::Statement {
             kind: MirStatementKind::Assign(
                 d.clone(),
@@ -133,10 +179,9 @@ pub(crate) fn lower_logical_expr(
             ),
             span: expr.span,
         });
-        return Ok(Operand::Copy(d.clone()));
+        return Operand::Copy(d);
     }
-
-    Ok(Operand::Copy(Place::new(result_local)))
+    Operand::Copy(Place::new(result_local))
 }
 
 /// Lowers the `??` (null coalescing) operator.
@@ -150,31 +195,54 @@ fn lower_null_coalesce(
     rhs: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    // Determine the inner type T from Option<T>
-    let lhs_checked_ty = ctx.type_checker.get_type(lhs.id).cloned();
-    let inner_ty = if let Some(ref ty) = lhs_checked_ty {
-        if let TypeKind::Option(inner) = &ty.kind {
-            inner.as_ref().clone()
-        } else {
-            ty.clone()
-        }
-    } else {
-        Type::new(TypeKind::Int, expr.span)
-    };
-
+    let inner_ty = coalesce_inner_type(ctx, lhs, expr);
     let result_local = ctx.push_temp(inner_ty.clone(), expr.span);
-
-    // Evaluate LHS
     let lhs_op = lower_expression(ctx, lhs, None)?;
+    let is_none_local = emit_none_comparison(ctx, &lhs_op, &inner_ty, expr);
 
-    // Create None constant for comparison
+    let rhs_bb = ctx.new_basic_block();
+    let some_bb = ctx.new_basic_block();
+    let final_bb = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::SwitchInt {
+            discr: Operand::Copy(Place::new(is_none_local)),
+            targets: vec![(Discriminant::bool_true(), rhs_bb)], // None → rhs
+            otherwise: some_bb,                                 // Some → use lhs
+        },
+        expr.span,
+    ));
+
+    emit_coalesce_some_branch(ctx, lhs_op, result_local, some_bb, final_bb, expr);
+    emit_logical_rhs(ctx, rhs, result_local, rhs_bb, final_bb, expr)?;
+
+    ctx.set_current_block(final_bb);
+    Ok(finish_logical_result(ctx, result_local, dest, expr))
+}
+
+/// The inner type `T` of `Option<T>` for the coalesce result temp; the lhs type
+/// itself if it is not an Option, else `Int` when untyped.
+fn coalesce_inner_type(ctx: &LoweringContext, lhs: &Expression, expr: &Expression) -> Type {
+    let Some(ty) = ctx.type_checker.get_type(lhs.id).cloned() else {
+        return Type::new(TypeKind::Int, expr.span);
+    };
+    match &ty.kind {
+        TypeKind::Option(inner) => inner.as_ref().clone(),
+        _ => ty,
+    }
+}
+
+/// Emit `lhs == None` and return the boolean result local.
+fn emit_none_comparison(
+    ctx: &mut LoweringContext,
+    lhs_op: &Operand,
+    inner_ty: &Type,
+    expr: &Expression,
+) -> crate::mir::Local {
     let none_val = Operand::Constant(Box::new(Constant {
         span: expr.span,
         ty: inner_ty.clone(),
         literal: crate::ast::literal::Literal::None,
     }));
-
-    // Compare LHS with None
     let is_none_local = ctx.push_temp(Type::new(TypeKind::Boolean, expr.span), expr.span);
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(
@@ -183,31 +251,23 @@ fn lower_null_coalesce(
         ),
         span: expr.span,
     });
+    is_none_local
+}
 
-    let rhs_bb = ctx.new_basic_block();
-    let some_bb = ctx.new_basic_block();
-    let final_bb = ctx.new_basic_block();
-
-    // If None → evaluate RHS, else → use LHS
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::SwitchInt {
-            discr: Operand::Copy(Place::new(is_none_local)),
-            targets: vec![(Discriminant::bool_true(), rhs_bb)], // is_none == true → rhs
-            otherwise: some_bb,                                 // is_none == false → use lhs
-        },
-        expr.span,
-    ));
-
-    // Some block: extract the payload by projecting Field(0)
+/// Some branch: project the Option payload (`Field(0)`) into `result_local`.
+fn emit_coalesce_some_branch(
+    ctx: &mut LoweringContext,
+    lhs_op: Operand,
+    result_local: crate::mir::Local,
+    some_bb: crate::mir::BasicBlock,
+    final_bb: crate::mir::BasicBlock,
+    expr: &Expression,
+) {
     ctx.set_current_block(some_bb);
-
-    // Convert lhs_op to a Place so we can project it
-    let lhs_place = crate::mir::lowering::helpers::ensure_place(ctx, lhs_op, expr.span);
-    let mut payload_place = lhs_place;
+    let mut payload_place = crate::mir::lowering::helpers::ensure_place(ctx, lhs_op, expr.span);
     payload_place
         .projection
         .push(crate::mir::PlaceElem::Field(0));
-
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(
             Place::new(result_local),
@@ -219,32 +279,4 @@ fn lower_null_coalesce(
         TerminatorKind::Goto { target: final_bb },
         expr.span,
     ));
-
-    // RHS block: evaluate RHS and assign to result
-    ctx.set_current_block(rhs_bb);
-    let rhs_op = lower_expression(ctx, rhs, None)?;
-    ctx.push_statement(crate::mir::Statement {
-        kind: MirStatementKind::Assign(Place::new(result_local), Rvalue::Use(rhs_op)),
-        span: expr.span,
-    });
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::Goto { target: final_bb },
-        expr.span,
-    ));
-
-    ctx.set_current_block(final_bb);
-
-    // DPS: write result into destination if provided
-    if let Some(ref d) = dest {
-        ctx.push_statement(crate::mir::Statement {
-            kind: MirStatementKind::Assign(
-                d.clone(),
-                Rvalue::Use(Operand::Copy(Place::new(result_local))),
-            ),
-            span: expr.span,
-        });
-        return Ok(Operand::Copy(d.clone()));
-    }
-
-    Ok(Operand::Copy(Place::new(result_local)))
 }
