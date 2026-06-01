@@ -157,6 +157,27 @@ pub(crate) fn apply_generic_sub(ty: &Type, subs: &HashMap<String, Type>) -> Type
 /// sites have been lowered. `mangled_name` is the already-computed symbol
 /// (e.g. `identity__int`) and `subs` maps each generic parameter name to its
 /// concrete type.
+/// Resolve a generic function's return type (same precedence as
+/// [`resolve_function_return_type`]) with the generic substitution applied.
+fn resolve_generic_return_type(
+    tc: &TypeChecker,
+    ret_type_expr: Option<&Expression>,
+    name: &str,
+    span: crate::error::syntax::Span,
+    subs: &HashMap<String, Type>,
+) -> Type {
+    if let Some(ret_expr) = ret_type_expr {
+        return apply_generic_sub(&resolve_type(tc, ret_expr), subs);
+    }
+    match tc.get_variable_type(name).map(|t| &t.kind) {
+        Some(TypeKind::Function(func)) => match &func.return_type {
+            Some(rt) => apply_generic_sub(&resolve_type(tc, rt), subs),
+            None => Type::new(TypeKind::Void, span),
+        },
+        _ => Type::new(TypeKind::Void, span),
+    }
+}
+
 pub fn lower_generic_instantiation(
     ast_func: &Statement,
     tc: &TypeChecker,
@@ -176,22 +197,8 @@ pub fn lower_generic_instantiation(
     let body_stmt = &decl.body;
     let props = &decl.properties;
 
-    // Resolve return type with generic substitution applied
-    let ret_ty = if let Some(ret_expr) = ret_type_expr {
-        apply_generic_sub(&resolve_type(tc, ret_expr), subs)
-    } else if let Some(ty) = tc.get_variable_type(name) {
-        if let TypeKind::Function(func) = &ty.kind {
-            if let Some(rt) = &func.return_type {
-                apply_generic_sub(&resolve_type(tc, rt), subs)
-            } else {
-                Type::new(TypeKind::Void, ast_func.span)
-            }
-        } else {
-            Type::new(TypeKind::Void, ast_func.span)
-        }
-    } else {
-        Type::new(TypeKind::Void, ast_func.span)
-    };
+    let ret_ty =
+        resolve_generic_return_type(tc, ret_type_expr.as_deref(), name, ast_func.span, subs);
 
     let execution_model = resolve_execution_model(props);
 
