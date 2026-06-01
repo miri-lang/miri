@@ -213,62 +213,86 @@ fn try_lower_enum_variant(
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Option<Operand>, LoweringError> {
-    if let ExpressionKind::Member(enum_expr, variant_expr) = &func.node {
-        if let ExpressionKind::Identifier(type_name, _) = &enum_expr.node {
-            if let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) =
-                ctx.type_checker.global_type_definitions.get(type_name)
-            {
-                if let ExpressionKind::Identifier(variant_name, _) = &variant_expr.node {
-                    if let Some((discriminant, _)) = enum_def
-                        .variants
-                        .iter()
-                        .enumerate()
-                        .find(|(_, (name, _))| name.as_str() == variant_name)
-                    {
-                        let discr_op = Operand::Constant(Box::new(Constant {
-                            span: expr.span,
-                            ty: Type::new(TypeKind::Int, expr.span),
-                            literal: crate::ast::literal::Literal::Integer(
-                                crate::ast::literal::IntegerLiteral::I32(discriminant as i32),
-                            ),
-                        }));
+    let ExpressionKind::Member(enum_expr, variant_expr) = &func.node else {
+        return Ok(None);
+    };
+    let ExpressionKind::Identifier(type_name, _) = &enum_expr.node else {
+        return Ok(None);
+    };
+    let ExpressionKind::Identifier(variant_name, _) = &variant_expr.node else {
+        return Ok(None);
+    };
+    let Some(discriminant) = enum_call_discriminant(ctx, type_name, variant_name) else {
+        return Ok(None);
+    };
 
-                        let arg_watermark = ctx.body.local_decls.len();
-                        let mut ops = vec![discr_op];
-                        for arg in args {
-                            ops.push(lower_expression(ctx, arg, None)?);
-                        }
+    let op = emit_enum_variant_call(ctx, type_name, variant_name, discriminant, args, expr, dest)?;
+    Ok(Some(op))
+}
 
-                        let target = if let Some(d) = dest {
-                            d
-                        } else {
-                            let ty = resolve_type(ctx.type_checker, expr);
-                            Place::new(ctx.push_temp(ty, expr.span))
-                        };
+/// Find the discriminant index of `variant_name` within enum `type_name`.
+fn enum_call_discriminant(
+    ctx: &LoweringContext,
+    type_name: &str,
+    variant_name: &str,
+) -> Option<usize> {
+    let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) =
+        ctx.type_checker.global_type_definitions.get(type_name)
+    else {
+        return None;
+    };
+    enum_def
+        .variants
+        .iter()
+        .position(|(name, _)| name.as_str() == variant_name)
+}
 
-                        ctx.push_statement(crate::mir::Statement {
-                            kind: MirStatementKind::Assign(
-                                target.clone(),
-                                Rvalue::Aggregate(
-                                    AggregateKind::Enum(
-                                        Rc::from(type_name.as_str()),
-                                        Rc::from(variant_name.as_str()),
-                                    ),
-                                    ops.clone(),
-                                ),
-                            ),
-                            span: expr.span,
-                        });
-                        for op in ops.iter().skip(1) {
-                            if let Operand::Copy(ref p) | Operand::Move(ref p) = op {
-                                ctx.emit_temp_drop(p.local, arg_watermark, expr.span);
-                            }
-                        }
-                        return Ok(Some(Operand::Copy(target)));
-                    }
-                }
-            }
+/// Lower the variant args and emit the enum `Aggregate`, dropping each fresh
+/// arg temp (the args' RC is donated into the aggregate).
+fn emit_enum_variant_call(
+    ctx: &mut LoweringContext,
+    type_name: &str,
+    variant_name: &str,
+    discriminant: usize,
+    args: &[Expression],
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let discr_op = Operand::Constant(Box::new(Constant {
+        span: expr.span,
+        ty: Type::new(TypeKind::Int, expr.span),
+        literal: crate::ast::literal::Literal::Integer(crate::ast::literal::IntegerLiteral::I32(
+            discriminant as i32,
+        )),
+    }));
+
+    let arg_watermark = ctx.body.local_decls.len();
+    let mut ops = vec![discr_op];
+    for arg in args {
+        ops.push(lower_expression(ctx, arg, None)?);
+    }
+
+    let target = match dest {
+        Some(d) => d,
+        None => {
+            let ty = resolve_type(ctx.type_checker, expr);
+            Place::new(ctx.push_temp(ty, expr.span))
+        }
+    };
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            target.clone(),
+            Rvalue::Aggregate(
+                AggregateKind::Enum(Rc::from(type_name), Rc::from(variant_name)),
+                ops.clone(),
+            ),
+        ),
+        span: expr.span,
+    });
+    for op in ops.iter().skip(1) {
+        if let Operand::Copy(ref p) | Operand::Move(ref p) = op {
+            ctx.emit_temp_drop(p.local, arg_watermark, expr.span);
         }
     }
-    Ok(None)
+    Ok(Operand::Copy(target))
 }
