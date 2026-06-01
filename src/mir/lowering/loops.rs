@@ -392,6 +392,48 @@ fn resolve_iterable_class(
 }
 
 /// Emit length check and loop header condition.
+/// Compute the iterable's length into `len_temp`: a `{Class}_length` runtime
+/// call for collection classes, else a direct `Rvalue::Len`.
+fn emit_loop_length(
+    ctx: &mut LoweringContext,
+    len_temp: crate::mir::Local,
+    list_local: crate::mir::Local,
+    iterable_class: &Option<String>,
+    span: &Span,
+) {
+    let Some(class_name) = iterable_class else {
+        ctx.push_statement(crate::mir::Statement {
+            kind: StatementKind::Assign(Place::new(len_temp), Rvalue::Len(Place::new(list_local))),
+            span: *span,
+        });
+        return;
+    };
+    let length_symbol = format!("{}_length", class_name);
+    let func_op = Operand::Constant(Box::new(Constant {
+        span: *span,
+        ty: Type::new(TypeKind::Identifier, *span),
+        literal: crate::ast::literal::Literal::Identifier(length_symbol.clone()),
+    }));
+    let mut args = vec![Operand::Copy(Place::new(list_local))];
+    if !length_symbol.starts_with("miri_") {
+        if let Some(&allocator) = ctx.variable_map.get("allocator") {
+            args.push(Operand::Copy(Place::new(allocator)));
+        }
+    }
+    let after_len_bb = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func: func_op,
+            args,
+            out_args: Vec::new(),
+            destination: Place::new(len_temp),
+            target: Some(after_len_bb),
+        },
+        *span,
+    ));
+    ctx.set_current_block(after_len_bb);
+}
+
 #[allow(clippy::too_many_arguments)]
 fn emit_loop_header(
     ctx: &mut LoweringContext,
@@ -404,45 +446,9 @@ fn emit_loop_header(
     span: &Span,
 ) -> Result<(), LoweringError> {
     let len_temp = ctx.push_temp(idx_ty.clone(), *span);
+    emit_loop_length(ctx, len_temp, list_local, iterable_class, span);
 
-    if let Some(ref class_name) = iterable_class {
-        let mut length_symbol = String::with_capacity(class_name.len() + 7);
-        length_symbol.push_str(class_name);
-        length_symbol.push_str("_length");
-        let func_op = Operand::Constant(Box::new(Constant {
-            span: *span,
-            ty: Type::new(TypeKind::Identifier, *span),
-            literal: crate::ast::literal::Literal::Identifier(length_symbol.clone()),
-        }));
-        let after_len_bb = ctx.new_basic_block();
-        ctx.set_terminator(Terminator::new(
-            TerminatorKind::Call {
-                func: func_op,
-                args: {
-                    let mut args = vec![Operand::Copy(Place::new(list_local))];
-                    if !length_symbol.starts_with("miri_") {
-                        if let Some(&allocator) = ctx.variable_map.get("allocator") {
-                            args.push(Operand::Copy(Place::new(allocator)));
-                        }
-                    }
-                    args
-                },
-                out_args: Vec::new(),
-                destination: Place::new(len_temp),
-                target: Some(after_len_bb),
-            },
-            *span,
-        ));
-        ctx.set_current_block(after_len_bb);
-    } else {
-        ctx.push_statement(crate::mir::Statement {
-            kind: StatementKind::Assign(Place::new(len_temp), Rvalue::Len(Place::new(list_local))),
-            span: *span,
-        });
-    }
-
-    let bool_ty = Type::new(TypeKind::Boolean, *span);
-    let cond_temp = ctx.push_temp(bool_ty, *span);
+    let cond_temp = ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span);
     ctx.push_statement(crate::mir::Statement {
         kind: StatementKind::Assign(
             Place::new(cond_temp),
