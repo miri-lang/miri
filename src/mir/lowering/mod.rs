@@ -484,58 +484,76 @@ fn emit_parameter_guards(
     params: &[crate::ast::common::Parameter],
 ) -> Result<(), LoweringError> {
     for param in params {
-        let Some(guard) = &param.guard else {
-            continue;
-        };
-        let Some(&param_local) = ctx.variable_map.get(param.name.as_str()) else {
-            continue;
-        };
-        let ExpressionKind::Guard(guard_op, guard_value) = &guard.node else {
-            continue;
-        };
-
-        let guard_val = lower_expression(ctx, guard_value, None)?;
-
-        let bin_op = match guard_op {
-            crate::ast::operator::GuardOp::GreaterThan => BinOp::Gt,
-            crate::ast::operator::GuardOp::GreaterThanEqual => BinOp::Ge,
-            crate::ast::operator::GuardOp::LessThan => BinOp::Lt,
-            crate::ast::operator::GuardOp::LessThanEqual => BinOp::Le,
-            crate::ast::operator::GuardOp::NotEqual => BinOp::Ne,
-            _ => continue,
-        };
-
-        let check_result = ctx.push_temp(Type::new(TypeKind::Boolean, guard.span), guard.span);
-        ctx.push_statement(crate::mir::Statement {
-            kind: MirStatementKind::Assign(
-                Place::new(check_result),
-                Rvalue::BinaryOp(
-                    bin_op,
-                    Box::new(Operand::Copy(Place::new(param_local))),
-                    Box::new(guard_val),
-                ),
-            ),
-            span: guard.span,
-        });
-
-        let continue_bb = ctx.new_basic_block();
-        let fail_bb = ctx.new_basic_block();
-
-        ctx.set_terminator(Terminator::new(
-            TerminatorKind::SwitchInt {
-                discr: Operand::Copy(Place::new(check_result)),
-                targets: vec![(Discriminant::bool_true(), continue_bb)],
-                otherwise: fail_bb,
-            },
-            guard.span,
-        ));
-
-        ctx.set_current_block(fail_bb);
-        ctx.set_terminator(Terminator::new(TerminatorKind::Unreachable, guard.span));
-
-        ctx.set_current_block(continue_bb);
+        emit_param_guard(ctx, param)?;
     }
     Ok(())
+}
+
+/// Emit the comparison + fail-on-false branch for a single guarded parameter.
+/// Parameters without a (supported) guard are left untouched.
+fn emit_param_guard(
+    ctx: &mut LoweringContext,
+    param: &crate::ast::common::Parameter,
+) -> Result<(), LoweringError> {
+    let Some(guard) = &param.guard else {
+        return Ok(());
+    };
+    let Some(&param_local) = ctx.variable_map.get(param.name.as_str()) else {
+        return Ok(());
+    };
+    let ExpressionKind::Guard(guard_op, guard_value) = &guard.node else {
+        return Ok(());
+    };
+
+    let guard_val = lower_expression(ctx, guard_value, None)?;
+    let Some(bin_op) = guard_op_to_binop(guard_op) else {
+        return Ok(());
+    };
+
+    let check_result = ctx.push_temp(Type::new(TypeKind::Boolean, guard.span), guard.span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            Place::new(check_result),
+            Rvalue::BinaryOp(
+                bin_op,
+                Box::new(Operand::Copy(Place::new(param_local))),
+                Box::new(guard_val),
+            ),
+        ),
+        span: guard.span,
+    });
+    emit_guard_fail_branch(ctx, check_result, guard.span);
+    Ok(())
+}
+
+/// Map a guard operator to its MIR comparison op (None if unsupported).
+fn guard_op_to_binop(op: &crate::ast::operator::GuardOp) -> Option<BinOp> {
+    match op {
+        crate::ast::operator::GuardOp::GreaterThan => Some(BinOp::Gt),
+        crate::ast::operator::GuardOp::GreaterThanEqual => Some(BinOp::Ge),
+        crate::ast::operator::GuardOp::LessThan => Some(BinOp::Lt),
+        crate::ast::operator::GuardOp::LessThanEqual => Some(BinOp::Le),
+        crate::ast::operator::GuardOp::NotEqual => Some(BinOp::Ne),
+        _ => None,
+    }
+}
+
+/// Branch on `check_result`: continue when true, else jump to an unreachable
+/// fail block. Leaves the current block at the continue path.
+fn emit_guard_fail_branch(ctx: &mut LoweringContext, check_result: crate::mir::Local, span: crate::error::syntax::Span) {
+    let continue_bb = ctx.new_basic_block();
+    let fail_bb = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::SwitchInt {
+            discr: Operand::Copy(Place::new(check_result)),
+            targets: vec![(Discriminant::bool_true(), continue_bb)],
+            otherwise: fail_bb,
+        },
+        span,
+    ));
+    ctx.set_current_block(fail_bb);
+    ctx.set_terminator(Terminator::new(TerminatorKind::Unreachable, span));
+    ctx.set_current_block(continue_bb);
 }
 
 /// Finalize the lowering context: pop root scope, ensure termination, and validate.
