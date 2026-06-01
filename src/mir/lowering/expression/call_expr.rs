@@ -106,7 +106,11 @@ fn try_lower_testing_intrinsic(
             && testing_intrinsic::is_from_testing_module(ctx, name.as_str())
         {
             return Ok(Some(testing_intrinsic::lower_testing_intrinsic(
-                ctx, expr, name.as_str(), args, dest,
+                ctx,
+                expr,
+                name.as_str(),
+                args,
+                dest,
             )?));
         }
     }

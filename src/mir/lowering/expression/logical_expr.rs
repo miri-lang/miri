@@ -131,7 +131,12 @@ fn emit_logical_short_circuit(
         crate::ast::operator::BinaryOp::Or => {
             emit_or_short_circuit(ctx, result_local, result_ty, rhs_bb, done_bb, expr)
         }
-        _ => return Err(LoweringError::unsupported_operator(format!("{:?}", op), expr.span)),
+        _ => {
+            return Err(LoweringError::unsupported_operator(
+                format!("{:?}", op),
+                expr.span,
+            ))
+        }
     }
     Ok(())
 }
@@ -260,7 +265,9 @@ fn emit_coalesce_some_branch(
 ) {
     ctx.set_current_block(some_bb);
     let mut payload_place = crate::mir::lowering::helpers::ensure_place(ctx, lhs_op, expr.span);
-    payload_place.projection.push(crate::mir::PlaceElem::Field(0));
+    payload_place
+        .projection
+        .push(crate::mir::PlaceElem::Field(0));
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(
             Place::new(result_local),

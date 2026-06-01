@@ -214,8 +214,9 @@ fn assign_variable_initializer(
     }
 
     let init_ty = ctx.type_checker.get_type(init_expr.id);
-    let types_match = init_ty
-        .is_some_and(|ity| MirType::from_type_kind(&ity.kind) == MirType::from_type_kind(var_ty_kind));
+    let types_match = init_ty.is_some_and(|ity| {
+        MirType::from_type_kind(&ity.kind) == MirType::from_type_kind(var_ty_kind)
+    });
     if types_match {
         lower_expression(ctx, init_expr, Some(dest))?;
         return Ok(());
