@@ -86,53 +86,65 @@ pub(crate) fn lower_logical_expr(
     let ExpressionKind::Logical(lhs, op, rhs) = &expr.node else {
         unreachable!()
     };
-    // Handle null coalescing operator (??) separately
     if matches!(op, crate::ast::operator::BinaryOp::NullCoalesce) {
         return lower_null_coalesce(ctx, expr, lhs, rhs, dest);
     }
 
-    // Short-circuit evaluation for logical operators:
-    // - and: if lhs is false, skip rhs and return false
-    // - or: if lhs is true, skip rhs and return true
-
+    // Short-circuit: `and` skips rhs when lhs is false; `or` when lhs is true.
     let result_ty = Type::new(TypeKind::Boolean, expr.span);
     let result_local = ctx.push_temp(result_ty.clone(), expr.span);
-
-    // Evaluate LHS
     let lhs_op = lower_expression(ctx, lhs, None)?;
 
-    // Create blocks for short-circuit evaluation
     let rhs_bb = ctx.new_basic_block();
     let done_bb = ctx.new_basic_block();
-
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(Place::new(result_local), Rvalue::Use(lhs_op)),
         span: expr.span,
     });
+    emit_logical_short_circuit(ctx, op, result_local, &result_ty, rhs_bb, done_bb, expr)?;
 
-    match op {
-        crate::ast::operator::BinaryOp::And => {
-            emit_and_short_circuit(ctx, result_local, &result_ty, rhs_bb, done_bb, expr);
-        }
-        crate::ast::operator::BinaryOp::Or => {
-            emit_or_short_circuit(ctx, result_local, &result_ty, rhs_bb, done_bb, expr);
-        }
-        _ => {
-            return Err(LoweringError::unsupported_operator(
-                format!("{:?}", op),
-                expr.span,
-            ));
-        }
-    }
-
-    // Create final join block
     let final_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(
         TerminatorKind::Goto { target: final_bb },
         expr.span,
     ));
+    emit_logical_rhs(ctx, rhs, result_local, rhs_bb, final_bb, expr)?;
 
-    // Evaluate RHS in rhs_bb
+    ctx.set_current_block(final_bb);
+    Ok(finish_logical_result(ctx, result_local, dest, expr))
+}
+
+/// Dispatch to the `and`/`or` short-circuit emitter for `op`.
+fn emit_logical_short_circuit(
+    ctx: &mut LoweringContext,
+    op: &crate::ast::operator::BinaryOp,
+    result_local: crate::mir::Local,
+    result_ty: &Type,
+    rhs_bb: crate::mir::BasicBlock,
+    done_bb: crate::mir::BasicBlock,
+    expr: &Expression,
+) -> Result<(), LoweringError> {
+    match op {
+        crate::ast::operator::BinaryOp::And => {
+            emit_and_short_circuit(ctx, result_local, result_ty, rhs_bb, done_bb, expr)
+        }
+        crate::ast::operator::BinaryOp::Or => {
+            emit_or_short_circuit(ctx, result_local, result_ty, rhs_bb, done_bb, expr)
+        }
+        _ => return Err(LoweringError::unsupported_operator(format!("{:?}", op), expr.span)),
+    }
+    Ok(())
+}
+
+/// Evaluate the RHS in `rhs_bb`, store it into `result_local`, and goto join.
+fn emit_logical_rhs(
+    ctx: &mut LoweringContext,
+    rhs: &Expression,
+    result_local: crate::mir::Local,
+    rhs_bb: crate::mir::BasicBlock,
+    final_bb: crate::mir::BasicBlock,
+    expr: &Expression,
+) -> Result<(), LoweringError> {
     ctx.set_current_block(rhs_bb);
     let rhs_op = lower_expression(ctx, rhs, None)?;
     ctx.push_statement(crate::mir::Statement {
@@ -143,14 +155,18 @@ pub(crate) fn lower_logical_expr(
         TerminatorKind::Goto { target: final_bb },
         expr.span,
     ));
+    Ok(())
+}
 
-    ctx.set_current_block(final_bb);
-
-    // DPS: if a destination was provided (e.g. the variable being initialised in
-    // `let var = a and b`), write the result into it so the caller's variable is
-    // populated.  Without this the Logical arm ignores `dest` and the variable
-    // stays at its zero-initialised default (false).
-    if let Some(ref d) = dest {
+/// Return the boolean result, copying into `dest` (DPS) when provided so that
+/// `let v = a and b` populates `v` rather than leaving its zero default.
+fn finish_logical_result(
+    ctx: &mut LoweringContext,
+    result_local: crate::mir::Local,
+    dest: Option<Place>,
+    expr: &Expression,
+) -> Operand {
+    if let Some(d) = dest {
         ctx.push_statement(crate::mir::Statement {
             kind: MirStatementKind::Assign(
                 d.clone(),
@@ -158,10 +174,9 @@ pub(crate) fn lower_logical_expr(
             ),
             span: expr.span,
         });
-        return Ok(Operand::Copy(d.clone()));
+        return Operand::Copy(d);
     }
-
-    Ok(Operand::Copy(Place::new(result_local)))
+    Operand::Copy(Place::new(result_local))
 }
 
 /// Lowers the `??` (null coalescing) operator.
