@@ -649,7 +649,7 @@ impl TypeChecker {
             }
 
             if let Some(result) = self.dispatch_type_definition_member(
-                &name,
+                name,
                 prop_name,
                 obj_type,
                 &type_args,
@@ -1527,7 +1527,7 @@ impl TypeChecker {
 
         if let Some(TypeDefinition::Enum(def)) = &def_opt {
             return self.infer_member_enum_variant_from_meta(
-                name, prop_name, inner_type, &def, span,
+                name, prop_name, inner_type, def, span,
             );
         }
 

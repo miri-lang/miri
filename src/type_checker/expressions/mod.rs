@@ -145,7 +145,7 @@ impl TypeChecker {
     fn infer_block(
         &mut self,
         statements: &[Statement],
-        final_expr: &Box<Expression>,
+        final_expr: &Expression,
         context: &mut Context,
     ) -> Type {
         for stmt in statements {

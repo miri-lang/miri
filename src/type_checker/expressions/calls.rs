@@ -118,6 +118,7 @@ impl TypeChecker {
     }
 
     /// Dispatches to function or constructor call based on the function type.
+    #[allow(clippy::too_many_arguments)]
     fn infer_call_dispatch(
         &mut self,
         func_type: &Type,

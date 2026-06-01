@@ -25,21 +25,15 @@ fn kernel_context_field(sym: &str) -> Option<&str> {
         .and_then(|rest| rest.strip_prefix('.'))
 }
 
-pub(crate) fn lower_member_expr(
+fn try_module_alias_constant(
     ctx: &mut LoweringContext,
+    obj: &Expression,
+    prop: &Expression,
     expr: &Expression,
     dest: Option<Place>,
-) -> Result<Operand, LoweringError> {
-    let ExpressionKind::Member(obj, prop) = &expr.node else {
-        unreachable!()
-    };
-    // Handle module alias constant access (e.g., math.PI)
+) -> Result<Option<Operand>, LoweringError> {
     if let ExpressionKind::Identifier(alias_name, _) = &obj.node {
-        if ctx
-            .type_checker
-            .module_aliases
-            .contains_key(alias_name.as_str())
-        {
+        if ctx.type_checker.module_aliases.contains_key(alias_name.as_str()) {
             if let ExpressionKind::Identifier(prop_name, _) = &prop.node {
                 let constant_val = match prop_name.as_str() {
                     "PI" => Some(std::f64::consts::PI),
@@ -63,37 +57,36 @@ pub(crate) fn lower_member_expr(
                             kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(operand)),
                             span: expr.span,
                         });
-                        return Ok(Operand::Copy(d));
+                        return Ok(Some(Operand::Copy(d)));
                     } else {
-                        // Return the constant operand directly.
-                        // If this is used as an argument to a function,
-                        // it will be passed as a value.
-                        return Ok(operand);
+                        return Ok(Some(operand));
                     }
                 }
             }
         }
     }
+    Ok(None)
+}
 
-    let obj_operand = lower_expression(ctx, obj, None)?;
-
-    // Handle kernel-context intrinsics (`kernel.thread_idx.x`, etc.).
-    // Two-step lowering: `kernel.thread_idx` => intermediate identifier
-    // `kernel.thread_idx`, then `<that>.x` => the actual GpuIntrinsic rvalue.
-    // `gpu_context` is the deprecated alias and folds into the same path.
-    if let Operand::Constant(c) = &obj_operand {
+fn try_gpu_intrinsic(
+    ctx: &mut LoweringContext,
+    obj_operand: &Operand,
+    prop: &Expression,
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Option<Operand>, LoweringError> {
+    if let Operand::Constant(c) = obj_operand {
         if let crate::ast::literal::Literal::Identifier(sym) = &c.literal {
             if sym == KERNEL_CONTEXT_IDENT || sym == GPU_CONTEXT_DEPRECATED_IDENT {
                 if let ExpressionKind::Identifier(prop_name, _) = &prop.node {
-                    // Return intermediate identifier for chained access
-                    return Ok(Operand::Constant(Box::new(Constant {
+                    return Ok(Some(Operand::Constant(Box::new(Constant {
                         span: expr.span,
                         ty: Type::new(TypeKind::Void, expr.span),
                         literal: crate::ast::literal::Literal::Identifier(format!(
                             "{}.{}",
                             KERNEL_CONTEXT_IDENT, prop_name
                         )),
-                    })));
+                    }))));
                 }
             } else if let Some(field) = kernel_context_field(sym) {
                 if let ExpressionKind::Identifier(prop_name, _) = &prop.node {
@@ -128,7 +121,7 @@ pub(crate) fn lower_member_expr(
                                 kind: MirStatementKind::Assign(d.clone(), rvalue),
                                 span: expr.span,
                             });
-                            return Ok(Operand::Copy(d.clone()));
+                            return Ok(Some(Operand::Copy(d.clone())));
                         }
                         None => {
                             let temp =
@@ -137,12 +130,33 @@ pub(crate) fn lower_member_expr(
                                 kind: MirStatementKind::Assign(Place::new(temp), rvalue),
                                 span: expr.span,
                             });
-                            return Ok(Operand::Copy(Place::new(temp)));
+                            return Ok(Some(Operand::Copy(Place::new(temp))));
                         }
                     }
                 }
             }
         }
+    }
+    Ok(None)
+}
+
+pub(crate) fn lower_member_expr(
+    ctx: &mut LoweringContext,
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let ExpressionKind::Member(obj, prop) = &expr.node else {
+        unreachable!()
+    };
+
+    if let Some(result) = try_module_alias_constant(ctx, obj, prop, expr, dest.clone())? {
+        return Ok(result);
+    }
+
+    let obj_operand = lower_expression(ctx, obj, None)?;
+
+    if let Some(result) = try_gpu_intrinsic(ctx, &obj_operand, prop, expr, dest.clone())? {
+        return Ok(result);
     }
 
     // 2. Handle General Struct Member Access
