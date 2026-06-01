@@ -133,15 +133,23 @@ pub(crate) fn resolve_inherited_method(
         type_defs.get(class_name),
         Some(TypeDefinition::Class(cd)) if cd.is_abstract
     );
+    resolve_via_class_chain(type_defs, class_name, method_name, caller_is_abstract)
+}
 
+/// Walk the class's inheritance chain (and each class's traits) for `method_name`.
+fn resolve_via_class_chain(
+    type_defs: &std::collections::HashMap<String, TypeDefinition>,
+    class_name: &str,
+    method_name: &str,
+    caller_is_abstract: bool,
+) -> Option<(String, MethodInfo)> {
     let mut current = class_name.to_string();
     loop {
         let (base, traits) = match type_defs.get(&current) {
             Some(TypeDefinition::Class(class_def)) => {
                 if let Some(method_info) = class_def.methods.get(method_name) {
-                    // When a concrete caller finds the method in an abstract ancestor,
-                    // return the original caller's name so dispatch goes to the
-                    // per-concrete-class compiled version rather than the abstract one.
+                    // A concrete caller finding the method in an abstract ancestor
+                    // uses the caller's name so dispatch lands on the per-concrete copy.
                     let defining = if class_def.is_abstract && !caller_is_abstract {
                         class_name.to_string()
                     } else {
@@ -153,31 +161,40 @@ pub(crate) fn resolve_inherited_method(
             }
             _ => return None,
         };
-        // Check default (non-abstract) methods in implemented traits.
-        //
-        // When the concrete caller picks up a default method from a trait, we apply
-        // the same concrete-caller / abstract-definer rule used for abstract classes:
-        // the mangled symbol uses the caller's name so static dispatch lands on a
-        // per-concrete copy (`Array_is_empty`) rather than the trait-typed default
-        // (`Queryable_is_empty`). The per-concrete copy is synthesized by the
-        // pipeline's trait-default re-lowering pass.
-        for trait_name in &traits {
-            if let Some((defining_trait, info)) =
-                resolve_trait_default_method(type_defs, trait_name, method_name)
-            {
-                let defining = if caller_is_abstract {
-                    defining_trait
-                } else {
-                    class_name.to_string()
-                };
-                return Some((defining, info));
-            }
+        if let Some(found) =
+            resolve_via_class_traits(type_defs, &traits, method_name, class_name, caller_is_abstract)
+        {
+            return Some(found);
         }
         match base {
             Some(b) => current = b,
             None => return None,
         }
     }
+}
+
+/// Scan a class's directly-implemented traits for a default `method_name`. The
+/// concrete-caller / abstract-definer rule mirrors the class-chain case.
+fn resolve_via_class_traits(
+    type_defs: &std::collections::HashMap<String, TypeDefinition>,
+    traits: &[String],
+    method_name: &str,
+    class_name: &str,
+    caller_is_abstract: bool,
+) -> Option<(String, MethodInfo)> {
+    for trait_name in traits {
+        if let Some((defining_trait, info)) =
+            resolve_trait_default_method(type_defs, trait_name, method_name)
+        {
+            let defining = if caller_is_abstract {
+                defining_trait
+            } else {
+                class_name.to_string()
+            };
+            return Some((defining, info));
+        }
+    }
+    None
 }
 
 /// Walk the trait hierarchy to find `method_name`. Returns the defining trait
@@ -402,60 +419,50 @@ fn try_lower_kernel_launch(
     args: &[Expression],
     dest: Option<Place>,
 ) -> Result<Option<Operand>, LoweringError> {
-    if let ExpressionKind::Identifier(name, _) = &prop.node {
-        if name == "launch" {
-            // Check if objective is a Kernel type.
-            if let Some(ty) = ctx.type_checker.get_type(obj.id) {
-                if let TypeKind::Custom(type_name, _) = &ty.kind {
-                    if type_name == "Kernel" {
-                        let kernel_op = lower_expression(ctx, obj, None)?;
-
-                        if args.len() != 2 {
-                            return Err(LoweringError::invalid_gpu_launch_args(
-                                2,
-                                args.len(),
-                                *span,
-                            ));
-                        }
-
-                        let grid_op = lower_expression(ctx, &args[0], None)?;
-                        let block_op = lower_expression(ctx, &args[1], None)?;
-
-                        let mut return_ty = Type::new(TypeKind::Void, *span);
-                        if let Some(ty) = ctx.type_checker.get_type(call_expr_id) {
-                            return_ty = ty.clone();
-                        }
-
-                        let (destination, op) = if let Some(d) = dest {
-                            (d.clone(), Operand::Copy(d))
-                        } else {
-                            let temp = ctx.push_temp(return_ty, *span);
-                            let p = Place::new(temp);
-                            (p.clone(), Operand::Copy(p))
-                        };
-                        let target_bb = ctx.new_basic_block();
-
-                        ctx.set_terminator(Terminator::new(
-                            TerminatorKind::GpuLaunch {
-                                kernel: kernel_op,
-                                grid: grid_op,
-                                block: block_op,
-                                args: Vec::new(),
-                                arg_handles: Vec::new(),
-                                destination,
-                                target: Some(target_bb),
-                            },
-                            *span,
-                        ));
-
-                        ctx.set_current_block(target_bb);
-                        return Ok(Some(op));
-                    }
-                }
-            }
-        }
+    let ExpressionKind::Identifier(name, _) = &prop.node else {
+        return Ok(None);
+    };
+    if name != "launch" || !receiver_is_kernel(ctx, obj) {
+        return Ok(None);
     }
-    Ok(None)
+
+    let kernel_op = lower_expression(ctx, obj, None)?;
+    if args.len() != 2 {
+        return Err(LoweringError::invalid_gpu_launch_args(2, args.len(), *span));
+    }
+    let grid_op = lower_expression(ctx, &args[0], None)?;
+    let block_op = lower_expression(ctx, &args[1], None)?;
+
+    let return_ty = ctx
+        .type_checker
+        .get_type(call_expr_id)
+        .cloned()
+        .unwrap_or_else(|| Type::new(TypeKind::Void, *span));
+    let (destination, op) = call_destination(ctx, return_ty, dest, *span);
+    let target_bb = ctx.new_basic_block();
+
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::GpuLaunch {
+            kernel: kernel_op,
+            grid: grid_op,
+            block: block_op,
+            args: Vec::new(),
+            arg_handles: Vec::new(),
+            destination,
+            target: Some(target_bb),
+        },
+        *span,
+    ));
+    ctx.set_current_block(target_bb);
+    Ok(Some(op))
+}
+
+/// True when `obj` has the GPU `Kernel` type.
+fn receiver_is_kernel(ctx: &LoweringContext, obj: &Expression) -> bool {
+    ctx.type_checker
+        .get_type(obj.id)
+        .map(|ty| matches!(&ty.kind, TypeKind::Custom(n, _) if n == "Kernel"))
+        .unwrap_or(false)
 }
 
 /// Emit a virtual method call through a vtable slot.
