@@ -145,69 +145,93 @@ pub fn lower_variable(
     span: &Span,
 ) -> Result<(), LoweringError> {
     for decl in decls {
-        if decl.residency == AstResidency::Host {
-            emit_cross_residency_readback(ctx, decl.initializer.as_deref(), *span);
-        }
-        let (var_ty, init_expr_opt, pre_lowered_op) = resolve_decl_init(ctx, decl, span)?;
-
-        // Clone var_ty only when needed for comparison; consume in final use
-        let var_ty_kind = var_ty.kind.clone();
-        let local = ctx.push_local(decl.name.clone(), var_ty, *span);
-
-        if decl.is_shared {
-            ctx.body.local_decls[local.0].storage_class = StorageClass::GpuShared;
-        }
-
-        ctx.body.local_decls[local.0].residency = match decl.residency {
-            AstResidency::Host => MirResidency::Host,
-            AstResidency::Gpu => MirResidency::Gpu,
-        };
-        if ctx.body.local_decls[local.0].residency == MirResidency::Gpu {
-            let handle = DeviceHandleId::fresh();
-            ctx.body.local_decls[local.0].device_handle = Some(handle);
-            emit_gpu_buffer_reset(ctx, handle, *span);
-        }
-
-        if let Some(init_expr) = init_expr_opt {
-            let dest = Place::new(local);
-
-            // If we already lowered it (inference case), we must assign it now
-            if let Some(op) = pre_lowered_op {
-                // op.ty() == var_ty, so no cast needed
-                ctx.push_statement(crate::mir::Statement {
-                    kind: MirStatementKind::Assign(dest, Rvalue::Use(op)),
-                    span: *span,
-                });
-            } else {
-                // Check if we can use DPS (types match)
-                let init_ty = ctx.type_checker.get_type(init_expr.id);
-                // Comparison: ignore spans
-                let types_match = init_ty.is_some_and(|ity| {
-                    MirType::from_type_kind(&ity.kind) == MirType::from_type_kind(&var_ty_kind)
-                });
-
-                if types_match {
-                    // Optimized path: write directly to variable
-                    lower_expression(ctx, init_expr, Some(dest))?;
-                } else {
-                    // Fallback: create temp/use result, then cast/assign
-                    let op = lower_expression(ctx, init_expr, None)?;
-                    let op_ty = op.ty(&ctx.body).clone();
-
-                    let rvalue = if op_ty.kind != var_ty_kind {
-                        let target_ty = ctx.body.local_decls[local.0].ty.clone();
-                        coerce_rvalue(op, &op_ty, &target_ty)
-                    } else {
-                        Rvalue::Use(op)
-                    };
-
-                    ctx.push_statement(crate::mir::Statement {
-                        kind: MirStatementKind::Assign(dest, rvalue),
-                        span: *span,
-                    });
-                }
-            }
-        }
+        lower_single_variable(ctx, decl, span)?;
     }
+    Ok(())
+}
+
+/// Lower one variable declaration: resolve its type, allocate the local, apply
+/// residency metadata, and lower the initializer.
+fn lower_single_variable(
+    ctx: &mut LoweringContext,
+    decl: &VariableDeclaration,
+    span: &Span,
+) -> Result<(), LoweringError> {
+    if decl.residency == AstResidency::Host {
+        emit_cross_residency_readback(ctx, decl.initializer.as_deref(), *span);
+    }
+    let (var_ty, init_expr_opt, pre_lowered_op) = resolve_decl_init(ctx, decl, span)?;
+    let var_ty_kind = var_ty.kind.clone();
+    let local = ctx.push_local(decl.name.clone(), var_ty, *span);
+
+    apply_variable_residency(ctx, local, decl, span);
+
+    if let Some(init_expr) = init_expr_opt {
+        assign_variable_initializer(ctx, local, init_expr, pre_lowered_op, &var_ty_kind, span)?;
+    }
+    Ok(())
+}
+
+/// Apply shared-storage and host/gpu residency metadata to a freshly-declared
+/// local, allocating a device handle (and emitting a buffer reset) for gpu vars.
+fn apply_variable_residency(
+    ctx: &mut LoweringContext,
+    local: crate::mir::Local,
+    decl: &VariableDeclaration,
+    span: &Span,
+) {
+    if decl.is_shared {
+        ctx.body.local_decls[local.0].storage_class = StorageClass::GpuShared;
+    }
+    ctx.body.local_decls[local.0].residency = match decl.residency {
+        AstResidency::Host => MirResidency::Host,
+        AstResidency::Gpu => MirResidency::Gpu,
+    };
+    if ctx.body.local_decls[local.0].residency == MirResidency::Gpu {
+        let handle = DeviceHandleId::fresh();
+        ctx.body.local_decls[local.0].device_handle = Some(handle);
+        emit_gpu_buffer_reset(ctx, handle, *span);
+    }
+}
+
+/// Lower a variable's initializer into `local`: assign a pre-lowered operand,
+/// use DPS when the types match, or fall back to a temp + cast/assign.
+fn assign_variable_initializer(
+    ctx: &mut LoweringContext,
+    local: crate::mir::Local,
+    init_expr: &Expression,
+    pre_lowered_op: Option<Operand>,
+    var_ty_kind: &TypeKind,
+    span: &Span,
+) -> Result<(), LoweringError> {
+    let dest = Place::new(local);
+    if let Some(op) = pre_lowered_op {
+        ctx.push_statement(crate::mir::Statement {
+            kind: MirStatementKind::Assign(dest, Rvalue::Use(op)),
+            span: *span,
+        });
+        return Ok(());
+    }
+
+    let init_ty = ctx.type_checker.get_type(init_expr.id);
+    let types_match = init_ty
+        .is_some_and(|ity| MirType::from_type_kind(&ity.kind) == MirType::from_type_kind(var_ty_kind));
+    if types_match {
+        lower_expression(ctx, init_expr, Some(dest))?;
+        return Ok(());
+    }
+
+    let op = lower_expression(ctx, init_expr, None)?;
+    let op_ty = op.ty(&ctx.body).clone();
+    let rvalue = if op_ty.kind != *var_ty_kind {
+        let target_ty = ctx.body.local_decls[local.0].ty.clone();
+        coerce_rvalue(op, &op_ty, &target_ty)
+    } else {
+        Rvalue::Use(op)
+    };
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(dest, rvalue),
+        span: *span,
+    });
     Ok(())
 }
