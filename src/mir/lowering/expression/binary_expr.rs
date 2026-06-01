@@ -429,6 +429,52 @@ fn lower_option_equality(
     Ok(ret_op)
 }
 
+/// Map AST binary operators to MIR BinOp, or error if unsupported.
+fn op_to_binop(
+    op: &crate::ast::operator::BinaryOp,
+    expr_span: crate::error::syntax::Span,
+) -> Result<BinOp, LoweringError> {
+    match op {
+        crate::ast::operator::BinaryOp::Add => Ok(BinOp::Add),
+        crate::ast::operator::BinaryOp::Sub => Ok(BinOp::Sub),
+        crate::ast::operator::BinaryOp::Mul => Ok(BinOp::Mul),
+        crate::ast::operator::BinaryOp::Div => Ok(BinOp::Div),
+        crate::ast::operator::BinaryOp::Mod => Ok(BinOp::Rem),
+        crate::ast::operator::BinaryOp::BitwiseAnd => Ok(BinOp::BitAnd),
+        crate::ast::operator::BinaryOp::BitwiseOr => Ok(BinOp::BitOr),
+        crate::ast::operator::BinaryOp::BitwiseXor => Ok(BinOp::BitXor),
+        crate::ast::operator::BinaryOp::Equal => Ok(BinOp::Eq),
+        crate::ast::operator::BinaryOp::NotEqual => Ok(BinOp::Ne),
+        crate::ast::operator::BinaryOp::LessThan => Ok(BinOp::Lt),
+        crate::ast::operator::BinaryOp::LessThanEqual => Ok(BinOp::Le),
+        crate::ast::operator::BinaryOp::GreaterThan => Ok(BinOp::Gt),
+        crate::ast::operator::BinaryOp::GreaterThanEqual => Ok(BinOp::Ge),
+        _ => Err(LoweringError::unsupported_operator(
+            format!("{:?}", op),
+            expr_span,
+        )),
+    }
+}
+
+/// Determine result type for a binary operation.
+fn binary_result_type(
+    ctx: &LoweringContext,
+    op: &crate::ast::operator::BinaryOp,
+    expr: &Expression,
+) -> Type {
+    match op {
+        crate::ast::operator::BinaryOp::Equal
+        | crate::ast::operator::BinaryOp::NotEqual
+        | crate::ast::operator::BinaryOp::LessThan
+        | crate::ast::operator::BinaryOp::LessThanEqual
+        | crate::ast::operator::BinaryOp::GreaterThan
+        | crate::ast::operator::BinaryOp::GreaterThanEqual => {
+            Type::new(TypeKind::Boolean, expr.span)
+        }
+        _ => resolve_type(ctx.type_checker, expr),
+    }
+}
+
 pub(crate) fn lower_binary_expr(
     ctx: &mut LoweringContext,
     expr: &Expression,
@@ -438,7 +484,6 @@ pub(crate) fn lower_binary_expr(
         unreachable!()
     };
 
-    // Handle `In` operator specially - it's a membership test
     if matches!(op, crate::ast::operator::BinaryOp::In) {
         return lower_in_operator(ctx, lhs, rhs, expr, dest);
     }
@@ -447,7 +492,6 @@ pub(crate) fn lower_binary_expr(
     let lhs_op = lower_expression(ctx, lhs, None)?;
     let rhs_op = lower_expression(ctx, rhs, None)?;
 
-    // Check if Option equality
     let is_option_eq = if let Some(lhs_ty) = ctx.type_checker.get_type(lhs.id) {
         matches!(&lhs_ty.kind, TypeKind::Option(_))
             && matches!(
@@ -462,7 +506,6 @@ pub(crate) fn lower_binary_expr(
         return lower_option_equality(ctx, lhs_op, rhs_op, expr, dest, op);
     }
 
-    // Trait-based binary operator dispatch for class types.
     if let Some(result) = try_lower_binary_trait_method(
         ctx,
         lhs,
@@ -476,41 +519,8 @@ pub(crate) fn lower_binary_expr(
         return Ok(result);
     }
 
-    let bin_op = match op {
-        crate::ast::operator::BinaryOp::Add => BinOp::Add,
-        crate::ast::operator::BinaryOp::Sub => BinOp::Sub,
-        crate::ast::operator::BinaryOp::Mul => BinOp::Mul,
-        crate::ast::operator::BinaryOp::Div => BinOp::Div,
-        crate::ast::operator::BinaryOp::Mod => BinOp::Rem,
-        crate::ast::operator::BinaryOp::BitwiseAnd => BinOp::BitAnd,
-        crate::ast::operator::BinaryOp::BitwiseOr => BinOp::BitOr,
-        crate::ast::operator::BinaryOp::BitwiseXor => BinOp::BitXor,
-        crate::ast::operator::BinaryOp::Equal => BinOp::Eq,
-        crate::ast::operator::BinaryOp::NotEqual => BinOp::Ne,
-        crate::ast::operator::BinaryOp::LessThan => BinOp::Lt,
-        crate::ast::operator::BinaryOp::LessThanEqual => BinOp::Le,
-        crate::ast::operator::BinaryOp::GreaterThan => BinOp::Gt,
-        crate::ast::operator::BinaryOp::GreaterThanEqual => BinOp::Ge,
-        // Range and In are handled separately, And/Or via Logical
-        _ => {
-            return Err(LoweringError::unsupported_operator(
-                format!("{:?}", op),
-                expr.span,
-            ));
-        }
-    };
-
-    let result_ty = match op {
-        crate::ast::operator::BinaryOp::Equal
-        | crate::ast::operator::BinaryOp::NotEqual
-        | crate::ast::operator::BinaryOp::LessThan
-        | crate::ast::operator::BinaryOp::LessThanEqual
-        | crate::ast::operator::BinaryOp::GreaterThan
-        | crate::ast::operator::BinaryOp::GreaterThanEqual => {
-            Type::new(TypeKind::Boolean, expr.span)
-        }
-        _ => resolve_type(ctx.type_checker, expr),
-    };
+    let bin_op = op_to_binop(op, expr.span)?;
+    let result_ty = binary_result_type(ctx, op, expr);
 
     let (target, ret_op) = if let Some(d) = dest {
         (d.clone(), Operand::Copy(d))

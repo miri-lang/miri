@@ -778,6 +778,77 @@ fn emit_cow_check(
     Operand::Move(Place::new(self_local))
 }
 
+/// Lower element_at/get on List, Array, or Tuple.
+fn lower_collection_element_access(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    call_expr_id: usize,
+    obj: &Expression,
+    obj_ty: &Type,
+    args: &[Expression],
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let obj_watermark = ctx.body.local_decls.len();
+    let obj_op = lower_expression(ctx, obj, None)?;
+    let obj_op_src = match &obj_op {
+        Operand::Copy(p) | Operand::Move(p) => Some(p.local),
+        _ => None,
+    };
+    let index_op = lower_expression(ctx, &args[0], None)?;
+
+    let obj_op = match obj_op {
+        Operand::Move(p) => Operand::Copy(p),
+        other => other,
+    };
+    let obj_local = ctx.push_temp(obj_ty.clone(), *span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(Place::new(obj_local), Rvalue::Use(obj_op)),
+        span: *span,
+    });
+
+    let index_local = match index_op {
+        Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => p.local,
+        _ => {
+            let temp = ctx.push_temp(Type::new(TypeKind::Int, args[0].span), args[0].span);
+            ctx.push_statement(crate::mir::Statement {
+                kind: StatementKind::Assign(Place::new(temp), Rvalue::Use(index_op)),
+                span: args[0].span,
+            });
+            temp
+        }
+    };
+
+    let mut indexed_place = Place::new(obj_local);
+    indexed_place
+        .projection
+        .push(crate::mir::PlaceElem::Index(index_local));
+
+    let elem_ty = if let Some(t) = ctx.type_checker.get_type(call_expr_id) {
+        t.clone()
+    } else {
+        Type::new(TypeKind::Int, *span)
+    };
+
+    let (destination, op) = if let Some(d) = dest {
+        (d.clone(), Operand::Copy(d))
+    } else {
+        let temp = ctx.push_temp(elem_ty, *span);
+        let p = Place::new(temp);
+        (p.clone(), Operand::Copy(p))
+    };
+
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(destination, Rvalue::Use(Operand::Copy(indexed_place))),
+        span: *span,
+    });
+
+    ctx.emit_temp_drop(obj_local, obj_watermark, *span);
+    if let Some(src_local) = obj_op_src {
+        ctx.emit_temp_drop(src_local, obj_watermark, *span);
+    }
+    Ok(op)
+}
+
 /// Lower optimized collection methods directly to MIR instructions or intrinsics.
 ///
 /// This prevents monomorphization conflicts when multiple instantiations (e.g., List<int>, List<bool>)
@@ -801,79 +872,9 @@ fn try_lower_collection_intrinsic(
         builtin,
         Some(BuiltinCollectionKind::List | BuiltinCollectionKind::Array)
     ) || obj_ty.kind.is_tuple();
-    // element_at / get on List, Array, Tuple: emit a direct index-read.
     if args.len() == 1 && matches!(method_name, "element_at" | "get") && is_indexable_collection {
-        let obj_watermark = ctx.body.local_decls.len();
-        let obj_op = lower_expression(ctx, obj, None)?;
-        // Track the source local for potential cleanup of expression temps.
-        let obj_op_src = match &obj_op {
-            Operand::Copy(p) | Operand::Move(p) => Some(p.local),
-            _ => None,
-        };
-        let index_op = lower_expression(ctx, &args[0], None)?;
-
-        // Always use Copy semantics for the assignment to obj_local.  The
-        // source local will get its own DecRef at scope exit (or, for params,
-        // won't be DecRef'd at all).  Using Copy here ensures Perceus inserts
-        // an IncRef, and the StorageDead of obj_local below provides the
-        // matching DecRef — keeping the pair balanced regardless of whether
-        // the source is a local variable or a parameter.
-        let obj_op = match obj_op {
-            Operand::Move(p) => Operand::Copy(p),
-            other => other,
-        };
-        let obj_local = ctx.push_temp(obj_ty.clone(), *span);
-        ctx.push_statement(crate::mir::Statement {
-            kind: StatementKind::Assign(Place::new(obj_local), Rvalue::Use(obj_op)),
-            span: *span,
-        });
-
-        let index_local = match index_op {
-            Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => p.local,
-            _ => {
-                let temp = ctx.push_temp(Type::new(TypeKind::Int, args[0].span), args[0].span);
-                ctx.push_statement(crate::mir::Statement {
-                    kind: StatementKind::Assign(Place::new(temp), Rvalue::Use(index_op)),
-                    span: args[0].span,
-                });
-                temp
-            }
-        };
-
-        let mut indexed_place = Place::new(obj_local);
-        indexed_place
-            .projection
-            .push(crate::mir::PlaceElem::Index(index_local));
-
-        let elem_ty = if let Some(t) = ctx.type_checker.get_type(call_expr_id) {
-            t.clone()
-        } else {
-            Type::new(TypeKind::Int, *span)
-        };
-
-        let (destination, op) = if let Some(d) = dest {
-            (d.clone(), Operand::Copy(d))
-        } else {
-            let temp = ctx.push_temp(elem_ty, *span);
-            let p = Place::new(temp);
-            (p.clone(), Operand::Copy(p))
-        };
-
-        ctx.push_statement(crate::mir::Statement {
-            kind: StatementKind::Assign(destination, Rvalue::Use(Operand::Copy(indexed_place))),
-            span: *span,
-        });
-
-        // Always clean up the obj_local temp (holds the collection for indexing).
-        // The assignment above uses Copy semantics, so Perceus inserts IncRef
-        // for the copy source.  This StorageDead triggers the matching DecRef.
-        ctx.emit_temp_drop(obj_local, obj_watermark, *span);
-        // Also clean up the source local if it was a temp created during
-        // expression lowering (e.g. a function-call return value).
-        if let Some(src_local) = obj_op_src {
-            ctx.emit_temp_drop(src_local, obj_watermark, *span);
-        }
-        return Ok(Some(op));
+        return lower_collection_element_access(ctx, span, call_expr_id, obj, obj_ty, args, dest)
+            .map(Some);
     }
 
     // push(item) on List: emit miri_rt_list_push directly.
