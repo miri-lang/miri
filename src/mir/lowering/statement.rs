@@ -257,29 +257,8 @@ fn lower_class_decl(ctx: &mut LoweringContext, name_expr: &Expression) {
     else {
         return;
     };
-    let fields = def
-        .fields
-        .iter()
-        .enumerate()
-        .map(|(idx, (field_name, field_info))| FieldDecl {
-            name: field_name.clone(),
-            ty: field_info.ty.clone(),
-            visibility: field_info.visibility.clone(),
-            index: idx,
-            mutable: field_info.mutable,
-        })
-        .collect();
-    let methods = def
-        .methods
-        .iter()
-        .map(|(method_name, method_info)| MethodDecl {
-            name: method_name.clone(),
-            params: method_info.params.clone(),
-            return_type: method_info.return_type.clone(),
-            visibility: method_info.visibility.clone(),
-            is_constructor: method_info.is_constructor,
-        })
-        .collect();
+    let fields = build_field_decls(def);
+    let methods = build_method_decls(def);
     let generics = collect_generics(def.generics.as_ref());
     ctx.declarations.push(Declaration::Class(ClassDecl {
         name: name.to_string(),
@@ -290,6 +269,35 @@ fn lower_class_decl(ctx: &mut LoweringContext, name_expr: &Expression) {
         traits: def.traits.clone(),
         module: def.module.clone(),
     }));
+}
+
+/// Build the lowered field declarations for a class.
+fn build_field_decls(def: &crate::type_checker::context::ClassDefinition) -> Vec<FieldDecl> {
+    def.fields
+        .iter()
+        .enumerate()
+        .map(|(idx, (field_name, field_info))| FieldDecl {
+            name: field_name.clone(),
+            ty: field_info.ty.clone(),
+            visibility: field_info.visibility.clone(),
+            index: idx,
+            mutable: field_info.mutable,
+        })
+        .collect()
+}
+
+/// Build the lowered method declarations for a class.
+fn build_method_decls(def: &crate::type_checker::context::ClassDefinition) -> Vec<MethodDecl> {
+    def.methods
+        .iter()
+        .map(|(method_name, method_info)| MethodDecl {
+            name: method_name.clone(),
+            params: method_info.params.clone(),
+            return_type: method_info.return_type.clone(),
+            visibility: method_info.visibility.clone(),
+            is_constructor: method_info.is_constructor,
+        })
+        .collect()
 }
 
 fn lower_trait_decl(ctx: &mut LoweringContext, name_expr: &Expression) {
