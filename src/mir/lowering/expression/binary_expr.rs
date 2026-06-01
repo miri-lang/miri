@@ -7,8 +7,8 @@ use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::mir::{
-    BinOp, Constant, Discriminant, Local, Operand, Place, Rvalue, StatementKind as MirStatementKind,
-    Terminator, TerminatorKind, UnOp,
+    BinOp, Constant, Discriminant, Local, Operand, Place, Rvalue,
+    StatementKind as MirStatementKind, Terminator, TerminatorKind, UnOp,
 };
 use crate::runtime_fns::rt;
 
@@ -317,9 +317,33 @@ fn lower_option_equality(
     let result_local = ctx.push_temp(Type::new(TypeKind::Boolean, expr.span), expr.span);
     let final_bb = ctx.new_basic_block();
 
-    emit_option_ptr_eq_check(ctx, &lhs_op, &rhs_op, result_local, is_eq, final_bb, expr.span);
-    emit_option_lhs_null_check(ctx, &lhs_op, &rhs_op, result_local, is_eq, final_bb, expr.span);
-    emit_option_inner_compare(ctx, lhs_op, rhs_op, result_local, is_eq, final_bb, expr.span);
+    emit_option_ptr_eq_check(
+        ctx,
+        &lhs_op,
+        &rhs_op,
+        result_local,
+        is_eq,
+        final_bb,
+        expr.span,
+    );
+    emit_option_lhs_null_check(
+        ctx,
+        &lhs_op,
+        &rhs_op,
+        result_local,
+        is_eq,
+        final_bb,
+        expr.span,
+    );
+    emit_option_inner_compare(
+        ctx,
+        lhs_op,
+        rhs_op,
+        result_local,
+        is_eq,
+        final_bb,
+        expr.span,
+    );
 
     ctx.set_current_block(final_bb);
     finalize_option_comparison(ctx, result_local, dest, expr.span)
@@ -340,7 +364,11 @@ fn emit_option_ptr_eq_check(
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(
             Place::new(ptr_eq_local),
-            Rvalue::BinaryOp(BinOp::Eq, Box::new(lhs_op.clone()), Box::new(rhs_op.clone())),
+            Rvalue::BinaryOp(
+                BinOp::Eq,
+                Box::new(lhs_op.clone()),
+                Box::new(rhs_op.clone()),
+            ),
         ),
         span,
     });

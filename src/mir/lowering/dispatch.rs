@@ -161,9 +161,13 @@ fn resolve_via_class_chain(
             }
             _ => return None,
         };
-        if let Some(found) =
-            resolve_via_class_traits(type_defs, &traits, method_name, class_name, caller_is_abstract)
-        {
+        if let Some(found) = resolve_via_class_traits(
+            type_defs,
+            &traits,
+            method_name,
+            class_name,
+            caller_is_abstract,
+        ) {
             return Some(found);
         }
         match base {
@@ -392,9 +396,9 @@ fn lower_plain_args(
 /// Append the implicit `allocator` argument unless it is already present.
 fn push_allocator_arg(ctx: &LoweringContext, arg_ops: &mut Vec<Operand>) {
     if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
-        let already_has_alloc = arg_ops.iter().any(
-            |op| matches!(op, Operand::Copy(p) | Operand::Move(p) if p.local == alloc_local),
-        );
+        let already_has_alloc = arg_ops
+            .iter()
+            .any(|op| matches!(op, Operand::Copy(p) | Operand::Move(p) if p.local == alloc_local));
         if !already_has_alloc {
             arg_ops.push(Operand::Copy(Place::new(alloc_local)));
         }
@@ -688,9 +692,11 @@ fn emit_resolved_method_call(
     let (destination, op) = call_destination(ctx, return_ty, dest, *m.span);
 
     if should_use_virtual_dispatch(ctx, m.obj, m.class_name) {
-        if let Some(slot) =
-            vtable_slot_index(m.class_name, m.method_name, &ctx.type_checker.global_type_definitions)
-        {
+        if let Some(slot) = vtable_slot_index(
+            m.class_name,
+            m.method_name,
+            &ctx.type_checker.global_type_definitions,
+        ) {
             return emit_virtual_method_call(
                 ctx,
                 slot,
@@ -1230,7 +1236,14 @@ fn lower_direct_call(
     let func_op_for_drop = func_op.clone();
     let out_args = build_out_args(&param_types, &arg_ops);
 
-    emit_call_terminator(ctx, func_op, arg_ops.clone(), out_args, destination.clone(), *span);
+    emit_call_terminator(
+        ctx,
+        func_op,
+        arg_ops.clone(),
+        out_args,
+        destination.clone(),
+        *span,
+    );
     emit_direct_call_drops(ctx, &arg_ops, arg_watermark, destination.local, *span);
     if is_indirect_call {
         if let Operand::Copy(place) | Operand::Move(place) = &func_op_for_drop {

@@ -94,8 +94,7 @@ pub fn lower_function(
     let body_stmt = &decl.body;
     let props = &decl.properties;
 
-    let ret_ty =
-        resolve_function_return_type(tc, ret_type_expr.as_deref(), name, ast_func.span);
+    let ret_ty = resolve_function_return_type(tc, ret_type_expr.as_deref(), name, ast_func.span);
 
     let execution_model = resolve_execution_model(props);
 
@@ -298,9 +297,10 @@ pub fn lower_class_method(
     let body_stmt = &decl.body;
     let props = &decl.properties;
 
-    let ret_ty = ret_type_expr
-        .as_deref()
-        .map_or_else(|| Type::new(TypeKind::Void, ast_method.span), |e| resolve_type(tc, e));
+    let ret_ty = ret_type_expr.as_deref().map_or_else(
+        || Type::new(TypeKind::Void, ast_method.span),
+        |e| resolve_type(tc, e),
+    );
 
     let execution_model = resolve_execution_model(props);
 
@@ -543,7 +543,11 @@ fn guard_op_to_binop(op: &crate::ast::operator::GuardOp) -> Option<BinOp> {
 
 /// Branch on `check_result`: continue when true, else jump to an unreachable
 /// fail block. Leaves the current block at the continue path.
-fn emit_guard_fail_branch(ctx: &mut LoweringContext, check_result: crate::mir::Local, span: crate::error::syntax::Span) {
+fn emit_guard_fail_branch(
+    ctx: &mut LoweringContext,
+    check_result: crate::mir::Local,
+    span: crate::error::syntax::Span,
+) {
     let continue_bb = ctx.new_basic_block();
     let fail_bb = ctx.new_basic_block();
     ctx.set_terminator(Terminator::new(

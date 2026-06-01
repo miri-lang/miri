@@ -99,7 +99,10 @@ fn collect_capture_infos(
     for name in capture_names {
         let Some(&outer_local) = ctx.variable_map.get(name.as_str()) else {
             return Err(LoweringError::unsupported_expression(
-                format!("gpu for: captured variable '{}' is not visible at the loop site", name),
+                format!(
+                    "gpu for: captured variable '{}' is not visible at the loop site",
+                    name
+                ),
                 span,
             ));
         };

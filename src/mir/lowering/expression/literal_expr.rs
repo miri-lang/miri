@@ -12,7 +12,10 @@ use crate::mir::lowering::context::LoweringContext;
 
 /// Infer a literal's MIR type when the type checker has none (preserving the
 /// specific integer/float width carried by the literal).
-fn infer_literal_type(lit: &crate::ast::literal::Literal, span: crate::error::syntax::Span) -> Type {
+fn infer_literal_type(
+    lit: &crate::ast::literal::Literal,
+    span: crate::error::syntax::Span,
+) -> Type {
     use crate::ast::literal::{FloatLiteral, Literal};
     match lit {
         Literal::Integer(int_lit) => infer_integer_literal_type(int_lit, span),

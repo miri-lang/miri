@@ -248,12 +248,7 @@ impl TypeChecker {
     }
 
     /// Validates the start index of a slice against the array size.
-    fn check_slice_start_bounds(
-        &mut self,
-        start: &Expression,
-        size: i128,
-        context: &mut Context,
-    ) {
+    fn check_slice_start_bounds(&mut self, start: &Expression, size: i128, context: &mut Context) {
         if let Some(start_val) = Self::try_eval_const_int_with_context(start, context) {
             if start_val < 0 {
                 self.report_error(
@@ -273,12 +268,7 @@ impl TypeChecker {
     }
 
     /// Validates the end index of a slice against the array size.
-    fn check_slice_end_bounds(
-        &mut self,
-        end_expr: &Expression,
-        size: i128,
-        context: &mut Context,
-    ) {
+    fn check_slice_end_bounds(&mut self, end_expr: &Expression, size: i128, context: &mut Context) {
         if let Some(end_val) = Self::try_eval_const_int_with_context(end_expr, context) {
             if end_val < 0 {
                 self.report_error(
@@ -649,12 +639,7 @@ impl TypeChecker {
             }
 
             if let Some(result) = self.dispatch_type_definition_member(
-                name,
-                prop_name,
-                obj_type,
-                &type_args,
-                span,
-                context,
+                name, prop_name, obj_type, &type_args, span, context,
             ) {
                 return result;
             }
@@ -703,16 +688,19 @@ impl TypeChecker {
             Some(TypeDefinition::Trait(trait_def)) => {
                 Some(self.infer_member_trait(type_name, &trait_def, prop_name, span, context))
             }
-            Some(TypeDefinition::Enum(enum_def)) => Some(self.infer_member_enum(
-                &enum_def, type_name, prop_name, obj_type, span, context,
-            )),
+            Some(TypeDefinition::Enum(enum_def)) => Some(
+                self.infer_member_enum(&enum_def, type_name, prop_name, obj_type, span, context),
+            ),
             Some(TypeDefinition::Generic(_)) | Some(TypeDefinition::Alias(_)) => None,
             None => {
                 if let Some(module) = self.suggest_module_for_type(type_name) {
                     self.report_error_with_help(
                         format!("Type '{}' does not have members", obj_type),
                         span,
-                        format!("Consider importing '{}' to use {} methods", module, type_name),
+                        format!(
+                            "Consider importing '{}' to use {} methods",
+                            module, type_name
+                        ),
                     );
                 } else {
                     self.report_error(format!("Type '{}' does not have members", obj_type), span);
@@ -1526,9 +1514,8 @@ impl TypeChecker {
         let def_opt = self.resolve_visible_type(name, context).cloned();
 
         if let Some(TypeDefinition::Enum(def)) = &def_opt {
-            return self.infer_member_enum_variant_from_meta(
-                name, prop_name, inner_type, def, span,
-            );
+            return self
+                .infer_member_enum_variant_from_meta(name, prop_name, inner_type, def, span);
         }
 
         self.report_error(

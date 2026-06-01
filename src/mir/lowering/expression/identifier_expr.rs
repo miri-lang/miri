@@ -44,7 +44,10 @@ fn lower_local_identifier(
 ) -> Result<Operand, LoweringError> {
     if let Some(d) = dest {
         ctx.push_statement(crate::mir::Statement {
-            kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(Operand::Copy(Place::new(local)))),
+            kind: MirStatementKind::Assign(
+                d.clone(),
+                Rvalue::Use(Operand::Copy(Place::new(local))),
+            ),
             span: expr.span,
         });
         return Ok(Operand::Copy(d));

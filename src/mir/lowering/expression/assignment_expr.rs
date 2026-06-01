@@ -43,7 +43,10 @@ fn assign_to_identifier(
             Err(LoweringError::undefined_variable(name, expr.span))
         }
     } else {
-        Err(LoweringError::unsupported_lhs("Expected identifier", expr.span))
+        Err(LoweringError::unsupported_lhs(
+            "Expected identifier",
+            expr.span,
+        ))
     }
 }
 
@@ -71,9 +74,7 @@ fn assign_to_var_simple(
         };
 
         if let Some(rhs_place) = rhs_place {
-            handle_managed_place_assign(
-                ctx, local, &lhs_ty, rhs_place, expr, dest, rhs_watermark,
-            )
+            handle_managed_place_assign(ctx, local, &lhs_ty, rhs_place, expr, dest, rhs_watermark)
         } else {
             handle_managed_nonplace_assign(ctx, local, rvalue, expr, dest)
         }
@@ -267,7 +268,16 @@ fn assign_to_member(
                 let mut target_place = obj_place;
                 target_place.projection.push(PlaceElem::Field(idx));
 
-                dispatch_member_assign(ctx, &target_place, op, val.clone(), type_name, idx, prop, expr)?;
+                dispatch_member_assign(
+                    ctx,
+                    &target_place,
+                    op,
+                    val.clone(),
+                    type_name,
+                    idx,
+                    prop,
+                    expr,
+                )?;
                 finalize_member_result(ctx, val, dest, expr)
             } else {
                 Err(LoweringError::unsupported_lhs(
@@ -335,10 +345,7 @@ fn finalize_member_result(
 fn resolve_member_field_index(
     type_name: &str,
     prop: &Expression,
-    type_defs: &std::collections::HashMap<
-        String,
-        crate::type_checker::context::TypeDefinition,
-    >,
+    type_defs: &std::collections::HashMap<String, crate::type_checker::context::TypeDefinition>,
 ) -> Option<usize> {
     match type_defs.get(type_name) {
         Some(crate::type_checker::context::TypeDefinition::Struct(def)) => {
@@ -352,7 +359,9 @@ fn resolve_member_field_index(
             if let ExpressionKind::Identifier(field_name, _) = &prop.node {
                 let all_fields =
                     crate::type_checker::context::collect_class_fields_all(def, type_defs);
-                all_fields.iter().position(|(n, _)| *n == field_name.as_str())
+                all_fields
+                    .iter()
+                    .position(|(n, _)| *n == field_name.as_str())
             } else {
                 None
             }
@@ -436,12 +445,7 @@ fn assign_to_member_compound(
     Ok(())
 }
 
-fn inc_ref_if_managed(
-    ctx: &mut LoweringContext,
-    op: &Operand,
-    ty: &Type,
-    expr: &Expression,
-) {
+fn inc_ref_if_managed(ctx: &mut LoweringContext, op: &Operand, ty: &Type, expr: &Expression) {
     if ctx.is_perceus_managed(&ty.kind) {
         if let Operand::Copy(place) | Operand::Move(place) = op {
             ctx.push_statement(crate::mir::Statement {
