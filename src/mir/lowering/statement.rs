@@ -348,6 +348,27 @@ fn lower_type_alias(ctx: &mut LoweringContext, decls: &[Expression]) {
     }
 }
 
+/// Build the `ImportKind` (all/wildcard vs named list) from an import-path kind.
+fn build_import_kind(kind: &crate::ast::expression::ImportPathKind) -> ImportKind {
+    match kind {
+        crate::ast::expression::ImportPathKind::Simple
+        | crate::ast::expression::ImportPathKind::Wildcard => ImportKind::All,
+        crate::ast::expression::ImportPathKind::Multi(items) => {
+            let import_items: Vec<ImportItem> = items
+                .iter()
+                .filter_map(|(name_expr, alias_expr)| {
+                    let name = extract_identifier(name_expr)?.to_string();
+                    let alias = alias_expr
+                        .as_ref()
+                        .and_then(|a| extract_identifier(a).map(|s| s.to_string()));
+                    Some(ImportItem { name, alias })
+                })
+                .collect();
+            ImportKind::Named(import_items)
+        }
+    }
+}
+
 fn lower_use_stmt(
     ctx: &mut LoweringContext,
     import_path_expr: &Expression,
@@ -374,24 +395,7 @@ fn lower_use_stmt(
         ),
     };
 
-    let import_kind = match kind {
-        crate::ast::expression::ImportPathKind::Simple
-        | crate::ast::expression::ImportPathKind::Wildcard => ImportKind::All,
-        crate::ast::expression::ImportPathKind::Multi(items) => {
-            let import_items: Vec<ImportItem> = items
-                .iter()
-                .filter_map(|(name_expr, alias_expr)| {
-                    let name = extract_identifier(name_expr)?.to_string();
-                    let alias = alias_expr
-                        .as_ref()
-                        .and_then(|a| extract_identifier(a).map(|s| s.to_string()));
-                    Some(ImportItem { name, alias })
-                })
-                .collect();
-            ImportKind::Named(import_items)
-        }
-    };
-
+    let import_kind = build_import_kind(kind);
     let mut import = Import::new(source, module_path, import_kind);
     if let Some(alias_box) = alias_opt {
         if let Some(alias_name) = extract_identifier(alias_box) {
