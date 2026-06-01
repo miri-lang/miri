@@ -22,7 +22,7 @@ pub mod loops;
 pub mod statement;
 pub mod variable;
 
-use crate::ast::expression::ExpressionKind;
+use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::statement::{Statement, StatementKind};
 use crate::ast::types::{Type, TypeKind};
 use crate::error::lowering::LoweringError;
@@ -56,6 +56,26 @@ pub use statement::lower_statement;
 ///
 /// Returns `LoweringError` if the statement is not a function declaration,
 /// if expression lowering fails, or if the resulting MIR fails validation.
+/// Resolve a function's return type: explicit annotation, then the type
+/// checker's inferred function type, else `void`.
+fn resolve_function_return_type(
+    tc: &TypeChecker,
+    ret_type_expr: Option<&Expression>,
+    name: &str,
+    span: crate::error::syntax::Span,
+) -> Type {
+    if let Some(ret_expr) = ret_type_expr {
+        return resolve_type(tc, ret_expr);
+    }
+    match tc.get_variable_type(name).map(|t| &t.kind) {
+        Some(TypeKind::Function(func)) => match &func.return_type {
+            Some(rt) => resolve_type(tc, rt),
+            None => Type::new(TypeKind::Void, span),
+        },
+        _ => Type::new(TypeKind::Void, span),
+    }
+}
+
 pub fn lower_function(
     ast_func: &Statement,
     tc: &TypeChecker,
@@ -74,22 +94,7 @@ pub fn lower_function(
     let body_stmt = &decl.body;
     let props = &decl.properties;
 
-    // Resolve return type: explicit annotation > type checker inference > void
-    let ret_ty = if let Some(ret_expr) = ret_type_expr {
-        resolve_type(tc, ret_expr)
-    } else if let Some(ty) = tc.get_variable_type(name) {
-        if let TypeKind::Function(func) = &ty.kind {
-            if let Some(rt) = &func.return_type {
-                resolve_type(tc, rt)
-            } else {
-                Type::new(TypeKind::Void, ast_func.span)
-            }
-        } else {
-            Type::new(TypeKind::Void, ast_func.span)
-        }
-    } else {
-        Type::new(TypeKind::Void, ast_func.span)
-    };
+    let ret_ty = resolve_function_return_type(tc, ret_type_expr.as_deref(), name, ast_func.span);
 
     let execution_model = resolve_execution_model(props);
 
@@ -151,6 +156,27 @@ pub(crate) fn apply_generic_sub(ty: &Type, subs: &HashMap<String, Type>) -> Type
 /// sites have been lowered. `mangled_name` is the already-computed symbol
 /// (e.g. `identity__int`) and `subs` maps each generic parameter name to its
 /// concrete type.
+/// Resolve a generic function's return type (same precedence as
+/// [`resolve_function_return_type`]) with the generic substitution applied.
+fn resolve_generic_return_type(
+    tc: &TypeChecker,
+    ret_type_expr: Option<&Expression>,
+    name: &str,
+    span: crate::error::syntax::Span,
+    subs: &HashMap<String, Type>,
+) -> Type {
+    if let Some(ret_expr) = ret_type_expr {
+        return apply_generic_sub(&resolve_type(tc, ret_expr), subs);
+    }
+    match tc.get_variable_type(name).map(|t| &t.kind) {
+        Some(TypeKind::Function(func)) => match &func.return_type {
+            Some(rt) => apply_generic_sub(&resolve_type(tc, rt), subs),
+            None => Type::new(TypeKind::Void, span),
+        },
+        _ => Type::new(TypeKind::Void, span),
+    }
+}
+
 pub fn lower_generic_instantiation(
     ast_func: &Statement,
     tc: &TypeChecker,
@@ -170,22 +196,8 @@ pub fn lower_generic_instantiation(
     let body_stmt = &decl.body;
     let props = &decl.properties;
 
-    // Resolve return type with generic substitution applied
-    let ret_ty = if let Some(ret_expr) = ret_type_expr {
-        apply_generic_sub(&resolve_type(tc, ret_expr), subs)
-    } else if let Some(ty) = tc.get_variable_type(name) {
-        if let TypeKind::Function(func) = &ty.kind {
-            if let Some(rt) = &func.return_type {
-                apply_generic_sub(&resolve_type(tc, rt), subs)
-            } else {
-                Type::new(TypeKind::Void, ast_func.span)
-            }
-        } else {
-            Type::new(TypeKind::Void, ast_func.span)
-        }
-    } else {
-        Type::new(TypeKind::Void, ast_func.span)
-    };
+    let ret_ty =
+        resolve_generic_return_type(tc, ret_type_expr.as_deref(), name, ast_func.span, subs);
 
     let execution_model = resolve_execution_model(props);
 
@@ -244,6 +256,30 @@ pub fn lower_generic_instantiation(
 ///
 /// Returns `LoweringError` if the statement is not a function declaration,
 /// if expression lowering fails, or if the resulting MIR fails validation.
+/// Inject enum/class-level generic names (e.g. `T`, `E` from `Result<T, E>`)
+/// into `type_params`. `collect_type_params` only catches `TypeKind::Generic`,
+/// missing names that resolve to `Custom("T", None)` for enum/class methods;
+/// reading them from the type definition closes that gap so Perceus does not
+/// treat unresolved placeholders as concrete heap-managed types.
+fn inject_class_level_generics(ctx: &mut LoweringContext, self_type: &Type, tc: &TypeChecker) {
+    let TypeKind::Custom(class_name, _) = &self_type.kind else {
+        return;
+    };
+    let Some(type_def) = tc.type_definitions().get(class_name.as_str()) else {
+        return;
+    };
+    let generics = match type_def {
+        crate::type_checker::context::TypeDefinition::Enum(ed) => ed.generics.as_deref(),
+        crate::type_checker::context::TypeDefinition::Class(cd) => cd.generics.as_deref(),
+        _ => None,
+    };
+    if let Some(gens) = generics {
+        for gen in gens {
+            ctx.body.type_params.insert(gen.name.clone());
+        }
+    }
+}
+
 pub fn lower_class_method(
     ast_method: &Statement,
     self_type: Type,
@@ -261,16 +297,15 @@ pub fn lower_class_method(
     let body_stmt = &decl.body;
     let props = &decl.properties;
 
-    let ret_ty = if let Some(ret_expr) = ret_type_expr {
-        resolve_type(tc, ret_expr)
-    } else {
-        Type::new(TypeKind::Void, ast_method.span)
-    };
+    let ret_ty = ret_type_expr.as_deref().map_or_else(
+        || Type::new(TypeKind::Void, ast_method.span),
+        |e| resolve_type(tc, e),
+    );
 
     let execution_model = resolve_execution_model(props);
 
-    // Initial arg_count = 1 (self) + explicit params.
-    // The allocator is added to arg_count below but NOT to variable_map.
+    // arg_count = 1 (self) + explicit params; the allocator is counted below but
+    // not added to variable_map.
     let body = Body::new(params.len() + 1, ast_method.span, execution_model);
     let mut ctx = LoweringContext::new(body, tc, is_release);
 
@@ -278,26 +313,7 @@ pub fn lower_class_method(
     // and class-level generics that appear in param/return types, e.g. T in List<T>).
     ctx.body.type_params = collect_type_params(decl, tc);
 
-    // Also inject enum/class-level generic names (e.g. T, E from Result<T, E>).
-    // `collect_type_params` only catches generics that `resolve_type` returns as
-    // `TypeKind::Generic`; but for enum methods the self_type is `Custom("Result", None)`
-    // and param types resolve to `Custom("T", None)` — so the generic names are missed.
-    // Reading them directly from the type definition closes the gap and prevents Perceus
-    // from treating unresolved generic placeholders as concrete heap-managed types.
-    if let TypeKind::Custom(class_name, _) = &self_type.kind {
-        if let Some(type_def) = tc.type_definitions().get(class_name.as_str()) {
-            let generics = match type_def {
-                crate::type_checker::context::TypeDefinition::Enum(ed) => ed.generics.as_deref(),
-                crate::type_checker::context::TypeDefinition::Class(cd) => cd.generics.as_deref(),
-                _ => None,
-            };
-            if let Some(gens) = generics {
-                for gen in gens {
-                    ctx.body.type_params.insert(gen.name.clone());
-                }
-            }
-        }
-    }
+    inject_class_level_generics(&mut ctx, &self_type, tc);
 
     // _0: Return value
     ctx.body
@@ -471,58 +487,80 @@ fn emit_parameter_guards(
     params: &[crate::ast::common::Parameter],
 ) -> Result<(), LoweringError> {
     for param in params {
-        let Some(guard) = &param.guard else {
-            continue;
-        };
-        let Some(&param_local) = ctx.variable_map.get(param.name.as_str()) else {
-            continue;
-        };
-        let ExpressionKind::Guard(guard_op, guard_value) = &guard.node else {
-            continue;
-        };
-
-        let guard_val = lower_expression(ctx, guard_value, None)?;
-
-        let bin_op = match guard_op {
-            crate::ast::operator::GuardOp::GreaterThan => BinOp::Gt,
-            crate::ast::operator::GuardOp::GreaterThanEqual => BinOp::Ge,
-            crate::ast::operator::GuardOp::LessThan => BinOp::Lt,
-            crate::ast::operator::GuardOp::LessThanEqual => BinOp::Le,
-            crate::ast::operator::GuardOp::NotEqual => BinOp::Ne,
-            _ => continue,
-        };
-
-        let check_result = ctx.push_temp(Type::new(TypeKind::Boolean, guard.span), guard.span);
-        ctx.push_statement(crate::mir::Statement {
-            kind: MirStatementKind::Assign(
-                Place::new(check_result),
-                Rvalue::BinaryOp(
-                    bin_op,
-                    Box::new(Operand::Copy(Place::new(param_local))),
-                    Box::new(guard_val),
-                ),
-            ),
-            span: guard.span,
-        });
-
-        let continue_bb = ctx.new_basic_block();
-        let fail_bb = ctx.new_basic_block();
-
-        ctx.set_terminator(Terminator::new(
-            TerminatorKind::SwitchInt {
-                discr: Operand::Copy(Place::new(check_result)),
-                targets: vec![(Discriminant::bool_true(), continue_bb)],
-                otherwise: fail_bb,
-            },
-            guard.span,
-        ));
-
-        ctx.set_current_block(fail_bb);
-        ctx.set_terminator(Terminator::new(TerminatorKind::Unreachable, guard.span));
-
-        ctx.set_current_block(continue_bb);
+        emit_param_guard(ctx, param)?;
     }
     Ok(())
+}
+
+/// Emit the comparison + fail-on-false branch for a single guarded parameter.
+/// Parameters without a (supported) guard are left untouched.
+fn emit_param_guard(
+    ctx: &mut LoweringContext,
+    param: &crate::ast::common::Parameter,
+) -> Result<(), LoweringError> {
+    let Some(guard) = &param.guard else {
+        return Ok(());
+    };
+    let Some(&param_local) = ctx.variable_map.get(param.name.as_str()) else {
+        return Ok(());
+    };
+    let ExpressionKind::Guard(guard_op, guard_value) = &guard.node else {
+        return Ok(());
+    };
+
+    let guard_val = lower_expression(ctx, guard_value, None)?;
+    let Some(bin_op) = guard_op_to_binop(guard_op) else {
+        return Ok(());
+    };
+
+    let check_result = ctx.push_temp(Type::new(TypeKind::Boolean, guard.span), guard.span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            Place::new(check_result),
+            Rvalue::BinaryOp(
+                bin_op,
+                Box::new(Operand::Copy(Place::new(param_local))),
+                Box::new(guard_val),
+            ),
+        ),
+        span: guard.span,
+    });
+    emit_guard_fail_branch(ctx, check_result, guard.span);
+    Ok(())
+}
+
+/// Map a guard operator to its MIR comparison op (None if unsupported).
+fn guard_op_to_binop(op: &crate::ast::operator::GuardOp) -> Option<BinOp> {
+    match op {
+        crate::ast::operator::GuardOp::GreaterThan => Some(BinOp::Gt),
+        crate::ast::operator::GuardOp::GreaterThanEqual => Some(BinOp::Ge),
+        crate::ast::operator::GuardOp::LessThan => Some(BinOp::Lt),
+        crate::ast::operator::GuardOp::LessThanEqual => Some(BinOp::Le),
+        crate::ast::operator::GuardOp::NotEqual => Some(BinOp::Ne),
+        _ => None,
+    }
+}
+
+/// Branch on `check_result`: continue when true, else jump to an unreachable
+/// fail block. Leaves the current block at the continue path.
+fn emit_guard_fail_branch(
+    ctx: &mut LoweringContext,
+    check_result: crate::mir::Local,
+    span: crate::error::syntax::Span,
+) {
+    let continue_bb = ctx.new_basic_block();
+    let fail_bb = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::SwitchInt {
+            discr: Operand::Copy(Place::new(check_result)),
+            targets: vec![(Discriminant::bool_true(), continue_bb)],
+            otherwise: fail_bb,
+        },
+        span,
+    ));
+    ctx.set_current_block(fail_bb);
+    ctx.set_terminator(Terminator::new(TerminatorKind::Unreachable, span));
+    ctx.set_current_block(continue_bb);
 }
 
 /// Finalize the lowering context: pop root scope, ensure termination, and validate.

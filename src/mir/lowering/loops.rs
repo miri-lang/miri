@@ -68,36 +68,36 @@ pub fn lower_if(
         *span,
     ));
 
-    // Lower then block
     ctx.set_current_block(then_bb);
-    lower_statement(ctx, then_block)?;
-    // If the block didn't terminate itself (e.g. return), goto join
-    if ctx.body.basic_blocks[ctx.current_block.0]
-        .terminator
-        .is_none()
-    {
-        ctx.set_terminator(Terminator::new(
-            TerminatorKind::Goto { target: join_bb },
-            *span,
-        ));
-    }
+    lower_branch_into_join(ctx, Some(then_block), join_bb, *span)?;
 
-    // Lower else block
     ctx.set_current_block(else_bb);
-    if let Some(else_stmt) = else_block_opt {
-        lower_statement(ctx, else_stmt)?;
-    }
-    if ctx.body.basic_blocks[ctx.current_block.0]
-        .terminator
-        .is_none()
-    {
-        ctx.set_terminator(Terminator::new(
-            TerminatorKind::Goto { target: join_bb },
-            *span,
-        ));
-    }
+    lower_branch_into_join(ctx, else_block_opt.as_deref(), join_bb, *span)?;
 
     ctx.set_current_block(join_bb);
+    Ok(())
+}
+
+/// Lower an optional branch statement and, if it didn't terminate itself,
+/// `goto join_bb`.
+fn lower_branch_into_join(
+    ctx: &mut LoweringContext,
+    stmt: Option<&Statement>,
+    join_bb: crate::mir::BasicBlock,
+    span: Span,
+) -> Result<(), LoweringError> {
+    if let Some(s) = stmt {
+        lower_statement(ctx, s)?;
+    }
+    if ctx.body.basic_blocks[ctx.current_block.0]
+        .terminator
+        .is_none()
+    {
+        ctx.set_terminator(Terminator::new(
+            TerminatorKind::Goto { target: join_bb },
+            span,
+        ));
+    }
     Ok(())
 }
 
@@ -229,26 +229,22 @@ pub fn lower_while(
     Ok(())
 }
 
-/// Helper to lower for-loops over iterable collections (lists, arrays).
-/// Unrolls the iteration by evaluating each element.
-fn lower_for_over_iterable(
+/// Helper to extract element and secondary-variable types for a for-loop.
+fn extract_loop_types(
     ctx: &mut LoweringContext,
     span: &Span,
     decls: &[VariableDeclaration],
-    iterable: &Expression,
-    body: &Statement,
-) -> Result<(), LoweringError> {
-    // For now, use a simple approach: just run the interpreter for this
-    // since proper list iteration requires more complex MIR patterns.
-    // We'll lower it as: evaluate list, iterate with index.
+    iterable_ty: &Option<Type>,
+) -> (Type, bool, Option<crate::mir::Local>) {
+    let is_map = iterable_is_map(iterable_ty);
+    let elem_ty = resolve_loop_elem_type(ctx, span, iterable_ty);
+    let idx_loop_var = resolve_loop_index_var(ctx, span, decls, is_map, iterable_ty);
+    (elem_ty, is_map, idx_loop_var)
+}
 
-    ctx.push_scope();
-
-    let decl = &decls[0];
-    // Infer element type from type checker or default to Int
-    let iterable_ty = ctx.type_checker.get_type(iterable.id).cloned();
-    let is_map = match iterable_ty.as_ref().map(|t| &t.kind) {
-        // Canonical variants are normalized to Custom before MIR lowering.
+/// True when the iterable is a `Map` (normalized to `Custom("Map", ..)`).
+fn iterable_is_map(iterable_ty: &Option<Type>) -> bool {
+    match iterable_ty.as_ref().map(|t| &t.kind) {
         Some(TypeKind::Map(_, _)) => {
             unreachable!("collection types are normalized to Custom before this point")
         }
@@ -258,51 +254,89 @@ fn lower_for_over_iterable(
             true
         }
         _ => false,
+    }
+}
+
+/// Resolve the element type produced by iterating the loop's iterable.
+fn resolve_loop_elem_type(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    iterable_ty: &Option<Type>,
+) -> Type {
+    let Some(ty) = iterable_ty else {
+        return Type::new(TypeKind::Int, *span);
     };
-    let elem_ty = if let Some(ty) = &iterable_ty {
-        // Extract element type from collection type parameters.
-        // After normalization, all builtin collections are Custom("Name", args).
-        match &ty.kind {
-            TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => {
-                unreachable!("collection types are normalized to Custom before this point")
-            }
-            TypeKind::Tuple(elem_type_exprs) if !elem_type_exprs.is_empty() => {
-                super::resolve_type(ctx.type_checker, &elem_type_exprs[0])
-            }
-            TypeKind::Custom(name, Some(args))
-                if (BuiltinCollectionKind::from_name(name).is_some()
-                    || name == crate::ast::types::TUPLE_TYPE_NAME)
-                    && !args.is_empty() =>
-            {
-                super::resolve_type(ctx.type_checker, &args[0])
-            }
-            _ => ty.clone(),
+    match &ty.kind {
+        TypeKind::List(_) | TypeKind::Array(_, _) | TypeKind::Map(_, _) | TypeKind::Set(_) => {
+            unreachable!("collection types are normalized to Custom before this point")
         }
+        TypeKind::Tuple(elem_type_exprs) if !elem_type_exprs.is_empty() => {
+            super::resolve_type(ctx.type_checker, &elem_type_exprs[0])
+        }
+        TypeKind::Custom(name, Some(args))
+            if (BuiltinCollectionKind::from_name(name).is_some()
+                || name == crate::ast::types::TUPLE_TYPE_NAME)
+                && !args.is_empty() =>
+        {
+            super::resolve_type(ctx.type_checker, &args[0])
+        }
+        _ => ty.clone(),
+    }
+}
+
+/// Allocate the optional second loop variable (index, or map value), if present.
+fn resolve_loop_index_var(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    decls: &[VariableDeclaration],
+    is_map: bool,
+    iterable_ty: &Option<Type>,
+) -> Option<crate::mir::Local> {
+    if decls.len() <= 1 {
+        return None;
+    }
+    let var_ty = if is_map {
+        resolve_map_value_type(ctx, span, iterable_ty)
     } else {
         Type::new(TypeKind::Int, *span)
     };
+    Some(ctx.push_local(decls[1].name.clone(), var_ty, *span))
+}
 
-    // Determine if the element type needs RC management.
-    let elem_is_managed = ctx.is_perceus_managed(&elem_ty.kind);
+/// Resolve a map's value type for the second loop variable, else default Int.
+fn resolve_map_value_type(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    iterable_ty: &Option<Type>,
+) -> Type {
+    match iterable_ty.as_ref().map(|t| &t.kind) {
+        Some(TypeKind::Map(_, _)) => {
+            unreachable!("collection types are normalized to Custom before this point")
+        }
+        Some(TypeKind::Custom(name, Some(args)))
+            if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Map)
+                && args.len() == 2 =>
+        {
+            super::resolve_type(ctx.type_checker, &args[1])
+        }
+        _ => Type::new(TypeKind::Int, *span),
+    }
+}
 
-    // For managed element types we must emit StorageLive at the *start* of each body
-    // iteration and StorageDead at the *start* of the increment block.  This causes
-    // Perceus to insert a DecRef for the previous iteration's element before the next
-    // element_at overwrites loop_var, preventing a reference-count leak of N-1 elements.
-    //
-    // To achieve this without pop_scope emitting a redundant StorageDead for loop_var
-    // (which would DecRef an uninitialized slot on the empty-list path), we create the
-    // local via push_temp (which does NOT add it to scope.introduced) and manually
-    // register it in variable_map so that the loop body can resolve it by name.
-    //
-    // For non-managed element types (e.g. Int), use the regular push_local path.
-    let loop_var = if elem_is_managed {
-        let local = ctx.push_temp(elem_ty.clone(), *span);
+/// Register loop variable for managed types, or use push_local for primitives.
+fn setup_loop_variable(
+    ctx: &mut LoweringContext,
+    decl: &VariableDeclaration,
+    elem_ty: Type,
+    elem_is_managed: bool,
+    span: &Span,
+) -> crate::mir::Local {
+    if elem_is_managed {
+        let local = ctx.push_temp(elem_ty, *span);
         if !ctx.is_release {
             ctx.body.local_decls[local.0].name = Some(Rc::from(decl.name.as_str()));
         }
         ctx.body.local_decls[local.0].is_user_variable = true;
-        // Register in variable_map, saving any shadowed binding so pop_scope can restore it.
         let name_rc: Rc<str> = Rc::from(decl.name.as_str());
         match ctx.variable_map.entry(name_rc) {
             std::collections::hash_map::Entry::Occupied(mut entry) => {
@@ -319,79 +353,15 @@ fn lower_for_over_iterable(
         local
     } else {
         ctx.push_local(decl.name.clone(), elem_ty, *span)
-    };
+    }
+}
 
-    // If there's a second declaration:
-    // - For Map: it's the value variable (for k, v in map)
-    // - For others: it's the index variable (for val, idx in list)
-    let idx_loop_var = if decls.len() > 1 {
-        let idx_decl = &decls[1];
-        let var_ty = if is_map {
-            match iterable_ty.as_ref().map(|t| &t.kind) {
-                Some(TypeKind::Map(_, _)) => {
-                    unreachable!("collection types are normalized to Custom before this point")
-                }
-                Some(TypeKind::Custom(name, Some(args)))
-                    if BuiltinCollectionKind::from_name(name)
-                        == Some(BuiltinCollectionKind::Map)
-                        && args.len() == 2 =>
-                {
-                    super::resolve_type(ctx.type_checker, &args[1])
-                }
-                _ => Type::new(TypeKind::Int, *span),
-            }
-        } else {
-            Type::new(TypeKind::Int, *span)
-        };
-        Some(ctx.push_local(idx_decl.name.clone(), var_ty, *span))
-    } else {
-        None
-    };
-
-    // Lower the iterable using DPS to avoid an extra Copy (and spurious IncRef).
-    // The single reference owned by list_local is released via StorageDead after the loop.
-    let list_ty = if let Some(ty) = ctx.type_checker.get_type(iterable.id) {
-        ty.clone()
-    } else {
-        Type::new(TypeKind::Void, *span)
-    };
-    let list_local = ctx.push_temp(list_ty, *span);
-    lower_expression(ctx, iterable, Some(Place::new(list_local)))?;
-
-    // Index variable
-    let idx_ty = Type::new(TypeKind::Int, *span);
-    let idx_var = ctx.push_temp(idx_ty.clone(), *span);
-
-    // Initialize index to 0
-    let zero = Operand::Constant(Box::new(Constant {
-        span: *span,
-        ty: idx_ty.clone(),
-        literal: crate::ast::literal::Literal::Integer(crate::ast::literal::IntegerLiteral::I32(0)),
-    }));
-    ctx.push_statement(crate::mir::Statement {
-        kind: StatementKind::Assign(Place::new(idx_var), Rvalue::Use(zero)),
-        span: *span,
-    });
-
-    let header_bb = ctx.new_basic_block();
-    let body_bb = ctx.new_basic_block();
-    let increment_bb = ctx.new_basic_block();
-    let exit_bb = ctx.new_basic_block();
-
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::Goto { target: header_bb },
-        *span,
-    ));
-
-    // Determine if the iterable is a class implementing Iterable trait.
-    // If so, we use method calls (ClassName_length, ClassName_element_at)
-    // instead of raw Rvalue::Len and PlaceElem::Index.
-    let iterable_class: Option<String> = ctx
-        .type_checker
-        .get_type(iterable.id)
+/// Determine the iterable class and its method symbols if it implements Iterable.
+fn resolve_iterable_class(ctx: &LoweringContext, iterable_id: usize) -> Option<String> {
+    ctx.type_checker
+        .get_type(iterable_id)
         .and_then(|ty| match &ty.kind {
             TypeKind::String => Some(crate::ast::types::STRING_TYPE_NAME.to_string()),
-            // Canonical variants are normalized to Custom before MIR lowering.
             TypeKind::Map(_, _) | TypeKind::Set(_) => {
                 unreachable!("collection types are normalized to Custom before this point")
             }
@@ -418,52 +388,67 @@ fn lower_for_over_iterable(
                 ctx.type_checker.global_type_definitions.get(name),
                 Some(TypeDefinition::Class(class_def)) if class_def.traits.iter().any(|t| t == "Iterable")
             )
-        });
+        })
+}
 
-    // Header: Check idx < length
-    ctx.set_current_block(header_bb);
-
-    let len_temp = ctx.push_temp(idx_ty.clone(), *span);
-
-    if let Some(ref class_name) = iterable_class {
-        // Call ClassName_length(iterable) via MIR terminator
-        let mut length_symbol = String::with_capacity(class_name.len() + 7);
-        length_symbol.push_str(class_name);
-        length_symbol.push_str("_length");
-        let func_op = Operand::Constant(Box::new(Constant {
-            span: *span,
-            ty: Type::new(TypeKind::Identifier, *span),
-            literal: crate::ast::literal::Literal::Identifier(length_symbol.clone()),
-        }));
-        let after_len_bb = ctx.new_basic_block();
-        ctx.set_terminator(Terminator::new(
-            TerminatorKind::Call {
-                func: func_op,
-                args: {
-                    let mut args = vec![Operand::Copy(Place::new(list_local))];
-                    if !length_symbol.starts_with("miri_") {
-                        if let Some(&allocator) = ctx.variable_map.get("allocator") {
-                            args.push(Operand::Copy(Place::new(allocator)));
-                        }
-                    }
-                    args
-                },
-                out_args: Vec::new(),
-                destination: Place::new(len_temp),
-                target: Some(after_len_bb),
-            },
-            *span,
-        ));
-        ctx.set_current_block(after_len_bb);
-    } else {
+/// Emit length check and loop header condition.
+/// Compute the iterable's length into `len_temp`: a `{Class}_length` runtime
+/// call for collection classes, else a direct `Rvalue::Len`.
+fn emit_loop_length(
+    ctx: &mut LoweringContext,
+    len_temp: crate::mir::Local,
+    list_local: crate::mir::Local,
+    iterable_class: &Option<String>,
+    span: &Span,
+) {
+    let Some(class_name) = iterable_class else {
         ctx.push_statement(crate::mir::Statement {
             kind: StatementKind::Assign(Place::new(len_temp), Rvalue::Len(Place::new(list_local))),
             span: *span,
         });
+        return;
+    };
+    let length_symbol = format!("{}_length", class_name);
+    let func_op = Operand::Constant(Box::new(Constant {
+        span: *span,
+        ty: Type::new(TypeKind::Identifier, *span),
+        literal: crate::ast::literal::Literal::Identifier(length_symbol.clone()),
+    }));
+    let mut args = vec![Operand::Copy(Place::new(list_local))];
+    if !length_symbol.starts_with("miri_") {
+        if let Some(&allocator) = ctx.variable_map.get("allocator") {
+            args.push(Operand::Copy(Place::new(allocator)));
+        }
     }
+    let after_len_bb = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func: func_op,
+            args,
+            out_args: Vec::new(),
+            destination: Place::new(len_temp),
+            target: Some(after_len_bb),
+        },
+        *span,
+    ));
+    ctx.set_current_block(after_len_bb);
+}
 
-    let bool_ty = Type::new(TypeKind::Boolean, *span);
-    let cond_temp = ctx.push_temp(bool_ty, *span);
+#[allow(clippy::too_many_arguments)]
+fn emit_loop_header(
+    ctx: &mut LoweringContext,
+    list_local: crate::mir::Local,
+    iterable_class: &Option<String>,
+    idx_var: crate::mir::Local,
+    idx_ty: &Type,
+    body_bb: crate::mir::BasicBlock,
+    exit_bb: crate::mir::BasicBlock,
+    span: &Span,
+) -> Result<(), LoweringError> {
+    let len_temp = ctx.push_temp(idx_ty.clone(), *span);
+    emit_loop_length(ctx, len_temp, list_local, iterable_class, span);
+
+    let cond_temp = ctx.push_temp(Type::new(TypeKind::Boolean, *span), *span);
     ctx.push_statement(crate::mir::Statement {
         kind: StatementKind::Assign(
             Place::new(cond_temp),
@@ -485,33 +470,69 @@ fn lower_for_over_iterable(
         *span,
     ));
 
-    // Body
-    ctx.enter_loop(exit_bb, increment_bb);
-    ctx.set_current_block(body_bb);
+    Ok(())
+}
 
-    // For managed element types, start the lifetime of loop_var at the top of each
-    // body iteration.  Perceus will pair this StorageLive with the StorageDead in the
-    // increment block, yielding an IncRef (for the element_at Copy below) followed by
-    // a DecRef (when the iteration ends), correctly balancing every element reference.
-    if elem_is_managed {
-        ctx.push_statement(crate::mir::Statement {
-            kind: StatementKind::StorageLive(Place::new(loop_var)),
-            span: *span,
-        });
-    }
+/// Emit element load and secondary variable assignment within loop body.
+/// Emit element load from collection within loop body.
+fn emit_element_at_call(
+    ctx: &mut LoweringContext,
+    loop_var: crate::mir::Local,
+    list_local: crate::mir::Local,
+    idx_var: crate::mir::Local,
+    class_name: &str,
+    span: &Span,
+) {
+    let mut element_at_symbol = String::with_capacity(class_name.len() + 11);
+    element_at_symbol.push_str(class_name);
+    element_at_symbol.push_str("_element_at");
+    let func_op = Operand::Constant(Box::new(Constant {
+        span: *span,
+        ty: Type::new(TypeKind::Identifier, *span),
+        literal: crate::ast::literal::Literal::Identifier(element_at_symbol.clone()),
+    }));
+    let after_elem_bb = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func: func_op,
+            args: {
+                let mut args = vec![
+                    Operand::Copy(Place::new(list_local)),
+                    Operand::Copy(Place::new(idx_var)),
+                ];
+                if !element_at_symbol.starts_with("miri_") {
+                    if let Some(&allocator) = ctx.variable_map.get("allocator") {
+                        args.push(Operand::Copy(Place::new(allocator)));
+                    }
+                }
+                args
+            },
+            out_args: Vec::new(),
+            destination: Place::new(loop_var),
+            target: Some(after_elem_bb),
+        },
+        *span,
+    ));
+    ctx.set_current_block(after_elem_bb);
+}
 
-    // Assign loop_var = element_at(idx) or list[idx]
-    if let Some(ref class_name) = iterable_class {
-        // Call ClassName_element_at(iterable, idx) via MIR terminator
-        let mut element_at_symbol = String::with_capacity(class_name.len() + 11);
-        element_at_symbol.push_str(class_name);
-        element_at_symbol.push_str("_element_at");
+/// Emit secondary loop variable assignment (map value or list index).
+fn emit_secondary_loop_var(
+    ctx: &mut LoweringContext,
+    idx_local: crate::mir::Local,
+    list_local: crate::mir::Local,
+    idx_var: crate::mir::Local,
+    is_map: bool,
+    span: &Span,
+) {
+    if is_map {
+        let value_at_symbol = "Map_value_at".to_string();
         let func_op = Operand::Constant(Box::new(Constant {
             span: *span,
             ty: Type::new(TypeKind::Identifier, *span),
-            literal: crate::ast::literal::Literal::Identifier(element_at_symbol.clone()),
+            literal: crate::ast::literal::Literal::Identifier(value_at_symbol),
         }));
-        let after_elem_bb = ctx.new_basic_block();
+        let after_val_bb = ctx.new_basic_block();
         ctx.set_terminator(Terminator::new(
             TerminatorKind::Call {
                 func: func_op,
@@ -520,20 +541,50 @@ fn lower_for_over_iterable(
                         Operand::Copy(Place::new(list_local)),
                         Operand::Copy(Place::new(idx_var)),
                     ];
-                    if !element_at_symbol.starts_with("miri_") {
-                        if let Some(&allocator) = ctx.variable_map.get("allocator") {
-                            args.push(Operand::Copy(Place::new(allocator)));
-                        }
+                    if let Some(&allocator) = ctx.variable_map.get("allocator") {
+                        args.push(Operand::Copy(Place::new(allocator)));
                     }
                     args
                 },
                 out_args: Vec::new(),
-                destination: Place::new(loop_var),
-                target: Some(after_elem_bb),
+                destination: Place::new(idx_local),
+                target: Some(after_val_bb),
             },
             *span,
         ));
-        ctx.set_current_block(after_elem_bb);
+        ctx.set_current_block(after_val_bb);
+    } else {
+        ctx.push_statement(crate::mir::Statement {
+            kind: StatementKind::Assign(
+                Place::new(idx_local),
+                Rvalue::Use(Operand::Copy(Place::new(idx_var))),
+            ),
+            span: *span,
+        });
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_loop_body_element_load(
+    ctx: &mut LoweringContext,
+    loop_var: crate::mir::Local,
+    list_local: crate::mir::Local,
+    idx_var: crate::mir::Local,
+    iterable_class: &Option<String>,
+    elem_is_managed: bool,
+    idx_loop_var: Option<crate::mir::Local>,
+    is_map: bool,
+    span: &Span,
+) -> Result<(), LoweringError> {
+    if elem_is_managed {
+        ctx.push_statement(crate::mir::Statement {
+            kind: StatementKind::StorageLive(Place::new(loop_var)),
+            span: *span,
+        });
+    }
+
+    if let Some(ref class_name) = iterable_class {
+        emit_element_at_call(ctx, loop_var, list_local, idx_var, class_name, span);
     } else {
         let mut indexed_place = Place::new(list_local);
         indexed_place
@@ -548,70 +599,23 @@ fn lower_for_over_iterable(
         });
     }
 
-    // If there's a second loop variable, assign it
     if let Some(idx_local) = idx_loop_var {
-        if is_map {
-            // For Map: call Map_value_at(map, idx) to get the value
-            let value_at_symbol = "Map_value_at".to_string();
-            let func_op = Operand::Constant(Box::new(Constant {
-                span: *span,
-                ty: Type::new(TypeKind::Identifier, *span),
-                literal: crate::ast::literal::Literal::Identifier(value_at_symbol),
-            }));
-            let after_val_bb = ctx.new_basic_block();
-            ctx.set_terminator(Terminator::new(
-                TerminatorKind::Call {
-                    func: func_op,
-                    args: {
-                        let mut args = vec![
-                            Operand::Copy(Place::new(list_local)),
-                            Operand::Copy(Place::new(idx_var)),
-                        ];
-                        if let Some(&allocator) = ctx.variable_map.get("allocator") {
-                            args.push(Operand::Copy(Place::new(allocator)));
-                        }
-                        args
-                    },
-                    out_args: Vec::new(),
-                    destination: Place::new(idx_local),
-                    target: Some(after_val_bb),
-                },
-                *span,
-            ));
-            ctx.set_current_block(after_val_bb);
-        } else {
-            // For List/Array/String: assign the loop counter as the index
-            ctx.push_statement(crate::mir::Statement {
-                kind: StatementKind::Assign(
-                    Place::new(idx_local),
-                    Rvalue::Use(Operand::Copy(Place::new(idx_var))),
-                ),
-                span: *span,
-            });
-        }
+        emit_secondary_loop_var(ctx, idx_local, list_local, idx_var, is_map, span);
     }
 
-    lower_statement(ctx, body)?;
+    Ok(())
+}
 
-    if ctx.body.basic_blocks[ctx.current_block.0]
-        .terminator
-        .is_none()
-    {
-        ctx.set_terminator(Terminator::new(
-            TerminatorKind::Goto {
-                target: increment_bb,
-            },
-            *span,
-        ));
-    }
-    ctx.exit_loop();
-
-    // Increment
-    ctx.set_current_block(increment_bb);
-
-    // For managed element types, end the lifetime of loop_var at the top of the
-    // increment block.  Perceus converts this StorageDead into a DecRef, releasing
-    // the current iteration's element reference before the next element_at is called.
+/// Emit element cleanup and index increment at loop increment block.
+fn emit_loop_increment(
+    ctx: &mut LoweringContext,
+    loop_var: crate::mir::Local,
+    elem_is_managed: bool,
+    idx_var: crate::mir::Local,
+    idx_ty: &Type,
+    header_bb: crate::mir::BasicBlock,
+    span: &Span,
+) {
     if elem_is_managed {
         ctx.push_statement(crate::mir::Statement {
             kind: StatementKind::StorageDead(Place::new(loop_var)),
@@ -621,7 +625,7 @@ fn lower_for_over_iterable(
 
     let one = Operand::Constant(Box::new(Constant {
         span: *span,
-        ty: idx_ty,
+        ty: idx_ty.clone(),
         literal: crate::ast::literal::Literal::Integer(crate::ast::literal::IntegerLiteral::I32(1)),
     }));
     ctx.push_statement(crate::mir::Statement {
@@ -640,12 +644,113 @@ fn lower_for_over_iterable(
         TerminatorKind::Goto { target: header_bb },
         *span,
     ));
+}
+
+/// Helper to lower for-loops over iterable collections (lists, arrays).
+/// Unrolls the iteration by evaluating each element.
+fn lower_for_over_iterable(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    decls: &[VariableDeclaration],
+    iterable: &Expression,
+    body: &Statement,
+) -> Result<(), LoweringError> {
+    ctx.push_scope();
+
+    let decl = &decls[0];
+    let iterable_ty = ctx.type_checker.get_type(iterable.id).cloned();
+    let (elem_ty, is_map, idx_loop_var) = extract_loop_types(ctx, span, decls, &iterable_ty);
+    let elem_is_managed = ctx.is_perceus_managed(&elem_ty.kind);
+
+    let loop_var = setup_loop_variable(ctx, decl, elem_ty, elem_is_managed, span);
+
+    let list_ty = if let Some(ty) = ctx.type_checker.get_type(iterable.id) {
+        ty.clone()
+    } else {
+        Type::new(TypeKind::Void, *span)
+    };
+    let list_local = ctx.push_temp(list_ty, *span);
+    lower_expression(ctx, iterable, Some(Place::new(list_local)))?;
+
+    let idx_ty = Type::new(TypeKind::Int, *span);
+    let idx_var = ctx.push_temp(idx_ty.clone(), *span);
+
+    let zero = Operand::Constant(Box::new(Constant {
+        span: *span,
+        ty: idx_ty.clone(),
+        literal: crate::ast::literal::Literal::Integer(crate::ast::literal::IntegerLiteral::I32(0)),
+    }));
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(Place::new(idx_var), Rvalue::Use(zero)),
+        span: *span,
+    });
+
+    let header_bb = ctx.new_basic_block();
+    let body_bb = ctx.new_basic_block();
+    let increment_bb = ctx.new_basic_block();
+    let exit_bb = ctx.new_basic_block();
+
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Goto { target: header_bb },
+        *span,
+    ));
+
+    let iterable_class = resolve_iterable_class(ctx, iterable.id);
+
+    ctx.set_current_block(header_bb);
+    emit_loop_header(
+        ctx,
+        list_local,
+        &iterable_class,
+        idx_var,
+        &idx_ty,
+        body_bb,
+        exit_bb,
+        span,
+    )?;
+
+    ctx.enter_loop(exit_bb, increment_bb);
+    ctx.set_current_block(body_bb);
+    emit_loop_body_element_load(
+        ctx,
+        loop_var,
+        list_local,
+        idx_var,
+        &iterable_class,
+        elem_is_managed,
+        idx_loop_var,
+        is_map,
+        span,
+    )?;
+
+    lower_statement(ctx, body)?;
+
+    if ctx.body.basic_blocks[ctx.current_block.0]
+        .terminator
+        .is_none()
+    {
+        ctx.set_terminator(Terminator::new(
+            TerminatorKind::Goto {
+                target: increment_bb,
+            },
+            *span,
+        ));
+    }
+    ctx.exit_loop();
+
+    ctx.set_current_block(increment_bb);
+    emit_loop_increment(
+        ctx,
+        loop_var,
+        elem_is_managed,
+        idx_var,
+        &idx_ty,
+        header_bb,
+        span,
+    );
 
     ctx.set_current_block(exit_bb);
-    // Release the iterable local now that the loop is done.
     ctx.emit_temp_drop(list_local, 0, *span);
-    // For managed loop vars, remove the manually-registered binding before pop_scope.
-    // pop_scope's shadowed.drain() will restore any outer binding that was shadowed.
     if elem_is_managed {
         ctx.variable_map.remove(decl.name.as_str());
     }
