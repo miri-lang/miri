@@ -257,29 +257,8 @@ fn lower_class_decl(ctx: &mut LoweringContext, name_expr: &Expression) {
     else {
         return;
     };
-    let fields = def
-        .fields
-        .iter()
-        .enumerate()
-        .map(|(idx, (field_name, field_info))| FieldDecl {
-            name: field_name.clone(),
-            ty: field_info.ty.clone(),
-            visibility: field_info.visibility.clone(),
-            index: idx,
-            mutable: field_info.mutable,
-        })
-        .collect();
-    let methods = def
-        .methods
-        .iter()
-        .map(|(method_name, method_info)| MethodDecl {
-            name: method_name.clone(),
-            params: method_info.params.clone(),
-            return_type: method_info.return_type.clone(),
-            visibility: method_info.visibility.clone(),
-            is_constructor: method_info.is_constructor,
-        })
-        .collect();
+    let fields = build_field_decls(def);
+    let methods = build_method_decls(def);
     let generics = collect_generics(def.generics.as_ref());
     ctx.declarations.push(Declaration::Class(ClassDecl {
         name: name.to_string(),
@@ -290,6 +269,35 @@ fn lower_class_decl(ctx: &mut LoweringContext, name_expr: &Expression) {
         traits: def.traits.clone(),
         module: def.module.clone(),
     }));
+}
+
+/// Build the lowered field declarations for a class.
+fn build_field_decls(def: &crate::type_checker::context::ClassDefinition) -> Vec<FieldDecl> {
+    def.fields
+        .iter()
+        .enumerate()
+        .map(|(idx, (field_name, field_info))| FieldDecl {
+            name: field_name.clone(),
+            ty: field_info.ty.clone(),
+            visibility: field_info.visibility.clone(),
+            index: idx,
+            mutable: field_info.mutable,
+        })
+        .collect()
+}
+
+/// Build the lowered method declarations for a class.
+fn build_method_decls(def: &crate::type_checker::context::ClassDefinition) -> Vec<MethodDecl> {
+    def.methods
+        .iter()
+        .map(|(method_name, method_info)| MethodDecl {
+            name: method_name.clone(),
+            params: method_info.params.clone(),
+            return_type: method_info.return_type.clone(),
+            visibility: method_info.visibility.clone(),
+            is_constructor: method_info.is_constructor,
+        })
+        .collect()
 }
 
 fn lower_trait_decl(ctx: &mut LoweringContext, name_expr: &Expression) {
@@ -340,6 +348,27 @@ fn lower_type_alias(ctx: &mut LoweringContext, decls: &[Expression]) {
     }
 }
 
+/// Build the `ImportKind` (all/wildcard vs named list) from an import-path kind.
+fn build_import_kind(kind: &crate::ast::expression::ImportPathKind) -> ImportKind {
+    match kind {
+        crate::ast::expression::ImportPathKind::Simple
+        | crate::ast::expression::ImportPathKind::Wildcard => ImportKind::All,
+        crate::ast::expression::ImportPathKind::Multi(items) => {
+            let import_items: Vec<ImportItem> = items
+                .iter()
+                .filter_map(|(name_expr, alias_expr)| {
+                    let name = extract_identifier(name_expr)?.to_string();
+                    let alias = alias_expr
+                        .as_ref()
+                        .and_then(|a| extract_identifier(a).map(|s| s.to_string()));
+                    Some(ImportItem { name, alias })
+                })
+                .collect();
+            ImportKind::Named(import_items)
+        }
+    }
+}
+
 fn lower_use_stmt(
     ctx: &mut LoweringContext,
     import_path_expr: &Expression,
@@ -366,24 +395,7 @@ fn lower_use_stmt(
         ),
     };
 
-    let import_kind = match kind {
-        crate::ast::expression::ImportPathKind::Simple
-        | crate::ast::expression::ImportPathKind::Wildcard => ImportKind::All,
-        crate::ast::expression::ImportPathKind::Multi(items) => {
-            let import_items: Vec<ImportItem> = items
-                .iter()
-                .filter_map(|(name_expr, alias_expr)| {
-                    let name = extract_identifier(name_expr)?.to_string();
-                    let alias = alias_expr
-                        .as_ref()
-                        .and_then(|a| extract_identifier(a).map(|s| s.to_string()));
-                    Some(ImportItem { name, alias })
-                })
-                .collect();
-            ImportKind::Named(import_items)
-        }
-    };
-
+    let import_kind = build_import_kind(kind);
     let mut import = Import::new(source, module_path, import_kind);
     if let Some(alias_box) = alias_opt {
         if let Some(alias_name) = extract_identifier(alias_box) {

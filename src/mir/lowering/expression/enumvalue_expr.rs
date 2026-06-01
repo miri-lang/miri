@@ -21,69 +21,92 @@ pub(crate) fn lower_enumvalue_expr(
     expr: &Expression,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
+    // EnumValue constructs an enum variant via `::` syntax, e.g. `Option::Some(v)`.
     let ExpressionKind::EnumValue(enum_expr, args) = &expr.node else {
         unreachable!()
     };
-    // EnumValue is used for enum variant construction with :: syntax
-    // e.g., Option::Some(value)
-    // Extract the enum type name and variant from the expression
-    if let ExpressionKind::Member(type_expr, variant_expr) = &enum_expr.node {
-        if let ExpressionKind::Identifier(type_name, _) = &type_expr.node {
-            if let ExpressionKind::Identifier(variant_name, _) = &variant_expr.node {
-                if let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) =
-                    ctx.type_checker.global_type_definitions.get(type_name)
-                {
-                    if let Some((discriminant, _)) = enum_def
-                        .variants
-                        .iter()
-                        .enumerate()
-                        .find(|(_, (name, _))| name.as_str() == variant_name)
-                    {
-                        // Create discriminant constant
-                        let discr_op = Operand::Constant(Box::new(Constant {
-                            span: expr.span,
-                            ty: Type::new(TypeKind::Int, expr.span),
-                            literal: crate::ast::literal::Literal::Integer(
-                                crate::ast::literal::IntegerLiteral::I32(discriminant as i32),
-                            ),
-                        }));
+    let invalid = || {
+        LoweringError::unsupported_expression(
+            "Invalid EnumValue expression structure".to_string(),
+            expr.span,
+        )
+    };
+    let ExpressionKind::Member(type_expr, variant_expr) = &enum_expr.node else {
+        return Err(invalid());
+    };
+    let ExpressionKind::Identifier(type_name, _) = &type_expr.node else {
+        return Err(invalid());
+    };
+    let ExpressionKind::Identifier(variant_name, _) = &variant_expr.node else {
+        return Err(invalid());
+    };
+    let Some(discriminant) = enum_variant_discriminant(ctx, type_name, variant_name) else {
+        return Err(invalid());
+    };
 
-                        // Lower all arguments
-                        let mut ops = vec![discr_op];
-                        for arg in args {
-                            ops.push(lower_expression(ctx, arg, None)?);
-                        }
+    emit_enum_aggregate(ctx, type_name, variant_name, discriminant, args, expr, dest)
+}
 
-                        // DPS: use the caller-provided destination if given,
-                        // otherwise allocate a fresh temp.
-                        let target = if let Some(d) = dest {
-                            d
-                        } else {
-                            let ty = resolve_type(ctx.type_checker, expr);
-                            Place::new(ctx.push_temp(ty, expr.span))
-                        };
-
-                        ctx.push_statement(crate::mir::Statement {
-                            kind: MirStatementKind::Assign(
-                                target.clone(),
-                                Rvalue::Aggregate(
-                                    AggregateKind::Enum(
-                                        Rc::from(type_name.as_str()),
-                                        Rc::from(variant_name.as_str()),
-                                    ),
-                                    ops,
-                                ),
-                            ),
-                            span: expr.span,
-                        });
-                        return Ok(Operand::Copy(target));
-                    }
-                }
-            }
-        }
+/// Lower the variant args and emit the enum `Aggregate` into `dest` (or a temp).
+fn emit_enum_aggregate(
+    ctx: &mut LoweringContext,
+    type_name: &str,
+    variant_name: &str,
+    discriminant: usize,
+    args: &[Expression],
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let mut ops = vec![enum_discriminant_operand(discriminant, expr.span)];
+    for arg in args {
+        ops.push(lower_expression(ctx, arg, None)?);
     }
-    Err(LoweringError::unsupported_expression(
-        "Invalid EnumValue expression structure".to_string(),
-        expr.span,
-    ))
+
+    // DPS: use the caller-provided destination, else allocate a fresh temp.
+    let target = match dest {
+        Some(d) => d,
+        None => {
+            let ty = resolve_type(ctx.type_checker, expr);
+            Place::new(ctx.push_temp(ty, expr.span))
+        }
+    };
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            target.clone(),
+            Rvalue::Aggregate(
+                AggregateKind::Enum(Rc::from(type_name), Rc::from(variant_name)),
+                ops,
+            ),
+        ),
+        span: expr.span,
+    });
+    Ok(Operand::Copy(target))
+}
+
+/// Find the discriminant index of `variant_name` within enum `type_name`.
+fn enum_variant_discriminant(
+    ctx: &LoweringContext,
+    type_name: &str,
+    variant_name: &str,
+) -> Option<usize> {
+    let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) =
+        ctx.type_checker.global_type_definitions.get(type_name)
+    else {
+        return None;
+    };
+    enum_def
+        .variants
+        .iter()
+        .position(|(name, _)| name.as_str() == variant_name)
+}
+
+/// Build the i32 discriminant constant operand for an enum aggregate.
+fn enum_discriminant_operand(discriminant: usize, span: crate::error::syntax::Span) -> Operand {
+    Operand::Constant(Box::new(Constant {
+        span,
+        ty: Type::new(TypeKind::Int, span),
+        literal: crate::ast::literal::Literal::Integer(crate::ast::literal::IntegerLiteral::I32(
+            discriminant as i32,
+        )),
+    }))
 }
