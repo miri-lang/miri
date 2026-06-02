@@ -28,15 +28,24 @@ impl CompilerResult {
 
 /// Execute Miri binary with given command
 fn exec_miri(command: &str, input: &str) -> CompilerResult {
+    use std::path::PathBuf;
+
     let mut file = NamedTempFile::new().unwrap();
     write!(file, "{}", input).unwrap();
     let path = file.path().to_str().unwrap().to_string();
+
+    // Set MIRI_STDLIB_PATH so the compiler can find prelude and stdlib modules
+    // from single-file tests running in temporary directories.
+    let stdlib_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("stdlib");
 
     let mut cmd = miri_cmd();
     let output = cmd
         .env("RUST_BACKTRACE", "1")
         .env("MIRI_LEAK_CHECK", "1")
         .env("MIRI_VERIFY_MIR", "1")
+        .env("MIRI_STDLIB_PATH", stdlib_path.to_str().unwrap())
         // Prevent linker-override env vars from leaking in from concurrent tests.
         .env_remove("MIRI_CC")
         .env_remove("CC")

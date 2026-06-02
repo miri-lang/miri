@@ -14,9 +14,12 @@ println("selective")
 
 #[test]
 fn test_selective_import_rejects_non_imported() {
+    // With implicit imports, system.io functions are available globally.
+    // This test verifies that selective imports from other modules still
+    // properly reject non-selected symbols.
     let code = r#"
-use system.io.{println}
-print("should fail")
+use system.string.{String}
+let x = is_gpu_available()
 "#;
     assert_compiler_error(code, "Undefined variable");
 }

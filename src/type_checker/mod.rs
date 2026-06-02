@@ -76,6 +76,18 @@ pub struct TypeChecker {
     pub(crate) global_type_definitions: HashMap<String, TypeDefinition>,
     /// Set of modules that have been fully loaded.
     pub(crate) loaded_modules: std::collections::HashSet<String>,
+    /// For each fully-loaded module (keyed by module path), the type names its
+    /// load made user-visible — including transitive ones it pulled in. A repeat
+    /// `use` of an already-loaded module replays this set so a guarded re-import
+    /// exposes the same names a fresh load would have (e.g. `use
+    /// system.collections.list` re-exposing the transitive `Iterable`).
+    pub(crate) module_visibility: HashMap<String, Vec<String>>,
+    /// Module paths the implicit prelude preloaded for definitions only (the
+    /// collection-literal backings). Because the preload marks them loaded, a
+    /// user's later explicit `use` of one is a guarded re-import; replaying its
+    /// full visibility (transitive types included) is restricted to this set so
+    /// ordinary user re-imports keep their own-types-only visibility.
+    pub(crate) implicitly_preloaded_modules: std::collections::HashSet<String>,
     /// Stack of modules currently being loaded (used to detect circular imports).
     pub(crate) loading_stack: Vec<String>,
     /// Tracks (message, span) pairs to deduplicate errors reported multiple times
@@ -137,6 +149,8 @@ impl TypeChecker {
             global_scope,
             global_type_definitions,
             loaded_modules: std::collections::HashSet::new(),
+            module_visibility: HashMap::new(),
+            implicitly_preloaded_modules: std::collections::HashSet::new(),
             loading_stack: Vec::new(),
             reported_errors: std::collections::HashSet::new(),
             imported_statements: Vec::new(),

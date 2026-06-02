@@ -15,16 +15,18 @@ println("hello")
     );
 }
 
-/// Using a non-imported function from the same module should fail.
+/// A selective import must still hide the module's other symbols. `system.io`
+/// can no longer demonstrate this (the implicit prelude re-exports all of it),
+/// so use a non-prelude module: importing only `sqrt` must leave `abs` undefined.
 #[test]
 fn selective_import_rejects_non_imported_items() {
     type_checker_error_test(
         r#"
-use system.io.{println}
+use system.math.{sqrt}
 
-print("hello")
+let x = abs(-1.0)
 "#,
-        "Undefined variable: print",
+        "Undefined variable: abs",
     );
 }
 

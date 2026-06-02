@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use super::utils::{
-    type_checker_error_test, type_checker_error_with_help_test, type_checker_test,
-    type_checker_vars_type_test,
-};
+use super::utils::{type_checker_error_test, type_checker_test, type_checker_vars_type_test};
 use miri::ast::factory::{type_array, type_f32, type_int, type_string, type_tuple};
 
 #[test]
@@ -26,15 +23,15 @@ fn test_array_variable_definitions() {
 }
 
 #[test]
-fn test_array_missing_import_suggestion() {
-    type_checker_error_with_help_test(
+fn test_array_literal_resolves_without_import() {
+    // An array literal pulls in its backing definitions implicitly, so indexing
+    // and iteration type-check with no `use system.collections.array`.
+    type_checker_test(
         "
-        let items = []
-        for i in 0..10
-            items.push(i)
+        let items = [1, 2, 3]
+        for i in 0..3
+            let x = items[i]
         ",
-        "Type 'Array(void, 0)' does not have members",
-        "Consider importing 'system.collections.array' to use Array methods",
     );
 }
 
