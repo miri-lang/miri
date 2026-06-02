@@ -70,4 +70,5 @@ Lead GPU Engineer:       <headline, or N/A>
 - **Never declare DONE with `make test` red** or `make audit` reporting new violations in touched files.
 - **A green suite over a wrong design is NOT DONE** — honor the Compiler Architect's UNSOUND verdict.
 - Only the `lead-miri-engineer` edits source. Specialists and you are read-only.
+- **Never commit, stage, push, or otherwise touch git.** No `git add`, `git commit`, `git push`, `git stash`, branch creation, or rebases — not by you and not by any subagent. Leave all fixes in the working tree for the user to review and commit themselves. If a subagent is dispatched, instruct it explicitly not to run any git write commands.
 - Always `cargo test --test mod` — never `--test integration`.
