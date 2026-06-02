@@ -24,7 +24,11 @@ use super::utils::*;
 #[test]
 fn demo_vector_add() {
     let source = include_str!("../../../examples/gpu/vector_add.mi");
-    assert_runs(source);
+    if super::helpers::gpu_adapter_available() {
+        assert_runs_with_output(source, "6.0 8.0 10.0 12.0");
+    } else {
+        assert_runs(source);
+    }
 }
 
 /// saxpy: fused multiply-add with a literal scalar constant. Demonstrates
@@ -32,7 +36,11 @@ fn demo_vector_add() {
 #[test]
 fn demo_saxpy() {
     let source = include_str!("../../../examples/gpu/saxpy.mi");
-    assert_runs(source);
+    if super::helpers::gpu_adapter_available() {
+        assert_runs_with_output(source, "7.0 10.0 13.0 16.0");
+    } else {
+        assert_runs(source);
+    }
 }
 
 /// buffer_reuse: two sequential gpu for blocks on the same gpu var with no
@@ -41,5 +49,9 @@ fn demo_saxpy() {
 #[test]
 fn demo_buffer_reuse() {
     let source = include_str!("../../../examples/gpu/buffer_reuse.mi");
-    assert_runs(source);
+    if super::helpers::gpu_adapter_available() {
+        assert_runs_with_output(source, "15 1 2 1 1");
+    } else {
+        assert_runs(source);
+    }
 }
