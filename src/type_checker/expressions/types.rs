@@ -157,66 +157,75 @@ impl TypeChecker {
         span: Span,
         context: &mut Context,
     ) -> Option<Type> {
-        if let Some(variant_types) = enum_def.variants.get(variant_name) {
-            if values.len() != variant_types.len() {
-                self.report_error(
-                    format!(
-                        "Enum variant '{}.{}' expects {} arguments, got {}",
-                        enum_name,
-                        variant_name,
-                        variant_types.len(),
-                        values.len()
-                    ),
-                    span,
-                );
-                return Some(ast_factory::make_type(TypeKind::Error));
-            }
-
-            let generic_mapping = self.build_enum_generic_mapping(
-                enum_def,
-                variant_types,
-                values,
-                enum_name,
-                variant_name,
-                span,
-                context,
-            );
-
-            if enum_def.generics.is_some() && !generic_mapping.is_empty() {
-                self.validate_generic_enum_args(
-                    enum_name,
-                    variant_name,
-                    variant_types,
-                    values,
-                    &generic_mapping,
-                    context,
-                );
-            }
-
-            let generic_args = enum_def.generics.as_ref().map(|generics| {
-                generics
-                    .iter()
-                    .map(|g| {
-                        let ty = generic_mapping
-                            .get(&g.name)
-                            .cloned()
-                            .unwrap_or_else(|| ast_factory::make_type(TypeKind::Error));
-                        self.create_type_expression(ty)
-                    })
-                    .collect()
-            });
-
-            Some(ast_factory::make_type(TypeKind::Custom(
-                enum_name.to_string(),
-                generic_args,
-            )))
-        } else {
+        let Some(variant_types) = enum_def.variants.get(variant_name) else {
             self.report_error(
                 format!("Enum '{}' has no variant '{}'", enum_name, variant_name),
                 span,
             );
-            Some(ast_factory::make_type(TypeKind::Error))
+            return Some(ast_factory::make_type(TypeKind::Error));
+        };
+
+        if values.len() != variant_types.len() {
+            self.report_error(
+                format!(
+                    "Enum variant '{}.{}' expects {} arguments, got {}",
+                    enum_name,
+                    variant_name,
+                    variant_types.len(),
+                    values.len()
+                ),
+                span,
+            );
+            return Some(ast_factory::make_type(TypeKind::Error));
         }
+
+        let generic_mapping = self.build_enum_generic_mapping(
+            enum_def,
+            variant_types,
+            values,
+            enum_name,
+            variant_name,
+            span,
+            context,
+        );
+
+        if enum_def.generics.is_some() && !generic_mapping.is_empty() {
+            self.validate_generic_enum_args(
+                enum_name,
+                variant_name,
+                variant_types,
+                values,
+                &generic_mapping,
+                context,
+            );
+        }
+
+        let generic_args = self.build_enum_variant_generic_args(enum_def, &generic_mapping);
+
+        Some(ast_factory::make_type(TypeKind::Custom(
+            enum_name.to_string(),
+            generic_args,
+        )))
+    }
+
+    /// Builds the generic type arguments for an enum variant.
+    fn build_enum_variant_generic_args(
+        &mut self,
+        enum_def: &crate::type_checker::context::EnumDefinition,
+        generic_mapping: &HashMap<String, Type>,
+    ) -> Option<Vec<Expression>> {
+        enum_def.generics.as_ref().map(|generics| {
+            generics
+                .iter()
+                .map(|g| {
+                    let ty = generic_mapping
+                        .get(&g.name)
+                        .cloned()
+                        .unwrap_or_else(|| ast_factory::make_type(TypeKind::Error));
+                    self.create_type_expression(ty)
+                })
+                .collect()
+        })
     }
 
     #[allow(clippy::too_many_arguments)]

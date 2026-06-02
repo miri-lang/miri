@@ -126,7 +126,6 @@ pub fn lower_class_constructor(
     args: &[Expression],
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
-    // Resolve init method: own class first, then walk the inheritance chain.
     let init_class_name: Option<String> = {
         if def.methods.get("init").is_some_and(|m| !m.is_abstract) {
             Some(class_name.to_string())
@@ -139,8 +138,6 @@ pub fn lower_class_constructor(
         }
     };
 
-    // Collect ALL fields in inheritance order (base class fields first).
-    // This defines the canonical memory layout for the class instance.
     let all_fields: Vec<(String, crate::type_checker::context::FieldInfo)> = {
         collect_class_fields_all(def, &ctx.type_checker.global_type_definitions)
             .into_iter()
@@ -149,162 +146,175 @@ pub fn lower_class_constructor(
     };
 
     if let Some(init_class) = init_class_name {
-        // When init exists (own or inherited), constructor args are init params.
-        // Allocate the object with default field values for ALL fields, then call init.
-        let field_defaults: Vec<Operand> = all_fields
-            .iter()
-            .map(|(_, fi)| create_default_value(&fi.ty, span))
-            .collect();
-
-        let class_ty = Type::new(TypeKind::Custom(class_name.to_string(), None), *span);
-
-        let (destination, result_op) = if let Some(d) = dest {
-            (d.clone(), Operand::Copy(d))
-        } else {
-            let temp = ctx.push_temp(class_ty.clone(), *span);
-            let p = Place::new(temp);
-            (p.clone(), Operand::Copy(p))
-        };
-
-        ctx.push_statement(crate::mir::Statement {
-            kind: StatementKind::Assign(
-                destination.clone(),
-                Rvalue::Aggregate(AggregateKind::Class(class_ty), field_defaults),
-            ),
-            span: *span,
-        });
-
-        // Build init call args: self + constructor args + allocator
-        let mut call_args = vec![Operand::Copy(destination)];
-        let init_arg_watermark = ctx.body.local_decls.len();
-        for arg in args {
-            match &arg.node {
-                ExpressionKind::NamedArgument(_name, value) => {
-                    call_args.push(lower_expression(ctx, value, None)?);
-                }
-                _ => {
-                    call_args.push(lower_expression(ctx, arg, None)?);
-                }
-            }
-        }
-        if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
-            call_args.push(Operand::Copy(Place::new(alloc_local)));
-        }
-
-        let mut mangled_name = String::with_capacity(init_class.len() + 5);
-        mangled_name.push_str(&init_class);
-        mangled_name.push_str("_init");
-        let func_op = Operand::Constant(Box::new(Constant {
-            span: *span,
-            ty: Type::new(TypeKind::Identifier, *span),
-            literal: crate::ast::literal::Literal::Identifier(mangled_name),
-        }));
-
-        // init returns void; use a temp destination for the call
-        let void_ty = Type::new(TypeKind::Void, *span);
-        let void_dest = ctx.push_temp(void_ty, *span);
-        let target_bb = ctx.new_basic_block();
-        ctx.set_terminator(crate::mir::Terminator::new(
-            crate::mir::TerminatorKind::Call {
-                func: func_op,
-                args: call_args.clone(),
-                out_args: Vec::new(),
-                destination: Place::new(void_dest),
-                target: Some(target_bb),
-            },
-            *span,
-        ));
-        ctx.set_current_block(target_bb);
-
-        // Release managed temporaries created while lowering init call arguments.
-        // Skip call_args[0] which is `self` (the destination, not a fresh temp).
-        for arg_op in call_args.iter().skip(1) {
-            if let Operand::Copy(place) | Operand::Move(place) = arg_op {
-                ctx.emit_temp_drop(place.local, init_arg_watermark, *span);
-            }
-        }
-
-        Ok(result_op)
+        lower_class_with_init(ctx, span, class_name, init_class, &all_fields, args, dest)
     } else {
-        // No init method anywhere in the chain — map constructor args directly to ALL fields.
-        let arg_watermark = ctx.body.local_decls.len();
-        let mut positional_args = Vec::with_capacity(args.len());
-        let mut named_args: std::collections::HashMap<&str, Operand> =
-            std::collections::HashMap::with_capacity(args.len());
+        lower_class_without_init(ctx, span, class_name, &all_fields, args, dest)
+    }
+}
 
-        for arg in args {
-            match &arg.node {
-                ExpressionKind::NamedArgument(name, value) => {
-                    let op = lower_expression(ctx, value, None)?;
-                    named_args.insert(name, op);
-                }
-                _ => {
-                    let op = lower_expression(ctx, arg, None)?;
-                    positional_args.push(op);
-                }
+fn lower_class_with_init(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    class_name: &str,
+    init_class: String,
+    all_fields: &[(String, crate::type_checker::context::FieldInfo)],
+    args: &[Expression],
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let field_defaults: Vec<Operand> = all_fields
+        .iter()
+        .map(|(_, fi)| create_default_value(&fi.ty, span))
+        .collect();
+
+    let class_ty = Type::new(TypeKind::Custom(class_name.to_string(), None), *span);
+    let (destination, result_op) = if let Some(d) = dest {
+        (d.clone(), Operand::Copy(d))
+    } else {
+        let temp = ctx.push_temp(class_ty.clone(), *span);
+        let p = Place::new(temp);
+        (p.clone(), Operand::Copy(p))
+    };
+
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(
+            destination.clone(),
+            Rvalue::Aggregate(AggregateKind::Class(class_ty), field_defaults),
+        ),
+        span: *span,
+    });
+
+    let mut call_args = vec![Operand::Copy(destination)];
+    let init_arg_watermark = ctx.body.local_decls.len();
+    for arg in args {
+        match &arg.node {
+            ExpressionKind::NamedArgument(_name, value) => {
+                call_args.push(lower_expression(ctx, value, None)?);
+            }
+            _ => {
+                call_args.push(lower_expression(ctx, arg, None)?);
             }
         }
+    }
+    if let Some(&alloc_local) = ctx.variable_map.get("allocator") {
+        call_args.push(Operand::Copy(Place::new(alloc_local)));
+    }
 
-        let mut operands = Vec::with_capacity(all_fields.len());
-        let mut pos_iter = positional_args.into_iter();
+    let mut mangled_name = String::with_capacity(init_class.len() + 5);
+    mangled_name.push_str(&init_class);
+    mangled_name.push_str("_init");
+    let func_op = Operand::Constant(Box::new(Constant {
+        span: *span,
+        ty: Type::new(TypeKind::Identifier, *span),
+        literal: crate::ast::literal::Literal::Identifier(mangled_name),
+    }));
 
-        for (field_name, field_info) in &all_fields {
-            let op = if let Some(op) = pos_iter.next() {
-                op
-            } else if let Some(op) = named_args.remove(field_name.as_str()) {
-                op
-            } else {
-                create_default_value(&field_info.ty, span)
-            };
+    let void_ty = Type::new(TypeKind::Void, *span);
+    let void_dest = ctx.push_temp(void_ty, *span);
+    let target_bb = ctx.new_basic_block();
+    ctx.set_terminator(crate::mir::Terminator::new(
+        crate::mir::TerminatorKind::Call {
+            func: func_op,
+            args: call_args.clone(),
+            out_args: Vec::new(),
+            destination: Place::new(void_dest),
+            target: Some(target_bb),
+        },
+        *span,
+    ));
+    ctx.set_current_block(target_bb);
 
-            let op_ty = op.ty(&ctx.body).clone();
-            let op = if op_ty.kind != field_info.ty.kind {
-                let temp = ctx.push_temp(field_info.ty.clone(), *span);
-                ctx.push_statement(crate::mir::Statement {
-                    kind: StatementKind::Assign(
-                        Place::new(temp),
-                        coerce_rvalue(op, &op_ty, &field_info.ty),
-                    ),
-                    span: *span,
-                });
-                Operand::Copy(Place::new(temp))
-            } else {
-                op
-            };
-
-            operands.push(op);
+    for arg_op in call_args.iter().skip(1) {
+        if let Operand::Copy(place) | Operand::Move(place) = arg_op {
+            ctx.emit_temp_drop(place.local, init_arg_watermark, *span);
         }
+    }
 
-        let class_ty = Type::new(TypeKind::Custom(class_name.to_string(), None), *span);
+    Ok(result_op)
+}
 
-        let (destination, result_op) = if let Some(d) = dest {
-            (d.clone(), Operand::Copy(d))
+fn lower_class_without_init(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    class_name: &str,
+    all_fields: &[(String, crate::type_checker::context::FieldInfo)],
+    args: &[Expression],
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    let arg_watermark = ctx.body.local_decls.len();
+    let mut positional_args = Vec::with_capacity(args.len());
+    let mut named_args: std::collections::HashMap<&str, Operand> =
+        std::collections::HashMap::with_capacity(args.len());
+
+    for arg in args {
+        match &arg.node {
+            ExpressionKind::NamedArgument(name, value) => {
+                let op = lower_expression(ctx, value, None)?;
+                named_args.insert(name, op);
+            }
+            _ => {
+                let op = lower_expression(ctx, arg, None)?;
+                positional_args.push(op);
+            }
+        }
+    }
+
+    let mut operands = Vec::with_capacity(all_fields.len());
+    let mut pos_iter = positional_args.into_iter();
+
+    for (field_name, field_info) in all_fields {
+        let op = if let Some(op) = pos_iter.next() {
+            op
+        } else if let Some(op) = named_args.remove(field_name.as_str()) {
+            op
         } else {
-            let temp = ctx.push_temp(class_ty.clone(), *span);
-            let p = Place::new(temp);
-            (p.clone(), Operand::Copy(p))
+            create_default_value(&field_info.ty, span)
         };
 
-        let dest_local = destination.local;
-        ctx.push_statement(crate::mir::Statement {
-            kind: StatementKind::Assign(
-                destination,
-                Rvalue::Aggregate(AggregateKind::Class(class_ty), operands.clone()),
-            ),
-            span: *span,
-        });
+        let op_ty = op.ty(&ctx.body).clone();
+        let op = if op_ty.kind != field_info.ty.kind {
+            let temp = ctx.push_temp(field_info.ty.clone(), *span);
+            ctx.push_statement(crate::mir::Statement {
+                kind: StatementKind::Assign(
+                    Place::new(temp),
+                    coerce_rvalue(op, &op_ty, &field_info.ty),
+                ),
+                span: *span,
+            });
+            Operand::Copy(Place::new(temp))
+        } else {
+            op
+        };
 
-        // Release managed temporaries created while lowering the constructor arguments.
-        for op in &operands {
-            if let Operand::Copy(place) | Operand::Move(place) = op {
-                if place.local != dest_local {
-                    ctx.emit_temp_drop(place.local, arg_watermark, *span);
-                }
+        operands.push(op);
+    }
+
+    let class_ty = Type::new(TypeKind::Custom(class_name.to_string(), None), *span);
+    let (destination, result_op) = if let Some(d) = dest {
+        (d.clone(), Operand::Copy(d))
+    } else {
+        let temp = ctx.push_temp(class_ty.clone(), *span);
+        let p = Place::new(temp);
+        (p.clone(), Operand::Copy(p))
+    };
+
+    let dest_local = destination.local;
+    ctx.push_statement(crate::mir::Statement {
+        kind: StatementKind::Assign(
+            destination,
+            Rvalue::Aggregate(AggregateKind::Class(class_ty), operands.clone()),
+        ),
+        span: *span,
+    });
+
+    for op in &operands {
+        if let Operand::Copy(place) | Operand::Move(place) = op {
+            if place.local != dest_local {
+                ctx.emit_temp_drop(place.local, arg_watermark, *span);
             }
         }
-
-        Ok(result_op)
     }
+
+    Ok(result_op)
 }
 
 /// Creates a default value operand for a given type.
