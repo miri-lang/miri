@@ -7,7 +7,7 @@ This directory contains production-grade example programs showcasing Miri's GPU 
 
 ## Design notes
 
-- **Single source of truth**: These files are loaded by the test suite via `include_str!("../examples/gpu/<name>.mi")`, ensuring demo code and CI tests always verify identical bytes.
+- **Single source of truth**: These files are loaded by the test suite via `include_str!("../../../examples/gpu/<name>.mi")`, ensuring demo code and CI tests always verify identical bytes.
 - **Surface constraints**: Demos use only features shipped in M6.5 Phase 1: `gpu let`/`gpu var`/`gpu for` with literal Int range bounds, no kernel-body loops, straight-line code + `if`-guards only, and cross-residency readback via assignment.
 - **§17 compliance**: Each demo's source comments justify itself against the six-point GPU code review checklist in `notes/GPU_DRAFT.md` §17 (residency, cost-classes, buffer-reuse, mutability, bounds+indexing, portability).
 
