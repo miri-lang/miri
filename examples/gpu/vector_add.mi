@@ -1,0 +1,23 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// Vector addition: two float arrays captured on the device, element-wise sum
+// written to a mutable device buffer, readback to host, and print.
+//
+// §17 compliance:
+// - §17.1 residency: gpu let a, gpu let b, gpu var dst
+// - §17.2 cost-classes: 1 upload (a, b, dst), 1 launch (kernel), 1 readback
+// - §17.3 buffer-reuse: no adjacent kernels; single readback at end
+// - §17.4 mutability: dst is written by thread i only
+// - §17.5 bounds: loop bounds cover all elements; no extra guards needed
+// - §17.6 portability: no backend-specific code; pure arithmetic
+
+gpu let a = [1.0, 2.0, 3.0, 4.0]
+gpu let b = [5.0, 6.0, 7.0, 8.0]
+gpu var dst = [0.0, 0.0, 0.0, 0.0]
+
+gpu for i in 0..4
+    dst[i] = a[i] + b[i]
+
+let host = dst
+println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
