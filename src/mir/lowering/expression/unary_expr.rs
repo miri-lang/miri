@@ -11,6 +11,35 @@ use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::resolve_type;
 
+/// Lower `--x` as `-(-x)`. The type-checker's resolved type is used for the
+/// temps so projected operands (e.g. `self.field`) keep their scalar width.
+fn lower_double_negate(
+    ctx: &mut LoweringContext,
+    op_val: Operand,
+    operand: &Expression,
+    expr: &Expression,
+) -> Operand {
+    let first_neg_ty = resolve_type(ctx.type_checker, operand);
+    let first_neg = ctx.push_temp(first_neg_ty.clone(), expr.span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            Place::new(first_neg),
+            Rvalue::UnaryOp(UnOp::Neg, Box::new(op_val)),
+        ),
+        span: expr.span,
+    });
+
+    let second_neg = ctx.push_temp(first_neg_ty, expr.span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            Place::new(second_neg),
+            Rvalue::UnaryOp(UnOp::Neg, Box::new(Operand::Copy(Place::new(first_neg)))),
+        ),
+        span: expr.span,
+    });
+    Operand::Copy(Place::new(second_neg))
+}
+
 pub(crate) fn lower_unary_expr(
     ctx: &mut LoweringContext,
     expr: &Expression,
@@ -24,34 +53,9 @@ pub(crate) fn lower_unary_expr(
         crate::ast::operator::UnaryOp::Negate => UnOp::Neg,
         crate::ast::operator::UnaryOp::Not => UnOp::Not,
         crate::ast::operator::UnaryOp::Await => UnOp::Await,
-        // Decrement (--x) is treated as double negation: -(-x) = x
-        // We recursively lower the operand and then negate twice
+        // Decrement (--x) is treated as double negation: -(-x) = x.
         crate::ast::operator::UnaryOp::Decrement => {
-            // Use the type-checker's resolved type for the operand expression.
-            // Reading the base local's type would lose projections (e.g. `self.field`
-            // would yield the class type rather than the field's scalar type),
-            // causing Perceus to mis-type the result temp.
-            let first_neg_ty = resolve_type(ctx.type_checker, operand);
-            let first_neg = ctx.push_temp(first_neg_ty.clone(), expr.span);
-            ctx.push_statement(crate::mir::Statement {
-                kind: MirStatementKind::Assign(
-                    Place::new(first_neg),
-                    Rvalue::UnaryOp(UnOp::Neg, Box::new(op_val)),
-                ),
-                span: expr.span,
-            });
-
-            // Second negate
-            let second_neg = ctx.push_temp(first_neg_ty, expr.span);
-            ctx.push_statement(crate::mir::Statement {
-                kind: MirStatementKind::Assign(
-                    Place::new(second_neg),
-                    Rvalue::UnaryOp(UnOp::Neg, Box::new(Operand::Copy(Place::new(first_neg)))),
-                ),
-                span: expr.span,
-            });
-
-            return Ok(Operand::Copy(Place::new(second_neg)));
+            return Ok(lower_double_negate(ctx, op_val, operand, expr));
         }
         // Increment (++x) is a no-op for value (not implemented as mutation)
         crate::ast::operator::UnaryOp::Increment => {

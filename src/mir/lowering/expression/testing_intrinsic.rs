@@ -474,24 +474,8 @@ fn emit_equality(
     a: Operand,
     b: Operand,
 ) -> Result<Local, LoweringError> {
-    let bool_ty = Type::new(TypeKind::Boolean, span);
     match kind {
-        TypeKind::String => {
-            let result = ctx.push_temp(bool_ty, span);
-            let next = ctx.new_basic_block();
-            ctx.set_terminator(Terminator::new(
-                TerminatorKind::Call {
-                    func: identifier_constant(rt::STRING_EQUALS, span),
-                    args: vec![a, b],
-                    out_args: Vec::new(),
-                    destination: Place::new(result),
-                    target: Some(next),
-                },
-                span,
-            ));
-            ctx.set_current_block(next);
-            Ok(result)
-        }
+        TypeKind::String => Ok(emit_string_equality(ctx, span, a, b)),
         TypeKind::Boolean
         | TypeKind::Int
         | TypeKind::I8
@@ -506,17 +490,7 @@ fn emit_equality(
         | TypeKind::U128
         | TypeKind::Float
         | TypeKind::F32
-        | TypeKind::F64 => {
-            let result = ctx.push_temp(bool_ty, span);
-            ctx.push_statement(crate::mir::Statement {
-                kind: MirStatementKind::Assign(
-                    Place::new(result),
-                    Rvalue::BinaryOp(BinOp::Eq, Box::new(a), Box::new(b)),
-                ),
-                span,
-            });
-            Ok(result)
-        }
+        | TypeKind::F64 => Ok(emit_primitive_equality(ctx, span, a, b)),
         other => Err(LoweringError::unsupported_expression(
             format!(
                 "assert_eq/assert_ne does not yet support values of type '{}'",
@@ -525,6 +499,37 @@ fn emit_equality(
             span,
         )),
     }
+}
+
+/// Emit `miri_rt_string_equals(a, b)` and return the boolean result local.
+fn emit_string_equality(ctx: &mut LoweringContext, span: Span, a: Operand, b: Operand) -> Local {
+    let result = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
+    let next = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func: identifier_constant(rt::STRING_EQUALS, span),
+            args: vec![a, b],
+            out_args: Vec::new(),
+            destination: Place::new(result),
+            target: Some(next),
+        },
+        span,
+    ));
+    ctx.set_current_block(next);
+    result
+}
+
+/// Emit `a == b` as a `BinaryOp::Eq` and return the boolean result local.
+fn emit_primitive_equality(ctx: &mut LoweringContext, span: Span, a: Operand, b: Operand) -> Local {
+    let result = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            Place::new(result),
+            Rvalue::BinaryOp(BinOp::Eq, Box::new(a), Box::new(b)),
+        ),
+        span,
+    });
+    result
 }
 
 /// Convert a value to its display string, with string values wrapped in

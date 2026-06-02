@@ -25,30 +25,53 @@ pub(crate) fn lower_index_expr(
         unreachable!()
     };
 
-    // Check if this is a map index access — dispatch to runtime call
-    if let Some(obj_ty) = ctx.type_checker.get_type(obj.id) {
-        if obj_ty.kind.as_builtin_collection() == Some(BuiltinCollectionKind::Map) {
-            return lower_map_index_read(ctx, expr, obj, index_expr, dest);
-        }
+    // Map index access dispatches to a runtime call.
+    if is_map_index(ctx, obj) {
+        return lower_map_index_read(ctx, expr, obj, index_expr, dest);
     }
 
-    // Lower object to get a place. Record a watermark so we can release any
-    // managed temp created just for this subexpression (e.g. an array literal).
+    // Watermark so we can release any managed temp created for `obj` (e.g. an
+    // array literal). Only drop on Copy — Perceus IncRef's the source temp.
     let obj_watermark = ctx.body.local_decls.len();
     let obj_operand = lower_expression(ctx, obj, None)?;
-    // Only drop if we got a Copy (Perceus will have IncRef'd the source temp).
     let obj_op_is_copy = matches!(&obj_operand, Operand::Copy(_));
-
     let obj_place = ensure_place(ctx, obj_operand, obj.span);
 
-    // Lower index expression
     let index_operand = lower_expression(ctx, index_expr, None)?;
+    let index_local = ensure_index_local(ctx, index_expr, index_operand);
 
-    // Ensure index is in a local (PlaceElem::Index requires Local)
-    let index_local = match index_operand {
+    let mut indexed_place = obj_place.clone();
+    indexed_place.projection.push(PlaceElem::Index(index_local));
+
+    finish_index_read(
+        ctx,
+        indexed_place,
+        &obj_place,
+        obj_op_is_copy,
+        obj_watermark,
+        expr,
+        dest,
+    )
+}
+
+/// True when `obj` is a `Map` (indexing it lowers to a runtime call).
+fn is_map_index(ctx: &LoweringContext, obj: &Expression) -> bool {
+    ctx.type_checker
+        .get_type(obj.id)
+        .map(|t| t.kind.as_builtin_collection() == Some(BuiltinCollectionKind::Map))
+        .unwrap_or(false)
+}
+
+/// Materialize the index operand into a bare local (`PlaceElem::Index` requires
+/// a `Local`), spilling to a temp when it is projected or a constant.
+fn ensure_index_local(
+    ctx: &mut LoweringContext,
+    index_expr: &Expression,
+    index_operand: Operand,
+) -> crate::mir::Local {
+    match index_operand {
         Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => p.local,
         _ => {
-            // Store in temp - use inferred type from type checker or default to Int
             let ty = ctx
                 .type_checker
                 .get_type(index_expr.id)
@@ -61,26 +84,31 @@ pub(crate) fn lower_index_expr(
             });
             temp
         }
-    };
+    }
+}
 
-    // Create indexed place with projection
-    let mut indexed_place = obj_place.clone();
-    indexed_place.projection.push(PlaceElem::Index(index_local));
-
+/// Emit the indexed read into `dest` (or a temp), releasing the collection temp
+/// after the element is read when `obj` was a Copy-returned temporary.
+fn finish_index_read(
+    ctx: &mut LoweringContext,
+    indexed_place: Place,
+    obj_place: &Place,
+    obj_op_is_copy: bool,
+    obj_watermark: usize,
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
     if let Some(d) = dest {
         ctx.push_statement(crate::mir::Statement {
             kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(Operand::Copy(indexed_place))),
             span: expr.span,
         });
-        // Release the collection temp only if it was a Copy (Perceus IncRef'd it).
         if obj_op_is_copy {
             ctx.emit_temp_drop(obj_place.local, obj_watermark, expr.span);
         }
         Ok(Operand::Copy(d))
     } else if obj_op_is_copy {
-        // obj was a temporary (Copy-returned) that we IncRef'd. Materialize the
-        // element value into its own temp first, then release the collection temp.
-        // This ensures the collection is freed AFTER the element has been read.
+        // Materialize the element first so the collection is freed AFTER the read.
         let elem_ty = ctx
             .type_checker
             .get_type(expr.id)
@@ -97,7 +125,7 @@ pub(crate) fn lower_index_expr(
         ctx.emit_temp_drop(obj_place.local, obj_watermark, expr.span);
         Ok(Operand::Copy(Place::new(elem_temp)))
     } else {
-        // obj was accessed via Move — no IncRef, no drop needed. Return the projected place.
+        // obj accessed via Move — no IncRef, no drop. Return the projected place.
         Ok(Operand::Copy(indexed_place))
     }
 }
