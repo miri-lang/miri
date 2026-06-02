@@ -39,7 +39,6 @@
 //! - Implicit vs explicit returns
 //! - Return type compatibility
 
-use crate::ast::factory;
 use crate::ast::*;
 use crate::error::syntax::Span;
 use crate::lexer::Lexer;
@@ -86,6 +85,7 @@ impl TypeChecker {
 
         if self.loaded_modules.contains(&abs_path_str) {
             self.restore_visibility_for_module(&path_str, &import_kind);
+            self.replay_module_visibility(&path_str, &import_kind);
             return;
         }
 
@@ -94,6 +94,7 @@ impl TypeChecker {
                 self.report_circular_import_error(&path_str, &abs_path_str, path.span);
             }
             self.restore_visibility_for_module(&path_str, &import_kind);
+            self.replay_module_visibility(&path_str, &import_kind);
             return;
         }
 
@@ -109,6 +110,7 @@ impl TypeChecker {
                 }
             };
 
+        let visible_before_load: HashSet<String> = self.visible_type_names.clone();
         self.process_loaded_module(
             &path_str,
             &file_path,
@@ -120,9 +122,63 @@ impl TypeChecker {
             &import_kind,
             path.span,
         );
+        self.record_module_visibility(&path_str, &module_ast, &visible_before_load);
 
         self.loading_stack.retain(|m| m != &abs_path_str);
         self.loaded_modules.insert(abs_path_str);
+    }
+
+    /// Records the full set of type names a module's load exposes, so a later
+    /// guarded re-import can replay it (see [`replay_module_visibility`]).
+    ///
+    /// The set is the names this load *newly* made visible, unioned with the
+    /// recorded contributions of every module it directly imports. The union is
+    /// essential: a transitive dependency loaded earlier by a sibling import is
+    /// not "new" for this module, so a plain visibility diff would miss it (e.g.
+    /// `system.ops`'s `Iterable` is loaded before `system.collections.list` during
+    /// the implicit-prelude preload, yet must replay when the user imports `list`).
+    fn record_module_visibility(
+        &mut self,
+        path_str: &str,
+        module_ast: &Program,
+        visible_before_load: &HashSet<String>,
+    ) {
+        let mut names: HashSet<String> = self
+            .visible_type_names
+            .difference(visible_before_load)
+            .cloned()
+            .collect();
+        for stmt in &module_ast.body {
+            if let StatementKind::Use(dep_path, _) = &stmt.node {
+                if let Some((dep_path_str, _)) = Self::extract_import_path_with_kind(dep_path) {
+                    if let Some(dep_names) = self.module_visibility.get(&dep_path_str) {
+                        names.extend(dep_names.iter().cloned());
+                    }
+                }
+            }
+        }
+        self.module_visibility
+            .insert(path_str.to_string(), names.into_iter().collect());
+    }
+
+    /// Re-exposes the type names a module's original load made visible when that
+    /// module is imported again after being loaded already (e.g. preloaded by the
+    /// implicit prelude). Without this, a guarded re-import would restore only the
+    /// module's own types and silently drop the transitive ones a fresh load
+    /// surfaced. Skipped for selective imports, whose visibility is governed
+    /// name-by-name by [`restore_visibility_for_module`].
+    fn replay_module_visibility(&mut self, path_str: &str, import_kind: &ImportPathKind) {
+        if matches!(import_kind, ImportPathKind::Multi(_)) {
+            return;
+        }
+        if !self.implicitly_preloaded_modules.contains(path_str) {
+            return;
+        }
+        if let Some(names) = self.module_visibility.get(path_str) {
+            for name in names {
+                self.visible_type_names.insert(name.clone());
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -630,48 +686,79 @@ impl TypeChecker {
         }
     }
 
-    /// Loads the implicit prelude, making its definitions available in every program.
+    /// Loads the implicit prelude before the user's code is type-checked.
     ///
-    /// The prelude (`system/prelude.mi`) is loaded exactly once before the user's
-    /// code is type-checked. If the prelude file cannot be found (e.g. in isolated
-    /// test environments without stdlib), this is a silent no-op — programs still
-    /// compile but without implicit prelude imports.
+    /// There are two tiers, both sourced from stdlib so the compiler hardcodes no
+    /// stdlib type or module names:
     ///
-    /// The already-loaded guard in [`check_use`] ensures that an explicit
-    /// `use system.string` (or any other prelude module) in user code is a no-op.
+    /// - `system/prelude.mi` — re-exported by name: its modules' symbols (e.g.
+    ///   `println`, `String`) are available unqualified, mirroring Rust's
+    ///   `std::prelude`.
+    /// - `system/prelude_internal.mi` — loaded for definitions only: backing
+    ///   classes for collection literals (`Array`/`List`/`Map`/`Set`) are needed
+    ///   so a `[1, 2, 3]` literal can resolve methods and be gpu-resident, but the
+    ///   user has not named them, so writing `Array<…>(…)` must still require an
+    ///   explicit `use system.collections.array`. Their names are dropped from
+    ///   `visible_type_names` after loading; only the definitions remain.
+    ///
+    /// Loading happens at clean type-checker state (before any user expression),
+    /// which is required: the collection modules pull a trait web whose default
+    /// methods only resolve correctly outside an in-progress inference.
+    ///
+    /// Missing files are a silent no-op so isolated tests without stdlib still
+    /// compile. The already-loaded guard in [`check_use`] keeps an explicit
+    /// `use system.string` in user code a no-op.
     pub(crate) fn load_prelude(&mut self, context: &mut Context) {
+        self.load_prelude_file("prelude.mi", context);
+
+        let visible_before = self.visible_type_names.clone();
+        let modules_before: HashSet<String> = self.module_visibility.keys().cloned().collect();
+        self.load_prelude_file("prelude_internal.mi", context);
+        self.visible_type_names = visible_before;
+
+        // Every module loaded while processing the internal prelude — the listed
+        // collection modules AND their transitive deps (queryable, ops, …) — is
+        // marked preloaded, so a later explicit `use` of any of them replays its
+        // full visibility (an explicit `use system.collections.queryable` must
+        // still expose the transitive `Iterable` it would on a fresh load).
+        let newly_loaded: Vec<String> = self
+            .module_visibility
+            .keys()
+            .filter(|module| !modules_before.contains(*module))
+            .cloned()
+            .collect();
+        self.implicitly_preloaded_modules.extend(newly_loaded);
+    }
+
+    /// Parses one stdlib prelude file under `system/` and runs each of its
+    /// top-level `use` statements as a normal import. Loading them at top level
+    /// (rather than nested under a single synthetic import) keeps each module's
+    /// own symbols past the visibility filter.
+    fn load_prelude_file(&mut self, file_name: &str, context: &mut Context) {
         let stdlib_base = std::env::var("MIRI_STDLIB_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("src/stdlib"));
 
-        // Only attempt the load when the file physically exists; silently skip
-        // otherwise so that isolated unit tests without stdlib still work.
-        if !stdlib_base.join("system").join("prelude.mi").exists() {
+        let file_path = stdlib_base.join("system").join(file_name);
+        if !file_path.exists() {
             return;
         }
 
-        let path = factory::expr_with_span(
-            ExpressionKind::ImportPath(
-                vec![
-                    factory::identifier_with_span("system", Span::default()),
-                    factory::identifier_with_span("prelude", Span::default()),
-                ],
-                ImportPathKind::Simple,
-            ),
-            Span::default(),
-        );
-        // The prelude's purpose is to make its imports globally available.
-        // Snapshot visible types before, load the prelude, then ensure
-        // everything it made visible stays visible (the normal post-import
-        // filter would hide transitive types, but the prelude exists
-        // precisely to re-export them).
-        let pre = self.visible_type_names.clone();
-        self.check_use(&path, &None, context);
-        // Re-add any types that were visible during prelude loading but
-        // hidden by the post-import filter.
-        for name in self.global_type_definitions.keys() {
-            if !pre.contains(name) && !self.visible_type_names.contains(name) {
-                self.visible_type_names.insert(name.clone());
+        let source = match fs::read_to_string(&file_path) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+
+        let mut lexer = Lexer::new(&source);
+        let mut parser = Parser::new(&mut lexer, &source);
+        let ast = match parser.parse() {
+            Ok(a) => a,
+            Err(_) => return,
+        };
+
+        for stmt in &ast.body {
+            if let StatementKind::Use(path_expr, alias_expr) = &stmt.node {
+                self.check_use(path_expr, alias_expr, context);
             }
         }
     }

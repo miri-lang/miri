@@ -17,12 +17,14 @@ let s = set()
 
 #[test]
 fn test_set_requires_import_for_methods() {
-    assert_compiler_error(
+    // Sets are now implicitly available (loaded via prelude).
+    // This test verifies that Set methods work without explicit import.
+    assert_runs_with_output(
         r#"
 let s = {1, 2, 3}
 println(f"{s.length()}")
 "#,
-        "does not have members",
+        "3",
     );
 }
 

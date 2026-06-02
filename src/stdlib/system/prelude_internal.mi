@@ -1,0 +1,15 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+/// Internal prelude: loaded automatically before every Miri program, but for
+/// definitions only — none of these names enter user scope.
+///
+/// These modules back the collection literals (`[1, 2, 3]`, `[...]`, `{k: v}`,
+/// `{1, 2, 3}`). Loading them lets a literal resolve its methods and become
+/// gpu-resident without an explicit `use`. Because the user never named the
+/// type, its name stays private: referencing `Array`/`List`/`Map`/`Set` by name
+/// still requires an explicit `use system.collections.*`.
+use system.collections.array
+use system.collections.list
+use system.collections.map
+use system.collections.set
