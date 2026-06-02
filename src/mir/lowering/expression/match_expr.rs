@@ -16,6 +16,176 @@ use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::{bind_pattern, literal_to_u128, lower_to_local, resolve_type};
 
+/// Lower guard condition and emit branching to appropriate successor or fallback.
+fn emit_guard_and_branch(
+    ctx: &mut LoweringContext,
+    guard: &Expression,
+    arm_idx: usize,
+    branch_blocks: &[(
+        crate::mir::BasicBlock,
+        &crate::ast::pattern::MatchBranch,
+        Vec<u128>,
+    )],
+    this_discrs: &[u128],
+    join_bb: crate::mir::BasicBlock,
+) -> Result<(), LoweringError> {
+    let guard_op = lower_expression(ctx, guard, None)?;
+    let guard_true_bb = ctx.new_basic_block();
+
+    let this_is_catchall = this_discrs.is_empty();
+    let mut guard_fail_bb = join_bb;
+    for (next_bb, _, next_discrs) in branch_blocks.iter().skip(arm_idx + 1) {
+        let next_is_catchall = next_discrs.is_empty();
+        if next_is_catchall {
+            guard_fail_bb = *next_bb;
+            break;
+        }
+        if !this_is_catchall && this_discrs.iter().any(|d| next_discrs.contains(d)) {
+            guard_fail_bb = *next_bb;
+            break;
+        }
+    }
+
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::SwitchInt {
+            discr: guard_op,
+            targets: vec![(Discriminant::bool_true(), guard_true_bb)],
+            otherwise: guard_fail_bb,
+        },
+        guard.span,
+    ));
+
+    ctx.set_current_block(guard_true_bb);
+    Ok(())
+}
+
+/// Compute discriminant values and switch targets for a pattern in match arms.
+fn compute_pattern_discriminants(
+    ctx: &LoweringContext,
+    pattern: &Pattern,
+    is_option_subject: bool,
+    branch_bb: crate::mir::BasicBlock,
+    seen_discrs: &mut std::collections::HashSet<u128>,
+    switch_targets: &mut Vec<(Discriminant, crate::mir::BasicBlock)>,
+    otherwise_bb: &mut Option<crate::mir::BasicBlock>,
+) -> Vec<u128> {
+    let mut arm_discrs: Vec<u128> = Vec::new();
+
+    if is_option_subject {
+        match pattern {
+            Pattern::Literal(crate::ast::literal::Literal::None) => {
+                arm_discrs.push(0);
+                if seen_discrs.insert(0) {
+                    switch_targets.push((Discriminant::from(0u128), branch_bb));
+                }
+                return arm_discrs;
+            }
+            Pattern::Member(parent, member)
+                if matches!(
+                    &**parent,
+                    Pattern::Identifier(n) if n == crate::ast::types::OPTION_TYPE_NAME
+                ) && member == "None" =>
+            {
+                arm_discrs.push(0);
+                if seen_discrs.insert(0) {
+                    switch_targets.push((Discriminant::from(0u128), branch_bb));
+                }
+                return arm_discrs;
+            }
+            Pattern::EnumVariant(parent, _) => {
+                let is_some = match &**parent {
+                    Pattern::Identifier(name) => name == "Some",
+                    Pattern::Member(enum_pat, variant) => {
+                        matches!(
+                            &**enum_pat,
+                            Pattern::Identifier(n) if n == crate::ast::types::OPTION_TYPE_NAME
+                        ) && variant == "Some"
+                    }
+                    _ => false,
+                };
+                if is_some {
+                    if otherwise_bb.is_none() {
+                        *otherwise_bb = Some(branch_bb);
+                    }
+                    return arm_discrs;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    match pattern {
+        Pattern::Literal(lit) => {
+            if let Some(val) = literal_to_u128(lit) {
+                arm_discrs.push(val);
+                if seen_discrs.insert(val) {
+                    switch_targets.push((Discriminant::from(val), branch_bb));
+                }
+            }
+        }
+        Pattern::Default => {
+            *otherwise_bb = Some(branch_bb);
+        }
+        Pattern::Identifier(_) => {
+            if otherwise_bb.is_none() {
+                *otherwise_bb = Some(branch_bb);
+            }
+        }
+        Pattern::Member(type_pattern, variant_name) => {
+            if let Pattern::Identifier(type_name) = type_pattern.as_ref() {
+                if let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) =
+                    ctx.type_checker.global_type_definitions.get(type_name)
+                {
+                    if let Some((idx, _)) = enum_def
+                        .variants
+                        .iter()
+                        .enumerate()
+                        .find(|(_, (name, _))| *name == variant_name)
+                    {
+                        arm_discrs.push(idx as u128);
+                        if seen_discrs.insert(idx as u128) {
+                            switch_targets.push((Discriminant::from(idx as u128), branch_bb));
+                        }
+                    }
+                }
+            }
+        }
+        Pattern::EnumVariant(parent_pattern, _bindings) => {
+            if let Pattern::Member(type_pattern, variant_name) = parent_pattern.as_ref() {
+                if let Pattern::Identifier(type_name) = type_pattern.as_ref() {
+                    if let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) =
+                        ctx.type_checker.global_type_definitions.get(type_name)
+                    {
+                        if let Some((idx, _)) = enum_def
+                            .variants
+                            .iter()
+                            .enumerate()
+                            .find(|(_, (name, _))| *name == variant_name)
+                        {
+                            arm_discrs.push(idx as u128);
+                            if seen_discrs.insert(idx as u128) {
+                                switch_targets.push((Discriminant::from(idx as u128), branch_bb));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Pattern::Tuple(_) => {
+            if otherwise_bb.is_none() {
+                *otherwise_bb = Some(branch_bb);
+            }
+        }
+        Pattern::Regex(_) => {
+            if otherwise_bb.is_none() {
+                *otherwise_bb = Some(branch_bb);
+            }
+        }
+    }
+
+    arm_discrs
+}
+
 pub(crate) fn lower_match_expr(
     ctx: &mut LoweringContext,
     expr: &Expression,
@@ -75,129 +245,16 @@ pub(crate) fn lower_match_expr(
         let mut arm_discrs: Vec<u128> = Vec::new();
 
         for pattern in &branch.patterns {
-            // Handle Option-specific patterns
-            if is_option_subject {
-                match pattern {
-                    Pattern::Literal(crate::ast::literal::Literal::None) => {
-                        // None literal pattern → discriminant 0
-                        arm_discrs.push(0);
-                        if seen_discrs.insert(0) {
-                            switch_targets.push((Discriminant::from(0u128), branch_bb));
-                        }
-                        continue;
-                    }
-                    Pattern::Member(parent, member)
-                        if matches!(
-                            &**parent,
-                            Pattern::Identifier(n) if n == crate::ast::types::OPTION_TYPE_NAME
-                        ) && member == "None" =>
-                    {
-                        arm_discrs.push(0);
-                        if seen_discrs.insert(0) {
-                            switch_targets.push((Discriminant::from(0u128), branch_bb));
-                        }
-                        continue;
-                    }
-                    Pattern::EnumVariant(parent, _) => {
-                        let is_some = match &**parent {
-                            Pattern::Identifier(name) => name == "Some",
-                            Pattern::Member(enum_pat, variant) => {
-                                matches!(
-                                    &**enum_pat,
-                                    Pattern::Identifier(n) if n == crate::ast::types::OPTION_TYPE_NAME
-                                ) && variant == "Some"
-                            }
-                            _ => false,
-                        };
-                        if is_some {
-                            // Some(x) → otherwise (any non-zero value)
-                            if otherwise_bb.is_none() {
-                                otherwise_bb = Some(branch_bb);
-                            }
-                            continue;
-                        }
-                    }
-                    _ => {} // Fall through to generic handling
-                }
-            }
-
-            match pattern {
-                Pattern::Literal(lit) => {
-                    if let Some(val) = literal_to_u128(lit) {
-                        arm_discrs.push(val);
-                        // Only register the first arm per discriminant in switch_targets.
-                        if seen_discrs.insert(val) {
-                            switch_targets.push((Discriminant::from(val), branch_bb));
-                        }
-                    }
-                }
-                Pattern::Default => {
-                    otherwise_bb = Some(branch_bb);
-                }
-                Pattern::Identifier(_) => {
-                    // Identifier pattern matches everything - treat as otherwise
-                    if otherwise_bb.is_none() {
-                        otherwise_bb = Some(branch_bb);
-                    }
-                }
-                Pattern::Member(type_pattern, variant_name) => {
-                    // Member pattern for unit enum variants: Status.Ok
-                    if let Pattern::Identifier(type_name) = type_pattern.as_ref() {
-                        if let Some(crate::type_checker::context::TypeDefinition::Enum(enum_def)) =
-                            ctx.type_checker.global_type_definitions.get(type_name)
-                        {
-                            if let Some((idx, _)) = enum_def
-                                .variants
-                                .iter()
-                                .enumerate()
-                                .find(|(_, (name, _))| *name == variant_name)
-                            {
-                                arm_discrs.push(idx as u128);
-                                if seen_discrs.insert(idx as u128) {
-                                    switch_targets
-                                        .push((Discriminant::from(idx as u128), branch_bb));
-                                }
-                            }
-                        }
-                    }
-                }
-                Pattern::EnumVariant(parent_pattern, _bindings) => {
-                    // Enum variant with bindings: Color.Red(x, y)
-                    if let Pattern::Member(type_pattern, variant_name) = parent_pattern.as_ref() {
-                        if let Pattern::Identifier(type_name) = type_pattern.as_ref() {
-                            if let Some(crate::type_checker::context::TypeDefinition::Enum(
-                                enum_def,
-                            )) = ctx.type_checker.global_type_definitions.get(type_name)
-                            {
-                                if let Some((idx, _)) = enum_def
-                                    .variants
-                                    .iter()
-                                    .enumerate()
-                                    .find(|(_, (name, _))| *name == variant_name)
-                                {
-                                    arm_discrs.push(idx as u128);
-                                    if seen_discrs.insert(idx as u128) {
-                                        switch_targets
-                                            .push((Discriminant::from(idx as u128), branch_bb));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                Pattern::Tuple(_) => {
-                    // Tuple patterns match by structure - treat as otherwise for now
-                    if otherwise_bb.is_none() {
-                        otherwise_bb = Some(branch_bb);
-                    }
-                }
-                Pattern::Regex(_) => {
-                    // Regex patterns require runtime matching - treat as otherwise
-                    if otherwise_bb.is_none() {
-                        otherwise_bb = Some(branch_bb);
-                    }
-                }
-            }
+            let discrs = compute_pattern_discriminants(
+                ctx,
+                pattern,
+                is_option_subject,
+                branch_bb,
+                &mut seen_discrs,
+                &mut switch_targets,
+                &mut otherwise_bb,
+            );
+            arm_discrs.extend(discrs);
         }
 
         branch_blocks.push((branch_bb, branch, arm_discrs));
@@ -257,49 +314,8 @@ pub(crate) fn lower_match_expr(
             bind_pattern(ctx, pattern, subject_local, &subject.span)?;
         }
 
-        // Handle guard if present
         if let Some(guard) = &branch.guard {
-            let guard_op = lower_expression(ctx, guard, None)?;
-            let guard_true_bb = ctx.new_basic_block();
-
-            // Compute guard-failure target: the next arm that could match the same
-            // subject value.
-            //
-            // • If this arm has specific discriminants (literal / enum variant), scan
-            //   forward for the next arm that shares at least one of those discriminants,
-            //   OR the first catch-all arm (identifier / default / tuple / regex) —
-            //   whichever comes first in source order.
-            //
-            // • If this arm is itself a catch-all (empty discriminant set), scan forward
-            //   for the next catch-all arm.
-            //
-            // Falling off the end means no more arms can match → jump to join_bb.
-            let this_is_catchall = this_discrs.is_empty();
-            let mut guard_fail_bb = join_bb;
-            for (next_bb, _, next_discrs) in branch_blocks.iter().skip(arm_idx + 1) {
-                let next_is_catchall = next_discrs.is_empty();
-                if next_is_catchall {
-                    // A catch-all arm can always receive control.
-                    guard_fail_bb = *next_bb;
-                    break;
-                }
-                if !this_is_catchall && this_discrs.iter().any(|d| next_discrs.contains(d)) {
-                    // Next arm covers the same discriminant value.
-                    guard_fail_bb = *next_bb;
-                    break;
-                }
-            }
-
-            ctx.set_terminator(Terminator::new(
-                TerminatorKind::SwitchInt {
-                    discr: guard_op,
-                    targets: vec![(Discriminant::bool_true(), guard_true_bb)],
-                    otherwise: guard_fail_bb,
-                },
-                guard.span,
-            ));
-
-            ctx.set_current_block(guard_true_bb);
+            emit_guard_and_branch(ctx, guard, arm_idx, &branch_blocks, this_discrs, join_bb)?;
         }
 
         // Lower branch body and assign result to result_local

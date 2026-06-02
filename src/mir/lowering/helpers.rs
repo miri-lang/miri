@@ -326,6 +326,27 @@ pub fn coerce_rvalue(operand: Operand, op_ty: &Type, target_ty: &Type) -> Rvalue
 
 /// Helper to lower a statement and assign the result expression to a target local.
 /// This is used for match branches where each branch result should be assigned to result_local.
+/// Lower an expression statement and copy its value into `target_local`,
+/// dropping the source temp afterwards (the Copy/Use IncRef leaves both owning).
+fn assign_expr_to_local(
+    ctx: &mut LoweringContext,
+    expr: &Expression,
+    target_local: crate::mir::Local,
+) -> Result<(), LoweringError> {
+    let watermark = ctx.body.local_decls.len();
+    let operand = lower_expression(ctx, expr, None)?;
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(Place::new(target_local), Rvalue::Use(operand.clone())),
+        span: expr.span,
+    });
+    if let Operand::Copy(p) | Operand::Move(p) = &operand {
+        if p.local != target_local && p.projection.is_empty() {
+            ctx.emit_temp_drop(p.local, watermark, expr.span);
+        }
+    }
+    Ok(())
+}
+
 pub fn lower_to_local(
     ctx: &mut LoweringContext,
     stmt: &Statement,
@@ -338,26 +359,7 @@ pub fn lower_to_local(
     }
 
     match &stmt.node {
-        StatementKind::Expression(expr) => {
-            let watermark = ctx.body.local_decls.len();
-            let operand = lower_expression(ctx, expr, None)?;
-            ctx.push_statement(crate::mir::Statement {
-                kind: MirStatementKind::Assign(
-                    Place::new(target_local),
-                    Rvalue::Use(operand.clone()),
-                ),
-                span: expr.span,
-            });
-            // Drop the expression temp after copying it into target_local.
-            // The Assign/Use above triggers an IncRef (Copy semantics), so both
-            // target_local and the temp own a reference.  Without this drop, the
-            // temp leaks (e.g. f-string intermediates inside match arms).
-            if let Operand::Copy(p) | Operand::Move(p) = &operand {
-                if p.local != target_local && p.projection.is_empty() {
-                    ctx.emit_temp_drop(p.local, watermark, expr.span);
-                }
-            }
-        }
+        StatementKind::Expression(expr) => assign_expr_to_local(ctx, expr, target_local)?,
         StatementKind::Block(stmts) => {
             ctx.push_scope();
             let last_meaningful_idx = stmts
