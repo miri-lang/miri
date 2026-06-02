@@ -33,6 +33,31 @@ println(\"dispatched\")
     );
 }
 
+/// The M6.5 Definition-of-Done program: a full `gpu let` / `gpu var` /
+/// `gpu for` / cross-residency-readback pipeline that compiles, dispatches,
+/// and reads back with ZERO `use` lines. Proves the implicit-import rule end
+/// to end on the GPU path — `println`, the `[...]` literals, and the
+/// `Accelerable` gate all resolve without an explicit import.
+#[test]
+fn definition_of_done_program_compiles_with_zero_use_lines() {
+    let source = "
+gpu let a = [1.0, 2.0, 3.0, 4.0]
+gpu let b = [5.0, 6.0, 7.0, 8.0]
+gpu var dst = [0.0, 0.0, 0.0, 0.0]
+
+gpu for i in 0..4
+    dst[i] = a[i] + b[i]
+
+let host = dst
+println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
+";
+    if super::helpers::gpu_adapter_available() {
+        assert_runs_with_output(source, "6.0 8.0 10.0 12.0");
+    } else {
+        assert_runs(source);
+    }
+}
+
 /// End-to-end value-correctness check for `int` (host i64 / WGSL i64):
 /// element-wise add of two captured arrays into a writable destination.
 /// Reads back the host buffer and prints it to compare against the

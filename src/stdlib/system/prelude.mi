@@ -8,4 +8,11 @@
 ///
 /// If a user also writes `use system.string` explicitly, the already-loaded
 /// guard in the type checker makes it a no-op.
+///
+/// Modules here are re-exported by name. Collection-literal backings
+/// (`Array`/`List`/`Map`/`Set`) are NOT listed: their definitions are loaded
+/// from `prelude_internal.mi` (also at startup) with their names kept private,
+/// so a literal resolves while naming the type still requires an explicit
+/// `use system.collections.*`.
+use system.io
 use system.string
