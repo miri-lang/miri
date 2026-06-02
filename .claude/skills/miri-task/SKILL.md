@@ -67,4 +67,5 @@ Lead GPU Engineer:       <headline, or N/A>
 - **Never** skip `miri-audit` as the validation pass — that is where the full panel runs.
 - **Never** widen scope beyond what was confirmed — record discoveries as follow-ups instead.
 - Only the `lead-miri-engineer` edits source; architects, specialists, and you are read-only.
+- **Never commit, stage, push, or otherwise touch git.** No `git add`, `git commit`, `git push`, `git stash`, branch creation, or rebases — not by you and not by any subagent. Leave all changes in the working tree for the user to review and commit themselves. If a subagent is dispatched, instruct it explicitly not to run any git write commands.
 - Never hardcode stdlib type names in the compiler. Always `cargo test --test mod` — never `--test integration`.
