@@ -19,6 +19,7 @@ pub use crate::integration::utils;
 
 pub mod accelerable;
 pub mod cross_residency;
+pub mod demos;
 pub mod gpu_for_capture_residency;
 pub mod helpers;
 pub mod launch;

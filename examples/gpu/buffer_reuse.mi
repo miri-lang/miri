@@ -1,0 +1,29 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// Buffer reuse: two sequential gpu for blocks on the same gpu var with no
+// readback between them. Demonstrates persistent-buffer cost model:
+// one upload to device, two kernel launches, one readback. The mutable
+// device buffer is allocated once and reused across the two kernels.
+//
+// §17 compliance:
+// - §17.1 residency: gpu var data only
+// - §17.2 cost-classes: 1 upload at first capture, 2 launches, 1 readback
+// - §17.3 buffer-reuse: two adjacent kernels; same data buffer; no readback between
+// - §17.4 mutability: data is written by thread i only in each kernel
+// - §17.5 bounds: loop covers all; no guards needed
+// - §17.6 portability: pure arithmetic
+
+use system.gpu
+use system.io
+
+gpu var data = [0, 0, 0, 0, 0, 0, 0, 0]
+
+gpu for i in 0..8
+    data[i] = i
+
+gpu for i in 0..8
+    data[i] = data[i] + 8
+
+let host = data
+println(f'{host[7]} {gpu_uploads()} {gpu_launches()} {gpu_readbacks()} {gpu_fences()}')
