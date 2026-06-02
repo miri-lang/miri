@@ -4,14 +4,6 @@
 // SAXPY: single-precision A*X plus Y. Fused multiply-add with a literal
 // scalar constant. Each element is computed as a[i] * 2.0 + b[i], where 2.0
 // is inlined directly into the kernel body.
-//
-// §17 compliance:
-// - §17.1 residency: gpu let a, gpu let b, gpu var dst
-// - §17.2 cost-classes: 1 upload (a, b, dst), 1 launch (kernel), 1 readback
-// - §17.3 buffer-reuse: single kernel; no reuse needed
-// - §17.4 mutability: dst is written by thread i only
-// - §17.5 bounds: loop covers all; literal constant is always safe
-// - §17.6 portability: pure arithmetic; no backend code
 
 gpu let a = [1.0, 2.0, 3.0, 4.0]
 gpu let b = [5.0, 6.0, 7.0, 8.0]
