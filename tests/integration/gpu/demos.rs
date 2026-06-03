@@ -16,7 +16,7 @@
 // - map_normalize: math-intrinsic result temps typed f64 while f32 buffers → width
 //   mismatch → zeros on Metal (blocker: F23).
 
-use super::utils::*;
+use super::device::assert_gpu_runs_with_output;
 
 /// vector_add: two float arrays captured as gpu-resident, element-wise sum
 /// into a mutable device buffer, readback and print. Exercises float f-string
@@ -24,11 +24,7 @@ use super::utils::*;
 #[test]
 fn demo_vector_add() {
     let source = include_str!("../../../examples/gpu/vector_add.mi");
-    if super::helpers::gpu_adapter_available() {
-        assert_runs_with_output(source, "6.0 8.0 10.0 12.0");
-    } else {
-        assert_runs(source);
-    }
+    assert_gpu_runs_with_output(source, "6.0 8.0 10.0 12.0");
 }
 
 /// saxpy: fused multiply-add with a literal scalar constant. Demonstrates
@@ -36,11 +32,7 @@ fn demo_vector_add() {
 #[test]
 fn demo_saxpy() {
     let source = include_str!("../../../examples/gpu/saxpy.mi");
-    if super::helpers::gpu_adapter_available() {
-        assert_runs_with_output(source, "7.0 10.0 13.0 16.0");
-    } else {
-        assert_runs(source);
-    }
+    assert_gpu_runs_with_output(source, "7.0 10.0 13.0 16.0");
 }
 
 /// buffer_reuse: two sequential gpu for blocks on the same gpu var with no
@@ -49,9 +41,5 @@ fn demo_saxpy() {
 #[test]
 fn demo_buffer_reuse() {
     let source = include_str!("../../../examples/gpu/buffer_reuse.mi");
-    if super::helpers::gpu_adapter_available() {
-        assert_runs_with_output(source, "15 1 2 1 1");
-    } else {
-        assert_runs(source);
-    }
+    assert_gpu_runs_with_output(source, "15 1 2 1 1");
 }
