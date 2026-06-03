@@ -102,7 +102,7 @@ impl Emitter {
         )
         .map_err(emit_err)?;
 
-        let mut ctx = BodyEmitter::new(body, bindings, workgroup_size, &mut self.output);
+        let mut ctx = BodyEmitter::new(body, bindings, workgroup_size, &mut self.output)?;
         ctx.emit_local_declarations()?;
         ctx.emit_blocks()?;
 
@@ -262,12 +262,39 @@ fn sanitize_identifier(name: &str) -> String {
     s
 }
 
+/// Info about a loop header: exit block, body entry, and continue target.
+#[derive(Debug, Clone)]
+struct LoopInfo {
+    /// The block jumped to when the loop condition is false (loop exit).
+    exit: crate::mir::BasicBlock,
+    /// The block where the loop body begins (after the header's SwitchInt).
+    body_entry: crate::mir::BasicBlock,
+    /// For for-loops: the continuing block (single latch != body_entry).
+    /// For while-loops: None (header is the continue target).
+    continuing: Option<crate::mir::BasicBlock>,
+    /// The block to jump to on `continue` (either continuing block or header).
+    continue_target: crate::mir::BasicBlock,
+}
+
+/// A frame on the loop stack, tracking where break/continue should jump.
+#[derive(Debug, Clone)]
+struct LoopFrame {
+    exit: crate::mir::BasicBlock,
+    continue_target: crate::mir::BasicBlock,
+}
+
 struct BodyEmitter<'a> {
     body: &'a Body,
     bindings: &'a [BufferBinding],
     workgroup_size: [u32; 3],
     output: &'a mut String,
     indent: usize,
+    /// Blocks that are loop headers (targets of back-edges).
+    loop_headers: std::collections::HashSet<crate::mir::BasicBlock>,
+    /// Per-header loop info (exit, body_entry, continuing, continue_target).
+    loop_info: std::collections::HashMap<crate::mir::BasicBlock, LoopInfo>,
+    /// Stack of active loop frames for break/continue resolution.
+    loop_stack: Vec<LoopFrame>,
 }
 
 impl<'a> BodyEmitter<'a> {
@@ -276,14 +303,196 @@ impl<'a> BodyEmitter<'a> {
         bindings: &'a [BufferBinding],
         workgroup_size: [u32; 3],
         output: &'a mut String,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, CodegenError> {
+        let (loop_headers, loop_info, invalid_headers) = Self::detect_loops_and_build_info(body);
+
+        // Reject if there are back-edges to non-SwitchInt blocks (invalid loop structure).
+        if !invalid_headers.is_empty() {
+            if let Some(bb) = invalid_headers.iter().min_by_key(|b| b.0) {
+                return Err(CodegenError::Internal(format!(
+                    "WGSL backend: back-edge to block bb{} without loop condition (SwitchInt); \
+                     this is invalid loop structure and cannot be compiled to WGSL",
+                    bb.0
+                )));
+            }
+        }
+
+        Ok(Self {
             body,
             bindings,
             workgroup_size,
             output,
             indent: 1,
+            loop_headers,
+            loop_info,
+            loop_stack: Vec::new(),
+        })
+    }
+
+    /// Detect loop headers and build per-header LoopInfo.
+    /// Returns (valid_headers, loop_info, invalid_headers).
+    /// Invalid headers are back-edges to blocks that are not proper SwitchInt loop headers.
+    fn detect_loops_and_build_info(
+        body: &Body,
+    ) -> (
+        std::collections::HashSet<crate::mir::BasicBlock>,
+        std::collections::HashMap<crate::mir::BasicBlock, LoopInfo>,
+        std::collections::HashSet<crate::mir::BasicBlock>,
+    ) {
+        let mut headers = std::collections::HashSet::new();
+        let mut latches: std::collections::HashMap<
+            crate::mir::BasicBlock,
+            std::collections::HashSet<crate::mir::BasicBlock>,
+        > = std::collections::HashMap::new();
+        let mut visited = std::collections::HashSet::new();
+        let mut on_stack = std::collections::HashSet::new();
+
+        Self::dfs_find_back_edges(
+            crate::mir::BasicBlock(0),
+            body,
+            &mut visited,
+            &mut on_stack,
+            &mut headers,
+            &mut latches,
+        );
+
+        // Build LoopInfo for each header.
+        let mut loop_info = std::collections::HashMap::new();
+        for header in &headers {
+            if let Some(header_block) = body.basic_blocks.get(header.0) {
+                if let Some(term) = &header_block.terminator {
+                    if let TerminatorKind::SwitchInt {
+                        targets, otherwise, ..
+                    } = &term.kind
+                    {
+                        if targets.len() == 1
+                            && targets[0].0 == crate::mir::Discriminant::bool_true()
+                        {
+                            let body_entry = targets[0].1;
+                            let exit = *otherwise;
+                            let latch_set = latches.get(header).cloned().unwrap_or_default();
+
+                            // Determine if this is a for-loop or while-loop.
+                            let (continuing, continue_target) = if latch_set.len() == 1 {
+                                if let Some(&latch) = latch_set.iter().next() {
+                                    if latch == body_entry {
+                                        // Single latch == body_entry => while-loop style.
+                                        (None, *header)
+                                    } else {
+                                        // Single latch != body_entry => for-loop style.
+                                        (Some(latch), latch)
+                                    }
+                                } else {
+                                    // len() == 1 but iter().next() is None: impossible but fallback.
+                                    (None, *header)
+                                }
+                            } else {
+                                // Multiple or zero latches => while-loop style.
+                                (None, *header)
+                            };
+
+                            loop_info.insert(
+                                *header,
+                                LoopInfo {
+                                    exit,
+                                    body_entry,
+                                    continuing,
+                                    continue_target,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
         }
+
+        // Identify invalid headers: back-edges to blocks that are not proper SwitchInt loop headers.
+        let mut invalid_headers = std::collections::HashSet::new();
+        for header in &headers {
+            if !loop_info.contains_key(header) {
+                invalid_headers.insert(*header);
+            }
+        }
+
+        // Remove invalid headers so they are not treated as loops.
+        headers.retain(|h| loop_info.contains_key(h));
+
+        (headers, loop_info, invalid_headers)
+    }
+
+    fn dfs_find_back_edges(
+        bb: crate::mir::BasicBlock,
+        body: &Body,
+        visited: &mut std::collections::HashSet<crate::mir::BasicBlock>,
+        on_stack: &mut std::collections::HashSet<crate::mir::BasicBlock>,
+        headers: &mut std::collections::HashSet<crate::mir::BasicBlock>,
+        latches: &mut std::collections::HashMap<
+            crate::mir::BasicBlock,
+            std::collections::HashSet<crate::mir::BasicBlock>,
+        >,
+    ) {
+        if visited.contains(&bb) {
+            return;
+        }
+        visited.insert(bb);
+        on_stack.insert(bb);
+
+        if let Some(block) = body.basic_blocks.get(bb.0) {
+            if let Some(term) = &block.terminator {
+                match &term.kind {
+                    crate::mir::TerminatorKind::Goto { target } => {
+                        if on_stack.contains(target) {
+                            headers.insert(*target);
+                            latches.entry(*target).or_default().insert(bb);
+                        } else if !visited.contains(target) {
+                            Self::dfs_find_back_edges(
+                                *target, body, visited, on_stack, headers, latches,
+                            );
+                        }
+                    }
+                    crate::mir::TerminatorKind::SwitchInt {
+                        targets, otherwise, ..
+                    } => {
+                        for (_, t) in targets {
+                            if on_stack.contains(t) {
+                                headers.insert(*t);
+                                latches.entry(*t).or_default().insert(bb);
+                            } else if !visited.contains(t) {
+                                Self::dfs_find_back_edges(
+                                    *t, body, visited, on_stack, headers, latches,
+                                );
+                            }
+                        }
+                        if on_stack.contains(otherwise) {
+                            headers.insert(*otherwise);
+                            latches.entry(*otherwise).or_default().insert(bb);
+                        } else if !visited.contains(otherwise) {
+                            Self::dfs_find_back_edges(
+                                *otherwise, body, visited, on_stack, headers, latches,
+                            );
+                        }
+                    }
+                    crate::mir::TerminatorKind::Call { target, .. }
+                    | crate::mir::TerminatorKind::VirtualCall { target, .. }
+                    | crate::mir::TerminatorKind::GpuLaunch { target, .. } => {
+                        if let Some(t) = target {
+                            if on_stack.contains(t) {
+                                headers.insert(*t);
+                                latches.entry(*t).or_default().insert(bb);
+                            } else if !visited.contains(t) {
+                                Self::dfs_find_back_edges(
+                                    *t, body, visited, on_stack, headers, latches,
+                                );
+                            }
+                        }
+                    }
+                    crate::mir::TerminatorKind::Return
+                    | crate::mir::TerminatorKind::Unreachable => {}
+                }
+            }
+        }
+
+        on_stack.remove(&bb);
     }
 
     fn write_indent(&mut self) -> Result<(), CodegenError> {
@@ -329,10 +538,9 @@ impl<'a> BodyEmitter<'a> {
     }
 
     /// Emits MIR basic blocks starting at `start`, following `Goto` chains
-    /// linearly and structurizing a `SwitchInt(cond, [(true, then)], otherwise=merge)`
-    /// terminator into a WGSL `if` statement. Stops when reaching `stop` (if any)
-    /// or a `Return`. Rejects back-edges (loops) since WGSL has no `goto` and
-    /// structured loop emission is a follow-up.
+    /// linearly, structurizing a `SwitchInt(cond, [(true, then)], otherwise=merge)`
+    /// terminator into a WGSL `if` statement, and structurizing loops.
+    /// Stops when reaching `stop` (if any) or a `Return`.
     fn emit_from(
         &mut self,
         start: crate::mir::BasicBlock,
@@ -344,13 +552,57 @@ impl<'a> BodyEmitter<'a> {
             if Some(cur) == stop {
                 return Ok(());
             }
-            if !visited.insert(cur) {
-                return Err(CodegenError::Internal(format!(
-                    "WGSL backend: back-edge to bb{} not yet supported (loops are a follow-up)",
-                    cur.0
-                )));
+
+            // Check if we've visited this block before (back-edge or convergence).
+            if visited.contains(&cur) {
+                // If we've reached our stop block (e.g., if-merge or loop header), return.
+                if Some(cur) == stop {
+                    return Ok(());
+                }
+                // Back-edge: must be a loop header.
+                if self.loop_headers.contains(&cur) {
+                    self.emit_loop(cur, visited)?;
+                    // After the loop, set cur to the exit and continue.
+                    let exit = self
+                        .loop_info
+                        .get(&cur)
+                        .ok_or_else(|| {
+                            CodegenError::Internal(format!(
+                                "WGSL backend: loop header bb{} missing LoopInfo",
+                                cur.0
+                            ))
+                        })?
+                        .exit;
+                    cur = exit;
+                    continue;
+                } else {
+                    // Visited non-header block: this is a convergence point (diamond).
+                    // Return so the caller can continue from here.
+                    return Ok(());
+                }
             }
-            let block = &self.body.basic_blocks[cur.0];
+            visited.insert(cur);
+            // If this is a loop header encountered via forward edge, emit it as a loop.
+            if self.loop_headers.contains(&cur) {
+                self.emit_loop(cur, visited)?;
+                // After the loop, set cur to the exit and continue.
+                let exit = self
+                    .loop_info
+                    .get(&cur)
+                    .ok_or_else(|| {
+                        CodegenError::Internal(format!(
+                            "WGSL backend: loop header bb{} missing LoopInfo",
+                            cur.0
+                        ))
+                    })?
+                    .exit;
+                cur = exit;
+                continue;
+            }
+
+            let block = self.body.basic_blocks.get(cur.0).ok_or_else(|| {
+                CodegenError::Internal(format!("WGSL backend: block bb{} out of bounds", cur.0))
+            })?;
             for stmt in &block.statements {
                 self.emit_statement(&stmt.kind)?;
             }
@@ -359,6 +611,11 @@ impl<'a> BodyEmitter<'a> {
             })?;
             match &term.kind {
                 TerminatorKind::Return => {
+                    // Early return inside a loop/if requires explicit `return;`.
+                    if !self.loop_stack.is_empty() || self.indent > 1 {
+                        self.write_indent()?;
+                        writeln!(self.output, "return;").map_err(emit_err)?;
+                    }
                     return Ok(());
                 }
                 TerminatorKind::Unreachable => {
@@ -367,6 +624,26 @@ impl<'a> BodyEmitter<'a> {
                     return Ok(());
                 }
                 TerminatorKind::Goto { target } => {
+                    // Resolve the Goto against the loop stack.
+                    if let Some(frame) = self.loop_stack.last() {
+                        if *target == frame.exit {
+                            // Jump to loop exit => emit break.
+                            self.write_indent()?;
+                            writeln!(self.output, "break;").map_err(emit_err)?;
+                            return Ok(());
+                        }
+                        if Some(*target) == stop {
+                            // Jump to stop block (e.g., if-merge, loop continue target).
+                            return Ok(());
+                        }
+                        if *target == frame.continue_target {
+                            // Jump to continue target => emit continue.
+                            self.write_indent()?;
+                            writeln!(self.output, "continue;").map_err(emit_err)?;
+                            return Ok(());
+                        }
+                    }
+                    // Otherwise, continue at that target.
                     cur = *target;
                 }
                 TerminatorKind::SwitchInt {
@@ -385,7 +662,47 @@ impl<'a> BodyEmitter<'a> {
                         self.indent -= 1;
                         self.write_indent()?;
                         writeln!(self.output, "}}").map_err(emit_err)?;
-                        cur = merge_bb;
+
+                        // After the if, try to continue from the merge block.
+                        // If it's already been visited, follow its Goto to determine the next block.
+                        if visited.contains(&merge_bb) {
+                            // The merge block has been visited during the if-body processing.
+                            // Follow its Goto to find the next unvisited block.
+                            if let Some(merge_block) = self.body.basic_blocks.get(merge_bb.0) {
+                                if let Some(term) = &merge_block.terminator {
+                                    match &term.kind {
+                                        TerminatorKind::Goto { target } => {
+                                            cur = *target;
+                                        }
+                                        TerminatorKind::Return | TerminatorKind::Unreachable => {
+                                            // Legitimately done — merge block ends here.
+                                            return Ok(());
+                                        }
+                                        TerminatorKind::SwitchInt { .. }
+                                        | TerminatorKind::Call { .. }
+                                        | TerminatorKind::VirtualCall { .. }
+                                        | TerminatorKind::GpuLaunch { .. } => {
+                                            return Err(CodegenError::Internal(format!(
+                                                "WGSL backend: visited merge block bb{} has unsupported terminator for continuation",
+                                                merge_bb.0
+                                            )));
+                                        }
+                                    }
+                                } else {
+                                    return Err(CodegenError::Internal(format!(
+                                        "WGSL backend: merge block bb{} has no terminator",
+                                        merge_bb.0
+                                    )));
+                                }
+                            } else {
+                                return Err(CodegenError::Internal(format!(
+                                    "WGSL backend: merge block bb{} out of bounds",
+                                    merge_bb.0
+                                )));
+                            }
+                        } else {
+                            cur = merge_bb;
+                        }
                     } else {
                         return Err(CodegenError::Internal(format!(
                             "WGSL backend: SwitchInt shape not supported (targets={:?})",
@@ -405,6 +722,94 @@ impl<'a> BodyEmitter<'a> {
         }
     }
 
+    /// Emit a loop starting at `header`.
+    fn emit_loop(
+        &mut self,
+        header: crate::mir::BasicBlock,
+        visited: &mut std::collections::HashSet<crate::mir::BasicBlock>,
+    ) -> Result<(), CodegenError> {
+        let loop_info = self
+            .loop_info
+            .get(&header)
+            .ok_or_else(|| {
+                CodegenError::Internal(format!(
+                    "WGSL backend: loop header bb{} missing LoopInfo",
+                    header.0
+                ))
+            })?
+            .clone();
+
+        self.write_indent()?;
+        writeln!(self.output, "loop {{").map_err(emit_err)?;
+        self.indent += 1;
+
+        // Push the loop frame.
+        self.loop_stack.push(LoopFrame {
+            exit: loop_info.exit,
+            continue_target: loop_info.continue_target,
+        });
+
+        // Emit the condition check at the header.
+        let header_block = self.body.basic_blocks.get(header.0).ok_or_else(|| {
+            CodegenError::Internal(format!("WGSL backend: block bb{} out of bounds", header.0))
+        })?;
+        if let Some(term) = &header_block.terminator {
+            if let TerminatorKind::SwitchInt {
+                discr,
+                targets,
+                otherwise: _,
+            } = &term.kind
+            {
+                if targets.len() == 1 && targets[0].0 == crate::mir::Discriminant::bool_true() {
+                    let cond_str = self.render_operand(discr)?;
+                    self.write_indent()?;
+                    writeln!(self.output, "if (!(bool({}))) {{ break; }}", cond_str)
+                        .map_err(emit_err)?;
+                } else {
+                    return Err(CodegenError::Internal(format!(
+                        "WGSL backend: loop header bb{} has unexpected terminator shape",
+                        header.0
+                    )));
+                }
+            } else {
+                return Err(CodegenError::Internal(format!(
+                    "WGSL backend: loop header bb{} is not a SwitchInt",
+                    header.0
+                )));
+            }
+        }
+
+        // Emit the body, stopping at the header (back-edge).
+        self.emit_from(loop_info.body_entry, Some(header), visited)?;
+
+        // If this is a for-loop, emit the continuing block.
+        if let Some(continuing) = loop_info.continuing {
+            self.write_indent()?;
+            writeln!(self.output, "continuing {{").map_err(emit_err)?;
+            self.indent += 1;
+
+            // Emit statements only from the continuing block, not the terminator (which is Goto header).
+            if let Some(cont_block) = self.body.basic_blocks.get(continuing.0) {
+                for stmt in &cont_block.statements {
+                    self.emit_statement(&stmt.kind)?;
+                }
+            }
+
+            self.indent -= 1;
+            self.write_indent()?;
+            writeln!(self.output, "}}").map_err(emit_err)?;
+        }
+
+        self.loop_stack.pop();
+
+        self.indent -= 1;
+        self.write_indent()?;
+        writeln!(self.output, "}}").map_err(emit_err)?;
+
+        Ok(())
+    }
+
+    /// Emit a statement.
     fn emit_statement(&mut self, kind: &StatementKind) -> Result<(), CodegenError> {
         match kind {
             StatementKind::Assign(place, rvalue) | StatementKind::Reassign(place, rvalue) => {
@@ -433,7 +838,18 @@ impl<'a> BodyEmitter<'a> {
                     write!(rendered, ".{}", idx).map_err(emit_err)?;
                 }
                 PlaceElem::Index(local) => {
-                    write!(rendered, "[{}]", local_name(*local)).map_err(emit_err)?;
+                    // Check if the index local's type is a signed/64-bit integer.
+                    // naga rejects indexing `array<T>` with an `i64` value — array indices must be `i32`/`u32`.
+                    let needs_cast = if let Some(decl) = self.body.local_decls.get(local.0) {
+                        matches!(decl.ty.kind, TypeKind::Int | TypeKind::I64)
+                    } else {
+                        false
+                    };
+                    if needs_cast {
+                        write!(rendered, "[i32({})]", local_name(*local)).map_err(emit_err)?;
+                    } else {
+                        write!(rendered, "[{}]", local_name(*local)).map_err(emit_err)?;
+                    }
                 }
                 PlaceElem::Deref => {
                     return Err(CodegenError::Internal(

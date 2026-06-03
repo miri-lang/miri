@@ -159,3 +159,102 @@ println(f'{host[0]}')
 ";
     assert_gpu_runs_with_output(source, "36");
 }
+
+/// Inner while-loop accumulation: each GPU thread sums the first two
+/// elements of the array, accumulating into a local variable over
+/// loop iterations. Expected: 1+2 = 3 for all threads.
+#[test]
+fn while_loop_value_round_trips_through_device() {
+    let source = "
+use system.io
+use system.gpu
+use system.collections.array
+
+gpu let a = [1, 2, 3, 4]
+gpu var dst = [0, 0, 0, 0]
+gpu for i in 0..4
+    var s = 0
+    var j = 0
+    while j < 2
+        s = s + a[j]
+        j = j + 1
+    dst[i] = s
+let host = dst
+println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
+";
+    assert_gpu_runs_with_output(source, "3 3 3 3");
+}
+
+/// Inner for-loop with continue: each thread sums array elements,
+/// skipping index 2. Chunk 0: a[0]+a[1]+a[3]=1+2+4=7;
+/// Chunk 1: a[4]+a[5]+a[7]=5+6+8=19.
+#[test]
+fn inner_loop_continue_value_round_trips_through_device() {
+    let source = "
+use system.io
+use system.gpu
+use system.collections.array
+
+gpu let a = [1, 2, 3, 4, 5, 6, 7, 8]
+gpu var dst = [0, 0]
+gpu for i in 0..2
+    var s = 0
+    for j in 0..4
+        if j == 2
+            continue
+        s = s + a[i * 4 + j]
+    dst[i] = s
+let host = dst
+println(f'{host[0]} {host[1]}')
+";
+    assert_gpu_runs_with_output(source, "7 19");
+}
+
+/// Inner for-loop with break: each thread sums array elements until
+/// index 2, then breaks. Chunk 0: a[0]+a[1]=1+2=3;
+/// Chunk 1: a[4]+a[5]=5+6=11.
+#[test]
+fn inner_loop_break_value_round_trips_through_device() {
+    let source = "
+use system.io
+use system.gpu
+use system.collections.array
+
+gpu let a = [1, 2, 3, 4, 5, 6, 7, 8]
+gpu var dst = [0, 0]
+gpu for i in 0..2
+    var s = 0
+    for j in 0..4
+        if j == 2
+            break
+        s = s + a[i * 4 + j]
+    dst[i] = s
+let host = dst
+println(f'{host[0]} {host[1]}')
+";
+    assert_gpu_runs_with_output(source, "3 11");
+}
+
+/// Triple-nested loops: each thread sums a 2x3 chunk.
+/// Chunk 0: sum a[0..6]=1+2+3+4+5+6=21;
+/// Chunk 1: sum a[6..12]=7+8+9+10+11+12=57.
+#[test]
+fn nested_loop_value_round_trips_through_device() {
+    let source = "
+use system.io
+use system.gpu
+use system.collections.array
+
+gpu let a = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+gpu var dst = [0, 0]
+gpu for i in 0..2
+    var s = 0
+    for j in 0..2
+        for k in 0..3
+            s = s + a[i * 6 + j * 3 + k]
+    dst[i] = s
+let host = dst
+println(f'{host[0]} {host[1]}')
+";
+    assert_gpu_runs_with_output(source, "21 57");
+}
