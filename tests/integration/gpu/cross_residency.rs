@@ -10,7 +10,7 @@
 //   * passing a gpu-resident value to a host call (`println(gpu_g)`) is
 //     rejected (§6.4).
 
-use super::helpers::gpu_adapter_available;
+use super::device::gpu_adapter_available;
 use super::utils::*;
 
 #[test]
