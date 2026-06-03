@@ -171,6 +171,7 @@ impl fmt::Display for Terminator {
                 block,
                 args,
                 arg_handles: _,
+                uniform_bound: _,
                 destination,
                 target,
             } => {
@@ -251,6 +252,11 @@ pub enum TerminatorKind {
     /// storage buffers (binding 0..N in declaration order). Baseline assumes
     /// every capture is read/write — the runtime unconditionally copies each
     /// buffer back to host memory after dispatch.
+    ///
+    /// When `uniform_bound` is `Some`, the kernel bounds-check loop limit is
+    /// exposed as a uniform buffer (storage binding N) instead of a compile-time
+    /// constant. The runtime will write this value to the uniform buffer
+    /// before dispatch.
     GpuLaunch {
         kernel: Operand,
         grid: Operand,
@@ -262,6 +268,10 @@ pub enum TerminatorKind {
         /// uploaded and read back per launch. Empty means every capture is
         /// host-resident.
         arg_handles: Vec<Option<DeviceHandleId>>,
+        /// When present, an i64 operand containing the loop-bound limit value.
+        /// This is lowered to a uniform buffer in the kernel at binding position
+        /// `num_captures + 1`. When `None`, bounds are compile-time constants.
+        uniform_bound: Option<Box<Operand>>,
         destination: Place,
         target: Option<BasicBlock>,
     },

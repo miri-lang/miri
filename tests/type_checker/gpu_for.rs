@@ -14,14 +14,27 @@ gpu for i in 0..4
 }
 
 #[test]
-fn test_gpu_for_rejects_variable_range_bound() {
-    type_checker_error_test(
+fn test_gpu_for_accepts_variable_range_bound() {
+    // F1 feature: variable bounds are now accepted (lowered to uniform buffers).
+    type_checker_test(
         r#"
 let n = 4
 gpu for i in 0..n
     let x = i + 1
 "#,
-        "Int-literal range bounds",
+    );
+}
+
+#[test]
+fn test_gpu_for_rejects_non_int_range_bound() {
+    // The range end must be Int.
+    type_checker_error_test(
+        r#"
+let s = "hello"
+gpu for i in 0..s
+    let x = i
+"#,
+        "must be Int",
     );
 }
 

@@ -102,6 +102,7 @@ fn define_bytes(
 /// All 8-byte fields are naturally aligned; the six packed u32 dims
 /// (offsets 32..56) sit on 4-byte boundaries and don't introduce padding
 /// before the trailing pointers because 56 is already 8-aligned.
+/// Offsets 88+ hold the uniform_bound fields (F1 feature).
 mod desc_layout {
     pub(super) const WGSL_PTR: i32 = 0;
     pub(super) const WGSL_LEN: i32 = 8;
@@ -117,7 +118,10 @@ mod desc_layout {
     pub(super) const BUF_DATA_PTRS: i32 = 64;
     pub(super) const BUF_BYTE_LENS: i32 = 72;
     pub(super) const BUF_HANDLE_IDS: i32 = 80;
-    pub(super) const DESC_SIZE: u32 = 88;
+    pub(super) const UNIFORM_BOUND_PRESENT: i32 = 88;
+    pub(super) const UNIFORM_BOUND_VALUE: i32 = 96;
+    pub(super) const NUM_STORAGE_BUFS: i32 = 104;
+    pub(super) const DESC_SIZE: u32 = 112;
 }
 
 /// Field offsets within `runtime::core::MiriArray` (`repr(C)`):
@@ -139,6 +143,7 @@ pub(crate) fn translate(
     block_op: &Operand,
     args: &[Operand],
     arg_handles: &[Option<DeviceHandleId>],
+    uniform_bound: &Option<Box<Operand>>,
     locals: &HashMap<Local, cranelift_frontend::Variable>,
     type_ctx: &TypeCtx,
 ) -> Result<(), CodegenError> {
@@ -186,6 +191,41 @@ pub(crate) fn translate(
         num_bufs,
         [grid_x, grid_y, grid_z],
         [block_x, block_y, block_z],
+    );
+
+    // Populate uniform_bound if present (F1 feature).
+    let zero_i64 = builder.ins().iconst(cl_types::I64, 0);
+    if let Some(bound_op) = uniform_bound {
+        let bound_value = read_operand_value(builder, bound_op, locals, type_ctx)?;
+        let one_i64 = builder.ins().iconst(cl_types::I64, 1);
+        builder.ins().store(
+            MemFlags::new(),
+            one_i64,
+            slots.desc_addr,
+            desc_layout::UNIFORM_BOUND_PRESENT,
+        );
+        builder.ins().store(
+            MemFlags::new(),
+            bound_value,
+            slots.desc_addr,
+            desc_layout::UNIFORM_BOUND_VALUE,
+        );
+    } else {
+        builder.ins().store(
+            MemFlags::new(),
+            zero_i64,
+            slots.desc_addr,
+            desc_layout::UNIFORM_BOUND_PRESENT,
+        );
+    }
+
+    // Store num_storage_bufs (= num_bufs, always equal to capture count).
+    let num_storage_i64 = builder.ins().iconst(cl_types::I64, num_bufs as i64);
+    builder.ins().store(
+        MemFlags::new(),
+        num_storage_i64,
+        slots.desc_addr,
+        desc_layout::NUM_STORAGE_BUFS,
     );
 
     let func_id = declare_launch_fn(module_ctx.module, ptr_ty)?;
