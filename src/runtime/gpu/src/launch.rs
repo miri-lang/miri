@@ -49,6 +49,14 @@ pub struct GpuLaunchDesc {
     /// binding whose device buffer persists across launches; `0` marks a
     /// host-resident capture that is uploaded and read back per launch.
     pub buf_handle_ids: *const u64,
+    /// F1 feature: when present (non-zero), a uniform buffer contains the
+    /// loop-bound limit value for the kernel's bounds-check loop.
+    pub uniform_bound_present: u64,
+    pub uniform_bound_value: i64,
+    /// Number of storage buffer bindings (F1 feature).
+    /// num_bufs reflects capture count, but with uniform buffers present,
+    /// the kernel has num_bufs storage + 1 uniform binding. This is always num_bufs.
+    pub num_storage_bufs: u64,
 }
 
 /// Launches a GPU kernel inline. Returns 1 on success, 0 on failure.
@@ -86,12 +94,30 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
     let ctx = ensure_context()?;
     check_required_shader_features(wgsl, ctx.enabled_shader_features)?;
 
-    let kernel = ensure_kernel(
+    // F1 feature: account for uniform buffer in binding count if present.
+    let num_bindings = desc.num_bufs
+        + if desc.uniform_bound_present != 0 {
+            1
+        } else {
+            0
+        };
+
+    // Ensure the kernel is compiled with the correct bind group layout.
+    // Pass num_storage_bufs so the layout can distinguish storage from uniform buffers.
+    ensure_kernel(
         entry_point,
         wgsl,
-        desc.num_bufs,
+        num_bindings,
+        desc.num_storage_bufs as usize,
         [desc.block_x, desc.block_y, desc.block_z],
     )?;
+
+    let kernel = get_kernel_by_name(entry_point).ok_or_else(|| {
+        GpuError::ShaderCompilationFailed(format!(
+            "failed to retrieve kernel after ensure_kernel for {}",
+            entry_point
+        ))
+    })?;
 
     let device = &ctx.device;
     let queue = &ctx.queue;
@@ -103,7 +129,21 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
     let (storage_buffers, transient_captures) =
         prepare_capture_buffers(device, queue, buf_handle_ids, buf_data_ptrs, buf_byte_lens);
 
-    let entries: Vec<wgpu::BindGroupEntry> = storage_buffers
+    // F1 feature: create uniform buffer if needed (must live until bind_group is created).
+    let uniform_buf = if desc.uniform_bound_present != 0 {
+        let buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("miri_gpu_uniform_bound"),
+            size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&buf, 0, &desc.uniform_bound_value.to_le_bytes());
+        Some(buf)
+    } else {
+        None
+    };
+
+    let mut entries: Vec<wgpu::BindGroupEntry> = storage_buffers
         .iter()
         .enumerate()
         .map(|(i, b)| wgpu::BindGroupEntry {
@@ -111,6 +151,15 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
             resource: b.as_entire_binding(),
         })
         .collect();
+
+    // Add uniform buffer binding if present.
+    if let Some(ref ub) = uniform_buf {
+        entries.push(wgpu::BindGroupEntry {
+            binding: desc.num_bufs as u32,
+            resource: ub.as_entire_binding(),
+        });
+    }
+
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("miri_gpu_launch_inline bg"),
         layout: &kernel.bind_group_layout,
@@ -295,17 +344,27 @@ fn cache_key(entry_point: &str, wgsl: &str) -> String {
     format!("{}#{:016x}", entry_point, hasher.finish())
 }
 
+/// Ensure the kernel is compiled with a bind group layout that splits the
+/// `num_storage_bufs` storage bindings from the trailing uniform bindings.
 fn ensure_kernel(
     entry_point: &str,
     wgsl: &str,
     num_bindings: usize,
+    num_storage_bufs: usize,
     workgroup_size: [u32; 3],
-) -> Result<Arc<CompiledKernel>, GpuError> {
+) -> Result<(), GpuError> {
     let key = cache_key(entry_point, wgsl);
-    if let Some(existing) = get_kernel_by_name(&key) {
-        return Ok(existing);
+    if let Some(_existing) = get_kernel_by_name(&key) {
+        return Ok(());
     }
-    compile_and_register(entry_point, &key, wgsl, num_bindings, workgroup_size)
+    compile_and_register(
+        entry_point,
+        &key,
+        wgsl,
+        num_bindings,
+        num_storage_bufs,
+        workgroup_size,
+    )
 }
 
 fn compile_and_register(
@@ -313,25 +372,26 @@ fn compile_and_register(
     cache_name: &str,
     wgsl: &str,
     num_bindings: usize,
+    num_storage_bufs: usize,
     workgroup_size: [u32; 3],
-) -> Result<Arc<CompiledKernel>, GpuError> {
+) -> Result<(), GpuError> {
     static REGISTER_LOCK: OnceCell<RwLock<()>> = OnceCell::new();
     let lock = REGISTER_LOCK.get_or_init(|| RwLock::new(()));
     let _guard = lock.write();
-    if let Some(existing) = get_kernel_by_name(cache_name) {
-        return Ok(existing);
+    if let Some(_existing) = get_kernel_by_name(cache_name) {
+        return Ok(());
     }
-    let kernel =
-        compile_kernel_inline(entry_point, cache_name, wgsl, num_bindings, workgroup_size)?;
-    let id = kernel.id;
+    let kernel = compile_kernel_inline(
+        entry_point,
+        cache_name,
+        wgsl,
+        num_bindings,
+        num_storage_bufs,
+        workgroup_size,
+    )?;
+    let _id = kernel.id;
     crate::compute::register_kernel_inline(kernel);
-    get_kernel_by_id(id).ok_or_else(|| {
-        GpuError::ShaderCompilationFailed(format!("failed to register {}", cache_name))
-    })
-}
-
-fn get_kernel_by_id(id: u64) -> Option<Arc<CompiledKernel>> {
-    crate::compute::get_kernel(id)
+    Ok(())
 }
 
 fn compile_kernel_inline(
@@ -339,6 +399,7 @@ fn compile_kernel_inline(
     cache_name: &str,
     wgsl: &str,
     num_bindings: usize,
+    num_storage_bufs: usize,
     workgroup_size: [u32; 3],
 ) -> Result<CompiledKernel, GpuError> {
     let ctx = ensure_context()?;
@@ -348,7 +409,8 @@ fn compile_kernel_inline(
             label: Some(cache_name),
             source: wgpu::ShaderSource::Wgsl(wgsl.into()),
         });
-    let bind_group_layout = build_bind_group_layout(&ctx.device, cache_name, num_bindings);
+    let bind_group_layout =
+        build_bind_group_layout(&ctx.device, cache_name, num_bindings, num_storage_bufs);
     let pipeline_layout = ctx
         .device
         .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -377,13 +439,22 @@ fn compile_kernel_inline(
     })
 }
 
-fn build_bind_group_layout(
+/// Build a bind group layout that matches the bindings declared in the WGSL
+/// shader: the first `num_storage_bufs` bindings are storage buffers, the
+/// remaining `num_bindings - num_storage_bufs` are uniform buffers.
+pub(crate) fn build_bind_group_layout(
     device: &Device,
     name: &str,
     num_bindings: usize,
+    num_storage_bufs: usize,
 ) -> wgpu::BindGroupLayout {
-    let entries: Vec<wgpu::BindGroupLayoutEntry> = (0..num_bindings)
-        .map(|i| wgpu::BindGroupLayoutEntry {
+    let num_uniform = num_bindings - num_storage_bufs;
+
+    let mut entries = Vec::new();
+
+    // Storage buffer bindings (0..num_storage_bufs).
+    for i in 0..num_storage_bufs {
+        entries.push(wgpu::BindGroupLayoutEntry {
             binding: i as u32,
             visibility: wgpu::ShaderStages::COMPUTE,
             ty: wgpu::BindingType::Buffer {
@@ -392,8 +463,23 @@ fn build_bind_group_layout(
                 min_binding_size: None,
             },
             count: None,
-        })
-        .collect();
+        });
+    }
+
+    // Uniform buffer bindings (num_storage_bufs..num_bindings).
+    for i in 0..num_uniform {
+        entries.push(wgpu::BindGroupLayoutEntry {
+            binding: (num_storage_bufs + i) as u32,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: std::num::NonZeroU64::new(8),
+            },
+            count: None,
+        });
+    }
+
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some(&format!("{}_layout", name)),
         entries: &entries,

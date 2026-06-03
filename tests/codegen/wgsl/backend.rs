@@ -796,16 +796,18 @@ fn gpu_device_function_is_rejected() {
 }
 
 #[test]
-fn uniform_buffer_storage_class_is_rejected() {
+fn uniform_buffer_storage_class_emits_uniform_binding() {
     let span = dummy_span();
     let mut body = Body::new(1, span, ExecutionModel::GpuKernel);
     body.local_decls
         .push(LocalDecl::new(Type::new(TypeKind::Void, span), span));
-    let mut buf = LocalDecl::new(f32_array_type(), span);
-    buf.storage_class = StorageClass::UniformBuffer;
-    buf.name = Some("buf".into());
-    buf.is_user_variable = true;
-    body.local_decls.push(buf);
+
+    let i64_ty = Type::new(TypeKind::Int, span);
+    let mut uniform_param = LocalDecl::new(i64_ty, span);
+    uniform_param.storage_class = StorageClass::UniformBuffer;
+    uniform_param.name = Some("bound".into());
+    uniform_param.is_user_variable = true;
+    body.local_decls.push(uniform_param);
 
     body.out_params = vec![false];
     body.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
@@ -817,13 +819,20 @@ fn uniform_buffer_storage_class_is_rejected() {
     body.basic_blocks.push(bb);
 
     let backend = WgslBackend;
-    let err = backend
+    let artifact = backend
         .compile(&[("u", &body)], &WgslOptions::default())
-        .expect_err("UniformBuffer storage class must be rejected");
-    let msg = format!("{:?}", err);
+        .expect("scalar i64 uniform buffer should compile");
+
+    let source = std::str::from_utf8(&artifact.bytes).expect("WGSL output is UTF-8");
     assert!(
-        msg.contains("UniformBuffer"),
-        "expected UniformBuffer rejection, got: {}",
-        msg
+        source.contains("var<uniform>"),
+        "expected var<uniform> binding, got:\n{}",
+        source
     );
+    assert!(
+        source.contains("bound"),
+        "expected uniform variable named 'bound', got:\n{}",
+        source
+    );
+    assert_wgsl_valid(source);
 }

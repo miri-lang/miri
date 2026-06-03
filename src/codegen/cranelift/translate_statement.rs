@@ -276,6 +276,7 @@ impl<'a> FunctionTranslator<'a> {
                 block: grid_block,
                 args,
                 arg_handles,
+                uniform_bound,
                 destination: _,
                 target,
             } => {
@@ -287,6 +288,7 @@ impl<'a> FunctionTranslator<'a> {
                     grid_block,
                     args,
                     arg_handles,
+                    uniform_bound,
                     locals,
                     type_ctx,
                 )?;
