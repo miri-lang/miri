@@ -10,6 +10,7 @@
 // scalar mapping aligns host and device widths (`int` → `i64`, `float`
 // → `f64`) so reads/writes round-trip through device memory cleanly.
 
+use super::device::assert_gpu_runs_with_output;
 use super::utils::*;
 
 /// Smoke test verifying the infrastructure layer is wired end-to-end:
@@ -51,11 +52,7 @@ gpu for i in 0..4
 let host = dst
 println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 ";
-    if super::helpers::gpu_adapter_available() {
-        assert_runs_with_output(source, "6.0 8.0 10.0 12.0");
-    } else {
-        assert_runs(source);
-    }
+    assert_gpu_runs_with_output(source, "6.0 8.0 10.0 12.0");
 }
 
 /// End-to-end value-correctness check for `int` (host i64 / WGSL i64):
@@ -77,14 +74,7 @@ gpu for i in 0..4
 let host = dst
 println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 ";
-    // Native dispatch stores `int` as WGSL `i64`; without a `SHADER_INT64`
-    // adapter the device read-back is all zeros, so we drop to a smoke run
-    // rather than assert values (mirrors `gpu/helpers.rs`).
-    if super::helpers::gpu_adapter_available() {
-        assert_runs_with_output(source, "11 22 33 44");
-    } else {
-        assert_runs(source);
-    }
+    assert_gpu_runs_with_output(source, "11 22 33 44");
 }
 
 /// End-to-end value-correctness check for scalar multiply: every element
@@ -104,10 +94,68 @@ gpu for i in 0..8
 let host = dst
 println(f'{host[0]} {host[7]}')
 ";
-    // Same `SHADER_INT64` dependency as `vector_add_int_round_trips_through_device`.
-    if super::helpers::gpu_adapter_available() {
-        assert_runs_with_output(source, "7 56");
-    } else {
-        assert_runs(source);
-    }
+    assert_gpu_runs_with_output(source, "7 56");
+}
+
+/// End-to-end value-correctness check for element-wise multiply-add:
+/// `dst[i] = a[i] * b[i] + c[i]` for all elements.
+#[test]
+fn elementwise_madd_round_trips_through_device() {
+    let source = "
+use system.io
+use system.gpu
+use system.collections.array
+
+gpu let a = [1, 2, 3, 4]
+gpu let b = [10, 20, 30, 40]
+gpu let c = [100, 200, 300, 400]
+gpu var dst = [0, 0, 0, 0]
+gpu for i in 0..4
+    dst[i] = a[i] * b[i] + c[i]
+let host = dst
+println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
+";
+    // Expected values: 1*10+100=110, 2*20+200=240, 3*30+300=390, 4*40+400=560
+    assert_gpu_runs_with_output(source, "110 240 390 560");
+}
+
+/// End-to-end value-correctness check for bounds checking: a kernel with
+/// iteration range `0..7` against an 8-element array. Threads 7..255 must
+/// hit the synthesized bounds guard and skip the body. The last element
+/// is initialized to 999 (sentinel); if the bounds guard is missing,
+/// thread 7 would overwrite it.
+#[test]
+fn bounds_check_preserves_sentinel_past_range_end() {
+    let source = "
+use system.io
+use system.gpu
+use system.collections.array
+
+gpu var dst = [999, 999, 999, 999, 999, 999, 999, 999]
+gpu for i in 0..7
+    dst[i] = i + 100
+let host = dst
+println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]} {host[5]} {host[6]} {host[7]}')
+";
+    assert_gpu_runs_with_output(source, "100 101 102 103 104 105 106 999");
+}
+
+/// End-to-end value-correctness check for a fixed-size reduction: a
+/// single-thread kernel (`0..1`) that computes the sum of all elements
+/// in a captured array.
+#[test]
+fn reduction_fixed_sum_writes_single_total() {
+    let source = "
+use system.io
+use system.gpu
+use system.collections.array
+
+gpu let a = [1, 2, 3, 4, 5, 6, 7, 8]
+gpu var dst = [0, 0, 0, 0]
+gpu for i in 0..1
+    dst[0] = a[0] + a[1] + a[2] + a[3] + a[4] + a[5] + a[6] + a[7]
+let host = dst
+println(f'{host[0]}')
+";
+    assert_gpu_runs_with_output(source, "36");
 }

@@ -9,7 +9,7 @@
 // source, so these tests assert the exact upload / launch / readback / fence
 // budget end-to-end through native dispatch.
 
-use super::helpers::gpu_adapter_available;
+use super::device::gpu_adapter_available;
 use super::utils::*;
 
 /// §16.2 — the two-stage pipeline pays exactly one upload, two launches, and

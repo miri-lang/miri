@@ -1,27 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! WGSL backend value-correctness tests (M6.5 Task 7).
+//! WGSL backend shader-validity tests.
 //!
 //! Each test exercises a small `gpu for` kernel through the WGSL backend and
-//! `naga`'s validator. Compute tests additionally dispatch the kernel via
-//! `wgpu` directly from the test harness (bypassing the Cranelift native
-//! dispatch path); when no adapter is available (bare CI without a software
-//! fallback) the dispatch is skipped without failing the suite.
+//! `naga`'s validator to confirm the shader source is syntactically and
+//! type-correctly generated. These tests require no GPU hardware.
 //!
-//! The host-side scalar type is `i64` to match the WGSL mapping for
-//! Miri's `int` (see `src/codegen/wgsl/types.rs::scalar`). Capture order is
-//! the textual discovery order of outer identifiers in the kernel body:
-//! the first identifier mentioned in the body becomes binding 0, the next
-//! new identifier becomes binding 1, and so on.
-//!
-//! Value-correctness for `vector_add` and `scalar_multiply` now lives in
-//! `super::launch` (compiler end-to-end), since the WGSL backend maps
-//! `int` to WGSL `i64` so host and device buffer widths align. Remaining
-//! compute tests in this file exercise kernel shapes whose native-dispatch
-//! variants are still being designed (PLAN M6.5 task "Helper-shrink").
+//! Value-correctness testing (i.e., comparing computed values against
+//! expected results) is owned by `super::launch` via the compiler-driven
+//! native dispatch path.
 
-use super::helpers::{assert_gpu_compute_i64, assert_gpu_wgsl_valid};
+use super::helpers::assert_gpu_wgsl_valid;
 
 #[test]
 fn vector_add_emits_naga_valid_wgsl() {
@@ -37,80 +27,6 @@ fn main()
     gpu for i in 0..4
         dst[i] = a[i] + b[i]
 ",
-    );
-}
-
-#[test]
-fn elementwise_madd_compute_matches_expected() {
-    // dst[i] = a[i] * b[i] + c[i]
-    // Capture order: dst, a, b, c.
-    assert_gpu_compute_i64(
-        "
-use system.gpu
-use system.collections.array
-
-fn main()
-    gpu let a = [1, 2, 3, 4]
-    gpu let b = [10, 20, 30, 40]
-    gpu let c = [100, 200, 300, 400]
-    gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
-        dst[i] = a[i] * b[i] + c[i]
-",
-        &[
-            &[0, 0, 0, 0],
-            &[1, 2, 3, 4],
-            &[10, 20, 30, 40],
-            &[100, 200, 300, 400],
-        ],
-        &[
-            // 1*10+100=110, 2*20+200=240, 3*30+300=390, 4*40+400=560
-            &[110, 240, 390, 560],
-            &[1, 2, 3, 4],
-            &[10, 20, 30, 40],
-            &[100, 200, 300, 400],
-        ],
-    );
-}
-
-#[test]
-fn bounds_check_skips_threads_past_range_end() {
-    // Range `0..7` against the synthesized `@workgroup_size(256, 1, 1)`
-    // kernel means threads 7..255 must hit the WGSL bounds guard and
-    // skip the body. Buffer length is 8 with sentinel 999 in the last
-    // slot — if the guard is missing, thread 7 would overwrite it.
-    assert_gpu_compute_i64(
-        "
-use system.gpu
-use system.collections.array
-
-fn main()
-    gpu var dst = [999, 999, 999, 999, 999, 999, 999, 999]
-    gpu for i in 0..7
-        dst[i] = i + 100
-",
-        &[&[999, 999, 999, 999, 999, 999, 999, 999]],
-        &[&[100, 101, 102, 103, 104, 105, 106, 999]],
-    );
-}
-
-#[test]
-fn reduction_fixed_sum_writes_single_total() {
-    // Single-thread reduction (range `0..1`) computes a fixed-size sum
-    // on the GPU. Captures: dst, a.
-    assert_gpu_compute_i64(
-        "
-use system.gpu
-use system.collections.array
-
-fn main()
-    gpu let a = [1, 2, 3, 4, 5, 6, 7, 8]
-    gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..1
-        dst[0] = a[0] + a[1] + a[2] + a[3] + a[4] + a[5] + a[6] + a[7]
-",
-        &[&[0, 0, 0, 0], &[1, 2, 3, 4, 5, 6, 7, 8]],
-        &[&[36, 0, 0, 0], &[1, 2, 3, 4, 5, 6, 7, 8]],
     );
 }
 
@@ -146,7 +62,8 @@ fn main()
 /// an `assert_compiler_error` proving the diagnostic fires before MIR
 /// lowering — not as a naga validation failure on emitted shader source.
 mod types {
-    use super::{super::utils::assert_compiler_error, assert_gpu_wgsl_valid};
+    use super::super::utils::assert_compiler_error;
+    use super::assert_gpu_wgsl_valid;
 
     #[test]
     fn int_buffer_add_emits_naga_valid_wgsl() {
