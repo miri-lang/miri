@@ -24,4 +24,5 @@ pub mod helpers;
 pub mod launch;
 pub mod persistent_buffer;
 pub mod residency;
+pub mod variable_bound_gpu_for;
 pub mod wgsl;

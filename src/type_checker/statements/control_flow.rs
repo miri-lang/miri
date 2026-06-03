@@ -217,11 +217,9 @@ impl TypeChecker {
     ///
     /// Restrictions enforced beyond `check_for`:
     /// - The iterable must be a numeric range (`a..b` or `a..=b`).
-    /// - Both range bounds must be integer literals. The baseline MIR
-    ///   lowering rejects variable bounds because they require scalar
-    ///   uniform/push-constant ABI support that the WGSL backend has not
-    ///   landed yet; enforcing the restriction here surfaces the limit at
-    ///   type-check time instead of as a late MIR error.
+    /// - The range start must be an integer literal (variable starts are a follow-up).
+    /// - The range end may be a runtime Int expression (F1 feature).
+    ///   Non-literal ends are lowered to uniform buffers in the MIR kernel.
     /// - The loop body is checked with `context.in_gpu_function = true`, so
     ///   discarded values and variable types are validated against
     ///   [`is_gpu_compatible`](crate::type_checker::utils::is_gpu_compatible).
@@ -254,11 +252,22 @@ impl TypeChecker {
             );
             return;
         }
-        if !is_int_literal(start) || !is_int_literal(end) {
+        if !is_int_literal(start) {
             self.report_error(
-                "'gpu for' baseline requires Int-literal range bounds (variable bounds are a follow-up)"
+                "'gpu for' requires Int-literal range start (variable start is a follow-up)"
                     .to_string(),
                 iterable.span,
+            );
+            return;
+        }
+
+        // End can be a runtime Int expression (F1 feature).
+        // Type-check it and validate it is Int or gpu-compatible.
+        let end_type = self.infer_expression(end, context);
+        if !matches!(end_type.kind, TypeKind::Int) {
+            self.report_error(
+                format!("'gpu for' range end must be Int, got {}", end_type.kind),
+                end.span,
             );
             return;
         }

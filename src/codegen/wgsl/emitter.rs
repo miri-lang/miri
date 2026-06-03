@@ -43,21 +43,34 @@ impl Emitter {
 
     fn emit_bindings(&mut self, bindings: &[BufferBinding]) -> Result<(), CodegenError> {
         for binding in bindings {
-            let access = if binding.read_write {
-                "storage, read_write"
+            if binding.is_uniform {
+                writeln!(
+                    self.output,
+                    "@group({}) @binding({}) var<uniform> {}: {};",
+                    binding.group,
+                    binding.index,
+                    binding.var_name,
+                    binding.element_type.name(),
+                )
+                .map_err(emit_err)?;
             } else {
-                "storage, read"
-            };
-            writeln!(
-                self.output,
-                "@group({}) @binding({}) var<{}> {}: array<{}>;",
-                binding.group,
-                binding.index,
-                access,
-                binding.var_name,
-                binding.element_type.name(),
-            )
-            .map_err(emit_err)?;
+                // Storage buffers are arrays of scalars.
+                let access = if binding.read_write {
+                    "storage, read_write"
+                } else {
+                    "storage, read"
+                };
+                writeln!(
+                    self.output,
+                    "@group({}) @binding({}) var<{}> {}: array<{}>;",
+                    binding.group,
+                    binding.index,
+                    access,
+                    binding.var_name,
+                    binding.element_type.name(),
+                )
+                .map_err(emit_err)?;
+            }
         }
         if !bindings.is_empty() {
             writeln!(self.output).map_err(emit_err)?;
@@ -124,11 +137,15 @@ struct BufferBinding {
     var_name: String,
     element_type: WgslScalar,
     read_write: bool,
+    is_uniform: bool,
 }
 
 fn collect_buffer_bindings(body: &Body) -> Result<Vec<BufferBinding>, CodegenError> {
     let mut bindings = Vec::new();
-    for (next_index, param_idx) in (1..=body.arg_count).enumerate() {
+    let mut binding_index = 0u32;
+
+    // First pass: collect storage buffers.
+    for param_idx in 1..=body.arg_count {
         let decl = body.local_decls.get(param_idx).ok_or_else(|| {
             CodegenError::Internal(format!(
                 "WGSL backend: local_decls length {} <= param_idx {}",
@@ -136,27 +153,15 @@ fn collect_buffer_bindings(body: &Body) -> Result<Vec<BufferBinding>, CodegenErr
                 param_idx
             ))
         })?;
-        match decl.storage_class {
-            StorageClass::GpuGlobal | StorageClass::StorageBuffer => {}
-            StorageClass::UniformBuffer => {
-                return Err(CodegenError::Internal(format!(
-                    "WGSL backend: kernel parameter _{} uses UniformBuffer storage class, \
-                     which is not yet supported (WGSL uniform buffers require fixed-size \
-                     arrays; only storage buffers are emitted today)",
-                    param_idx
-                )));
-            }
-            StorageClass::Stack
-            | StorageClass::GpuShared
-            | StorageClass::GpuConstant
-            | StorageClass::GpuPrivate => {
-                return Err(CodegenError::Internal(format!(
-                    "WGSL backend: kernel parameter _{} has unsupported storage class {:?}; \
-                     expected GpuGlobal/StorageBuffer",
-                    param_idx, decl.storage_class
-                )));
-            }
+
+        // Only storage buffers in the first pass.
+        if !matches!(
+            decl.storage_class,
+            StorageClass::GpuGlobal | StorageClass::StorageBuffer
+        ) {
+            continue;
         }
+
         let read_write = body.out_params.get(param_idx - 1).copied().ok_or_else(|| {
             CodegenError::Internal(format!(
                 "WGSL backend: out_params length {} < arg_count {}",
@@ -173,12 +178,70 @@ fn collect_buffer_bindings(body: &Body) -> Result<Vec<BufferBinding>, CodegenErr
         bindings.push(BufferBinding {
             param_local: Local(param_idx),
             group: 0,
-            index: next_index as u32,
+            index: binding_index,
             var_name,
             element_type,
             read_write,
+            is_uniform: false,
         });
+        binding_index += 1;
     }
+
+    // Second pass: collect uniform buffers.
+    for param_idx in 1..=body.arg_count {
+        let decl = body.local_decls.get(param_idx).ok_or_else(|| {
+            CodegenError::Internal(format!(
+                "WGSL backend: local_decls length {} <= param_idx {}",
+                body.local_decls.len(),
+                param_idx
+            ))
+        })?;
+        if decl.storage_class != StorageClass::UniformBuffer {
+            continue;
+        }
+
+        let var_name = decl
+            .name
+            .as_deref()
+            .map(sanitize_identifier)
+            .unwrap_or_else(|| format!("_uniform{}", param_idx));
+        bindings.push(BufferBinding {
+            param_local: Local(param_idx),
+            group: 0,
+            index: binding_index,
+            var_name,
+            element_type: WgslScalar::I64,
+            read_write: false,
+            is_uniform: true,
+        });
+        binding_index += 1;
+    }
+
+    // Validate all parameters.
+    for param_idx in 1..=body.arg_count {
+        let decl = body.local_decls.get(param_idx).ok_or_else(|| {
+            CodegenError::Internal(format!(
+                "WGSL backend: local_decls length {} <= param_idx {}",
+                body.local_decls.len(),
+                param_idx
+            ))
+        })?;
+        match decl.storage_class {
+            StorageClass::GpuGlobal | StorageClass::StorageBuffer | StorageClass::UniformBuffer => {
+            }
+            StorageClass::Stack
+            | StorageClass::GpuShared
+            | StorageClass::GpuConstant
+            | StorageClass::GpuPrivate => {
+                return Err(CodegenError::Internal(format!(
+                    "WGSL backend: kernel parameter _{} has unsupported storage class {:?}; \
+                     expected GpuGlobal/StorageBuffer/UniformBuffer",
+                    param_idx, decl.storage_class
+                )));
+            }
+        }
+    }
+
     Ok(bindings)
 }
 
