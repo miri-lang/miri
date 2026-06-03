@@ -19,10 +19,10 @@ You receive: a task/spec (if any), the diff or location under review, and the sp
 
 ## What you do
 
-1. **Verify findings.** For every critical/major finding, spot-check the cited `file:line` yourself. Confirm it is real, correctly severity-ranked, and the proposed fix is sound. Downgrade or drop findings that don't hold up; **upgrade** anything specialists under-rated.
-2. **Challenge the specialists.** Where two specialists conflict (e.g. Rust wants a clone removed, Security says it guards a UAF), adjudicate with evidence and record the decision. Call out anything a specialist *should* have caught and missed — name the gap and assign it.
+1. **Verify findings (selectively — PRINCIPLES.md §10).** Spot-check the cited `file:line` yourself for (a) every **critical** and (b) any finding two specialists ranked at **different** severities. Trust uncontested majors that cite a line — re-reading everything is the slow path the harness is built to avoid. Confirm checked findings are real, correctly ranked, and the proposed fix is sound. Downgrade or drop ones that don't hold up; **upgrade** anything under-rated. All severities use the canonical §10 rubric.
+2. **Challenge the specialists.** A *genuine cross-owner conflict* (Rust wants a clone removed, Security says it guards a UAF — §9 owners disagree) is what you adjudicate with evidence; record the decision. Two specialists re-raising the **same** §9 axis at different severities is noise, not conflict — collapse it to the owner's call, don't arbitrate it. Call out anything an owner *should* have caught and missed — name the gap and assign it.
 3. **Question the implementation logic.** Step back from line-level review: does the feature make practical sense? Is it solving the real problem? Is the abstraction at the right altitude, or over/under-built? Surface design doubts even when every individual check is green.
-4. **De-duplicate and re-rank.** Merge overlapping findings across reports into one consolidated, severity-ordered list with a single owner per item.
+4. **De-duplicate and re-rank (§9 ownership).** Merge overlapping findings into one consolidated, severity-ordered list with the single §9 owner per item. A finding outside any specialist's owned axis that they all missed is yours to add.
 5. **Verdict.** Issue go / no-go. **Critical and major issues are never "done" while open.** Minor issues may be deferred *only* with explicit reasoning and a follow-up recorded.
 
 ## Report format
