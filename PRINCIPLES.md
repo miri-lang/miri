@@ -293,12 +293,70 @@ An overall grade lower than **B** in any dimension requires a fix list before th
 
 ---
 
-## 8. How this document is enforced
+## 8. Change-risk tiers (how much review a change earns)
 
-- **Workflow**: `miri-task` skill drives Red-Green-Refactor and runs `make audit` at the end.
-- **Review**: `miri-reviewer` agent checks every diff against §1–§5.
-- **On-demand audit**: `miri-audit` skill grades any path/branch against §7 and proposes diffs (report-only by default).
-- **Mechanical**: `clippy.toml` thresholds + `Cargo.toml` `[lints.clippy]` enforce function size, argument count, complexity, and `unwrap_used` for `src/`. `make lint` is part of every verification gate.
+Not every change earns the full specialist panel. The `miri-task` and `miri-audit` skills classify the change **first**, then spend review effort proportional to risk. The CTO assigns the tier by the trigger checklist below — by triggers, not by feeling.
+
+### 8.1 Major-risk triggers (ANY one → **Major** tier → full specialist panel)
+
+- A new or changed `MirInstruction` / `Place` / `PlaceElem` / terminator variant (touches every visitor — §5.4).
+- A new or changed runtime intrinsic / FFI signature / Cranelift ABI (§5.2).
+- Any `unsafe` block, `transmute`, raw-pointer arithmetic, manual `Layout`/`alloc`.
+- Any Perceus / reference-counting path (`perceus.rs`, `emit_temp_drop`, managed-temp lifetime — §5.1).
+- Any GPU surface (WGSL emitter, `src/runtime/gpu/`, residency, `gpu for|fn|let|var`).
+- A cross-layer dependency change, a new public trait/contract, or a change to `src/pipeline.rs` orchestration.
+
+### 8.2 Tier definitions
+
+| Tier | What it is | Review it earns |
+|------|------------|-----------------|
+| **Trivial** | Typo, comment, rename, doc, format-only; ≤ 2 files; **no logic change**; and **no file under `src/mir/`, `perceus.rs`, `src/codegen/`, or `src/runtime/`** (those paths carry MIR snapshot call-order / Perceus / ABI invariants that a "behavior-preserving" edit can silently break — they are **Standard** minimum). | `make audit` + `miri-test-runner`. No reviewer agent, no panel. |
+| **Standard** | Single-stage feature or fix; **no Major trigger** fires. | `lead-miri-engineer` TDD → **`miri-reviewer` alone** + `miri-test-runner`. |
+| **Major** | Any §8.1 trigger fires. | Full specialist panel (§9 owners), CTO consolidation, fix loop. |
+
+When unsure between two tiers, pick the higher one. Record the chosen tier and the trigger that set it.
+
+---
+
+## 9. Review ownership matrix (one axis, one owner)
+
+Redundant review is the main source of conflicting findings and adjudication overhead. **Each axis has exactly one owner.** A reviewer checks only its owned axes; it does **not** re-raise another owner's axis. Mechanical checks belong to `make audit` and are **not** re-grepped by any agent.
+
+| Axis | Sole owner |
+|------|-----------|
+| `unwrap()`/`expect()`/`panic!` in `src/`, stdlib-name string leaks, `_ =>` over Miri enums, function > 80 lines, `// ── banner ──`, comment rot | **`make audit`** (mechanical sweep — agents trust its output, do not re-grep) |
+| Layer boundaries, SOLID *judgment*, DRY, God-objects, altitude | **Lead Software Architect** |
+| IR/`Place`/terminator design, visitor-contract completeness, monomorphization, residency/effect model, lowering-seam placement | **Lead Compiler Architect** |
+| Perceus RC correctness (UAF/double-free), runtime/FFI ABI match, bounds/overflow, `unsafe` soundness, user-input panics | **Lead Security Engineer** |
+| Ownership/borrow ergonomics, clone/alloc hygiene, iterator-vs-loop, perf, error-handling *shape* | **Lead Rust Engineer** |
+| Test coverage, error-path tests, green-washing, duplicate/misnamed tests, edge cases | **Lead QA Engineer** |
+| WGSL correctness, GPU memory hierarchy, coalescing, occupancy, scalar-width portability, upload/readback bounds | **Lead GPU Engineer** |
+| Cross-specialist synthesis, severity adjudication, practical-sense, go/no-go | **CTO** (`lead-cto`) |
+
+Genuine cross-owner conflict (e.g. Rust wants a clone removed, Security says it guards a UAF) is **expected and valuable** — surface it to the CTO with evidence. Re-raising another owner's axis at a different severity is **not** a conflict; it is noise — don't.
+
+---
+
+## 10. Severity rubric (canonical — every agent cites this)
+
+All reviewers and the CTO use this single scale. Do not invent local definitions. Severity decides whether a finding blocks: **critical + major block; minor may defer with a recorded follow-up.**
+
+| Severity | Definition | Examples |
+|----------|------------|----------|
+| **critical** | Unsound, unsafe, or data-corrupting. Ships a wrong compiler. | Perceus UAF/double-free; FFI/ABI memory corruption; OOB read/write; stdlib-independence violation; cross-layer dependency leak; user-input-reachable panic; broken visitor contract; GPU buffer overrun; compiler wrongly accepts/rejects a program. |
+| **major** | Real defect or debt that must be fixed before ship, but not unsound. | `unwrap()`/`expect()` in `src/`; function > 80 lines; OCP violation in dispatcher; real DRY duplication; missing error-path test; green-washed `assert_runs`; untested new public fn; unchecked size arithmetic; missed coalescing/redundant upload in a hot path; design that blocks the next backend. |
+| **minor** | Style, idiom, or defense-in-depth. Defer freely with a follow-up. | naming nit; avoidable temp/clone (non-hot); comment rot; banner; long arg list; occupancy tuning; theoretical (no-trigger) hardening. |
+
+A finding the owner cannot reproduce at a cited `file:line` is **not a finding** — drop it. The CTO spot-checks **criticals and any finding two specialists ranked differently**; uncontested majors with a cited line are trusted, not re-verified.
+
+---
+
+## 11. How this document is enforced
+
+- **Workflow**: `miri-task` skill classifies the change (§8), drives Red-Green-Refactor, and runs `make audit` at the end.
+- **Review**: `miri-reviewer` agent is the sole reviewer for **Standard**-tier changes (§8.2); it checks §1–§5 and cites §10 severities.
+- **On-demand audit**: `miri-audit` skill runs the **Major**-tier panel (§9 owners) against any path/branch and grades §7, proposing diffs (report-only by default).
+- **Mechanical**: `make audit` owns the §9 mechanical sweeps; `clippy.toml` + `Cargo.toml` `[lints.clippy]` enforce function size, argument count, complexity, and `unwrap_used` for `src/`. `make lint` is part of every verification gate.
 - **Memory**: `MEMORY.md` references this file so future sessions inherit the standard.
 
 When in doubt, optimize for the next reader. The next reader is often you.
