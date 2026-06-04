@@ -312,3 +312,61 @@ gpu for i in 0..4
         "manifest should contain elemType for distinguishing types"
     );
 }
+
+#[test]
+fn test_bundle_manifest_binding_association_structural() {
+    let source = r#"
+use system.gpu
+
+gpu let a = [1.0, 2.0, 3.0, 4.0]
+gpu let b = [5.0, 6.0, 7.0, 8.0]
+gpu var dst = [0.0, 0.0, 0.0, 0.0]
+
+gpu for i in 0..4
+    dst[i] = a[i] + b[i]
+"#;
+
+    let bundle_dir = build_bundle_to_tempdir(source);
+    let index_html = read_bundle_file(&bundle_dir, "index.html");
+
+    // Extract the KERNELS manifest from the HTML
+    let manifest_start = index_html
+        .find("const KERNELS = ")
+        .expect("should find KERNELS");
+    let manifest_end = index_html[manifest_start..]
+        .find("];")
+        .expect("should find manifest end");
+    let manifest_str = &index_html[manifest_start + 16..manifest_start + manifest_end + 1];
+
+    // Verify 'a' binding: initialData exactly [1, 2, 3, 4] in order.
+    // The format is: "a": { elemType: "f64", length: 4, readOnly: true, initialData: [1, 2, 3, 4] }
+    assert!(
+        manifest_str.contains("initialData: [1, 2, 3, 4]"),
+        "binding 'a' should have initialData: [1, 2, 3, 4] in exact order. Manifest:\n{}",
+        manifest_str
+    );
+
+    // Verify 'b' binding: initialData exactly [5, 6, 7, 8] in order.
+    assert!(
+        manifest_str.contains("initialData: [5, 6, 7, 8]"),
+        "binding 'b' should have initialData: [5, 6, 7, 8] in exact order. Manifest:\n{}",
+        manifest_str
+    );
+
+    // Verify 'dst' binding: readOnly: false (it's a gpu var, not gpu let)
+    let dst_pattern = r#""dst""#;
+    assert!(
+        manifest_str.contains(dst_pattern),
+        "manifest should have binding named 'dst'. WGSL:\n{}",
+        manifest_str
+    );
+
+    if let Some(dst_start) = manifest_str.find(r#""dst""#) {
+        let dst_section = &manifest_str[dst_start..];
+        assert!(
+            dst_section.contains("readOnly: false"),
+            "binding 'dst' should have readOnly: false (it's a gpu var). Section:\n{}",
+            dst_section
+        );
+    }
+}
