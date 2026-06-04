@@ -49,6 +49,10 @@ pub struct GpuLaunchDesc {
     /// binding whose device buffer persists across launches; `0` marks a
     /// host-resident capture that is uploaded and read back per launch.
     pub buf_handle_ids: *const u64,
+    /// F3 feature: which buffers are read-only. `buf_read_only[i]` is 1 if the
+    /// i-th storage buffer binding is read-only, 0 if read-write. Array length
+    /// is `num_bufs`. When null, all buffers are assumed read-write (legacy behavior).
+    pub buf_read_only: *const u8,
     /// F1 feature: when present (non-zero), a uniform buffer contains the
     /// loop-bound limit value for the kernel's bounds-check loop.
     pub uniform_bound_present: u64,
@@ -104,15 +108,25 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
 
     // Ensure the kernel is compiled with the correct bind group layout.
     // Pass num_storage_bufs so the layout can distinguish storage from uniform buffers.
+    // F3 feature: pass buf_read_only so storage buffers use the correct access mode.
+    let buf_read_only = if desc.buf_read_only.is_null() {
+        None
+    } else {
+        Some(std::slice::from_raw_parts(
+            desc.buf_read_only,
+            desc.num_bufs,
+        ))
+    };
     ensure_kernel(
         entry_point,
         wgsl,
         num_bindings,
         desc.num_storage_bufs as usize,
+        buf_read_only,
         [desc.block_x, desc.block_y, desc.block_z],
     )?;
 
-    let kernel = get_kernel_by_name(entry_point).ok_or_else(|| {
+    let kernel = get_kernel_by_name(&cache_key(entry_point, wgsl)).ok_or_else(|| {
         GpuError::ShaderCompilationFailed(format!(
             "failed to retrieve kernel after ensure_kernel for {}",
             entry_point
@@ -346,11 +360,13 @@ fn cache_key(entry_point: &str, wgsl: &str) -> String {
 
 /// Ensure the kernel is compiled with a bind group layout that splits the
 /// `num_storage_bufs` storage bindings from the trailing uniform bindings.
+/// F3 feature: `buf_read_only` specifies which buffers are read-only (true=read-only, false=read-write).
 fn ensure_kernel(
     entry_point: &str,
     wgsl: &str,
     num_bindings: usize,
     num_storage_bufs: usize,
+    buf_read_only: Option<&[u8]>,
     workgroup_size: [u32; 3],
 ) -> Result<(), GpuError> {
     let key = cache_key(entry_point, wgsl);
@@ -363,6 +379,7 @@ fn ensure_kernel(
         wgsl,
         num_bindings,
         num_storage_bufs,
+        buf_read_only,
         workgroup_size,
     )
 }
@@ -373,6 +390,7 @@ fn compile_and_register(
     wgsl: &str,
     num_bindings: usize,
     num_storage_bufs: usize,
+    buf_read_only: Option<&[u8]>,
     workgroup_size: [u32; 3],
 ) -> Result<(), GpuError> {
     static REGISTER_LOCK: OnceCell<RwLock<()>> = OnceCell::new();
@@ -387,6 +405,7 @@ fn compile_and_register(
         wgsl,
         num_bindings,
         num_storage_bufs,
+        buf_read_only,
         workgroup_size,
     )?;
     let _id = kernel.id;
@@ -400,6 +419,7 @@ fn compile_kernel_inline(
     wgsl: &str,
     num_bindings: usize,
     num_storage_bufs: usize,
+    buf_read_only: Option<&[u8]>,
     workgroup_size: [u32; 3],
 ) -> Result<CompiledKernel, GpuError> {
     let ctx = ensure_context()?;
@@ -409,8 +429,13 @@ fn compile_kernel_inline(
             label: Some(cache_name),
             source: wgpu::ShaderSource::Wgsl(wgsl.into()),
         });
-    let bind_group_layout =
-        build_bind_group_layout(&ctx.device, cache_name, num_bindings, num_storage_bufs);
+    let bind_group_layout = build_bind_group_layout(
+        &ctx.device,
+        cache_name,
+        num_bindings,
+        num_storage_bufs,
+        buf_read_only,
+    );
     let pipeline_layout = ctx
         .device
         .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -442,11 +467,13 @@ fn compile_kernel_inline(
 /// Build a bind group layout that matches the bindings declared in the WGSL
 /// shader: the first `num_storage_bufs` bindings are storage buffers, the
 /// remaining `num_bindings - num_storage_bufs` are uniform buffers.
+/// F3 feature: `buf_read_only` specifies which storage buffers are read-only (1=read-only, 0=read-write).
 pub(crate) fn build_bind_group_layout(
     device: &Device,
     name: &str,
     num_bindings: usize,
     num_storage_bufs: usize,
+    buf_read_only: Option<&[u8]>,
 ) -> wgpu::BindGroupLayout {
     let num_uniform = num_bindings - num_storage_bufs;
 
@@ -454,11 +481,17 @@ pub(crate) fn build_bind_group_layout(
 
     // Storage buffer bindings (0..num_storage_bufs).
     for i in 0..num_storage_bufs {
+        let is_read_only = buf_read_only
+            .and_then(|arr| arr.get(i))
+            .map(|&b| b != 0)
+            .unwrap_or(false);
         entries.push(wgpu::BindGroupLayoutEntry {
             binding: i as u32,
             visibility: wgpu::ShaderStages::COMPUTE,
             ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                ty: wgpu::BufferBindingType::Storage {
+                    read_only: is_read_only,
+                },
                 has_dynamic_offset: false,
                 min_binding_size: None,
             },
@@ -542,6 +575,40 @@ pub struct MiriArrayHeader {
     pub data: *mut u8,
     pub elem_count: usize,
     pub elem_size: usize,
+}
+
+#[cfg(test)]
+mod desc_layout_tests {
+    use super::GpuLaunchDesc;
+    use std::mem::{align_of, offset_of, size_of};
+
+    #[test]
+    fn gpu_launch_desc_abi_is_pinned() {
+        assert_eq!(
+            size_of::<GpuLaunchDesc>(),
+            120,
+            "GpuLaunchDesc size drifted; update Cranelift desc_layout::DESC_SIZE in lockstep"
+        );
+        assert_eq!(align_of::<GpuLaunchDesc>(), 8);
+        assert_eq!(offset_of!(GpuLaunchDesc, wgsl_ptr), 0);
+        assert_eq!(offset_of!(GpuLaunchDesc, wgsl_len), 8);
+        assert_eq!(offset_of!(GpuLaunchDesc, entry_ptr), 16);
+        assert_eq!(offset_of!(GpuLaunchDesc, entry_len), 24);
+        assert_eq!(offset_of!(GpuLaunchDesc, grid_x), 32);
+        assert_eq!(offset_of!(GpuLaunchDesc, grid_y), 36);
+        assert_eq!(offset_of!(GpuLaunchDesc, grid_z), 40);
+        assert_eq!(offset_of!(GpuLaunchDesc, block_x), 44);
+        assert_eq!(offset_of!(GpuLaunchDesc, block_y), 48);
+        assert_eq!(offset_of!(GpuLaunchDesc, block_z), 52);
+        assert_eq!(offset_of!(GpuLaunchDesc, num_bufs), 56);
+        assert_eq!(offset_of!(GpuLaunchDesc, buf_data_ptrs), 64);
+        assert_eq!(offset_of!(GpuLaunchDesc, buf_byte_lens), 72);
+        assert_eq!(offset_of!(GpuLaunchDesc, buf_handle_ids), 80);
+        assert_eq!(offset_of!(GpuLaunchDesc, buf_read_only), 88);
+        assert_eq!(offset_of!(GpuLaunchDesc, uniform_bound_present), 96);
+        assert_eq!(offset_of!(GpuLaunchDesc, uniform_bound_value), 104);
+        assert_eq!(offset_of!(GpuLaunchDesc, num_storage_bufs), 112);
+    }
 }
 
 /// Cross-residency readback: fences outstanding writes to the device buffer

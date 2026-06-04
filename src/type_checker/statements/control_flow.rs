@@ -213,12 +213,14 @@ impl TypeChecker {
         context.exit_scope();
     }
 
-    /// Type-checks a `gpu for <ident> in <range>` statement.
+    /// Type-checks a `gpu for <ident> in <range>` statement (1D) or
+    /// `gpu for x, y in <range1>, <range2>` statement (2D, N1).
     ///
     /// Restrictions enforced beyond `check_for`:
     /// - The iterable must be a numeric range (`a..b` or `a..=b`).
-    /// - The range start must be an integer literal (variable starts are a follow-up).
-    /// - The range end may be a runtime Int expression (F1 feature).
+    /// - For 1D: single loop variable; for 2D: exactly two loop variables.
+    /// - The range start(s) must be an integer literal (variable starts are a follow-up).
+    /// - The range end(s) may be a runtime Int expression (F1 feature).
     ///   Non-literal ends are lowered to uniform buffers in the MIR kernel.
     /// - The loop body is checked with `context.in_gpu_function = true`, so
     ///   discarded values and variable types are validated against
@@ -234,6 +236,26 @@ impl TypeChecker {
         body: &Statement,
         context: &mut Context,
         stmt_span: Span,
+    ) {
+        match decls.len() {
+            1 => self.check_gpu_for_1d(decls, iterable, body, context, stmt_span),
+            2 => self.check_gpu_for_2d(decls, iterable, body, context, stmt_span),
+            _ => {
+                self.report_error(
+                    "gpu for requires 1 or 2 loop variables".to_string(),
+                    stmt_span,
+                );
+            }
+        }
+    }
+
+    fn check_gpu_for_1d(
+        &mut self,
+        decls: &[VariableDeclaration],
+        iterable: &Expression,
+        body: &Statement,
+        context: &mut Context,
+        _stmt_span: Span,
     ) {
         let ExpressionKind::Range(start, Some(end), range_type) = &iterable.node else {
             self.report_error(
@@ -275,19 +297,144 @@ impl TypeChecker {
         let iterable_type = self.infer_expression(iterable, context);
         let element_type = self.get_iterable_element_type(&iterable_type, iterable.span);
 
-        if decls.len() != 1 {
-            self.report_error(
-                "'gpu for' requires exactly one loop variable".to_string(),
-                stmt_span,
-            );
-        }
-
         context.enter_scope();
         let outer_in_gpu = context.in_gpu_function;
         context.in_gpu_function = true;
         context.gpu_for_depth += 1;
 
         self.bind_loop_variables(decls, &element_type, &iterable_type, iterable.span, context);
+        self.check_statement(body, context);
+        self.check_gpu_for_captures(decls, body, context);
+
+        context.gpu_for_depth -= 1;
+        context.in_gpu_function = outer_in_gpu;
+
+        let unconsumed = context.get_unconsumed_linear_vars();
+        for (name, span) in unconsumed {
+            self.report_error(
+                format!("Linear variable '{}' must be consumed exactly once", name),
+                span,
+            );
+        }
+
+        context.exit_scope();
+    }
+
+    fn check_gpu_for_2d(
+        &mut self,
+        decls: &[VariableDeclaration],
+        iterable: &Expression,
+        body: &Statement,
+        context: &mut Context,
+        _stmt_span: Span,
+    ) {
+        let ExpressionKind::Tuple(ranges) = &iterable.node else {
+            self.report_error(
+                "2D gpu for requires two comma-separated ranges".to_string(),
+                iterable.span,
+            );
+            return;
+        };
+
+        if ranges.len() != 2 {
+            self.report_error(
+                "2D gpu for requires exactly two ranges".to_string(),
+                iterable.span,
+            );
+            return;
+        }
+
+        // Type check both ranges
+        for (i, range_expr) in ranges.iter().enumerate() {
+            let ExpressionKind::Range(start, Some(end), range_type) = &range_expr.node else {
+                self.report_error(
+                    "'gpu for' requires a bounded numeric range like 'a..b' or 'a..=b'".to_string(),
+                    range_expr.span,
+                );
+                return;
+            };
+            if !matches!(
+                range_type,
+                RangeExpressionType::Exclusive | RangeExpressionType::Inclusive
+            ) {
+                self.report_error(
+                    "'gpu for' requires a bounded numeric range like 'a..b' or 'a..=b'".to_string(),
+                    range_expr.span,
+                );
+                return;
+            }
+            if !is_int_literal(start) {
+                self.report_error(
+                    format!(
+                        "'gpu for' range {} start must be an Int literal (variable start is a follow-up)",
+                        if i == 0 { "x" } else { "y" }
+                    ),
+                    range_expr.span,
+                );
+                return;
+            }
+
+            // 2D gpu for requires literal bounds (N1a will support variable bounds)
+            if !is_int_literal(end) {
+                self.report_error(
+                    "2D gpu for requires literal bounds (variable bounds are N1a follow-up)"
+                        .to_string(),
+                    end.span,
+                );
+                return;
+            }
+
+            let end_type = self.infer_expression(end, context);
+            if !matches!(end_type.kind, TypeKind::Int) {
+                self.report_error(
+                    format!(
+                        "'gpu for' range {} end must be Int, got {}",
+                        if i == 0 { "x" } else { "y" },
+                        end_type.kind
+                    ),
+                    end.span,
+                );
+                return;
+            }
+        }
+
+        // Bind both loop variables as Int
+        context.enter_scope();
+        let outer_in_gpu = context.in_gpu_function;
+        context.in_gpu_function = true;
+        context.gpu_for_depth += 1;
+
+        let int_type = make_type(TypeKind::Int);
+        for decl in decls {
+            let var_type = if let Some(type_expr) = &decl.typ {
+                let declared_type = self.resolve_type_expression(type_expr, context);
+                if !self.are_compatible(&declared_type, &int_type, context) {
+                    self.report_error(
+                        format!(
+                            "Type mismatch for loop variable '{}': expected Int, got {}",
+                            decl.name, declared_type
+                        ),
+                        type_expr.span,
+                    );
+                }
+                declared_type
+            } else {
+                int_type.clone()
+            };
+            let is_mutable = matches!(decl.declaration_type, VariableDeclarationType::Mutable);
+            context.define(
+                decl.name.clone(),
+                SymbolInfo::new(
+                    var_type,
+                    is_mutable,
+                    false,
+                    MemberVisibility::Public,
+                    self.current_module.clone(),
+                    None,
+                ),
+            );
+        }
+
         self.check_statement(body, context);
         self.check_gpu_for_captures(decls, body, context);
 

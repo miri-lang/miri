@@ -12,7 +12,7 @@ use miri::mir::ExecutionModel;
 use miri::pipeline::Pipeline;
 
 /// Compile a Miri source with a `gpu for` or `gpu fn` to WGSL and return the kernel text.
-fn compile_to_wgsl(source: &str) -> String {
+pub fn compile_to_wgsl(source: &str) -> String {
     let pipeline = Pipeline::new();
     let result = pipeline.frontend(source).expect("frontend failed");
     let func_stmt = result

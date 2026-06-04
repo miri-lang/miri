@@ -621,19 +621,70 @@ impl<'source> Parser<'source> {
         self.eat_token(&Token::For)?;
 
         let variable_declarations = self.for_loop_variable_list()?;
-        self.eat_token(&Token::In)?;
-        let iterable_expr = self.range_expression()?;
 
-        let iterable = if matches!(&iterable_expr.node, ExpressionKind::Range(_, _, _)) {
-            iterable_expr
-        } else {
-            let span = iterable_expr.span;
-            ast::range_with_span(
-                iterable_expr,
-                None,
-                RangeExpressionType::IterableObject,
-                span,
+        if variable_declarations.len() > 2 {
+            return Err(self.error_unexpected_token(
+                "at most 2 loop variables",
+                &format!("{} variables", variable_declarations.len()),
+            ));
+        }
+
+        self.eat_token(&Token::In)?;
+
+        // Parse first range
+        let first_range = self.range_expression()?;
+        let first_range_span = first_range.span;
+
+        // For 2D: parse second range after comma
+        let iterable = if variable_declarations.len() == 2 {
+            if !self.match_lookahead_type(|t| t == &Token::Comma) {
+                return Err(self.error_unexpected_token(
+                    "2D gpu for requires two comma-separated ranges",
+                    "single range",
+                ));
+            }
+            self.eat_token(&Token::Comma)?;
+            let second_range = self.range_expression()?;
+
+            // Wrap both ranges in a Tuple
+            let first_range_normalized =
+                if matches!(&first_range.node, ExpressionKind::Range(_, _, _)) {
+                    first_range
+                } else {
+                    let span = first_range.span;
+                    ast::range_with_span(
+                        first_range,
+                        None,
+                        RangeExpressionType::IterableObject,
+                        span,
+                    )
+                };
+
+            let second_range_normalized =
+                if matches!(&second_range.node, ExpressionKind::Range(_, _, _)) {
+                    second_range
+                } else {
+                    let span = second_range.span;
+                    ast::range_with_span(
+                        second_range,
+                        None,
+                        RangeExpressionType::IterableObject,
+                        span,
+                    )
+                };
+
+            ast::tuple_with_span(
+                vec![first_range_normalized, second_range_normalized],
+                first_range_span,
             )
+        } else {
+            // 1D path: single range
+            if matches!(&first_range.node, ExpressionKind::Range(_, _, _)) {
+                first_range
+            } else {
+                let span = first_range.span;
+                ast::range_with_span(first_range, None, RangeExpressionType::IterableObject, span)
+            }
         };
 
         if let ExpressionKind::Range(_, _, range_type) = &iterable.node {

@@ -282,6 +282,151 @@ fn wrap_script_in_main(program: &mut Program) {
     program.body = top_level;
 }
 
+/// Collects initial data for GPU buffers from compile-time constant
+/// array/list literals in gpu let/var declarations.
+fn collect_gpu_buffer_initializers(
+    program: &Program,
+) -> std::collections::HashMap<String, crate::codegen::web_gpu::GpuBufferInit> {
+    use std::collections::HashMap;
+    let mut inits = HashMap::new();
+
+    fn walk_stmt(
+        stmt: &Statement,
+        inits: &mut HashMap<String, crate::codegen::web_gpu::GpuBufferInit>,
+    ) {
+        match &stmt.node {
+            StatementKind::Variable(decls, _) => {
+                for decl in decls {
+                    if decl.residency == crate::ast::statement::BindingResidency::Gpu {
+                        if let Some(init) = &decl.initializer {
+                            if let Some(data) = extract_const_array_values(init) {
+                                inits.insert(
+                                    decl.name.clone(),
+                                    crate::codegen::web_gpu::GpuBufferInit {
+                                        elem_type: infer_elem_type(init),
+                                        values: data,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            StatementKind::Block(stmts) => {
+                for s in stmts {
+                    walk_stmt(s, inits);
+                }
+            }
+            StatementKind::If(_, then_branch, else_branch, _) => {
+                walk_stmt(then_branch, inits);
+                if let Some(e) = else_branch {
+                    walk_stmt(e, inits);
+                }
+            }
+            StatementKind::While(_, body, _) | StatementKind::For(_, _, body) => {
+                walk_stmt(body, inits);
+            }
+            StatementKind::GpuFor(_, _, body) => {
+                walk_stmt(body, inits);
+            }
+            StatementKind::FunctionDeclaration(decl) => {
+                if let Some(body) = &decl.body {
+                    walk_stmt(body, inits);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    walk_stmt(
+        &Statement {
+            node: StatementKind::Block(program.body.clone()),
+            span: crate::error::syntax::Span::new(0, 0),
+            id: 0,
+        },
+        &mut inits,
+    );
+
+    inits
+}
+
+fn extract_const_array_values(expr: &crate::ast::expression::Expression) -> Option<Vec<f64>> {
+    match &expr.node {
+        ExpressionKind::Array(elements, _) => {
+            let mut values = Vec::new();
+            for elem in elements {
+                match extract_numeric_literal(elem) {
+                    Some(v) => values.push(v),
+                    None => return None,
+                }
+            }
+            Some(values)
+        }
+        ExpressionKind::List(elements) => {
+            let mut values = Vec::new();
+            for elem in elements {
+                match extract_numeric_literal(elem) {
+                    Some(v) => values.push(v),
+                    None => return None,
+                }
+            }
+            Some(values)
+        }
+        _ => None,
+    }
+}
+
+fn extract_numeric_literal(expr: &crate::ast::expression::Expression) -> Option<f64> {
+    match &expr.node {
+        ExpressionKind::Literal(lit) => match lit {
+            crate::ast::literal::Literal::Integer(int_lit) => {
+                use crate::ast::literal::IntegerLiteral;
+                Some(match int_lit {
+                    IntegerLiteral::I8(v) => *v as f64,
+                    IntegerLiteral::I16(v) => *v as f64,
+                    IntegerLiteral::I32(v) => *v as f64,
+                    IntegerLiteral::I64(v) => *v as f64,
+                    IntegerLiteral::I128(v) => *v as f64,
+                    IntegerLiteral::U8(v) => *v as f64,
+                    IntegerLiteral::U16(v) => *v as f64,
+                    IntegerLiteral::U32(v) => *v as f64,
+                    IntegerLiteral::U64(v) => *v as f64,
+                    IntegerLiteral::U128(v) => *v as f64,
+                })
+            }
+            crate::ast::literal::Literal::Float(float_lit) => {
+                use crate::ast::literal::FloatLiteral;
+                Some(match float_lit {
+                    FloatLiteral::F32(v) => f32::from_bits(*v) as f64,
+                    FloatLiteral::F64(v) => f64::from_bits(*v),
+                })
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn infer_elem_type(expr: &crate::ast::expression::Expression) -> String {
+    match &expr.node {
+        ExpressionKind::Array(elements, _) | ExpressionKind::List(elements) => {
+            if let Some(elem) = elements.first() {
+                match &elem.node {
+                    ExpressionKind::Literal(lit) => match lit {
+                        crate::ast::literal::Literal::Float(_) => "f32".to_string(),
+                        crate::ast::literal::Literal::Integer(_) => "i32".to_string(),
+                        _ => "i32".to_string(),
+                    },
+                    _ => "i32".to_string(),
+                }
+            } else {
+                "i32".to_string()
+            }
+        }
+        _ => "i32".to_string(),
+    }
+}
+
 /// Ensures that a user-defined `main()` function returns `Int` with an
 /// implicit `return 0` at the end, so the process exits cleanly.
 fn patch_main_return(program: &mut Program) {
@@ -512,7 +657,17 @@ impl Pipeline {
         match opts.target {
             BuildTarget::Native => {}
             BuildTarget::WebGpu => {
-                return crate::codegen::web_gpu::emit_bundle(&mir_bodies, opts.out_path.as_ref());
+                let gpu_buffer_inits = collect_gpu_buffer_initializers(&pipeline_result.ast);
+                return crate::codegen::web_gpu::emit_bundle(
+                    &mir_bodies,
+                    opts.out_path.as_ref(),
+                    Some(source),
+                    if gpu_buffer_inits.is_empty() {
+                        None
+                    } else {
+                        Some(&gpu_buffer_inits)
+                    },
+                );
             }
         }
 

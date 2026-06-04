@@ -11,8 +11,8 @@ use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
 use crate::mir::types::MirType;
 use crate::mir::{
-    Discriminant, Operand, Place, PlaceElem, Rvalue, StatementKind as MirStatementKind, Terminator,
-    TerminatorKind,
+    Discriminant, ExecutionModel, Operand, Place, PlaceElem, Rvalue,
+    StatementKind as MirStatementKind, Terminator, TerminatorKind,
 };
 use crate::type_checker::TypeChecker;
 
@@ -529,4 +529,37 @@ pub fn lower_as_return(
         _ => lower_statement(ctx, stmt)?,
     }
     Ok(())
+}
+
+/// Adjust math intrinsic return type for GPU kernels.
+///
+/// In GPU kernel execution, math intrinsics that take f32 arguments must produce
+/// f32 results, not f64. This prevents buffer width mismatches (e.g., sqrt on
+/// f32 input must emit f32 WGSL, not f64, to avoid zeros on Metal).
+///
+/// # Arguments
+///
+/// * `ctx` - The lowering context with execution model and type checker
+/// * `args` - AST expressions for the intrinsic arguments
+/// * `declared` - The declared return type from type checking
+/// * `span` - Source span for error reporting
+///
+/// # Returns
+///
+/// The adjusted return type (f32 if in GpuKernel and first arg is f32, else declared).
+pub fn gpu_math_return_type(
+    ctx: &LoweringContext,
+    args: &[Expression],
+    declared: Type,
+    span: Span,
+) -> Type {
+    if ctx.body.execution_model == ExecutionModel::GpuKernel && !args.is_empty() {
+        let arg_expr = &args[0];
+        if let Some(arg_ty) = ctx.type_checker.get_type(arg_expr.id) {
+            if arg_ty.kind == TypeKind::F32 {
+                return Type::new(TypeKind::F32, span);
+            }
+        }
+    }
+    declared
 }
