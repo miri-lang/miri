@@ -363,3 +363,413 @@ fn main()
         );
     }
 }
+
+mod math_intrinsics {
+    use super::super::device::assert_gpu_runs_with_output;
+    use super::assert_gpu_wgsl_valid;
+
+    /// CRITERION 1 — F23: GPU math-intrinsic scalar width
+    /// A math intrinsic (sqrt) inside an f32 kernel must produce an f32 result,
+    /// not an f64 result that gets width-cast before storing into the f32 buffer.
+    /// This test checks both WGSL validity (no f64/f32 mismatch) and value correctness.
+    #[test]
+    fn sqrt_f32_buffer_width_correct() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+
+fn main()
+    gpu let a = [1.0, 4.0, 9.0, 16.0]
+    gpu var dst = [0.0, 0.0, 0.0, 0.0]
+    gpu for i in 0..4
+        dst[i] = sqrt(a[i])
+",
+        );
+        // Value correctness: sqrt of perfect squares.
+        assert_gpu_runs_with_output(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+use system.io
+
+fn main()
+    gpu let a = [1.0, 4.0, 9.0, 16.0]
+    gpu var dst = [0.0, 0.0, 0.0, 0.0]
+    gpu for i in 0..4
+        dst[i] = sqrt(a[i])
+    let result = dst
+    println(f'{result[0]} {result[1]} {result[2]} {result[3]}')
+",
+            "1.0 2.0 3.0 4.0",
+        );
+    }
+
+    /// Math intrinsic with f64 buffers (high-precision floats that don't
+    /// round-trip in f32).
+    #[test]
+    fn sqrt_f64_buffer_width_correct() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+
+fn main()
+    gpu let a = [1.4142135623730951, 3.7416573867739413, 5.744562646538029, 7.745966692414834]
+    gpu var dst = [1.4142135623730951, 3.7416573867739413, 5.744562646538029, 7.745966692414834]
+    gpu for i in 0..4
+        dst[i] = sqrt(a[i])
+",
+        );
+    }
+
+    /// Another math intrinsic: sin(x) on f32 buffers.
+    #[test]
+    fn sin_f32_buffer_width_correct() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+
+fn main()
+    gpu let a = [0.0, 1.0, 2.0, 3.0]
+    gpu var dst = [0.0, 0.0, 0.0, 0.0]
+    gpu for i in 0..4
+        dst[i] = sin(a[i])
+",
+        );
+    }
+}
+
+mod multi_if {
+    use super::super::helpers::compile_to_wgsl;
+    use super::assert_gpu_wgsl_valid;
+
+    /// CRITERION 2 — F24: sequential if chains with scope issues
+    /// Tests that the structurizer properly handles local variable declarations
+    /// across sequential if statements. This exercises the case where multiple
+    /// sequential ifs need to see the same function-scope vars.
+    #[test]
+    fn sequential_ifs_with_local_accumulation_emit_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [1, 2, 3, 4]
+    gpu let b = [10, 20, 30, 40]
+    gpu var dst = [0, 0, 0, 0]
+    gpu for i in 0..4
+        var sum = 0
+        if a[i] > 0
+            sum = sum + a[i]
+        if b[i] > 15
+            sum = sum + b[i]
+        dst[i] = sum
+",
+        );
+    }
+
+    /// Nested if statements with local vars. This ensures the structurizer
+    /// does not try to redeclare locals inside nested if bodies.
+    #[test]
+    fn nested_ifs_with_local_vars_emit_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [1, 2, 3, 4]
+    gpu let b = [10, 20, 30, 40]
+    gpu var dst = [0, 0, 0, 0]
+    gpu for i in 0..4
+        var sum = 0
+        var count = 0
+        if a[i] > 1
+            sum = sum + a[i]
+            count = count + 1
+            if b[i] < 30
+                sum = sum + b[i]
+                count = count + 1
+        dst[i] = sum
+",
+        );
+    }
+
+    /// If-else statement inside a kernel body. Tests that the structurizer
+    /// properly emits the else clause when needed.
+    #[test]
+    fn if_else_with_accumulation_emit_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [1, 2, 3, 4]
+    gpu var dst = [0, 0, 0, 0]
+    gpu for i in 0..4
+        var result = 0
+        if a[i] > 2
+            result = 1
+        else
+            result = 0
+        dst[i] = result
+",
+        );
+    }
+
+    /// Plain if (no else) with trailing code. The trailing code must NOT
+    /// be nested inside the if block. This is the core bug test: it proves
+    /// the bug exists by checking WGSL structure.
+    #[test]
+    fn plain_if_with_trailing_code_emits_naga_valid_wgsl() {
+        let wgsl = compile_to_wgsl(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [1, 2, 3, 4]
+    gpu var dst = [0, 0, 0, 0]
+    gpu for i in 0..4
+        var sum = 0
+        if a[i] > 2
+            sum = sum + 100
+        dst[i] = sum + a[i]
+",
+        );
+
+        // First: naga must validate (smoke test).
+        let module = naga::front::wgsl::parse_str(&wgsl).unwrap_or_else(|err| {
+            panic!(
+                "naga parse failed: {}\nWGSL:\n{}",
+                err.emit_to_string(&wgsl),
+                wgsl
+            )
+        });
+        let mut validator = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        );
+        validator
+            .validate(&module)
+            .unwrap_or_else(|err| panic!("naga validate failed: {:?}\nWGSL:\n{}", err, wgsl));
+
+        // CORE: the trailing `dst[i] = ...` store must land AFTER the inner
+        // if's closing brace, i.e. at function scope, not nested inside the if.
+        // Find the SECOND if statement (the inner data-conditional, skipping the outer
+        // bounds-check if), find its matching closing brace, then assert the trailing
+        // store appears after that brace at the SAME indentation level (i.e. right after
+        // the else clause closes).
+        let mut if_positions = vec![];
+        let mut search_start = 0;
+        while let Some(pos) = wgsl[search_start..].find("if (") {
+            if_positions.push(search_start + pos);
+            search_start = search_start + pos + 1;
+        }
+        let if_start = if_positions
+            .get(1)
+            .copied()
+            .expect("should have at least two if statements (bounds-check and inner condition)");
+
+        // Balance braces starting from the opening brace after "if ("
+        let mut brace_depth = 0;
+        let mut if_end = if_start;
+        let mut found_open = false;
+        for (i, ch) in wgsl[if_start..].char_indices() {
+            if ch == '{' {
+                found_open = true;
+                brace_depth += 1;
+            } else if ch == '}' {
+                brace_depth -= 1;
+                if found_open && brace_depth == 0 {
+                    if_end = if_start + i;
+                    break;
+                }
+            }
+        }
+
+        // Find the dst assignment position (could be multiple; we want the one after
+        // the inner if closes).
+        let dst_assign = wgsl[if_end..]
+            .find("dst[i32")
+            .expect("should have dst[i32] assignment after inner if");
+        let dst_assign = if_end + dst_assign;
+
+        assert!(
+            dst_assign > if_end,
+            "WGSL structure bug: dst[i32] assignment at pos {} should be AFTER the inner if block's closing brace at pos {} (not nested inside). WGSL:\n{}",
+            dst_assign, if_end, wgsl
+        );
+    }
+
+    /// Sequential ifs with trailing code. Both ifs should close before
+    /// the final store. This is a smoke test verifying naga accepts the
+    /// complex control flow structure.
+    #[test]
+    fn sequential_ifs_with_trailing_code_emits_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [1, 2, 3, 4]
+    gpu var dst = [0, 0, 0, 0]
+    gpu for i in 0..4
+        var sum = 0
+        if a[i] > 2
+            sum = sum + 10
+        if a[i] < 3
+            sum = sum + 20
+        dst[i] = sum
+",
+        );
+    }
+
+    /// Nested ifs with trailing code. This verifies that naga accepts
+    /// the nested control flow.
+    #[test]
+    fn nested_ifs_with_trailing_code_emits_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [1, 2, 3, 4]
+    gpu let b = [10, 20, 30, 40]
+    gpu var dst = [0, 0, 0, 0]
+    gpu for i in 0..4
+        var sum = 0
+        if a[i] > 1
+            sum = sum + a[i]
+            if b[i] > 15
+                sum = sum + 100
+        dst[i] = sum
+",
+        );
+    }
+
+    /// If-else with trailing code. This verifies the if-else path
+    /// alongside plain-if path.
+    #[test]
+    fn if_else_with_trailing_code_emits_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [1, 2, 3, 4]
+    gpu var dst = [0, 0, 0, 0]
+    gpu for i in 0..4
+        var sum = 0
+        if a[i] > 2
+            sum = sum + 10
+        else
+            sum = sum + 5
+        dst[i] = sum + 1
+",
+        );
+    }
+}
+
+mod gpu_for_2d {
+    use super::super::utils::assert_compiler_error;
+    use super::assert_gpu_wgsl_valid;
+
+    /// N1: Basic 2D gpu for with literal bounds (4x3 grid).
+    /// Emits WGSL with @workgroup_size(16, 16, 1), uses _local_id.y and _workgroup_id.y,
+    /// and has the 2D bounds guard.
+    #[test]
+    fn gpu_for_2d_literal_bounds_emits_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu var dst = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    gpu for x, y in 0..4, 0..3
+        dst[y * 4 + x] = x + y
+",
+        );
+    }
+
+    /// N1: 2D gpu for with larger bounds (32x32 grid).
+    #[test]
+    fn gpu_for_2d_large_bounds_emits_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu var dst = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    gpu for x, y in 0..32, 0..32
+        dst[y * 32 + x] = x + y
+",
+        );
+    }
+
+    /// N1: 2D gpu for with non-literal range end should emit a clear error.
+    #[test]
+    fn gpu_for_2d_runtime_bounds_is_rejected_with_clear_error() {
+        assert_compiler_error(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    let w = 4
+    let h = 3
+    gpu var dst = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    gpu for x, y in 0..w, 0..h
+        dst[y * 4 + x] = x + y
+",
+            "2D gpu for requires literal bounds",
+        );
+    }
+
+    /// N1: Reject >2 loop variables.
+    #[test]
+    fn gpu_for_3d_is_rejected() {
+        assert_compiler_error(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu var dst = [0, 0, 0, 0, 0, 0, 0, 0]
+    gpu for x, y, z in 0..2, 0..2, 0..2
+        dst[z * 4 + y * 2 + x] = x + y + z
+",
+            "at most 2 loop variables",
+        );
+    }
+
+    /// N1: Reject 2 vars with a single range.
+    #[test]
+    fn gpu_for_2d_missing_second_range_is_rejected() {
+        assert_compiler_error(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu var dst = [0, 0, 0, 0]
+    gpu for x, y in 0..4
+        dst[0] = 0
+",
+            "2D gpu for requires two comma-separated ranges",
+        );
+    }
+}
