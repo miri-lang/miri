@@ -350,3 +350,59 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 ";
     assert_gpu_runs_with_output(source, "0 0 1 1");
 }
+
+/// N1 2D gpu for value-correctness test.
+/// A 2D grid `gpu for x, y in 0..4, 0..3` over a 4x3 array (12 elements total).
+/// Each thread computes `dst[y * 4 + x] = x + y`.
+/// Expected output after readback: row r, column c → value c+r.
+/// Row 0: 0 1 2 3
+/// Row 1: 1 2 3 4
+/// Row 2: 2 3 4 5
+#[test]
+fn gpu_for_2d_value_round_trips_through_device() {
+    let source = "
+use system.io
+use system.gpu
+use system.collections.array
+
+gpu var dst = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+gpu for x, y in 0..4, 0..3
+    dst[y * 4 + x] = x + y
+let host = dst
+println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]} {host[5]} {host[6]} {host[7]} {host[8]} {host[9]} {host[10]} {host[11]}')
+";
+    assert_gpu_runs_with_output(source, "0 1 2 3 1 2 3 4 2 3 4 5");
+}
+
+/// N4 buffer ping-pong with 3 generations and telemetry.
+/// Two persistent `gpu var` grids swapped across 3 sequential `gpu for` kernels
+/// WITHOUT intermediate readback. Proves:
+/// - N4: buffer ping-pong (buffers reused across launches)
+/// - F3: read-only vs read-write capture (each kernel declares the binding it needs)
+/// Acceptance criterion: final value is correct AND gpu_readbacks() == 1 (only final readback).
+/// Sequence:
+/// 1. First kernel: b[i] = a[i] + 100  (a read-only, b read-write)
+/// 2. Second kernel: a[i] = b[i] + 1000 (b read-only, a read-write)
+/// 3. Third kernel: b[i] = a[i] + 100  (a read-only, b read-write)
+/// Final b[i] = ((a[i]+100)+1000)+100 = a[i]+1200 → b=[1201,1202,1203,1204]
+#[test]
+fn ping_pong_three_generations_value_and_telemetry() {
+    let source = "
+use system.gpu
+use system.io
+use system.collections.array
+
+gpu_reset_telemetry()
+gpu var a = [1, 2, 3, 4]
+gpu var b = [0, 0, 0, 0]
+gpu for i in 0..4
+    b[i] = a[i] + 100
+gpu for i in 0..4
+    a[i] = b[i] + 1000
+gpu for i in 0..4
+    b[i] = a[i] + 100
+let host = b
+println(f'{host[0]} {host[1]} {host[2]} {host[3]} {gpu_readbacks()}')
+";
+    assert_gpu_runs_with_output(source, "1201 1202 1203 1204 1");
+}
