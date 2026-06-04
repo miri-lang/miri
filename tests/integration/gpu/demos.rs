@@ -12,9 +12,9 @@
 // - Surface compliance: residency keywords, cost-class ordering, buffer
 //   reuse, bounds-checking, and portability checks per §17.
 //
-// Deferred demos (compiler bugs, not scope for this task):
-// - map_normalize: math-intrinsic result temps typed f64 while f32 buffers → width
-//   mismatch → zeros on Metal (blocker: F23).
+// Deferred demos (not scope for this task):
+// - map_normalize: will be added as a Task-10 demo now that the math-intrinsic
+//   result-width narrowing (f64 result into f32 buffers) is resolved.
 
 use super::device::assert_gpu_runs_with_output;
 
