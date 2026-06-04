@@ -653,55 +653,53 @@ impl<'a> BodyEmitter<'a> {
                 } => {
                     if targets.len() == 1 && targets[0].0 == crate::mir::Discriminant::bool_true() {
                         let then_bb = targets[0].1;
-                        let merge_bb = *otherwise;
+                        let otherwise_bb = *otherwise;
                         let cond_str = self.render_operand(discr)?;
-                        self.write_indent()?;
-                        writeln!(self.output, "if (bool({})) {{", cond_str).map_err(emit_err)?;
-                        self.indent += 1;
-                        self.emit_from(then_bb, Some(merge_bb), visited)?;
-                        self.indent -= 1;
-                        self.write_indent()?;
-                        writeln!(self.output, "}}").map_err(emit_err)?;
 
-                        // After the if, try to continue from the merge block.
-                        // If it's already been visited, follow its Goto to determine the next block.
-                        if visited.contains(&merge_bb) {
-                            // The merge block has been visited during the if-body processing.
-                            // Follow its Goto to find the next unvisited block.
-                            if let Some(merge_block) = self.body.basic_blocks.get(merge_bb.0) {
-                                if let Some(term) = &merge_block.terminator {
-                                    match &term.kind {
-                                        TerminatorKind::Goto { target } => {
-                                            cur = *target;
-                                        }
-                                        TerminatorKind::Return | TerminatorKind::Unreachable => {
-                                            // Legitimately done — merge block ends here.
-                                            return Ok(());
-                                        }
-                                        TerminatorKind::SwitchInt { .. }
-                                        | TerminatorKind::Call { .. }
-                                        | TerminatorKind::VirtualCall { .. }
-                                        | TerminatorKind::GpuLaunch { .. } => {
-                                            return Err(CodegenError::Internal(format!(
-                                                "WGSL backend: visited merge block bb{} has unsupported terminator for continuation",
-                                                merge_bb.0
-                                            )));
-                                        }
-                                    }
-                                } else {
-                                    return Err(CodegenError::Internal(format!(
-                                        "WGSL backend: merge block bb{} has no terminator",
-                                        merge_bb.0
-                                    )));
-                                }
-                            } else {
-                                return Err(CodegenError::Internal(format!(
-                                    "WGSL backend: merge block bb{} out of bounds",
-                                    merge_bb.0
-                                )));
-                            }
+                        // Decide plain-if vs if-else by checking forward reachability.
+                        let then_reaches_otherwise = self.forward_reachable(then_bb, otherwise_bb);
+
+                        if then_reaches_otherwise {
+                            // Plain if: otherwise_bb is the merge point.
+                            self.write_indent()?;
+                            writeln!(self.output, "if (bool({})) {{", cond_str)
+                                .map_err(emit_err)?;
+                            self.indent += 1;
+                            self.emit_from(then_bb, Some(otherwise_bb), visited)?;
+                            self.indent -= 1;
+
+                            self.write_indent()?;
+                            writeln!(self.output, "}}").map_err(emit_err)?;
+
+                            // Continue at the merge point (otherwise_bb).
+                            cur = otherwise_bb;
                         } else {
-                            cur = merge_bb;
+                            // If-else: find the merge point of both branches.
+                            let merge = self.find_merge(then_bb, otherwise_bb);
+
+                            self.write_indent()?;
+                            writeln!(self.output, "if (bool({})) {{", cond_str)
+                                .map_err(emit_err)?;
+                            self.indent += 1;
+                            self.emit_from(then_bb, merge, visited)?;
+                            self.indent -= 1;
+
+                            self.write_indent()?;
+                            writeln!(self.output, "}} else {{").map_err(emit_err)?;
+                            self.indent += 1;
+                            self.emit_from(otherwise_bb, merge, visited)?;
+                            self.indent -= 1;
+
+                            self.write_indent()?;
+                            writeln!(self.output, "}}").map_err(emit_err)?;
+
+                            // Continue at the merge point if it exists.
+                            if let Some(merge_bb) = merge {
+                                cur = merge_bb;
+                            } else {
+                                // Both branches return/diverge: end here.
+                                return Ok(());
+                            }
                         }
                     } else {
                         return Err(CodegenError::Internal(format!(
@@ -719,6 +717,91 @@ impl<'a> BodyEmitter<'a> {
                     )));
                 }
             }
+        }
+    }
+
+    /// Check if `target` is forward-reachable from `source` without crossing loop back-edges.
+    /// Returns true if a path exists from source to target following only forward edges.
+    fn forward_reachable(
+        &self,
+        source: crate::mir::BasicBlock,
+        target: crate::mir::BasicBlock,
+    ) -> bool {
+        if source == target {
+            return true;
+        }
+        let mut visited = std::collections::HashSet::new();
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back(source);
+        visited.insert(source);
+
+        while let Some(bb) = queue.pop_front() {
+            if let Some(block) = self.body.basic_blocks.get(bb.0) {
+                if let Some(term) = &block.terminator {
+                    let successors = Self::terminator_successors(&term.kind);
+                    for succ in successors {
+                        if succ == target {
+                            return true;
+                        }
+                        // Don't cross loop back-edges.
+                        if !self.loop_headers.contains(&succ) && !visited.contains(&succ) {
+                            visited.insert(succ);
+                            queue.push_back(succ);
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Find the nearest block reachable from BOTH `a` and `b` by forward edges.
+    /// Returns None if no common reachable block exists (both paths diverge/return).
+    fn find_merge(
+        &self,
+        a: crate::mir::BasicBlock,
+        b: crate::mir::BasicBlock,
+    ) -> Option<crate::mir::BasicBlock> {
+        let mut visited_a = std::collections::HashSet::new();
+        let mut queue_a = std::collections::VecDeque::new();
+        queue_a.push_back(a);
+        visited_a.insert(a);
+
+        while let Some(bb) = queue_a.pop_front() {
+            if self.forward_reachable(b, bb) {
+                return Some(bb);
+            }
+            if let Some(block) = self.body.basic_blocks.get(bb.0) {
+                if let Some(term) = &block.terminator {
+                    let successors = Self::terminator_successors(&term.kind);
+                    for succ in successors {
+                        if !self.loop_headers.contains(&succ) && !visited_a.contains(&succ) {
+                            visited_a.insert(succ);
+                            queue_a.push_back(succ);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Extract successor blocks from a terminator.
+    fn terminator_successors(term: &TerminatorKind) -> Vec<crate::mir::BasicBlock> {
+        match term {
+            TerminatorKind::Return => vec![],
+            TerminatorKind::Unreachable => vec![],
+            TerminatorKind::Goto { target } => vec![*target],
+            TerminatorKind::SwitchInt {
+                targets, otherwise, ..
+            } => {
+                let mut succs = targets.iter().map(|(_, bb)| *bb).collect::<Vec<_>>();
+                succs.push(*otherwise);
+                succs
+            }
+            TerminatorKind::Call { target, .. }
+            | TerminatorKind::GpuLaunch { target, .. }
+            | TerminatorKind::VirtualCall { target, .. } => target.iter().copied().collect(),
         }
     }
 
@@ -753,6 +836,12 @@ impl<'a> BodyEmitter<'a> {
         let header_block = self.body.basic_blocks.get(header.0).ok_or_else(|| {
             CodegenError::Internal(format!("WGSL backend: block bb{} out of bounds", header.0))
         })?;
+
+        // Emit header block statements (compute the loop condition).
+        for stmt in &header_block.statements {
+            self.emit_statement(&stmt.kind)?;
+        }
+
         if let Some(term) = &header_block.terminator {
             if let TerminatorKind::SwitchInt {
                 discr,
@@ -779,8 +868,10 @@ impl<'a> BodyEmitter<'a> {
             }
         }
 
-        // Emit the body, stopping at the header (back-edge).
-        self.emit_from(loop_info.body_entry, Some(header), visited)?;
+        // Emit the body. For a for-loop, stop at the continuing block (latch).
+        // For a while-loop, stop at the header (back-edge).
+        let body_stop = loop_info.continuing.or(Some(header));
+        self.emit_from(loop_info.body_entry, body_stop, visited)?;
 
         // If this is a for-loop, emit the continuing block.
         if let Some(continuing) = loop_info.continuing {

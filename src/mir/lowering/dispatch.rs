@@ -17,7 +17,7 @@ use crate::type_checker::context::{
 };
 
 use super::constructors::{lower_class_constructor, lower_struct_constructor, COLLECTION_CTORS};
-use super::helpers::coerce_rvalue;
+use super::helpers::{coerce_rvalue, gpu_math_return_type};
 use super::{lower_expression, LoweringContext};
 
 /// Context for lowering a collection intrinsic method (push/get/index).
@@ -344,6 +344,7 @@ fn lower_math_intrinsic_call(
         .get_type(call_expr_id)
         .cloned()
         .unwrap_or_else(|| Type::new(TypeKind::Void, *span));
+    let return_ty = gpu_math_return_type(ctx, args, return_ty, *span);
     let (target, ret_op) = call_destination(ctx, return_ty, dest, *span);
     ctx.push_statement(crate::mir::Statement {
         kind: StatementKind::Assign(target, Rvalue::MathIntrinsic(intrinsic, arg_ops)),
@@ -444,6 +445,7 @@ fn try_lower_kernel_launch(
             block: block_op,
             args: Vec::new(),
             arg_handles: Vec::new(),
+            arg_read_only: Vec::new(),
             uniform_bound: None,
             destination,
             target: Some(target_bb),

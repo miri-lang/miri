@@ -258,3 +258,95 @@ println(f'{host[0]} {host[1]}')
 ";
     assert_gpu_runs_with_output(source, "21 57");
 }
+
+/// Multi-if value-correctness: sequential ifs with accumulation.
+/// Game-of-Life neighbor-count shape: conditionally add from two arrays.
+/// a=[1,2,3,4], b=[10,20,30,40]
+/// i=0: a[0]=1>0 (add), b[0]=10 not>15 → sum=1
+/// i=1: a[1]=2>0 (add), b[1]=20>15 (add) → sum=2+20=22
+/// i=2: a[2]=3>0 (add), b[2]=30>15 (add) → sum=3+30=33
+/// i=3: a[3]=4>0 (add), b[3]=40>15 (add) → sum=4+40=44
+#[test]
+fn multi_if_sequential_with_accumulation_value_correctness() {
+    let source = "
+use system.io
+use system.gpu
+use system.collections.array
+
+gpu let a = [1, 2, 3, 4]
+gpu let b = [10, 20, 30, 40]
+gpu var dst = [0, 0, 0, 0]
+gpu for i in 0..4
+    var sum = 0
+    if a[i] > 0
+        sum = sum + a[i]
+    if b[i] > 15
+        sum = sum + b[i]
+    dst[i] = sum
+let host = dst
+println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
+";
+    assert_gpu_runs_with_output(source, "1 22 33 44");
+}
+
+/// Multi-if value-correctness: nested ifs with accumulation.
+/// Box-blur-like shape: nested bounds guard accumulation.
+/// a=[1,2,3,4], b=[10,20,30,40]
+/// i=0: a[0]=1>1 (no) → sum=0
+/// i=1: a[1]=2>1 (yes), sum=2; b[1]=20<30 (yes), sum=2+20=22
+/// i=2: a[2]=3>1 (yes), sum=3; b[2]=30<30 (no) → sum=3
+/// i=3: a[3]=4>1 (yes), sum=4; b[3]=40<30 (no) → sum=4
+#[test]
+fn multi_if_nested_with_accumulation_value_correctness() {
+    let source = "
+use system.io
+use system.gpu
+use system.collections.array
+
+gpu let a = [1, 2, 3, 4]
+gpu let b = [10, 20, 30, 40]
+gpu var dst = [0, 0, 0, 0]
+gpu for i in 0..4
+    var sum = 0
+    var count = 0
+    if a[i] > 1
+        sum = sum + a[i]
+        count = count + 1
+        if b[i] < 30
+            sum = sum + b[i]
+            count = count + 1
+    dst[i] = sum
+let host = dst
+println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
+";
+    assert_gpu_runs_with_output(source, "0 22 3 4");
+}
+
+/// Multi-if value-correctness: if-else statement.
+/// MOST CRITICAL: verify the else body actually emits and runs.
+/// a=[1,2,3,4]
+/// i=0: a[0]=1 not>2 → else: result=0
+/// i=1: a[1]=2 not>2 → else: result=0
+/// i=2: a[2]=3>2 → if: result=1
+/// i=3: a[3]=4>2 → if: result=1
+#[test]
+fn multi_if_else_value_correctness() {
+    let source = "
+use system.io
+use system.gpu
+use system.collections.array
+
+gpu let a = [1, 2, 3, 4]
+gpu var dst = [0, 0, 0, 0]
+gpu for i in 0..4
+    var result = 0
+    if a[i] > 2
+        result = 1
+    else
+        result = 0
+    dst[i] = result
+let host = dst
+println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
+";
+    assert_gpu_runs_with_output(source, "0 0 1 1");
+}

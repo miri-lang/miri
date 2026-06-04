@@ -57,12 +57,27 @@ pub fn lower_gpu_for(
     iterable: &Expression,
     body: &Statement,
 ) -> Result<(), LoweringError> {
-    if decls.len() != 1 {
-        return Err(LoweringError::unsupported_expression(
-            "gpu for: exactly one loop variable is supported".to_string(),
+    match decls.len() {
+        1 => lower_gpu_for_1d(ctx, span, stmt_id, decls, iterable, body),
+        2 => lower_gpu_for_2d(ctx, span, stmt_id, decls, iterable, body),
+        _ => Err(LoweringError::unsupported_expression(
+            format!(
+                "gpu for: expected 1 or 2 loop variables, got {}",
+                decls.len()
+            ),
             *span,
-        ));
+        )),
     }
+}
+
+fn lower_gpu_for_1d(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    stmt_id: usize,
+    decls: &[VariableDeclaration],
+    iterable: &Expression,
+    body: &Statement,
+) -> Result<(), LoweringError> {
     let loop_var_name = decls[0].name.clone();
 
     let ExpressionKind::Range(start, Some(end), range_type) = &iterable.node else {
@@ -122,10 +137,158 @@ pub fn lower_gpu_for(
     Ok(())
 }
 
+fn lower_gpu_for_2d(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    stmt_id: usize,
+    decls: &[VariableDeclaration],
+    iterable: &Expression,
+    body: &Statement,
+) -> Result<(), LoweringError> {
+    let ExpressionKind::Tuple(ranges) = &iterable.node else {
+        return Err(LoweringError::unsupported_expression(
+            "2D gpu for: expected a tuple of two ranges".to_string(),
+            *span,
+        ));
+    };
+    if ranges.len() != 2 {
+        return Err(LoweringError::unsupported_expression(
+            format!(
+                "2D gpu for: expected exactly 2 ranges, got {}",
+                ranges.len()
+            ),
+            *span,
+        ));
+    }
+
+    let ExpressionKind::Range(start_x, Some(end_x), range_type_x) = &ranges[0].node else {
+        return Err(LoweringError::unsupported_expression(
+            "2D gpu for: first range must be a bounded numeric range".to_string(),
+            *span,
+        ));
+    };
+    let ExpressionKind::Range(start_y, Some(end_y), range_type_y) = &ranges[1].node else {
+        return Err(LoweringError::unsupported_expression(
+            "2D gpu for: second range must be a bounded numeric range".to_string(),
+            *span,
+        ));
+    };
+
+    let start_x_lit = read_int_literal(start_x, *span)?;
+    let end_x_lit = read_int_literal(end_x, *span)?;
+    let start_y_lit = read_int_literal(start_y, *span)?;
+    let end_y_lit = read_int_literal(end_y, *span)?;
+
+    let width = compute_range_length(start_x_lit, end_x_lit, range_type_x.clone(), *span)?;
+    let height = compute_range_length(start_y_lit, end_y_lit, range_type_y.clone(), *span)?;
+
+    let loop_var_x = decls[0].name.clone();
+    let loop_var_y = decls[1].name.clone();
+
+    let captures = collect_capture_infos(ctx, body, &loop_var_x, *span)?;
+    let kernel_name = format!("miri_gpu_for_2d_{}", stmt_id);
+
+    let kernel_body = build_kernel_body_2d_literal(
+        ctx,
+        Kernel2DContext {
+            captures: &captures,
+            loop_var_x: &loop_var_x,
+            loop_var_y: &loop_var_y,
+            start_x: start_x_lit,
+            start_y: start_y_lit,
+            width,
+            height,
+            body,
+            span: *span,
+        },
+    )?;
+
+    ctx.lambda_bodies.push(LambdaInfo {
+        name: kernel_name.clone(),
+        body: kernel_body,
+        captures: Vec::new(),
+    });
+
+    emit_gpu_launch_2d_literal(ctx, &kernel_name, width, height, &captures, *span);
+    Ok(())
+}
+
 struct CaptureInfo {
     name: String,
     ty: Type,
     outer_local: Local,
+    is_written: bool,
+}
+
+/// Collects the names of variables that are written to in the given statement.
+/// This includes assignments like `x = ...`, `x[i] = ...`, and `x.field = ...`.
+fn collect_written_captures(body: &Statement) -> HashSet<String> {
+    let mut written = HashSet::new();
+    visit_written_stmt(body, &mut written);
+    written
+}
+
+fn visit_written_stmt(stmt: &Statement, written: &mut HashSet<String>) {
+    match &stmt.node {
+        StatementKind::Block(stmts) => {
+            for s in stmts {
+                visit_written_stmt(s, written);
+            }
+        }
+        StatementKind::Expression(expr) => visit_written_expr(expr, written),
+        StatementKind::Variable(_, _) => {}
+        StatementKind::Return(_) => {}
+        StatementKind::If(_, then_branch, else_branch, _) => {
+            visit_written_stmt(then_branch, written);
+            if let Some(eb) = else_branch {
+                visit_written_stmt(eb, written);
+            }
+        }
+        StatementKind::While(_, body, _) => visit_written_stmt(body, written),
+        StatementKind::For(_, _, body) | StatementKind::GpuFor(_, _, body) => {
+            visit_written_stmt(body, written);
+        }
+        StatementKind::Empty
+        | StatementKind::Break
+        | StatementKind::Continue
+        | StatementKind::Use(_, _)
+        | StatementKind::Type(_, _)
+        | StatementKind::FunctionDeclaration(_)
+        | StatementKind::Enum(_, _, _, _, _, _)
+        | StatementKind::Struct(_, _, _, _, _)
+        | StatementKind::Class(_)
+        | StatementKind::Trait(_, _, _, _, _)
+        | StatementKind::RuntimeFunctionDeclaration(_, _, _, _)
+        | StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => {}
+    }
+}
+
+fn visit_written_expr(expr: &Expression, written: &mut HashSet<String>) {
+    if let ExpressionKind::Assignment(lhs, _, rhs) = &expr.node {
+        extract_written_lhs(lhs, written);
+        visit_written_expr(rhs, written);
+    }
+}
+
+fn extract_written_lhs(
+    lhs: &crate::ast::expression::LeftHandSideExpression,
+    written: &mut HashSet<String>,
+) {
+    use crate::ast::expression::LeftHandSideExpression;
+    match lhs {
+        LeftHandSideExpression::Identifier(expr) => {
+            if let ExpressionKind::Identifier(name, _) = &expr.node {
+                written.insert(name.clone());
+            }
+        }
+        LeftHandSideExpression::Index(expr) | LeftHandSideExpression::Member(expr) => {
+            if let ExpressionKind::Index(base, _) | ExpressionKind::Member(base, _) = &expr.node {
+                if let ExpressionKind::Identifier(name, _) = &base.node {
+                    written.insert(name.clone());
+                }
+            }
+        }
+    }
 }
 
 /// Collect and validate the outer-variable captures of a `gpu for` body. Only
@@ -138,6 +301,7 @@ fn collect_capture_infos(
     span: Span,
 ) -> Result<Vec<CaptureInfo>, LoweringError> {
     let capture_names = collect_outer_captures(body, loop_var_name, ctx);
+    let written = collect_written_captures(body);
     let mut captures: Vec<CaptureInfo> = Vec::with_capacity(capture_names.len());
     for name in capture_names {
         let Some(&outer_local) = ctx.variable_map.get(name.as_str()) else {
@@ -166,9 +330,10 @@ fn collect_capture_infos(
             ));
         }
         captures.push(CaptureInfo {
-            name,
+            name: name.clone(),
             ty,
             outer_local,
+            is_written: written.contains(&name),
         });
     }
     Ok(captures)
@@ -483,9 +648,10 @@ fn visit_lhs(
     }
 }
 
-/// Computes the global thread index (thread_id_x + block_id_x * block_dim_x).
+/// Computes the global thread index for the given dimension:
+/// `thread_id[dim] + block_id[dim] * block_dim[dim]`, cast to i64.
 /// Returns the i64 thread index and emits the necessary statements into ctx.
-fn compute_thread_index(ctx: &mut LoweringContext, span: Span) -> Local {
+fn compute_thread_index(ctx: &mut LoweringContext, dim: Dimension, span: Span) -> Local {
     let u32_ty = Type::new(TypeKind::U32, span);
     let i64_ty = Type::new(TypeKind::Int, span);
 
@@ -493,21 +659,21 @@ fn compute_thread_index(ctx: &mut LoweringContext, span: Span) -> Local {
     push_assign(
         ctx,
         global_idx_u32,
-        Rvalue::GpuIntrinsic(GpuIntrinsic::ThreadIdx(Dimension::X)),
+        Rvalue::GpuIntrinsic(GpuIntrinsic::ThreadIdx(dim)),
         span,
     );
     let block_id_u32 = ctx.push_temp(u32_ty.clone(), span);
     push_assign(
         ctx,
         block_id_u32,
-        Rvalue::GpuIntrinsic(GpuIntrinsic::BlockIdx(Dimension::X)),
+        Rvalue::GpuIntrinsic(GpuIntrinsic::BlockIdx(dim)),
         span,
     );
     let block_dim_u32 = ctx.push_temp(u32_ty.clone(), span);
     push_assign(
         ctx,
         block_dim_u32,
-        Rvalue::GpuIntrinsic(GpuIntrinsic::BlockDim(Dimension::X)),
+        Rvalue::GpuIntrinsic(GpuIntrinsic::BlockDim(dim)),
         span,
     );
     let block_offset_u32 = ctx.push_temp(u32_ty.clone(), span);
@@ -561,7 +727,7 @@ fn build_kernel_body_literal(
         workgroup_size: Some([GPU_FOR_BLOCK_SIZE, 1, 1]),
         required_capabilities: Vec::new(),
     }));
-    kernel.out_params = vec![true; captures.len()];
+    kernel.out_params = captures.iter().map(|c| c.is_written).collect();
 
     let mut ctx = LoweringContext::new(kernel, parent.type_checker, parent.is_release);
     for cap in captures {
@@ -570,7 +736,7 @@ fn build_kernel_body_literal(
     }
 
     let i64_ty = Type::new(TypeKind::Int, span);
-    let thread_int = compute_thread_index(&mut ctx, span);
+    let thread_int = compute_thread_index(&mut ctx, Dimension::X, span);
 
     let loop_local = ctx.push_local(loop_var_name.to_string(), i64_ty.clone(), span);
     push_assign(
@@ -691,6 +857,7 @@ fn emit_gpu_launch_literal(
             block: Operand::Copy(Place::new(block_local)),
             args: arg_ops,
             arg_handles,
+            arg_read_only: captures.iter().map(|c| !c.is_written).collect(),
             uniform_bound: None,
             destination: Place::new(dest_local),
             target: Some(after_bb),
@@ -721,7 +888,7 @@ fn build_kernel_body_runtime(
         required_capabilities: Vec::new(),
     }));
 
-    let mut out_params = vec![true; captures.len()];
+    let mut out_params: Vec<bool> = captures.iter().map(|c| c.is_written).collect();
     out_params.push(false);
     kernel.out_params = out_params;
 
@@ -736,7 +903,7 @@ fn build_kernel_body_runtime(
     let uniform_param = ctx.push_param("_uniform_bound".to_string(), i64_ty.clone(), span);
     ctx.body.local_decls[uniform_param.0].storage_class = StorageClass::UniformBuffer;
 
-    let thread_int = compute_thread_index(&mut ctx, span);
+    let thread_int = compute_thread_index(&mut ctx, Dimension::X, span);
 
     let loop_local = ctx.push_local(loop_var_name.to_string(), i64_ty.clone(), span);
     push_assign(
@@ -1027,6 +1194,11 @@ fn emit_gpu_launch_runtime(
             block: Operand::Copy(Place::new(block_local)),
             args: arg_ops,
             arg_handles,
+            arg_read_only: {
+                let mut read_only: Vec<bool> = captures.iter().map(|c| !c.is_written).collect();
+                read_only.push(false);
+                read_only
+            },
             uniform_bound: Some(Box::new(end_op)),
             destination: Place::new(dest_local),
             target: Some(after_bb),
@@ -1042,6 +1214,238 @@ fn push_assign(ctx: &mut LoweringContext, local: Local, rvalue: Rvalue, span: Sp
         kind: MirStatementKind::Assign(Place::new(local), rvalue),
         span,
     });
+}
+
+struct Kernel2DContext<'a> {
+    captures: &'a [CaptureInfo],
+    loop_var_x: &'a str,
+    loop_var_y: &'a str,
+    start_x: i64,
+    start_y: i64,
+    width: i64,
+    height: i64,
+    body: &'a Statement,
+    span: Span,
+}
+
+/// Emits the 2D bounds-check conditional, kernel body, and cleanup.
+fn emit_2d_bounds_check_loop(
+    ctx: &mut LoweringContext,
+    x_local: Local,
+    y_local: Local,
+    end_x: i64,
+    end_y: i64,
+    body: &Statement,
+    span: Span,
+) -> Result<(), LoweringError> {
+    let x_in_bounds = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
+    push_assign(
+        ctx,
+        x_in_bounds,
+        Rvalue::BinaryOp(
+            BinOp::Lt,
+            Box::new(Operand::Copy(Place::new(x_local))),
+            Box::new(int_constant(end_x, span)),
+        ),
+        span,
+    );
+
+    let y_in_bounds = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
+    push_assign(
+        ctx,
+        y_in_bounds,
+        Rvalue::BinaryOp(
+            BinOp::Lt,
+            Box::new(Operand::Copy(Place::new(y_local))),
+            Box::new(int_constant(end_y, span)),
+        ),
+        span,
+    );
+
+    let cond_local = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
+    push_assign(
+        ctx,
+        cond_local,
+        Rvalue::BinaryOp(
+            BinOp::BitAnd,
+            Box::new(Operand::Copy(Place::new(x_in_bounds))),
+            Box::new(Operand::Copy(Place::new(y_in_bounds))),
+        ),
+        span,
+    );
+
+    let body_bb = ctx.new_basic_block();
+    let exit_bb = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::SwitchInt {
+            discr: Operand::Copy(Place::new(cond_local)),
+            targets: vec![(Discriminant::bool_true(), body_bb)],
+            otherwise: exit_bb,
+        },
+        span,
+    ));
+
+    ctx.set_current_block(body_bb);
+    lower_statement(ctx, body)?;
+    if ctx.body.basic_blocks[ctx.current_block.0]
+        .terminator
+        .is_none()
+    {
+        ctx.set_terminator(Terminator::new(
+            TerminatorKind::Goto { target: exit_bb },
+            span,
+        ));
+    }
+
+    ctx.set_current_block(exit_bb);
+    ctx.set_terminator(Terminator::new(TerminatorKind::Return, span));
+
+    Ok(())
+}
+
+fn build_kernel_body_2d_literal(
+    parent: &mut LoweringContext,
+    ctx: Kernel2DContext,
+) -> Result<Body, LoweringError> {
+    const BLOCK_SIZE_2D: u32 = 16;
+
+    let arg_count = ctx.captures.len();
+    let mut kernel = Body::new(arg_count, ctx.span, ExecutionModel::GpuKernel);
+    kernel.local_decls.push(LocalDecl::new(
+        Type::new(TypeKind::Void, ctx.span),
+        ctx.span,
+    ));
+    kernel.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
+        workgroup_size: Some([BLOCK_SIZE_2D, BLOCK_SIZE_2D, 1]),
+        required_capabilities: Vec::new(),
+    }));
+    kernel.out_params = ctx.captures.iter().map(|c| c.is_written).collect();
+
+    let mut lower_ctx = LoweringContext::new(kernel, parent.type_checker, parent.is_release);
+    for cap in ctx.captures {
+        let local = lower_ctx.push_param(cap.name.clone(), cap.ty.clone(), ctx.span);
+        lower_ctx.body.local_decls[local.0].storage_class = StorageClass::GpuGlobal;
+    }
+
+    let i64_ty = Type::new(TypeKind::Int, ctx.span);
+    let thread_x = compute_thread_index(&mut lower_ctx, Dimension::X, ctx.span);
+    let thread_y = compute_thread_index(&mut lower_ctx, Dimension::Y, ctx.span);
+
+    let x_local = lower_ctx.push_local(ctx.loop_var_x.to_string(), i64_ty.clone(), ctx.span);
+    push_assign(
+        &mut lower_ctx,
+        x_local,
+        Rvalue::BinaryOp(
+            BinOp::Add,
+            Box::new(Operand::Copy(Place::new(thread_x))),
+            Box::new(int_constant(ctx.start_x, ctx.span)),
+        ),
+        ctx.span,
+    );
+
+    let y_local = lower_ctx.push_local(ctx.loop_var_y.to_string(), i64_ty.clone(), ctx.span);
+    push_assign(
+        &mut lower_ctx,
+        y_local,
+        Rvalue::BinaryOp(
+            BinOp::Add,
+            Box::new(Operand::Copy(Place::new(thread_y))),
+            Box::new(int_constant(ctx.start_y, ctx.span)),
+        ),
+        ctx.span,
+    );
+
+    let end_x = ctx.start_x + ctx.width;
+    let end_y = ctx.start_y + ctx.height;
+
+    emit_2d_bounds_check_loop(
+        &mut lower_ctx,
+        x_local,
+        y_local,
+        end_x,
+        end_y,
+        ctx.body,
+        ctx.span,
+    )?;
+
+    Ok(lower_ctx.body)
+}
+
+fn emit_gpu_launch_2d_literal(
+    ctx: &mut LoweringContext,
+    kernel_name: &str,
+    width: i64,
+    height: i64,
+    captures: &[CaptureInfo],
+    span: Span,
+) {
+    const BLOCK_SIZE: u32 = 16;
+    let dim3_ty = Type::new(TypeKind::Custom(DIM3_TYPE_NAME.to_string(), None), span);
+
+    let block_size_i64 = i64::from(BLOCK_SIZE);
+    let grid_x = width / block_size_i64 + i64::from(width % block_size_i64 != 0);
+    let grid_y = height / block_size_i64 + i64::from(height % block_size_i64 != 0);
+
+    let grid_x_op = int_constant(grid_x, span);
+    let grid_y_op = int_constant(grid_y, span);
+    let one_op = int_constant(1, span);
+
+    let grid_local = ctx.push_temp(dim3_ty.clone(), span);
+    push_assign(
+        ctx,
+        grid_local,
+        Rvalue::Aggregate(
+            AggregateKind::Struct(dim3_ty.clone()),
+            vec![grid_x_op, grid_y_op, one_op.clone()],
+        ),
+        span,
+    );
+
+    let block_size_op = int_constant(block_size_i64, span);
+    let block_local = ctx.push_temp(dim3_ty.clone(), span);
+    push_assign(
+        ctx,
+        block_local,
+        Rvalue::Aggregate(
+            AggregateKind::Struct(dim3_ty.clone()),
+            vec![block_size_op.clone(), block_size_op, one_op],
+        ),
+        span,
+    );
+
+    let kernel_op = Operand::Constant(Box::new(Constant {
+        span,
+        ty: Type::new(TypeKind::Identifier, span),
+        literal: Literal::Identifier(kernel_name.to_string()),
+    }));
+
+    let arg_ops: Vec<Operand> = captures
+        .iter()
+        .map(|c| Operand::Copy(Place::new(c.outer_local)))
+        .collect();
+    let arg_handles: Vec<Option<DeviceHandleId>> = captures
+        .iter()
+        .map(|c| ctx.body.local_decls[c.outer_local.0].device_handle)
+        .collect();
+
+    let void_ty = Type::new(TypeKind::Void, span);
+    let dest_local = ctx.push_temp(void_ty, span);
+    let after_bb = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::GpuLaunch {
+            kernel: kernel_op,
+            grid: Operand::Copy(Place::new(grid_local)),
+            block: Operand::Copy(Place::new(block_local)),
+            args: arg_ops,
+            arg_handles,
+            arg_read_only: captures.iter().map(|c| !c.is_written).collect(),
+            uniform_bound: None,
+            destination: Place::new(dest_local),
+            target: Some(after_bb),
+        },
+        span,
+    ));
+    ctx.set_current_block(after_bb);
 }
 
 fn int_constant(value: i64, span: Span) -> Operand {

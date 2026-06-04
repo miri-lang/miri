@@ -16,7 +16,7 @@ use std::rc::Rc;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::control_flow::lower_call;
 use crate::mir::lowering::expression::{lower_expression, testing_intrinsic};
-use crate::mir::lowering::helpers::resolve_type;
+use crate::mir::lowering::helpers::{gpu_math_return_type, resolve_type};
 
 pub(crate) fn lower_call_expr(
     ctx: &mut LoweringContext,
@@ -196,6 +196,7 @@ fn try_lower_math_intrinsic(
     }
 
     let return_ty = resolve_type(ctx.type_checker, expr);
+    let return_ty = gpu_math_return_type(ctx, args, return_ty, expr.span);
     let (target, ret_op) = if let Some(ref d) = dest {
         (d.clone(), Operand::Copy(d.clone()))
     } else {

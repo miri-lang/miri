@@ -126,10 +126,16 @@ fn main()
 ",
     );
     let source = std::str::from_utf8(&bytes).expect("WGSL output is UTF-8");
-    let binding_count = source.matches("var<storage, read_write>").count();
+    let read_only_count = source.matches("var<storage, read>").count();
+    let read_write_count = source.matches("var<storage, read_write>").count();
     assert_eq!(
-        binding_count, 3,
-        "expected 3 captured buffers as storage bindings, got:\n{}",
+        read_only_count, 2,
+        "expected 2 read-only captured buffers, got:\n{}",
+        source
+    );
+    assert_eq!(
+        read_write_count, 1,
+        "expected 1 read-write captured buffer (dst), got:\n{}",
         source
     );
 }
