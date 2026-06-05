@@ -75,6 +75,14 @@ pub fn assign_with_span(
     )
 }
 
+/// Creates a cast expression with a specific span.
+pub fn cast_with_span(value: Expression, target_type: Expression, span: Span) -> Expression {
+    expr_with_span(
+        ExpressionKind::Cast(Box::new(value), Box::new(target_type)),
+        span,
+    )
+}
+
 /// Creates a list literal expression with a specific span.
 pub fn list_with_span(elements: Vec<Expression>, span: Span) -> Expression {
     expr_with_span(ExpressionKind::List(elements), span)

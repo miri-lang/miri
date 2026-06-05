@@ -173,6 +173,11 @@ pub enum ExpressionKind {
     ///     let y = 20
     ///     x + y
     Block(Vec<Statement>, Box<Expression>),
+
+    /// A cast expression (e.g., `x as int`, `3.14 as float`).
+    /// The first Expression is the value being cast; the second is the target type
+    /// (parsed as a type expression).
+    Cast(Box<Expression>, Box<Expression>),
 }
 
 /// An expression node (wraps `ExpressionKind` with an ID and span).
@@ -217,7 +222,8 @@ impl fmt::Display for ExpressionKind {
             | ExpressionKind::FormattedString(..)
             | ExpressionKind::NamedArgument(..)
             | ExpressionKind::Super
-            | ExpressionKind::Block(..) => write!(f, "{:?}", self),
+            | ExpressionKind::Block(..)
+            | ExpressionKind::Cast(..) => write!(f, "{:?}", self),
         }
     }
 }
