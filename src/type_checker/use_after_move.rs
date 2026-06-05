@@ -342,6 +342,9 @@ impl<'a> UseAfterMoveChecker<'a> {
                 }
                 self.check_expr(final_expr, consumed);
             }
+            ExpressionKind::Cast(value_expr, _target_type_expr) => {
+                self.check_expr(value_expr, consumed);
+            }
             ExpressionKind::Literal(_)
             | ExpressionKind::Type(_, _)
             | ExpressionKind::GenericType(_, _, _)

@@ -29,6 +29,7 @@ impl<'source> Parser<'source> {
                 Token::LParen => Some(self.call_access(expression.clone())?),
                 Token::LessThan => self.generic_arg_access(expression.clone())?,
                 Token::Float => self.tuple_field_access(expression.clone())?,
+                Token::As => Some(self.cast_access(expression.clone())?),
                 _ => None,
             };
 
@@ -126,6 +127,15 @@ impl<'source> Parser<'source> {
         Ok(Some(ast::member_with_span(
             expression, property, total_span,
         )))
+    }
+
+    fn cast_access(&mut self, expression: Expression) -> Result<Expression, SyntaxError> {
+        self.eat_token(&Token::As)?;
+        let target_type = self
+            .type_expression()?
+            .ok_or_else(|| self.error_unexpected_token("type", "after 'as'"))?;
+        let span = Span::new(expression.span.start, target_type.span.end);
+        Ok(ast::cast_with_span(expression, target_type, span))
     }
 
     pub(crate) fn arguments(&mut self) -> Result<(Vec<Expression>, Span), SyntaxError> {

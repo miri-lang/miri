@@ -331,6 +331,9 @@ impl<'a> ReturnFlowAnalyzer<'a> {
                     self.scan_lambda_captures(&lambda_data.body, flow);
                 }
             }
+            ExpressionKind::Cast(value_expr, _target_type_expr) => {
+                self.classify(value_expr, aliases_return, flow);
+            }
             ExpressionKind::Literal(_)
             | ExpressionKind::Type(_, _)
             | ExpressionKind::GenericType(_, _, _)
@@ -1036,6 +1039,9 @@ fn collect_callees_from_expr(
                 collect_callees_from_expr(e, types, known, out);
             }
         }
+        ExpressionKind::Cast(value_expr, _target_type_expr) => {
+            collect_callees_from_expr(value_expr, types, known, out);
+        }
         ExpressionKind::Lambda(_)
         | ExpressionKind::Identifier(_, _)
         | ExpressionKind::Literal(_)
@@ -1535,6 +1541,9 @@ fn walk_expr_for_rule4(
             if let Some(e) = end_ {
                 walk_expr_for_rule4(e, params, summaries, direct_escapes);
             }
+        }
+        ExpressionKind::Cast(value_expr, _target_type_expr) => {
+            walk_expr_for_rule4(value_expr, params, summaries, direct_escapes);
         }
         ExpressionKind::Lambda(_)
         | ExpressionKind::Identifier(_, _)

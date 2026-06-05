@@ -220,6 +220,9 @@ fn visit_expr(
         ExpressionKind::Block(stmts, final_expr) => {
             visit_block_expr(stmts, final_expr, bound, context, reported, violations);
         }
+        ExpressionKind::Cast(value_expr, _target_type_expr) => {
+            visit_expr(value_expr, bound, context, reported, violations);
+        }
         ExpressionKind::Literal(_)
         | ExpressionKind::Super
         | ExpressionKind::Type(_, _)

@@ -115,6 +115,40 @@ fn main()
         );
     }
 
+    /// i64 div/mod: operands are narrowed to i32 for the op then widened back.
+    /// This works around naga MSL's "select is ambiguous" error on Metal.
+    #[test]
+    fn int_buffer_div_emits_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [0, 1, 2, 3, 4]
+    gpu var dst = [0, 0, 0, 0, 0]
+    gpu for i in 0..5
+        dst[i] = a[i] / 2
+",
+        );
+    }
+
+    #[test]
+    fn int_buffer_rem_emits_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [0, 1, 2, 3, 4]
+    gpu var dst = [0, 0, 0, 0, 0]
+    gpu for i in 0..5
+        dst[i] = a[i] % 3
+",
+        );
+    }
+
     #[test]
     fn f32_buffer_add_emits_naga_valid_wgsl() {
         assert_gpu_wgsl_valid(

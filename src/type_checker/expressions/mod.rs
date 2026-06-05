@@ -51,6 +51,7 @@ use crate::type_checker::TypeChecker;
 pub mod access;
 pub mod binary;
 pub mod calls;
+pub mod cast;
 pub mod collections;
 pub mod control_flow;
 pub mod functions;
@@ -129,6 +130,9 @@ impl TypeChecker {
                 self.infer_block(statements, final_expr, context)
             }
             ExpressionKind::Array(elements, size) => self.infer_array(elements, size, context),
+            ExpressionKind::Cast(value_expr, target_type_expr) => {
+                self.infer_cast(value_expr, target_type_expr, span, context)
+            }
             ExpressionKind::Guard(_, _)
             | ExpressionKind::GenericType(_, _, _)
             | ExpressionKind::Type(_, _)

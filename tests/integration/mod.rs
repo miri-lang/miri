@@ -4,6 +4,7 @@
 pub mod arithmetic;
 pub mod array;
 pub mod basic;
+pub mod cast;
 pub mod comparisons;
 pub mod complex;
 pub mod constant;

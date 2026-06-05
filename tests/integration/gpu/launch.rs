@@ -406,3 +406,209 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]} {gpu_readbacks()}')
 ";
     assert_gpu_runs_with_output(source, "1201 1202 1203 1204 1");
 }
+
+#[test]
+fn gpu_i64_modulo_roundtrips() {
+    let source = "
+use system.gpu
+use system.collections.array
+
+gpu let src = [0, 1, 2, 3, 4]
+gpu var dst = [0, 0, 0, 0, 0]
+gpu for i in 0..5
+    dst[i] = src[i] % 3
+
+let host = dst
+println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]}')
+";
+    assert_gpu_runs_with_output(source, "0 1 2 0 1");
+}
+
+#[test]
+fn gpu_i64_divide_roundtrips() {
+    let source = "
+use system.gpu
+use system.collections.array
+
+gpu let src = [0, 1, 2, 3, 4]
+gpu var dst = [0, 0, 0, 0, 0]
+gpu for i in 0..5
+    dst[i] = src[i] / 2
+
+let host = dst
+println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]}')
+";
+    assert_gpu_runs_with_output(source, "0 0 1 1 2");
+}
+
+#[test]
+fn gpu_i64_arithmetic_kernel_still_works() {
+    let source = "
+use system.gpu
+use system.collections.array
+
+gpu let src = [10, 20, 30, 40]
+gpu var dst = [0, 0, 0, 0]
+gpu for i in 0..4
+    dst[i] = src[i] + 5
+
+let host = dst
+println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
+";
+    assert_gpu_runs_with_output(source, "15 25 35 45");
+}
+
+/// Test both div and mod in the same kernel using flat addressing (row = i / 3, col = i % 3).
+/// This verifies the Metal MSL i64 narrowing workaround fires for both operators.
+#[test]
+fn gpu_i64_div_and_mod_flat_addressing() {
+    let source = "
+use system.gpu
+use system.collections.array
+
+gpu let indices = [0, 1, 2, 3, 4, 5, 6, 7, 8]
+gpu var rows = [0, 0, 0, 0, 0, 0, 0, 0, 0]
+gpu var cols = [0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+gpu for i in 0..9
+    rows[i] = indices[i] / 3
+    cols[i] = indices[i] % 3
+
+let h_rows = rows
+let h_cols = cols
+println(f'{h_rows[0]} {h_rows[1]} {h_rows[2]} {h_rows[3]} {h_rows[4]} {h_rows[5]} {h_rows[6]} {h_rows[7]} {h_rows[8]}')
+println(f'{h_cols[0]} {h_cols[1]} {h_cols[2]} {h_cols[3]} {h_cols[4]} {h_cols[5]} {h_cols[6]} {h_cols[7]} {h_cols[8]}')
+";
+    assert_gpu_runs_with_output(source, "0 0 0 1 1 1 2 2 2\n0 1 2 0 1 2 0 1 2");
+}
+
+/// Test int→float cast inside a gpu kernel.
+/// The kernel casts i64 loop counter to f32 and stores into f32 buffer.
+/// Uses explicit `i as f32` to match the f32 buffer width.
+#[test]
+fn gpu_cast_int_to_float_in_kernel() {
+    let source = "
+use system.gpu
+use system.collections.array
+
+gpu var posx = [0.0, 0.0, 0.0, 0.0]
+
+gpu for i in 0..4
+    posx[i] = i as f32 * 0.25
+
+let h = posx
+println(f'{h[0]} {h[1]} {h[2]} {h[3]}')
+";
+    assert_gpu_runs_with_output(source, "0 0.25 0.5 0.75");
+}
+
+/// Test float→int cast inside a gpu kernel.
+/// The kernel applies floor() to an f32 value and casts to i64.
+#[test]
+fn gpu_cast_float_to_int_in_kernel() {
+    let source = "
+use system.gpu
+use system.collections.array
+use system.math
+
+gpu let src = [1.7, 2.3, 3.9]
+gpu var idx = [0, 0, 0]
+
+gpu for i in 0..3
+    idx[i] = floor(src[i]) as int
+
+let h = idx
+println(f'{h[0]} {h[1]} {h[2]}')
+";
+    assert_gpu_runs_with_output(source, "1 2 3");
+}
+
+/// Test large i64 constant (out-of-i32 range) in division.
+/// The constant 9223372036854775800 is near i64::MAX.
+/// When narrowed to i32, it truncates to a valid i32 range value.
+/// Expected: (5 / i32::truncated(9223372036854775800)) = (5 / -8) = 0 (signed division, truncate toward zero).
+#[test]
+fn gpu_i64_divide_large_constant() {
+    let source = "
+use system.gpu
+use system.collections.array
+
+gpu let src = [5]
+gpu var dst = [0]
+
+gpu for i in 0..1
+    dst[i] = src[i] / 9223372036854775800
+
+let host = dst
+println(f'{host[0]}')
+";
+    // The large constant 9223372036854775800 as i64 narrows to i32(-8) in WGSL.
+    // 5 / -8 = 0 (truncate toward zero for signed division).
+    assert_gpu_runs_with_output(source, "0");
+}
+
+/// Test large i64 constant (out-of-i32 range) in modulo.
+/// The constant 9223372036854775800 is near i64::MAX.
+/// When narrowed to i32, it truncates to a valid i32 range value.
+/// Expected: (5 % i32::truncated(9223372036854775800)) matches i32-narrowed semantics.
+#[test]
+fn gpu_i64_modulo_large_constant() {
+    let source = "
+use system.gpu
+use system.collections.array
+
+gpu let src = [5]
+gpu var dst = [0]
+
+gpu for i in 0..1
+    dst[i] = src[i] % 9223372036854775800
+
+let host = dst
+println(f'{host[0]}')
+";
+    // The large constant 9223372036854775800 as i64 narrows to i32(-8) in WGSL.
+    // 5 % -8 = 5 (modulo with negative divisor keeps sign of dividend).
+    assert_gpu_runs_with_output(source, "5");
+}
+
+/// Test negative dividend with division (i32 semantics: truncate toward zero).
+#[test]
+fn gpu_i64_divide_negative() {
+    let source = "
+use system.gpu
+use system.collections.array
+
+gpu let src = [0, 0-1, 0-2, 3, 4]
+gpu var dst = [0, 0, 0, 0, 0]
+
+gpu for i in 0..5
+    dst[i] = src[i] / 2
+
+let host = dst
+println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]}')
+";
+    // Signed division truncate toward zero:
+    // 0 / 2 = 0, -1 / 2 = 0 (not -1), -2 / 2 = -1, 3 / 2 = 1, 4 / 2 = 2
+    assert_gpu_runs_with_output(source, "0 0 -1 1 2");
+}
+
+/// Test negative dividend with modulo (sign follows dividend).
+#[test]
+fn gpu_i64_modulo_negative() {
+    let source = "
+use system.gpu
+use system.collections.array
+
+gpu let src = [0, 0-1, 0-2, 3, 4]
+gpu var dst = [0, 0, 0, 0, 0]
+
+gpu for i in 0..5
+    dst[i] = src[i] % 3
+
+let host = dst
+println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]}')
+";
+    // Modulo with negative dividend (sign follows dividend):
+    // 0 % 3 = 0, -1 % 3 = -1, -2 % 3 = -2, 3 % 3 = 0, 4 % 3 = 1
+    assert_gpu_runs_with_output(source, "0 -1 -2 0 1");
+}
