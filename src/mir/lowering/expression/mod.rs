@@ -18,6 +18,7 @@ pub mod array_expr;
 pub mod assignment_expr;
 pub mod binary_expr;
 pub mod call_expr;
+pub mod cast_expr;
 pub mod conditional_expr;
 pub mod enumvalue_expr;
 pub mod formattedstring_expr;
@@ -79,6 +80,7 @@ pub fn lower_expression(
         ExpressionKind::Super => super_expr::lower_super_expr(ctx, expr, dest),
         ExpressionKind::EnumValue(..) => enumvalue_expr::lower_enumvalue_expr(ctx, expr, dest),
         ExpressionKind::Type(..) => type_expr::lower_type_expr(ctx, expr, dest),
+        ExpressionKind::Cast(..) => cast_expr::lower_cast_expr(ctx, expr, dest),
         ExpressionKind::StructMember(..) => {
             structmember_expr::lower_structmember_expr(ctx, expr, dest)
         }

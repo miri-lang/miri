@@ -619,6 +619,10 @@ fn visit_expr(
             visit_expr(final_expr, bound, ctx, seen, ordered);
             *bound = snap;
         }
+        ExpressionKind::Cast(value_expr, target_type_expr) => {
+            visit_expr(value_expr, bound, ctx, seen, ordered);
+            visit_expr(target_type_expr, bound, ctx, seen, ordered);
+        }
         // No captureable identifiers in these shapes; rejected by the GPU
         // type check anyway. Listed explicitly so a future `ExpressionKind`
         // variant cannot be silently dropped from capture collection.

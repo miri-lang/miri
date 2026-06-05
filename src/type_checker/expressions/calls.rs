@@ -47,6 +47,7 @@ use crate::ast::factory::make_type;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
 use crate::error::syntax::Span;
+use crate::mir::MathIntrinsic;
 use crate::type_checker::context::{Context, TypeDefinition};
 use crate::type_checker::utils::is_gpu_compatible;
 use crate::type_checker::TypeChecker;
@@ -129,6 +130,14 @@ impl TypeChecker {
         context: &mut Context,
         call_id: usize,
     ) -> Type {
+        // Check for math intrinsics with numeric polymorphism (abs, min, max).
+        // These accept both int and float arguments, with return type matching the first arg.
+        if let Some(return_type) =
+            self.try_infer_polymorphic_math_call(func, positional_args, span, context)
+        {
+            return return_type;
+        }
+
         match &func_type.kind {
             TypeKind::Function(func_data) => self.infer_function_call(
                 func_data,
@@ -150,6 +159,114 @@ impl TypeChecker {
                 make_type(TypeKind::Error)
             }
         }
+    }
+
+    /// Detects polymorphic math intrinsics (abs, min, max) and infers their return type
+    /// based on the first argument's numeric type, bypassing the float-only stdlib signature.
+    /// Returns `Some(return_type)` if this is a detected intrinsic, `None` otherwise.
+    fn try_infer_polymorphic_math_call(
+        &mut self,
+        func: &Expression,
+        positional_args: &[(&Expression, Type)],
+        span: Span,
+        context: &Context,
+    ) -> Option<Type> {
+        // Extract the function name from direct identifier or module member access.
+        let func_name = match &func.node {
+            ExpressionKind::Identifier(name, _) => Some(name.as_str()),
+            ExpressionKind::Member(_module_expr, func_expr) => {
+                // Handle `M.abs` where M is `use system.math as M`.
+                if let ExpressionKind::Identifier(func_name, _) = &func_expr.node {
+                    Some(func_name.as_str())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }?;
+
+        // Check if this is a polymorphic math intrinsic (only Abs, Min, Max).
+        // Bind the intrinsic once; validate arity in exhaustive match below.
+        let intrinsic = match MathIntrinsic::from_name(func_name) {
+            Some(m @ (MathIntrinsic::Abs | MathIntrinsic::Min | MathIntrinsic::Max)) => m,
+            _ => return None,
+        };
+
+        // Verify it's from the math module.
+        // Deliberate stdlib-independence deviation: the module gate prevents a user-defined `abs`
+        // from being treated as the polymorphic intrinsic. This mirrors MIR intercepts at
+        // src/mir/lowering/dispatch.rs:323 and expression/call_expr.rs:183.
+        let is_from_math = self
+            .get_variable_module(func_name)
+            .map(|m| m == "system.math")
+            .unwrap_or(false);
+
+        if !is_from_math {
+            return None;
+        }
+
+        // Validate arity before type checking.
+        // Note: The guard above (line 191) ensures `intrinsic` is one of Abs, Min, Max,
+        // so the _ arm below should never be reached in well-formed code.
+        match intrinsic {
+            MathIntrinsic::Abs => {
+                if positional_args.len() != 1 {
+                    self.report_error(
+                        format!(
+                            "abs expects exactly one argument, but got {}",
+                            positional_args.len()
+                        ),
+                        span,
+                    );
+                    return Some(make_type(TypeKind::Error));
+                }
+            }
+            MathIntrinsic::Min | MathIntrinsic::Max => {
+                if positional_args.len() != 2 {
+                    self.report_error(
+                        format!(
+                            "{} expects exactly two arguments, but got {}",
+                            func_name,
+                            positional_args.len()
+                        ),
+                        span,
+                    );
+                    return Some(make_type(TypeKind::Error));
+                }
+            }
+            // Other intrinsics are filtered out by the guard above.
+            _ => return None,
+        }
+
+        // All args must be numeric (int or float). Return type matches the first arg.
+        let first_arg_type = positional_args.first().map(|(_, ty)| ty)?;
+
+        if !self.is_numeric_type(&first_arg_type.kind) {
+            self.report_error(
+                format!(
+                    "Type '{}' is not numeric: {} only accepts int or float arguments",
+                    first_arg_type, func_name
+                ),
+                span,
+            );
+            return Some(make_type(TypeKind::Error));
+        }
+
+        // Validate that all arguments are the same numeric type (or numeric-compatible).
+        for (arg_expr, arg_type) in positional_args {
+            if !self.are_compatible(first_arg_type, arg_type, context) {
+                self.report_error(
+                    format!(
+                        "Type mismatch in {}: expected {}, got {}",
+                        func_name, first_arg_type, arg_type
+                    ),
+                    arg_expr.span,
+                );
+            }
+        }
+
+        // Return type matches the first argument type (numeric polymorphism).
+        Some(first_arg_type.clone())
     }
 
     /// Checks GPU compatibility of call arguments.

@@ -234,6 +234,9 @@ fn normalize_expr(expr: &mut Expression) {
             normalize_stmt_list(stmts);
             normalize_expr(final_expr);
         }
+        ExpressionKind::Cast(value_expr, target_type_expr) => {
+            normalize_expr_pair(value_expr, target_type_expr)
+        }
         ExpressionKind::Literal(_) | ExpressionKind::Identifier(_, _) | ExpressionKind::Super => {}
     }
 }

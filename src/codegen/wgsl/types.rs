@@ -188,6 +188,7 @@ pub fn buffer_element(kind: &TypeKind) -> Result<WgslScalar, CodegenError> {
         | ExpressionKind::FormattedString(..)
         | ExpressionKind::NamedArgument(..)
         | ExpressionKind::Super
+        | ExpressionKind::Cast(..)
         | ExpressionKind::Block(..) => Err(CodegenError::Internal(
             "WGSL backend: unresolved buffer element type expression".into(),
         )),
