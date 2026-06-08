@@ -102,9 +102,7 @@ fn define_bytes(
 /// All 8-byte fields are naturally aligned; the six packed u32 dims
 /// (offsets 32..56) sit on 4-byte boundaries and don't introduce padding
 /// before the trailing pointers because 56 is already 8-aligned.
-/// Offsets 88+ hold the uniform_bound fields (F1 feature).
-/// Offset 88 now holds buf_read_only (F3 feature) instead.
-/// Offset 96 now holds buf_int_narrow (CHANGE 2 feature) instead.
+/// Offsets 88+ hold the variable fields (uniform_bound, buf_read_only, buf_int_narrow).
 mod desc_layout {
     pub(super) const WGSL_PTR: i32 = 0;
     pub(super) const WGSL_LEN: i32 = 8;
@@ -180,7 +178,7 @@ pub(crate) fn translate(
     )?;
     populate_handle_ids(builder, arg_handles, num_bufs, slots.handle_ids_addr);
 
-    // F3 feature: allocate and populate buf_read_only if non-empty.
+    // Allocate and populate buf_read_only if non-empty.
     let read_only_addr = if _arg_read_only.is_empty() {
         builder.ins().iconst(ptr_ty, 0)
     } else {
@@ -201,7 +199,7 @@ pub(crate) fn translate(
         read_only_addr
     };
 
-    // CHANGE 2 feature: allocate and populate buf_int_narrow if non-empty.
+    // Allocate and populate buf_int_narrow if non-empty.
     let int_narrow_addr = if arg_int_narrow.is_empty() {
         builder.ins().iconst(ptr_ty, 0)
     } else {
@@ -243,7 +241,7 @@ pub(crate) fn translate(
         [block_x, block_y, block_z],
     );
 
-    // Populate uniform_bound if present (F1 feature).
+    // Populate uniform_bound if present.
     let zero_i64 = builder.ins().iconst(cl_types::I64, 0);
     if let Some(bound_op) = uniform_bound {
         let bound_value = read_operand_value(builder, bound_op, locals, type_ctx)?;

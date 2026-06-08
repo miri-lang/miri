@@ -259,8 +259,6 @@ fn main()
     );
 }
 
-// ── Task 4.1.5: Nested collection mutation drops (elem_drop_fn chain) ─────────
-
 #[test]
 fn test_array_of_lists_set_method_no_leak() {
     // Array<List<int>>.set(i, new_list) must call miri_rt_list_decref_element on

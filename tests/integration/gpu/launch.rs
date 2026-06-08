@@ -34,11 +34,10 @@ println(\"dispatched\")
     );
 }
 
-/// The M6.5 Definition-of-Done program: a full `gpu let` / `gpu var` /
-/// `gpu for` / cross-residency-readback pipeline that compiles, dispatches,
-/// and reads back with ZERO `use` lines. Proves the implicit-import rule end
-/// to end on the GPU path — `println`, the `[...]` literals, and the
-/// `Accelerable` gate all resolve without an explicit import.
+/// End-to-end test: `gpu let` / `gpu var` / `gpu for` / cross-residency
+/// readback compiles and dispatches with ZERO `use` lines. Verifies that
+/// implicit imports work on the GPU path — `println`, array literals, and
+/// the `Accelerable` trait resolve without explicit imports.
 #[test]
 fn definition_of_done_program_compiles_with_zero_use_lines() {
     let source = "

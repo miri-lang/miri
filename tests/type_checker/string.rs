@@ -232,7 +232,6 @@ fn test_string_length_method_type() {
 
 #[test]
 fn test_string_property_access_error() {
-    // After Phase 2 the class method dispatch reports "no field or method".
     type_checker_error_test(
         "\"hello\".invalid",
         "Type 'String' has no field or method 'invalid'",

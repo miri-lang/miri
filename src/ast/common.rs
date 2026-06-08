@@ -76,8 +76,7 @@ impl RuntimeKind {
 
     /// Extra linker arguments required by a runtime's transitive
     /// dependencies. Kept on the enum rather than in `pipeline.rs` so
-    /// that adding a new runtime does not force a pipeline edit
-    /// (PRINCIPLES §1.1, §2.2).
+    /// that adding a new runtime does not force a pipeline edit.
     pub fn extra_link_args(&self) -> &'static [&'static str] {
         match self {
             Self::Core => &[],

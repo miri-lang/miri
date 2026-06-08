@@ -326,8 +326,6 @@ fn main()
     );
 }
 
-// ── Task 4.1.5: Array<collection> set() mutation elem_drop_fn chain ──────────
-
 #[test]
 fn test_array_of_lists_set_method_frees_old() {
     // array.set(i, new_list) must invoke elem_drop_fn (miri_rt_list_decref_element)

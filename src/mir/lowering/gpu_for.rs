@@ -7,8 +7,8 @@
 //! emits a `TerminatorKind::GpuLaunch` at the call site with a fixed
 //! workgroup size of 256.
 //!
-//! F1 feature (variable-bound `gpu for`):
-//! - Range start must be an Int literal (variable start is a follow-up).
+//! Range bound modes:
+//! - Range start must be an Int literal.
 //! - Range end may be a runtime Int expression (e.g., `let n = 4; gpu for i in 0..n`).
 //!   When end is a literal, uses fast constant-grid path.
 //!   When end is a runtime expression, computes grid at runtime and passes the
@@ -46,7 +46,7 @@ const GPU_FOR_BLOCK_SIZE: u32 = 256;
 
 /// Lowers a `gpu for` loop into a synthesized kernel + `GpuLaunch`.
 ///
-/// Two paths (F1 feature):
+/// Two paths based on range end:
 /// - Literal end: uses existing constant-grid lowering (fast path, no grid arithmetic).
 /// - Runtime end: computes grid at runtime, emits uniform buffer for bounds-check limit.
 pub fn lower_gpu_for(
@@ -318,13 +318,13 @@ fn collect_capture_infos(
         let ty = ctx.body.local_decls[outer_local.0].ty.clone();
         if !is_gpu_buffer_capture(&ty.kind) {
             return Err(LoweringError::unsupported_expression(
-                format!("gpu for: capture '{}' has non-buffer type; baseline only accepts `Array<T, N>` or `[T; N]` captures (scalar/string/collection captures need uniform/push-constant lowering, follow-up)", name),
+                format!("gpu for: capture '{}' has non-buffer type; only `Array<T, N>` or `[T; N]` captures are supported", name),
                 span,
             ));
         }
         // Only a gpu-resident buffer may be marshaled as a kernel storage
-        // binding; host buffers are rejected upstream (§6.4) so this guards
-        // against any implicit upload (GPU_DRAFT §10.5 — no silent promotion).
+        // binding; host buffers are rejected upstream so this guards
+        // against any implicit upload.
         if ctx.body.local_decls[outer_local.0].residency != BindingResidency::Gpu {
             return Err(LoweringError::unsupported_expression(
                 format!("gpu for: capture '{}' is not gpu-resident", name),
@@ -353,9 +353,8 @@ fn is_gpu_buffer_capture(kind: &TypeKind) -> bool {
             BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Array)
         }
         // Listed explicitly so a new `TypeKind` variant must be classified
-        // here on purpose (PRINCIPLES §3.5). Every kind below currently
-        // ships through the kernel body but cannot be marshaled as a
-        // storage buffer by the dispatcher.
+        // here. Every kind below ships through the kernel body but cannot be
+        // marshaled as a storage buffer by the dispatcher.
         TypeKind::Int
         | TypeKind::I8
         | TypeKind::I16
@@ -395,8 +394,7 @@ fn read_int_literal(expr: &Expression, span: Span) -> Result<i64, LoweringError>
         Ok(int_literal_to_i64(int_lit))
     } else {
         Err(LoweringError::unsupported_expression(
-            "gpu for: range bounds must be Int literals in the baseline (variable bounds are a follow-up)"
-                .to_string(),
+            "gpu for: 2D range bounds must be Int literals".to_string(),
             span,
         ))
     }
@@ -508,11 +506,10 @@ fn visit_stmt(
             *bound = scope_snapshot;
         }
         // Listed explicitly so a new `StatementKind` variant cannot be
-        // silently dropped from capture collection (PRINCIPLES §3.5, §5.4).
-        // None of these shapes can introduce a captured outer-scope
-        // identifier into a `gpu for` body: control-flow markers carry no
-        // expression, and nested declarations open a fresh scope that the
-        // GPU type check rejects anyway.
+        // silently dropped from capture collection. None of these shapes can
+        // introduce a captured outer-scope identifier into a `gpu for` body:
+        // control-flow markers carry no expression, and nested declarations
+        // open a fresh scope that the GPU type check rejects anyway.
         StatementKind::Empty
         | StatementKind::Break
         | StatementKind::Continue
@@ -1498,10 +1495,10 @@ fn int_constant(value: i64, span: Span) -> Operand {
     }))
 }
 
-/// CHANGE 2: Determines if a GPU buffer needs i64→i32 narrowing at the host
-/// boundary. True iff the buffer's element type is `int` / `i64` — those are
-/// 8-byte on the host but emitted as `array<i32>` (4-byte) in WGSL (WebGPU has
-/// no 64-bit integer), so the runtime narrows on upload and widens on readback.
+/// Determines if a GPU buffer needs i64→i32 narrowing at the host boundary.
+/// True iff the buffer's element type is `int` / `i64` — those are 8-byte on
+/// the host but emitted as `array<i32>` (4-byte) in WGSL (WebGPU has no 64-bit
+/// integer), so the runtime narrows on upload and widens on readback.
 /// `i32`/`u32`/`f32`/`f64`/etc. buffers match the device width and are not narrowed.
 fn needs_int_narrowing(ty: &Type) -> bool {
     let elem_expr = match &ty.kind {

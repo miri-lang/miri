@@ -3,9 +3,8 @@
 
 //! AST factory helpers, grouped by produced node category.
 //!
-//! Every constructor here is named after the grammar non-terminal / AST node
-//! it returns (PRINCIPLES.md §3.2 exception). Span defaults to `(0, 0)` for
-//! the non-`_with_span` variant.
+//! Every constructor is named after the grammar non-terminal / AST node it
+//! returns. Span defaults to `(0, 0)` for the non-`_with_span` variant.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 

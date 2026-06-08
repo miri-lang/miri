@@ -106,10 +106,10 @@ impl SyntaxErrorKind {
     /// Returns the error code, title, message, and help text for this error kind.
     ///
     /// The match is intentionally a single exhaustive table over all variants.
-    /// Splitting it would either require non-exhaustive helper matches (banned
-    /// by PRINCIPLES §3.7) or duplicate variant lists across helpers — both
-    /// strictly worse than one flat lookup. Adding a variant fails to compile
-    /// here, which is the safety property we want.
+    /// Splitting it would either require non-exhaustive helper matches or
+    /// duplicate variant lists across helpers — both strictly worse than one
+    /// flat lookup. Adding a variant fails to compile here, which is the
+    /// safety property we want.
     #[allow(clippy::too_many_lines)]
     pub fn properties(&self) -> ErrorProperties {
         use SyntaxErrorKind as K;

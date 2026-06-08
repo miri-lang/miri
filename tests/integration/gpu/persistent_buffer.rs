@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 //
-// Persistent device buffer per `gpu`-resident binding (GPU_DRAFT §7.1, §7.2,
-// §16.2). A `gpu var` binding's device buffer is allocated and uploaded once,
-// then reused across every kernel launch that captures it; only a
-// cross-residency readback (`let h = g`) fences and copies back. The
-// residency cost counters in `src/runtime/gpu/` make this observable from
-// source, so these tests assert the exact upload / launch / readback / fence
-// budget end-to-end through native dispatch.
+// Persistent device buffer per `gpu`-resident binding. A `gpu var` binding's
+// device buffer is allocated and uploaded once, then reused across every kernel
+// launch that captures it; only a cross-residency readback (`let h = g`) fences
+// and copies back. The residency cost counters in `src/runtime/gpu/` make this
+// observable from source, so these tests assert the exact upload / launch /
+// readback / fence budget end-to-end through native dispatch.
 
 use super::device::gpu_adapter_available;
 use super::utils::*;
 
-/// §16.2 — the two-stage pipeline pays exactly one upload, two launches, and
-/// one readback (one fence). `host[7] = (7*7)*2 = 98`.
+/// Persistent buffer test: the two-stage pipeline pays exactly one upload, two
+/// launches, and one readback (one fence). `host[7] = (7*7)*2 = 98`.
 #[test]
 fn two_stage_pipeline_reuses_one_device_buffer() {
     if !gpu_adapter_available() {
@@ -110,7 +109,7 @@ fn main()
 }
 
 /// A `gpu`-resident binding survives two readbacks, each fencing once and
-/// producing an independent host array (D23). The reuse means a single
+/// producing an independent host array. The persistent buffer means a single
 /// upload still covers both stages.
 #[test]
 fn two_readbacks_each_fence_and_survive() {

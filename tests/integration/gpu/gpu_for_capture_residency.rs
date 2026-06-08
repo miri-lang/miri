@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-// `gpu for` capture rules under the residency surface (GPU_DRAFT §5.5, §6.4,
-// §10.5, §11). A `gpu for` body may only capture identifiers whose binding
-// residency is `Gpu`. Capturing a host-resident buffer is a type error with
-// the §6.4 diagnostic and dual machine-applicable fix-its. The old
-// implicit-capture-uploads-everything behavior is retired — no silent
-// promotion (§10.5).
+// `gpu for` capture residency rules. A `gpu for` body may only capture
+// identifiers whose binding residency is `Gpu`. Capturing a host-resident
+// buffer is a type error with dual machine-applicable fix-its. No implicit
+// uploads — residency is source-visible.
 
 use super::utils::*;
 

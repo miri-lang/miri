@@ -219,8 +219,8 @@ impl TypeChecker {
     /// Restrictions enforced beyond `check_for`:
     /// - The iterable must be a numeric range (`a..b` or `a..=b`).
     /// - For 1D: single loop variable; for 2D: exactly two loop variables.
-    /// - The range start(s) must be an integer literal (variable starts are a follow-up).
-    /// - The range end(s) may be a runtime Int expression (F1 feature).
+    /// - The range start must be an integer literal.
+    /// - The range end may be a runtime Int expression.
     ///   Non-literal ends are lowered to uniform buffers in the MIR kernel.
     /// - The loop body is checked with `context.in_gpu_function = true`, so
     ///   discarded values and variable types are validated against
@@ -276,14 +276,13 @@ impl TypeChecker {
         }
         if !is_int_literal(start) {
             self.report_error(
-                "'gpu for' requires Int-literal range start (variable start is a follow-up)"
-                    .to_string(),
+                "'gpu for' range start must be an Int literal".to_string(),
                 iterable.span,
             );
             return;
         }
 
-        // End can be a runtime Int expression (F1 feature).
+        // End can be a runtime Int expression.
         // Type-check it and validate it is Int or gpu-compatible.
         let end_type = self.infer_expression(end, context);
         if !matches!(end_type.kind, TypeKind::Int) {
@@ -366,7 +365,7 @@ impl TypeChecker {
             if !is_int_literal(start) {
                 self.report_error(
                     format!(
-                        "'gpu for' range {} start must be an Int literal (variable start is a follow-up)",
+                        "'gpu for' range {} start must be an Int literal",
                         if i == 0 { "x" } else { "y" }
                     ),
                     range_expr.span,
@@ -374,13 +373,8 @@ impl TypeChecker {
                 return;
             }
 
-            // 2D gpu for requires literal bounds (N1a will support variable bounds)
             if !is_int_literal(end) {
-                self.report_error(
-                    "2D gpu for requires literal bounds (variable bounds are N1a follow-up)"
-                        .to_string(),
-                    end.span,
-                );
+                self.report_error("2D gpu for requires literal bounds".to_string(), end.span);
                 return;
             }
 

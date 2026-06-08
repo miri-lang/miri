@@ -3,8 +3,8 @@
 
 // `Accelerable` capability gate: a `gpu let` / `gpu var` binding is admitted
 // only when its type implements the stdlib `Accelerable` trait. Dispatch is by
-// trait, never by stdlib type name — adding a GPU-eligible container is an `.mi`
-// edit, not a compiler edit (PRINCIPLES §1.4 / §5.3).
+// trait, never by stdlib type name — adding a GPU-eligible container is an
+// `.mi` edit, not a compiler edit.
 
 use super::utils::*;
 
@@ -116,7 +116,8 @@ fn main()
 
 // The headline property: a brand-new user type the compiler has never heard of
 // becomes gpu-eligible purely by declaring `implements Accelerable` — no compiler
-// edit. This is the `.mi`-extensibility guarantee (PRINCIPLES §1.4 / §5.3).
+// edit. This demonstrates the `.mi`-extensibility principle: new container types
+// can be made GPU-eligible without modifying the compiler.
 #[test]
 fn gpu_let_user_type_implementing_accelerable_is_accepted() {
     assert_type_checks(
