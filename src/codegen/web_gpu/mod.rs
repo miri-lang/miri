@@ -11,6 +11,7 @@
 
 mod manifest;
 
+use crate::ast::types::TypeKind;
 use crate::codegen::wgsl::{WgslBackend, WgslOptions};
 use crate::codegen::Backend;
 use crate::error::compiler::CompilerError;
@@ -180,6 +181,108 @@ fn is_frame_step_kernel(body: &Body) -> bool {
     }
 }
 
+/// Extract the WGSL element type string from a buffer (Array/List) parameter type.
+///
+/// Returns the WGSL type name ("i32", "f32", etc.) for the buffer's element type.
+/// Falls back to "i32" if the type cannot be resolved.
+fn buffer_element_type_string(param_ty: &TypeKind) -> String {
+    use crate::ast::types::BuiltinCollectionKind;
+
+    fn scalar_name(kind: &TypeKind) -> Option<&'static str> {
+        match kind {
+            TypeKind::I32 | TypeKind::I8 | TypeKind::I16 => Some("i32"),
+            TypeKind::U32 | TypeKind::U8 | TypeKind::U16 => Some("u32"),
+            TypeKind::F32 => Some("f32"),
+            TypeKind::Boolean => Some("bool"),
+            TypeKind::Int => Some("i32"),
+            TypeKind::I64 => Some("i64"),
+            TypeKind::U64 => Some("u64"),
+            TypeKind::Float | TypeKind::F64 => Some("f64"),
+            TypeKind::I128
+            | TypeKind::U128
+            | TypeKind::String
+            | TypeKind::Identifier
+            | TypeKind::RawPtr
+            | TypeKind::Void
+            | TypeKind::Error
+            | TypeKind::List(_)
+            | TypeKind::Array(_, _)
+            | TypeKind::Map(_, _)
+            | TypeKind::Tuple(_)
+            | TypeKind::Set(_)
+            | TypeKind::Result(_, _)
+            | TypeKind::Future(_)
+            | TypeKind::Function(_)
+            | TypeKind::Generic(_, _, _)
+            | TypeKind::Custom(_, _)
+            | TypeKind::Meta(_)
+            | TypeKind::Option(_)
+            | TypeKind::Linear(_) => None,
+        }
+    }
+
+    match param_ty {
+        TypeKind::Array(elem_expr, _) | TypeKind::List(elem_expr) => {
+            if let crate::ast::expression::ExpressionKind::Type(inner, _) = &elem_expr.node {
+                scalar_name(&inner.kind)
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "i32".to_string())
+            } else {
+                "i32".to_string()
+            }
+        }
+        TypeKind::Custom(name, Some(args))
+            if matches!(
+                BuiltinCollectionKind::from_name(name),
+                Some(BuiltinCollectionKind::Array) | Some(BuiltinCollectionKind::List)
+            ) =>
+        {
+            if let Some(elem_expr) = args.first() {
+                if let crate::ast::expression::ExpressionKind::Type(inner, _) = &elem_expr.node {
+                    scalar_name(&inner.kind)
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| "i32".to_string())
+                } else {
+                    "i32".to_string()
+                }
+            } else {
+                "i32".to_string()
+            }
+        }
+        TypeKind::Int
+        | TypeKind::I8
+        | TypeKind::I16
+        | TypeKind::I32
+        | TypeKind::I64
+        | TypeKind::I128
+        | TypeKind::U8
+        | TypeKind::U16
+        | TypeKind::U32
+        | TypeKind::U64
+        | TypeKind::U128
+        | TypeKind::Float
+        | TypeKind::F32
+        | TypeKind::F64
+        | TypeKind::String
+        | TypeKind::Boolean
+        | TypeKind::Identifier
+        | TypeKind::RawPtr
+        | TypeKind::Map(_, _)
+        | TypeKind::Tuple(_)
+        | TypeKind::Set(_)
+        | TypeKind::Result(_, _)
+        | TypeKind::Future(_)
+        | TypeKind::Function(_)
+        | TypeKind::Generic(_, _, _)
+        | TypeKind::Custom(_, _)
+        | TypeKind::Meta(_)
+        | TypeKind::Option(_)
+        | TypeKind::Void
+        | TypeKind::Error
+        | TypeKind::Linear(_) => "i32".to_string(),
+    }
+}
+
 fn extract_buffer_bindings(
     body: &Body,
     gpu_buffer_inits: Option<&HashMap<String, GpuBufferInit>>,
@@ -221,10 +324,12 @@ fn extract_buffer_bindings(
                         is_sized, // Zero-filled if explicitly sized (Array<T, N>())
                     )
                 } else {
-                    ("i32".to_string(), 0, Vec::new(), false)
+                    let elem_type = buffer_element_type_string(&decl.ty.kind);
+                    (elem_type, 0, Vec::new(), false)
                 }
             } else {
-                ("i32".to_string(), 0, Vec::new(), false)
+                let elem_type = buffer_element_type_string(&decl.ty.kind);
+                (elem_type, 0, Vec::new(), false)
             };
 
         bindings.push(BufferBinding {

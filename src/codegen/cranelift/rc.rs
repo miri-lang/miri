@@ -128,7 +128,37 @@ impl<'a> FunctionTranslator<'a> {
                     Some(_) => false,
                 }
             }
-            _ => false,
+            TypeKind::Int
+            | TypeKind::I8
+            | TypeKind::I16
+            | TypeKind::I32
+            | TypeKind::I64
+            | TypeKind::I128
+            | TypeKind::U8
+            | TypeKind::U16
+            | TypeKind::U32
+            | TypeKind::U64
+            | TypeKind::U128
+            | TypeKind::Float
+            | TypeKind::F32
+            | TypeKind::F64
+            | TypeKind::String
+            | TypeKind::Boolean
+            | TypeKind::Identifier
+            | TypeKind::RawPtr
+            | TypeKind::List(_)
+            | TypeKind::Array(_, _)
+            | TypeKind::Map(_, _)
+            | TypeKind::Tuple(_)
+            | TypeKind::Set(_)
+            | TypeKind::Result(_, _)
+            | TypeKind::Future(_)
+            | TypeKind::Function(_)
+            | TypeKind::Meta(_)
+            | TypeKind::Option(_)
+            | TypeKind::Void
+            | TypeKind::Error
+            | TypeKind::Linear(_) => false,
         }
     }
 
