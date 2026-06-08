@@ -10,6 +10,7 @@ pub mod complex;
 pub mod constant;
 pub mod control_flow;
 pub mod diagnostics;
+pub mod docs;
 pub mod enums;
 pub mod fstring;
 pub mod function_params;
