@@ -49,19 +49,19 @@ pub struct GpuLaunchDesc {
     /// binding whose device buffer persists across launches; `0` marks a
     /// host-resident capture that is uploaded and read back per launch.
     pub buf_handle_ids: *const u64,
-    /// F3 feature: which buffers are read-only. `buf_read_only[i]` is 1 if the
-    /// i-th storage buffer binding is read-only, 0 if read-write. Array length
-    /// is `num_bufs`. When null, all buffers are assumed read-write (legacy behavior).
+    /// Which buffers are read-only. `buf_read_only[i]` is 1 if the i-th storage
+    /// buffer binding is read-only, 0 if read-write. Array length is `num_bufs`.
+    /// When null, all buffers are assumed read-write (legacy behavior).
     pub buf_read_only: *const u8,
-    /// CHANGE 2 feature: which buffers need i64→i32 narrowing on upload and i32→i64 widening on readback.
+    /// Which buffers need i64→i32 narrowing on upload and i32→i64 widening on readback.
     /// `buf_int_narrow[i]` is 1 if the i-th buffer is an `Array<int, N>`, 0 otherwise.
     /// Array length is `num_bufs`. When null, no buffers need narrowing (legacy behavior).
     pub buf_int_narrow: *const u8,
-    /// F1 feature: when present (non-zero), a uniform buffer contains the
-    /// loop-bound limit value for the kernel's bounds-check loop.
+    /// When present (non-zero), a uniform buffer contains the loop-bound limit
+    /// value for the kernel's bounds-check loop.
     pub uniform_bound_present: u64,
     pub uniform_bound_value: i64,
-    /// Number of storage buffer bindings (F1 feature).
+    /// Number of storage buffer bindings.
     /// num_bufs reflects capture count, but with uniform buffers present,
     /// the kernel has num_bufs storage + 1 uniform binding. This is always num_bufs.
     pub num_storage_bufs: u64,
@@ -102,7 +102,7 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
     let ctx = ensure_context()?;
     check_required_shader_features(wgsl, ctx.enabled_shader_features)?;
 
-    // F1 feature: account for uniform buffer in binding count if present.
+    // Account for uniform buffer in binding count if present.
     let num_bindings = desc.num_bufs
         + if desc.uniform_bound_present != 0 {
             1
@@ -112,7 +112,7 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
 
     // Ensure the kernel is compiled with the correct bind group layout.
     // Pass num_storage_bufs so the layout can distinguish storage from uniform buffers.
-    // F3 feature: pass buf_read_only so storage buffers use the correct access mode.
+    // Pass buf_read_only so storage buffers use the correct access mode.
     let buf_read_only = if desc.buf_read_only.is_null() {
         None
     } else {
@@ -161,7 +161,7 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
         buf_int_narrow,
     );
 
-    // F1 feature: create uniform buffer if needed (must live until bind_group is created).
+    // Create uniform buffer if needed (must live until bind_group is created).
     let uniform_buf = if desc.uniform_bound_present != 0 {
         let buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("miri_gpu_uniform_bound"),
@@ -240,7 +240,7 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
 /// allocates its persistent buffer; a transient one allocates fresh and is
 /// scheduled for post-dispatch readback.
 ///
-/// CHANGE 2: when `buf_int_narrow[i]` is 1, the host buffer (i64 elements) is narrowed
+/// When `buf_int_narrow[i]` is 1, the host buffer (i64 elements) is narrowed
 /// to i32 on upload and widened back on readback.
 ///
 /// # Safety
@@ -312,7 +312,7 @@ unsafe fn persistent_capture_buffer(
 /// When there are host bytes to copy, uploads them and records one upload in the telemetry counters;
 /// an empty or null capture allocates the buffer without an upload.
 ///
-/// CHANGE 2: when `needs_narrow` is true, the host buffer contains i64 elements
+/// When `needs_narrow` is true, the host buffer contains i64 elements
 /// (8 bytes each) that are narrowed to i32 (4 bytes each) on upload.
 ///
 /// # Panics
@@ -440,7 +440,7 @@ fn cache_key(entry_point: &str, wgsl: &str) -> String {
 
 /// Ensure the kernel is compiled with a bind group layout that splits the
 /// `num_storage_bufs` storage bindings from the trailing uniform bindings.
-/// F3 feature: `buf_read_only` specifies which buffers are read-only (true=read-only, false=read-write).
+/// `buf_read_only` specifies which buffers are read-only (true=read-only, false=read-write).
 fn ensure_kernel(
     entry_point: &str,
     wgsl: &str,
@@ -547,7 +547,7 @@ fn compile_kernel_inline(
 /// Build a bind group layout that matches the bindings declared in the WGSL
 /// shader: the first `num_storage_bufs` bindings are storage buffers, the
 /// remaining `num_bindings - num_storage_bufs` are uniform buffers.
-/// F3 feature: `buf_read_only` specifies which storage buffers are read-only (1=read-only, 0=read-write).
+/// `buf_read_only` specifies which storage buffers are read-only (1=read-only, 0=read-write).
 pub(crate) fn build_bind_group_layout(
     device: &Device,
     name: &str,

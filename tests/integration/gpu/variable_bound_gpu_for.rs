@@ -146,7 +146,7 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 }
 
 /// The runtime bound is carried in a uniform buffer, which is control data and
-/// must NOT be counted as a capture upload. Mirrors the §16.2 persistent-buffer
+/// must NOT be counted as a capture upload. This test mirrors the persistent-buffer
 /// telemetry shape with a runtime bound: one `gpu var` binding pays exactly one
 /// upload regardless of the two launches. If the uniform were counted, uploads
 /// would be 3 (one per launch). Asserting `1` proves the exclusion.

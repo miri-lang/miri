@@ -6,7 +6,7 @@
 //
 // Predicates are inline lambdas — passing a named-fn reference through a
 // generic trait method (`xs.reduce(0, add)`) is currently miscompiled and
-// segfaults at runtime. Tracked under PLAN.md "Open follow-ups 2026-05-17".
+// segfaults at runtime.
 
 use system.io
 use system.collections.list

@@ -57,10 +57,10 @@ pub struct UseAfterMoveChecker<'a> {
     /// so an inner function does not see its caller's bindings.
     fn_bindings: HashSet<String>,
     /// Names currently bound as gpu-resident locals (`gpu let` / `gpu var`).
-    /// A gpu binding owns a device buffer and is linear per residency (§6.5);
-    /// `gpu let b = a` where `a` is gpu-resident is a move that consumes `a`
-    /// (D24), whereas a cross-residency `let h = a` is a copy (D23). Snapshotted
-    /// and restored alongside `fn_bindings`.
+    /// A gpu binding owns a device buffer and is linear per residency.
+    /// `gpu let b = a` where `a` is gpu-resident is a move that consumes `a`,
+    /// whereas a cross-residency `let h = a` is a copy. Snapshotted and
+    /// restored alongside `fn_bindings`.
     gpu_bindings: HashSet<String>,
 }
 

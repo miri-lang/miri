@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Escape summary data structures for Phase 12 escape-based use-after-move
-//! inference on managed types.
+//! Escape summary data structures for escape-based use-after-move inference
+//! on managed types.
 //!
 //! A function's escape summary answers the question: *which of my managed-type
 //! parameters outlive the call?*  A parameter "escapes" if it is returned,

@@ -7,12 +7,11 @@
 //! outer-scope variables) that lower to WGSL storage buffers, and rejects two
 //! classes of invalid capture:
 //!
-//!   * **Host-resident captures** (GPU_DRAFT §5.5, §6.4, §10.5). A buffer may
-//!     only be captured into the kernel when its binding residency is `Gpu`.
-//!     Capturing a host-resident binding is a type error with two
-//!     machine-applicable fix-its (annotate with `gpu let`, or copy
-//!     explicitly above the loop). There is no implicit upload — residency is
-//!     source-visible.
+//!   * **Host-resident captures**. A buffer may only be captured into a
+//!     kernel when its binding residency is `Gpu`. Capturing a host-resident
+//!     binding is a type error with two machine-applicable fix-its (annotate
+//!     with `gpu let`, or copy explicitly above the loop). There is no
+//!     implicit upload — residency is source-visible.
 //!   * **Non-buffer-eligible element types**. Even a gpu-resident buffer must
 //!     hold a WGSL storage-buffer-eligible scalar. Bool is the motivating
 //!     rejection: WGSL allows `bool` as a local but forbids it inside

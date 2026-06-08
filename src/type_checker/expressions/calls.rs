@@ -287,11 +287,10 @@ impl TypeChecker {
         }
     }
 
-    /// Rejects a gpu-resident binding passed as an argument to a host call
-    /// (GPU_DRAFT §6.4). A host function reads its arguments on the host, so a
-    /// gpu-resident value would need an implicit readback — the design forbids
-    /// any implicit fence outside cross-residency assignment. The reader must
-    /// copy to host first (`let h = g`) and pass the copy.
+    /// Rejects a gpu-resident binding passed as an argument to a host call.
+    /// A host function reads its arguments on the host, so a gpu-resident
+    /// value would need an implicit readback. To prevent silent readbacks, the
+    /// caller must explicitly copy to host first (`let h = g`) and pass the copy.
     fn reject_gpu_resident_call_args(
         &mut self,
         func: &Expression,

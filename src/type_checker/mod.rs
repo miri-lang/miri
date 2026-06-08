@@ -297,10 +297,10 @@ impl TypeChecker {
         self.warnings.extend(uam_warnings);
     }
 
-    /// Phase 1a — register class/trait/struct/enum names as empty shells.
-    /// Runs before `collect_declaration` so that method signatures in later
-    /// declarations can resolve forward references to types declared later
-    /// in the same module (or in a module that recursively imports us back).
+    /// Register class/trait/struct/enum names as empty shells. Runs before
+    /// `collect_declaration` so that method signatures in later declarations
+    /// can resolve forward references to types declared later in the same
+    /// module (or in a module that recursively imports us back).
     pub(crate) fn collect_type_shells(&mut self, statement: &Statement) {
         let mut context = Context::new();
         let context = &mut context;

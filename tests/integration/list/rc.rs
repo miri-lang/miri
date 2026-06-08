@@ -321,8 +321,6 @@ fn main()
     );
 }
 
-// ── Nested collection elem_drop_fn (follow-up to task 3.2) ───────────────────
-
 #[test]
 fn test_list_of_arrays_clear_no_leak() {
     // List<Array<int>>: elem_drop_fn must be miri_rt_array_decref_element so that
@@ -415,8 +413,6 @@ fn main()
     );
 }
 
-// ── Task 4.1.5: List<collection> mutation elem_drop_fn chain ─────────────────
-
 #[test]
 fn test_list_of_lists_set_method_frees_old() {
     // list.set(i, new_list) must call elem_drop_fn (miri_rt_list_decref_element)
@@ -482,8 +478,6 @@ fn main()
         "ok",
     );
 }
-
-// ── Task 3.3: Clear decref all elements ─────────────────────────────────────
 
 #[test]
 fn test_list_of_custom_index_write_calls_decref_thunk() {

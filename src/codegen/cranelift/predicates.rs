@@ -4,8 +4,7 @@
 //! Type-level predicates and classifiers used by codegen dispatch sites.
 //!
 //! Pure functions only: no IR emission. Each predicate exhaustively matches
-//! its target enum so adding a new variant forces this module to be revisited
-//! (PRINCIPLES.md §3.5).
+//! its target enum so adding a new variant forces this module to be revisited.
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
@@ -114,7 +113,7 @@ impl<'a> FunctionTranslator<'a> {
     ///
     /// The exhaustive `TypeKind` match is deliberate: a new variant must
     /// force this site to be revisited rather than silently absorbed by a
-    /// wildcard (PRINCIPLES.md §3.5, §5.4).
+    /// wildcard pattern.
     pub(crate) fn resolve_collection_elem_type(base_type: &Type) -> Option<&TypeKind> {
         fn elem_kind_from_expr(expr: &Expression) -> Option<&TypeKind> {
             if let ExpressionKind::Type(ty, _) = &expr.node {

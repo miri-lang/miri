@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Tests for N4 (buffer ping-pong).
+//! Tests for buffer ping-pong.
 //!
 //! Two persistent `gpu var` grids, two sequential `gpu for` blocks with swapped
-//! read/write roles. Persistent device buffers (F6 feature) retain both across
-//! dispatches without intermediate readback.
+//! read/write roles. Persistent device buffers retain both across dispatches
+//! without intermediate readback.
 
 use super::helpers::compile_to_wgsl;
 

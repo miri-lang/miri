@@ -284,9 +284,9 @@ pub fn is_gpu_compatible(kind: &TypeKind) -> bool {
 ///   without naming those types);
 /// - a tuple whose every element type is accelerable.
 ///
-/// Dispatch is by the `Accelerable` trait, never by stdlib type name, so a
-/// future GPU-eligible container (e.g. `Tensor<T, Rank>`) becomes accelerable by
-/// shipping its `.mi` impl with no compiler edit (PRINCIPLES §1.4 / §5.3).
+/// Dispatch is by the `Accelerable` trait, never by stdlib type name. This
+/// means new GPU-eligible containers (e.g. `Tensor<T, Rank>`) can be added
+/// without modifying the compiler — only their `.mi` implementation is needed.
 pub fn is_accelerable(
     kind: &TypeKind,
     type_definitions: &std::collections::HashMap<String, TypeDefinition>,
@@ -545,8 +545,8 @@ pub fn captured_buffer_element(kind: &TypeKind) -> Option<Type> {
 /// capture, so annotating it with `gpu let` would not help; it is rejected as
 /// a non-buffer capture at MIR lowering instead.
 ///
-/// The residency capture rule (GPU_DRAFT §6.4) therefore governs only the
-/// plain `Array` captures a `gpu let` can produce.
+/// The residency capture rule therefore governs only the plain `Array`
+/// captures a `gpu let` can produce.
 pub fn is_residency_gated_buffer(kind: &TypeKind) -> bool {
     match kind {
         TypeKind::Array(_, _) => true,
@@ -1682,7 +1682,7 @@ impl TypeChecker {
     /// Returns the binding name when `expr` is a bare identifier whose symbol
     /// is gpu-resident. Compound expressions, unresolved names, and host
     /// bindings yield `None`. Shared by the element-cross-read, host-call, and
-    /// cross-residency-assignment checks (GPU_DRAFT §6.4).
+    /// cross-residency-assignment validation.
     pub(crate) fn gpu_resident_identifier<'a>(
         &self,
         expr: &'a Expression,

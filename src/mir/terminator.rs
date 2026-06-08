@@ -252,7 +252,7 @@ pub enum TerminatorKind {
     ///
     /// `args` are the host-side capture operands marshaled into the kernel's
     /// storage buffers (binding 0..N in declaration order). Each capture's
-    /// read/write mode is recorded in `arg_read_only` (F3 feature).
+    /// read/write mode is recorded in `arg_read_only`.
     ///
     /// When `uniform_bound` is `Some`, the kernel bounds-check loop limit is
     /// exposed as a uniform buffer (storage binding N) instead of a compile-time
@@ -269,12 +269,12 @@ pub enum TerminatorKind {
         /// uploaded and read back per launch. Empty means every capture is
         /// host-resident.
         arg_handles: Vec<Option<DeviceHandleId>>,
-        /// F3 feature: which args (storage buffers) are read-only.
+        /// Which args (storage buffers) are read-only.
         /// `arg_read_only[i]` is true when the i-th capture is never written to
         /// in the kernel body. Empty means no captures (impossible), or this
         /// launch is legacy and all captures are assumed read_write.
         arg_read_only: Vec<bool>,
-        /// CHANGE 2 feature: which args need i64→i32 narrowing on upload and i32→i64 widening on readback.
+        /// Which args need i64→i32 narrowing on upload and i32→i64 widening on readback.
         /// `arg_int_narrow[i]` is true when the i-th capture is an `Array<int, N>`.
         /// Empty means no captures (impossible), or this launch is legacy and none need narrowing.
         arg_int_narrow: Vec<bool>,

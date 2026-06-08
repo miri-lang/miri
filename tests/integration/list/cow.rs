@@ -3,8 +3,6 @@
 
 use super::utils::*;
 
-// ── Phase 10: Copy-on-Write value semantics ───────────────────────────────────
-
 #[test]
 fn test_list_cow_push_isolates_original() {
     // The canonical CoW test from the spec.

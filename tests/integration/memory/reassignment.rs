@@ -206,8 +206,6 @@ fn main()
     );
 }
 
-// ── Phase 4 verification tests (M2 Known Limitation #4) ─────────────────────
-
 #[test]
 fn test_array_reassign_old_freed_no_leak() {
     // Perceus StatementKind::Reassign emits DecRef for the old value.

@@ -181,8 +181,6 @@ fn main()
     );
 }
 
-// ── Task 3.3: Empty Set<T>() constructor sets elem_drop_fn ───────────────────
-
 #[test]
 fn test_empty_set_of_strings_add_clear_no_leak() {
     // Set<String>() empty constructor: elem_drop_fn must be set from the

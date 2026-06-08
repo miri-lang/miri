@@ -143,8 +143,6 @@ fn main()
     );
 }
 
-// ── Phase 10: Copy-on-Write value semantics ───────────────────────────────────
-
 #[test]
 fn test_map_cow_set_isolates_original() {
     // CoW: m2 shares m1's data until m2.set mutates → m1 must be unchanged.
@@ -320,8 +318,6 @@ fn main()
         "2",
     );
 }
-
-// ── Task 3.3: Clear decref all elements ─────────────────────────────────────
 
 #[test]
 fn test_map_100_string_keys_clear_no_leak() {
