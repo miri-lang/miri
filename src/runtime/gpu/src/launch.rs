@@ -221,7 +221,7 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
         let _ = device.poll(wgpu::PollType::wait_indefinitely());
         telemetry::record_fence();
         for i in transient_captures {
-            let needs_narrow = buf_int_narrow.as_ref().map_or(false, |arr| arr[i] != 0);
+            let needs_narrow = buf_int_narrow.as_ref().is_some_and(|arr| arr[i] != 0);
             readback_device_buffer(
                 device,
                 queue,
@@ -257,7 +257,7 @@ unsafe fn prepare_capture_buffers(
     let mut storage_buffers = Vec::with_capacity(buf_handle_ids.len());
     let mut transient_captures = Vec::new();
     for i in 0..buf_handle_ids.len() {
-        let needs_narrow = buf_int_narrow.map_or(false, |arr| arr[i] != 0);
+        let needs_narrow = buf_int_narrow.is_some_and(|arr| arr[i] != 0);
         let buffer = if buf_handle_ids[i] != device_table::HOST_HANDLE {
             persistent_capture_buffer(
                 device,
@@ -329,7 +329,7 @@ unsafe fn new_storage_buffer_with_upload(
         // Host buffer is i64 elements (byte_len = 8*N); device buffer is i32 elements (4*N).
         // Guard: byte_len must be a multiple of 8.
         assert!(
-            byte_len % 8 == 0,
+            byte_len.is_multiple_of(8),
             "host buffer byte_len {} is not a multiple of 8 for i64 narrowing",
             byte_len
         );
@@ -617,7 +617,7 @@ unsafe fn readback_device_buffer(
         // Device buffer is i32 elements (4 bytes each); host buffer is i64 elements (8 bytes each).
         // Guard: byte_len (host length) must be a multiple of 8.
         assert!(
-            byte_len % 8 == 0,
+            byte_len.is_multiple_of(8),
             "host buffer byte_len {} is not a multiple of 8 for i64 widening",
             byte_len
         );
