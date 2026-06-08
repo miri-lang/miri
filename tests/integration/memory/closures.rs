@@ -9,7 +9,7 @@
 //   - Primitive captures (int, float, bool) — copy semantics, no RC needed
 //   - String captures — pointer capture with correct RC
 //   - Class captures (primitive fields and List fields)
-//   - List captures — closure env DecRefs captured List on drop (fixed in Milestone 5 Task 5.1)
+//   - List captures — closure env DecRefs captured List on drop
 
 use super::super::utils::*;
 
@@ -92,7 +92,6 @@ fn main()
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-//  Collection captures (Milestone 5 Task 0e — now fixed)
 // ────────────────────────────────────────────────────────────────────────────
 
 /// Lambda capturing a List; the List must not be freed while the lambda is live,
@@ -252,7 +251,6 @@ fn main()
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-//  Closure allocation tracking (Milestone 5 Task 5.4)
 // ────────────────────────────────────────────────────────────────────────────
 
 /// Verifies that closure allocations are counted in CLOSURE_ALLOC_BALANCE and
@@ -329,7 +327,6 @@ fn main()
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-//  Closure returned from a function (Milestone 5 Task 5.5)
 // ────────────────────────────────────────────────────────────────────────────
 
 /// Closure created inside a function and returned to the caller.

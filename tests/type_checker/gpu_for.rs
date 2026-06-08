@@ -15,7 +15,7 @@ gpu for i in 0..4
 
 #[test]
 fn test_gpu_for_accepts_variable_range_bound() {
-    // F1 feature: variable bounds are now accepted (lowered to uniform buffers).
+    // Variable range bounds are supported (lowered to uniform buffers).
     type_checker_test(
         r#"
 let n = 4

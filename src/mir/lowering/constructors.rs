@@ -366,11 +366,11 @@ pub(crate) type CollectionCtorFn = fn(
 /// language.  When that built-in exists, each `init()` method can be moved to
 /// stdlib and the corresponding entry removed from this table.
 ///
-/// This table exists **solely for constructor dispatch**.  Method dispatch for
-/// collections goes through normal class method resolution (as of Phase 1 —
-/// the interception registry has been removed).  Adding a new collection type
-/// requires: (1) a `.mi` file, (2) a runtime module, (3) constants in
-/// `runtime_fns.rs`, and (4) one entry here plus one handler function below.
+/// This table exists **solely for constructor dispatch**. Method dispatch for
+/// collections goes through normal class method resolution. Adding a new
+/// collection type requires: (1) a `.mi` file, (2) a runtime module,
+/// (3) constants in `runtime_fns.rs`, and (4) one entry here plus one
+/// handler function below.
 pub(crate) const COLLECTION_CTORS: &[(BuiltinCollectionKind, CollectionCtorFn)] = &[
     (BuiltinCollectionKind::List, lower_list_constructor),
     (BuiltinCollectionKind::Map, lower_map_constructor),
@@ -614,7 +614,7 @@ pub(crate) fn lower_set_constructor(
 ///
 /// Error cases:
 /// - Non-constant size expressions → compile error
-/// - Managed element types → compile error (deferred to follow-up)
+/// - Managed element types → compile error
 pub(crate) fn lower_array_constructor(
     ctx: &mut LoweringContext,
     span: &Span,

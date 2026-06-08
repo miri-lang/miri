@@ -5,7 +5,7 @@ use super::super::utils::*;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Baseline: managed params inside function bodies must not trigger false-positive
-// use-after-move errors (regression guard for Phase 12 escape analysis).
+// use-after-move errors (regression guard for escape analysis).
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Method / self semantics
@@ -259,7 +259,7 @@ println(f"{count_down(xs, 3)}")
 #[test]
 fn test_resource_param_inside_fn_body_still_errors() {
     // Resource types (those with fn drop(self)) must still be flagged inside
-    // function bodies — Phase 12 does not change resource semantics.
+    // function bodies — resource semantics remain unchanged.
     assert_compiler_error(
         r#"
 use system.io
@@ -467,12 +467,10 @@ println("ok")
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// §12.1 — Escape summaries on function definitions
-//
+// Escape summaries on function definitions.
 // The escape analysis pass computes a summary for every user function that
 // records which parameters escape the function (are returned, or passed to
-// another escaping callee).  The use-after-move checker then uses those
+// another escaping callee). The use-after-move checker then uses those
 // summaries inside function bodies to decide when to consume an argument.
 //
 // Positive tests: the pass detects escape → consumed error inside fn body.

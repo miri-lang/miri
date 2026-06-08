@@ -10,7 +10,7 @@
 // - Compilation succeeds (adapter-less CI still runs).
 // - Value correctness (adapter-present CI asserts exact output).
 // - Surface compliance: residency keywords, cost-class ordering, buffer
-//   reuse, bounds-checking, and portability checks per §17.
+//   reuse, bounds-checking, and portability checks.
 //
 // Deferred demos (not scope for this task):
 // - map_normalize: will be added as a Task-10 demo now that the math-intrinsic

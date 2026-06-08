@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-// Cross-residency assignment surface (GPU_DRAFT §6.3–§6.5, §7.1, §7.3, §16):
+// Cross-residency assignment rules:
 //   * host → gpu (`gpu let g = host_x`) and gpu → host (`let h = gpu_g`) are
-//     copies — the source survives (D23).
-//   * gpu → gpu (`gpu let b = gpu_a`) is a linear move — `gpu_a` is consumed
-//     (D24).
-//   * element cross-read (`let v = gpu_g[0]`) is rejected (D22).
+//     copies — the source survives.
+//   * gpu → gpu (`gpu let b = gpu_a`) is a linear move — `gpu_a` is consumed.
+//   * element cross-read (`let v = gpu_g[0]`) is rejected.
 //   * passing a gpu-resident value to a host call (`println(gpu_g)`) is
-//     rejected (§6.4).
+//     rejected.
 
 use super::device::gpu_adapter_available;
 use super::utils::*;
@@ -161,8 +160,8 @@ fn main()
 
 #[test]
 fn vector_add_demo_compiles_and_runs() {
-    // §16.1 — compiles end-to-end on the residency surface: `gpu let` inputs,
-    // a `gpu var` output, and a readback (`let host = dst`). Value correctness
+    // Compiles end-to-end on the residency surface: `gpu let` inputs, a
+    // `gpu var` output, and a readback (`let host = dst`). Value correctness
     // is asserted by `vector_add_demo_value_correctness`.
     assert_runs(
         "
@@ -185,8 +184,8 @@ fn main()
 
 #[test]
 fn two_readbacks_compile() {
-    // §16.7 `good()` shape extended: two independent host copies of the same
-    // gpu binding. The binding survives both readbacks.
+    // Two independent host copies of the same gpu binding. The binding
+    // survives both readbacks.
     assert_runs(
         "
 use system.gpu
