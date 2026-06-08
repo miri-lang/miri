@@ -43,3 +43,86 @@ fn demo_buffer_reuse() {
     let source = include_str!("../../../examples/gpu/buffer_reuse.mi");
     assert_gpu_runs_with_output(source, "15 1 2 1 1");
 }
+
+/// mandelbrot: Mandelbrot set fractal using sized Array<f32, N>() constructor.
+/// Computes escape-time iterations for each pixel in a 64×64 grid, demonstrating
+/// fixed-size GPU buffers and correctness of in-set vs escaped pixels. The classic
+/// palette renders the set black (0.0); escaped pixels carry their escape count.
+#[test]
+fn demo_mandelbrot() {
+    let source = include_str!("../../../examples/gpu/mandelbrot.mi");
+    assert_gpu_runs_with_output(source, "inside=0.0 outside=1.0");
+}
+
+/// game_of_life: Conway's Game of Life cellular automaton on a 64×64 toroidal grid.
+/// Seeds a deterministic ~38% pseudo-random soup, then advances one B3/S23
+/// generation with a `gpu frame` kernel (the browser runtime loops it). The
+/// native run counts live cells after one generation — a deterministic smoke
+/// value (the soup hash + the rule are fixed). Rule correctness on isolated
+/// patterns is covered by the blinker/glider tests in gpu_frame.rs / launch.rs.
+#[test]
+fn demo_game_of_life() {
+    let source = include_str!("../../../examples/gpu/game_of_life.mi");
+    assert_gpu_runs_with_output(source, "alive=1993");
+}
+
+/// box_blur: 3×3 clamped-edge box blur convolution. Initializes a bright 16×16
+/// square (value 1.0) centered in a 64×64 f32 image, applies two-kernel GPU
+/// computation (initialization then blur), and readbacks to host. Demonstrates
+/// edge-handling correctness: interior pixels unchanged (9/9 = 1.0), corner pixels
+/// smoothed by clamped neighbors (4/9 ≈ 0.444), edge pixels partially averaged
+/// (6/9 ≈ 0.667).
+#[test]
+fn demo_box_blur() {
+    let source = include_str!("../../../examples/gpu/box_blur.mi");
+    assert_gpu_runs_with_output(
+        source,
+        "interior=1.0 corner=0.4444444477558136 edge=0.6666666865348816",
+    );
+}
+
+/// matmul: 2×2 matrix multiply C = A×B, one GPU thread per output cell, each
+/// computing a dot product of A's row and B's column. Verifies the canonical
+/// GEMM mapping with hand-checkable integer-valued matrices.
+#[test]
+fn demo_matmul() {
+    let source = include_str!("../../../examples/gpu/matmul.mi");
+    assert_gpu_runs_with_output(source, "19.0 22.0 43.0 50.0");
+}
+
+/// linear_regression: one batch gradient-descent step. The kernel computes
+/// per-sample MSE gradient contributions in parallel; the host reduces them to
+/// the batch gradient and takes one step. On y = 2x + 1 from (W, B) = (0, 0)
+/// the step lands at (1.7, 0.8) with starting loss 21 — the GPU-ML map/reduce
+/// split, value-verified.
+#[test]
+fn demo_linear_regression() {
+    let source = include_str!("../../../examples/gpu/linear_regression.mi");
+    assert_gpu_runs_with_output(
+        source,
+        "W: 0 -> 1.7000000476837158  B: 0 -> 0.800000011920929  MSE: 21.0",
+    );
+}
+
+/// neural_net: a single dense layer (2 → 3) with ReLU, one thread per neuron.
+/// ReLU is the ternary `sum if sum > 0 else 0` — no transcendental activation.
+/// The third neuron's pre-activation is negative, so ReLU clips it to 0,
+/// exercising the activation path alongside the two positive outputs.
+#[test]
+fn demo_neural_net() {
+    let source = include_str!("../../../examples/gpu/neural_net.mi");
+    assert_gpu_runs_with_output(source, "1.5 1.5 0.0");
+}
+
+/// neural_net_mlp: a 2-layer MLP (2 → 2 ReLU → 1) computing XOR over all four
+/// input pairs in one batched forward pass. Two kernels chained through a
+/// persistent hidden buffer with no intermediate readback. Output [0,1,1,0] is
+/// XOR — proof the hidden layer learned the non-linear separation.
+#[test]
+fn demo_neural_net_mlp() {
+    let source = include_str!("../../../examples/gpu/neural_net_mlp.mi");
+    assert_gpu_runs_with_output(
+        source,
+        "xor(0,0)=0.0 xor(0,1)=1.0 xor(1,0)=1.0 xor(1,1)=0.0",
+    );
+}

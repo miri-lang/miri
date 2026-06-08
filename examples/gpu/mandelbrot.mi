@@ -1,0 +1,57 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// Mandelbrot set fractal: compute escape-time iterations for each pixel
+// in a 64×64 grid, store results in a device buffer, and readback to host.
+
+use system.collections.array
+
+const SIZE = 64 * 64
+
+// Allocate a 64×64 pixel buffer on the GPU (4096 pixels total).
+// Store iteration counts as f32 for web bundle compatibility.
+gpu var pixels = Array<f32, 64 * 64>()
+
+// Main computation: for each pixel (as a linear index), map to 2D coordinates,
+// then to complex plane, iterate z = z² + c until |z|² > 4 or reach iteration limit.
+// Host scalars cannot be captured into the kernel, so the viewport mapping is
+// computed device-side from idx.
+gpu for idx in 0..SIZE
+    // Convert linear index to (x, y) coordinates
+    let y = idx / 64
+    let x = idx - y * 64
+
+    // Map pixel coordinates to complex plane
+    // Viewport: Real axis [-2.5, 1.0], Imaginary axis [-1.25, 1.25]
+    let cx = -2.5 + (x as f32) * 3.5 / 64.0
+    let cy = -1.25 + (y as f32) * 2.5 / 64.0
+
+    // Escape-time iteration
+    var zx = 0.0
+    var zy = 0.0
+    var iterations = 0
+
+    while iterations < 100
+        let zx_sq = zx * zx
+        let zy_sq = zy * zy
+        if zx_sq + zy_sq > 4.0: break
+
+        let zx_new = zx_sq - zy_sq + cx
+        let zy_new = 2.0 * zx * zy + cy
+
+        zx = zx_new
+        zy = zy_new
+        iterations += 1
+
+    // Classic Mandelbrot palette: points that never escape (the set itself) are
+    // black; escaped points are shaded by how long they took to escape, so the
+    // set's boundary glows bright and fades into the surrounding void.
+    pixels[idx] = 0.0 if iterations == 100 else iterations as f32
+
+// Readback results to host
+let host = pixels
+
+// Print sentinel values demonstrating the fractal correctness:
+// - Index 2085 ≈ (37, 32): inside the set → black (0.0)
+// - Index 2048 ≈ (0, 32): far-left edge, escapes after 1 iteration (1.0)
+println(f"inside={host[2085]} outside={host[2048]}")

@@ -43,6 +43,7 @@ fn is_wrappable_stmt(stmt: &Statement) -> bool {
             | StatementKind::While(..)
             | StatementKind::For(..)
             | StatementKind::GpuFor(..)
+            | StatementKind::GpuFrame(..)
             | StatementKind::Block(..)
             | StatementKind::Return(..)
             | StatementKind::Break
@@ -202,7 +203,7 @@ pub fn program_uses_gpu<'a, I: IntoIterator<Item = &'a Statement>>(stmts: I) -> 
 
 fn stmt_uses_gpu(stmt: &Statement) -> bool {
     match &stmt.node {
-        StatementKind::GpuFor(_, _, _) => true,
+        StatementKind::GpuFor(_, _, _) | StatementKind::GpuFrame(_, _, _) => true,
         StatementKind::FunctionDeclaration(decl) => {
             decl.properties.is_gpu || decl.body.as_ref().is_some_and(|b| stmt_uses_gpu(b))
         }
@@ -300,11 +301,14 @@ fn collect_gpu_buffer_initializers(
                     if decl.residency == crate::ast::statement::BindingResidency::Gpu {
                         if let Some(init) = &decl.initializer {
                             if let Some(data) = extract_const_array_values(init) {
+                                // For Array<T, N>() sized constructors, extract explicit length
+                                let length = extract_array_size(init);
                                 inits.insert(
                                     decl.name.clone(),
                                     crate::codegen::web_gpu::GpuBufferInit {
                                         elem_type: infer_elem_type(init),
                                         values: data,
+                                        length,
                                     },
                                 );
                             }
@@ -372,8 +376,27 @@ fn extract_const_array_values(expr: &crate::ast::expression::Expression) -> Opti
             }
             Some(values)
         }
+        ExpressionKind::Call(func_expr, args) if args.is_empty() => {
+            // Handle Array<T, N>() constructor: return empty vector
+            // (length will be determined from the type generic N)
+            if is_array_constructor(func_expr) {
+                Some(Vec::new())
+            } else {
+                None
+            }
+        }
         _ => None,
     }
+}
+
+fn is_array_constructor(expr: &crate::ast::expression::Expression) -> bool {
+    if let ExpressionKind::TypeDeclaration(name_expr, Some(generics), _, _) = &expr.node {
+        if let ExpressionKind::Identifier(name, _) = &name_expr.node {
+            // Array<T, N> has exactly 2 generics
+            return name == "Array" && generics.len() == 2;
+        }
+    }
+    false
 }
 
 fn extract_numeric_literal(expr: &crate::ast::expression::Expression) -> Option<f64> {
@@ -411,19 +434,127 @@ fn infer_elem_type(expr: &crate::ast::expression::Expression) -> String {
     match &expr.node {
         ExpressionKind::Array(elements, _) | ExpressionKind::List(elements) => {
             if let Some(elem) = elements.first() {
-                match &elem.node {
-                    ExpressionKind::Literal(lit) => match lit {
-                        crate::ast::literal::Literal::Float(_) => "f32".to_string(),
-                        crate::ast::literal::Literal::Integer(_) => "i32".to_string(),
-                        _ => "i32".to_string(),
-                    },
-                    _ => "i32".to_string(),
-                }
+                infer_elem_type_from_literal(elem)
             } else {
                 "i32".to_string()
             }
         }
+        ExpressionKind::Call(func_expr, _) if is_array_constructor(func_expr) => {
+            // For Array<T, N>(), extract T from the first generic argument
+            if let ExpressionKind::TypeDeclaration(_base, Some(generics), _, _) = &func_expr.node {
+                if let Some(elem_type_expr) = generics.first() {
+                    return match &elem_type_expr.node {
+                        ExpressionKind::Identifier(type_name, _) => {
+                            use crate::ast::types::wgsl_scalar_name;
+                            // Try to map the type name using the shared WGSL scalar mapping.
+                            // Parse the type name into a TypeKind for lookup.
+                            let kind = match type_name.as_str() {
+                                "int" => Some(crate::ast::types::TypeKind::Int),
+                                "i8" => Some(crate::ast::types::TypeKind::I8),
+                                "i16" => Some(crate::ast::types::TypeKind::I16),
+                                "i32" => Some(crate::ast::types::TypeKind::I32),
+                                "i64" => Some(crate::ast::types::TypeKind::I64),
+                                "u8" => Some(crate::ast::types::TypeKind::U8),
+                                "u16" => Some(crate::ast::types::TypeKind::U16),
+                                "u32" => Some(crate::ast::types::TypeKind::U32),
+                                "u64" => Some(crate::ast::types::TypeKind::U64),
+                                "f32" => Some(crate::ast::types::TypeKind::F32),
+                                "float" => Some(crate::ast::types::TypeKind::Float),
+                                "f64" => Some(crate::ast::types::TypeKind::F64),
+                                _ => None,
+                            };
+                            kind.and_then(|k| wgsl_scalar_name(&k))
+                                .map(|s| s.to_string())
+                                .unwrap_or_else(|| "i32".to_string())
+                        }
+                        ExpressionKind::Type(inner_ty, _) => {
+                            // Extract type name from the Type inside (created by type checker)
+                            infer_elem_type_from_type(&inner_ty.kind)
+                        }
+                        _ => "i32".to_string(),
+                    };
+                }
+            }
+            "i32".to_string()
+        }
         _ => "i32".to_string(),
+    }
+}
+
+fn infer_elem_type_from_type(kind: &crate::ast::types::TypeKind) -> String {
+    use crate::ast::types::wgsl_scalar_name;
+    wgsl_scalar_name(kind).unwrap_or("i32").to_string()
+}
+
+fn infer_elem_type_from_literal(elem: &crate::ast::expression::Expression) -> String {
+    match &elem.node {
+        ExpressionKind::Literal(lit) => match lit {
+            crate::ast::literal::Literal::Float(float_lit) => {
+                use crate::ast::literal::FloatLiteral;
+                match float_lit {
+                    FloatLiteral::F32(_) => "f32".to_string(),
+                    FloatLiteral::F64(_) => "f64".to_string(),
+                }
+            }
+            crate::ast::literal::Literal::Integer(_) => {
+                // Integer literals are int (Miri default), which maps to i32 for browser portability.
+                // The host keeps i64; marshalling narrows to i32 for device and widens on readback.
+                "i32".to_string()
+            }
+            _ => "i32".to_string(),
+        },
+        _ => "i32".to_string(),
+    }
+}
+
+fn extract_array_size(expr: &crate::ast::expression::Expression) -> Option<usize> {
+    if let ExpressionKind::Call(func_expr, _) = &expr.node {
+        if let ExpressionKind::TypeDeclaration(_, Some(generics), _, _) = &func_expr.node {
+            if generics.len() >= 2 {
+                // The size is the second generic argument
+                return try_eval_const_size(&generics[1]);
+            }
+        }
+    }
+    None
+}
+
+fn try_eval_const_size(expr: &crate::ast::expression::Expression) -> Option<usize> {
+    // Try to evaluate simple constant expressions (literals and arithmetic)
+    match &expr.node {
+        ExpressionKind::Literal(lit) => {
+            if let crate::ast::literal::Literal::Integer(int_lit) = lit {
+                use crate::ast::literal::IntegerLiteral;
+                let val = match int_lit {
+                    IntegerLiteral::I8(v) => *v as i128,
+                    IntegerLiteral::I16(v) => *v as i128,
+                    IntegerLiteral::I32(v) => *v as i128,
+                    IntegerLiteral::I64(v) => *v as i128,
+                    IntegerLiteral::I128(v) => *v,
+                    IntegerLiteral::U8(v) => *v as i128,
+                    IntegerLiteral::U16(v) => *v as i128,
+                    IntegerLiteral::U32(v) => *v as i128,
+                    IntegerLiteral::U64(v) => *v as i128,
+                    IntegerLiteral::U128(v) => *v as i128,
+                };
+                if val >= 0 {
+                    return Some(val as usize);
+                }
+            }
+            None
+        }
+        ExpressionKind::Binary(left, op, right) => {
+            let l = try_eval_const_size(left)?;
+            let r = try_eval_const_size(right)?;
+            match op {
+                crate::ast::operator::BinaryOp::Add => Some(l + r),
+                crate::ast::operator::BinaryOp::Sub => Some(l.saturating_sub(r)),
+                crate::ast::operator::BinaryOp::Mul => Some(l * r),
+                crate::ast::operator::BinaryOp::Div if r > 0 => Some(l / r),
+                _ => None,
+            }
+        }
+        _ => None,
     }
 }
 

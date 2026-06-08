@@ -375,6 +375,7 @@ pub(crate) const COLLECTION_CTORS: &[(BuiltinCollectionKind, CollectionCtorFn)] 
     (BuiltinCollectionKind::List, lower_list_constructor),
     (BuiltinCollectionKind::Map, lower_map_constructor),
     (BuiltinCollectionKind::Set, lower_set_constructor),
+    (BuiltinCollectionKind::Array, lower_array_constructor),
 ];
 
 /// Lowers a `List(args)` constructor call.
@@ -603,6 +604,245 @@ pub(crate) fn lower_set_constructor(
     });
 
     Ok(result_op)
+}
+
+/// Lowers an `Array<T, N>()` constructor call with compile-time sized allocation.
+///
+/// Supports one form:
+/// - `Array<T, N>()` where N is a compile-time constant integer expression
+///   (integer literals and simple arithmetic like `4 * 4`).
+///
+/// Error cases:
+/// - Non-constant size expressions → compile error
+/// - Managed element types → compile error (deferred to follow-up)
+pub(crate) fn lower_array_constructor(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    call_expr_id: usize,
+    args: &[Expression],
+    dest: Option<Place>,
+) -> Result<Operand, LoweringError> {
+    // Array<T, N>() constructor requires no arguments
+    if !args.is_empty() {
+        return Err(LoweringError::unsupported_expression(
+            "Array<T, N>() constructor does not accept arguments".to_string(),
+            *span,
+        ));
+    }
+
+    // Get the inferred type: Custom("Array", Some([elem_expr, size_expr]))
+    let array_ty = if let Some(call_ty) = ctx.type_checker.get_type(call_expr_id) {
+        call_ty.clone()
+    } else {
+        return Err(LoweringError::unsupported_expression(
+            "Unable to infer Array<T, N>() constructor type".to_string(),
+            *span,
+        ));
+    };
+
+    // Extract the size expression from the type generic arguments
+    let size_expr = match &array_ty.kind {
+        TypeKind::Custom(name, Some(args)) if name == "Array" && args.len() == 2 => args[1].clone(),
+        _ => {
+            return Err(LoweringError::unsupported_expression(
+                "Expected Array<T, N> type in constructor".to_string(),
+                *span,
+            ));
+        }
+    };
+
+    // Const-evaluate the size expression
+    let size_value =
+        crate::type_checker::TypeChecker::try_eval_const_int(&size_expr).ok_or_else(|| {
+            LoweringError::unsupported_expression(
+                "Array<T, N>() requires a compile-time constant size".to_string(),
+                size_expr.span,
+            )
+        })?;
+
+    if size_value < 0 {
+        return Err(LoweringError::unsupported_expression(
+            "Array<T, N>() size must be non-negative".to_string(),
+            size_expr.span,
+        ));
+    }
+
+    let size_value = size_value as i64;
+
+    // Extract element type and compute its size
+    let elem_type = match &array_ty.kind {
+        TypeKind::Custom(_, Some(args)) if args.len() == 2 => {
+            // Try to get the type from type checker first
+            if let Some(ty) = ctx.type_checker.get_type(args[0].id) {
+                ty.clone()
+            } else {
+                // Fall back to synthesizing from the expression
+                infer_type_from_generic_arg(&args[0], ctx)
+                    .unwrap_or_else(|| Type::new(TypeKind::Int, *span))
+            }
+        }
+        _ => Type::new(TypeKind::Int, *span),
+    };
+
+    // Check if element type is managed. This should have been rejected by the type checker.
+    // If we reach here with a managed element type, it's a compiler bug.
+    if ctx.is_perceus_managed(&elem_type.kind) {
+        return Err(LoweringError::unsupported_expression(
+            format!(
+                "Array<T, N>() with managed element type '{}' should have been rejected at type-check time",
+                elem_type
+            ),
+            *span,
+        ));
+    }
+
+    let elem_size = compute_elem_size_from_type(&elem_type.kind);
+
+    // Set up the destination
+    let (destination, result_op) = if let Some(d) = dest {
+        (d.clone(), Operand::Copy(d))
+    } else {
+        let temp = ctx.push_temp(array_ty.clone(), *span);
+        let p = Place::new(temp);
+        (p.clone(), Operand::Copy(p))
+    };
+
+    // Create operands for the runtime call
+    let size_op = Operand::Constant(Box::new(Constant {
+        span: *span,
+        ty: Type::new(TypeKind::Int, *span),
+        literal: crate::ast::literal::Literal::Integer(crate::ast::literal::IntegerLiteral::I64(
+            size_value,
+        )),
+    }));
+
+    let elem_size_op = Operand::Constant(Box::new(Constant {
+        span: *span,
+        ty: Type::new(TypeKind::Int, *span),
+        literal: crate::ast::literal::Literal::Integer(crate::ast::literal::IntegerLiteral::I64(
+            elem_size,
+        )),
+    }));
+
+    let func_op = Operand::Constant(Box::new(Constant {
+        span: *span,
+        ty: Type::new(TypeKind::Identifier, *span),
+        literal: crate::ast::literal::Literal::Identifier(rt::ARRAY_NEW.to_string()),
+    }));
+
+    let target_bb = ctx.new_basic_block();
+
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func: func_op,
+            args: vec![size_op, elem_size_op],
+            out_args: Vec::new(),
+            destination: destination.clone(),
+            target: Some(target_bb),
+        },
+        *span,
+    ));
+
+    ctx.set_current_block(target_bb);
+    Ok(result_op)
+}
+
+/// Infer type from a generic argument expression.
+/// Used when the type checker doesn't have a stored type for the generic arg.
+fn infer_type_from_generic_arg(arg: &Expression, ctx: &LoweringContext) -> Option<Type> {
+    use crate::ast::expression::ExpressionKind;
+
+    match &arg.node {
+        ExpressionKind::Type(inner_ty, _) => {
+            // Type expressions created by create_type_expression
+            Some((**inner_ty).clone())
+        }
+        ExpressionKind::Identifier(name, _) => {
+            // Simple identifier like `List`, `int`, `f32`, etc.
+            let kind = match name.as_str() {
+                "List" => TypeKind::Custom("List".to_string(), None),
+                "Map" => TypeKind::Custom("Map".to_string(), None),
+                "Set" => TypeKind::Custom("Set".to_string(), None),
+                "int" => TypeKind::Int,
+                "i32" => TypeKind::I32,
+                "i64" => TypeKind::I64,
+                "i8" => TypeKind::I8,
+                "i16" => TypeKind::I16,
+                "u32" => TypeKind::U32,
+                "u64" => TypeKind::U64,
+                "u8" => TypeKind::U8,
+                "u16" => TypeKind::U16,
+                "f32" => TypeKind::F32,
+                "f64" => TypeKind::F64,
+                "float" => TypeKind::Float,
+                "bool" => TypeKind::Boolean,
+                "String" => TypeKind::String,
+                _ => {
+                    // Check if it's a user-defined type
+                    if ctx.type_checker.global_type_definitions.contains_key(name) {
+                        TypeKind::Custom(name.clone(), None)
+                    } else {
+                        return None;
+                    }
+                }
+            };
+            Some(Type::new(kind, arg.span))
+        }
+        ExpressionKind::TypeDeclaration(base_expr, Some(generics), _, _) => {
+            // Generic type like `List<int>` or `Map<int, string>`
+            if let ExpressionKind::Identifier(name, _) = &base_expr.node {
+                match name.as_str() {
+                    "List" if !generics.is_empty() => {
+                        if infer_type_from_generic_arg(&generics[0], ctx).is_some() {
+                            // Need to convert Type back to Expression for TypeKind::Custom args
+                            Some(Type::new(
+                                TypeKind::Custom(
+                                    "List".to_string(),
+                                    Some(vec![generics[0].clone()]),
+                                ),
+                                arg.span,
+                            ))
+                        } else {
+                            None
+                        }
+                    }
+                    "Map" if generics.len() >= 2 => {
+                        if let (Some(_key_ty), Some(_val_ty)) = (
+                            infer_type_from_generic_arg(&generics[0], ctx),
+                            infer_type_from_generic_arg(&generics[1], ctx),
+                        ) {
+                            Some(Type::new(
+                                TypeKind::Custom(
+                                    "Map".to_string(),
+                                    Some(vec![generics[0].clone(), generics[1].clone()]),
+                                ),
+                                arg.span,
+                            ))
+                        } else {
+                            None
+                        }
+                    }
+                    "Set" if !generics.is_empty() => {
+                        if infer_type_from_generic_arg(&generics[0], ctx).is_some() {
+                            Some(Type::new(
+                                TypeKind::Custom(
+                                    "Set".to_string(),
+                                    Some(vec![generics[0].clone()]),
+                                ),
+                                arg.span,
+                            ))
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Computes the element size in bytes for a collection element type.

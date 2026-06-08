@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 //
-// `miri build --target web-gpu` produces a browser-runnable bundle:
-//   - index.html       — harness with <canvas>, loads the JS runtime + WGSL.
-//   - miri_gpu_runtime.js — copied from assets/web/.
-//   - kernels/*.wgsl   — one shader per `gpu fn` kernel emitted from the source.
-// The native object/binary path is skipped — the bundle is the artifact.
+// `miri build --target web-gpu` produces a bundle:
+//   - <name>.json     — manifest with buffers, kernels, and animation metadata
+//   - miri-gpu.js     — reusable embeddable runtime driver (copied from assets/web/)
+//   - index.html      — thin harness for local development
+// The manifest is the primary artifact, consumed by miri-gpu.js.
 
 use crate::utils::miri_cmd;
 use std::fs;
@@ -24,6 +24,20 @@ gpu for i in 0..4
 println("done")
 "#;
 
+const GPU_FRAME_SOURCE: &str = r#"use system.io
+use system.gpu
+use system.collections.array
+
+gpu var grid_a = Array<int, 16>()
+gpu var grid_b = Array<int, 16>()
+
+gpu for idx in 0..16
+    grid_a[idx] = idx as int
+
+gpu frame idx in 0..16
+    grid_b[idx] = grid_a[idx] + 1
+"#;
+
 fn write_source(content: &str) -> NamedTempFile {
     let mut file = NamedTempFile::new().unwrap();
     write!(file, "{}", content).unwrap();
@@ -31,7 +45,7 @@ fn write_source(content: &str) -> NamedTempFile {
 }
 
 #[test]
-fn target_web_gpu_emits_html_bundle_with_canvas_and_kernel() {
+fn target_web_gpu_emits_manifest_and_runtime() {
     let source = write_source(GPU_FOR_SOURCE);
     let out_dir = tempfile::tempdir().unwrap();
     let bundle_dir = out_dir.path().join("bundle");
@@ -46,45 +60,164 @@ fn target_web_gpu_emits_html_bundle_with_canvas_and_kernel() {
         .assert()
         .success();
 
-    let index_path = bundle_dir.join("index.html");
-    let index = fs::read_to_string(&index_path)
-        .unwrap_or_else(|_| panic!("expected bundle index.html at {:?}", index_path));
+    // Check manifest file exists and parses as valid JSON
+    // The manifest name is derived from the output directory name
+    let manifest_path = bundle_dir.join("bundle.json");
     assert!(
-        index.contains("<canvas"),
-        "index.html must declare a <canvas> for compute output rendering, got:\n{}",
-        index
-    );
-    assert!(
-        index.contains("miri_gpu_runtime.js"),
-        "index.html must reference the JS runtime, got:\n{}",
-        index
+        manifest_path.is_file(),
+        "expected manifest at {:?} (directory contents: {:?})",
+        manifest_path,
+        fs::read_dir(&bundle_dir)
+            .ok()
+            .map(|mut entries| entries.next())
     );
 
-    let runtime_path = bundle_dir.join("miri_gpu_runtime.js");
+    let manifest_text = fs::read_to_string(&manifest_path).expect("read manifest");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&manifest_text).expect("parse manifest JSON");
+
+    // Validate manifest schema
+    assert!(
+        manifest["name"].is_string(),
+        "manifest must have 'name' string field"
+    );
+    assert!(
+        manifest["canvas"]["width"].is_number(),
+        "manifest must have canvas.width number"
+    );
+    assert!(
+        manifest["canvas"]["height"].is_number(),
+        "manifest must have canvas.height number"
+    );
+    assert!(
+        manifest["buffers"].is_array(),
+        "manifest must have 'buffers' array"
+    );
+    assert!(
+        manifest["seed"].is_array(),
+        "manifest must have 'seed' array"
+    );
+    assert!(
+        manifest["paint"].is_string(),
+        "manifest must have 'paint' string (buffer name)"
+    );
+
+    // Validate kernel specs
+    let seed = &manifest["seed"];
+    assert!(
+        !seed.as_array().unwrap().is_empty(),
+        "seed kernels must be non-empty"
+    );
+    for kernel in seed.as_array().unwrap() {
+        assert!(kernel["entryPoint"].is_string(), "kernel needs entryPoint");
+        assert!(kernel["wgsl"].is_string(), "kernel needs wgsl source");
+        assert!(kernel["workgroups"].is_array(), "kernel needs workgroups");
+        assert!(kernel["bindings"].is_array(), "kernel needs bindings");
+        assert!(
+            !kernel["wgsl"].as_str().unwrap().contains("i64"),
+            "WGSL must not contain i64 (unsupported on some targets)"
+        );
+    }
+
+    // Check miri-gpu.js runtime is copied
+    let runtime_path = bundle_dir.join("miri-gpu.js");
     assert!(
         runtime_path.is_file(),
-        "expected runtime shim copied to {:?}",
+        "expected miri-gpu.js runtime copied to {:?}",
         runtime_path
     );
-
-    let kernels_dir = bundle_dir.join("kernels");
-    let entries: Vec<_> = fs::read_dir(&kernels_dir)
-        .unwrap_or_else(|_| panic!("expected kernels/ at {:?}", kernels_dir))
-        .filter_map(Result::ok)
-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "wgsl"))
-        .collect();
+    let runtime_text = fs::read_to_string(&runtime_path).expect("read runtime");
     assert!(
-        !entries.is_empty(),
-        "expected at least one .wgsl kernel file emitted in {:?}",
-        kernels_dir
+        runtime_text.contains("export async function mount"),
+        "miri-gpu.js must export mount function"
     );
 
-    let wgsl = fs::read_to_string(entries[0].path()).unwrap();
+    // Check index.html harness
+    let index_path = bundle_dir.join("index.html");
     assert!(
-        wgsl.contains("@compute"),
-        "kernel file must contain @compute entry point, got:\n{}",
-        wgsl
+        index_path.is_file(),
+        "expected index.html at {:?}",
+        index_path
     );
+    let index_text = fs::read_to_string(&index_path).expect("read index.html");
+    assert!(
+        index_text.contains("<canvas"),
+        "index.html must have <canvas>"
+    );
+    assert!(
+        index_text.contains("import { mount } from"),
+        "index.html must import mount from miri-gpu.js"
+    );
+    assert!(
+        index_text.contains(".json"),
+        "index.html must reference the manifest JSON file"
+    );
+}
+
+#[test]
+fn target_web_gpu_frame_kernel_in_manifest() {
+    let source = write_source(GPU_FRAME_SOURCE);
+    let out_dir = tempfile::tempdir().unwrap();
+    let bundle_dir = out_dir.path().join("bundle");
+
+    let mut cmd = miri_cmd();
+    cmd.arg("build")
+        .arg(source.path())
+        .arg("--target")
+        .arg("web-gpu")
+        .arg("--out")
+        .arg(&bundle_dir)
+        .assert()
+        .success();
+
+    let manifest_path = bundle_dir.join("bundle.json");
+    let manifest_text = fs::read_to_string(&manifest_path).expect("read manifest");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&manifest_text).expect("parse manifest JSON");
+
+    // Validate frame field is present
+    assert!(
+        manifest["frame"].is_object() || manifest["frame"].is_null(),
+        "manifest 'frame' must be an object or null"
+    );
+
+    // If frame is present, check it has read/write
+    if manifest["frame"].is_object() {
+        let frame = &manifest["frame"];
+        assert!(
+            frame["read"].is_string() || frame["read"].is_null(),
+            "frame kernel must have 'read' buffer name"
+        );
+        assert!(
+            frame["write"].is_string() || frame["write"].is_null(),
+            "frame kernel must have 'write' buffer name"
+        );
+
+        // Validate bindings match the read/write buffers
+        let bindings = &frame["bindings"];
+        assert!(bindings.is_array(), "frame kernel must have bindings array");
+
+        // Check that binding access matches frame.read/write classification
+        let read_buf = frame["read"].as_str();
+        let write_buf = frame["write"].as_str();
+
+        for binding in bindings.as_array().unwrap() {
+            let name = binding["name"].as_str().unwrap();
+            let access = binding["access"].as_str().unwrap();
+
+            if Some(name) == read_buf {
+                assert_eq!(
+                    access, "read",
+                    "read buffer binding must have access='read'"
+                );
+            } else if Some(name) == write_buf {
+                assert_eq!(
+                    access, "read_write",
+                    "write buffer binding must have access='read_write'"
+                );
+            }
+        }
+    }
 }
 
 #[test]

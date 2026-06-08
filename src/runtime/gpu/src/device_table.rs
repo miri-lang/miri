@@ -28,26 +28,33 @@ pub const HOST_HANDLE: u64 = 0;
 struct ResidentBuffer {
     buffer: Buffer,
     byte_len: usize,
+    /// CHANGE 2: True if this buffer's host data was narrowed (i64→i32) on upload.
+    needs_widen: bool,
 }
 
 static DEVICE_BUFFERS: Lazy<RwLock<HashMap<u64, ResidentBuffer>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
 /// Returns a clone of the resident buffer handle for `handle_id` paired with
-/// its uploaded byte length, or `None` when nothing has been allocated for it
-/// yet.
-pub fn resident_buffer(handle_id: u64) -> Option<(Buffer, usize)> {
+/// its uploaded byte length and narrowing flag, or `None` when nothing has been allocated for it yet.
+pub fn resident_buffer(handle_id: u64) -> Option<(Buffer, usize, bool)> {
     DEVICE_BUFFERS
         .read()
         .get(&handle_id)
-        .map(|entry| (entry.buffer.clone(), entry.byte_len))
+        .map(|entry| (entry.buffer.clone(), entry.byte_len, entry.needs_widen))
 }
 
 /// Records `buffer` as the persistent device buffer for `handle_id`.
-pub fn insert_resident(handle_id: u64, buffer: Buffer, byte_len: usize) {
-    DEVICE_BUFFERS
-        .write()
-        .insert(handle_id, ResidentBuffer { buffer, byte_len });
+/// CHANGE 2: `needs_widen` tracks whether the buffer was narrowed on upload and needs widening on readback.
+pub fn insert_resident(handle_id: u64, buffer: Buffer, byte_len: usize, needs_widen: bool) {
+    DEVICE_BUFFERS.write().insert(
+        handle_id,
+        ResidentBuffer {
+            buffer,
+            byte_len,
+            needs_widen,
+        },
+    );
 }
 
 /// Releases the device buffer owned by a dropped host-side binding. Returns

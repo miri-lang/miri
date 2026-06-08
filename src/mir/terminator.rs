@@ -172,6 +172,7 @@ impl fmt::Display for Terminator {
                 args,
                 arg_handles: _,
                 arg_read_only: _,
+                arg_int_narrow: _,
                 uniform_bound: _,
                 destination,
                 target,
@@ -273,6 +274,10 @@ pub enum TerminatorKind {
         /// in the kernel body. Empty means no captures (impossible), or this
         /// launch is legacy and all captures are assumed read_write.
         arg_read_only: Vec<bool>,
+        /// CHANGE 2 feature: which args need i64→i32 narrowing on upload and i32→i64 widening on readback.
+        /// `arg_int_narrow[i]` is true when the i-th capture is an `Array<int, N>`.
+        /// Empty means no captures (impossible), or this launch is legacy and none need narrowing.
+        arg_int_narrow: Vec<bool>,
         /// When present, an i64 operand containing the loop-bound limit value.
         /// This is lowered to a uniform buffer in the kernel at binding position
         /// `num_captures + 1`. When `None`, bounds are compile-time constants.

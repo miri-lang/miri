@@ -452,6 +452,159 @@ impl TypeChecker {
         context.exit_scope();
     }
 
+    pub(crate) fn check_gpu_frame(
+        &mut self,
+        decls: &[VariableDeclaration],
+        iterable: &Expression,
+        body: &Statement,
+        context: &mut Context,
+        stmt_span: Span,
+    ) {
+        // `gpu frame` must have exactly 1 loop variable (enforced in parser)
+        if decls.len() != 1 {
+            self.report_error(
+                "gpu frame requires exactly 1 loop variable".to_string(),
+                stmt_span,
+            );
+            return;
+        }
+
+        let ExpressionKind::Range(start, Some(end), range_type) = &iterable.node else {
+            self.report_error(
+                "'gpu frame' requires a bounded numeric range like 'a..b' or 'a..=b'".to_string(),
+                iterable.span,
+            );
+            return;
+        };
+        if !matches!(
+            range_type,
+            RangeExpressionType::Exclusive | RangeExpressionType::Inclusive
+        ) {
+            self.report_error(
+                "'gpu frame' requires a bounded numeric range like 'a..b' or 'a..=b'".to_string(),
+                iterable.span,
+            );
+            return;
+        }
+        if !is_int_literal(start) {
+            self.report_error(
+                "'gpu frame' requires Int-literal range start".to_string(),
+                iterable.span,
+            );
+            return;
+        }
+
+        // End can be a runtime Int expression.
+        let end_type = self.infer_expression(end, context);
+        if !matches!(end_type.kind, TypeKind::Int) {
+            self.report_error(
+                format!("'gpu frame' range end must be Int, got {}", end_type.kind),
+                end.span,
+            );
+            return;
+        }
+
+        // Enter scope and type-check body
+        context.enter_scope();
+        let outer_in_gpu = context.in_gpu_function;
+        context.in_gpu_function = true;
+        context.gpu_for_depth += 1;
+
+        let int_type = make_type(TypeKind::Int);
+        let is_mutable = matches!(decls[0].declaration_type, VariableDeclarationType::Mutable);
+        context.define(
+            decls[0].name.clone(),
+            SymbolInfo::new(
+                int_type,
+                is_mutable,
+                false,
+                MemberVisibility::Public,
+                self.current_module.clone(),
+                None,
+            ),
+        );
+
+        // Type-check the body
+        self.check_statement(body, context);
+
+        // Validate ping-pong buffers: exactly 1 read-only and 1 read-write gpu capture
+        self.check_gpu_frame_buffers(decls, body, context, stmt_span);
+
+        context.gpu_for_depth -= 1;
+        context.in_gpu_function = outer_in_gpu;
+
+        let unconsumed = context.get_unconsumed_linear_vars();
+        for (name, span) in unconsumed {
+            self.report_error(
+                format!("Linear variable '{}' must be consumed exactly once", name),
+                span,
+            );
+        }
+
+        context.exit_scope();
+    }
+
+    fn check_gpu_frame_buffers(
+        &mut self,
+        loop_decls: &[VariableDeclaration],
+        body: &Statement,
+        context: &Context,
+        stmt_span: Span,
+    ) {
+        // Collect all gpu buffers captured in the frame body.
+        let loop_var_name = &loop_decls[0].name;
+        let (read_only_captures, written_captures) =
+            collect_gpu_frame_captures(body, loop_var_name, context);
+
+        // Ping-pong buffer rule: exactly 1 read-only and 1 read-write gpu buffer,
+        // and they must be different (no in-place updates).
+        let total_captures = read_only_captures.len() + written_captures.len();
+
+        if total_captures == 0 {
+            self.report_error(
+                "'gpu frame' body must capture at least one gpu buffer".to_string(),
+                stmt_span,
+            );
+            return;
+        }
+
+        if written_captures.is_empty() {
+            self.report_error(
+                "'gpu frame' body must write to at least one gpu buffer".to_string(),
+                stmt_span,
+            );
+            return;
+        }
+
+        if written_captures.len() > 1 {
+            self.report_error(
+                format!(
+                    "'gpu frame' body must write to exactly one gpu buffer, but {} are written: {}",
+                    written_captures.len(),
+                    written_captures
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                stmt_span,
+            );
+            return;
+        }
+
+        // Check that read and write buffers are disjoint.
+        let written_name = written_captures.iter().next().unwrap();
+        if read_only_captures.contains(written_name) {
+            self.report_error(
+                format!(
+                    "'gpu frame' buffers create a data race: '{}' is both read and written",
+                    written_name
+                ),
+                stmt_span,
+            );
+        }
+    }
+
     pub(crate) fn bind_loop_variables(
         &mut self,
         decls: &[VariableDeclaration],
@@ -712,4 +865,509 @@ fn is_int_literal(expr: &Expression) -> bool {
         &expr.node,
         ExpressionKind::Literal(crate::ast::literal::Literal::Integer(_))
     )
+}
+
+/// Collects gpu buffer captures in a gpu frame body, classifying them as
+/// read-only or read-write based on whether they appear in assignments.
+///
+/// Returns a tuple of (read_only_captures, written_captures) where each is a
+/// set of captured gpu buffer variable names that are gpu-resident. Note that
+/// a single buffer may appear in both sets if it is both read and written (data race).
+fn collect_gpu_frame_captures(
+    body: &Statement,
+    loop_var_name: &str,
+    context: &Context,
+) -> (
+    std::collections::HashSet<String>,
+    std::collections::HashSet<String>,
+) {
+    use std::collections::HashSet;
+
+    let written = collect_written_names_in_stmt(body);
+    let mut read_only = HashSet::new();
+    let mut written_captures = HashSet::new();
+
+    // Collect all captured identifiers.
+    let mut bound = HashSet::new();
+    bound.insert(loop_var_name.to_string());
+    let mut captured = HashSet::new();
+    collect_identifiers_in_stmt(body, &mut bound, &mut captured);
+
+    for name in captured {
+        // Skip loop variables and non-gpu-resident captures.
+        if name == loop_var_name {
+            continue;
+        }
+
+        // Check if this variable is visible in the outer context.
+        let Some(info) = context.resolve_info(&name) else {
+            continue;
+        };
+
+        // Only gpu-resident buffers are counted as frame captures.
+        if !is_gpu_buffer_type(&info.ty.kind) {
+            continue;
+        }
+
+        let is_written = written.contains(&name);
+        let is_read = is_identifier_read_in_stmt(body, &name, loop_var_name);
+
+        if is_written {
+            written_captures.insert(name.clone());
+        }
+        if is_read {
+            read_only.insert(name);
+        }
+    }
+
+    (read_only, written_captures)
+}
+
+/// Helper: collects all identifiers referenced in a statement, excluding
+/// those bound locally or in the `bound` set.
+fn collect_identifiers_in_stmt(
+    stmt: &Statement,
+    bound: &mut std::collections::HashSet<String>,
+    captured: &mut std::collections::HashSet<String>,
+) {
+    match &stmt.node {
+        StatementKind::Block(stmts) => {
+            let scope_snapshot = bound.clone();
+            for s in stmts {
+                collect_identifiers_in_stmt(s, bound, captured);
+            }
+            *bound = scope_snapshot;
+        }
+        StatementKind::Expression(expr) => {
+            collect_identifiers_in_expr(expr, bound, captured);
+        }
+        StatementKind::Variable(decls, _) => {
+            for d in decls {
+                if let Some(init) = &d.initializer {
+                    collect_identifiers_in_expr(init, bound, captured);
+                }
+                bound.insert(d.name.clone());
+            }
+        }
+        StatementKind::Return(Some(e)) => {
+            collect_identifiers_in_expr(e, bound, captured);
+        }
+        StatementKind::Return(None) => {}
+        StatementKind::If(cond, then_branch, else_branch, _) => {
+            collect_identifiers_in_expr(cond, bound, captured);
+            collect_identifiers_in_stmt(then_branch, bound, captured);
+            if let Some(eb) = else_branch {
+                collect_identifiers_in_stmt(eb, bound, captured);
+            }
+        }
+        StatementKind::While(cond, body, _) => {
+            collect_identifiers_in_expr(cond, bound, captured);
+            collect_identifiers_in_stmt(body, bound, captured);
+        }
+        StatementKind::For(inner_decls, iter, body)
+        | StatementKind::GpuFor(inner_decls, iter, body)
+        | StatementKind::GpuFrame(inner_decls, iter, body) => {
+            collect_identifiers_in_expr(iter, bound, captured);
+            let scope_snapshot = bound.clone();
+            for d in inner_decls {
+                bound.insert(d.name.clone());
+            }
+            collect_identifiers_in_stmt(body, bound, captured);
+            *bound = scope_snapshot;
+        }
+        StatementKind::Empty
+        | StatementKind::Break
+        | StatementKind::Continue
+        | StatementKind::Use(_, _)
+        | StatementKind::Type(_, _)
+        | StatementKind::FunctionDeclaration(_)
+        | StatementKind::Enum(_, _, _, _, _, _)
+        | StatementKind::Struct(_, _, _, _, _)
+        | StatementKind::Class(_)
+        | StatementKind::Trait(_, _, _, _, _)
+        | StatementKind::RuntimeFunctionDeclaration(_, _, _, _)
+        | StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => {}
+    }
+}
+
+/// Helper: collects all identifiers referenced in an expression.
+fn collect_identifiers_in_expr(
+    expr: &Expression,
+    bound: &std::collections::HashSet<String>,
+    captured: &mut std::collections::HashSet<String>,
+) {
+    match &expr.node {
+        ExpressionKind::Identifier(name, _) => {
+            if !bound.contains(name) {
+                captured.insert(name.clone());
+            }
+        }
+        ExpressionKind::Binary(lhs, _, rhs) | ExpressionKind::Logical(lhs, _, rhs) => {
+            collect_identifiers_in_expr(lhs, bound, captured);
+            collect_identifiers_in_expr(rhs, bound, captured);
+        }
+        ExpressionKind::Range(lhs, Some(rhs), _) => {
+            collect_identifiers_in_expr(lhs, bound, captured);
+            collect_identifiers_in_expr(rhs, bound, captured);
+        }
+        ExpressionKind::Range(lhs, None, _) => {
+            collect_identifiers_in_expr(lhs, bound, captured);
+        }
+        ExpressionKind::Unary(_, e) => {
+            collect_identifiers_in_expr(e, bound, captured);
+        }
+        ExpressionKind::Call(func, args) => {
+            collect_identifiers_in_expr(func, bound, captured);
+            for arg in args {
+                collect_identifiers_in_expr(arg, bound, captured);
+            }
+        }
+        ExpressionKind::Index(base, index) => {
+            collect_identifiers_in_expr(base, bound, captured);
+            collect_identifiers_in_expr(index, bound, captured);
+        }
+        ExpressionKind::Member(base, _) => {
+            collect_identifiers_in_expr(base, bound, captured);
+        }
+        ExpressionKind::Assignment(lhs, _, rhs) => {
+            // Process RHS.
+            collect_identifiers_in_expr(rhs, bound, captured);
+            // LHS is not an expression, but we still need to check the base.
+            use crate::ast::expression::LeftHandSideExpression;
+            match lhs.as_ref() {
+                LeftHandSideExpression::Identifier(e) => {
+                    if let ExpressionKind::Identifier(name, _) = &e.node {
+                        if !bound.contains(name) {
+                            captured.insert(name.clone());
+                        }
+                    }
+                }
+                LeftHandSideExpression::Index(e) | LeftHandSideExpression::Member(e) => {
+                    collect_identifiers_in_expr(e, bound, captured);
+                }
+            }
+        }
+        ExpressionKind::Array(exprs, init_expr) => {
+            for e in exprs {
+                collect_identifiers_in_expr(e, bound, captured);
+            }
+            collect_identifiers_in_expr(init_expr, bound, captured);
+        }
+        ExpressionKind::List(exprs) => {
+            for e in exprs {
+                collect_identifiers_in_expr(e, bound, captured);
+            }
+        }
+        ExpressionKind::Set(exprs) => {
+            for e in exprs {
+                collect_identifiers_in_expr(e, bound, captured);
+            }
+        }
+        ExpressionKind::Tuple(exprs) => {
+            for e in exprs {
+                collect_identifiers_in_expr(e, bound, captured);
+            }
+        }
+        ExpressionKind::Map(pairs) => {
+            for (k, v) in pairs {
+                collect_identifiers_in_expr(k, bound, captured);
+                collect_identifiers_in_expr(v, bound, captured);
+            }
+        }
+        ExpressionKind::Cast(e, _) => {
+            collect_identifiers_in_expr(e, bound, captured);
+        }
+        ExpressionKind::Conditional(cond, then_expr, else_expr, _) => {
+            collect_identifiers_in_expr(cond, bound, captured);
+            collect_identifiers_in_expr(then_expr, bound, captured);
+            if let Some(e) = else_expr {
+                collect_identifiers_in_expr(e, bound, captured);
+            }
+        }
+        ExpressionKind::Block(_, e) => {
+            collect_identifiers_in_expr(e, bound, captured);
+        }
+        ExpressionKind::Match(e, _) => {
+            collect_identifiers_in_expr(e, bound, captured);
+        }
+        ExpressionKind::Lambda(_) => {
+            // Lambda captures are handled by their own scope analysis.
+        }
+        ExpressionKind::Guard(_, e) => {
+            collect_identifiers_in_expr(e, bound, captured);
+        }
+        ExpressionKind::Literal(_)
+        | ExpressionKind::Type(_, _)
+        | ExpressionKind::GenericType(_, _, _)
+        | ExpressionKind::TypeDeclaration(_, _, _, _)
+        | ExpressionKind::EnumValue(_, _)
+        | ExpressionKind::StructMember(_, _)
+        | ExpressionKind::ImportPath(_, _)
+        | ExpressionKind::FormattedString(_)
+        | ExpressionKind::NamedArgument(_, _)
+        | ExpressionKind::Super => {}
+    }
+}
+
+/// Helper: collects all variable names that are written to in a statement.
+fn collect_written_names_in_stmt(stmt: &Statement) -> std::collections::HashSet<String> {
+    let mut written = std::collections::HashSet::new();
+    visit_written_stmt(stmt, &mut written);
+    written
+}
+
+fn visit_written_stmt(stmt: &Statement, written: &mut std::collections::HashSet<String>) {
+    match &stmt.node {
+        StatementKind::Block(stmts) => {
+            for s in stmts {
+                visit_written_stmt(s, written);
+            }
+        }
+        StatementKind::Expression(expr) => visit_written_expr(expr, written),
+        StatementKind::Variable(_, _) => {}
+        StatementKind::Return(_) => {}
+        StatementKind::If(_, then_branch, else_branch, _) => {
+            visit_written_stmt(then_branch, written);
+            if let Some(eb) = else_branch {
+                visit_written_stmt(eb, written);
+            }
+        }
+        StatementKind::While(_, body, _) => visit_written_stmt(body, written),
+        StatementKind::For(_, _, body)
+        | StatementKind::GpuFor(_, _, body)
+        | StatementKind::GpuFrame(_, _, body) => {
+            visit_written_stmt(body, written);
+        }
+        StatementKind::Empty
+        | StatementKind::Break
+        | StatementKind::Continue
+        | StatementKind::Use(_, _)
+        | StatementKind::Type(_, _)
+        | StatementKind::FunctionDeclaration(_)
+        | StatementKind::Enum(_, _, _, _, _, _)
+        | StatementKind::Struct(_, _, _, _, _)
+        | StatementKind::Class(_)
+        | StatementKind::Trait(_, _, _, _, _)
+        | StatementKind::RuntimeFunctionDeclaration(_, _, _, _)
+        | StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => {}
+    }
+}
+
+fn visit_written_expr(expr: &Expression, written: &mut std::collections::HashSet<String>) {
+    if let ExpressionKind::Assignment(lhs, _, rhs) = &expr.node {
+        extract_written_lhs(lhs, written);
+        visit_written_expr(rhs, written);
+    }
+}
+
+fn extract_written_lhs(
+    lhs: &crate::ast::expression::LeftHandSideExpression,
+    written: &mut std::collections::HashSet<String>,
+) {
+    use crate::ast::expression::LeftHandSideExpression;
+    match lhs {
+        LeftHandSideExpression::Identifier(expr) => {
+            if let ExpressionKind::Identifier(name, _) = &expr.node {
+                written.insert(name.clone());
+            }
+        }
+        LeftHandSideExpression::Index(expr) | LeftHandSideExpression::Member(expr) => {
+            if let ExpressionKind::Index(base, _) | ExpressionKind::Member(base, _) = &expr.node {
+                if let ExpressionKind::Identifier(name, _) = &base.node {
+                    written.insert(name.clone());
+                }
+            }
+        }
+    }
+}
+
+/// Helper: determines if a type is a gpu-compatible buffer type.
+/// This checks for Array types and List/Map/Set (future gpu buffers).
+fn is_gpu_buffer_type(kind: &TypeKind) -> bool {
+    match kind {
+        TypeKind::Array(_, _) => true,
+        TypeKind::Custom(name, _) => {
+            BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Array)
+        }
+        _ => false,
+    }
+}
+
+/// Helper: checks if an identifier is read (appears in any expression) in a statement.
+/// Excludes the loop variable.
+fn is_identifier_read_in_stmt(stmt: &Statement, name: &str, loop_var: &str) -> bool {
+    let mut bound = std::collections::HashSet::new();
+    bound.insert(loop_var.to_string());
+    is_identifier_read_in_stmt_impl(stmt, name, &bound)
+}
+
+fn is_identifier_read_in_stmt_impl(
+    stmt: &Statement,
+    name: &str,
+    bound: &std::collections::HashSet<String>,
+) -> bool {
+    match &stmt.node {
+        StatementKind::Block(stmts) => {
+            for s in stmts {
+                if is_identifier_read_in_stmt_impl(s, name, bound) {
+                    return true;
+                }
+            }
+            false
+        }
+        StatementKind::Expression(expr) => is_identifier_read_in_expr(expr, name, bound),
+        StatementKind::Variable(decls, _) => {
+            for d in decls {
+                if let Some(init) = &d.initializer {
+                    if is_identifier_read_in_expr(init, name, bound) {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+        StatementKind::Return(Some(e)) => is_identifier_read_in_expr(e, name, bound),
+        StatementKind::Return(None) => false,
+        StatementKind::If(cond, then_branch, else_branch, _) => {
+            if is_identifier_read_in_expr(cond, name, bound) {
+                return true;
+            }
+            if is_identifier_read_in_stmt_impl(then_branch, name, bound) {
+                return true;
+            }
+            if let Some(eb) = else_branch {
+                if is_identifier_read_in_stmt_impl(eb, name, bound) {
+                    return true;
+                }
+            }
+            false
+        }
+        StatementKind::While(cond, body, _) => {
+            if is_identifier_read_in_expr(cond, name, bound) {
+                return true;
+            }
+            is_identifier_read_in_stmt_impl(body, name, bound)
+        }
+        StatementKind::For(inner_decls, iter, body)
+        | StatementKind::GpuFor(inner_decls, iter, body)
+        | StatementKind::GpuFrame(inner_decls, iter, body) => {
+            if is_identifier_read_in_expr(iter, name, bound) {
+                return true;
+            }
+            let mut new_bound = bound.clone();
+            for d in inner_decls {
+                new_bound.insert(d.name.clone());
+            }
+            is_identifier_read_in_stmt_impl(body, name, &new_bound)
+        }
+        StatementKind::Empty
+        | StatementKind::Break
+        | StatementKind::Continue
+        | StatementKind::Use(_, _)
+        | StatementKind::Type(_, _)
+        | StatementKind::FunctionDeclaration(_)
+        | StatementKind::Enum(_, _, _, _, _, _)
+        | StatementKind::Struct(_, _, _, _, _)
+        | StatementKind::Class(_)
+        | StatementKind::Trait(_, _, _, _, _)
+        | StatementKind::RuntimeFunctionDeclaration(_, _, _, _)
+        | StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => false,
+    }
+}
+
+fn is_identifier_read_in_expr(
+    expr: &Expression,
+    name: &str,
+    bound: &std::collections::HashSet<String>,
+) -> bool {
+    match &expr.node {
+        ExpressionKind::Identifier(ident, _) => ident == name && !bound.contains(name),
+        ExpressionKind::Binary(lhs, _, rhs) | ExpressionKind::Logical(lhs, _, rhs) => {
+            is_identifier_read_in_expr(lhs, name, bound)
+                || is_identifier_read_in_expr(rhs, name, bound)
+        }
+        ExpressionKind::Range(lhs, Some(rhs), _) => {
+            is_identifier_read_in_expr(lhs, name, bound)
+                || is_identifier_read_in_expr(rhs, name, bound)
+        }
+        ExpressionKind::Range(lhs, None, _) => is_identifier_read_in_expr(lhs, name, bound),
+        ExpressionKind::Unary(_, e) => is_identifier_read_in_expr(e, name, bound),
+        ExpressionKind::Call(func, args) => {
+            if is_identifier_read_in_expr(func, name, bound) {
+                return true;
+            }
+            for arg in args {
+                if is_identifier_read_in_expr(arg, name, bound) {
+                    return true;
+                }
+            }
+            false
+        }
+        ExpressionKind::Index(base, index) => {
+            is_identifier_read_in_expr(base, name, bound)
+                || is_identifier_read_in_expr(index, name, bound)
+        }
+        ExpressionKind::Member(base, _) => is_identifier_read_in_expr(base, name, bound),
+        ExpressionKind::Assignment(_, _, rhs) => {
+            // Check RHS only. The LHS is being written to, not read.
+            // For `a[i] = b[i]`, we only care that `b` is read on the RHS,
+            // not that `a` is indexed on the LHS.
+            is_identifier_read_in_expr(rhs, name, bound)
+        }
+        ExpressionKind::Array(exprs, init_expr) => {
+            for e in exprs {
+                if is_identifier_read_in_expr(e, name, bound) {
+                    return true;
+                }
+            }
+            is_identifier_read_in_expr(init_expr, name, bound)
+        }
+        ExpressionKind::List(exprs) | ExpressionKind::Set(exprs) | ExpressionKind::Tuple(exprs) => {
+            for e in exprs {
+                if is_identifier_read_in_expr(e, name, bound) {
+                    return true;
+                }
+            }
+            false
+        }
+        ExpressionKind::Map(pairs) => {
+            for (k, v) in pairs {
+                if is_identifier_read_in_expr(k, name, bound)
+                    || is_identifier_read_in_expr(v, name, bound)
+                {
+                    return true;
+                }
+            }
+            false
+        }
+        ExpressionKind::Cast(e, _) => is_identifier_read_in_expr(e, name, bound),
+        ExpressionKind::Conditional(cond, then_expr, else_expr, _) => {
+            if is_identifier_read_in_expr(cond, name, bound) {
+                return true;
+            }
+            if is_identifier_read_in_expr(then_expr, name, bound) {
+                return true;
+            }
+            if let Some(e) = else_expr {
+                if is_identifier_read_in_expr(e, name, bound) {
+                    return true;
+                }
+            }
+            false
+        }
+        ExpressionKind::Block(_, e) => is_identifier_read_in_expr(e, name, bound),
+        ExpressionKind::Match(e, _) => is_identifier_read_in_expr(e, name, bound),
+        ExpressionKind::Guard(_, e) => is_identifier_read_in_expr(e, name, bound),
+        ExpressionKind::Lambda(_) => false, // Lambdas have their own scope
+        ExpressionKind::Literal(_)
+        | ExpressionKind::Type(_, _)
+        | ExpressionKind::GenericType(_, _, _)
+        | ExpressionKind::TypeDeclaration(_, _, _, _)
+        | ExpressionKind::EnumValue(_, _)
+        | ExpressionKind::StructMember(_, _)
+        | ExpressionKind::ImportPath(_, _)
+        | ExpressionKind::FormattedString(_)
+        | ExpressionKind::NamedArgument(_, _)
+        | ExpressionKind::Super => false,
+    }
 }

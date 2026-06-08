@@ -4,11 +4,13 @@
 // Vector addition: two float arrays captured on the device, element-wise sum
 // written to a mutable device buffer, readback to host, and print.
 
+const N = 4
+
 gpu let a = [1.0, 2.0, 3.0, 4.0]
 gpu let b = [5.0, 6.0, 7.0, 8.0]
 gpu var dst = [0.0, 0.0, 0.0, 0.0]
 
-gpu for i in 0..4
+gpu for i in 0..N
     dst[i] = a[i] + b[i]
 
 let host = dst

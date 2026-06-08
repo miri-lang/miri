@@ -18,7 +18,7 @@ pub fn program_uses_gpu<'a, I: IntoIterator<Item = &'a Statement>>(stmts: I) -> 
 /// Returns true if a statement or any of its nested children use GPU constructs.
 fn stmt_uses_gpu(stmt: &Statement) -> bool {
     match &stmt.node {
-        StatementKind::GpuFor(_, _, _) => true,
+        StatementKind::GpuFor(_, _, _) | StatementKind::GpuFrame(_, _, _) => true,
         StatementKind::FunctionDeclaration(decl) => {
             decl.properties.is_gpu || decl.body.as_ref().is_some_and(|b| stmt_uses_gpu(b))
         }
