@@ -58,8 +58,8 @@ impl WgslScalar {
 /// Miri's default `Int` maps to WGSL `i32` (not i64). The runtime marshals
 /// host i64 buffers ↔ device i32 buffers at launch/readback boundaries.
 /// Fixed-width types keep their declared widths (`I32` → `i32`, `I64` → `i64`
-/// for CPU-only code). Default `Float` still maps to WGSL `f64` (browser
-/// f64 support is deferred; F32 buffers stay f32 unchanged).
+/// for CPU-only code). Default `Float` still maps to WGSL `f64`.
+/// Not all browsers support WGSL f64; F32 buffers stay f32 unchanged.
 ///
 /// Returns `Err(CodegenError::Internal)` for non-scalar inputs; callers wrap
 /// pointer/buffer types in `array<T>` themselves.

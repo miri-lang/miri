@@ -3,7 +3,7 @@
 
 use super::utils::*;
 
-// ── Array<List<T>> elem_drop_fn (task 2.4a) ──────────────────────────────────
+// ── Array<List<T>> elem_drop_fn ──────────────────────────────────────────────
 
 #[test]
 fn test_array_of_lists_no_crash() {
@@ -76,7 +76,7 @@ fn main()
     );
 }
 
-// ── Array<String> scope-exit cleanup (task 2.5) ──────────────────────────────
+// ── Array<String> scope-exit cleanup ──────────────────────────────────────────
 
 #[test]
 fn test_array_of_strings_out_of_scope_no_crash() {
@@ -98,7 +98,7 @@ fn main()
     );
 }
 
-// ── Drop-fn setter wiring (task 2.4) ─────────────────────────────────────────
+// ── Drop-fn setter wiring ─────────────────────────────────────────────────────
 
 #[test]
 fn test_array_of_strings_no_crash() {
@@ -203,7 +203,7 @@ fn main()
     );
 }
 
-// ── Array.set incref for managed elements (task 3.1) ─────────────────────────
+// ── Array.set incref for managed elements ─────────────────────────────────────
 
 #[test]
 fn test_array_set_managed_val_incref() {
@@ -370,7 +370,7 @@ fn main()
     );
 }
 
-// ── Set/overwrite decref old value (task 3.2) ────────────────────────────────
+// ── Set/overwrite decref old value ────────────────────────────────────────────
 
 #[test]
 fn test_array_set_overwrite_managed_no_leak() {

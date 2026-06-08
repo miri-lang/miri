@@ -472,7 +472,7 @@ let c = m.clone()
 }
 
 // ─────────────────────────────────────────────
-// Deep clone of Array/List<custom class>: task 6.2a
+// Deep clone of Array/List<custom class>
 // ─────────────────────────────────────────────
 
 #[test]
@@ -568,7 +568,7 @@ println(f"{lst[0].x}")
 }
 
 // ─────────────────────────────────────────────
-// Empty-constructor List<T> / Set<T> clone: task 6.2b
+// Empty-constructor List<T> / Set<T> clone
 // ─────────────────────────────────────────────
 
 #[test]
@@ -632,7 +632,7 @@ println(f"{m[0].x}")
 }
 
 // ─────────────────────────────────────────────
-// Deep clone of Set<custom class>: task 6.2a/6.2b
+// Deep clone of Set<custom class>
 // ─────────────────────────────────────────────
 
 #[test]
@@ -697,7 +697,7 @@ fn main()
 }
 
 // ─────────────────────────────────────────────
-// Deep clone of Map<String, custom class>: task 6.2c
+// Deep clone of Map<String, custom class>
 // ─────────────────────────────────────────────
 
 #[test]
@@ -762,13 +762,12 @@ fn main()
 }
 
 // ─────────────────────────────────────────────
-// 6.3: push to clone does not affect original
+// Push to clone does not affect original
 // ─────────────────────────────────────────────
 
 #[test]
 fn test_list_clone_push_to_clone_does_not_affect_original() {
-    // Plan 6.3 exact example: clone a list, push to the clone,
-    // original must still have its original length.
+    // Clone a list, push to the clone, original must still have its original length.
     assert_runs_with_output(
         r#"
 use system.io
@@ -785,7 +784,7 @@ println(f"{a.length()}")
 }
 
 // ─────────────────────────────────────────────
-// 6.3: struct with managed (List) field — deep copy, independent lifecycle
+// Struct with managed (List) field — deep copy, independent lifecycle
 // ─────────────────────────────────────────────
 
 #[test]

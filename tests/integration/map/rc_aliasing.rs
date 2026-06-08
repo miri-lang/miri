@@ -3,7 +3,7 @@
 
 use super::utils::*;
 
-// ── Drop-fn setter wiring (task 2.4) ─────────────────────────────────────────
+// ── Drop-fn setter wiring ─────────────────────────────────────────────────────
 
 #[test]
 fn test_map_string_values_remove_no_crash() {
@@ -60,7 +60,7 @@ fn main()
     );
 }
 
-// ── Map<String, List<int>> scope-exit cleanup (task 2.5) ─────────────────────
+// ── Map<String, List<int>> scope-exit cleanup ─────────────────────────────────
 
 #[test]
 fn test_map_string_list_values_scope_exit_no_crash() {
@@ -201,7 +201,7 @@ fn main()
     );
 }
 
-// ── Map index-write incref for managed elements (task 3.1) ───────────────────
+// ── Map index-write incref for managed elements ───────────────────────────────
 
 #[test]
 fn test_map_index_write_managed_val_incref() {
@@ -251,7 +251,7 @@ fn main()
     );
 }
 
-// ── Map index-write overwrite decref (task 3.2) ──────────────────────────────
+// ── Map index-write overwrite decref ──────────────────────────────────────────
 
 #[test]
 fn test_map_index_write_overwrite_managed_no_leak() {
