@@ -258,8 +258,8 @@ fn main()
 /// dropped must leave the counter at zero, or the MIRI_LEAK_CHECK atexit handler
 /// would fire and this test would fail with "Memory leak detected".
 ///
-/// This is the positive half of the 5.4 acceptance criterion: the tracking is
-/// in place AND does not produce false positives on correct code.
+/// Tests that allocation tracking is in place and does not produce false
+/// positives on correct code.
 #[test]
 fn test_closure_alloc_tracked_no_false_positive() {
     assert_runs_with_output(
@@ -278,8 +278,8 @@ fn main()
 /// must cause the MIRI_LEAK_CHECK atexit handler to fire and exit non-zero with
 /// the "leaked N closure allocation(s)" message.
 ///
-/// This is the negative half of the 5.4 acceptance criterion: the tracking
-/// correctly catches an imbalanced closure counter at process exit.
+/// Tests that the allocation tracking correctly detects and reports an imbalanced
+/// closure counter at process exit.
 #[test]
 fn test_closure_leak_detector_fires() {
     assert_leak_detected(
