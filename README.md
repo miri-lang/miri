@@ -14,13 +14,13 @@ Miri's second Beta release lays down the **Core Standard Library** that every fu
 
 **New in v0.4.0-beta.2:**
 - **`Result<T, E>`**: Enum with `Ok(T)` / `Err(E)` variants and `is_ok`, `is_err`, `unwrap_or` methods. The compiler enforces `must_use` semantics — ignoring a `Result` is a compile error. Auto-propagation forces every fallible API to be inspected.
-- **`system.math`**: `abs`, `min`, `max`, `pow`, `sqrt`, `floor`, `ceil`, `round`, `sin`, `cos`, `tan`, `log`, `exp` plus `PI`, `E`, `INF` as free functions. One source, two lowerings — calls inside `gpu fn` (M6.5) will route to WGSL/SPIR-V built-ins; calls on the CPU lower to `libm` / Cranelift intrinsics.
+- **`system.math`**: `abs`, `min`, `max`, `pow`, `sqrt`, `floor`, `ceil`, `round`, `sin`, `cos`, `tan`, `log`, `exp` plus `PI`, `E`, `INF` as free functions. One source, two lowerings — calls inside `gpu fn` will route to WGSL/SPIR-V built-ins; calls on the CPU lower to `libm` / Cranelift intrinsics.
 - **Collection trait taxonomy**: Four focused traits replace the old kitchen-sink design.
   - `Queryable<T>` — `is_empty`, `first`, `last`, `contains`, `index_of`.
   - `Transformable<T>` — `map`, `filter`, `flat_map`.
   - `Foldable<T>` — `reduce`, `any`, `all`, `count_where`, `sum`, `min`, `max`. Empty-collection-safe: `sum`/`min`/`max` return `T?` (`None` on empty).
   - `Sequenced<T>` extends `Transformable<T>` — `take`, `skip`, `sorted_by`, `unique`, `reversed`, `zip`, `enumerate`.
-  - `List<T>` and `Array<T, N>` inherit default trait bodies; `Map<K, V>` and `Set<T>` keep ad-hoc `map`/`filter`/`reduce`. `GpuArray<T>` (M6.5) will implement the same traits without API churn.
+  - `List<T>` and `Array<T, N>` inherit default trait bodies; `Map<K, V>` and `Set<T>` keep ad-hoc `map`/`filter`/`reduce`. Future GPU-resident array type will implement the same traits without API churn.
 - **`system.testing`**: `assert(cond, msg?)`, `assert_eq<T>(actual, expected, msg?)`, `assert_ne<T>(a, b, msg?)`, and `assert_panics(f, expected?)` declared `intrinsic`. Failures abort with `Runtime error: assertion failed at <path>:<line>: <detail>`. `assert_panics` catches Miri-level `panic(...)` via a setjmp/longjmp frame.
 - **Trait & generic improvements**: Soft-cycle module loading, two-phase pre-pass for forward references, trait-default re-lowering per concrete class, nested generic args in `implements` / `extends` clauses, and base-class generic substitution (`class IntStack extends Stack<int>`).
 
