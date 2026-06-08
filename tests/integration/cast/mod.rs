@@ -127,7 +127,8 @@ fn test_cast_rejects_bool() {
     );
 }
 
-// Note: GPU cast test is deferred pending investigation of GPU capture/binding handling
+// NOTE: GPU cast expressions in kernels are not tested yet. The implementation
+// requires careful investigation of GPU capture and binding handling with cast expressions.
 // #[test]
 // fn test_cast_in_gpu_kernel() {
 //     let source = r#"
@@ -144,7 +145,8 @@ fn test_cast_rejects_bool() {
 //     assert_gpu_runs_with_output(source, "0.0 0.25 0.5 0.75");
 // }
 
-// Note: GPU cast test is deferred pending investigation of GPU capture/binding handling
+// NOTE: GPU cast expressions in kernels are not tested yet. The implementation
+// requires careful investigation of GPU capture and binding handling with cast expressions.
 // #[test]
 // fn test_cast_float_to_int_in_gpu_kernel() {
 //     let source = r#"
