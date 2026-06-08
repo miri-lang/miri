@@ -350,7 +350,7 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
     assert_gpu_runs_with_output(source, "0 0 1 1");
 }
 
-/// N1 2D gpu for value-correctness test.
+/// 2D gpu for value-correctness test.
 /// A 2D grid `gpu for x, y in 0..4, 0..3` over a 4x3 array (12 elements total).
 /// Each thread computes `dst[y * 4 + x] = x + y`.
 /// Expected output after readback: row r, column c → value c+r.
@@ -373,11 +373,11 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]} {host[5]} {host[6]} 
     assert_gpu_runs_with_output(source, "0 1 2 3 1 2 3 4 2 3 4 5");
 }
 
-/// N4 buffer ping-pong with 3 generations and telemetry.
+/// Buffer ping-pong with 3 generations and telemetry.
 /// Two persistent `gpu var` grids swapped across 3 sequential `gpu for` kernels
 /// WITHOUT intermediate readback. Proves:
-/// - N4: buffer ping-pong (buffers reused across launches)
-/// - F3: read-only vs read-write capture (each kernel declares the binding it needs)
+/// - Buffers are reused across launches
+/// - Read-only vs read-write capture (each kernel declares the binding it needs)
 /// Acceptance criterion: final value is correct AND gpu_readbacks() == 1 (only final readback).
 /// Sequence:
 /// 1. First kernel: b[i] = a[i] + 100  (a read-only, b read-write)
@@ -528,8 +528,8 @@ println(f'{h[0]} {h[1]} {h[2]}')
 // integers are now i32 end-to-end (WebGPU/WGSL has no 64-bit integer type), so a
 // constant exceeding i32 range is genuinely unrepresentable in a kernel. In-range
 // integer div/mod stays covered by `gpu_i64_divide_roundtrips` / `gpu_i64_modulo_roundtrips`.
-// Follow-up (notes/PLAN.md): reject an out-of-i32-range integer constant inside a GPU
-// kernel with a clean compile-time error instead of the current shader-compile abort.
+// TODO: reject an out-of-i32-range integer constant inside a GPU kernel with a
+// clean compile-time error instead of the current shader-compile abort.
 
 /// Test negative dividend with division (i32 semantics: truncate toward zero).
 #[test]
@@ -573,7 +573,7 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]}')
     assert_gpu_runs_with_output(source, "0 -1 -2 0 1");
 }
 
-// NOTE: Game of Life correctness test deferred to after WGSL structurizer F24
-// fix (multiple if-else statements in GPU kernels currently hit a SwitchInt limitation).
+// NOTE: Game of Life correctness test is not included here because multiple if-else
+// statements in GPU kernels currently hit a SwitchInt limitation in the WGSL structurizer.
 // The demo test (in tests/integration/gpu/demos.rs) will serve as the acceptance criterion
-// for rule correctness once the demo is created and value-verified on Metal.
+// for rule correctness once it is created and value-verified on Metal.

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 //
-// Tests for F1: variable-bound `gpu for` loops.
-// The range end is now a runtime Int expression (not just a literal).
+// Tests for variable-bound `gpu for` loops.
+// The range end can be a runtime Int expression (not just a literal).
 
 use super::device::{assert_gpu_runs_with_output, gpu_adapter_available};
 use super::helpers::assert_gpu_wgsl_valid;
@@ -105,7 +105,7 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
     assert_gpu_runs_with_output(source, "888 888 888 888");
 }
 
-/// Issue 2: Inclusive runtime range iterates over correct element count.
+/// Inclusive runtime range iterates over correct element count.
 /// `0..=n` where n=4 should iterate i=0,1,2,3,4 (5 total), not 4.
 #[test]
 fn inclusive_runtime_range_includes_end() {
