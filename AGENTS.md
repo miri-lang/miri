@@ -52,9 +52,22 @@ When writing tests or standard library code, remember Miri's syntax:
 - **Matching**: Exhaustive `match` is mandatory. Do not use `_` for domain-critical enums.
 - **Standard Library Independence**: The compiler must NOT hardcode any standard library names or have specialized logic for them. Treat them like user code.
 - **Separation of Concerns**: `struct` for data, `trait` for behavior. Avoid "God Objects".
-- **Comments**: Keep comments up-to-date with the code. Remove obsolete comments. Do NOT add comments that mention paragraphs, task or milestone numbers from planning documents. Ensure copyright headers are present.
+- **Comments**: Keep comments up-to-date with the code. Remove obsolete comments. Describe the code at hand independently; do NOT reference internal planning documents, section numbers, milestone/phase numbers, or task identifiers. Ensure copyright headers are present.
 
-## 3.5 Principles Harness (BINDING)
+## 3.5 Codebase Cleanliness: No Planning References (BINDING)
+**The codebase must be absolutely clean of internal planning artifacts.** This means:
+
+- **NO references to internal documents**: PRINCIPLES.md, PLAN.md, GPU_DRAFT, design docs, vision docs, or any planning file.
+- **NO section/milestone numbers**: §1.4, M6.5, Phase 12, Task 4.1.5, Milestone 5, etc.
+- **NO feature identifiers**: F1, F3, CHANGE 2, D23, D24, N1a, etc.
+- **NO follow-up language**: "follow-up", "deferred", "future", "yet to be implemented" without explicit description of the gap.
+- **NO section banners**: Comments like `// ── Task 3.1: ...` or `// ── Phase 10: ...`. Split into separate functions or modules instead.
+
+**Where this applies**: Comments, docstrings, error messages, test names, function/variable documentation, README snippets—everywhere. Code is read by humans and future AI agents who should not need access to planning documents to understand it.
+
+**Rule of thumb**: If a comment or error message would be confusing without knowing an internal task/phase/section number, the comment is not independent. Rewrite it to describe the implementation's actual behavior, invariants, or constraints.
+
+## 3.6 Principles Harness (BINDING)
 `PRINCIPLES.md` at the repo root is the **binding standard** for every change. It is the single source of truth for Clean Architecture (layer rules, stdlib independence), SOLID, Clean Code (function size, naming, comments, error handling), TDD discipline, and Miri-specific invariants (Perceus, runtime/stdlib alignment, exhaustive visitors).
 
 - Before writing code: read the relevant section of `PRINCIPLES.md`.
