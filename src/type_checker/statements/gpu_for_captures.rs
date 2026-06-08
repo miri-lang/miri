@@ -135,7 +135,8 @@ fn visit_stmt(
             visit_stmt(body, bound, context, reported, violations);
         }
         StatementKind::For(inner_decls, iter, body)
-        | StatementKind::GpuFor(inner_decls, iter, body) => {
+        | StatementKind::GpuFor(inner_decls, iter, body)
+        | StatementKind::GpuFrame(inner_decls, iter, body) => {
             visit_expr(iter, bound, context, reported, violations);
             let scope_snapshot = bound.clone();
             for d in inner_decls {

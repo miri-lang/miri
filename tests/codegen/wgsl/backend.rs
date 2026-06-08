@@ -55,7 +55,9 @@ fn build_copy_kernel() -> Body {
     body.out_params = vec![false, true];
     body.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([64, 1, 1]),
+        grid_size: None,
         required_capabilities: Vec::new(),
+        is_frame_step: false,
     }));
 
     let u32_ty = Type::new(TypeKind::U32, span);
@@ -243,7 +245,9 @@ fn math_intrinsic_maps_to_wgsl_sqrt() {
     body.out_params = vec![true];
     body.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([1, 1, 1]),
+        grid_size: None,
         required_capabilities: Vec::new(),
+        is_frame_step: false,
     }));
 
     let u32_ty = Type::new(TypeKind::U32, span);
@@ -324,7 +328,9 @@ fn block_dim_intrinsic_substitutes_workgroup_size_literal() {
     body.out_params = vec![true];
     body.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([128, 1, 1]),
+        grid_size: None,
         required_capabilities: Vec::new(),
+        is_frame_step: false,
     }));
 
     let u32_ty = Type::new(TypeKind::U32, span);
@@ -380,7 +386,9 @@ fn single_buffer_kernel() -> Body {
     body.out_params = vec![true];
     body.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([1, 1, 1]),
+        grid_size: None,
         required_capabilities: Vec::new(),
+        is_frame_step: false,
     }));
     body
 }
@@ -754,7 +762,9 @@ fn non_buffer_kernel_param_is_rejected() {
     body.out_params = vec![false];
     body.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([1, 1, 1]),
+        grid_size: None,
         required_capabilities: Vec::new(),
+        is_frame_step: false,
     }));
 
     let mut bb = BasicBlockData::new(None);
@@ -812,7 +822,9 @@ fn uniform_buffer_storage_class_emits_uniform_binding() {
     body.out_params = vec![false];
     body.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([1, 1, 1]),
+        grid_size: None,
         required_capabilities: Vec::new(),
+        is_frame_step: false,
     }));
     let mut bb = BasicBlockData::new(None);
     bb.terminator = Some(Terminator::new(TerminatorKind::Return, span));

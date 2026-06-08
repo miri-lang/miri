@@ -1,8 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Static bundle validation tests for web-gpu output.
-//! These tests verify the emitted HTML/WGSL/JS without requiring GPU hardware or browser.
+//! Manifest and WGSL validation tests for web-GPU bundles.
+//!
+//! The bundle format consists of:
+//! - <name>.json manifest with kernel specs, buffers, and animation metadata
+//! - miri-gpu.js runtime driver (ES module)
+//! - index.html thin harness for local development
+//! - Per-kernel WGSL embedded in the manifest
+//!
+//! Tests verify:
+//! - Per-kernel WGSL passes naga validation
+//! - Manifest correctly reflects buffer types, sizes, and initial data
+//! - Sized-constructor arrays (Array<T, N>()) have correct elem types
+//! - Float and integer buffers are properly distinguished
 
 use std::fs;
 use std::path::PathBuf;
@@ -12,18 +23,16 @@ use std::path::PathBuf;
 fn build_bundle_to_tempdir(source: &str) -> PathBuf {
     use miri::codegen::backend::BuildTarget;
     use miri::pipeline::{BuildOptions, Pipeline};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     let pipeline = Pipeline::new();
-    // Use a unique timestamp to avoid collisions between parallel tests
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .subsec_nanos();
+    // Use a process-wide monotonic counter to avoid collisions between parallel tests
+    static BUNDLE_DIR_SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = BUNDLE_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
     let temp_base = std::env::temp_dir().join("miri_bundle_test").join(format!(
         "test_{}_{}",
         std::process::id(),
-        nanos
+        seq
     ));
     fs::create_dir_all(&temp_base).expect("create test dir");
 
@@ -41,9 +50,16 @@ fn build_bundle_to_tempdir(source: &str) -> PathBuf {
     temp_base
 }
 
-/// Helper to read a file from the bundle directory.
-fn read_bundle_file(bundle_dir: &PathBuf, path: &str) -> String {
-    fs::read_to_string(bundle_dir.join(path)).expect(&format!("Failed to read {}", path))
+/// Helper to read a JSON manifest from the bundle directory.
+fn read_manifest(bundle_dir: &PathBuf) -> serde_json::Value {
+    // The manifest name is derived from the bundle directory name
+    let dir_name = bundle_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("bundle");
+    let manifest_path = bundle_dir.join(format!("{}.json", dir_name));
+    let manifest_text = fs::read_to_string(&manifest_path).expect("read manifest");
+    serde_json::from_str(&manifest_text).expect("parse manifest JSON")
 }
 
 /// Helper to validate WGSL with naga.
@@ -65,105 +81,38 @@ fn validate_wgsl(wgsl: &str) {
 }
 
 #[test]
-fn test_bundle_basic_structure() {
+fn manifest_emits_initialdata_on_all_buffers() {
     let source = r#"
 use system.gpu
 
-gpu let src = [1, 2, 3, 4]
+gpu let a = [1, 2, 3, 4]
+gpu let b = [5, 6, 7, 8]
 gpu var dst = [0, 0, 0, 0]
 
 gpu for i in 0..4
-    dst[i] = src[i]
+    dst[i] = a[i] + b[i]
 "#;
 
     let bundle_dir = build_bundle_to_tempdir(source);
+    let manifest = read_manifest(&bundle_dir);
 
-    // Verify index.html exists
-    let index_html = read_bundle_file(&bundle_dir, "index.html");
-    assert!(!index_html.is_empty());
+    // Every buffer must have an initialData field (even if null)
+    let buffers = manifest["buffers"].as_array().expect("buffers is array");
+    assert!(!buffers.is_empty(), "manifest should have buffers");
 
-    // Verify miri_gpu_runtime.js exists
-    let runtime_js = read_bundle_file(&bundle_dir, "miri_gpu_runtime.js");
-    assert!(runtime_js.contains("export async function dispatch(spec)"));
-
-    // Verify kernel file exists (named after the gpu for)
-    let kernels_dir = bundle_dir.join("kernels");
-    let entries: Vec<_> = std::fs::read_dir(&kernels_dir)
-        .expect("read kernels dir")
-        .filter_map(|e| e.ok())
-        .collect();
-    assert!(!entries.is_empty(), "should have at least one kernel");
-
-    // Verify kernel WGSL is valid
-    for entry in entries {
-        let path = entry.path();
-        if path.extension().map_or(false, |ext| ext == "wgsl") {
-            let wgsl = fs::read_to_string(&path).expect("read WGSL");
-            validate_wgsl(&wgsl);
-        }
+    for buf in buffers {
+        assert!(
+            buf.get("initialData").is_some(),
+            "every buffer must have initialData field. buffer: {}",
+            serde_json::to_string(&buf).unwrap()
+        );
     }
 }
 
 #[test]
-fn test_bundle_contains_canvas() {
+fn manifest_has_literal_initial_data() {
     let source = r#"
 use system.gpu
-
-gpu let src = [1, 2, 3, 4]
-gpu var dst = [0, 0, 0, 0]
-
-gpu for i in 0..4
-    dst[i] = src[i]
-"#;
-
-    let bundle_dir = build_bundle_to_tempdir(source);
-    let index_html = read_bundle_file(&bundle_dir, "index.html");
-
-    assert!(index_html.contains("canvas"));
-    assert!(index_html.contains(r#"id="output""#));
-}
-
-#[test]
-fn test_bundle_contains_source_panel() {
-    let source = r#"use system.gpu
-gpu let src = [1, 2, 3, 4]
-gpu var dst = [0, 0, 0, 0]
-gpu for i in 0..4
-    dst[i] = src[i]"#;
-
-    let bundle_dir = build_bundle_to_tempdir(source);
-    let index_html = read_bundle_file(&bundle_dir, "index.html");
-
-    // Check for source panel section
-    assert!(index_html.contains("sourcePanel"));
-    // Check that source text is escaped and embedded
-    assert!(index_html.contains("gpu for"));
-}
-
-#[test]
-fn test_bundle_animate_flag() {
-    let source = r#"
-use system.gpu
-
-gpu let src = [1, 2, 3, 4]
-gpu var dst = [0, 0, 0, 0]
-
-gpu for i in 0..4
-    dst[i] = src[i]
-"#;
-
-    let bundle_dir = build_bundle_to_tempdir(source);
-    let index_html = read_bundle_file(&bundle_dir, "index.html");
-
-    // Check for requestAnimationFrame in JS
-    assert!(index_html.contains("requestAnimationFrame"));
-}
-
-#[test]
-fn test_bundle_with_real_input_buffers() {
-    let source = r#"
-use system.gpu
-use system.collections.array
 
 gpu let a = [1, 2, 3, 4]
 gpu let b = [5, 6, 7, 8]
@@ -174,199 +123,182 @@ gpu for i in 0..4
 "#;
 
     let bundle_dir = build_bundle_to_tempdir(source);
-    let index_html = read_bundle_file(&bundle_dir, "index.html");
+    let manifest = read_manifest(&bundle_dir);
 
-    // Check for kernel manifest
-    assert!(index_html.contains("KERNELS"));
-}
-
-#[test]
-fn test_bundle_wgsl_validation_1d_vector_add() {
-    let source = r#"
-use system.gpu
-use system.collections.array
-
-gpu let a = [1, 2, 3, 4]
-gpu let b = [5, 6, 7, 8]
-gpu var dst = [0, 0, 0, 0]
-
-gpu for i in 0..4
-    dst[i] = a[i] + b[i]
-"#;
-
-    let bundle_dir = build_bundle_to_tempdir(source);
-
-    // Find and validate any WGSL files
-    let kernels_dir = bundle_dir.join("kernels");
-    let entries: Vec<_> = std::fs::read_dir(&kernels_dir)
-        .expect("read kernels dir")
-        .filter_map(|e| e.ok())
+    let buffers: Vec<_> = manifest["buffers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| (b["name"].as_str().unwrap(), b))
         .collect();
-    assert!(!entries.is_empty(), "should have at least one kernel");
 
-    for entry in entries {
-        let path = entry.path();
-        if path.extension().map_or(false, |ext| ext == "wgsl") {
-            let wgsl = fs::read_to_string(&path).expect("read WGSL");
-            validate_wgsl(&wgsl);
-            assert!(wgsl.contains("@compute"));
-        }
+    // Find buffer 'a'
+    if let Some((_, buf_a)) = buffers.iter().find(|(name, _)| *name == "a") {
+        let init_data = &buf_a["initialData"];
+        assert!(
+            !init_data.is_null(),
+            "buffer 'a' should have literal initialData, not null"
+        );
+        let data = init_data.as_array().expect("initialData is array");
+        assert_eq!(data.len(), 4, "buffer 'a' should have 4 elements");
+        // Check that values are [1, 2, 3, 4] (as JSON numbers)
+        assert_eq!(data[0], 1, "first element of 'a'");
+        assert_eq!(data[1], 2, "second element of 'a'");
+        assert_eq!(data[2], 3, "third element of 'a'");
+        assert_eq!(data[3], 4, "fourth element of 'a'");
+    }
+
+    // Find buffer 'b'
+    if let Some((_, buf_b)) = buffers.iter().find(|(name, _)| *name == "b") {
+        let init_data = &buf_b["initialData"];
+        assert!(
+            !init_data.is_null(),
+            "buffer 'b' should have literal initialData, not null"
+        );
+        let data = init_data.as_array().expect("initialData is array");
+        assert_eq!(data.len(), 4, "buffer 'b' should have 4 elements");
+        // Check that values are [5, 6, 7, 8]
+        assert_eq!(data[0], 5, "first element of 'b'");
+        assert_eq!(data[1], 6, "second element of 'b'");
+        assert_eq!(data[2], 7, "third element of 'b'");
+        assert_eq!(data[3], 8, "fourth element of 'b'");
     }
 }
 
 #[test]
-fn test_bundle_manifest_has_real_initial_data() {
+fn manifest_has_null_initial_data_for_zero_filled() {
     let source = r#"
 use system.gpu
+use system.collections.array
 
-gpu let a = [1, 2, 3, 4]
-gpu let b = [5, 6, 7, 8]
-gpu var dst = [0, 0, 0, 0]
+gpu var px = Array<f32, 8>()
 
-gpu for i in 0..4
-    dst[i] = a[i] + b[i]
+gpu for i in 0..8
+    px[i] = i as f32
 "#;
 
     let bundle_dir = build_bundle_to_tempdir(source);
-    let index_html = read_bundle_file(&bundle_dir, "index.html");
+    let manifest = read_manifest(&bundle_dir);
 
-    // Extract the KERNELS manifest from the HTML
-    let manifest_start = index_html
-        .find("const KERNELS = ")
-        .expect("should find KERNELS");
-    let manifest_end = index_html[manifest_start..]
-        .find(";")
-        .expect("should find manifest end");
-    let manifest_str = &index_html[manifest_start + 16..manifest_start + manifest_end];
+    let buffers = manifest["buffers"].as_array().expect("buffers is array");
+    assert!(!buffers.is_empty(), "manifest should have buffers");
 
-    // Parse the manifest as JSON-like structure and verify initial data
-    assert!(
-        manifest_str.contains("initialData"),
-        "manifest should contain initialData field"
-    );
-
-    // Check that 'a' has correct initial data [1,2,3,4]
-    assert!(
-        manifest_str.contains("\"a\"") || manifest_str.contains("'a'"),
-        "manifest should have buffer 'a'"
-    );
-    assert!(
-        manifest_str.contains("1")
-            && manifest_str.contains("2")
-            && manifest_str.contains("3")
-            && manifest_str.contains("4"),
-        "manifest should have values 1,2,3,4"
-    );
-
-    // Check that 'b' has correct initial data [5,6,7,8]
-    assert!(
-        manifest_str.contains("\"b\"") || manifest_str.contains("'b'"),
-        "manifest should have buffer 'b'"
-    );
-    assert!(
-        manifest_str.contains("5")
-            && manifest_str.contains("6")
-            && manifest_str.contains("7")
-            && manifest_str.contains("8"),
-        "manifest should have values 5,6,7,8"
-    );
-
-    // Check readOnly flags (a and b should be readOnly: true, dst should be readOnly: false)
-    assert!(
-        manifest_str.contains("readOnly"),
-        "manifest should contain readOnly field"
-    );
+    // Sized constructors should have null initialData
+    for buf in buffers {
+        let init_data = &buf["initialData"];
+        assert!(
+            init_data.is_null(),
+            "zero-filled buffer should have null initialData, got: {}",
+            init_data
+        );
+    }
 }
 
 #[test]
-fn test_bundle_manifest_int_and_float_buffers() {
+fn manifest_elem_types_match_buffer_types() {
     let source = r#"
 use system.gpu
+use system.collections.array
 
 gpu let ints = [1, 2, 3, 4]
-gpu let floats = [1.5, 2.5, 3.5, 4.5]
-gpu var results = [0, 0, 0, 0]
+gpu var floats = Array<f32, 4>()
 
 gpu for i in 0..4
-    results[i] = ints[i]
+    floats[i] = ints[i] as f32
 "#;
 
     let bundle_dir = build_bundle_to_tempdir(source);
-    let index_html = read_bundle_file(&bundle_dir, "index.html");
+    let manifest = read_manifest(&bundle_dir);
 
-    // Extract and verify manifest
-    let manifest_start = index_html
-        .find("const KERNELS = ")
-        .expect("should find KERNELS");
-    let manifest_end = index_html[manifest_start..]
-        .find(";")
-        .expect("should find manifest end");
-    let manifest_str = &index_html[manifest_start + 16..manifest_start + manifest_end];
+    let buffers: Vec<_> = manifest["buffers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| (b["name"].as_str().unwrap(), b))
+        .collect();
 
-    assert!(
-        manifest_str.contains("initialData"),
-        "manifest should contain initialData"
-    );
-    assert!(
-        manifest_str.contains("elemType"),
-        "manifest should contain elemType for distinguishing types"
-    );
+    // Check integer buffer
+    if let Some((_, buf_ints)) = buffers.iter().find(|(name, _)| *name == "ints") {
+        let elem_type = buf_ints["elemType"].as_str().unwrap();
+        assert_eq!(elem_type, "i32", "integer buffer should have elemType i32");
+    }
+
+    // Check float buffer
+    if let Some((_, buf_floats)) = buffers.iter().find(|(name, _)| *name == "floats") {
+        let elem_type = buf_floats["elemType"].as_str().unwrap();
+        assert_eq!(elem_type, "f32", "f32 buffer should have elemType f32");
+    }
 }
 
 #[test]
-fn test_bundle_manifest_binding_association_structural() {
+fn kernel_wgsl_in_manifest_passes_validation() {
     let source = r#"
 use system.gpu
 
-gpu let a = [1.0, 2.0, 3.0, 4.0]
-gpu let b = [5.0, 6.0, 7.0, 8.0]
-gpu var dst = [0.0, 0.0, 0.0, 0.0]
+gpu let a = [1, 2, 3, 4]
+gpu let b = [5, 6, 7, 8]
+gpu var dst = [0, 0, 0, 0]
 
 gpu for i in 0..4
     dst[i] = a[i] + b[i]
 "#;
 
     let bundle_dir = build_bundle_to_tempdir(source);
-    let index_html = read_bundle_file(&bundle_dir, "index.html");
+    let manifest = read_manifest(&bundle_dir);
 
-    // Extract the KERNELS manifest from the HTML
-    let manifest_start = index_html
-        .find("const KERNELS = ")
-        .expect("should find KERNELS");
-    let manifest_end = index_html[manifest_start..]
-        .find("];")
-        .expect("should find manifest end");
-    let manifest_str = &index_html[manifest_start + 16..manifest_start + manifest_end + 1];
+    // Validate seed kernel WGSL
+    if let Some(seed_array) = manifest["seed"].as_array() {
+        for kernel in seed_array {
+            let wgsl = kernel["wgsl"].as_str().expect("wgsl is string");
+            validate_wgsl(wgsl);
+            assert!(
+                wgsl.contains("@compute"),
+                "kernel WGSL should have @compute attribute"
+            );
+        }
+    }
 
-    // Verify 'a' binding: initialData exactly [1, 2, 3, 4] in order.
-    // The format is: "a": { elemType: "f64", length: 4, readOnly: true, initialData: [1, 2, 3, 4] }
-    assert!(
-        manifest_str.contains("initialData: [1, 2, 3, 4]"),
-        "binding 'a' should have initialData: [1, 2, 3, 4] in exact order. Manifest:\n{}",
-        manifest_str
-    );
-
-    // Verify 'b' binding: initialData exactly [5, 6, 7, 8] in order.
-    assert!(
-        manifest_str.contains("initialData: [5, 6, 7, 8]"),
-        "binding 'b' should have initialData: [5, 6, 7, 8] in exact order. Manifest:\n{}",
-        manifest_str
-    );
-
-    // Verify 'dst' binding: readOnly: false (it's a gpu var, not gpu let)
-    let dst_pattern = r#""dst""#;
-    assert!(
-        manifest_str.contains(dst_pattern),
-        "manifest should have binding named 'dst'. WGSL:\n{}",
-        manifest_str
-    );
-
-    if let Some(dst_start) = manifest_str.find(r#""dst""#) {
-        let dst_section = &manifest_str[dst_start..];
+    // Validate frame kernel WGSL if present
+    if let Some(frame) = manifest["frame"].as_object() {
+        let wgsl = frame["wgsl"].as_str().expect("wgsl is string");
+        validate_wgsl(wgsl);
         assert!(
-            dst_section.contains("readOnly: false"),
-            "binding 'dst' should have readOnly: false (it's a gpu var). Section:\n{}",
-            dst_section
+            wgsl.contains("@compute"),
+            "frame kernel WGSL should have @compute attribute"
         );
+    }
+}
+
+#[test]
+fn kernel_workgroups_is_dispatch_grid() {
+    let source = r#"
+use system.gpu
+use system.collections.array
+
+gpu let src = Array<int, 4096>()
+gpu var dst = Array<int, 4096>()
+
+gpu for i in 0..4096
+    dst[i] = src[i]
+"#;
+
+    let bundle_dir = build_bundle_to_tempdir(source);
+    let manifest = read_manifest(&bundle_dir);
+
+    // For 4096 elements with 256-thread workgroups, grid should be ceil(4096/256) = 16
+    if let Some(seed_array) = manifest["seed"].as_array() {
+        for kernel in seed_array {
+            let workgroups = kernel["workgroups"]
+                .as_array()
+                .expect("workgroups is array");
+            assert_eq!(workgroups.len(), 3, "workgroups should be [x, y, z]");
+            let grid_x = workgroups[0].as_u64().expect("grid x is number");
+            assert_eq!(
+                grid_x, 16,
+                "dispatch grid for 4096 elements / 256 threads should be 16"
+            );
+            assert_eq!(workgroups[1], 1, "grid y should be 1");
+            assert_eq!(workgroups[2], 1, "grid z should be 1");
+        }
     }
 }

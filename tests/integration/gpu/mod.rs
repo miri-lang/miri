@@ -16,16 +16,20 @@
 pub use crate::integration::utils;
 
 pub mod accelerable;
+pub mod box_blur;
 pub mod bundle_validation;
 pub mod cross_residency;
 pub mod demos;
 pub mod device;
+pub mod game_of_life;
 pub mod gpu_for_capture_residency;
+pub mod gpu_frame;
 pub mod helpers;
 pub mod launch;
 pub mod persistent_buffer;
 pub mod ping_pong;
 pub mod read_only_capture;
 pub mod residency;
+pub mod sized_constructor;
 pub mod variable_bound_gpu_for;
 pub mod wgsl;

@@ -186,9 +186,9 @@ impl TypeChecker {
             // Loop bodies are not guaranteed to execute (zero iterations possible).
             // Only a super.init() in the loop condition expression itself is guaranteed.
             StatementKind::While(cond, _body, _) => self.expression_contains_super_init(cond),
-            StatementKind::For(_, iter, _body) | StatementKind::GpuFor(_, iter, _body) => {
-                self.expression_contains_super_init(iter)
-            }
+            StatementKind::For(_, iter, _body)
+            | StatementKind::GpuFor(_, iter, _body)
+            | StatementKind::GpuFrame(_, iter, _body) => self.expression_contains_super_init(iter),
             StatementKind::Variable(decls, _) => decls.iter().any(|d| {
                 d.initializer
                     .as_ref()

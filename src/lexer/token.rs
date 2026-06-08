@@ -35,6 +35,8 @@ pub enum Token {
     Parallel,
     #[token("gpu")]
     Gpu,
+    #[token("frame")]
+    Frame,
     #[token("if")]
     If,
     #[token("unless")]
@@ -324,7 +326,7 @@ impl Token {
             Token::InvalidBinaryNumber => LexAction::Invalid(SyntaxErrorKind::InvalidBinaryLiteral),
             Token::InvalidHexNumber => LexAction::Invalid(SyntaxErrorKind::InvalidHexLiteral),
             Token::InvalidOctalNumber => LexAction::Invalid(SyntaxErrorKind::InvalidOctalLiteral),
-            Token::Use | Token::Fn | Token::Async | Token::Await | Token::Spawn | Token::Parallel | Token::Gpu
+            Token::Use | Token::Fn | Token::Async | Token::Await | Token::Spawn | Token::Parallel | Token::Gpu | Token::Frame
             | Token::If | Token::Unless | Token::Else | Token::Match | Token::Default | Token::Return
             | Token::While | Token::Until | Token::Do | Token::For | Token::Forever | Token::In
             | Token::Let | Token::Var | Token::Const | Token::Or | Token::And | Token::Not

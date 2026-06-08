@@ -53,6 +53,10 @@ pub struct GpuLaunchDesc {
     /// i-th storage buffer binding is read-only, 0 if read-write. Array length
     /// is `num_bufs`. When null, all buffers are assumed read-write (legacy behavior).
     pub buf_read_only: *const u8,
+    /// CHANGE 2 feature: which buffers need i64→i32 narrowing on upload and i32→i64 widening on readback.
+    /// `buf_int_narrow[i]` is 1 if the i-th buffer is an `Array<int, N>`, 0 otherwise.
+    /// Array length is `num_bufs`. When null, no buffers need narrowing (legacy behavior).
+    pub buf_int_narrow: *const u8,
     /// F1 feature: when present (non-zero), a uniform buffer contains the
     /// loop-bound limit value for the kernel's bounds-check loop.
     pub uniform_bound_present: u64,
@@ -139,9 +143,23 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
     let buf_data_ptrs = std::slice::from_raw_parts(desc.buf_data_ptrs, desc.num_bufs);
     let buf_byte_lens = std::slice::from_raw_parts(desc.buf_byte_lens, desc.num_bufs);
     let buf_handle_ids = std::slice::from_raw_parts(desc.buf_handle_ids, desc.num_bufs);
+    let buf_int_narrow = if desc.buf_int_narrow.is_null() {
+        None
+    } else {
+        Some(std::slice::from_raw_parts(
+            desc.buf_int_narrow,
+            desc.num_bufs,
+        ))
+    };
 
-    let (storage_buffers, transient_captures) =
-        prepare_capture_buffers(device, queue, buf_handle_ids, buf_data_ptrs, buf_byte_lens);
+    let (storage_buffers, transient_captures) = prepare_capture_buffers(
+        device,
+        queue,
+        buf_handle_ids,
+        buf_data_ptrs,
+        buf_byte_lens,
+        buf_int_narrow,
+    );
 
     // F1 feature: create uniform buffer if needed (must live until bind_group is created).
     let uniform_buf = if desc.uniform_bound_present != 0 {
@@ -203,12 +221,14 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
         let _ = device.poll(wgpu::PollType::wait_indefinitely());
         telemetry::record_fence();
         for i in transient_captures {
+            let needs_narrow = buf_int_narrow.as_ref().map_or(false, |arr| arr[i] != 0);
             readback_device_buffer(
                 device,
                 queue,
                 &storage_buffers[i],
                 buf_data_ptrs[i],
                 buf_byte_lens[i],
+                needs_narrow,
             )?;
         }
     }
@@ -220,6 +240,9 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
 /// allocates its persistent buffer; a transient one allocates fresh and is
 /// scheduled for post-dispatch readback.
 ///
+/// CHANGE 2: when `buf_int_narrow[i]` is 1, the host buffer (i64 elements) is narrowed
+/// to i32 on upload and widened back on readback.
+///
 /// # Safety
 /// The three slices must be `num_bufs` long and their host pointers valid for
 /// the matching byte lengths.
@@ -229,10 +252,12 @@ unsafe fn prepare_capture_buffers(
     buf_handle_ids: &[u64],
     buf_data_ptrs: &[*mut u8],
     buf_byte_lens: &[usize],
+    buf_int_narrow: Option<&[u8]>,
 ) -> (Vec<wgpu::Buffer>, Vec<usize>) {
     let mut storage_buffers = Vec::with_capacity(buf_handle_ids.len());
     let mut transient_captures = Vec::new();
     for i in 0..buf_handle_ids.len() {
+        let needs_narrow = buf_int_narrow.map_or(false, |arr| arr[i] != 0);
         let buffer = if buf_handle_ids[i] != device_table::HOST_HANDLE {
             persistent_capture_buffer(
                 device,
@@ -240,10 +265,17 @@ unsafe fn prepare_capture_buffers(
                 buf_handle_ids[i],
                 buf_data_ptrs[i],
                 buf_byte_lens[i],
+                needs_narrow,
             )
         } else {
             transient_captures.push(i);
-            new_storage_buffer_with_upload(device, queue, buf_data_ptrs[i], buf_byte_lens[i])
+            new_storage_buffer_with_upload(
+                device,
+                queue,
+                buf_data_ptrs[i],
+                buf_byte_lens[i],
+                needs_narrow,
+            )
         };
         storage_buffers.push(buffer);
     }
@@ -258,34 +290,82 @@ unsafe fn persistent_capture_buffer(
     handle: u64,
     host_ptr: *mut u8,
     byte_len: usize,
+    needs_narrow: bool,
 ) -> wgpu::Buffer {
-    if let Some((existing, _)) = device_table::resident_buffer(handle) {
+    if let Some((existing, _, _)) = device_table::resident_buffer(handle) {
         return existing;
     }
-    let buffer = new_storage_buffer_with_upload(device, queue, host_ptr, byte_len);
-    device_table::insert_resident(handle, buffer.clone(), byte_len);
+    let buffer = new_storage_buffer_with_upload(device, queue, host_ptr, byte_len, needs_narrow);
+    let device_byte_len = if needs_narrow {
+        let elem_count = byte_len / 8;
+        elem_count
+            .checked_mul(4)
+            .unwrap_or_else(|| panic!("device buffer size overflow: {} * 4", elem_count))
+    } else {
+        byte_len
+    };
+    device_table::insert_resident(handle, buffer.clone(), device_byte_len, needs_narrow);
     buffer
 }
 
-/// Allocates a storage buffer sized for `byte_len`. When there are host bytes
-/// to copy, uploads them and records one upload in the telemetry counters; an
-/// empty or null capture allocates the buffer without an upload.
+/// Allocates a storage buffer sized for `byte_len` (or narrowed size if needs_narrow).
+/// When there are host bytes to copy, uploads them and records one upload in the telemetry counters;
+/// an empty or null capture allocates the buffer without an upload.
+///
+/// CHANGE 2: when `needs_narrow` is true, the host buffer contains i64 elements
+/// (8 bytes each) that are narrowed to i32 (4 bytes each) on upload.
+///
+/// # Panics
+/// Panics if `byte_len` is not a multiple of 8 when `needs_narrow` is true (host buffer
+/// must contain complete i64 elements).
 unsafe fn new_storage_buffer_with_upload(
     device: &Device,
     queue: &Queue,
     host_ptr: *mut u8,
     byte_len: usize,
+    needs_narrow: bool,
 ) -> wgpu::Buffer {
-    let padded = align_to_4(byte_len.max(4));
+    let (device_byte_len, upload_bytes) = if needs_narrow {
+        // Host buffer is i64 elements (byte_len = 8*N); device buffer is i32 elements (4*N).
+        // Guard: byte_len must be a multiple of 8.
+        assert!(
+            byte_len % 8 == 0,
+            "host buffer byte_len {} is not a multiple of 8 for i64 narrowing",
+            byte_len
+        );
+        let elem_count = byte_len / 8;
+        // Defend against integer overflow: check that elem_count * 4 doesn't overflow.
+        let device_len = elem_count
+            .checked_mul(4)
+            .unwrap_or_else(|| panic!("device buffer size overflow: {} * 4", elem_count));
+        let padded = align_to_4(device_len.max(4));
+        let mut upload_bytes = Vec::with_capacity(device_len);
+        if byte_len > 0 && !host_ptr.is_null() {
+            let host_i64s = std::slice::from_raw_parts(host_ptr as *const i64, elem_count);
+            for &val in host_i64s {
+                upload_bytes.extend_from_slice(&(val as i32).to_le_bytes());
+            }
+        }
+        (padded as u64, upload_bytes)
+    } else {
+        // Defend against integer overflow in align_to_4.
+        let padded = align_to_4(byte_len.max(4));
+        let bytes = if byte_len > 0 && !host_ptr.is_null() {
+            std::slice::from_raw_parts(host_ptr as *const u8, byte_len).to_vec()
+        } else {
+            Vec::new()
+        };
+        (padded as u64, bytes)
+    };
+
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("miri_gpu_launch_inline storage"),
-        size: padded as u64,
+        size: device_byte_len,
         usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    if byte_len > 0 && !host_ptr.is_null() {
-        let bytes = std::slice::from_raw_parts(host_ptr as *const u8, byte_len);
-        queue.write_buffer(&buffer, 0, bytes);
+    if !upload_bytes.is_empty() {
+        queue.write_buffer(&buffer, 0, &upload_bytes);
         telemetry::record_upload();
     }
     buffer
@@ -531,8 +611,26 @@ unsafe fn readback_device_buffer(
     src: &wgpu::Buffer,
     host_ptr: *mut u8,
     byte_len: usize,
+    needs_narrow: bool,
 ) -> Result<(), GpuError> {
-    let padded = align_to_4(byte_len.max(4)) as u64;
+    let (device_byte_len, host_byte_len) = if needs_narrow {
+        // Device buffer is i32 elements (4 bytes each); host buffer is i64 elements (8 bytes each).
+        // Guard: byte_len (host length) must be a multiple of 8.
+        assert!(
+            byte_len % 8 == 0,
+            "host buffer byte_len {} is not a multiple of 8 for i64 widening",
+            byte_len
+        );
+        let elem_count = byte_len / 8;
+        let device_len = elem_count
+            .checked_mul(4)
+            .unwrap_or_else(|| panic!("device buffer size overflow: {} * 4", elem_count));
+        (device_len, byte_len)
+    } else {
+        (byte_len, byte_len)
+    };
+
+    let padded = align_to_4(device_byte_len.max(4)) as u64;
     let staging = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("miri_gpu_launch_inline readback"),
         size: padded,
@@ -556,14 +654,26 @@ unsafe fn readback_device_buffer(
         .map_err(|_| GpuError::BufferCreationFailed)?;
 
     let mapped = slice.get_mapped_range();
-    std::ptr::copy_nonoverlapping(mapped.as_ptr(), host_ptr, byte_len);
+    if needs_narrow {
+        // Widen i32 elements back to i64.
+        // Host array is 8-aligned by alloc_zeroed, so the i64 slice read is aligned.
+        let elem_count = host_byte_len / 8;
+        let device_i32s = std::slice::from_raw_parts(mapped.as_ptr() as *const i32, elem_count);
+        let host_i64s = std::slice::from_raw_parts_mut(host_ptr as *mut i64, elem_count);
+        device_i32s
+            .iter()
+            .zip(host_i64s.iter_mut())
+            .for_each(|(&v, d)| *d = v as i64);
+    } else {
+        std::ptr::copy_nonoverlapping(mapped.as_ptr(), host_ptr, host_byte_len);
+    }
     drop(mapped);
     staging.unmap();
     Ok(())
 }
 
 fn align_to_4(value: usize) -> usize {
-    (value + 3) & !3
+    value.saturating_add(3) & !3
 }
 
 /// Leading fields of `runtime::core::MiriArray` (`repr(C)`), mirrored here so
@@ -586,7 +696,7 @@ mod desc_layout_tests {
     fn gpu_launch_desc_abi_is_pinned() {
         assert_eq!(
             size_of::<GpuLaunchDesc>(),
-            120,
+            128,
             "GpuLaunchDesc size drifted; update Cranelift desc_layout::DESC_SIZE in lockstep"
         );
         assert_eq!(align_of::<GpuLaunchDesc>(), 8);
@@ -605,9 +715,10 @@ mod desc_layout_tests {
         assert_eq!(offset_of!(GpuLaunchDesc, buf_byte_lens), 72);
         assert_eq!(offset_of!(GpuLaunchDesc, buf_handle_ids), 80);
         assert_eq!(offset_of!(GpuLaunchDesc, buf_read_only), 88);
-        assert_eq!(offset_of!(GpuLaunchDesc, uniform_bound_present), 96);
-        assert_eq!(offset_of!(GpuLaunchDesc, uniform_bound_value), 104);
-        assert_eq!(offset_of!(GpuLaunchDesc, num_storage_bufs), 112);
+        assert_eq!(offset_of!(GpuLaunchDesc, buf_int_narrow), 96);
+        assert_eq!(offset_of!(GpuLaunchDesc, uniform_bound_present), 104);
+        assert_eq!(offset_of!(GpuLaunchDesc, uniform_bound_value), 112);
+        assert_eq!(offset_of!(GpuLaunchDesc, num_storage_bufs), 120);
     }
 }
 
@@ -632,14 +743,30 @@ pub unsafe extern "C" fn miri_gpu_readback(handle: u64, arr: *const MiriArrayHea
     if host_byte_len == 0 || header.data.is_null() {
         return 1;
     }
-    let Some((buffer, resident_byte_len)) = device_table::resident_buffer(handle) else {
+    let Some((buffer, resident_byte_len, needs_widen)) = device_table::resident_buffer(handle)
+    else {
         return 1;
     };
-    let byte_len = host_byte_len.min(resident_byte_len);
+    // `readback_device_buffer` takes the HOST byte length and derives the device
+    // length itself (host/8*4 for widened i64 buffers). For a widened buffer the
+    // resident (device) length is half the host length, so clamping to it here
+    // would re-narrow and drop the upper half — pass the host length directly.
+    let byte_len = if needs_widen {
+        host_byte_len
+    } else {
+        host_byte_len.min(resident_byte_len)
+    };
     let Ok(ctx) = init_gpu_context() else {
         return 0;
     };
-    match readback_device_buffer(&ctx.device, &ctx.queue, &buffer, header.data, byte_len) {
+    match readback_device_buffer(
+        &ctx.device,
+        &ctx.queue,
+        &buffer,
+        header.data,
+        byte_len,
+        needs_widen,
+    ) {
         Ok(()) => {
             telemetry::record_fence();
             telemetry::record_readback();

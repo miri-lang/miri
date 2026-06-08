@@ -210,7 +210,7 @@ fn collect_buffer_bindings(body: &Body) -> Result<Vec<BufferBinding>, CodegenErr
             group: 0,
             index: binding_index,
             var_name,
-            element_type: WgslScalar::I64,
+            element_type: WgslScalar::I32, // Browser-portable: uniform bounds are i32
             read_write: false,
             is_uniform: true,
         });
@@ -959,88 +959,6 @@ impl<'a> BodyEmitter<'a> {
         }
     }
 
-    /// Checks if an operand has an effective i64 or Int scalar type by walking projections.
-    ///
-    /// For constants, checks the constant's type directly.
-    /// For place operands, starts from the local's declared mir_ty and follows projections:
-    ///   - PlaceElem::Index(_) extracts the element type from Array/List/Set/Map
-    ///   - PlaceElem::Field(_) and PlaceElem::Deref do not fire the check
-    ///
-    /// Returns true if the effective type is MirType::I64 or MirType::Int.
-    ///
-    /// This handles the MIR pitfall where Operand::ty() ignores projections,
-    /// which prevented the naga MSL i64 div/mod narrowing from firing for
-    /// array-element operands (e.g., `src[i] % 3` would report src as Array type,
-    /// not the element type i64).
-    fn is_i64_or_int_operand(&self, op: &Operand) -> bool {
-        use crate::mir::types::MirType;
-
-        match op {
-            Operand::Constant(c) => matches!(c.ty.kind, TypeKind::Int | TypeKind::I64),
-            Operand::Move(place) | Operand::Copy(place) => {
-                let local_decl = &self.body.local_decls[place.local.0];
-                let mut current_mir_ty = &local_decl.mir_ty;
-
-                for elem in &place.projection {
-                    match elem {
-                        PlaceElem::Index(_) => {
-                            // Extract element type from collection via MirType
-                            match current_mir_ty {
-                                MirType::Array(elem_ty)
-                                | MirType::List(elem_ty)
-                                | MirType::Set(elem_ty) => {
-                                    current_mir_ty = elem_ty;
-                                }
-                                MirType::Map(_, val_ty) => {
-                                    current_mir_ty = val_ty;
-                                }
-                                _ => return false, // Cannot project further
-                            }
-                        }
-                        PlaceElem::Field(_) | PlaceElem::Deref => {
-                            // Field and Deref don't fire the check.
-                            return false;
-                        }
-                    }
-                }
-
-                matches!(current_mir_ty, MirType::I64 | MirType::Int)
-            }
-        }
-    }
-
-    /// Narrows an operand to i32 for div/mod operations on Metal.
-    ///
-    /// For constants, renders the value without explicit type suffix so WGSL
-    /// Narrows an i64/Int operand to i32 for WGSL div/mod operations.
-    /// For constants, compile-time narrows the literal to i32 range to avoid
-    /// validation errors (e.g. 9223372036854775800 as i64 truncates to i32(-8)).
-    /// For place operands, wraps in explicit i32() cast.
-    /// This mirrors runtime i32-truncation semantics and prevents naga validation failures.
-    ///
-    /// Callers must ensure the operand is i64/Int before calling this.
-    fn narrow_operand_to_i32(&self, op: &Operand) -> Result<String, CodegenError> {
-        match op {
-            Operand::Constant(c) => {
-                // Narrow the constant's value at compile time to avoid out-of-i32-range literals.
-                // This matches runtime semantics: (i.to_i128() as i32) truncates to valid i32 range.
-                match &c.literal {
-                    Literal::Integer(i) => Ok((i.to_i128() as i32).to_string()),
-                    _ => {
-                        // Non-integer constants shouldn't reach here (guard checked is_i64_or_int).
-                        Err(CodegenError::Internal(
-                            "WGSL backend: narrowing non-integer operand".into(),
-                        ))
-                    }
-                }
-            }
-            Operand::Move(place) | Operand::Copy(place) => {
-                let place_str = self.render_place(place)?;
-                Ok(format!("i32({})", place_str))
-            }
-        }
-    }
-
     fn render_rvalue(&self, rvalue: &Rvalue) -> Result<String, CodegenError> {
         match rvalue {
             Rvalue::Use(op) => self.render_operand(op),
@@ -1049,22 +967,10 @@ impl<'a> BodyEmitter<'a> {
                 let rhs_str = self.render_operand(rhs)?;
                 let sym = binop_symbol(*op)?;
 
-                // Workaround for naga MSL i64 select ambiguity with div/mod on Metal:
-                // naga's MSL backend tries to synthesize metal::select() for the rhs,
-                // but mismatches i32 literal vs i64 operand → "call to 'select' is ambiguous".
-                // Solution: narrow both operands to i32, perform the operation, widen back.
-                // This truncates operands ≥ 2^31, but GPU kernels typically use grid-bounded
-                // indices (0..n) where n fits in i32.
-                if matches!(op, BinOp::Div | BinOp::Rem)
-                    && self.is_i64_or_int_operand(lhs)
-                    && self.is_i64_or_int_operand(rhs)
-                {
-                    // Narrow operands to i32. For constants, render without explicit i32 suffix
-                    // to avoid WGSL validation errors; WGSL will infer i32 from context.
-                    let lhs_narrowed = self.narrow_operand_to_i32(lhs)?;
-                    let rhs_narrowed = self.narrow_operand_to_i32(rhs)?;
-                    return Ok(format!("i64({} {} {})", lhs_narrowed, sym, rhs_narrowed));
-                }
+                // Browser-portability: `Int` is now i32 in WGSL, so div/mod on int no longer
+                // requires the i64 narrowing workaround. The workaround was needed only for
+                // naga's MSL backend's i64 select ambiguity on Metal. Since `Int` → `i32`,
+                // plain i32 div/mod is valid WGSL and naga handles it correctly.
 
                 Ok(format!("({} {} {})", lhs_str, sym, rhs_str))
             }
@@ -1199,13 +1105,18 @@ fn render_constant(c: &Constant) -> Result<String, CodegenError> {
 
 /// WGSL integer-literal suffixes encode width and signedness — `u` for u32,
 /// `li` for i64, `lu` for u64, bare for i32 — so the parser cannot widen
-/// an `i32` literal into a 64-bit storage element by mistake.
+/// an `i32` literal into a storage element by mistake.
+///
+/// Browser-portability: `Int` (default int type) maps to i32 in WGSL,
+/// so renders as bare (e.g., `123` not `123li`). Explicit `I64` still
+/// uses `li` suffix (for CPU-only code). Fixed-width `I32` is bare.
 fn render_integer(i: &IntegerLiteral, ty: &TypeKind) -> String {
     let value = i.to_i128();
     match ty {
         TypeKind::U8 | TypeKind::U16 | TypeKind::U32 | TypeKind::U128 => format!("{}u", value),
         TypeKind::U64 => format!("{}lu", value),
-        TypeKind::Int | TypeKind::I64 => format!("{}li", value),
+        TypeKind::Int => value.to_string(), // Browser-portable: bare i32 literal
+        TypeKind::I64 => format!("{}li", value), // Explicit i64 uses li suffix
         TypeKind::I8
         | TypeKind::I16
         | TypeKind::I32

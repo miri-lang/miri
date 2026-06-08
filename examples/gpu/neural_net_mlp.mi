@@ -1,0 +1,59 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// Neural network — a 2-layer multilayer perceptron computing XOR.
+//
+// XOR is the textbook example of a function no single linear layer can learn;
+// it needs a hidden layer. This MLP runs the classic hand-constructed solution
+// as a batched forward pass over all four input combinations at once:
+//
+//   input(2) ──► hidden(2, ReLU) ──► output(1)
+//
+//   h0 = ReLU(x0 + x1)          out = h0 - 2·h1
+//   h1 = ReLU(x0 + x1 - 1)
+//
+//   (0,0): h=(0,0) -> 0      (1,0): h=(1,0) -> 1
+//   (0,1): h=(1,0) -> 1      (1,1): h=(2,1) -> 0     => XOR
+//
+// Two kernels chained through a persistent `gpu var` hidden buffer, no readback
+// between them. The first runs one thread per (sample, hidden-unit) pair; the
+// second runs one thread per sample. Weights are inlined as gpu-resident
+// literals — a real trained net would upload them the same way.
+
+use system.collections.array
+
+// Four input samples, 2 features each (row-major: sample 0 = inputs[0..2], ...).
+gpu let inputs = [0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0]
+
+// Layer 1: weights (hidden-unit-major, 2×2), bias (2).
+gpu let w1 = [1.0, 1.0, 1.0, 1.0]
+gpu let b1 = [0.0, -1.0]
+
+// Layer 2: weights (2), bias is 0 so it is omitted.
+gpu let w2 = [1.0, -2.0]
+
+gpu var hidden = Array<f32, 8>()
+gpu var output = Array<f32, 4>()
+
+// Hidden layer: one thread per (sample s, hidden unit j). idx = s * 2 + j.
+gpu for idx in 0..8
+    let s = idx / 2
+    let j = idx - s * 2
+    var sum = b1[j]
+    var i = 0
+    while i < 2
+        sum = sum + w1[j * 2 + i] * inputs[s * 2 + i]
+        i = i + 1
+    hidden[idx] = sum if sum > 0.0 else 0.0
+
+// Output layer: one thread per sample, dot product over the 2 hidden units.
+gpu for s in 0..4
+    var sum = 0.0
+    var j = 0
+    while j < 2
+        sum = sum + w2[j] * hidden[s * 2 + j]
+        j = j + 1
+    output[s] = sum
+
+let host = output
+println(f"xor(0,0)={host[0]} xor(0,1)={host[1]} xor(1,0)={host[2]} xor(1,1)={host[3]}")
