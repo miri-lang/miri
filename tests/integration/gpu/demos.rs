@@ -12,9 +12,9 @@
 // - Surface compliance: residency keywords, cost-class ordering, buffer
 //   reuse, bounds-checking, and portability checks.
 //
-// Deferred demos (not scope for this task):
-// - map_normalize: will be added as a Task-10 demo now that the math-intrinsic
-//   result-width narrowing (f64 result into f32 buffers) is resolved.
+// Planned demos awaiting completion of math-intrinsic result-width narrowing
+// (f64 result into f32 buffers):
+// - map_normalize: normalizes a GPU buffer by the Euclidean norm.
 
 use super::device::assert_gpu_runs_with_output;
 

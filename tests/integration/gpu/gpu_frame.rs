@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Tests for `gpu frame` statement surface (MILESTONE 1 acceptance).
+//! Tests for the `gpu frame` statement surface.
 //!
-//! M1 scope: parser accepts gpu frame syntax, type-checker validates empty body,
-//! MIR lowering delegates to gpu_for lowering. Detailed ping-pong buffer validation
-//! (exactly 1 read, exactly 1 write, disjoint) is M1b implementation.
+//! The parser accepts gpu frame syntax, the type-checker validates empty bodies,
+//! and MIR lowering delegates to gpu_for lowering. Ping-pong buffer validation
+//! ensures exactly 1 read-only and 1 read-write buffer with no overlap.
 
 use crate::integration::utils::{assert_compiler_error, assert_runs};
 
@@ -28,7 +28,7 @@ fn main()
     assert_runs(code);
 }
 
-// MILESTONE 1b: Ping-pong buffer validation tests
+// Ping-pong buffer validation tests ensure correctness of dual-buffer tracking
 
 #[test]
 fn test_gpu_frame_valid_one_read_one_write() {
@@ -101,7 +101,7 @@ fn main()
     assert_compiler_error(code, "data race");
 }
 
-// MILESTONE 2: Value-verified frame kernel (Conway Game of Life, simplified)
+// Value-verified frame kernel tests (simplified patterns before full Conway's Game of Life)
 
 #[test]
 fn test_gpu_frame_simple_gol() {
