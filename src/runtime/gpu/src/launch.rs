@@ -67,6 +67,8 @@ pub struct GpuLaunchDesc {
     pub num_storage_bufs: u64,
 }
 
+const _: () = assert!(core::mem::size_of::<GpuLaunchDesc>() == 128);
+
 /// Launches a GPU kernel inline. Returns 1 on success, 0 on failure.
 ///
 /// Each capture's persistence is keyed on its `buf_handle_ids[i]`:

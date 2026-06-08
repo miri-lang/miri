@@ -564,3 +564,13 @@ fn narrow_to_i32(builder: &mut FunctionBuilder, value: Value, from: cl_types::Ty
         builder.ins().ireduce(cl_types::I32, value)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::desc_layout;
+
+    #[test]
+    fn gpu_launch_desc_size_matches_runtime() {
+        assert_eq!(desc_layout::DESC_SIZE as usize, 128);
+    }
+}
