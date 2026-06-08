@@ -1,0 +1,55 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// Game of Life: Conway's B3/S23 cellular automaton, animated on the GPU.
+//
+// A seed kernel fills the grid once with a deterministic pseudo-random "soup";
+// a `gpu frame` kernel then advances one generation per animation frame,
+// ping-ponging between two device grids (the web runtime swaps read/write each
+// frame). The soup keeps the simulation churning — still-lifes, blinkers, and
+// gliders continually emerge and collide — rather than settling at once.
+
+use system.collections.array
+
+const SIZE = 64 * 64
+
+// 64×64 toroidal grids (4096 cells).
+gpu var grid_a = Array<int, 64 * 64>()
+gpu var grid_b = Array<int, 64 * 64>()
+
+// Seed: a deterministic hash lights a dense, non-uniform subset of cells —
+// the classic Life "soup" that keeps the simulation churning.
+gpu for idx in 0..SIZE
+    let x = idx % 64
+    let y = idx / 64
+    let hash = (x * 37 + y * 71 + x * y * 7) % 13
+    grid_a[idx] = 1 if hash < 5 else 0
+
+// One generation per frame, reading grid_a and writing grid_b (toroidal wrap).
+gpu frame idx in 0..SIZE
+    let y = idx / 64
+    let x = idx % 64
+    let ym = (y - 1 + 64) % 64
+    let yp = (y + 1) % 64
+    let xm = (x - 1 + 64) % 64
+    let xp = (x + 1) % 64
+    let neighbors = grid_a[ym*64+xm] + grid_a[ym*64+x] + grid_a[ym*64+xp] + grid_a[y*64+xm] + grid_a[y*64+xp] + grid_a[yp*64+xm] + grid_a[yp*64+x] + grid_a[yp*64+xp]
+    // B3/S23: a cell lives next gen iff it has exactly 3 neighbors, or it is
+    // already alive with exactly 2. (The WGSL backend has no `or`, so the two
+    // birth/survival rules are written as separate guards.)
+    var next = 0
+    if neighbors == 3
+        next = 1
+    if grid_a[idx] == 1 and neighbors == 2
+        next = 1
+    grid_b[idx] = next
+
+// Native smoke check: count live cells after one generation (deterministic).
+// The browser runs the frame kernel continuously; here we run it once.
+let host = grid_b
+var alive = 0
+var k = 0
+while k < 4096
+    alive = alive + host[k]
+    k = k + 1
+println(f"alive={alive}")

@@ -523,53 +523,14 @@ println(f'{h[0]} {h[1]} {h[2]}')
     assert_gpu_runs_with_output(source, "1 2 3");
 }
 
-/// Test large i64 constant (out-of-i32 range) in division.
-/// The constant 9223372036854775800 is near i64::MAX.
-/// When narrowed to i32, it truncates to a valid i32 range value.
-/// Expected: (5 / i32::truncated(9223372036854775800)) = (5 / -8) = 0 (signed division, truncate toward zero).
-#[test]
-fn gpu_i64_divide_large_constant() {
-    let source = "
-use system.gpu
-use system.collections.array
-
-gpu let src = [5]
-gpu var dst = [0]
-
-gpu for i in 0..1
-    dst[i] = src[i] / 9223372036854775800
-
-let host = dst
-println(f'{host[0]}')
-";
-    // The large constant 9223372036854775800 as i64 narrows to i32(-8) in WGSL.
-    // 5 / -8 = 0 (truncate toward zero for signed division).
-    assert_gpu_runs_with_output(source, "0");
-}
-
-/// Test large i64 constant (out-of-i32 range) in modulo.
-/// The constant 9223372036854775800 is near i64::MAX.
-/// When narrowed to i32, it truncates to a valid i32 range value.
-/// Expected: (5 % i32::truncated(9223372036854775800)) matches i32-narrowed semantics.
-#[test]
-fn gpu_i64_modulo_large_constant() {
-    let source = "
-use system.gpu
-use system.collections.array
-
-gpu let src = [5]
-gpu var dst = [0]
-
-gpu for i in 0..1
-    dst[i] = src[i] % 9223372036854775800
-
-let host = dst
-println(f'{host[0]}')
-";
-    // The large constant 9223372036854775800 as i64 narrows to i32(-8) in WGSL.
-    // 5 % -8 = 5 (modulo with negative divisor keeps sign of dividend).
-    assert_gpu_runs_with_output(source, "5");
-}
+// NOTE: the former `gpu_i64_divide_large_constant` / `gpu_i64_modulo_large_constant`
+// tests were removed. They asserted the old i64-constant-narrowing behaviour, where a
+// near-`i64::MAX` constant in a kernel was silently truncated into i32 range. GPU
+// integers are now i32 end-to-end (WebGPU/WGSL has no 64-bit integer type), so a
+// constant exceeding i32 range is genuinely unrepresentable in a kernel. In-range
+// integer div/mod stays covered by `gpu_i64_divide_roundtrips` / `gpu_i64_modulo_roundtrips`.
+// Follow-up (notes/PLAN.md): reject an out-of-i32-range integer constant inside a GPU
+// kernel with a clean compile-time error instead of the current shader-compile abort.
 
 /// Test negative dividend with division (i32 semantics: truncate toward zero).
 #[test]
@@ -612,3 +573,8 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]}')
     // 0 % 3 = 0, -1 % 3 = -1, -2 % 3 = -2, 3 % 3 = 0, 4 % 3 = 1
     assert_gpu_runs_with_output(source, "0 -1 -2 0 1");
 }
+
+// NOTE: Game of Life correctness test deferred to after WGSL structurizer F24
+// fix (multiple if-else statements in GPU kernels currently hit a SwitchInt limitation).
+// The demo test (in tests/integration/gpu/demos.rs) will serve as the acceptance criterion
+// for rule correctness once the demo is created and value-verified on Metal.

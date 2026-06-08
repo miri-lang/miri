@@ -807,3 +807,155 @@ fn main()
         );
     }
 }
+
+/// Browser-portability tests: ensure no i64 literals or i64 array types
+/// in WGSL output, only i32 (WebGPU/Tint has no 64-bit int support).
+mod browser_portability {
+    use super::super::helpers::compile_to_wgsl;
+
+    #[test]
+    fn int_buffer_emits_i32_not_i64_in_wgsl() {
+        // int buffers must compile to array<i32>, not array<i64>.
+        let source = "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [1, 2, 3, 4]
+    gpu var dst = [0, 0, 0, 0]
+    gpu for i in 0..4
+        dst[i] = a[i] * 2
+";
+        let wgsl = compile_to_wgsl(source);
+
+        // Verify no i64 array declarations
+        assert!(
+            !wgsl.contains("array<i64>"),
+            "WGSL should use array<i32> for int buffers, not array<i64>. Found in:\n{}",
+            wgsl
+        );
+
+        // Verify no i64 type name
+        assert!(
+            !wgsl.contains("i64"),
+            "WGSL should contain NO i64 type keyword. Found in:\n{}",
+            wgsl
+        );
+
+        // Verify no li suffix (i64 literal marker in WGSL)
+        assert!(
+            !wgsl.contains("li"),
+            "WGSL should contain NO 'li' suffix (i64 literal). Found in:\n{}",
+            wgsl
+        );
+
+        // Verify i32 is present (for array and operations)
+        assert!(
+            wgsl.contains("array<i32>"),
+            "WGSL should contain array<i32> for int buffers. Full WGSL:\n{}",
+            wgsl
+        );
+    }
+
+    #[test]
+    fn int_buffer_div_emits_i32_operations_in_wgsl() {
+        // Div/mod on int should operate on i32 (not i64) in WGSL.
+        let source = "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [10, 20, 30, 40]
+    gpu var dst = [0, 0, 0, 0]
+    gpu for i in 0..4
+        dst[i] = a[i] / 2
+";
+        let wgsl = compile_to_wgsl(source);
+
+        // No i64 anywhere
+        assert!(
+            !wgsl.contains("i64"),
+            "Div on int buffer should not emit i64. Found in:\n{}",
+            wgsl
+        );
+
+        // Array uses i32
+        assert!(
+            wgsl.contains("array<i32>"),
+            "Div kernel should use array<i32>. Found in:\n{}",
+            wgsl
+        );
+    }
+
+    #[test]
+    fn float_buffer_still_uses_f32_in_wgsl() {
+        // f32 buffers (from floating-point literals) remain f32, unchanged.
+        let source = "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [1.0, 2.0, 3.0, 4.0]
+    gpu var dst = [0.0, 0.0, 0.0, 0.0]
+    gpu for i in 0..4
+        dst[i] = a[i] + 1.0
+";
+        let wgsl = compile_to_wgsl(source);
+
+        // Should use f32, not f64
+        assert!(
+            wgsl.contains("array<f32>"),
+            "f32 buffer should use array<f32>. Found in:\n{}",
+            wgsl
+        );
+
+        assert!(
+            !wgsl.contains("array<f64>"),
+            "f32 buffer should NOT use array<f64>. Found in:\n{}",
+            wgsl
+        );
+    }
+}
+
+/// Value-correctness after browser portability: int buffers round-trip
+/// through device with i32 WGSL and host-side marshalling.
+mod int_marshalling {
+    use super::super::device::assert_gpu_runs_with_output;
+
+    #[test]
+    fn small_int_values_round_trip_with_marshalling() {
+        // Small values (< i32::MAX) should round-trip correctly.
+        let source = "
+use system.io
+use system.gpu
+use system.collections.array
+
+gpu let vals = [0, 1, 100, 1000, 10000, 100000]
+gpu var result = [0, 0, 0, 0, 0, 0]
+gpu for i in 0..6
+    result[i] = vals[i]
+let host = result
+println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]} {host[5]}')
+";
+        assert_gpu_runs_with_output(source, "0 1 100 1000 10000 100000");
+    }
+
+    #[test]
+    fn int_arithmetic_after_marshalling_is_correct() {
+        // Arithmetic on marshalled values should be correct.
+        let source = "
+use system.io
+use system.gpu
+use system.collections.array
+
+gpu let a = [10, 20, 30, 40]
+gpu let b = [5, 6, 7, 8]
+gpu var result = [0, 0, 0, 0]
+gpu for i in 0..4
+    result[i] = a[i] + b[i]
+let host = result
+println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
+";
+        assert_gpu_runs_with_output(source, "15 26 37 48");
+    }
+}

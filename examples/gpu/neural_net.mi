@@ -1,0 +1,37 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// Neural network — a single dense layer with ReLU activation, forward pass.
+//
+// One fully-connected layer maps a 2-element input vector to 3 outputs:
+//
+//   y_j = ReLU( Σ_i W[j][i]·x[i] + b[j] )
+//
+// Each output neuron is independent, so the layer is one GPU thread per neuron.
+// ReLU is expressed directly as the ternary `sum if sum > 0 else 0` — no
+// transcendental activation (the GPU preview has no exp/sigmoid yet), which is
+// exactly why ReLU networks are the natural fit for this backend.
+//
+// Weights (row-major, neuron-major), bias, and input give:
+//   y0 = ReLU( 1·2 + (-1)·1 + 0.5 ) = ReLU( 1.5) = 1.5
+//   y1 = ReLU( 2·2 +  0.5·1 - 3.0 ) = ReLU( 1.5) = 1.5
+//   y2 = ReLU( 0.5·2 + 0.5·1 - 5.0) = ReLU(-3.5) = 0.0   (clipped by ReLU)
+
+use system.collections.array
+
+gpu let w = [1.0, -1.0, 2.0, 0.5, 0.5, 0.5]
+gpu let bias = [0.5, -3.0, -5.0]
+gpu let x = [2.0, 1.0]
+gpu var y = Array<f32, 3>()
+
+// One thread per output neuron.
+gpu for j in 0..3
+    var sum = bias[j]
+    var i = 0
+    while i < 2
+        sum = sum + w[j * 2 + i] * x[i]
+        i = i + 1
+    y[j] = sum if sum > 0.0 else 0.0
+
+let host = y
+println(f"{host[0]} {host[1]} {host[2]}")

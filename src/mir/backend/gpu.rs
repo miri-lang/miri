@@ -17,8 +17,17 @@ pub struct GpuBodyMetadata {
     /// Required for WebGPU/SPIR-V compute shaders, optional for CUDA/Metal.
     /// Format: [x, y, z]
     pub workgroup_size: Option<[u32; 3]>,
+    /// Dispatch grid size (number of workgroups).
+    /// Computed statically for `gpu for` with literal loop bounds.
+    /// For runtime-bound loops, this may be None (grid computed at runtime).
+    /// Format: [x, y, z]
+    pub grid_size: Option<[u32; 3]>,
     /// Required GPU capabilities for this kernel.
     pub required_capabilities: Vec<GpuCapability>,
+    /// True if this kernel is a frame-step animation kernel.
+    /// Frame-step kernels are marked by `gpu frame` and are dispatched every animation frame
+    /// in web-gpu bundles. Only one frame-step kernel per program is supported.
+    pub is_frame_step: bool,
 }
 
 /// GPU hardware capabilities that may be required by a kernel.

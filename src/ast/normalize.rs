@@ -42,7 +42,10 @@ fn normalize_stmt(stmt: &mut Statement) {
             normalize_stmt(body);
         }
         StatementKind::For(decls, iterable, body)
-        | StatementKind::GpuFor(decls, iterable, body) => normalize_for_stmt(decls, iterable, body),
+        | StatementKind::GpuFor(decls, iterable, body)
+        | StatementKind::GpuFrame(decls, iterable, body) => {
+            normalize_for_stmt(decls, iterable, body)
+        }
         StatementKind::FunctionDeclaration(decl) => normalize_function_decl(decl),
         StatementKind::RuntimeFunctionDeclaration(_, _, params, ret) => {
             normalize_params(params);

@@ -1,0 +1,67 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// Linear regression — one batch gradient-descent step on the GPU.
+//
+// This is the realistic GPU-ML pattern: the expensive per-sample work (forward
+// prediction + per-sample gradient contributions) is a parallel map computed on
+// the device, while the cheap reduction (summing those contributions into the
+// batch gradient) and the parameter update run on the host.
+//
+// Model:   y ≈ W·x + B          Loss: mean squared error
+// Dataset: y = 2x + 1 exactly, so the fit should drive W → 2, B → 1.
+// Current params: W = 0, B = 0 (the starting guess for this step).
+//
+// Per sample i the kernel emits the MSE gradient terms:
+//   pred   = W·x_i + B
+//   err    = pred - y_i
+//   ∂L/∂W contribution = 2·err·x_i      (gw[i])
+//   ∂L/∂B contribution = 2·err          (gb[i])
+//   squared error                       (sq[i], for reporting the loss)
+//
+// The host averages those over the batch and takes one step with rate 0.1.
+// One step moves (W, B) from (0, 0) to (1.7, 0.8). The MSE printed below is the
+// loss *at the current params* (21.0, before the step); re-running with the new
+// params would report ~0.535.
+
+use system.collections.array
+
+// Training data (features and targets), resident on the device.
+gpu let xs = [0.0, 1.0, 2.0, 3.0]
+gpu let ys = [1.0, 3.0, 5.0, 7.0]
+
+// Per-sample gradient contributions and squared errors.
+gpu var gw = Array<f32, 4>()
+gpu var gb = Array<f32, 4>()
+gpu var sq = Array<f32, 4>()
+
+// Parallel map: current params W = 0, B = 0 are inlined as kernel literals
+// (host scalars cannot be captured into the kernel).
+gpu for i in 0..4
+    let pred = 0.0 * xs[i] + 0.0
+    let err = pred - ys[i]
+    gw[i] = 2.0 * err * xs[i]
+    gb[i] = 2.0 * err
+    sq[i] = err * err
+
+// Reduce on the host: average the per-sample contributions into the batch
+// gradient and the mean squared error.
+let gwh = gw
+let gbh = gb
+let sqh = sq
+var sum_gw = 0.0
+var sum_gb = 0.0
+var sum_sq = 0.0
+var i = 0
+while i < 4
+    sum_gw = sum_gw + gwh[i]
+    sum_gb = sum_gb + gbh[i]
+    sum_sq = sum_sq + sqh[i]
+    i = i + 1
+
+// One gradient-descent step with learning rate 0.1.
+let w_new = 0.0 - 0.1 * (sum_gw / 4.0)
+let b_new = 0.0 - 0.1 * (sum_gb / 4.0)
+let mse = sum_sq / 4.0
+
+println(f"W: 0 -> {w_new}  B: 0 -> {b_new}  MSE: {mse}")

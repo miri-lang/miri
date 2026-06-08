@@ -54,10 +54,12 @@ impl WgslScalar {
 
 /// Map a scalar MIR/AST type kind to its WGSL scalar representation.
 ///
-/// Miri's default `Int` maps to host Cranelift `i64`, so it must reach the
-/// kernel as WGSL `i64` for buffer element widths to align. Likewise the
-/// default `Float` is host `f64` and maps to WGSL `f64`. Narrower fixed-width
-/// types keep their native widths.
+/// For browser portability (WebGPU/Tint has no 64-bit int support),
+/// Miri's default `Int` maps to WGSL `i32` (not i64). The runtime marshals
+/// host i64 buffers ↔ device i32 buffers at launch/readback boundaries.
+/// Fixed-width types keep their declared widths (`I32` → `i32`, `I64` → `i64`
+/// for CPU-only code). Default `Float` still maps to WGSL `f64` (browser
+/// f64 support is deferred; F32 buffers stay f32 unchanged).
 ///
 /// Returns `Err(CodegenError::Internal)` for non-scalar inputs; callers wrap
 /// pointer/buffer types in `array<T>` themselves.
@@ -67,7 +69,8 @@ pub fn scalar(kind: &TypeKind) -> Result<WgslScalar, CodegenError> {
         TypeKind::U32 | TypeKind::U8 | TypeKind::U16 => Ok(WgslScalar::U32),
         TypeKind::F32 => Ok(WgslScalar::F32),
         TypeKind::Boolean => Ok(WgslScalar::Bool),
-        TypeKind::Int | TypeKind::I64 => Ok(WgslScalar::I64),
+        TypeKind::Int => Ok(WgslScalar::I32), // Browser-portable: no i64
+        TypeKind::I64 => Ok(WgslScalar::I64), // Explicit i64 still uses i64
         TypeKind::U64 => Ok(WgslScalar::U64),
         TypeKind::Float | TypeKind::F64 => Ok(WgslScalar::F64),
         TypeKind::I128

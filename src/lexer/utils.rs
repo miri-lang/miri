@@ -15,6 +15,7 @@ pub fn token_to_string(token: &Token) -> Cow<'static, str> {
         Token::Spawn => "spawn".into(),
         Token::Parallel => "parallel".into(),
         Token::Gpu => "gpu".into(),
+        Token::Frame => "frame".into(),
         Token::If => "if".into(),
         Token::Unless => "unless".into(),
         Token::Else => "else".into(),

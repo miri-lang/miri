@@ -245,7 +245,9 @@ fn visit_written_stmt(stmt: &Statement, written: &mut HashSet<String>) {
             }
         }
         StatementKind::While(_, body, _) => visit_written_stmt(body, written),
-        StatementKind::For(_, _, body) | StatementKind::GpuFor(_, _, body) => {
+        StatementKind::For(_, _, body)
+        | StatementKind::GpuFor(_, _, body)
+        | StatementKind::GpuFrame(_, _, body) => {
             visit_written_stmt(body, written);
         }
         StatementKind::Empty
@@ -495,7 +497,8 @@ fn visit_stmt(
             visit_stmt(body, bound, ctx, seen, ordered);
         }
         StatementKind::For(inner_decls, iter, body)
-        | StatementKind::GpuFor(inner_decls, iter, body) => {
+        | StatementKind::GpuFor(inner_decls, iter, body)
+        | StatementKind::GpuFrame(inner_decls, iter, body) => {
             visit_expr(iter, bound, ctx, seen, ordered);
             let scope_snapshot = bound.clone();
             for d in inner_decls {
@@ -727,9 +730,17 @@ fn build_kernel_body_literal(
     kernel
         .local_decls
         .push(LocalDecl::new(Type::new(TypeKind::Void, span), span));
+
+    // Compute grid size: ceil(length / workgroup_size)
+    let block_size_i64 = i64::from(GPU_FOR_BLOCK_SIZE);
+    let grid_count = length / block_size_i64 + i64::from(length % block_size_i64 != 0);
+    let grid_x = grid_count.min(u32::MAX as i64) as u32;
+
     kernel.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([GPU_FOR_BLOCK_SIZE, 1, 1]),
+        grid_size: Some([grid_x, 1, 1]),
         required_capabilities: Vec::new(),
+        is_frame_step: false,
     }));
     kernel.out_params = captures.iter().map(|c| c.is_written).collect();
 
@@ -851,6 +862,10 @@ fn emit_gpu_launch_literal(
         .iter()
         .map(|c| ctx.body.local_decls[c.outer_local.0].device_handle)
         .collect();
+    let arg_int_narrow: Vec<bool> = captures
+        .iter()
+        .map(|c| needs_int_narrowing(&c.ty))
+        .collect();
 
     let dest_local = ctx.push_temp(void_ty, span);
     let after_bb = ctx.new_basic_block();
@@ -862,6 +877,7 @@ fn emit_gpu_launch_literal(
             args: arg_ops,
             arg_handles,
             arg_read_only: captures.iter().map(|c| !c.is_written).collect(),
+            arg_int_narrow,
             uniform_bound: None,
             destination: Place::new(dest_local),
             target: Some(after_bb),
@@ -889,7 +905,9 @@ fn build_kernel_body_runtime(
         .push(LocalDecl::new(Type::new(TypeKind::Void, span), span));
     kernel.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([GPU_FOR_BLOCK_SIZE, 1, 1]),
+        grid_size: None, // Runtime-bound; grid computed at runtime
         required_capabilities: Vec::new(),
+        is_frame_step: false,
     }));
 
     let mut out_params: Vec<bool> = captures.iter().map(|c| c.is_written).collect();
@@ -1186,6 +1204,10 @@ fn emit_gpu_launch_runtime(
         .iter()
         .map(|c| ctx.body.local_decls[c.outer_local.0].device_handle)
         .collect();
+    let arg_int_narrow: Vec<bool> = captures
+        .iter()
+        .map(|c| needs_int_narrowing(&c.ty))
+        .collect();
 
     let void_ty = Type::new(TypeKind::Void, span);
     let dest_local = ctx.push_temp(void_ty, span);
@@ -1203,6 +1225,7 @@ fn emit_gpu_launch_runtime(
                 read_only.push(false);
                 read_only
             },
+            arg_int_narrow,
             uniform_bound: Some(Box::new(end_op)),
             destination: Place::new(dest_local),
             target: Some(after_bb),
@@ -1319,9 +1342,19 @@ fn build_kernel_body_2d_literal(
         Type::new(TypeKind::Void, ctx.span),
         ctx.span,
     ));
+
+    // Compute grid size for 2D: ceil(width / BLOCK_SIZE_2D) x ceil(height / BLOCK_SIZE_2D)
+    let block_size_i64 = i64::from(BLOCK_SIZE_2D);
+    let grid_x = ctx.width / block_size_i64 + i64::from(ctx.width % block_size_i64 != 0);
+    let grid_y = ctx.height / block_size_i64 + i64::from(ctx.height % block_size_i64 != 0);
+    let grid_x_u32 = grid_x.min(u32::MAX as i64) as u32;
+    let grid_y_u32 = grid_y.min(u32::MAX as i64) as u32;
+
     kernel.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([BLOCK_SIZE_2D, BLOCK_SIZE_2D, 1]),
+        grid_size: Some([grid_x_u32, grid_y_u32, 1]),
         required_capabilities: Vec::new(),
+        is_frame_step: false,
     }));
     kernel.out_params = ctx.captures.iter().map(|c| c.is_written).collect();
 
@@ -1431,6 +1464,10 @@ fn emit_gpu_launch_2d_literal(
         .iter()
         .map(|c| ctx.body.local_decls[c.outer_local.0].device_handle)
         .collect();
+    let arg_int_narrow: Vec<bool> = captures
+        .iter()
+        .map(|c| needs_int_narrowing(&c.ty))
+        .collect();
 
     let void_ty = Type::new(TypeKind::Void, span);
     let dest_local = ctx.push_temp(void_ty, span);
@@ -1443,6 +1480,7 @@ fn emit_gpu_launch_2d_literal(
             args: arg_ops,
             arg_handles,
             arg_read_only: captures.iter().map(|c| !c.is_written).collect(),
+            arg_int_narrow,
             uniform_bound: None,
             destination: Place::new(dest_local),
             target: Some(after_bb),
@@ -1458,4 +1496,53 @@ fn int_constant(value: i64, span: Span) -> Operand {
         ty: Type::new(TypeKind::Int, span),
         literal: Literal::Integer(IntegerLiteral::I64(value)),
     }))
+}
+
+/// CHANGE 2: Determines if a GPU buffer needs i64→i32 narrowing at the host
+/// boundary. True iff the buffer's element type is `int` / `i64` — those are
+/// 8-byte on the host but emitted as `array<i32>` (4-byte) in WGSL (WebGPU has
+/// no 64-bit integer), so the runtime narrows on upload and widens on readback.
+/// `i32`/`u32`/`f32`/`f64`/etc. buffers match the device width and are not narrowed.
+fn needs_int_narrowing(ty: &Type) -> bool {
+    let elem_expr = match &ty.kind {
+        // AST-phase variants (before normalization).
+        TypeKind::Array(elem_expr, _) | TypeKind::List(elem_expr) => Some(elem_expr.as_ref()),
+        // Post-normalization: Array/List become Custom("Array"/"List", [elem_ty_expr, ...]).
+        TypeKind::Custom(name, Some(args))
+            if (name == "Array" || name == "List") && !args.is_empty() =>
+        {
+            Some(&args[0])
+        }
+        _ => None,
+    };
+
+    elem_expr
+        .is_some_and(|expr| matches!(element_type_kind(expr), Some(TypeKind::Int | TypeKind::I64)))
+}
+
+/// Resolves a collection element-type expression to its `TypeKind`, covering the
+/// forms produced across the pipeline: a `Type(...)` node (post-normalization),
+/// a bare identifier, or a literal identifier.
+fn element_type_kind(expr: &crate::ast::expression::Expression) -> Option<TypeKind> {
+    use crate::ast::expression::ExpressionKind;
+    use crate::ast::literal::Literal;
+
+    let name = match &expr.node {
+        ExpressionKind::Type(inner, _) => return Some(inner.kind.clone()),
+        ExpressionKind::Identifier(name, _) => name.as_str(),
+        ExpressionKind::Literal(Literal::Identifier(name)) => name.as_str(),
+        _ => return None,
+    };
+    match name {
+        "int" => Some(TypeKind::Int),
+        "i64" => Some(TypeKind::I64),
+        "i32" => Some(TypeKind::I32),
+        "i16" => Some(TypeKind::I16),
+        "i8" => Some(TypeKind::I8),
+        "u64" => Some(TypeKind::U64),
+        "u32" => Some(TypeKind::U32),
+        "f32" => Some(TypeKind::F32),
+        "f64" => Some(TypeKind::F64),
+        _ => None,
+    }
 }

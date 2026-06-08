@@ -90,6 +90,118 @@ fn is_resource_inner<'a>(
     }
 }
 
+/// Determines whether a type requires Perceus reference counting.
+///
+/// A type is Perceus-managed when it holds references to heap-allocated data
+/// and cannot be bitwise-copied. This includes:
+/// - Collections: `List<T>`, `Array<T>`, `Map<K,V>`, `Set<T>`
+/// - Strings: heap-allocated via `alloc_with_rc`
+/// - Options and Results over managed types
+/// - Tuples containing managed types
+/// - Closures/function values (heap-allocated)
+/// - User-defined classes (which may hold managed fields)
+/// - Structs with Perceus-managed fields
+///
+/// Pure scalar types (Int, Float, Bool, etc.) and generic parameters are NOT managed.
+/// Auto-copy types (those in the `auto_copy_types` set) bypass RC.
+pub fn is_perceus_managed(
+    kind: &TypeKind,
+    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+) -> bool {
+    is_perceus_managed_inner(
+        kind,
+        type_definitions,
+        &mut std::collections::HashSet::new(),
+    )
+}
+
+fn is_perceus_managed_inner(
+    kind: &TypeKind,
+    type_definitions: &std::collections::HashMap<String, TypeDefinition>,
+    visited: &mut std::collections::HashSet<String>,
+) -> bool {
+    match kind {
+        // Collections, Options, Tuples, and Strings use heap allocation and need RC.
+        TypeKind::Option(elem_ty) => {
+            is_perceus_managed_inner(&elem_ty.kind, type_definitions, visited)
+        }
+        TypeKind::Tuple(elems) => elems.iter().any(|elem_expr| {
+            if let ExpressionKind::Type(elem, _) = &elem_expr.node {
+                is_perceus_managed_inner(&elem.kind, type_definitions, visited)
+            } else {
+                false
+            }
+        }),
+        TypeKind::List(elem_expr) => {
+            if let ExpressionKind::Type(elem, _) = &elem_expr.node {
+                is_perceus_managed_inner(&elem.kind, type_definitions, visited)
+            } else {
+                true // If we can't determine, assume managed
+            }
+        }
+        TypeKind::Array(elem_expr, _) => {
+            if let ExpressionKind::Type(elem, _) = &elem_expr.node {
+                is_perceus_managed_inner(&elem.kind, type_definitions, visited)
+            } else {
+                true // If we can't determine, assume managed
+            }
+        }
+        TypeKind::Map(_key_expr, _val_expr) => {
+            // Maps are always managed regardless of key/value types
+            true
+        }
+        TypeKind::Set(_elem_expr) => {
+            // Sets are always managed
+            true
+        }
+        TypeKind::String => true,
+        TypeKind::Function(_) => true,
+        TypeKind::Result(ok_expr, err_expr) => {
+            let ok_managed = if let ExpressionKind::Type(t, _) = &ok_expr.node {
+                is_perceus_managed_inner(&t.kind, type_definitions, visited)
+            } else {
+                false
+            };
+            let err_managed = if let ExpressionKind::Type(t, _) = &err_expr.node {
+                is_perceus_managed_inner(&t.kind, type_definitions, visited)
+            } else {
+                false
+            };
+            ok_managed || err_managed
+        }
+        TypeKind::Generic(_, _, _) => false,
+        TypeKind::Custom(name, args) => {
+            // Exclude generic placeholders and "Self"
+            if name == "Self" {
+                return false;
+            }
+
+            // After normalization, builtin collection types are Custom("List", Some([...]))
+            if BuiltinCollectionKind::from_name(name).is_some() {
+                return args.is_some();
+            }
+
+            // Check user-defined types (classes and structs)
+            if visited.contains(name) {
+                return true; // Assume managed in cycles to be safe
+            }
+            visited.insert(name.clone());
+
+            match type_definitions.get(name) {
+                Some(TypeDefinition::Struct(def)) => def.fields.iter().any(|(_, field_ty, _)| {
+                    is_perceus_managed_inner(&field_ty.kind, type_definitions, visited)
+                }),
+                Some(TypeDefinition::Class(_def)) => {
+                    // All classes are managed (they have heap-allocated identity)
+                    true
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
 /// Determines whether a type is permitted inside a `gpu fn` body.
 ///
 /// GPU kernels execute on the device with no heap allocator, no I/O, and no

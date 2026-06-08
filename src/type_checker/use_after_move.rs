@@ -107,7 +107,9 @@ impl<'a> UseAfterMoveChecker<'a> {
                 self.check_expr(cond, consumed);
                 self.check_stmt(body, consumed);
             }
-            StatementKind::For(decls, iter, body) | StatementKind::GpuFor(decls, iter, body) => {
+            StatementKind::For(decls, iter, body)
+            | StatementKind::GpuFor(decls, iter, body)
+            | StatementKind::GpuFrame(decls, iter, body) => {
                 self.check_for_stmt(decls, iter, body, consumed);
             }
             StatementKind::Empty

@@ -480,6 +480,30 @@ fn fmt_custom(f: &mut fmt::Formatter<'_>, name: &str, args: Option<&[Expression]
     write!(f, "{}", close)
 }
 
+/// Maps a Miri type kind to its WGSL scalar type name.
+///
+/// This is the single source of truth for the Miri → WGSL scalar mapping,
+/// ensuring consistency across the pipeline (web manifest generation) and
+/// codegen (WGSL type emission). The mapping respects Miri's type narrowing:
+/// - Narrower integer types map to i32/u32 (WGSL minimum widths)
+/// - Miri's default int/float map to i64/f64
+///
+/// # Returns
+/// A static string slice (never allocates) naming the WGSL scalar, or `None`
+/// if the type is not a scalar (collections, tuples, etc.).
+pub fn wgsl_scalar_name(kind: &TypeKind) -> Option<&'static str> {
+    match kind {
+        TypeKind::I32 | TypeKind::I8 | TypeKind::I16 => Some("i32"),
+        TypeKind::U32 | TypeKind::U8 | TypeKind::U16 => Some("u32"),
+        TypeKind::F32 => Some("f32"),
+        TypeKind::Int => Some("i32"), // Browser-portable: no i64
+        TypeKind::I64 => Some("i64"), // Explicit i64 still uses i64
+        TypeKind::U64 => Some("u64"),
+        TypeKind::Float | TypeKind::F64 => Some("f64"),
+        _ => None,
+    }
+}
+
 impl fmt::Display for TypeDeclarationKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

@@ -9,15 +9,17 @@
 use system.gpu
 use system.io
 
+const N = 8
+
 // Reset telemetry so the cost-class counts reflect only this program
 gpu_reset_telemetry()
 
 gpu var data = [0, 0, 0, 0, 0, 0, 0, 0]
 
-gpu for i in 0..8
+gpu for i in 0..N
     data[i] = i
 
-gpu for i in 0..8
+gpu for i in 0..N
     data[i] = data[i] + 8
 
 let host = data

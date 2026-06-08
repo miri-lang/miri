@@ -523,6 +523,10 @@ impl<'source> Parser<'source> {
             return self.gpu_for_statement();
         }
 
+        if self.match_lookahead_type(|t| t == &Token::Frame) {
+            return self.gpu_frame_statement();
+        }
+
         if self.match_lookahead_type(|t| matches!(t, Token::Let | Token::Var)) {
             return self.gpu_variable_statement(visibility);
         }
@@ -699,6 +703,37 @@ impl<'source> Parser<'source> {
 
         let body = self.statement_body()?;
         Ok(ast::gpu_for_statement(
+            variable_declarations,
+            iterable,
+            body,
+        ))
+    }
+
+    pub(crate) fn gpu_frame_statement(&mut self) -> Result<Statement, SyntaxError> {
+        self.eat_token(&Token::Frame)?;
+
+        let variable_declarations = self.for_loop_variable_list()?;
+
+        if variable_declarations.len() != 1 {
+            return Err(self.error_unexpected_token(
+                "exactly 1 loop variable for gpu frame",
+                &format!("{} variables", variable_declarations.len()),
+            ));
+        }
+
+        self.eat_token(&Token::In)?;
+
+        let first_range = self.range_expression()?;
+
+        let iterable = if matches!(&first_range.node, ExpressionKind::Range(_, _, _)) {
+            first_range
+        } else {
+            let span = first_range.span;
+            ast::range_with_span(first_range, None, RangeExpressionType::IterableObject, span)
+        };
+
+        let body = self.statement_body()?;
+        Ok(ast::gpu_frame_statement(
             variable_declarations,
             iterable,
             body,

@@ -120,6 +120,13 @@ pub enum StatementKind {
     /// terminator whose grid is derived from the range length.
     GpuFor(Vec<VariableDeclaration>, Box<Expression>, Box<Statement>),
 
+    /// A GPU frame-step loop: `gpu frame <ident> in <range>`.
+    ///
+    /// Reads from one gpu buffer and writes to another, implementing a
+    /// ping-pong pattern for animations/simulations. Lowered to a synthesized
+    /// kernel marked with `is_frame_step=true`.
+    GpuFrame(Vec<VariableDeclaration>, Box<Expression>, Box<Statement>),
+
     /// A function declaration. Boxed to reduce enum size.
     FunctionDeclaration(Box<FunctionDeclarationData>),
 

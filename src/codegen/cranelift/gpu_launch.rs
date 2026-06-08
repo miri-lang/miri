@@ -104,6 +104,7 @@ fn define_bytes(
 /// before the trailing pointers because 56 is already 8-aligned.
 /// Offsets 88+ hold the uniform_bound fields (F1 feature).
 /// Offset 88 now holds buf_read_only (F3 feature) instead.
+/// Offset 96 now holds buf_int_narrow (CHANGE 2 feature) instead.
 mod desc_layout {
     pub(super) const WGSL_PTR: i32 = 0;
     pub(super) const WGSL_LEN: i32 = 8;
@@ -120,10 +121,11 @@ mod desc_layout {
     pub(super) const BUF_BYTE_LENS: i32 = 72;
     pub(super) const BUF_HANDLE_IDS: i32 = 80;
     pub(super) const BUF_READ_ONLY: i32 = 88;
-    pub(super) const UNIFORM_BOUND_PRESENT: i32 = 96;
-    pub(super) const UNIFORM_BOUND_VALUE: i32 = 104;
-    pub(super) const NUM_STORAGE_BUFS: i32 = 112;
-    pub(super) const DESC_SIZE: u32 = 120;
+    pub(super) const BUF_INT_NARROW: i32 = 96;
+    pub(super) const UNIFORM_BOUND_PRESENT: i32 = 104;
+    pub(super) const UNIFORM_BOUND_VALUE: i32 = 112;
+    pub(super) const NUM_STORAGE_BUFS: i32 = 120;
+    pub(super) const DESC_SIZE: u32 = 128;
 }
 
 /// Field offsets within `runtime::core::MiriArray` (`repr(C)`):
@@ -146,6 +148,7 @@ pub(crate) fn translate(
     args: &[Operand],
     arg_handles: &[Option<DeviceHandleId>],
     _arg_read_only: &[bool],
+    arg_int_narrow: &[bool],
     uniform_bound: &Option<Box<Operand>>,
     locals: &HashMap<Local, cranelift_frontend::Variable>,
     type_ctx: &TypeCtx,
@@ -198,6 +201,27 @@ pub(crate) fn translate(
         read_only_addr
     };
 
+    // CHANGE 2 feature: allocate and populate buf_int_narrow if non-empty.
+    let int_narrow_addr = if arg_int_narrow.is_empty() {
+        builder.ins().iconst(ptr_ty, 0)
+    } else {
+        let int_narrow_slot = builder.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            arg_int_narrow.len() as u32,
+            1,
+        ));
+        let int_narrow_addr = builder.ins().stack_addr(ptr_ty, int_narrow_slot, 0);
+        for (i, &needs_narrow) in arg_int_narrow.iter().enumerate() {
+            let byte_val = builder
+                .ins()
+                .iconst(cl_types::I8, if needs_narrow { 1 } else { 0 });
+            builder
+                .ins()
+                .store(MemFlags::new(), byte_val, int_narrow_addr, i as i32);
+        }
+        int_narrow_addr
+    };
+
     let (grid_x, grid_y, grid_z) = load_dim3_components(builder, grid_op, locals, type_ctx)?;
     let (block_x, block_y, block_z) = load_dim3_components(builder, block_op, locals, type_ctx)?;
 
@@ -210,6 +234,7 @@ pub(crate) fn translate(
             byte_lens_addr: slots.byte_lens_addr,
             handle_ids_addr: slots.handle_ids_addr,
             read_only_addr,
+            int_narrow_addr,
         },
         &kernel,
         ptr_ty,
@@ -394,6 +419,7 @@ struct DescriptorSlots {
     byte_lens_addr: Value,
     handle_ids_addr: Value,
     read_only_addr: Value,
+    int_narrow_addr: Value,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -413,6 +439,7 @@ fn populate_descriptor(
         byte_lens_addr,
         handle_ids_addr,
         read_only_addr,
+        int_narrow_addr,
     } = slots;
     let wgsl_ptr = data_pointer(builder, module, kernel.wgsl_data, ptr_ty);
     let entry_ptr = data_pointer(builder, module, kernel.name_data, ptr_ty);
@@ -440,6 +467,7 @@ fn populate_descriptor(
     store(byte_lens_addr, desc_layout::BUF_BYTE_LENS);
     store(handle_ids_addr, desc_layout::BUF_HANDLE_IDS);
     store(read_only_addr, desc_layout::BUF_READ_ONLY);
+    store(int_narrow_addr, desc_layout::BUF_INT_NARROW);
 }
 
 fn declare_launch_fn(

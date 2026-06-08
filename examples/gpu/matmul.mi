@@ -1,0 +1,35 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// Matrix multiplication: C = A × B for two 2×2 matrices, stored row-major in
+// device buffers. Each output element C[row][col] is an independent dot product
+// of A's row and B's column, so the whole product maps cleanly onto one GPU
+// thread per output cell — the canonical "embarrassingly parallel" GEMM shape.
+//
+//   A = | 1  2 |   B = | 5  6 |   C = A×B = | 19  22 |
+//       | 3  4 |       | 7  8 |             | 43  50 |
+//
+// Note: the matrix dimension is inlined as the literal `2` inside the kernel —
+// host scalars/consts cannot be captured into a `gpu for` body, only buffers.
+
+use system.collections.array
+
+gpu let a = [1.0, 2.0, 3.0, 4.0]
+gpu let b = [5.0, 6.0, 7.0, 8.0]
+gpu var c = Array<f32, 4>()
+
+// One thread per output cell: idx = row * 2 + col.
+gpu for idx in 0..4
+    let row = idx / 2
+    let col = idx - row * 2
+
+    // Dot product of A's row with B's column.
+    var sum = 0.0
+    var k = 0
+    while k < 2
+        sum = sum + a[row * 2 + k] * b[k * 2 + col]
+        k = k + 1
+    c[idx] = sum
+
+let host = c
+println(f"{host[0]} {host[1]} {host[2]} {host[3]}")

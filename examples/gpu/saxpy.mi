@@ -1,16 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-// SAXPY: single-precision A*X plus Y. Fused multiply-add with a literal
-// scalar constant. Each element is computed as a[i] * 2.0 + b[i], where 2.0
-// is inlined directly into the kernel body.
+// SAXPY: single-precision a*x plus y. Fused multiply-add with a literal
+// scalar a. Each element is computed as a * x[i] + y[i], where the scalar
+// a = 2.0 is inlined directly into the kernel body (host scalars cannot be
+// captured into a `gpu for`, so the coefficient lives in the kernel source).
 
-gpu let a = [1.0, 2.0, 3.0, 4.0]
-gpu let b = [5.0, 6.0, 7.0, 8.0]
+const N = 4
+
+gpu let x = [1.0, 2.0, 3.0, 4.0]
+gpu let y = [5.0, 6.0, 7.0, 8.0]
 gpu var dst = [0.0, 0.0, 0.0, 0.0]
 
-gpu for i in 0..4
-    dst[i] = a[i] * 2.0 + b[i]
+gpu for i in 0..N
+    dst[i] = 2.0 * x[i] + y[i]
 
 let host = dst
 println(f'{host[0]} {host[1]} {host[2]} {host[3]}')

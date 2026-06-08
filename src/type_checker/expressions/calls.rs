@@ -49,7 +49,7 @@ use crate::ast::*;
 use crate::error::syntax::Span;
 use crate::mir::MathIntrinsic;
 use crate::type_checker::context::{Context, TypeDefinition};
-use crate::type_checker::utils::is_gpu_compatible;
+use crate::type_checker::utils::{is_gpu_compatible, is_perceus_managed};
 use crate::type_checker::TypeChecker;
 use std::collections::HashMap;
 
@@ -606,6 +606,16 @@ impl TypeChecker {
                     return ty;
                 }
 
+                if let Some(ty) = self.try_infer_array_constructor(
+                    name,
+                    type_args,
+                    positional_args,
+                    span,
+                    context,
+                ) {
+                    return ty;
+                }
+
                 self.validate_class_generics(def, name, type_args, span);
 
                 let init_method = self.find_init_method(def);
@@ -1156,5 +1166,77 @@ impl TypeChecker {
         });
 
         make_type(TypeKind::Custom(name.to_string(), generic_args))
+    }
+
+    fn try_infer_array_constructor(
+        &mut self,
+        name: &str,
+        type_args: &Option<Vec<Expression>>,
+        positional_args: &[(&Expression, Type)],
+        span: Span,
+        context: &mut Context,
+    ) -> Option<Type> {
+        if BuiltinCollectionKind::from_name(name) != Some(BuiltinCollectionKind::Array) {
+            return None;
+        }
+
+        if let Some(args) = type_args {
+            if args.len() == 2 {
+                let elem_type = self.resolve_type_expression(&args[0], context);
+                let size_expr = args[1].clone();
+
+                // Validate that the size expression is a compile-time constant
+                if TypeChecker::try_eval_const_int(&size_expr).is_none() {
+                    self.report_error(
+                        "Array<T, N>() requires a compile-time constant size; use integer literals or simple arithmetic like '4 * 4'".to_string(),
+                        size_expr.span,
+                    );
+                    return Some(make_type(TypeKind::Error));
+                }
+
+                // Reject managed element types at type-check time
+                if is_perceus_managed(&elem_type.kind, &self.global_type_definitions) {
+                    self.report_error(
+                        format!(
+                            "Array<T, N>() is not yet supported for managed element type '{}'; use an array literal",
+                            elem_type
+                        ),
+                        args[0].span,
+                    );
+                    return Some(make_type(TypeKind::Error));
+                }
+
+                return Some(make_type(TypeKind::Custom(
+                    "Array".to_string(),
+                    Some(vec![self.create_type_expression(elem_type), size_expr]),
+                )));
+            } else {
+                self.report_error(
+                    format!(
+                        "Class 'Array<T, N>' expects 2 generic arguments, got {}",
+                        args.len()
+                    ),
+                    span,
+                );
+                return Some(make_type(TypeKind::Error));
+            }
+        }
+
+        // Array() with no arguments but explicit type args should have been caught above.
+        // If we get here with positional args, it's an error.
+        if !positional_args.is_empty() {
+            self.report_error(
+                "Array(...) with a positional argument is not supported. Use Array<T, N>() with explicit type arguments for a sized array, or use an array literal like [1, 2, 3]".to_string(),
+                span,
+            );
+            return Some(make_type(TypeKind::Error));
+        }
+
+        self.report_error(
+            "Cannot instantiate generic class 'Array<T, N>' without explicit type arguments"
+                .to_string(),
+            span,
+        );
+        Some(make_type(TypeKind::Error))
     }
 }
