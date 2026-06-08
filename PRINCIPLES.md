@@ -139,7 +139,7 @@ High-level modules (`pipeline.rs`, `Compiler`) depend on **abstractions** (trait
 - Allowed: a comment explaining a *non-obvious* invariant, a workaround for an upstream bug, a Cranelift quirk, or a Perceus subtlety.
 - **NEVER** write a comment that:
   - Restates what the code does (`// increment x`).
-  - References a planning doc (`// per §7.4`, `// task 1.5`, `// milestone 12`).
+  - References a planning document or internal tracking label.
   - Marks ownership (`// added by …`).
   - Is a section banner (`// ── parsing helpers ──`). If a file needs banners, split it.
 - Doc-comments (`///`) on public items: yes, when the contract is not obvious from the signature.
@@ -299,10 +299,10 @@ Not every change earns the full specialist panel. The `miri-task` and `miri-audi
 
 ### 8.1 Major-risk triggers (ANY one → **Major** tier → full specialist panel)
 
-- A new or changed `MirInstruction` / `Place` / `PlaceElem` / terminator variant (touches every visitor — §5.4).
-- A new or changed runtime intrinsic / FFI signature / Cranelift ABI (§5.2).
+- A new or changed `MirInstruction` / `Place` / `PlaceElem` / terminator variant (touches every visitor and codegen path).
+- A new or changed runtime intrinsic / FFI signature / Cranelift ABI.
 - Any `unsafe` block, `transmute`, raw-pointer arithmetic, manual `Layout`/`alloc`.
-- Any Perceus / reference-counting path (`perceus.rs`, `emit_temp_drop`, managed-temp lifetime — §5.1).
+- Any Perceus / reference-counting path (`perceus.rs`, `emit_temp_drop`, managed-temp lifetime).
 - Any GPU surface (WGSL emitter, `src/runtime/gpu/`, residency, `gpu for|fn|let|var`).
 - A cross-layer dependency change, a new public trait/contract, or a change to `src/pipeline.rs` orchestration.
 
@@ -312,7 +312,7 @@ Not every change earns the full specialist panel. The `miri-task` and `miri-audi
 |------|------------|-----------------|
 | **Trivial** | Typo, comment, rename, doc, format-only; ≤ 2 files; **no logic change**; and **no file under `src/mir/`, `perceus.rs`, `src/codegen/`, or `src/runtime/`** (those paths carry MIR snapshot call-order / Perceus / ABI invariants that a "behavior-preserving" edit can silently break — they are **Standard** minimum). | `make audit` + `miri-test-runner`. No reviewer agent, no panel. |
 | **Standard** | Single-stage feature or fix; **no Major trigger** fires. | `lead-miri-engineer` TDD → **`miri-reviewer` alone** + `miri-test-runner`. |
-| **Major** | Any §8.1 trigger fires. | Full specialist panel (§9 owners), CTO consolidation, fix loop. |
+| **Major** | Any change affecting MIR, runtime, Perceus, unsafe code, or GPU surface. | Full specialist panel (architecture, compiler, security, Rust, QA, GPU, CTO), consolidation, fix loop. |
 
 When unsure between two tiers, pick the higher one. Record the chosen tier and the trigger that set it.
 
@@ -353,10 +353,10 @@ A finding the owner cannot reproduce at a cited `file:line` is **not a finding**
 
 ## 11. How this document is enforced
 
-- **Workflow**: `miri-task` skill classifies the change (§8), drives Red-Green-Refactor, and runs `make audit` at the end.
-- **Review**: `miri-reviewer` agent is the sole reviewer for **Standard**-tier changes (§8.2); it checks §1–§5 and cites §10 severities.
-- **On-demand audit**: `miri-audit` skill runs the **Major**-tier panel (§9 owners) against any path/branch and grades §7, proposing diffs (report-only by default).
-- **Mechanical**: `make audit` owns the §9 mechanical sweeps; `clippy.toml` + `Cargo.toml` `[lints.clippy]` enforce function size, argument count, complexity, and `unwrap_used` for `src/`. `make lint` is part of every verification gate.
+- **Workflow**: `miri-task` skill classifies the change into Trivial/Standard/Major tiers, drives Red-Green-Refactor cycle, and runs `make audit` at the end.
+- **Review**: `miri-reviewer` agent is the sole reviewer for **Standard**-tier changes; it validates Clean Architecture, SOLID, and Clean Code principles against canonical severities.
+- **On-demand audit**: `miri-audit` skill runs the **Major**-tier specialist panel (architecture, compiler, security, Rust, QA, GPU, CTO) against any path/branch, proposing diffs.
+- **Mechanical**: `make audit` enforces mechanical rules via `clippy.toml` and `Cargo.toml` `[lints.clippy]` (function size, argument count, complexity, `unwrap_used` in `src/`). `make lint` is part of every verification gate.
 - **Memory**: `MEMORY.md` references this file so future sessions inherit the standard.
 
 When in doubt, optimize for the next reader. The next reader is often you.

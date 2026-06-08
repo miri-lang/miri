@@ -57,11 +57,11 @@ When writing tests or standard library code, remember Miri's syntax:
 ## 3.5 Codebase Cleanliness: No Planning References (BINDING)
 **The codebase must be absolutely clean of internal planning artifacts.** This means:
 
-- **NO references to internal documents**: PRINCIPLES.md, PLAN.md, GPU_DRAFT, design docs, vision docs, or any planning file.
-- **NO section/milestone numbers**: §1.4, M6.5, Phase 12, Task 4.1.5, Milestone 5, etc.
-- **NO feature identifiers**: F1, F3, CHANGE 2, D23, D24, N1a, etc.
-- **NO follow-up language**: "follow-up", "deferred", "future", "yet to be implemented" without explicit description of the gap.
-- **NO section banners**: Comments like `// ── Task 3.1: ...` or `// ── Phase 10: ...`. Split into separate functions or modules instead.
+- **NO references to internal documents**: design documents, vision docs, or planning files.
+- **NO structural numbers**: section numbers, milestone markers, phase numbers, task numbers, or milestone identifiers.
+- **NO feature identifiers**: internal feature codes or internal tracking labels.
+- **No deferral language without context**: Never mark a gap as unfinished without explicitly describing what's missing and why.
+- **NO section banners**: Comment-based visual section markers. Split into separate functions or modules instead.
 
 **Where this applies**: Comments, docstrings, error messages, test names, function/variable documentation, README snippets—everywhere. Code is read by humans and future AI agents who should not need access to planning documents to understand it.
 
@@ -70,22 +70,22 @@ When writing tests or standard library code, remember Miri's syntax:
 ## 3.6 Principles Harness (BINDING)
 `PRINCIPLES.md` at the repo root is the **binding standard** for every change. It is the single source of truth for Clean Architecture (layer rules, stdlib independence), SOLID, Clean Code (function size, naming, comments, error handling), TDD discipline, and Miri-specific invariants (Perceus, runtime/stdlib alignment, exhaustive visitors).
 
-- Before writing code: read the relevant section of `PRINCIPLES.md`.
-- After writing code: run `make audit` (mechanical sweep) and self-check against the dimension lists in §1.3 / §2.6 / §3.7 / §4.5 / §5.5.
+- Before writing code: read `PRINCIPLES.md` for the binding standards on architecture, SOLID, and TDD.
+- After writing code: run `make audit` (mechanical sweep) to verify layer rules, stdlib independence, function size, naming, comments, and exhaustive matching.
 - For existing-code reviews: use the `miri-audit` skill.
-- For diff-level review: use the `miri-reviewer` agent — it grades against the same principles.
+- For diff-level review: use the `miri-reviewer` agent — it validates the same principles.
 
 If you disagree with a principle, **say so** in the PR description. Do not silently deviate.
 
 ---
 
 ## 4. Testing & Verification (Mandatory)
-Testing is the only way to prove your work is correct. **Red-Green-Refactor is mandatory** — see PRINCIPLES.md §4. The cycle:
+Testing is the only way to prove your work is correct. **Red-Green-Refactor is mandatory**. The cycle:
 1. **RED**: write a failing test; run it; confirm the failure is for the right reason.
 2. **GREEN**: minimum code that makes it pass. No speculative generality.
 3. **REFACTOR**: clean up names, extract functions, with the suite green.
 
-A task is **not done** until each acceptance criterion has gone through all three phases.
+Work is **not done** until each acceptance criterion has passed all three phases of this cycle.
 
 
 - **Integration Tests**: Located in `tests/integration/`. Use helpers in `tests/integration/utils.rs`:
@@ -117,7 +117,7 @@ To work efficiently and hit fewer roadblocks:
 3. **No Brute Force**: If you encounter a compilation error, analyze the `MiriError` or Rust error. Don't just `sed` the code.
 4. **Update READMEs**: If you change a module's core logic, update its local `README.md`.
 5. **Temporary Files**: Use `/tmp/` for scripts or backups.
-6. **Follow-up Changes**: When you discover a follow-up that's not part of the current scope. always add it to the `notes/PLAN.md` file where appropriate. Don't just list them without recording.
+6. **Out-of-scope discoveries**: When you discover a gap or missing feature not part of the current scope, record it as a TODO comment in the relevant code location. Do not commit discoveries without context.
 7. Reply in unified diff form. No file rewrites unless asked. No trailing summary.
 8. Never commit changes yourself, never create PRs.
 

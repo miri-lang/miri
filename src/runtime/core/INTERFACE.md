@@ -149,8 +149,8 @@ Follow these four steps when adding a new runtime type:
 
 3. **Add constants to `src/runtime_fns.rs`** (compiler side): declare each new symbol
    name as a `pub const` so the MIR lowering and codegen can reference it by name. The
-   Phase 4 drift-check (`make check-runtime-fns`) will catch any mismatch between
-   declared names and exported symbols.
+   `make check-runtime-fns` target will catch any mismatch between declared names and
+   exported symbols.
 
 4. **Add a `.mi` stdlib file** under `src/stdlib/` that exposes the new type to Miri
    programs. Declare FFI-backed methods with `runtime "core" fn miri_rt_{name}_{op}(...)`
