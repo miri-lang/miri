@@ -255,7 +255,7 @@ fn main()
     );
 }
 
-// ── Custom elem_drop_fn — collection mutation ops (task 2.4b) ─────────────────
+// ── Custom elem_drop_fn — collection mutation ops ─────────────────────────────
 
 #[test]
 fn test_set_of_class_instances_clear_no_crash() {

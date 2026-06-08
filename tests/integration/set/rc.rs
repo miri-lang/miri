@@ -3,7 +3,7 @@
 
 use super::utils::*;
 
-// ── Drop-fn setter wiring for Set<String> (task 2.4) ─────────────────────────
+// ── Drop-fn setter wiring for Set<String> ─────────────────────────────────────
 
 #[test]
 fn test_set_of_strings_remove_no_crash() {
@@ -40,7 +40,7 @@ fn main()
     );
 }
 
-// ── Set<int> baseline cleanup (task 2.5) ─────────────────────────────────────
+// ── Set<int> baseline cleanup ─────────────────────────────────────────────────
 
 #[test]
 fn test_set_int_clear_no_crash() {

@@ -3,7 +3,7 @@
 
 use super::utils::*;
 
-// ── Custom elem_drop_fn (task 2.4b) ──────────────────────────────────────────
+// ── Custom elem_drop_fn ──────────────────────────────────────────────────────
 
 #[test]
 fn test_list_of_custom_clear_no_crash() {
@@ -69,7 +69,7 @@ fn main()
     );
 }
 
-// ── List<List<int>> scope-exit cleanup (task 2.5) ────────────────────────────
+// ── List<List<int>> scope-exit cleanup ────────────────────────────────────────
 
 #[test]
 fn test_list_of_lists_out_of_scope_no_crash() {
@@ -91,7 +91,7 @@ fn main()
     );
 }
 
-// ── Drop-fn setter wiring (task 2.4) ─────────────────────────────────────────
+// ── Drop-fn setter wiring ─────────────────────────────────────────────────────
 
 #[test]
 fn test_list_of_strings_clear_no_crash() {
@@ -224,7 +224,7 @@ println(f\"{l1.length()}\")
     );
 }
 
-// ── Push/insert incref for managed elements (task 3.1) ───────────────────────
+// ── Push/insert incref for managed elements ───────────────────────────────────
 
 #[test]
 fn test_list_push_managed_val_incref() {
@@ -297,7 +297,7 @@ fn main()
     );
 }
 
-// ── Set/overwrite decref old value (task 3.2) ────────────────────────────────
+// ── Set/overwrite decref old value ────────────────────────────────────────────
 
 #[test]
 fn test_list_set_overwrite_managed_no_leak() {

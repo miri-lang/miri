@@ -179,8 +179,7 @@ fn set_read_only_accessors_have_no_escapes() {
 //
 // These tests cover each of the 7 enumerated rule cases by
 // hand-building small return expressions and the supporting types map.
-// They exercise the analyzer in isolation; integration with the
-// call-graph fixpoint is deferred.
+// They exercise the analyzer in isolation without the call-graph fixpoint.
 
 use miri::ast::expression::{Expression, ExpressionKind};
 use miri::ast::factory::{
