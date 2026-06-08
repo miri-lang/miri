@@ -402,7 +402,7 @@ mod math_intrinsics {
     use super::super::device::assert_gpu_runs_with_output;
     use super::assert_gpu_wgsl_valid;
 
-    /// CRITERION 1 — F23: GPU math-intrinsic scalar width
+    /// GPU math-intrinsic scalar width.
     /// A math intrinsic (sqrt) inside an f32 kernel must produce an f32 result,
     /// not an f64 result that gets width-cast before storing into the f32 buffer.
     /// This test checks both WGSL validity (no f64/f32 mismatch) and value correctness.
@@ -483,7 +483,7 @@ mod multi_if {
     use super::super::helpers::compile_to_wgsl;
     use super::assert_gpu_wgsl_valid;
 
-    /// CRITERION 2 — F24: sequential if chains with scope issues
+    /// Sequential if chains with scope handling.
     /// Tests that the structurizer properly handles local variable declarations
     /// across sequential if statements. This exercises the case where multiple
     /// sequential ifs need to see the same function-scope vars.
@@ -720,7 +720,7 @@ mod gpu_for_2d {
     use super::super::utils::assert_compiler_error;
     use super::assert_gpu_wgsl_valid;
 
-    /// N1: Basic 2D gpu for with literal bounds (4x3 grid).
+    /// Basic 2D gpu for with literal bounds (4x3 grid).
     /// Emits WGSL with @workgroup_size(16, 16, 1), uses _local_id.y and _workgroup_id.y,
     /// and has the 2D bounds guard.
     #[test]
@@ -738,7 +738,7 @@ fn main()
         );
     }
 
-    /// N1: 2D gpu for with larger bounds (32x32 grid).
+    /// 2D gpu for with larger bounds (32x32 grid).
     #[test]
     fn gpu_for_2d_large_bounds_emits_naga_valid_wgsl() {
         assert_gpu_wgsl_valid(
@@ -754,7 +754,7 @@ fn main()
         );
     }
 
-    /// N1: 2D gpu for with non-literal range end should emit a clear error.
+    /// 2D gpu for with non-literal range end should emit a clear error.
     #[test]
     fn gpu_for_2d_runtime_bounds_is_rejected_with_clear_error() {
         assert_compiler_error(
@@ -773,7 +773,7 @@ fn main()
         );
     }
 
-    /// N1: Reject >2 loop variables.
+    /// Reject >2 loop variables.
     #[test]
     fn gpu_for_3d_is_rejected() {
         assert_compiler_error(
@@ -790,7 +790,7 @@ fn main()
         );
     }
 
-    /// N1: Reject 2 vars with a single range.
+    /// Reject 2 vars with a single range.
     #[test]
     fn gpu_for_2d_missing_second_range_is_rejected() {
         assert_compiler_error(
