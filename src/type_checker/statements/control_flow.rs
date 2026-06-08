@@ -214,7 +214,7 @@ impl TypeChecker {
     }
 
     /// Type-checks a `gpu for <ident> in <range>` statement (1D) or
-    /// `gpu for x, y in <range1>, <range2>` statement (2D, N1).
+    /// `gpu for x, y in <range1>, <range2>` statement (2D).
     ///
     /// Restrictions enforced beyond `check_for`:
     /// - The iterable must be a numeric range (`a..b` or `a..=b`).

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! Tests for F3 (read-only vs read-write GPU captures).
+//! Tests for read-only vs read-write GPU captures.
 //!
 //! A capture that is never written to in the kernel body should emit
 //! `var<storage, read>` in the WGSL shader, while a written capture
