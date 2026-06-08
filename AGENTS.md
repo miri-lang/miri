@@ -119,6 +119,7 @@ To work efficiently and hit fewer roadblocks:
 5. **Temporary Files**: Use `/tmp/` for scripts or backups.
 6. **Follow-up Changes**: When you discover a follow-up that's not part of the current scope. always add it to the `notes/PLAN.md` file where appropriate. Don't just list them without recording.
 7. Reply in unified diff form. No file rewrites unless asked. No trailing summary.
+8. Never commit changes yourself, never create PRs.
 
 ---
 
