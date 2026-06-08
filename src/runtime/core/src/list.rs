@@ -387,8 +387,8 @@ pub mod ffi {
         // List-of-List cases the function handles one level of recursion. Deeper
         // nesting (List<List<List<T>>>) is handled correctly for the normal drop path
         // (variables going out of scope) by the codegen's element-drop loops, but
-        // mutation operations on lists holding non-List managed elements would need
-        // a different drop function (future work).
+        // mutation operations on lists holding non-List managed elements require
+        // a different drop function to avoid incorrect cleanup.
         (*list).elem_drop_fn = miri_rt_list_decref_element as *const () as usize;
         list
     }
