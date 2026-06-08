@@ -31,13 +31,44 @@ fn type_alignment(cl_ty: CraneliftType) -> i32 {
 }
 
 /// Extract a Cranelift type from a type expression (used in tuples).
+///
+/// Only `Type` nodes carry resolved type information in tuple elements.
+/// Non-type expressions are pointer-sized fallbacks.
 fn type_from_expression(
     expr: &crate::ast::expression::Expression,
     ptr_ty: CraneliftType,
 ) -> CraneliftType {
     match &expr.node {
         ExpressionKind::Type(ty, _) => translate_type_kind(&ty.kind, ptr_ty),
-        _ => ptr_ty, // Fallback to pointer size
+        ExpressionKind::Literal(_)
+        | ExpressionKind::Identifier(..)
+        | ExpressionKind::Binary(..)
+        | ExpressionKind::Logical(..)
+        | ExpressionKind::Unary(..)
+        | ExpressionKind::Assignment(..)
+        | ExpressionKind::Conditional(..)
+        | ExpressionKind::Range(..)
+        | ExpressionKind::Guard(..)
+        | ExpressionKind::Member(..)
+        | ExpressionKind::Index(..)
+        | ExpressionKind::Call(..)
+        | ExpressionKind::ImportPath(..)
+        | ExpressionKind::GenericType(..)
+        | ExpressionKind::TypeDeclaration(..)
+        | ExpressionKind::EnumValue(..)
+        | ExpressionKind::StructMember(..)
+        | ExpressionKind::Lambda(..)
+        | ExpressionKind::List(..)
+        | ExpressionKind::Array(..)
+        | ExpressionKind::Map(..)
+        | ExpressionKind::Tuple(..)
+        | ExpressionKind::Set(..)
+        | ExpressionKind::Match(..)
+        | ExpressionKind::FormattedString(..)
+        | ExpressionKind::NamedArgument(..)
+        | ExpressionKind::Super
+        | ExpressionKind::Block(..)
+        | ExpressionKind::Cast(..) => ptr_ty,
     }
 }
 
