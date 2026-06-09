@@ -46,6 +46,77 @@ make test
 
 This runs tests across the compiler, standard library, and all runtime crates. All tests must pass. If you're adding new functionality, include appropriate tests.
 
+### 4. GPU Browser Validation (Optional)
+
+If you are contributing GPU kernel code or modifying the WGSL code generator, validate that generated kernels are compatible with browser-class WebGPU via the Tint compiler:
+
+```bash
+make gpu-browser-check
+```
+
+This is **not** part of `make test` but is enforced in CI before merge. It catches browser-incompatible WGSL (e.g., 64-bit scalar types without proper feature guards, reserved identifiers starting with `__`) that `naga` may accept but Chrome's WebGPU validator rejects.
+
+#### Setting Up Tint Locally
+
+Tint builds from source with CMake + Ninja + a C++ toolchain on all three platforms. The clone/configure/build step is identical; only the dependency install, the binary path, and the environment-variable syntax differ per OS.
+
+**1. Install the build dependencies (CMake, Ninja, Git, a C++ compiler):**
+
+- **Linux (Debian/Ubuntu):**
+  ```bash
+  sudo apt-get install cmake ninja-build build-essential git
+  ```
+- **macOS** (Homebrew; the C++ compiler comes from the Xcode Command Line Tools):
+  ```bash
+  xcode-select --install   # if not already installed
+  brew install cmake ninja git
+  ```
+- **Windows** (winget; install the MSVC C++ toolchain via Visual Studio Build Tools, then run the build from a *x64 Native Tools Command Prompt* / *Developer PowerShell* so CMake finds MSVC and Ninja):
+  ```powershell
+  winget install Kitware.CMake Ninja-build.Ninja Git.Git
+  winget install Microsoft.VisualStudio.2022.BuildTools   # select "Desktop development with C++"
+  ```
+
+**2. Build Tint from the pinned immutable Dawn revision** (same on every platform):
+
+```bash
+git clone --depth 1 https://chromium.googlesource.com/chromium/src/third_party/dawn dawn
+cd dawn
+git fetch origin e12c4ee
+git checkout e12c4ee
+
+cmake -B build -G Ninja \
+  -DTINT_BUILD_CMD_TOOLS=ON \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DDAWN_BUILD_SAMPLES=OFF \
+  -DDAWN_BUILD_TESTS=OFF
+
+cmake --build build -t tint
+```
+
+The resulting binary is `build/tint` on Linux/macOS and `build\tint.exe` on Windows.
+
+**3. Point the validation harness at your Tint binary and run the gate:**
+
+- **Linux / macOS** (bash/zsh):
+  ```bash
+  export MIRI_TINT="$(pwd)/build/tint"
+  make gpu-browser-check
+  ```
+- **Windows** (PowerShell):
+  ```powershell
+  $env:MIRI_TINT = "$(Get-Location)\build\tint.exe"
+  make gpu-browser-check
+  ```
+  Windows contributors need `make` available (e.g. via MSYS2, Chocolatey, or WSL); without it, run the gate directly with `cargo test --features browser-gpu-gate --test mod browser_validation`.
+
+The harness searches in this order:
+- `MIRI_TINT` environment variable (if set)
+- `tools/tint/tint` (if present in the repo)
+- `tint` on your `PATH`
+
+For more details on naga↔Tint divergence and browser validation rules, see `tests/integration/gpu/BROWSER_VALIDATION.md`.
+
 ## Code Style
 
 ### Rust Conventions
@@ -121,12 +192,18 @@ Miri uses a modern Rust edition (2024) consistently across the workspace.
 
 ## CI/CD
 
-CI runs the following checks (equivalent to `make lint && make test`):
+CI runs the following checks:
 
-- `cargo fmt --check` (compiler + runtimes)
-- `cargo clippy -- -D warnings` (compiler + runtimes)
-- `cargo test` (unit + integration, compiler + runtimes)
-- Documentation build
+- **`build` job** (equivalent to `make lint && make build && make release && make test`):
+  - `cargo fmt --check` (compiler + runtimes)
+  - `cargo clippy -- -D warnings` (compiler + runtimes)
+  - `cargo test` (unit + integration, compiler + runtimes)
+  - Documentation build
+
+- **`gpu-browser-gate` job**:
+  - Builds Tint from a pinned immutable Dawn revision (browser-class validator)
+  - Runs `make gpu-browser-check` to validate every GPU kernel in `examples/gpu/` against Tint
+  - Blocks merge if any kernel is browser-invalid
 
 ## Questions?
 
