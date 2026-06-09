@@ -4,10 +4,12 @@
 //! `miri build --target web-gpu` bundle emitter.
 //!
 //! Produces a self-contained directory with:
-//! - A JSON manifest describing all buffers and kernels
+//! - A JSON manifest describing all buffers, kernels, and animation metadata
 //! - miri-gpu.js runtime driver (reusable embeddable module)
 //! - index.html harness for local development
-//! - Individual .wgsl files for each kernel
+//!
+//! WGSL kernels are embedded in the manifest JSON under `seed[].wgsl` and
+//! `frame.wgsl` (if present), not as separate files.
 
 mod manifest;
 

@@ -1,4 +1,4 @@
-.PHONY: build release test lint format clean audit
+.PHONY: build release test lint format clean audit gpu-browser-check
 
 RUNTIMES := $(patsubst %/Cargo.toml,%,$(wildcard src/runtime/*/Cargo.toml))
 
@@ -56,6 +56,22 @@ clean:
 			echo "Cleaning $$rt"; \
 			cargo clean --manifest-path "$$rt/Cargo.toml"; \
 		done; \
+	fi
+
+gpu-browser-check:
+	@echo "Checking for tint binary (Chrome's WGSL validator)..."
+	@if command -v tint >/dev/null 2>&1 || [ -n "$$MIRI_TINT" ] && [ -x "$$MIRI_TINT" ]; then \
+		echo "✓ tint found"; \
+		cargo test --features browser-gpu-gate --test mod browser_validation; \
+	else \
+		echo "✗ tint not found. To enable browser-class WGSL validation:"; \
+		echo "  1. Clone Dawn (Google's WebGPU implementation)"; \
+		echo "     git clone https://chromium.googlesource.com/chromium/src/third_party/dawn <path>"; \
+		echo "  2. Build tint:"; \
+		echo "     cd <path> && cmake -DTINT_BUILD_CMD_TOOLS=ON ... && cmake --build . -t tint"; \
+		echo "  3. Set MIRI_TINT=<path>/tint or add tint to PATH"; \
+		echo "  4. Re-run: make gpu-browser-check"; \
+		exit 1; \
 	fi
 
 # `make audit` — mechanical sweep against PRINCIPLES.md.
