@@ -62,3 +62,77 @@ jobs:
 
       - name: Run tests
         run: make test
+
+  gpu-browser-gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install system dependencies for Dawn build
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            pkg-config \
+            git
+
+      - name: Cache tint binary
+        id: cache-tint
+        uses: actions/cache@v3
+        with:
+          path: ~/tint-build
+          key: tint-immutable-sha-${{ runner.os }}-e12c4ee
+          restore-keys: |
+            tint-immutable-sha-${{ runner.os }}-
+
+      - name: Build tint from Dawn (pinned immutable revision)
+        if: steps.cache-tint.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p ~/tint-build
+          cd ~/tint-build
+
+          # Clone Dawn and pin to immutable commit SHA (chromium/120-era, 2024-01-15).
+          # This is the pinned, immutable browser-class validator revision.
+          if [ ! -d "dawn" ]; then
+            git clone --depth 1 \
+              https://chromium.googlesource.com/chromium/src/third_party/dawn dawn
+          fi
+
+          cd dawn
+          git fetch origin e12c4ee
+          git checkout e12c4ee
+
+          # Build tint standalone
+          cmake -B build \
+            -G Ninja \
+            -DTINT_BUILD_CMD_TOOLS=ON \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DDAWN_BUILD_SAMPLES=OFF \
+            -DDAWN_BUILD_TESTS=OFF
+
+          cmake --build build -t tint
+
+          # Verify tint built successfully
+          ./build/tint --version || true
+
+      - name: Run GPU browser validation gate
+        shell: bash
+        run: |
+          export MIRI_TINT="$HOME/tint-build/dawn/build/tint"
+          test -x "$MIRI_TINT" || { echo "tint not found at $MIRI_TINT"; exit 1; }
+          make gpu-browser-check

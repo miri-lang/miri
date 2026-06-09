@@ -16,6 +16,7 @@ cranelift = [
     "dep:target-lexicon",
 ]
 llvm = ["dep:inkwell"]
+browser-gpu-gate = []
 
 [dependencies]
 anyhow = "1.0.100"
