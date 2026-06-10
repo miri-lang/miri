@@ -45,7 +45,7 @@ use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, SymbolInfo};
-use crate::type_checker::utils::{is_accelerable, is_gpu_compatible};
+use crate::type_checker::utils::{is_accelerable, is_gpu_compatible, resolve_element_type_kind};
 use crate::type_checker::TypeChecker;
 
 impl TypeChecker {
@@ -114,7 +114,7 @@ impl TypeChecker {
     ) {
         let inferred_type = self.determine_variable_type(decl, context, span);
         self.check_gpu_variable_type(&decl.name, &inferred_type, context, span);
-        self.check_gpu_residency_type(decl, &inferred_type, span);
+        self.check_gpu_residency_type(decl, &inferred_type, context, span);
         let is_mutable = matches!(decl.declaration_type, VariableDeclarationType::Mutable);
         let is_constant = matches!(decl.declaration_type, VariableDeclarationType::Constant);
 
@@ -174,11 +174,12 @@ impl TypeChecker {
     /// `Accelerable` trait, and therefore cannot be made gpu-resident.
     ///
     /// Gating is by trait dispatch (see [`is_accelerable`]); host bindings are
-    /// never constrained.
+    /// never constrained. Also validates literal array elements against i32 range.
     fn check_gpu_residency_type(
         &mut self,
         decl: &VariableDeclaration,
         inferred_type: &Type,
+        context: &Context,
         span: Span,
     ) {
         if decl.residency != BindingResidency::Gpu {
@@ -187,7 +188,9 @@ impl TypeChecker {
         if matches!(inferred_type.kind, TypeKind::Error) {
             return;
         }
+
         if is_accelerable(&inferred_type.kind, &self.global_type_definitions) {
+            self.check_gpu_i32_range_literal(decl, inferred_type, context);
             return;
         }
         self.report_error(
@@ -197,6 +200,67 @@ impl TypeChecker {
             ),
             span,
         );
+    }
+
+    /// Checks that a gpu-resident variable with a literal integer array initializer
+    /// does not contain int (i64) values outside the i32 range.
+    /// Non-literal arrays and non-integer element types pass silently.
+    ///
+    /// This check is a fail-fast path for provably constant array elements.
+    /// Runtime expressions that compute out-of-range values are caught by the
+    /// narrowing validation in the runtime during buffer upload.
+    fn check_gpu_i32_range_literal(
+        &mut self,
+        decl: &VariableDeclaration,
+        inferred_type: &Type,
+        context: &Context,
+    ) {
+        let Some(init) = &decl.initializer else {
+            return;
+        };
+
+        let ExpressionKind::Array(elements, _) = &init.node else {
+            return;
+        };
+
+        let inferred_elem_type = match &inferred_type.kind {
+            TypeKind::Array(elem_expr, _) => elem_expr.as_ref(),
+            TypeKind::Custom(name, Some(args)) => {
+                if BuiltinCollectionKind::from_name(name) != Some(BuiltinCollectionKind::Array) {
+                    return;
+                }
+                if args.is_empty() {
+                    return;
+                }
+                &args[0]
+            }
+            _ => return,
+        };
+
+        let elem_kind = resolve_element_type_kind(inferred_elem_type);
+        let is_int_type = matches!(elem_kind, Some(TypeKind::Int) | Some(TypeKind::I64));
+
+        if !is_int_type {
+            return;
+        }
+
+        for (elem_idx, elem) in elements.iter().enumerate() {
+            if let Some(val) = Self::try_eval_const_int_with_context(elem, context) {
+                if val < i32::MIN as i128 || val > i32::MAX as i128 {
+                    self.report_error(
+                        format!(
+                            "Array element {} has value {} which exceeds i32 range [{}, {}]; \
+                            use Array<i32, N> for explicit 32-bit GPU storage",
+                            elem_idx,
+                            val,
+                            i32::MIN,
+                            i32::MAX
+                        ),
+                        elem.span,
+                    );
+                }
+            }
+        }
     }
 
     pub(crate) fn check_shadowing(

@@ -26,6 +26,7 @@ pub mod game_of_life;
 pub mod gpu_for_capture_residency;
 pub mod gpu_frame;
 pub mod helpers;
+pub mod i32_range_validation;
 pub mod launch;
 pub mod persistent_buffer;
 pub mod ping_pong;

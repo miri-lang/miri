@@ -595,6 +595,11 @@ fn extract_element_type(expr: &crate::ast::expression::Expression) -> Option<Typ
     }
 }
 
+// Re-export the shared element-type resolver from ast::types so it is available
+// to type checking code. The function is defined once in src/ast/types.rs to
+// prevent duplication with src/mir/lowering/gpu_for.rs.
+pub use crate::ast::types::resolve_element_type_kind;
+
 /// Determines whether a type is auto-copy given available type definitions.
 ///
 /// A type is auto-copy when:
