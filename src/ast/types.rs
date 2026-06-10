@@ -128,6 +128,41 @@ impl BuiltinCollectionKind {
     }
 }
 
+/// Resolves a type expression to a `TypeKind`, covering forms produced by the
+/// pipeline: a `Type(...)` node (post-normalization), a bare identifier, or a
+/// literal identifier.
+///
+/// Used to validate collection element types without requiring a full type
+/// resolution pass. Returns the resolved `TypeKind` if the expression is a type
+/// identifier; returns `None` otherwise.
+pub fn resolve_element_type_kind(expr: &crate::ast::expression::Expression) -> Option<TypeKind> {
+    use crate::ast::expression::ExpressionKind;
+    use crate::ast::literal::Literal;
+
+    let name = match &expr.node {
+        ExpressionKind::Type(inner, _) => return Some(inner.kind.clone()),
+        ExpressionKind::Identifier(name, _) => name.as_str(),
+        ExpressionKind::Literal(Literal::Identifier(name)) => name.as_str(),
+        _ => return None,
+    };
+    match name {
+        "int" => Some(TypeKind::Int),
+        "i64" => Some(TypeKind::I64),
+        "i32" => Some(TypeKind::I32),
+        "i16" => Some(TypeKind::I16),
+        "i8" => Some(TypeKind::I8),
+        "u64" => Some(TypeKind::U64),
+        "u32" => Some(TypeKind::U32),
+        "u16" => Some(TypeKind::U16),
+        "u8" => Some(TypeKind::U8),
+        "i128" => Some(TypeKind::I128),
+        "u128" => Some(TypeKind::U128),
+        "f32" => Some(TypeKind::F32),
+        "f64" => Some(TypeKind::F64),
+        _ => None,
+    }
+}
+
 /// Data for a function type, boxed to reduce `TypeKind` enum size.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FunctionTypeData {

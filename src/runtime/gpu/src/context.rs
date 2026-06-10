@@ -28,6 +28,14 @@ pub enum GpuError {
     /// truncate widths because that corrupts host/device buffer round-trips,
     /// so the launch is refused with this error before submission.
     UnsupportedScalar(String),
+    /// A buffer element value falls outside the i32 range during upload narrowing.
+    /// The upload cannot proceed because the narrowing would silently truncate
+    /// the value. Use `Array<i32, N>` for explicit 32-bit GPU storage.
+    ValueOutOfI32Range {
+        buffer_index: usize,
+        element_index: usize,
+        value: i64,
+    },
 }
 
 #[repr(C)]

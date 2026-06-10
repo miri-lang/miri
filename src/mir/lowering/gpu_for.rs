@@ -25,7 +25,9 @@ use std::collections::HashSet;
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::{IntegerLiteral, Literal};
 use crate::ast::statement::{Statement, StatementKind, VariableDeclaration};
-use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind, DIM3_TYPE_NAME};
+use crate::ast::types::{
+    resolve_element_type_kind, BuiltinCollectionKind, Type, TypeKind, DIM3_TYPE_NAME,
+};
 use crate::ast::RangeExpressionType;
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
@@ -1513,33 +1515,10 @@ fn needs_int_narrowing(ty: &Type) -> bool {
         _ => None,
     };
 
-    elem_expr
-        .is_some_and(|expr| matches!(element_type_kind(expr), Some(TypeKind::Int | TypeKind::I64)))
-}
-
-/// Resolves a collection element-type expression to its `TypeKind`, covering the
-/// forms produced across the pipeline: a `Type(...)` node (post-normalization),
-/// a bare identifier, or a literal identifier.
-fn element_type_kind(expr: &crate::ast::expression::Expression) -> Option<TypeKind> {
-    use crate::ast::expression::ExpressionKind;
-    use crate::ast::literal::Literal;
-
-    let name = match &expr.node {
-        ExpressionKind::Type(inner, _) => return Some(inner.kind.clone()),
-        ExpressionKind::Identifier(name, _) => name.as_str(),
-        ExpressionKind::Literal(Literal::Identifier(name)) => name.as_str(),
-        _ => return None,
-    };
-    match name {
-        "int" => Some(TypeKind::Int),
-        "i64" => Some(TypeKind::I64),
-        "i32" => Some(TypeKind::I32),
-        "i16" => Some(TypeKind::I16),
-        "i8" => Some(TypeKind::I8),
-        "u64" => Some(TypeKind::U64),
-        "u32" => Some(TypeKind::U32),
-        "f32" => Some(TypeKind::F32),
-        "f64" => Some(TypeKind::F64),
-        _ => None,
-    }
+    elem_expr.is_some_and(|expr| {
+        matches!(
+            resolve_element_type_kind(expr),
+            Some(TypeKind::Int | TypeKind::I64)
+        )
+    })
 }

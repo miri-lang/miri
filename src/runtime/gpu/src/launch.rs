@@ -18,6 +18,7 @@ use crate::context::{init_gpu_context, GpuContext, GpuError};
 use crate::{device_table, telemetry};
 use once_cell::sync::OnceCell;
 use parking_lot::RwLock;
+use std::io::Write;
 use std::sync::Arc;
 use wgpu::{BufferUsages, Device, Features, Queue};
 
@@ -90,10 +91,34 @@ pub unsafe extern "C" fn miri_gpu_launch_inline(desc: *const GpuLaunchDesc) -> u
     let desc_ref = &*desc;
     match launch_impl(desc_ref) {
         Ok(()) => 1,
-        Err(err) => {
-            log::error!("miri_gpu_launch_inline failed: {:?}", err);
-            0
-        }
+        Err(err) => match &err {
+            GpuError::ValueOutOfI32Range {
+                buffer_index,
+                element_index,
+                value,
+            } => {
+                // This variant aborts (rather than returning an error code) because
+                // out-of-range i32 values silently truncate to garbage if allowed to
+                // proceed. Silent data corruption is worse than early termination.
+                // Once the generated code traps launch error codes, this can return
+                // an error code instead of aborting.
+                let msg = format!(
+                    "Runtime error: GPU upload failed: buffer {} element {}: value {} \
+                    exceeds i32 range [{}, {}]; use Array<i32, N> for explicit 32-bit GPU storage",
+                    buffer_index,
+                    element_index,
+                    value,
+                    i32::MIN,
+                    i32::MAX
+                );
+                let _ = writeln!(std::io::stderr(), "{}", msg);
+                std::process::abort();
+            }
+            _ => {
+                log::error!("miri_gpu_launch_inline failed: {:?}", err);
+                0
+            }
+        },
     }
 }
 
@@ -161,7 +186,7 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
         buf_data_ptrs,
         buf_byte_lens,
         buf_int_narrow,
-    );
+    )?;
 
     // Create uniform buffer if needed (must live until bind_group is created).
     let uniform_buf = if desc.uniform_bound_present != 0 {
@@ -248,6 +273,9 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
 /// # Safety
 /// The three slices must be `num_bufs` long and their host pointers valid for
 /// the matching byte lengths.
+///
+/// # Errors
+/// Returns `Err` if any buffer value falls outside i32 range during narrowing.
 unsafe fn prepare_capture_buffers(
     device: &Device,
     queue: &Queue,
@@ -255,7 +283,7 @@ unsafe fn prepare_capture_buffers(
     buf_data_ptrs: &[*mut u8],
     buf_byte_lens: &[usize],
     buf_int_narrow: Option<&[u8]>,
-) -> (Vec<wgpu::Buffer>, Vec<usize>) {
+) -> Result<(Vec<wgpu::Buffer>, Vec<usize>), GpuError> {
     let mut storage_buffers = Vec::with_capacity(buf_handle_ids.len());
     let mut transient_captures = Vec::new();
     for i in 0..buf_handle_ids.len() {
@@ -268,7 +296,8 @@ unsafe fn prepare_capture_buffers(
                 buf_data_ptrs[i],
                 buf_byte_lens[i],
                 needs_narrow,
-            )
+                i,
+            )?
         } else {
             transient_captures.push(i);
             new_storage_buffer_with_upload(
@@ -277,15 +306,22 @@ unsafe fn prepare_capture_buffers(
                 buf_data_ptrs[i],
                 buf_byte_lens[i],
                 needs_narrow,
-            )
+                i,
+            )?
         };
         storage_buffers.push(buffer);
     }
-    (storage_buffers, transient_captures)
+    Ok((storage_buffers, transient_captures))
 }
 
 /// Returns the resident device buffer for `handle`, allocating and uploading
 /// it on first capture and reusing it (no upload) on every later launch.
+///
+/// When the buffer is first uploaded, range validation occurs. Later captures
+/// reuse the persistent buffer without re-validation.
+///
+/// # Errors
+/// Returns `Err` if the buffer value falls outside i32 range during first upload.
 unsafe fn persistent_capture_buffer(
     device: &Device,
     queue: &Queue,
@@ -293,11 +329,19 @@ unsafe fn persistent_capture_buffer(
     host_ptr: *mut u8,
     byte_len: usize,
     needs_narrow: bool,
-) -> wgpu::Buffer {
+    buffer_index: usize,
+) -> Result<wgpu::Buffer, GpuError> {
     if let Some((existing, _, _)) = device_table::resident_buffer(handle) {
-        return existing;
+        return Ok(existing);
     }
-    let buffer = new_storage_buffer_with_upload(device, queue, host_ptr, byte_len, needs_narrow);
+    let buffer = new_storage_buffer_with_upload(
+        device,
+        queue,
+        host_ptr,
+        byte_len,
+        needs_narrow,
+        buffer_index,
+    )?;
     let device_byte_len = if needs_narrow {
         let elem_count = byte_len / 8;
         elem_count
@@ -307,7 +351,7 @@ unsafe fn persistent_capture_buffer(
         byte_len
     };
     device_table::insert_resident(handle, buffer.clone(), device_byte_len, needs_narrow);
-    buffer
+    Ok(buffer)
 }
 
 /// Allocates a storage buffer sized for `byte_len` (or narrowed size if needs_narrow).
@@ -320,13 +364,17 @@ unsafe fn persistent_capture_buffer(
 /// # Panics
 /// Panics if `byte_len` is not a multiple of 8 when `needs_narrow` is true (host buffer
 /// must contain complete i64 elements).
+///
+/// # Errors
+/// Returns `Err` if any element value falls outside i32 range during narrowing.
 unsafe fn new_storage_buffer_with_upload(
     device: &Device,
     queue: &Queue,
     host_ptr: *mut u8,
     byte_len: usize,
     needs_narrow: bool,
-) -> wgpu::Buffer {
+    buffer_index: usize,
+) -> Result<wgpu::Buffer, GpuError> {
     let (device_byte_len, upload_bytes) = if needs_narrow {
         // Host buffer is i64 elements (byte_len = 8*N); device buffer is i32 elements (4*N).
         // Guard: byte_len must be a multiple of 8.
@@ -344,7 +392,14 @@ unsafe fn new_storage_buffer_with_upload(
         let mut upload_bytes = Vec::with_capacity(device_len);
         if byte_len > 0 && !host_ptr.is_null() {
             let host_i64s = std::slice::from_raw_parts(host_ptr as *const i64, elem_count);
-            for &val in host_i64s {
+            for (elem_idx, &val) in host_i64s.iter().enumerate() {
+                if val < i32::MIN as i64 || val > i32::MAX as i64 {
+                    return Err(GpuError::ValueOutOfI32Range {
+                        buffer_index,
+                        element_index: elem_idx,
+                        value: val,
+                    });
+                }
                 upload_bytes.extend_from_slice(&(val as i32).to_le_bytes());
             }
         }
@@ -370,7 +425,7 @@ unsafe fn new_storage_buffer_with_upload(
         queue.write_buffer(&buffer, 0, &upload_bytes);
         telemetry::record_upload();
     }
-    buffer
+    Ok(buffer)
 }
 
 /// Refuse to dispatch a kernel whose WGSL references a 64-bit scalar
