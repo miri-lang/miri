@@ -87,6 +87,7 @@ jobs:
             cmake \
             ninja-build \
             pkg-config \
+            python3 \
             git
 
       - name: Cache tint binary
@@ -94,7 +95,7 @@ jobs:
         uses: actions/cache@v3
         with:
           path: ~/tint-build
-          key: tint-immutable-sha-${{ runner.os }}-e12c4ee
+          key: tint-immutable-sha-${{ runner.os }}-c7ed440
           restore-keys: |
             tint-immutable-sha-${{ runner.os }}-
 
@@ -106,33 +107,44 @@ jobs:
           mkdir -p ~/tint-build
           cd ~/tint-build
 
-          # Clone Dawn and pin to immutable commit SHA (chromium/120-era, 2024-01-15).
-          # This is the pinned, immutable browser-class validator revision.
-          if [ ! -d "dawn" ]; then
-            git clone --depth 1 \
-              https://chromium.googlesource.com/chromium/src/third_party/dawn dawn
+          # Dawn standalone repo, pinned to an immutable full commit SHA
+          # (tip of branch chromium/6099 = Chrome M120, 2023-12). The old
+          # chromium/src/third_party/dawn mirror path is gone; googlesource
+          # fetches an arbitrary commit only by its full 40-char SHA.
+          DAWN_SHA=c7ed440d75861649d8a1ef4b775384f31211d902
+          if [ ! -d "dawn/.git" ]; then
+            git init dawn
           fi
-
           cd dawn
-          git fetch origin e12c4ee
-          git checkout e12c4ee
+          git remote add origin https://dawn.googlesource.com/dawn 2>/dev/null \
+            || git remote set-url origin https://dawn.googlesource.com/dawn
+          git fetch --depth 1 origin "$DAWN_SHA"
+          git checkout -q FETCH_HEAD
 
-          # Build tint standalone
+          # Fetch Dawn's third_party dependencies without depot_tools (CMake runs
+          # the bundled tools/fetch_dawn_dependencies.py), then build only the
+          # tint CLI. The CMake target is tint_cmd_tint_cmd; its output name is
+          # "tint".
           cmake -B build \
             -G Ninja \
-            -DTINT_BUILD_CMD_TOOLS=ON \
             -DCMAKE_BUILD_TYPE=Release \
+            -DDAWN_FETCH_DEPENDENCIES=ON \
+            -DTINT_BUILD_CMD_TOOLS=ON \
             -DDAWN_BUILD_SAMPLES=OFF \
-            -DDAWN_BUILD_TESTS=OFF
+            -DDAWN_BUILD_TESTS=OFF \
+            -DTINT_BUILD_TESTS=OFF
 
-          cmake --build build -t tint
+          cmake --build build -t tint_cmd_tint_cmd
 
-          # Verify tint built successfully
-          ./build/tint --version || true
+          # Expose the built binary at a stable, cache-restored path.
+          TINT_BIN="$(find build -type f -name tint | head -n1)"
+          test -x "$TINT_BIN"
+          cp "$TINT_BIN" ~/tint-build/tint
+          ~/tint-build/tint --version || true
 
       - name: Run GPU browser validation gate
         shell: bash
         run: |
-          export MIRI_TINT="$HOME/tint-build/dawn/build/tint"
+          export MIRI_TINT="$HOME/tint-build/tint"
           test -x "$MIRI_TINT" || { echo "tint not found at $MIRI_TINT"; exit 1; }
           make gpu-browser-check
