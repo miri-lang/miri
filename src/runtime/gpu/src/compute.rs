@@ -8,7 +8,7 @@
 //! reference them by handle.
 
 use crate::buffer::get_buffer;
-use crate::context::{get_gpu_context, GpuError};
+use crate::context::{get_gpu_context, with_validation_scope, GpuError};
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -69,30 +69,37 @@ impl CompiledKernel {
         workgroup_size: [u32; 3],
     ) -> Result<Self, GpuError> {
         let ctx = get_gpu_context()?;
-        let shader_module = ctx
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(name),
-                source: wgpu::ShaderSource::Wgsl(source.into()),
-            });
-        let bind_group_layout = build_bind_group_layout(ctx, name, num_bindings);
-        let pipeline_layout = ctx
-            .device
-            .create_pipeline_layout(&PipelineLayoutDescriptor {
-                label: Some(&format!("{}_pipeline_layout", name)),
-                bind_group_layouts: &[Some(&bind_group_layout)],
-                immediate_size: 0,
-            });
-        let pipeline = ctx
-            .device
-            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some(&format!("{}_pipeline", name)),
-                layout: Some(&pipeline_layout),
-                module: &shader_module,
-                entry_point: Some(entry_point),
-                compilation_options: Default::default(),
-                cache: None,
-            });
+
+        let (shader_module, bind_group_layout, pipeline) =
+            with_validation_scope(&ctx.device, || {
+                let shader_module = ctx
+                    .device
+                    .create_shader_module(wgpu::ShaderModuleDescriptor {
+                        label: Some(name),
+                        source: wgpu::ShaderSource::Wgsl(source.into()),
+                    });
+                let bind_group_layout = build_bind_group_layout(ctx, name, num_bindings);
+                let pipeline_layout =
+                    ctx.device
+                        .create_pipeline_layout(&PipelineLayoutDescriptor {
+                            label: Some(&format!("{}_pipeline_layout", name)),
+                            bind_group_layouts: &[Some(&bind_group_layout)],
+                            immediate_size: 0,
+                        });
+                let pipeline =
+                    ctx.device
+                        .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                            label: Some(&format!("{}_pipeline", name)),
+                            layout: Some(&pipeline_layout),
+                            module: &shader_module,
+                            entry_point: Some(entry_point),
+                            compilation_options: Default::default(),
+                            cache: None,
+                        });
+
+                (shader_module, bind_group_layout, pipeline)
+            })?;
+
         let id = NEXT_KERNEL_ID.fetch_add(1, Ordering::SeqCst);
         Ok(Self {
             id,
@@ -328,5 +335,52 @@ pub unsafe extern "C" fn miri_gpu_kernel_unload(kernel: *mut KernelHandle) {
         let id = (*kernel).id;
         remove_kernel(id);
         let _ = Box::from_raw(kernel);
+    }
+}
+
+#[cfg(test)]
+mod shader_compilation_tests {
+    use super::*;
+
+    /// Test that invalid WGSL in CompiledKernel::from_wgsl returns
+    /// ShaderCompilationFailed instead of panicking.
+    #[test]
+    fn from_wgsl_invalid_returns_error() {
+        let _ctx = match crate::context::get_gpu_context() {
+            Ok(c) => c,
+            Err(_) => {
+                eprintln!("No GPU adapter available, skipping from_wgsl_invalid_returns_error");
+                return;
+            }
+        };
+
+        // Invalid WGSL: references undeclared variable.
+        let invalid_wgsl = r#"
+            @compute @workgroup_size(256)
+            fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                var x = undefined_variable;
+            }
+        "#;
+
+        let result =
+            CompiledKernel::from_wgsl("invalid_kernel", invalid_wgsl, "main", 0, [256, 1, 1]);
+
+        match result {
+            Err(GpuError::ShaderCompilationFailed(msg)) => {
+                let msg_lower = msg.to_lowercase();
+                // Assert the message mentions either the undefined variable or a validation keyword.
+                // naga reports validation/scope errors; exact phrasing is version-dependent.
+                assert!(
+                    msg_lower.contains("undefined_variable")
+                        || msg_lower.contains("not found")
+                        || msg_lower.contains("undefined")
+                        || msg_lower.contains("unknown"),
+                    "error should mention the undefined identifier or be a validation error, got: {}",
+                    msg
+                );
+            }
+            Ok(_) => panic!("expected ShaderCompilationFailed, but compilation succeeded"),
+            Err(e) => panic!("expected ShaderCompilationFailed, got: {:?}", e),
+        }
     }
 }

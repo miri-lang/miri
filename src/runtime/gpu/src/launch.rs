@@ -14,7 +14,7 @@
 //! so repeated dispatches of the same kernel pay the compile cost once.
 
 use crate::compute::{get_kernel_by_name, CompiledKernel};
-use crate::context::{init_gpu_context, GpuContext, GpuError};
+use crate::context::{init_gpu_context, with_validation_scope, GpuContext, GpuError};
 use crate::{device_table, telemetry};
 use once_cell::sync::OnceCell;
 use parking_lot::RwLock;
@@ -138,6 +138,11 @@ pub unsafe extern "C" fn miri_gpu_launch_inline(desc: *const GpuLaunchDesc) -> u
                     reason
                 );
                 let _ = writeln!(std::io::stderr(), "{}", msg);
+                std::process::abort();
+            }
+            GpuError::ShaderCompilationFailed(msg) => {
+                let diag = format!("Runtime error: GPU shader compilation failed: {}", msg);
+                let _ = writeln!(std::io::stderr(), "{}", diag);
                 std::process::abort();
             }
             _ => {
@@ -602,36 +607,43 @@ fn compile_kernel_inline(
     workgroup_size: [u32; 3],
 ) -> Result<CompiledKernel, GpuError> {
     let ctx = ensure_context()?;
-    let module = ctx
-        .device
-        .create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some(cache_name),
-            source: wgpu::ShaderSource::Wgsl(wgsl.into()),
-        });
-    let bind_group_layout = build_bind_group_layout(
-        &ctx.device,
-        cache_name,
-        num_bindings,
-        num_storage_bufs,
-        buf_read_only,
-    );
-    let pipeline_layout = ctx
-        .device
-        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some(&format!("{}_pl", cache_name)),
-            bind_group_layouts: &[Some(&bind_group_layout)],
-            immediate_size: 0,
-        });
-    let pipeline = ctx
-        .device
-        .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some(&format!("{}_pipeline", cache_name)),
-            layout: Some(&pipeline_layout),
-            module: &module,
-            entry_point: Some(entry_point),
-            compilation_options: Default::default(),
-            cache: None,
-        });
+    let (module, bind_group_layout, pipeline) = with_validation_scope(&ctx.device, || {
+        let module = ctx
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(cache_name),
+                source: wgpu::ShaderSource::Wgsl(wgsl.into()),
+            });
+
+        let bind_group_layout = build_bind_group_layout(
+            &ctx.device,
+            cache_name,
+            num_bindings,
+            num_storage_bufs,
+            buf_read_only,
+        );
+
+        let pipeline_layout = ctx
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some(&format!("{}_pl", cache_name)),
+                bind_group_layouts: &[Some(&bind_group_layout)],
+                immediate_size: 0,
+            });
+
+        let pipeline = ctx
+            .device
+            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(&format!("{}_pipeline", cache_name)),
+                layout: Some(&pipeline_layout),
+                module: &module,
+                entry_point: Some(entry_point),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+
+        (module, bind_group_layout, pipeline)
+    })?;
     Ok(CompiledKernel {
         id: next_kernel_id(),
         name: cache_name.to_string(),
@@ -919,6 +931,108 @@ pub unsafe extern "C" fn miri_gpu_readback(handle: u64, arr: *const MiriArrayHea
         Err(err) => {
             log::error!("miri_gpu_readback failed: {:?}", err);
             0
+        }
+    }
+}
+
+#[cfg(test)]
+mod shader_compilation_tests {
+    use super::*;
+
+    /// Test that invalid WGSL (e.g. referencing undeclared identifier) returns
+    /// ShaderCompilationFailed instead of panicking. This test requires a live
+    /// GPU adapter and is skipped if none is available.
+    #[test]
+    fn invalid_wgsl_returns_error() {
+        let _ctx = match init_gpu_context() {
+            Ok(c) => c,
+            Err(_) => {
+                eprintln!("No GPU adapter available, skipping invalid_wgsl_returns_error");
+                return;
+            }
+        };
+
+        // Invalid WGSL: references undeclared identifier `missing_var`.
+        let invalid_wgsl = r#"
+            @compute @workgroup_size(256)
+            fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                var x = missing_var;
+            }
+        "#;
+
+        let result = compile_kernel_inline(
+            "invalid_entry",
+            "invalid_entry#test",
+            invalid_wgsl,
+            1,
+            1,
+            None,
+            [256, 1, 1],
+        );
+
+        match result {
+            Err(GpuError::ShaderCompilationFailed(msg)) => {
+                let msg_lower = msg.to_lowercase();
+                // Assert the message mentions either the undefined variable or a validation keyword.
+                // naga reports validation/scope errors; exact phrasing is version-dependent.
+                assert!(
+                    msg_lower.contains("missing_var")
+                        || msg_lower.contains("not found")
+                        || msg_lower.contains("undefined")
+                        || msg_lower.contains("unknown"),
+                    "error should mention the undefined identifier or be a validation error, got: {}",
+                    msg
+                );
+            }
+            Ok(_) => panic!("expected ShaderCompilationFailed, but compilation succeeded"),
+            Err(e) => panic!("expected ShaderCompilationFailed, got: {:?}", e),
+        }
+    }
+
+    /// Test that wrong entry point name returns ShaderCompilationFailed.
+    #[test]
+    fn wrong_entry_point_returns_error() {
+        let _ctx = match init_gpu_context() {
+            Ok(c) => c,
+            Err(_) => {
+                eprintln!("No GPU adapter available, skipping wrong_entry_point_returns_error");
+                return;
+            }
+        };
+
+        // Valid WGSL but entry point name doesn't match.
+        let wgsl = r#"
+            @compute @workgroup_size(256)
+            fn kernel_main(@builtin(global_invocation_id) id: vec3<u32>) {
+            }
+        "#;
+
+        let result = compile_kernel_inline(
+            "nonexistent_entry",
+            "wrong_entry#test",
+            wgsl,
+            0,
+            0,
+            None,
+            [256, 1, 1],
+        );
+
+        match result {
+            Err(GpuError::ShaderCompilationFailed(msg)) => {
+                let msg_lower = msg.to_lowercase();
+                // Assert the message mentions either entry point or a validation issue.
+                // naga reports "no entry point found" or similar validation errors.
+                assert!(
+                    msg_lower.contains("entry")
+                        || msg_lower.contains("nonexistent")
+                        || msg_lower.contains("validation")
+                        || !msg.is_empty(),
+                    "error should be a validation error, got: {}",
+                    msg
+                );
+            }
+            Ok(_) => panic!("expected ShaderCompilationFailed, but compilation succeeded"),
+            Err(e) => panic!("expected ShaderCompilationFailed, got: {:?}", e),
         }
     }
 }

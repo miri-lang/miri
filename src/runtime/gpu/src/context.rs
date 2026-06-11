@@ -191,6 +191,22 @@ pub(crate) fn init_gpu_context() -> Result<&'static Arc<GpuContext>, GpuError> {
     GPU_CONTEXT.get_or_try_init(|| GpuContext::new().map(Arc::new))
 }
 
+/// Runs `build` inside a wgpu validation error scope. Any validation error
+/// raised while creating shader modules / pipelines is captured and returned
+/// as ShaderCompilationFailed instead of escaping to wgpu's uncaptured-error
+/// handler (which aborts the process across the extern "C" boundary).
+pub(crate) fn with_validation_scope<T>(
+    device: &Device,
+    build: impl FnOnce() -> T,
+) -> Result<T, GpuError> {
+    let guard = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let built = build();
+    if let Some(err) = pollster::block_on(guard.pop()) {
+        return Err(GpuError::ShaderCompilationFailed(err.to_string()));
+    }
+    Ok(built)
+}
+
 /// Initializes the GPU runtime. Returns 1 on success, 0 on failure.
 #[no_mangle]
 pub extern "C" fn miri_gpu_init() -> u8 {
