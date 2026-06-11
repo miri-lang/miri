@@ -36,6 +36,11 @@ pub enum GpuError {
         element_index: usize,
         value: i64,
     },
+    /// Grid dimensions exceed device limits or loop bound exceeds u32::MAX.
+    /// The reason string clarifies which: "grid dimensions" or "loop bound".
+    /// This is rejected before dispatch to avoid wgpu validation failures or
+    /// silent truncation of the bounds-check uniform.
+    GridTooLarge(String),
 }
 
 #[repr(C)]
