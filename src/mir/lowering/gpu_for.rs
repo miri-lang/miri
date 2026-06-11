@@ -1067,8 +1067,13 @@ fn compute_grid_size(ctx: &mut LoweringContext, clamped_length: Local, span: Spa
     final_grid_x_local
 }
 
-/// Computes clamped loop length from end - start.
-/// Clamps to 0 for negative ranges. Returns the clamped length Local.
+/// Computes clamped range length for runtime-bound `gpu for` loops.
+///
+/// Safely clamps to 0 when the runtime end operand is not greater than the
+/// start literal. The clamp predicate compares the original operands
+/// (`end_op > start`) before computing the difference, ensuring correctness
+/// even when i64 subtraction would underflow. This avoids the wrap-to-positive
+/// vulnerability of checking `(end - start) > 0` directly.
 fn compute_clamped_length(
     ctx: &mut LoweringContext,
     end_op: Operand,
@@ -1076,36 +1081,40 @@ fn compute_clamped_length(
     span: Span,
 ) -> Local {
     let i64_ty = Type::new(TypeKind::Int, span);
+
+    // Compute the actual difference for the final result.
     let length_local = ctx.push_temp(i64_ty.clone(), span);
     push_assign(
         ctx,
         length_local,
         Rvalue::BinaryOp(
             BinOp::Sub,
+            Box::new(end_op.clone()),
+            Box::new(int_constant(start, span)),
+        ),
+        span,
+    );
+
+    // Clamp by comparing the ORIGINAL operands (end_op > start), not the computed
+    // difference. This is immune to i64 underflow wrap-around.
+    let is_in_range_local = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
+    push_assign(
+        ctx,
+        is_in_range_local,
+        Rvalue::BinaryOp(
+            BinOp::Gt,
             Box::new(end_op),
             Box::new(int_constant(start, span)),
         ),
         span,
     );
 
-    let is_pos_local = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
+    let is_in_range_i64_local = ctx.push_temp(i64_ty.clone(), span);
     push_assign(
         ctx,
-        is_pos_local,
-        Rvalue::BinaryOp(
-            BinOp::Gt,
-            Box::new(Operand::Copy(Place::new(length_local))),
-            Box::new(int_constant(0, span)),
-        ),
-        span,
-    );
-
-    let is_pos_i64_local = ctx.push_temp(i64_ty.clone(), span);
-    push_assign(
-        ctx,
-        is_pos_i64_local,
+        is_in_range_i64_local,
         Rvalue::Cast(
-            Box::new(Operand::Copy(Place::new(is_pos_local))),
+            Box::new(Operand::Copy(Place::new(is_in_range_local))),
             i64_ty.clone(),
         ),
         span,
@@ -1118,7 +1127,7 @@ fn compute_clamped_length(
         Rvalue::BinaryOp(
             BinOp::Mul,
             Box::new(Operand::Copy(Place::new(length_local))),
-            Box::new(Operand::Copy(Place::new(is_pos_i64_local))),
+            Box::new(Operand::Copy(Place::new(is_in_range_i64_local))),
         ),
         span,
     );
