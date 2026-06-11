@@ -92,14 +92,16 @@ jobs:
             xorg-dev \
             libgl1-mesa-dev
 
-      - name: Cache tint binary
+      # Restore only the built tint binary (keyed to the immutable Dawn SHA).
+      # Paired with an explicit save step placed *before* the validation gate,
+      # so the ~7-min build is cached even when the gate itself fails — a plain
+      # actions/cache discards it on job failure, forcing a rebuild every run.
+      - name: Restore cached tint binary
         id: cache-tint
-        uses: actions/cache@v3
+        uses: actions/cache/restore@v4
         with:
-          path: ~/tint-build
-          key: tint-immutable-sha-${{ runner.os }}-c7ed440
-          restore-keys: |
-            tint-immutable-sha-${{ runner.os }}-
+          path: ~/tint-build/tint
+          key: tint-bin-${{ runner.os }}-c7ed440
 
       - name: Build tint from Dawn (pinned immutable revision)
         if: steps.cache-tint.outputs.cache-hit != 'true'
@@ -143,6 +145,15 @@ jobs:
           test -x "$TINT_BIN"
           cp "$TINT_BIN" ~/tint-build/tint
           ~/tint-build/tint --version || true
+
+      # Save the freshly built binary now — before the gate can fail — so the
+      # next run restores it in seconds instead of rebuilding Dawn.
+      - name: Save tint binary to cache
+        if: steps.cache-tint.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/tint-build/tint
+          key: tint-bin-${{ runner.os }}-c7ed440
 
       - name: Run GPU browser validation gate
         shell: bash
