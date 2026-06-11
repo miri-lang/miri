@@ -6,7 +6,7 @@
 
 use super::device::{assert_gpu_runs_with_output, gpu_adapter_available};
 use super::helpers::assert_gpu_wgsl_valid;
-use super::utils::assert_runs_with_output;
+use super::utils::{assert_runs_with_output, assert_runtime_crash};
 
 /// AC3: WGSL emission produces valid WGSL with uniform binding.
 #[test]
@@ -179,4 +179,73 @@ fn main()
 ",
         "98 1 2 1 1",
     );
+}
+
+/// F30 A3: Bound value exceeding u32::MAX triggers GridTooLarge error and aborts.
+#[test]
+fn bound_exceeds_u32_max_errors() {
+    if !gpu_adapter_available() {
+        eprintln!("[gpu] skipped bound_exceeds_u32_max_errors: no suitable adapter");
+        return;
+    }
+    let source = "
+use system.gpu
+use system.io
+use system.collections.array
+
+fn main()
+    gpu var data = [0, 0, 0, 0]
+    let n = 5000000000
+    gpu for i in 0..n
+        data[i] = i
+";
+    assert_runtime_crash(source);
+}
+
+/// F30 A2: Negative bound should write 0 and result in empty dispatch (no error).
+#[test]
+fn negative_bound_is_noop_no_error() {
+    if !gpu_adapter_available() {
+        eprintln!("[gpu] skipped negative_bound_is_noop_no_error: no suitable adapter");
+        return;
+    }
+    let source = "
+use system.gpu
+use system.io
+use system.collections.array
+
+fn main()
+    gpu var data = [999, 999, 999, 999]
+    let n = -10
+    gpu for i in 0..n
+        data[i] = i
+    let host = data
+    println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
+";
+    assert_gpu_runs_with_output(source, "999 999 999 999");
+}
+
+/// F30 A1: Bound value of 2³¹ (2147483648) exceeds device max_compute_workgroups_per_dimension
+/// (~8M on most devices) and must trigger GridTooLarge error. This bound fits in u32, but the
+/// resulting grid (~8.4M) exceeds the device limit, not the u32 range.
+#[test]
+fn bound_2_to_31_exceeds_device_grid_limit_errors() {
+    if !gpu_adapter_available() {
+        eprintln!(
+            "[gpu] skipped bound_2_to_31_exceeds_device_grid_limit_errors: no suitable adapter"
+        );
+        return;
+    }
+    let source = "
+use system.gpu
+use system.io
+use system.collections.array
+
+fn main()
+    gpu var data = [0, 0, 0, 0]
+    let n = 2147483648
+    gpu for i in 0..n
+        data[i] = i
+";
+    assert_runtime_crash(source);
 }

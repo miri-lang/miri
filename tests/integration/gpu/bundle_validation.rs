@@ -302,3 +302,71 @@ gpu for i in 0..4096
         }
     }
 }
+
+/// F31 verification: Two gpu for loops produce distinct kernel entries.
+/// Ground truth: AST statement IDs are globally unique (not per-function),
+/// so kernel names are already distinct. This test verifies the fix.
+#[test]
+fn two_gpu_for_loops_produce_distinct_kernels() {
+    let source = r#"
+use system.gpu
+
+gpu var dst_a = [0, 0, 0, 0]
+gpu var dst_b = [0, 0, 0, 0]
+
+gpu for i in 0..4
+    dst_a[i] = i + 100
+
+gpu for i in 0..4
+    dst_b[i] = i + 200
+"#;
+
+    let bundle_dir = build_bundle_to_tempdir(source);
+    let manifest = read_manifest(&bundle_dir);
+
+    // Extract all kernels from the manifest
+    let seed_array = manifest["seed"].as_array().expect("seed is array");
+
+    assert_eq!(
+        seed_array.len(),
+        2,
+        "Expected 2 kernels for two gpu for loops; got {}",
+        seed_array.len()
+    );
+
+    // Build a map of kernel entry points to their WGSL
+    let mut kernels: Vec<(String, String)> = Vec::new();
+    for kernel in seed_array {
+        let entry_point = kernel["entryPoint"]
+            .as_str()
+            .expect("entryPoint is string")
+            .to_string();
+        let wgsl = kernel["wgsl"].as_str().expect("wgsl is string").to_string();
+        kernels.push((entry_point, wgsl));
+    }
+
+    // Verify kernels are distinct
+    assert_ne!(
+        kernels[0].0, kernels[1].0,
+        "Kernel entry points should be distinct; both are '{}' (collision)",
+        kernels[0].0
+    );
+
+    // Validate each kernel's WGSL independently
+    validate_wgsl(&kernels[0].1);
+    validate_wgsl(&kernels[1].1);
+
+    // Verify distinguishing constants appear in the expected kernels.
+    // First kernel computes `i + 100`, second computes `i + 200`.
+    // These literals should appear in the WGSL as constants or immediates.
+    assert!(
+        kernels[0].1.contains("100"),
+        "First kernel should contain constant 100; WGSL: {}",
+        kernels[0].1
+    );
+    assert!(
+        kernels[1].1.contains("200"),
+        "Second kernel should contain constant 200; WGSL: {}",
+        kernels[1].1
+    );
+}

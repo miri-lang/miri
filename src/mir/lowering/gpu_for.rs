@@ -952,6 +952,19 @@ fn emit_bounds_check_loop(
     body: &Statement,
     span: Span,
 ) -> Result<(), LoweringError> {
+    // The uniform parameter is stored as u32 on the wire (WGSL binding),
+    // but the loop index is TypeKind::Int (which maps to i32 on the browser-portable
+    // path, or i64 on the shader_int64 native path). Cast the uniform to the loop
+    // index's scalar type to match the comparison operands after MIR lowering.
+    let i64_ty = Type::new(TypeKind::Int, span);
+    let uniform_cast_local = ctx.push_temp(i64_ty.clone(), span);
+    push_assign(
+        ctx,
+        uniform_cast_local,
+        Rvalue::Cast(Box::new(Operand::Copy(Place::new(uniform_param))), i64_ty),
+        span,
+    );
+
     let cond_local = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
     push_assign(
         ctx,
@@ -959,7 +972,7 @@ fn emit_bounds_check_loop(
         Rvalue::BinaryOp(
             BinOp::Lt,
             Box::new(Operand::Copy(Place::new(loop_local))),
-            Box::new(Operand::Copy(Place::new(uniform_param))),
+            Box::new(Operand::Copy(Place::new(uniform_cast_local))),
         ),
         span,
     );

@@ -210,7 +210,7 @@ fn collect_buffer_bindings(body: &Body) -> Result<Vec<BufferBinding>, CodegenErr
             group: 0,
             index: binding_index,
             var_name,
-            element_type: WgslScalar::I32, // Browser-portable: uniform bounds are i32
+            element_type: WgslScalar::U32, // Loop bound stored as u32 (no shader_int64 feature)
             read_write: false,
             is_uniform: true,
         });
