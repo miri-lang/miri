@@ -31,6 +31,24 @@ fn ensure_context() -> Result<&'static Arc<GpuContext>, GpuError> {
     init_gpu_context()
 }
 
+/// Narrows a signed i64 loop bound to an unsigned u32 for WGSL uniform storage.
+///
+/// # Contract
+/// - Negative bounds result in 0 (empty loop, no error).
+/// - Bounds exceeding u32::MAX reject with GridTooLarge (grid would be too large).
+/// - Other values are cast to u32.
+fn narrow_uniform_bound(value: i64) -> Result<u32, GpuError> {
+    if value < 0 {
+        Ok(0)
+    } else if value > u32::MAX as i64 {
+        Err(GpuError::GridTooLarge(
+            "loop bound exceeds u32::MAX".to_string(),
+        ))
+    } else {
+        Ok(value as u32)
+    }
+}
+
 #[repr(C)]
 pub struct GpuLaunchDesc {
     pub wgsl_ptr: *const u8,
@@ -114,6 +132,14 @@ pub unsafe extern "C" fn miri_gpu_launch_inline(desc: *const GpuLaunchDesc) -> u
                 let _ = writeln!(std::io::stderr(), "{}", msg);
                 std::process::abort();
             }
+            GpuError::GridTooLarge(reason) => {
+                let msg = format!(
+                    "Runtime error: GPU launch failed: {}; reduce the loop range or data size",
+                    reason
+                );
+                let _ = writeln!(std::io::stderr(), "{}", msg);
+                std::process::abort();
+            }
             _ => {
                 log::error!("miri_gpu_launch_inline failed: {:?}", err);
                 0
@@ -167,6 +193,20 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
     let device = &ctx.device;
     let queue = &ctx.queue;
 
+    // Validate grid dimensions against device limits before allocating any buffers.
+    let max_workgroups = ctx.device.limits().max_compute_workgroups_per_dimension;
+    if desc.grid_x > max_workgroups || desc.grid_y > max_workgroups || desc.grid_z > max_workgroups
+    {
+        return Err(GpuError::GridTooLarge(
+            "grid dimensions exceed device limits".to_string(),
+        ));
+    }
+
+    // Validate uniform bound range before creating buffers.
+    if desc.uniform_bound_present != 0 {
+        let _ = narrow_uniform_bound(desc.uniform_bound_value)?;
+    }
+
     let buf_data_ptrs = std::slice::from_raw_parts(desc.buf_data_ptrs, desc.num_bufs);
     let buf_byte_lens = std::slice::from_raw_parts(desc.buf_byte_lens, desc.num_bufs);
     let buf_handle_ids = std::slice::from_raw_parts(desc.buf_handle_ids, desc.num_bufs);
@@ -190,13 +230,15 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
 
     // Create uniform buffer if needed (must live until bind_group is created).
     let uniform_buf = if desc.uniform_bound_present != 0 {
+        let bound_u32 = narrow_uniform_bound(desc.uniform_bound_value)?;
+
         let buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("miri_gpu_uniform_bound"),
-            size: 8,
+            size: 4,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(&buf, 0, &desc.uniform_bound_value.to_le_bytes());
+        queue.write_buffer(&buf, 0, &bound_u32.to_le_bytes());
         Some(buf)
     } else {
         None
@@ -644,7 +686,7 @@ pub(crate) fn build_bind_group_layout(
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,
-                min_binding_size: std::num::NonZeroU64::new(8),
+                min_binding_size: std::num::NonZeroU64::new(4),
             },
             count: None,
         });
@@ -742,6 +784,51 @@ pub struct MiriArrayHeader {
     pub data: *mut u8,
     pub elem_count: usize,
     pub elem_size: usize,
+}
+
+#[cfg(test)]
+mod narrow_uniform_bound_tests {
+    use super::{narrow_uniform_bound, GpuError};
+
+    #[test]
+    fn negative_bound_returns_zero() {
+        assert_eq!(narrow_uniform_bound(-1).unwrap(), 0);
+        assert_eq!(narrow_uniform_bound(-10).unwrap(), 0);
+        assert_eq!(narrow_uniform_bound(i64::MIN).unwrap(), 0);
+    }
+
+    #[test]
+    fn zero_bound_returns_zero() {
+        assert_eq!(narrow_uniform_bound(0).unwrap(), 0);
+    }
+
+    #[test]
+    fn small_positive_bounds_work() {
+        assert_eq!(narrow_uniform_bound(1).unwrap(), 1);
+        assert_eq!(narrow_uniform_bound(256).unwrap(), 256);
+        assert_eq!(narrow_uniform_bound(4096).unwrap(), 4096);
+    }
+
+    #[test]
+    fn u32_max_succeeds() {
+        assert_eq!(narrow_uniform_bound(u32::MAX as i64).unwrap(), u32::MAX);
+    }
+
+    #[test]
+    fn exceeding_u32_max_errors() {
+        assert!(matches!(
+            narrow_uniform_bound(u32::MAX as i64 + 1),
+            Err(GpuError::GridTooLarge(_))
+        ));
+        assert!(matches!(
+            narrow_uniform_bound(i64::MAX),
+            Err(GpuError::GridTooLarge(_))
+        ));
+        assert!(matches!(
+            narrow_uniform_bound(5_000_000_000),
+            Err(GpuError::GridTooLarge(_))
+        ));
+    }
 }
 
 #[cfg(test)]
