@@ -929,14 +929,20 @@ impl<'a> BodyEmitter<'a> {
                     write!(rendered, ".{}", idx).map_err(emit_err)?;
                 }
                 PlaceElem::Index(local) => {
-                    // Check if the index local's type is a signed/64-bit integer.
                     // naga rejects indexing `array<T>` with an `i64` value — array indices must be `i32`/`u32`.
-                    let needs_cast = if let Some(decl) = self.body.local_decls.get(local.0) {
-                        matches!(decl.ty.kind, TypeKind::Int | TypeKind::I64)
-                    } else {
-                        false
-                    };
-                    if needs_cast {
+                    // Int maps to WGSL i32 (identity cast is safe); an I64 value >= 2^31 would silently
+                    // truncate and wrap into an in-bounds index, aliasing a valid element, so saturate into
+                    // the non-negative i32 range with clamp() first — an out-of-range index stays out-of-range
+                    // and WGSL storage-array bounds behavior handles it harmlessly. Any other index type renders bare.
+                    let index_kind = self.body.local_decls.get(local.0).map(|decl| &decl.ty.kind);
+                    if matches!(index_kind, Some(TypeKind::I64)) {
+                        write!(
+                            rendered,
+                            "[i32(clamp({}, 0, 2147483647))]",
+                            local_name(*local)
+                        )
+                        .map_err(emit_err)?;
+                    } else if matches!(index_kind, Some(TypeKind::Int)) {
                         write!(rendered, "[i32({})]", local_name(*local)).map_err(emit_err)?;
                     } else {
                         write!(rendered, "[{}]", local_name(*local)).map_err(emit_err)?;
@@ -1188,5 +1194,179 @@ fn render_float(f: &FloatLiteral, ty: &TypeKind) -> String {
         | TypeKind::Meta(_)
         | TypeKind::Option(_)
         | TypeKind::Linear(_) => body,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::types::Type;
+    use crate::error::syntax::Span;
+    use crate::mir::LocalDecl;
+
+    /// Test that an I64 index is rendered with clamp to saturate into i32 range.
+    #[test]
+    fn test_render_place_i64_index_clamps() {
+        // Minimal MIR body with an I64 index local.
+        let mut body = Body::new(0, Span::default(), crate::mir::ExecutionModel::GpuKernel);
+
+        // Create a local with type I64 for use as an index.
+        let i64_local = body.new_local(LocalDecl::new(
+            Type::new(TypeKind::I64, Span::default()),
+            Span::default(),
+        ));
+
+        // Create a target local (the array being indexed) with a simple type.
+        let target_local = body.new_local(LocalDecl::new(
+            Type::new(TypeKind::Int, Span::default()),
+            Span::default(),
+        ));
+
+        // Create a place with an I64 index projection.
+        let place = Place {
+            local: target_local,
+            projection: vec![PlaceElem::Index(i64_local)],
+        };
+
+        // Create a minimal BodyEmitter. Empty bindings and empty output buffer.
+        let mut output = String::new();
+        let emitter = BodyEmitter {
+            body: &body,
+            bindings: &[],
+            workgroup_size: [256, 1, 1],
+            output: &mut output,
+            indent: 0,
+            loop_headers: std::collections::HashSet::new(),
+            loop_info: std::collections::HashMap::new(),
+            loop_stack: Vec::new(),
+        };
+
+        // Render the place.
+        let rendered = emitter.render_place(&place).expect("render_place failed");
+
+        // Assert that the rendered string contains the structured clamp: [i32(clamp(..., 0, 2147483647))].
+        // This pins the exact emission pattern so comments/TODOs can't accidentally pass.
+        assert!(
+            rendered.contains("[i32(clamp("),
+            "Expected [i32(clamp( in rendered I64 index, got: {}",
+            rendered
+        );
+        assert!(
+            rendered.contains(", 0, 2147483647))]"),
+            "Expected , 0, 2147483647))] in rendered I64 index, got: {}",
+            rendered
+        );
+    }
+
+    /// Test that an Int (i32) index is rendered WITHOUT clamp (identity).
+    #[test]
+    fn test_render_place_int_index_no_clamp() {
+        // Minimal MIR body with an Int index local.
+        let mut body = Body::new(0, Span::default(), crate::mir::ExecutionModel::GpuKernel);
+
+        // Create a local with type Int (i32) for use as an index.
+        let int_local = body.new_local(LocalDecl::new(
+            Type::new(TypeKind::Int, Span::default()),
+            Span::default(),
+        ));
+
+        // Create a target local (the array being indexed).
+        let target_local = body.new_local(LocalDecl::new(
+            Type::new(TypeKind::Int, Span::default()),
+            Span::default(),
+        ));
+
+        // Create a place with an Int index projection.
+        let place = Place {
+            local: target_local,
+            projection: vec![PlaceElem::Index(int_local)],
+        };
+
+        // Create a minimal BodyEmitter.
+        let mut output = String::new();
+        let emitter = BodyEmitter {
+            body: &body,
+            bindings: &[],
+            workgroup_size: [256, 1, 1],
+            output: &mut output,
+            indent: 0,
+            loop_headers: std::collections::HashSet::new(),
+            loop_info: std::collections::HashMap::new(),
+            loop_stack: Vec::new(),
+        };
+
+        // Render the place.
+        let rendered = emitter.render_place(&place).expect("render_place failed");
+
+        // Assert that the output has i32() but NOT clamp().
+        assert!(
+            rendered.contains("i32("),
+            "Expected i32() in rendered Int index, got: {}",
+            rendered
+        );
+        assert!(
+            !rendered.contains("clamp("),
+            "Unexpected clamp() in Int (i32) index (should be identity), got: {}",
+            rendered
+        );
+    }
+
+    /// Test that a non-Int/non-I64 index (e.g. F32) renders bare without i32() or clamp().
+    #[test]
+    fn test_render_place_other_index_renders_bare() {
+        // Minimal MIR body with an F32 index local (a contrived case, but validates the fallback).
+        let mut body = Body::new(0, Span::default(), crate::mir::ExecutionModel::GpuKernel);
+
+        // Create a local with type F32 for use as an index.
+        let f32_local = body.new_local(LocalDecl::new(
+            Type::new(TypeKind::F32, Span::default()),
+            Span::default(),
+        ));
+
+        // Create a target local (the array being indexed).
+        let target_local = body.new_local(LocalDecl::new(
+            Type::new(TypeKind::Int, Span::default()),
+            Span::default(),
+        ));
+
+        // Create a place with an F32 index projection.
+        let place = Place {
+            local: target_local,
+            projection: vec![PlaceElem::Index(f32_local)],
+        };
+
+        // Create a minimal BodyEmitter.
+        let mut output = String::new();
+        let emitter = BodyEmitter {
+            body: &body,
+            bindings: &[],
+            workgroup_size: [256, 1, 1],
+            output: &mut output,
+            indent: 0,
+            loop_headers: std::collections::HashSet::new(),
+            loop_info: std::collections::HashMap::new(),
+            loop_stack: Vec::new(),
+        };
+
+        // Render the place.
+        let rendered = emitter.render_place(&place).expect("render_place failed");
+
+        // Assert that the output is bare (no i32(), no clamp()).
+        assert!(
+            !rendered.contains("i32("),
+            "Unexpected i32() cast in F32 index (should be bare), got: {}",
+            rendered
+        );
+        assert!(
+            !rendered.contains("clamp("),
+            "Unexpected clamp() in F32 index (should be bare), got: {}",
+            rendered
+        );
+        // Ensure the index is present in brackets.
+        assert!(
+            rendered.contains("["),
+            "Expected [ in rendered place, got: {}",
+            rendered
+        );
     }
 }
