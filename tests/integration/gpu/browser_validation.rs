@@ -105,9 +105,17 @@ fn extract_kernels(manifest: &serde_json::Value) -> Vec<(String, String)> {
 /// 3. System `PATH` via which-like lookup
 ///
 /// Returns None if tint cannot be found.
+#[cfg_attr(not(feature = "browser-gpu-gate"), allow(dead_code))]
 fn resolve_tint() -> Option<PathBuf> {
-    // 1. Check environment variable
-    if let Ok(tint_path) = std::env::var("MIRI_TINT") {
+    resolve_tint_from(std::env::var("MIRI_TINT").ok())
+}
+
+/// Resolution logic with the `MIRI_TINT` value injected explicitly, so tests
+/// can exercise it without mutating the process-global environment (which would
+/// race the concurrently-running real-gate test that reads `MIRI_TINT`).
+fn resolve_tint_from(miri_tint: Option<String>) -> Option<PathBuf> {
+    // 1. Explicit override
+    if let Some(tint_path) = miri_tint {
         let path = PathBuf::from(&tint_path);
         if path.exists() {
             return Some(path);
@@ -146,7 +154,12 @@ fn tint_validate(tint: &std::path::Path, wgsl: &str) -> Result<(), String> {
     let temp_dir = std::env::temp_dir().join("miri_tint_validate");
     fs::create_dir_all(&temp_dir).ok();
 
-    let mut temp_file = tempfile::NamedTempFile::new_in(&temp_dir)
+    // The `.wgsl` suffix is required: tint infers the input language from the
+    // file extension, and rejects an extensionless temp file with
+    // "Unknown input format: unknown" before it ever parses the WGSL.
+    let mut temp_file = tempfile::Builder::new()
+        .suffix(".wgsl")
+        .tempfile_in(&temp_dir)
         .map_err(|e| format!("Failed to create temp file: {}", e))?;
     temp_file
         .write_all(wgsl.as_bytes())
@@ -324,19 +337,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 #[test]
 fn missing_tint_is_a_loud_error() {
-    // Point MIRI_TINT at a nonexistent path
-    std::env::set_var("MIRI_TINT", "/nonexistent/fake/tint");
-
-    // Attempt to resolve tint; it should fail
-    match resolve_tint() {
-        Some(_) => panic!("resolve_tint should fail when MIRI_TINT points to nonexistent path"),
-        None => {
-            // Expected — loud failure path is working
-        }
-    }
-
-    // Clean up
-    std::env::remove_var("MIRI_TINT");
+    // A nonexistent MIRI_TINT path must not resolve to that path. Injected
+    // explicitly — no global env mutation, so this cannot race the real-gate
+    // test. (Holds as long as `tools/tint/tint` is absent and `tint` is not on
+    // PATH, which is the case in the gate's CI job and a clean checkout.)
+    assert!(
+        resolve_tint_from(Some("/nonexistent/fake/tint".to_string())).is_none(),
+        "resolve_tint_from should fail when the override path does not exist"
+    );
 }
 
 /// Real-tint validation test (feature-gated for CI only).
