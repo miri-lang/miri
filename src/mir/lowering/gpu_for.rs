@@ -731,9 +731,7 @@ fn build_kernel_body_literal(
         .push(LocalDecl::new(Type::new(TypeKind::Void, span), span));
 
     // Compute grid size: ceil(length / workgroup_size)
-    let block_size_i64 = i64::from(GPU_FOR_BLOCK_SIZE);
-    let grid_count = length / block_size_i64 + i64::from(length % block_size_i64 != 0);
-    let grid_x = grid_count.min(u32::MAX as i64) as u32;
+    let grid_x = literal_grid_x(length);
 
     kernel.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([GPU_FOR_BLOCK_SIZE, 1, 1]),
@@ -816,14 +814,10 @@ fn emit_gpu_launch_literal(
     let dim3_ty = Type::new(TypeKind::Custom(DIM3_TYPE_NAME.to_string(), None), span);
     let void_ty = Type::new(TypeKind::Void, span);
 
-    let block_size_i64 = i64::from(GPU_FOR_BLOCK_SIZE);
-    // length and block_size are both positive (validated by
-    // `compute_range_length`), so `length / block_size` cannot overflow.
-    // Round up without ever forming `length + block_size - 1`, which would
-    // overflow when length is near i64::MAX.
-    let grid_count = length / block_size_i64 + i64::from(length % block_size_i64 != 0);
     let one_op = int_constant(1, span);
-    let grid_x_op = int_constant(grid_count, span);
+    let grid_x = literal_grid_x(length);
+    let grid_x_op = int_constant(i64::from(grid_x), span);
+    let block_size_i64 = i64::from(GPU_FOR_BLOCK_SIZE);
     let block_x_op = int_constant(block_size_i64, span);
 
     let grid_local = ctx.push_temp(dim3_ty.clone(), span);
@@ -1356,11 +1350,8 @@ fn build_kernel_body_2d_literal(
     ));
 
     // Compute grid size for 2D: ceil(width / BLOCK_SIZE_2D) x ceil(height / BLOCK_SIZE_2D)
-    let block_size_i64 = i64::from(BLOCK_SIZE_2D);
-    let grid_x = ctx.width / block_size_i64 + i64::from(ctx.width % block_size_i64 != 0);
-    let grid_y = ctx.height / block_size_i64 + i64::from(ctx.height % block_size_i64 != 0);
-    let grid_x_u32 = grid_x.min(u32::MAX as i64) as u32;
-    let grid_y_u32 = grid_y.min(u32::MAX as i64) as u32;
+    let grid_x_u32 = literal_grid_dim(ctx.width, BLOCK_SIZE_2D);
+    let grid_y_u32 = literal_grid_dim(ctx.height, BLOCK_SIZE_2D);
 
     kernel.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
         workgroup_size: Some([BLOCK_SIZE_2D, BLOCK_SIZE_2D, 1]),
@@ -1431,12 +1422,11 @@ fn emit_gpu_launch_2d_literal(
     const BLOCK_SIZE: u32 = 16;
     let dim3_ty = Type::new(TypeKind::Custom(DIM3_TYPE_NAME.to_string(), None), span);
 
-    let block_size_i64 = i64::from(BLOCK_SIZE);
-    let grid_x = width / block_size_i64 + i64::from(width % block_size_i64 != 0);
-    let grid_y = height / block_size_i64 + i64::from(height % block_size_i64 != 0);
+    let grid_x_u32 = literal_grid_dim(width, BLOCK_SIZE);
+    let grid_y_u32 = literal_grid_dim(height, BLOCK_SIZE);
 
-    let grid_x_op = int_constant(grid_x, span);
-    let grid_y_op = int_constant(grid_y, span);
+    let grid_x_op = int_constant(i64::from(grid_x_u32), span);
+    let grid_y_op = int_constant(i64::from(grid_y_u32), span);
     let one_op = int_constant(1, span);
 
     let grid_local = ctx.push_temp(dim3_ty.clone(), span);
@@ -1450,7 +1440,7 @@ fn emit_gpu_launch_2d_literal(
         span,
     );
 
-    let block_size_op = int_constant(block_size_i64, span);
+    let block_size_op = int_constant(i64::from(BLOCK_SIZE), span);
     let block_local = ctx.push_temp(dim3_ty.clone(), span);
     push_assign(
         ctx,
@@ -1502,6 +1492,21 @@ fn emit_gpu_launch_2d_literal(
     ctx.set_current_block(after_bb);
 }
 
+/// Workgroup count along one literal-bound `gpu for` axis, saturated to `u32::MAX`.
+/// An enormous range saturates the grid (and is rejected at dispatch as
+/// `GridTooLarge` by the device-limit check) instead of silently truncating
+/// the workgroup count when narrowed to the launch descriptor's `u32` field.
+fn literal_grid_dim(extent: i64, block_size: u32) -> u32 {
+    let block = i64::from(block_size);
+    let count = extent / block + i64::from(extent % block != 0);
+    count.min(u32::MAX as i64) as u32
+}
+
+/// 1D gpu for workgroup count, using the standard 256-thread block.
+fn literal_grid_x(length: i64) -> u32 {
+    literal_grid_dim(length, GPU_FOR_BLOCK_SIZE)
+}
+
 fn int_constant(value: i64, span: Span) -> Operand {
     Operand::Constant(Box::new(Constant {
         span,
@@ -1534,4 +1539,79 @@ fn needs_int_narrowing(ty: &Type) -> bool {
             Some(TypeKind::Int | TypeKind::I64)
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_literal_grid_x_small_range() {
+        // 256 elements / 256 block size = 1 workgroup
+        assert_eq!(literal_grid_x(256), 1);
+    }
+
+    #[test]
+    fn test_literal_grid_x_with_remainder() {
+        // 257 elements / 256 block size = 1 + ceil(1/256) = 2 workgroups
+        assert_eq!(literal_grid_x(257), 2);
+    }
+
+    #[test]
+    fn test_literal_grid_x_zero() {
+        // 0 elements = 0 workgroups
+        assert_eq!(literal_grid_x(0), 0);
+    }
+
+    #[test]
+    fn test_literal_grid_x_large_clamped() {
+        // 2^40 elements would naively compute grid_count = 2^32.
+        // literal_grid_x must saturate to u32::MAX.
+        let length = 1_099_511_627_776_i64; // 2^40
+        assert_eq!(literal_grid_x(length), u32::MAX);
+    }
+
+    #[test]
+    fn test_literal_grid_x_i64_max() {
+        // i64::MAX should saturate to u32::MAX without overflow or panic.
+        assert_eq!(literal_grid_x(i64::MAX), u32::MAX);
+    }
+
+    #[test]
+    fn test_literal_grid_dim_2d_small_range() {
+        // 16 x 16 elements / 16 block size = 1 x 1 workgroups
+        const BLOCK_SIZE_2D: u32 = 16;
+        assert_eq!(literal_grid_dim(16, BLOCK_SIZE_2D), 1);
+    }
+
+    #[test]
+    fn test_literal_grid_dim_2d_with_remainder() {
+        // 17 elements / 16 block size = 1 + ceil(1/16) = 2 workgroups
+        const BLOCK_SIZE_2D: u32 = 16;
+        assert_eq!(literal_grid_dim(17, BLOCK_SIZE_2D), 2);
+    }
+
+    #[test]
+    fn test_literal_grid_dim_2d_zero() {
+        // 0 elements = 0 workgroups
+        const BLOCK_SIZE_2D: u32 = 16;
+        assert_eq!(literal_grid_dim(0, BLOCK_SIZE_2D), 0);
+    }
+
+    #[test]
+    fn test_literal_grid_dim_2d_large_clamped() {
+        // An extent where naive count would exceed u32::MAX
+        // 2^36 * 16 = would naively compute a count > u32::MAX.
+        // literal_grid_dim must saturate to u32::MAX.
+        const BLOCK_SIZE_2D: u32 = 16;
+        let extent = 68_719_476_736_i64; // 2^36
+        assert_eq!(literal_grid_dim(extent, BLOCK_SIZE_2D), u32::MAX);
+    }
+
+    #[test]
+    fn test_literal_grid_dim_2d_i64_max() {
+        // i64::MAX should saturate to u32::MAX without overflow or panic.
+        const BLOCK_SIZE_2D: u32 = 16;
+        assert_eq!(literal_grid_dim(i64::MAX, BLOCK_SIZE_2D), u32::MAX);
+    }
 }
