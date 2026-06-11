@@ -417,6 +417,13 @@ fn int_literal_to_i64(lit: &IntegerLiteral) -> i64 {
     }
 }
 
+/// The overflow diagnostic shared by the literal-range length and bounds-limit
+/// arithmetic. The bounds reconstruction is guarded upstream by
+/// `compute_range_length`, so this fires only as defense-in-depth.
+fn bounds_overflow_err(span: Span) -> LoweringError {
+    LoweringError::unsupported_expression("gpu for: range bounds overflow i64".to_string(), span)
+}
+
 fn compute_range_length(
     start: i64,
     end: i64,
@@ -433,12 +440,7 @@ fn compute_range_length(
             ));
         }
     };
-    let raw = raw.ok_or_else(|| {
-        LoweringError::unsupported_expression(
-            "gpu for: range bounds overflow i64".to_string(),
-            span,
-        )
-    })?;
+    let raw = raw.ok_or_else(|| bounds_overflow_err(span))?;
     if raw <= 0 {
         return Err(LoweringError::unsupported_expression(
             "gpu for: range length must be positive".to_string(),
@@ -763,7 +765,10 @@ fn build_kernel_body_literal(
     );
 
     let cond_local = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
-    let limit = start + length;
+    // Defense-in-depth; compute_range_length already guards this against i64 overflow.
+    let limit = start
+        .checked_add(length)
+        .ok_or_else(|| bounds_overflow_err(span))?;
     push_assign(
         &mut ctx,
         cond_local,
@@ -1235,11 +1240,7 @@ fn emit_gpu_launch_runtime(
             block: Operand::Copy(Place::new(block_local)),
             args: arg_ops,
             arg_handles,
-            arg_read_only: {
-                let mut read_only: Vec<bool> = captures.iter().map(|c| !c.is_written).collect();
-                read_only.push(false);
-                read_only
-            },
+            arg_read_only: captures.iter().map(|c| !c.is_written).collect(),
             arg_int_narrow,
             uniform_bound: Some(Box::new(end_op)),
             destination: Place::new(dest_local),
@@ -1404,8 +1405,15 @@ fn build_kernel_body_2d_literal(
         ctx.span,
     );
 
-    let end_x = ctx.start_x + ctx.width;
-    let end_y = ctx.start_y + ctx.height;
+    // Defense-in-depth; compute_range_length already guards these against i64 overflow.
+    let end_x = ctx
+        .start_x
+        .checked_add(ctx.width)
+        .ok_or_else(|| bounds_overflow_err(ctx.span))?;
+    let end_y = ctx
+        .start_y
+        .checked_add(ctx.height)
+        .ok_or_else(|| bounds_overflow_err(ctx.span))?;
 
     emit_2d_bounds_check_loop(
         &mut lower_ctx,
