@@ -249,3 +249,31 @@ fn main()
 ";
     assert_runtime_crash(source);
 }
+
+/// When the runtime end is far below the literal start, the range is empty and
+/// must dispatch a 0-thread kernel (no-op). A naive clamp on `(end - start) > 0`
+/// is vulnerable to i64 subtraction underflow wrapping to a positive value; the
+/// clamp instead compares the original operands (`end > start`), which stays
+/// correct at the integer boundary. The runtime end here underflows the
+/// subtraction yet must still be treated as an empty range.
+#[test]
+fn wraparound_runtime_range_is_noop() {
+    if !gpu_adapter_available() {
+        eprintln!("[gpu] skipped wraparound_runtime_range_is_noop: no suitable adapter");
+        return;
+    }
+    let source = "
+use system.io
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu var dst = [777, 777, 777, 777]
+    let very_negative = -(9223372036854775807)
+    gpu for i in 1000..very_negative
+        dst[i] = i + 100
+    let host = dst
+    println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
+";
+    assert_gpu_runs_with_output(source, "777 777 777 777");
+}
