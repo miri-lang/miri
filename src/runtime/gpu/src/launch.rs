@@ -22,6 +22,67 @@ use std::io::Write;
 use std::sync::Arc;
 use wgpu::{BufferUsages, Device, Features, Queue};
 
+/// Generates a user-facing error message for every `GpuError` variant.
+/// Returns a non-empty string starting with `"Runtime error: GPU"`.
+pub(crate) fn gpu_launch_error_message(err: &GpuError) -> String {
+    match err {
+        GpuError::ValueOutOfI32Range {
+            buffer_index,
+            element_index,
+            value,
+        } => {
+            format!(
+                "Runtime error: GPU upload failed: buffer {} element {}: value {} \
+                exceeds i32 range [{}, {}]; use Array<i32, N> for explicit 32-bit GPU storage",
+                buffer_index,
+                element_index,
+                value,
+                i32::MIN,
+                i32::MAX
+            )
+        }
+        GpuError::GridTooLarge(reason) => {
+            format!(
+                "Runtime error: GPU launch failed: {}; reduce the loop range or data size",
+                reason
+            )
+        }
+        GpuError::ShaderCompilationFailed(msg) => {
+            format!("Runtime error: GPU shader compilation failed: {}", msg)
+        }
+        GpuError::NoAdapter => {
+            "Runtime error: GPU launch failed: no compatible GPU adapter found".to_string()
+        }
+        GpuError::DeviceCreationFailed(reason) => {
+            format!(
+                "Runtime error: GPU launch failed: device creation failed: {}",
+                reason
+            )
+        }
+        GpuError::NotInitialized => {
+            "Runtime error: GPU launch failed: GPU context not initialized".to_string()
+        }
+        GpuError::BufferCreationFailed => {
+            "Runtime error: GPU launch failed: buffer creation failed".to_string()
+        }
+        GpuError::KernelNotFound(name) => {
+            format!(
+                "Runtime error: GPU launch failed: kernel '{}' not found",
+                name
+            )
+        }
+        GpuError::InvalidDimensions => {
+            "Runtime error: GPU launch failed: invalid work dimensions".to_string()
+        }
+        GpuError::UnsupportedScalar(reason) => {
+            format!(
+                "Runtime error: GPU launch failed: unsupported scalar type: {}",
+                reason
+            )
+        }
+    }
+}
+
 /// Routes through the shared `context::GPU_CONTEXT` so a successful
 /// `gpu for` dispatch makes `miri_gpu_is_available()` (and therefore
 /// `system.gpu.is_gpu_available()`) start returning true. Keeping a
@@ -109,47 +170,22 @@ pub unsafe extern "C" fn miri_gpu_launch_inline(desc: *const GpuLaunchDesc) -> u
     let desc_ref = &*desc;
     match launch_impl(desc_ref) {
         Ok(()) => 1,
-        Err(err) => match &err {
-            GpuError::ValueOutOfI32Range {
-                buffer_index,
-                element_index,
-                value,
-            } => {
-                // This variant aborts (rather than returning an error code) because
-                // out-of-range i32 values silently truncate to garbage if allowed to
-                // proceed. Silent data corruption is worse than early termination.
-                // Once the generated code traps launch error codes, this can return
-                // an error code instead of aborting.
-                let msg = format!(
-                    "Runtime error: GPU upload failed: buffer {} element {}: value {} \
-                    exceeds i32 range [{}, {}]; use Array<i32, N> for explicit 32-bit GPU storage",
-                    buffer_index,
-                    element_index,
-                    value,
-                    i32::MIN,
-                    i32::MAX
-                );
-                let _ = writeln!(std::io::stderr(), "{}", msg);
-                std::process::abort();
+        Err(err) => {
+            let msg = gpu_launch_error_message(&err);
+            let _ = writeln!(std::io::stderr(), "{}", msg);
+
+            // Three variants abort unconditionally because silent data corruption
+            // is worse than early termination. Once generated code traps all
+            // non-success return codes, these will be caught by the trap.
+            match &err {
+                GpuError::ValueOutOfI32Range { .. }
+                | GpuError::GridTooLarge(_)
+                | GpuError::ShaderCompilationFailed(_) => {
+                    std::process::abort();
+                }
+                _ => 0,
             }
-            GpuError::GridTooLarge(reason) => {
-                let msg = format!(
-                    "Runtime error: GPU launch failed: {}; reduce the loop range or data size",
-                    reason
-                );
-                let _ = writeln!(std::io::stderr(), "{}", msg);
-                std::process::abort();
-            }
-            GpuError::ShaderCompilationFailed(msg) => {
-                let diag = format!("Runtime error: GPU shader compilation failed: {}", msg);
-                let _ = writeln!(std::io::stderr(), "{}", diag);
-                std::process::abort();
-            }
-            _ => {
-                log::error!("miri_gpu_launch_inline failed: {:?}", err);
-                0
-            }
-        },
+        }
     }
 }
 
@@ -1034,5 +1070,101 @@ mod shader_compilation_tests {
             Ok(_) => panic!("expected ShaderCompilationFailed, but compilation succeeded"),
             Err(e) => panic!("expected ShaderCompilationFailed, got: {:?}", e),
         }
+    }
+}
+
+#[cfg(test)]
+mod gpu_launch_error_message_tests {
+    use super::*;
+
+    #[test]
+    fn no_adapter_error() {
+        let err = GpuError::NoAdapter;
+        let msg = gpu_launch_error_message(&err);
+        assert!(msg.starts_with("Runtime error: GPU"));
+        assert!(msg.contains("no compatible GPU adapter"));
+    }
+
+    #[test]
+    fn device_creation_failed_error() {
+        let err = GpuError::DeviceCreationFailed("metal device failed".to_string());
+        let msg = gpu_launch_error_message(&err);
+        assert!(msg.starts_with("Runtime error: GPU"));
+        assert!(msg.contains("device creation failed"));
+        assert!(msg.contains("metal device failed"));
+    }
+
+    #[test]
+    fn not_initialized_error() {
+        let err = GpuError::NotInitialized;
+        let msg = gpu_launch_error_message(&err);
+        assert!(msg.starts_with("Runtime error: GPU"));
+        assert!(msg.contains("not initialized"));
+    }
+
+    #[test]
+    fn buffer_creation_failed_error() {
+        let err = GpuError::BufferCreationFailed;
+        let msg = gpu_launch_error_message(&err);
+        assert!(msg.starts_with("Runtime error: GPU"));
+        assert!(msg.contains("buffer creation"));
+    }
+
+    #[test]
+    fn shader_compilation_failed_error() {
+        let err = GpuError::ShaderCompilationFailed("naga: invalid syntax".to_string());
+        let msg = gpu_launch_error_message(&err);
+        assert!(msg.starts_with("Runtime error: GPU"));
+        assert!(msg.contains("shader compilation"));
+        assert!(msg.contains("naga: invalid syntax"));
+    }
+
+    #[test]
+    fn kernel_not_found_error() {
+        let err = GpuError::KernelNotFound("my_kernel".to_string());
+        let msg = gpu_launch_error_message(&err);
+        assert!(msg.starts_with("Runtime error: GPU"));
+        assert!(msg.contains("kernel"));
+        assert!(msg.contains("my_kernel"));
+        assert!(msg.contains("not found"));
+    }
+
+    #[test]
+    fn invalid_dimensions_error() {
+        let err = GpuError::InvalidDimensions;
+        let msg = gpu_launch_error_message(&err);
+        assert!(msg.starts_with("Runtime error: GPU"));
+        assert!(msg.contains("invalid work dimensions"));
+    }
+
+    #[test]
+    fn unsupported_scalar_error() {
+        let err = GpuError::UnsupportedScalar("f64 not supported on this adapter".to_string());
+        let msg = gpu_launch_error_message(&err);
+        assert!(msg.starts_with("Runtime error: GPU"));
+        assert!(msg.contains("unsupported scalar type"));
+        assert!(msg.contains("f64 not supported on this adapter"));
+    }
+
+    #[test]
+    fn value_out_of_i32_range_error() {
+        let err = GpuError::ValueOutOfI32Range {
+            buffer_index: 0,
+            element_index: 5,
+            value: 9_223_372_036_854_775_807i64,
+        };
+        let msg = gpu_launch_error_message(&err);
+        assert!(msg.starts_with("Runtime error: GPU"));
+        assert!(msg.contains("exceeds i32 range"));
+        assert!(msg.contains("9223372036854775807"));
+    }
+
+    #[test]
+    fn grid_too_large_error() {
+        let err = GpuError::GridTooLarge("grid dimensions exceed device limits".to_string());
+        let msg = gpu_launch_error_message(&err);
+        assert!(msg.starts_with("Runtime error: GPU"));
+        assert!(msg.contains("grid dimensions exceed device limits"));
+        assert!(msg.contains("reduce the loop range"));
     }
 }
