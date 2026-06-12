@@ -21,7 +21,8 @@ use crate::error::CodegenError;
 use crate::mir::body::DeviceHandleId;
 use crate::mir::{Body, ExecutionModel, Local, Operand, Place};
 use cranelift_codegen::ir::{
-    types as cl_types, AbiParam, InstBuilder, MemFlags, StackSlotData, StackSlotKind, Value,
+    condcodes::IntCC, types as cl_types, AbiParam, InstBuilder, MemFlags, StackSlotData,
+    StackSlotKind, TrapCode, Value,
 };
 use cranelift_frontend::FunctionBuilder;
 use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
@@ -280,7 +281,41 @@ pub(crate) fn translate(
     let local_func = module_ctx
         .module
         .declare_func_in_func(func_id, builder.func);
-    let _call = builder.ins().call(local_func, &[slots.desc_addr]);
+    let call = builder.ins().call(local_func, &[slots.desc_addr]);
+
+    trap_on_launch_failure(builder, call)?;
+
+    Ok(())
+}
+
+/// Converts a GPU launch failure (return code 0) into a trap.
+///
+/// The runtime prints a descriptive error message to stderr before returning 0.
+/// This helper reads the return code, compares it to 0, and emits a trap on
+/// failure. The process terminates cleanly with the error message visible
+/// to the user on stderr.
+///
+/// After this call, the builder is positioned on the continuation block
+/// (success path) so the parent `translate` function can proceed normally.
+fn trap_on_launch_failure(
+    builder: &mut FunctionBuilder,
+    call: cranelift_codegen::ir::Inst,
+) -> Result<(), CodegenError> {
+    let call_result = builder.inst_results(call)[0];
+    let zero_i8 = builder.ins().iconst(cl_types::I8, 0);
+    let failed = builder.ins().icmp(IntCC::Equal, call_result, zero_i8);
+
+    let fail_block = builder.create_block();
+    let cont_block = builder.create_block();
+    builder.ins().brif(failed, fail_block, &[], cont_block, &[]);
+
+    builder.switch_to_block(fail_block);
+    builder.ins().trap(TrapCode::unwrap_user(1));
+    builder.seal_block(fail_block);
+
+    builder.switch_to_block(cont_block);
+    builder.seal_block(cont_block);
+
     Ok(())
 }
 
