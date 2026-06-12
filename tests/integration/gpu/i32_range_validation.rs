@@ -3,8 +3,8 @@
 
 //! Tests for i32 range validation during GPU i64→i32 upload narrowing.
 //!
-//! F29 ensures that Array<int, N> elements falling outside i32 range are detected
-//! at upload time (hard error), preventing silent truncation. Tests cover:
+//! The compiler ensures Array<int, N> elements falling outside i32 range are
+//! detected at upload time (hard error), preventing silent truncation. Tests cover:
 //! - In-range round-trip (boundary values 2147483647 / -2147483648)
 //! - Out-of-range runtime error (non-literal, avoiding compile-time rejection)
 //! - Out-of-range compile error (literal array with out-of-range elements)
@@ -161,4 +161,28 @@ gpu for i in 0..1
     data[i] = data[i]
 ";
     assert_compiler_error(code, "must be gpu-resident");
+}
+
+#[test]
+fn test_gpu_i32_range_reassign_whole_array_outofrange() {
+    let code = "
+use system.gpu
+
+gpu var g = [1, 2, 3]
+g = [2147483648, 0, 0]
+";
+    // Whole-array reassignment with out-of-range literal should compile-error.
+    assert_compiler_error(code, "exceeds i32 range");
+}
+
+#[test]
+fn test_gpu_i32_range_reassign_whole_array_inrange() {
+    let code = "
+use system.gpu
+
+gpu var g = [1, 2, 3]
+g = [2147483647, -2147483648, 0]
+";
+    // Whole-array reassignment with in-range values should type-check and compile.
+    super::utils::assert_type_checks(code);
 }

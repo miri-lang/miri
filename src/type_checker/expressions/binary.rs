@@ -132,6 +132,10 @@ impl TypeChecker {
             );
         }
 
+        if matches!(op, AssignmentOp::Assign) {
+            self.check_gpu_reassignment_i32_range(lhs, rhs, &lhs_type, context);
+        }
+
         lhs_type
     }
 
@@ -218,6 +222,38 @@ impl TypeChecker {
         if let ExpressionKind::Literal(lit) = &rhs.node {
             if lit.is_zero() {
                 self.report_error("Division by zero".to_string(), rhs.span);
+            }
+        }
+    }
+
+    /// Validates that a gpu-resident identifier's reassignment has array-literal
+    /// elements within i32 range. Called only for plain (non-compound) assignments.
+    fn check_gpu_reassignment_i32_range(
+        &mut self,
+        lhs: &LeftHandSideExpression,
+        rhs: &Expression,
+        lhs_type: &Type,
+        context: &mut Context,
+    ) {
+        if let LeftHandSideExpression::Identifier(id_expr) = lhs {
+            if self.gpu_resident_identifier(id_expr, context).is_some() {
+                let elem_expr = match &lhs_type.kind {
+                    TypeKind::Array(elem_expr, _) => elem_expr.as_ref(),
+                    TypeKind::Custom(name, Some(args)) => {
+                        use crate::ast::types::BuiltinCollectionKind;
+                        if BuiltinCollectionKind::from_name(name)
+                            != Some(BuiltinCollectionKind::Array)
+                        {
+                            return;
+                        }
+                        if args.is_empty() {
+                            return;
+                        }
+                        &args[0]
+                    }
+                    _ => return,
+                };
+                self.check_gpu_i32_range_array_expr(rhs, elem_expr, context);
             }
         }
     }
