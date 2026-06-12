@@ -393,3 +393,41 @@ fn main()
         "xy",
     );
 }
+
+// ── Zero-arg sized-Array constructor RC cleanup ───────────────────────────────
+
+#[test]
+fn test_zero_arg_sized_array_unused_no_leak() {
+    // Array<int, N>() with zero-arg form allocates N elements and their RC header
+    // must be properly freed when the array goes out of scope. This guards against
+    // regressions where the len-0 array shape caused a drop-path no-op.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.array
+
+fn main()
+    let a = Array<int, 3>()
+    println(f"{a.length()}")
+"#,
+        "3",
+    );
+}
+
+#[test]
+fn test_zero_arg_sized_array_expr_stmt_no_leak() {
+    // Array<int, 3>() as a bare expression statement (not bound to a variable)
+    // must still have its RC header properly freed. This ensures the Perceus
+    // temp-drop path works for unreferenced constructor results.
+    assert_runs_with_output(
+        r#"
+use system.io
+use system.collections.array
+
+fn main()
+    Array<int, 3>()
+    println("ok")
+"#,
+        "ok",
+    );
+}
