@@ -125,6 +125,70 @@ fn main()
 }
 
 #[test]
+fn test_2d_gpu_for_with_literal_bounds_has_none_uniform_bounds() {
+    let body = mir_lower_code(
+        "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu var dst = [0, 0, 0, 0, 0, 0, 0, 0, 0]
+    gpu for i, j in 0..3, 0..3
+        dst[i * 3 + j] = i + j
+",
+    );
+    let launch = body
+        .basic_blocks
+        .iter()
+        .find_map(|bb| match bb.terminator.as_ref().map(|t| &t.kind) {
+            Some(TerminatorKind::GpuLaunch {
+                uniform_bound_x,
+                uniform_bound_y,
+                ..
+            }) => Some((uniform_bound_x.clone(), uniform_bound_y.clone())),
+            _ => None,
+        })
+        .expect("expected GpuLaunch terminator");
+    assert!(
+        launch.0.is_none() && launch.1.is_none(),
+        "expected literal 2D bounds to have None uniform_bound_x and uniform_bound_y"
+    );
+}
+
+#[test]
+fn test_2d_gpu_for_with_runtime_bounds_carries_uniform_bounds() {
+    let body = mir_lower_code(
+        "
+use system.gpu
+use system.collections.array
+
+fn main()
+    let w = 3
+    let h = 4
+    gpu var dst = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    gpu for i, j in 0..w, 0..h
+        dst[i * 4 + j] = i + j
+",
+    );
+    let launch = body
+        .basic_blocks
+        .iter()
+        .find_map(|bb| match bb.terminator.as_ref().map(|t| &t.kind) {
+            Some(TerminatorKind::GpuLaunch {
+                uniform_bound_x,
+                uniform_bound_y,
+                ..
+            }) => Some((uniform_bound_x.is_some(), uniform_bound_y.is_some())),
+            _ => None,
+        })
+        .expect("expected GpuLaunch terminator");
+    assert!(
+        launch.0 && launch.1,
+        "expected runtime 2D bounds to carry both uniform_bound_x and uniform_bound_y"
+    );
+}
+
+#[test]
 fn test_gpu_launch_terminator_carries_capture_args() {
     let body = mir_lower_code(
         "

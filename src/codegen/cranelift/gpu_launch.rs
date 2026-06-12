@@ -103,7 +103,7 @@ fn define_bytes(
 /// All 8-byte fields are naturally aligned; the six packed u32 dims
 /// (offsets 32..56) sit on 4-byte boundaries and don't introduce padding
 /// before the trailing pointers because 56 is already 8-aligned.
-/// Offsets 88+ hold the variable fields (uniform_bound, buf_read_only, buf_int_narrow).
+/// Offsets 88+ hold the variable fields (uniform bounds, buf_read_only, buf_int_narrow).
 mod desc_layout {
     pub(super) const WGSL_PTR: i32 = 0;
     pub(super) const WGSL_LEN: i32 = 8;
@@ -122,9 +122,10 @@ mod desc_layout {
     pub(super) const BUF_READ_ONLY: i32 = 88;
     pub(super) const BUF_INT_NARROW: i32 = 96;
     pub(super) const UNIFORM_BOUND_PRESENT: i32 = 104;
-    pub(super) const UNIFORM_BOUND_VALUE: i32 = 112;
-    pub(super) const NUM_STORAGE_BUFS: i32 = 120;
-    pub(super) const DESC_SIZE: u32 = 128;
+    pub(super) const UNIFORM_BOUND_X_VALUE: i32 = 112;
+    pub(super) const UNIFORM_BOUND_Y_VALUE: i32 = 120;
+    pub(super) const NUM_STORAGE_BUFS: i32 = 128;
+    pub(super) const DESC_SIZE: u32 = 144;
 }
 
 /// Field offsets within `runtime::core::MiriArray` (`repr(C)`):
@@ -148,7 +149,8 @@ pub(crate) fn translate(
     arg_handles: &[Option<DeviceHandleId>],
     _arg_read_only: &[bool],
     arg_int_narrow: &[bool],
-    uniform_bound: &Option<Box<Operand>>,
+    uniform_bound_x: &Option<Box<Operand>>,
+    uniform_bound_y: &Option<Box<Operand>>,
     locals: &HashMap<Local, cranelift_frontend::Variable>,
     type_ctx: &TypeCtx,
 ) -> Result<(), CodegenError> {
@@ -242,31 +244,53 @@ pub(crate) fn translate(
         [block_x, block_y, block_z],
     );
 
-    // Populate uniform_bound if present.
+    // Populate uniform bounds if present.
     let zero_i64 = builder.ins().iconst(cl_types::I64, 0);
-    if let Some(bound_op) = uniform_bound {
+    let mut bound_present = 0u64;
+
+    if let Some(bound_op) = uniform_bound_x {
         let bound_value = read_operand_value(builder, bound_op, locals, type_ctx)?;
-        let one_i64 = builder.ins().iconst(cl_types::I64, 1);
-        builder.ins().store(
-            MemFlags::new(),
-            one_i64,
-            slots.desc_addr,
-            desc_layout::UNIFORM_BOUND_PRESENT,
-        );
         builder.ins().store(
             MemFlags::new(),
             bound_value,
             slots.desc_addr,
-            desc_layout::UNIFORM_BOUND_VALUE,
+            desc_layout::UNIFORM_BOUND_X_VALUE,
         );
+        bound_present |= 1u64;
     } else {
         builder.ins().store(
             MemFlags::new(),
             zero_i64,
             slots.desc_addr,
-            desc_layout::UNIFORM_BOUND_PRESENT,
+            desc_layout::UNIFORM_BOUND_X_VALUE,
         );
     }
+
+    if let Some(bound_op) = uniform_bound_y {
+        let bound_value = read_operand_value(builder, bound_op, locals, type_ctx)?;
+        builder.ins().store(
+            MemFlags::new(),
+            bound_value,
+            slots.desc_addr,
+            desc_layout::UNIFORM_BOUND_Y_VALUE,
+        );
+        bound_present |= 2u64;
+    } else {
+        builder.ins().store(
+            MemFlags::new(),
+            zero_i64,
+            slots.desc_addr,
+            desc_layout::UNIFORM_BOUND_Y_VALUE,
+        );
+    }
+
+    let bound_present_i64 = builder.ins().iconst(cl_types::I64, bound_present as i64);
+    builder.ins().store(
+        MemFlags::new(),
+        bound_present_i64,
+        slots.desc_addr,
+        desc_layout::UNIFORM_BOUND_PRESENT,
+    );
 
     // Store num_storage_bufs (= num_bufs, always equal to capture count).
     let num_storage_i64 = builder.ins().iconst(cl_types::I64, num_bufs as i64);
@@ -537,13 +561,13 @@ fn read_operand_value(
         Operand::Copy(p) | Operand::Move(p) => p,
         Operand::Constant(_) => {
             return Err(CodegenError::Internal(
-                "GpuLaunch arg must be a Copy/Move of a Local (Array)".to_string(),
+                "GpuLaunch operand must be a Copy/Move of a projection-free Local".to_string(),
             ));
         }
     };
     if !place.projection.is_empty() {
         return Err(CodegenError::Internal(
-            "GpuLaunch arg with projection is not supported".to_string(),
+            "GpuLaunch operand must be a Copy/Move of a projection-free Local".to_string(),
         ));
     }
     read_place_value(builder, place, locals, type_ctx)
@@ -606,6 +630,6 @@ mod tests {
 
     #[test]
     fn gpu_launch_desc_size_matches_runtime() {
-        assert_eq!(desc_layout::DESC_SIZE as usize, 128);
+        assert_eq!(desc_layout::DESC_SIZE as usize, 144);
     }
 }

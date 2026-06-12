@@ -241,3 +241,85 @@ println("just host code")
         .failure()
         .stderr(predicates::str::contains("no GPU kernels"));
 }
+
+#[test]
+fn manifest_paint_mode_rgba_for_f32_4x_buffer() {
+    const RGBA_SOURCE: &str = r#"use system.io
+use system.gpu
+use system.collections.array
+
+gpu var canvas = Array<f32, 64>()
+
+gpu for i in 0..16
+    canvas[i * 4 + 0] = 1.0
+    canvas[i * 4 + 1] = 0.5
+    canvas[i * 4 + 2] = 0.25
+    canvas[i * 4 + 3] = 1.0
+"#;
+
+    let source = write_source(RGBA_SOURCE);
+    let out_dir = tempfile::tempdir().unwrap();
+    let bundle_dir = out_dir.path().join("bundle");
+
+    let mut cmd = miri_cmd();
+    cmd.arg("build")
+        .arg(source.path())
+        .arg("--target")
+        .arg("web-gpu")
+        .arg("--out")
+        .arg(&bundle_dir)
+        .assert()
+        .success();
+
+    let manifest_path = bundle_dir.join("bundle.json");
+    let manifest_text = fs::read_to_string(&manifest_path).expect("read manifest");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&manifest_text).expect("parse manifest JSON");
+
+    assert!(
+        manifest["paintMode"].is_string(),
+        "manifest should have 'paintMode' for RGBA buffer"
+    );
+    assert_eq!(
+        manifest["paintMode"].as_str().unwrap(),
+        "rgba",
+        "paintMode should be 'rgba' for f32 4x buffer"
+    );
+}
+
+#[test]
+fn manifest_paint_mode_default_colormap_for_int_buffer() {
+    const COLORMAP_SOURCE: &str = r#"use system.io
+use system.gpu
+use system.collections.array
+
+gpu var canvas = Array<int, 16>()
+
+gpu for i in 0..16
+    canvas[i] = i
+"#;
+
+    let source = write_source(COLORMAP_SOURCE);
+    let out_dir = tempfile::tempdir().unwrap();
+    let bundle_dir = out_dir.path().join("bundle");
+
+    let mut cmd = miri_cmd();
+    cmd.arg("build")
+        .arg(source.path())
+        .arg("--target")
+        .arg("web-gpu")
+        .arg("--out")
+        .arg(&bundle_dir)
+        .assert()
+        .success();
+
+    let manifest_path = bundle_dir.join("bundle.json");
+    let manifest_text = fs::read_to_string(&manifest_path).expect("read manifest");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&manifest_text).expect("parse manifest JSON");
+
+    assert!(
+        manifest["paintMode"].is_null(),
+        "manifest should have null/omitted 'paintMode' for non-RGBA buffer (defaults to colormap)"
+    );
+}

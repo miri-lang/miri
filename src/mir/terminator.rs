@@ -173,7 +173,8 @@ impl fmt::Display for Terminator {
                 arg_handles: _,
                 arg_read_only: _,
                 arg_int_narrow: _,
-                uniform_bound: _,
+                uniform_bound_x: _,
+                uniform_bound_y: _,
                 destination,
                 target,
             } => {
@@ -254,10 +255,11 @@ pub enum TerminatorKind {
     /// storage buffers (binding 0..N in declaration order). Each capture's
     /// read/write mode is recorded in `arg_read_only`.
     ///
-    /// When `uniform_bound` is `Some`, the kernel bounds-check loop limit is
-    /// exposed as a uniform buffer (storage binding N) instead of a compile-time
-    /// constant. The runtime will write this value to the uniform buffer
-    /// before dispatch.
+    /// When `uniform_bound_x` or `uniform_bound_y` is `Some`, the kernel
+    /// bounds-check loop limit(s) are exposed as a uniform buffer (struct with
+    /// `w` and `h` fields) instead of compile-time constants. The runtime will
+    /// write the values to the uniform buffer before dispatch. For 1D loops,
+    /// only `uniform_bound_x` is used; for 2D loops, both may be used.
     GpuLaunch {
         kernel: Operand,
         grid: Operand,
@@ -278,10 +280,14 @@ pub enum TerminatorKind {
         /// `arg_int_narrow[i]` is true when the i-th capture is an `Array<int, N>`.
         /// Empty means no captures (impossible), or this launch is legacy and none need narrowing.
         arg_int_narrow: Vec<bool>,
-        /// When present, an i64 operand containing the loop-bound limit value.
-        /// This is lowered to a uniform buffer in the kernel at binding position
-        /// `num_captures + 1`. When `None`, bounds are compile-time constants.
-        uniform_bound: Option<Box<Operand>>,
+        /// When present, an i64 operand containing the loop-bound limit value for the x axis.
+        /// For 1D loops, this carries the single bound. For 2D loops, this is the width.
+        /// This is lowered to a uniform buffer in the kernel. When `None`, x bounds
+        /// are compile-time constants.
+        uniform_bound_x: Option<Box<Operand>>,
+        /// When present, an i64 operand containing the loop-bound limit value for the y axis.
+        /// For 2D loops only; `None` for 1D loops or literal bounds.
+        uniform_bound_y: Option<Box<Operand>>,
         destination: Place,
         target: Option<BasicBlock>,
     },
