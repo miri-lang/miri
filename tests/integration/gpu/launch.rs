@@ -373,6 +373,82 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]} {host[5]} {host[6]} 
     assert_gpu_runs_with_output(source, "0 1 2 3 1 2 3 4 2 3 4 5");
 }
 
+/// 2D gpu for with runtime bounds compiles, dispatches, and produces correct values.
+/// The loop bounds are variables (w, h) determined at runtime, not compile-time constants.
+/// Verifies that over-dispatch safety works: with non-multiple-of-16 bounds (5x3),
+/// the kernel only writes to valid cells (0..15 of a 20-cell buffer), leaving
+/// cells 15-19 untouched (initialized to 99).
+#[test]
+fn gpu_for_2d_runtime_bounds_value_round_trips() {
+    let source = "
+use system.io
+use system.gpu
+use system.collections.array
+
+fn main()
+    let w = 5
+    let h = 3
+    gpu var dst = [99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99]
+    gpu for x, y in 0..w, 0..h
+        dst[y * 5 + x] = x * 100 + y
+    let host = dst
+    println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]} {host[5]} {host[6]} {host[7]} {host[15]} {host[16]}')
+";
+    assert_gpu_runs_with_output(source, "0 100 200 300 400 1 101 201 99 99");
+}
+
+/// 2D gpu for with mixed literal x-end and runtime y-end.
+/// Verifies that when one axis is literal and the other is runtime, both bounds
+/// are correctly materialized and passed to the kernel.
+#[test]
+fn gpu_for_2d_mixed_literal_x_runtime_y_bounds() {
+    let source = "
+use system.io
+use system.gpu
+use system.collections.array
+
+fn main()
+    let h = 3
+    gpu var buf = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    gpu for x, y in 0..4, 0..h
+        buf[y * 4 + x] = x * 100 + y
+    let r = buf
+    println(f'{r[0]} {r[1]} {r[6]} {r[11]}')
+";
+    // buf layout: [row0, row1, row2]
+    // row0 (y=0): [x*100+0 for x=0..4] = [0, 100, 200, 300]
+    // row1 (y=1): [x*100+1 for x=0..4] = [1, 101, 201, 301]
+    // row2 (y=2): [x*100+2 for x=0..4] = [2, 102, 202, 302]
+    // r[0]=0, r[1]=100, r[6]=buf[1*4+2]=201, r[11]=buf[2*4+3]=302
+    assert_gpu_runs_with_output(source, "0 100 201 302");
+}
+
+/// 2D gpu for with mixed runtime x-end and literal y-end.
+/// Verifies that when the x-axis is runtime and y-axis is literal, both bounds
+/// are correctly materialized and passed to the kernel.
+#[test]
+fn gpu_for_2d_mixed_runtime_x_literal_y_bounds() {
+    let source = "
+use system.io
+use system.gpu
+use system.collections.array
+
+fn main()
+    let w = 4
+    gpu var buf = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    gpu for x, y in 0..w, 0..3
+        buf[y * 4 + x] = x * 100 + y
+    let r = buf
+    println(f'{r[0]} {r[1]} {r[6]} {r[11]}')
+";
+    // buf layout: [row0, row1, row2]
+    // row0 (y=0): [x*100+0 for x=0..w] = [0, 100, 200, 300]
+    // row1 (y=1): [x*100+1 for x=0..w] = [1, 101, 201, 301]
+    // row2 (y=2): [x*100+2 for x=0..w] = [2, 102, 202, 302]
+    // r[0]=0, r[1]=100, r[6]=buf[1*4+2]=201, r[11]=buf[2*4+3]=302
+    assert_gpu_runs_with_output(source, "0 100 201 302");
+}
+
 /// Buffer ping-pong with 3 generations and telemetry.
 /// Two persistent `gpu var` grids swapped across 3 sequential `gpu for` kernels
 /// WITHOUT intermediate readback. Proves:

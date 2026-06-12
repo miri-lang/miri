@@ -129,7 +129,8 @@ pub trait Visitor {
                 arg_handles: _,
                 arg_read_only: _,
                 arg_int_narrow: _,
-                uniform_bound,
+                uniform_bound_x,
+                uniform_bound_y,
                 destination,
                 target: _,
             } => {
@@ -139,7 +140,10 @@ pub trait Visitor {
                 for arg in args {
                     self.visit_operand(arg, block);
                 }
-                if let Some(bound) = uniform_bound {
+                if let Some(bound) = uniform_bound_x {
+                    self.visit_operand(bound, block);
+                }
+                if let Some(bound) = uniform_bound_y {
                     self.visit_operand(bound, block);
                 }
                 self.visit_place(destination, PlaceContext::MutatingUse, block);
@@ -317,7 +321,8 @@ pub trait MutVisitor {
                 arg_handles: _,
                 arg_read_only: _,
                 arg_int_narrow: _,
-                uniform_bound,
+                uniform_bound_x,
+                uniform_bound_y,
                 destination,
                 target: _,
             } => {
@@ -327,7 +332,10 @@ pub trait MutVisitor {
                 for arg in args {
                     self.visit_operand(arg, block);
                 }
-                if let Some(bound) = uniform_bound {
+                if let Some(bound) = uniform_bound_x {
+                    self.visit_operand(bound, block);
+                }
+                if let Some(bound) = uniform_bound_y {
                     self.visit_operand(bound, block);
                 }
                 self.visit_place(destination, PlaceContext::MutatingUse, block);

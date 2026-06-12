@@ -754,10 +754,10 @@ fn main()
         );
     }
 
-    /// 2D gpu for with non-literal range end should emit a clear error.
+    /// 2D gpu for with runtime bounds compiles and emits valid WGSL.
     #[test]
-    fn gpu_for_2d_runtime_bounds_is_rejected_with_clear_error() {
-        assert_compiler_error(
+    fn gpu_for_2d_runtime_bounds_emits_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
             "
 use system.gpu
 use system.collections.array
@@ -769,7 +769,6 @@ fn main()
     gpu for x, y in 0..w, 0..h
         dst[y * 4 + x] = x + y
 ",
-            "2D gpu for requires literal bounds",
         );
     }
 

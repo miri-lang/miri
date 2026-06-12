@@ -373,11 +373,6 @@ impl TypeChecker {
                 return;
             }
 
-            if !is_int_literal(end) {
-                self.report_error("2D gpu for requires literal bounds".to_string(), end.span);
-                return;
-            }
-
             let end_type = self.infer_expression(end, context);
             if !matches!(end_type.kind, TypeKind::Int) {
                 self.report_error(

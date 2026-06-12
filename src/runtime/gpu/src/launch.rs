@@ -137,17 +137,22 @@ pub struct GpuLaunchDesc {
     /// `buf_int_narrow[i]` is 1 if the i-th buffer is an `Array<int, N>`, 0 otherwise.
     /// Array length is `num_bufs`. When null, no buffers need narrowing (legacy behavior).
     pub buf_int_narrow: *const u8,
-    /// When present (non-zero), a uniform buffer contains the loop-bound limit
-    /// value for the kernel's bounds-check loop.
+    /// Bitmask indicating which uniform bounds are present.
+    /// Bit 0 = x bound present, Bit 1 = y bound present.
     pub uniform_bound_present: u64,
-    pub uniform_bound_value: i64,
+    /// Bound value for x axis (1D loops or 2D x axis).
+    pub uniform_bound_x_value: i64,
+    /// Bound value for y axis (2D loops only).
+    pub uniform_bound_y_value: i64,
     /// Number of storage buffer bindings.
     /// num_bufs reflects capture count, but with uniform buffers present,
     /// the kernel has num_bufs storage + 1 uniform binding. This is always num_bufs.
     pub num_storage_bufs: u64,
+    /// Padding to reach 144 bytes for alignment.
+    pub _padding: [u64; 1],
 }
 
-const _: () = assert!(core::mem::size_of::<GpuLaunchDesc>() == 128);
+const _: () = assert!(core::mem::size_of::<GpuLaunchDesc>() == 144);
 
 /// Launches a GPU kernel inline. Returns 1 on success, 0 on failure.
 ///
@@ -196,13 +201,11 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
     let ctx = ensure_context()?;
     check_required_shader_features(wgsl, ctx.enabled_shader_features)?;
 
-    // Account for uniform buffer in binding count if present.
-    let num_bindings = desc.num_bufs
-        + if desc.uniform_bound_present != 0 {
-            1
-        } else {
-            0
-        };
+    // Account for uniform buffers in binding count if present.
+    // Bit 0 = x bound, Bit 1 = y bound. Count how many bits are set.
+    let num_uniform_bufs = ((desc.uniform_bound_present & 1) != 0_u64) as usize
+        + ((desc.uniform_bound_present & 2) != 0_u64) as usize;
+    let num_bindings = desc.num_bufs + num_uniform_bufs;
 
     // Ensure the kernel is compiled with the correct bind group layout.
     // Pass num_storage_bufs so the layout can distinguish storage from uniform buffers.
@@ -243,9 +246,23 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
         ));
     }
 
-    // Validate uniform bound range before creating buffers.
-    if desc.uniform_bound_present != 0 {
-        let _ = narrow_uniform_bound(desc.uniform_bound_value)?;
+    // Check that the grid product doesn't overflow u64. While wgpu's Limits don't
+    // define a total workgroup count limit, the product overflow itself is a guard
+    // against programming errors (e.g., very large 2D loops with runtime bounds).
+    let _ = (desc.grid_x as u64)
+        .checked_mul(desc.grid_y as u64)
+        .and_then(|v| v.checked_mul(desc.grid_z as u64))
+        .ok_or_else(|| GpuError::GridTooLarge("grid product (x*y*z) overflows u64".to_string()))?;
+
+    // Validate uniform bounds range before creating buffers.
+    let has_x_bound = (desc.uniform_bound_present & 1) != 0;
+    let has_y_bound = (desc.uniform_bound_present & 2) != 0;
+
+    if has_x_bound {
+        let _ = narrow_uniform_bound(desc.uniform_bound_x_value)?;
+    }
+    if has_y_bound {
+        let _ = narrow_uniform_bound(desc.uniform_bound_y_value)?;
     }
 
     let buf_data_ptrs = std::slice::from_raw_parts(desc.buf_data_ptrs, desc.num_bufs);
@@ -269,21 +286,36 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
         buf_int_narrow,
     )?;
 
-    // Create uniform buffer if needed (must live until bind_group is created).
-    let uniform_buf = if desc.uniform_bound_present != 0 {
-        let bound_u32 = narrow_uniform_bound(desc.uniform_bound_value)?;
+    // Create uniform buffer(s) if needed.
+    // For 1D loops: one 4-byte uniform with x bound.
+    // For 2D loops: two 4-byte uniforms with x and y bounds.
+    // Must live until bind_group is created.
+    let mut uniform_bufs: Vec<wgpu::Buffer> = Vec::new();
 
-        let buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("miri_gpu_uniform_bound"),
-            size: 4,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&buf, 0, &bound_u32.to_le_bytes());
-        Some(buf)
-    } else {
-        None
-    };
+    if desc.uniform_bound_present != 0 {
+        if has_x_bound {
+            let w_u32 = narrow_uniform_bound(desc.uniform_bound_x_value)?;
+            let buf = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("miri_gpu_uniform_bound_x"),
+                size: 4,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            queue.write_buffer(&buf, 0, &w_u32.to_le_bytes());
+            uniform_bufs.push(buf);
+        }
+        if has_y_bound {
+            let h_u32 = narrow_uniform_bound(desc.uniform_bound_y_value)?;
+            let buf = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("miri_gpu_uniform_bound_y"),
+                size: 4,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            queue.write_buffer(&buf, 0, &h_u32.to_le_bytes());
+            uniform_bufs.push(buf);
+        }
+    }
 
     let mut entries: Vec<wgpu::BindGroupEntry> = storage_buffers
         .iter()
@@ -294,10 +326,10 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
         })
         .collect();
 
-    // Add uniform buffer binding if present.
-    if let Some(ref ub) = uniform_buf {
+    // Add uniform buffer binding(s) if present.
+    for (i, ub) in uniform_bufs.iter().enumerate() {
         entries.push(wgpu::BindGroupEntry {
-            binding: desc.num_bufs as u32,
+            binding: (desc.num_bufs + i) as u32,
             resource: ub.as_entire_binding(),
         });
     }
