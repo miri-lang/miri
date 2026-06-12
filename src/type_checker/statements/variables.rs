@@ -219,11 +219,7 @@ impl TypeChecker {
             return;
         };
 
-        let ExpressionKind::Array(elements, _) = &init.node else {
-            return;
-        };
-
-        let inferred_elem_type = match &inferred_type.kind {
+        let inferred_elem_expr = match &inferred_type.kind {
             TypeKind::Array(elem_expr, _) => elem_expr.as_ref(),
             TypeKind::Custom(name, Some(args)) => {
                 if BuiltinCollectionKind::from_name(name) != Some(BuiltinCollectionKind::Array) {
@@ -237,7 +233,24 @@ impl TypeChecker {
             _ => return,
         };
 
-        let elem_kind = resolve_element_type_kind(inferred_elem_type);
+        self.check_gpu_i32_range_array_expr(init, inferred_elem_expr, context);
+    }
+
+    /// Validates that a literal integer array expression does not contain values
+    /// outside the i32 range. Used by both variable initializers and reassignments.
+    /// Non-integer element types and non-literal arrays pass silently.
+    /// The elem_expr is a type expression (Expression with ExpressionKind::Type or Identifier).
+    pub(crate) fn check_gpu_i32_range_array_expr(
+        &mut self,
+        expr: &Expression,
+        elem_expr: &Expression,
+        context: &Context,
+    ) {
+        let ExpressionKind::Array(elements, _) = &expr.node else {
+            return;
+        };
+
+        let elem_kind = resolve_element_type_kind(elem_expr);
         let is_int_type = matches!(elem_kind, Some(TypeKind::Int) | Some(TypeKind::I64));
 
         if !is_int_type {
