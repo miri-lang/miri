@@ -6,9 +6,14 @@
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
-use crate::mir::{BinOp, Operand, Place, PlaceElem, Rvalue, StatementKind as MirStatementKind};
+use crate::mir::body::BindingResidency as MirResidency;
+use crate::mir::{
+    BinOp, Constant, Operand, Place, PlaceElem, Rvalue, StatementKind as MirStatementKind,
+    Terminator, TerminatorKind,
+};
 use crate::runtime_fns::rt;
 
+use crate::ast::literal::Literal;
 use crate::mir::lowering::context::LoweringContext;
 use crate::mir::lowering::expression::lower_expression;
 use crate::mir::lowering::helpers::{coerce_rvalue, ensure_place, resolve_type};
@@ -98,6 +103,19 @@ fn handle_managed_place_assign(
 ) -> Result<Operand, LoweringError> {
     if matches!(lhs_ty.kind, TypeKind::Function(_)) {
         sync_closure_captures(ctx, local, &rhs_place, expr.span);
+    }
+
+    // Check for cross-residency upload: gpu-resident LHS assigned from host-resident RHS array.
+    let lhs_residency = ctx.body.local_decls[local.0].residency;
+    let rhs_residency = ctx.body.local_decls[rhs_place.local.0].residency;
+    let should_upload = lhs_residency == MirResidency::Gpu
+        && rhs_residency == MirResidency::Host
+        && rhs_place.projection.is_empty()
+        && ctx.is_perceus_managed(&lhs_ty.kind);
+
+    if should_upload {
+        // Emit upload BEFORE the assignment so the host bytes are transferred to device first.
+        emit_gpu_upload(ctx, local, &rhs_place, expr)?;
     }
 
     ctx.push_statement(crate::mir::Statement {
@@ -630,6 +648,50 @@ fn assign_to_index_compound(
         span: expr.span,
     });
 
+    Ok(())
+}
+
+fn emit_gpu_upload(
+    ctx: &mut LoweringContext,
+    gpu_local: crate::mir::Local,
+    host_place: &Place,
+    expr: &Expression,
+) -> Result<(), LoweringError> {
+    let Some(handle) = ctx.body.local_decls[gpu_local.0].device_handle else {
+        return Err(LoweringError::unsupported_expression(
+            "GPU-resident binding has no device handle",
+            expr.span,
+        ));
+    };
+
+    let handle_operand = Operand::Constant(Box::new(Constant {
+        span: expr.span,
+        ty: Type::new(TypeKind::Int, expr.span),
+        literal: Literal::Integer(crate::ast::literal::IntegerLiteral::I64(handle.0 as i64)),
+    }));
+
+    let array_operand = Operand::Copy(host_place.clone());
+
+    let func_op = Operand::Constant(Box::new(Constant {
+        span: expr.span,
+        ty: Type::new(TypeKind::Identifier, expr.span),
+        literal: Literal::Identifier("miri_gpu_upload".to_string()),
+    }));
+
+    let target_bb = ctx.new_basic_block();
+    let _result_temp = ctx.push_temp(Type::new(TypeKind::Int, expr.span), expr.span);
+
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::Call {
+            func: func_op,
+            args: vec![handle_operand, array_operand],
+            out_args: Vec::new(),
+            destination: Place::new(_result_temp),
+            target: Some(target_bb),
+        },
+        expr.span,
+    ));
+    ctx.set_current_block(target_bb);
     Ok(())
 }
 

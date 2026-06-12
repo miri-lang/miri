@@ -135,3 +135,72 @@ fn main()
         "9 9 1 2",
     );
 }
+
+/// Assigning a host array to a gpu-resident binding performs a real upload.
+/// The kernel reads the assigned values, proving the upload is not a silent
+/// host-side copy that skips device transfer.
+#[test]
+fn gpu_var_assignment_from_host_array_uploads() {
+    if !gpu_adapter_available() {
+        eprintln!("[gpu] skipped gpu_var_assignment_from_host_array_uploads: no suitable adapter");
+        return;
+    }
+    assert_runs_with_output(
+        "
+use system.gpu
+use system.io
+
+fn main()
+    gpu_reset_telemetry()
+    gpu var data = [1, 1, 1, 1]
+    gpu for i in 0..4
+        data[i] = data[i] + 10
+
+    let host1 = data
+    println(f'{host1[0]} {host1[1]} {host1[2]} {host1[3]}')
+
+    data = [2, 2, 2, 2]
+
+    gpu for i in 0..4
+        data[i] = data[i] + 20
+
+    let host2 = data
+    println(f'{host2[0]} {host2[1]} {host2[2]} {host2[3]} {gpu_uploads()}')
+",
+        "11 11 11 11\n22 22 22 22 2",
+    );
+}
+
+/// Simpler test: upload without a launch on host-only system.
+/// Since no GPU adapter exists, this just tests the structure is correct.
+#[test]
+fn gpu_var_assignment_uploads_count() {
+    if !gpu_adapter_available() {
+        eprintln!("[gpu] skipped gpu_var_assignment_uploads_count: no suitable adapter");
+        return;
+    }
+    assert_runs_with_output(
+        "
+use system.gpu
+use system.io
+
+fn main()
+    gpu_reset_telemetry()
+    gpu var data = [1, 1, 1, 1]
+    gpu for i in 0..4
+        data[i] = data[i] * 2
+
+    println(f'after first launch: {gpu_uploads()}')
+
+    data = [3, 3, 3, 3]
+    println(f'after assignment: {gpu_uploads()}')
+
+    gpu for i in 0..4
+        data[i] = data[i] + 1
+
+    let host = data
+    println(f'{host[0]} {host[1]} {host[2]} {host[3]} {gpu_uploads()}')
+",
+        "after first launch: 1\nafter assignment: 2\n4 4 4 4 2",
+    );
+}
