@@ -1003,6 +1003,101 @@ pub unsafe extern "C" fn miri_gpu_readback(handle: u64, arr: *const MiriArrayHea
     }
 }
 
+/// Cross-residency upload: copies host array bytes to the persistent device
+/// buffer owned by `handle`. If the buffer does not yet exist, allocates and
+/// uploads it (as if this binding were first captured in a launch).
+///
+/// When `handle` is 0 (HOST_HANDLE sentinel), returns 0 immediately—
+/// host-resident captures manage their own device buffers in the launch path.
+///
+/// # Safety
+/// `arr` must point to a valid `MiriArrayHeader` whose `data` covers
+/// `elem_count * elem_size` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn miri_gpu_upload(handle: u64, arr: *const MiriArrayHeader) -> u8 {
+    if arr.is_null() || handle == device_table::HOST_HANDLE {
+        return 0;
+    }
+    let header = &*arr;
+    let host_byte_len = header.elem_count.saturating_mul(header.elem_size);
+    if host_byte_len == 0 || header.data.is_null() {
+        return 1;
+    }
+
+    let Ok(ctx) = init_gpu_context() else {
+        return 0;
+    };
+
+    // Check if buffer already exists; if so, reuse it with a write.
+    if let Some((existing_buffer, existing_byte_len, needs_widen)) =
+        device_table::resident_buffer(handle)
+    {
+        if host_byte_len == 0 || header.data.is_null() {
+            return 1;
+        }
+        if needs_widen {
+            // Host buffer is i64 elements that were narrowed to i32 on first upload.
+            // Narrow again for this explicit upload.
+            let elem_count = host_byte_len / 8;
+            let device_len = elem_count.checked_mul(4).unwrap_or(0);
+            if device_len > existing_byte_len {
+                log::error!("miri_gpu_upload: narrowed device buffer too small");
+                return 0;
+            }
+            let mut upload_bytes = Vec::with_capacity(device_len);
+            let host_i64s = std::slice::from_raw_parts(header.data as *const i64, elem_count);
+            for (elem_idx, &val) in host_i64s.iter().enumerate() {
+                if val < i32::MIN as i64 || val > i32::MAX as i64 {
+                    log::error!(
+                        "miri_gpu_upload narrowing failed: buffer {} element {}: value {} \
+                        exceeds i32 range [{}, {}]",
+                        handle,
+                        elem_idx,
+                        val,
+                        i32::MIN,
+                        i32::MAX
+                    );
+                    return 0;
+                }
+                upload_bytes.extend_from_slice(&(val as i32).to_le_bytes());
+            }
+            ctx.queue.write_buffer(&existing_buffer, 0, &upload_bytes);
+        } else {
+            // No narrowing needed; write raw bytes.
+            let upload_len = host_byte_len.min(existing_byte_len);
+            ctx.queue.write_buffer(
+                &existing_buffer,
+                0,
+                std::slice::from_raw_parts(header.data, upload_len),
+            );
+        }
+        telemetry::record_upload();
+        return 1;
+    }
+
+    // Buffer does not exist yet; allocate and upload it fresh (same as first-launch path).
+    // For simplicity, assume no narrowing (the assignment path does not narrow; narrowing
+    // is only applied when a host array with i64 elements is first uploaded in a launch).
+    // If narrowing is needed in the future, the calling code must pass an i32-narrowed array.
+    match new_storage_buffer_with_upload(
+        &ctx.device,
+        &ctx.queue,
+        header.data,
+        host_byte_len,
+        false, // no narrowing for explicit upload assignment
+        0,     // buffer_index is not meaningful for standalone upload
+    ) {
+        Ok(buffer) => {
+            device_table::insert_resident(handle, buffer, host_byte_len, false);
+            1
+        }
+        Err(err) => {
+            log::error!("miri_gpu_upload failed: {:?}", err);
+            0
+        }
+    }
+}
+
 #[cfg(test)]
 mod shader_compilation_tests {
     use super::*;
