@@ -427,7 +427,30 @@ fn build_manifest(
         .get(&paint_buffer)
         .map(|(_, len, _, _)| *len)
         .unwrap_or(4096);
-    let (canvas_width, canvas_height) = compute_canvas_dimensions(paint_length);
+
+    // Infer paint_mode BEFORE computing canvas dimensions.
+    // Check if the paint buffer is f32 with length = 4 * pixel_count.
+    // If so, it's RGBA; otherwise it's colormap.
+    let (paint_mode, effective_paint_length) = all_buffers
+        .get(&paint_buffer)
+        .map(|(elem_type, len, _, _)| {
+            if elem_type == "f32" && *len % 4 == 0 {
+                // RGBA mode: length is 4 * pixel_count
+                ("rgba".to_string(), *len / 4)
+            } else {
+                // Colormap mode: length is pixel_count
+                ("colormap".to_string(), *len)
+            }
+        })
+        .unwrap_or_else(|| ("colormap".to_string(), paint_length));
+
+    let (canvas_width, canvas_height) = compute_canvas_dimensions(effective_paint_length);
+
+    let paint_mode = if paint_mode == "rgba" {
+        Some(paint_mode)
+    } else {
+        None
+    };
 
     // Split kernels into seed and frame
     let mut seed_kernels = Vec::new();
@@ -452,6 +475,7 @@ fn build_manifest(
         seed: seed_kernels,
         frame: frame_kernel,
         paint: paint_buffer,
+        paint_mode,
     })
 }
 

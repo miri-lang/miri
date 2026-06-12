@@ -18,6 +18,8 @@ pub struct Manifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frame: Option<KernelSpec>,
     pub paint: String,
+    #[serde(rename = "paintMode", skip_serializing_if = "Option::is_none")]
+    pub paint_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

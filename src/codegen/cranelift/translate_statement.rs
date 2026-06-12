@@ -278,7 +278,8 @@ impl<'a> FunctionTranslator<'a> {
                 arg_handles,
                 arg_read_only,
                 arg_int_narrow,
-                uniform_bound,
+                uniform_bound_x,
+                uniform_bound_y,
                 destination: _,
                 target,
             } => {
@@ -292,7 +293,8 @@ impl<'a> FunctionTranslator<'a> {
                     arg_handles,
                     arg_read_only,
                     arg_int_narrow,
-                    uniform_bound,
+                    uniform_bound_x,
+                    uniform_bound_y,
                     locals,
                     type_ctx,
                 )?;
