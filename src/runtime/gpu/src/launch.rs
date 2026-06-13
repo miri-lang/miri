@@ -148,11 +148,14 @@ pub struct GpuLaunchDesc {
     /// num_bufs reflects capture count, but with uniform buffers present,
     /// the kernel has num_bufs storage + 1 uniform binding. This is always num_bufs.
     pub num_storage_bufs: u64,
-    /// Padding to reach 144 bytes for alignment.
-    pub _padding: [u64; 1],
+    /// Packed scalar capture values (int→i32, bool→u32, f32→f32).
+    /// Each scalar occupies 4 bytes. When null, no scalar captures are present.
+    pub scalar_inputs_ptr: *const u8,
+    /// Byte length of `scalar_inputs_ptr` buffer.
+    pub scalar_inputs_len: usize,
 }
 
-const _: () = assert!(core::mem::size_of::<GpuLaunchDesc>() == 144);
+const _: () = assert!(core::mem::size_of::<GpuLaunchDesc>() == 152);
 
 /// Launches a GPU kernel inline. Returns 1 on success, 0 on failure.
 ///
@@ -205,7 +208,8 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
     // Bit 0 = x bound, Bit 1 = y bound. Count how many bits are set.
     let num_uniform_bufs = ((desc.uniform_bound_present & 1) != 0_u64) as usize
         + ((desc.uniform_bound_present & 2) != 0_u64) as usize;
-    let num_bindings = desc.num_bufs + num_uniform_bufs;
+    let has_scalar_inputs = desc.scalar_inputs_len > 0;
+    let num_bindings = desc.num_bufs + num_uniform_bufs + (has_scalar_inputs as usize);
 
     // Ensure the kernel is compiled with the correct bind group layout.
     // Pass num_storage_bufs so the layout can distinguish storage from uniform buffers.
@@ -317,6 +321,21 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
         }
     }
 
+    let scalar_inputs_buf = if desc.scalar_inputs_len > 0 {
+        let buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("miri_gpu_scalar_inputs"),
+            size: desc.scalar_inputs_len as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let scalar_data =
+            std::slice::from_raw_parts(desc.scalar_inputs_ptr, desc.scalar_inputs_len);
+        queue.write_buffer(&buf, 0, scalar_data);
+        Some(buf)
+    } else {
+        None
+    };
+
     let mut entries: Vec<wgpu::BindGroupEntry> = storage_buffers
         .iter()
         .enumerate()
@@ -331,6 +350,13 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
         entries.push(wgpu::BindGroupEntry {
             binding: (desc.num_bufs + i) as u32,
             resource: ub.as_entire_binding(),
+        });
+    }
+
+    if let Some(sib) = &scalar_inputs_buf {
+        entries.push(wgpu::BindGroupEntry {
+            binding: (desc.num_bufs + uniform_bufs.len()) as u32,
+            resource: sib.as_entire_binding(),
         });
     }
 
@@ -766,7 +792,7 @@ pub(crate) fn build_bind_group_layout(
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,
-                min_binding_size: std::num::NonZeroU64::new(4),
+                min_binding_size: None,
             },
             count: None,
         });

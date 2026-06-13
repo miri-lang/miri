@@ -43,6 +43,11 @@ enum CaptureViolation {
         elem_ty: Type,
         span: Span,
     },
+    UnsupportedScalarCapture {
+        name: String,
+        ty: Type,
+        span: Span,
+    },
 }
 
 impl TypeChecker {
@@ -92,6 +97,16 @@ impl TypeChecker {
                 ),
                 span,
             ),
+            CaptureViolation::UnsupportedScalarCapture { name, ty, span } => {
+                self.report_error(
+                    format!(
+                        "'gpu for' cannot capture scalar '{}' of type '{}': unsupported gpu scalar capture type. \
+                         Supported types are: int (i32, i64), bool, and f32 (not f64 or String)",
+                        name, ty
+                    ),
+                    span,
+                );
+            }
         }
     }
 }
@@ -366,24 +381,53 @@ fn check_captured_identifier(
     let Some(info) = context.resolve_info(name) else {
         return;
     };
-    let Some(elem_ty) = captured_buffer_element(&info.ty.kind) else {
-        return;
-    };
-    if info.residency == BindingResidency::Host && is_residency_gated_buffer(&info.ty.kind) {
+
+    if let Some(elem_ty) = captured_buffer_element(&info.ty.kind) {
+        if info.residency == BindingResidency::Host && is_residency_gated_buffer(&info.ty.kind) {
+            reported.insert(name.to_string());
+            violations.push(CaptureViolation::HostResident {
+                name: name.to_string(),
+                span,
+            });
+            return;
+        }
+        if is_gpu_buffer_element(&elem_ty.kind) {
+            return;
+        }
         reported.insert(name.to_string());
-        violations.push(CaptureViolation::HostResident {
+        violations.push(CaptureViolation::NonBufferElement {
             name: name.to_string(),
+            elem_ty,
             span,
         });
         return;
     }
-    if is_gpu_buffer_element(&elem_ty.kind) {
+
+    // Skip function types (math intrinsics, user fns, etc.).
+    // Only validate actual capturable variables.
+    if matches!(info.ty.kind, crate::ast::types::TypeKind::Function(_)) {
         return;
     }
-    reported.insert(name.to_string());
-    violations.push(CaptureViolation::NonBufferElement {
-        name: name.to_string(),
-        elem_ty,
-        span,
-    });
+
+    if !is_supported_scalar_capture(&info.ty.kind) {
+        reported.insert(name.to_string());
+        violations.push(CaptureViolation::UnsupportedScalarCapture {
+            name: name.to_string(),
+            ty: info.ty.clone(),
+            span,
+        });
+    }
+}
+
+fn is_supported_scalar_capture(kind: &crate::ast::types::TypeKind) -> bool {
+    use crate::ast::types::TypeKind;
+    matches!(
+        kind,
+        TypeKind::Int
+            | TypeKind::I32
+            | TypeKind::I16
+            | TypeKind::I8
+            | TypeKind::Boolean
+            | TypeKind::F32
+    )
 }

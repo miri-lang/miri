@@ -173,6 +173,7 @@ impl fmt::Display for Terminator {
                 arg_handles: _,
                 arg_read_only: _,
                 arg_int_narrow: _,
+                scalar_args: _,
                 uniform_bound_x: _,
                 uniform_bound_y: _,
                 destination,
@@ -255,6 +256,11 @@ pub enum TerminatorKind {
     /// storage buffers (binding 0..N in declaration order). Each capture's
     /// read/write mode is recorded in `arg_read_only`.
     ///
+    /// `scalar_args` are host-side scalar values (int, bool, f32) that are
+    /// passed as WGSL uniform values. These are read-only in the kernel.
+    /// The runtime packs them into a uniform struct buffer and passes it to
+    /// the kernel at binding index `num_buffers + num_bound_uniforms`.
+    ///
     /// When `uniform_bound_x` or `uniform_bound_y` is `Some`, the kernel
     /// bounds-check loop limit(s) are exposed as a uniform buffer (struct with
     /// `w` and `h` fields) instead of compile-time constants. The runtime will
@@ -280,6 +286,10 @@ pub enum TerminatorKind {
         /// `arg_int_narrow[i]` is true when the i-th capture is an `Array<int, N>`.
         /// Empty means no captures (impossible), or this launch is legacy and none need narrowing.
         arg_int_narrow: Vec<bool>,
+        /// Scalar captures (int, bool, f32) passed as WGSL uniform values.
+        /// Empty if no scalar captures. Each entry is materialized to a local
+        /// and its type is available from the type checker.
+        scalar_args: Vec<Operand>,
         /// When present, an i64 operand containing the loop-bound limit value for the x axis.
         /// For 1D loops, this carries the single bound. For 2D loops, this is the width.
         /// This is lowered to a uniform buffer in the kernel. When `None`, x bounds
