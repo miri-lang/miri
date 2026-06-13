@@ -39,6 +39,13 @@ pub struct BufferSpec {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct InputFieldSpec {
+    pub name: String,
+    pub ty: String,
+    pub offset: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct KernelSpec {
     #[serde(rename = "entryPoint")]
     pub entry_point: String,
@@ -49,6 +56,8 @@ pub struct KernelSpec {
     pub read: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub write: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inputs: Option<Vec<InputFieldSpec>>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -323,3 +323,132 @@ gpu for i in 0..16
         "manifest should have null/omitted 'paintMode' for non-RGBA buffer (defaults to colormap)"
     );
 }
+
+#[test]
+fn frame_kernel_inputs_manifest_field() {
+    // D4: verify frame kernels have inputs field in manifest with correct offsets
+    const FRAME_WITH_FIELDS_SOURCE: &str = r#"use system.io
+use system.gpu
+use system.collections.array
+
+gpu var grid_a = Array<int, 16>()
+gpu var grid_b = Array<int, 16>()
+
+gpu for idx in 0..16
+    grid_a[idx] = idx as int
+
+gpu frame idx in 0..16
+    if frame.mouse_down:
+        let t = frame.time
+        grid_b[idx] = grid_a[idx] + 1
+"#;
+
+    let source = write_source(FRAME_WITH_FIELDS_SOURCE);
+    let out_dir = tempfile::tempdir().unwrap();
+    let bundle_dir = out_dir.path().join("bundle");
+
+    let mut cmd = miri_cmd();
+    cmd.arg("build")
+        .arg(source.path())
+        .arg("--target")
+        .arg("web-gpu")
+        .arg("--out")
+        .arg(&bundle_dir)
+        .assert()
+        .success();
+
+    let manifest_path = bundle_dir.join("bundle.json");
+    let manifest_text = fs::read_to_string(&manifest_path).expect("read manifest");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&manifest_text).expect("parse manifest JSON");
+
+    // Verify frame kernel exists
+    assert!(
+        manifest["frame"].is_object(),
+        "manifest should have frame kernel object"
+    );
+
+    let frame = &manifest["frame"];
+
+    // Verify inputs field exists
+    assert!(
+        frame["inputs"].is_array(),
+        "frame kernel should have 'inputs' array field"
+    );
+
+    let inputs = frame["inputs"].as_array().unwrap();
+    assert_eq!(inputs.len(), 11, "frame inputs must have exactly 11 fields");
+
+    // Verify canonical order and offsets
+    let expected_fields = [
+        ("time", "f32", 0),
+        ("dt", "f32", 4),
+        ("index", "i32", 8),
+        ("mouse_x", "f32", 12),
+        ("mouse_y", "f32", 16),
+        ("mouse_down", "u32", 20),
+        ("drag_dx", "f32", 24),
+        ("drag_dy", "f32", 28),
+        ("wheel", "f32", 32),
+        ("clicked", "u32", 36),
+        ("double_clicked", "u32", 40),
+    ];
+
+    for (i, (name, ty, offset)) in expected_fields.iter().enumerate() {
+        let input = &inputs[i];
+        assert_eq!(
+            input["name"].as_str().unwrap(),
+            *name,
+            "input[{}].name should be '{}'",
+            i,
+            name
+        );
+        assert_eq!(
+            input["ty"].as_str().unwrap(),
+            *ty,
+            "input[{}].ty should be '{}'",
+            i,
+            ty
+        );
+        assert_eq!(
+            input["offset"].as_u64().unwrap(),
+            *offset as u64,
+            "input[{}].offset should be {}",
+            i,
+            offset
+        );
+    }
+}
+
+#[test]
+fn non_frame_kernel_no_inputs_field() {
+    // Verify non-frame kernels omit the inputs field entirely
+    let source = write_source(GPU_FOR_SOURCE);
+    let out_dir = tempfile::tempdir().unwrap();
+    let bundle_dir = out_dir.path().join("bundle");
+
+    let mut cmd = miri_cmd();
+    cmd.arg("build")
+        .arg(source.path())
+        .arg("--target")
+        .arg("web-gpu")
+        .arg("--out")
+        .arg(&bundle_dir)
+        .assert()
+        .success();
+
+    let manifest_path = bundle_dir.join("bundle.json");
+    let manifest_text = fs::read_to_string(&manifest_path).expect("read manifest");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&manifest_text).expect("parse manifest JSON");
+
+    // Check seed kernels do not have inputs field (prove skip_serializing_if works)
+    let seed = manifest["seed"].as_array().unwrap();
+    assert!(!seed.is_empty(), "should have at least one seed kernel");
+    for kernel in seed {
+        assert!(
+            kernel.get("inputs").is_none(),
+            "non-frame kernel should not have inputs field in JSON"
+        );
+    }
+}

@@ -946,7 +946,7 @@ mod desc_layout_tests {
     fn gpu_launch_desc_abi_is_pinned() {
         assert_eq!(
             size_of::<GpuLaunchDesc>(),
-            128,
+            152,
             "GpuLaunchDesc size drifted; update Cranelift desc_layout::DESC_SIZE in lockstep"
         );
         assert_eq!(align_of::<GpuLaunchDesc>(), 8);
@@ -967,8 +967,11 @@ mod desc_layout_tests {
         assert_eq!(offset_of!(GpuLaunchDesc, buf_read_only), 88);
         assert_eq!(offset_of!(GpuLaunchDesc, buf_int_narrow), 96);
         assert_eq!(offset_of!(GpuLaunchDesc, uniform_bound_present), 104);
-        assert_eq!(offset_of!(GpuLaunchDesc, uniform_bound_value), 112);
-        assert_eq!(offset_of!(GpuLaunchDesc, num_storage_bufs), 120);
+        assert_eq!(offset_of!(GpuLaunchDesc, uniform_bound_x_value), 112);
+        assert_eq!(offset_of!(GpuLaunchDesc, uniform_bound_y_value), 120);
+        assert_eq!(offset_of!(GpuLaunchDesc, num_storage_bufs), 128);
+        assert_eq!(offset_of!(GpuLaunchDesc, scalar_inputs_ptr), 136);
+        assert_eq!(offset_of!(GpuLaunchDesc, scalar_inputs_len), 144);
     }
 }
 

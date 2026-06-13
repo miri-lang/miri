@@ -64,6 +64,14 @@ impl<'source> Parser<'source> {
         match &self.lookahead {
             Some((Token::LParen, _)) => self.parenthesized_expression(),
             Some((Token::Identifier, _)) => self.identifier(),
+            // `frame` is a contextual keyword: it names the per-frame input
+            // context inside a `gpu frame` kernel body and parses as an
+            // ordinary identifier in expression position. The type checker
+            // binds it only within a `gpu frame` body and rejects it elsewhere.
+            Some((Token::Frame, _)) => {
+                let (_, span) = self.eat_token(&Token::Frame)?;
+                Ok(ast::identifier_with_class_and_span("frame", None, span))
+            }
             Some((Token::Super, _)) => {
                 let (_, span) = self.eat_token(&Token::Super)?;
                 Ok(ast::super_expression_with_span(span))

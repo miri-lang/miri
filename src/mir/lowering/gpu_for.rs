@@ -44,7 +44,7 @@ use super::context::LoweringContext;
 use super::expression::lower_expression;
 use super::statement::lower_statement;
 
-const GPU_FOR_BLOCK_SIZE: u32 = 256;
+pub const GPU_FOR_BLOCK_SIZE: u32 = 256;
 
 /// Lowers a `gpu for` loop into a synthesized kernel + `GpuLaunch`.
 ///
@@ -251,12 +251,12 @@ fn lower_gpu_for_2d(
     Ok(())
 }
 
-struct CaptureInfo {
-    name: String,
-    ty: Type,
-    outer_local: Local,
-    is_written: bool,
-    is_scalar: bool,
+pub struct CaptureInfo {
+    pub name: String,
+    pub ty: Type,
+    pub outer_local: Local,
+    pub is_written: bool,
+    pub is_scalar: bool,
 }
 
 /// Collects the names of variables that are written to in the given statement.
@@ -335,7 +335,7 @@ fn extract_written_lhs(
 /// Collect and validate the outer-variable captures of a `gpu for` body.
 /// Accepts both gpu-resident buffer (`Array`-shaped) captures and host-side
 /// scalar captures (int, bool, f32 — read-only uniforms).
-fn collect_capture_infos(
+pub fn collect_capture_infos(
     ctx: &LoweringContext,
     body: &Statement,
     loop_var_name: &str,
@@ -459,7 +459,7 @@ fn is_gpu_scalar_capture(kind: &TypeKind) -> bool {
     )
 }
 
-fn read_int_literal(expr: &Expression, span: Span) -> Result<i64, LoweringError> {
+pub fn read_int_literal(expr: &Expression, span: Span) -> Result<i64, LoweringError> {
     if let ExpressionKind::Literal(Literal::Integer(int_lit)) = &expr.node {
         Ok(int_literal_to_i64(int_lit))
     } else {
@@ -488,11 +488,11 @@ fn int_literal_to_i64(lit: &IntegerLiteral) -> i64 {
 /// The overflow diagnostic shared by the literal-range length and bounds-limit
 /// arithmetic. The bounds reconstruction is guarded upstream by
 /// `compute_range_length`, so this fires only as defense-in-depth.
-fn bounds_overflow_err(span: Span) -> LoweringError {
+pub fn bounds_overflow_err(span: Span) -> LoweringError {
     LoweringError::unsupported_expression("gpu for: range bounds overflow i64".to_string(), span)
 }
 
-fn compute_range_length(
+pub fn compute_range_length(
     start: i64,
     end: i64,
     range_type: RangeExpressionType,
@@ -733,7 +733,7 @@ fn visit_lhs(
 /// Computes the global thread index for the given dimension:
 /// `thread_id[dim] + block_id[dim] * block_dim[dim]`, cast to i64.
 /// Returns the i64 thread index and emits the necessary statements into ctx.
-fn compute_thread_index(ctx: &mut LoweringContext, dim: Dimension, span: Span) -> Local {
+pub fn compute_thread_index(ctx: &mut LoweringContext, dim: Dimension, span: Span) -> Local {
     let u32_ty = Type::new(TypeKind::U32, span);
     let i64_ty = Type::new(TypeKind::Int, span);
 
@@ -894,7 +894,7 @@ fn build_kernel_body_literal(
     Ok(ctx.body)
 }
 
-fn emit_gpu_launch_literal(
+pub fn emit_gpu_launch_literal(
     ctx: &mut LoweringContext,
     kernel_name: &str,
     length: i64,
@@ -1048,7 +1048,7 @@ fn build_kernel_body_runtime(
 
 /// Emits bounds check loop with uniform parameter.
 /// Assumes loop_local and uniform_param are already initialized.
-fn emit_bounds_check_loop(
+pub fn emit_bounds_check_loop(
     ctx: &mut LoweringContext,
     loop_local: Local,
     uniform_param: Local,
@@ -1115,7 +1115,7 @@ fn emit_bounds_check_loop(
 /// as the uniform bound.
 /// Computes grid size from a clamped loop length using overflow-safe ceiling division.
 /// Returns the grid-x value (Local). Emits statements into ctx.
-fn compute_grid_size(ctx: &mut LoweringContext, clamped_length: Local, span: Span) -> Local {
+pub fn compute_grid_size(ctx: &mut LoweringContext, clamped_length: Local, span: Span) -> Local {
     let i64_ty = Type::new(TypeKind::Int, span);
     let block_size_i64 = i64::from(GPU_FOR_BLOCK_SIZE);
 
@@ -1183,7 +1183,7 @@ fn compute_grid_size(ctx: &mut LoweringContext, clamped_length: Local, span: Spa
 /// (`end_op > start`) before computing the difference, ensuring correctness
 /// even when i64 subtraction would underflow. This avoids the wrap-to-positive
 /// vulnerability of checking `(end - start) > 0` directly.
-fn compute_clamped_length(
+pub fn compute_clamped_length(
     ctx: &mut LoweringContext,
     end_op: Operand,
     start: i64,
@@ -1283,7 +1283,7 @@ fn build_dim3_descriptors(ctx: &mut LoweringContext, grid_x: Local, span: Span) 
     (grid_local, block_local)
 }
 
-fn emit_gpu_launch_runtime(
+pub fn emit_gpu_launch_runtime(
     ctx: &mut LoweringContext,
     kernel_name: &str,
     start: i64,
@@ -1368,7 +1368,7 @@ fn emit_gpu_launch_runtime(
     Ok(())
 }
 
-fn push_assign(ctx: &mut LoweringContext, local: Local, rvalue: Rvalue, span: Span) {
+pub fn push_assign(ctx: &mut LoweringContext, local: Local, rvalue: Rvalue, span: Span) {
     ctx.push_statement(MirStatement {
         kind: MirStatementKind::Assign(Place::new(local), rvalue),
         span,
@@ -2099,11 +2099,11 @@ fn literal_grid_dim(extent: i64, block_size: u32) -> u32 {
 }
 
 /// 1D gpu for workgroup count, using the standard 256-thread block.
-fn literal_grid_x(length: i64) -> u32 {
+pub fn literal_grid_x(length: i64) -> u32 {
     literal_grid_dim(length, GPU_FOR_BLOCK_SIZE)
 }
 
-fn int_constant(value: i64, span: Span) -> Operand {
+pub fn int_constant(value: i64, span: Span) -> Operand {
     Operand::Constant(Box::new(Constant {
         span,
         ty: Type::new(TypeKind::Int, span),
@@ -2116,7 +2116,7 @@ fn int_constant(value: i64, span: Span) -> Operand {
 /// the host but emitted as `array<i32>` (4-byte) in WGSL (WebGPU has no 64-bit
 /// integer), so the runtime narrows on upload and widens on readback.
 /// `i32`/`u32`/`f32`/`f64`/etc. buffers match the device width and are not narrowed.
-fn needs_int_narrowing(ty: &Type) -> bool {
+pub fn needs_int_narrowing(ty: &Type) -> bool {
     let elem_expr = match &ty.kind {
         // AST-phase variants (before normalization).
         TypeKind::Array(elem_expr, _) | TypeKind::List(elem_expr) => Some(elem_expr.as_ref()),

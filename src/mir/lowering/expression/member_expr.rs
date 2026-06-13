@@ -4,7 +4,10 @@
 //! Expression lowering - converts AST expressions to MIR.
 
 use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::types::{Type, TypeKind, GPU_CONTEXT_DEPRECATED_IDENT, KERNEL_CONTEXT_IDENT};
+use crate::ast::types::{
+    frame_input_param_key, Type, TypeKind, FRAME_INPUT_FIELDS, FRAME_INPUT_IDENT,
+    GPU_CONTEXT_DEPRECATED_IDENT, KERNEL_CONTEXT_IDENT,
+};
 use crate::error::lowering::LoweringError;
 use crate::mir::{
     AggregateKind, Constant, Dimension, GpuIntrinsic, Operand, Place, PlaceElem, Rvalue,
@@ -314,10 +317,52 @@ fn try_gpu_intrinsic(
 
                     return Ok(Some(emit_gpu_intrinsic_assign(ctx, rvalue, dest, expr)));
                 }
+            } else if sym == FRAME_INPUT_IDENT {
+                if let ExpressionKind::Identifier(prop_name, _) = &prop.node {
+                    return lower_frame_input_field(ctx, prop_name, expr, dest);
+                }
             }
         }
     }
     Ok(None)
+}
+
+/// Lower a frame input field access (e.g., frame.time).
+/// Reads the value from the corresponding frame input parameter (f0..f10).
+fn lower_frame_input_field(
+    ctx: &mut LoweringContext,
+    field_name: &str,
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Option<Operand>, LoweringError> {
+    let field_idx = match FRAME_INPUT_FIELDS.iter().position(|f| f.name == field_name) {
+        Some(idx) => idx,
+        None => {
+            return Err(LoweringError::unsupported_expression(
+                format!("Unknown frame field: {}", field_name),
+                expr.span,
+            ));
+        }
+    };
+
+    let param_key: std::rc::Rc<str> = frame_input_param_key(field_idx).into();
+    let param_local = match ctx.variable_map.get(param_key.as_ref()) {
+        Some(&local) => local,
+        None => return Ok(None),
+    };
+
+    let operand = Operand::Copy(Place::new(param_local));
+
+    match &dest {
+        Some(d) => {
+            ctx.push_statement(crate::mir::Statement {
+                kind: MirStatementKind::Assign(d.clone(), Rvalue::Use(operand)),
+                span: expr.span,
+            });
+            Ok(Some(Operand::Copy(d.clone())))
+        }
+        None => Ok(Some(operand)),
+    }
 }
 
 pub(crate) fn lower_member_expr(
@@ -331,6 +376,18 @@ pub(crate) fn lower_member_expr(
 
     if let Some(result) = try_module_alias_constant(ctx, obj, prop, expr, dest.clone())? {
         return Ok(result);
+    }
+
+    // Handle frame.* field access before lowering obj
+    if let ExpressionKind::Identifier(name, _) = &obj.node {
+        if name == FRAME_INPUT_IDENT {
+            if let ExpressionKind::Identifier(prop_name, _) = &prop.node {
+                if let Some(operand) = lower_frame_input_field(ctx, prop_name, expr, dest.clone())?
+                {
+                    return Ok(operand);
+                }
+            }
+        }
     }
 
     let obj_operand = lower_expression(ctx, obj, None)?;
