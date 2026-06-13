@@ -7,7 +7,8 @@
 //! available in every Miri program without explicit imports.
 
 use crate::ast::types::{
-    TypeDeclarationKind, TypeKind, DIM3_TYPE_NAME, GPU_CONTEXT_TYPE_NAME, KERNEL_TYPE_NAME,
+    FrameFieldKind, TypeDeclarationKind, TypeKind, DIM3_TYPE_NAME, FRAME_INPUT_FIELDS,
+    FRAME_INPUT_TYPE_NAME, GPU_CONTEXT_TYPE_NAME, KERNEL_TYPE_NAME,
 };
 use crate::ast::MemberVisibility;
 use std::collections::HashMap;
@@ -99,6 +100,33 @@ fn register_gpu_types(types: &mut HashMap<String, TypeDefinition>) {
         KERNEL_TYPE_NAME.to_string(),
         TypeDefinition::Struct(StructDefinition {
             fields: vec![],
+            generics: None,
+            has_drop: false,
+            module: "std".to_string(),
+        }),
+    );
+
+    // FrameInput: per-frame host input available inside `gpu frame` bodies.
+    // Derived from FRAME_INPUT_FIELDS descriptor to maintain single source of truth.
+    let field_type = |kind: FrameFieldKind| match kind {
+        FrameFieldKind::F32 => crate::ast::factory::make_type(TypeKind::F32),
+        FrameFieldKind::Int => int_type(),
+        FrameFieldKind::Bool => crate::ast::factory::make_type(TypeKind::Boolean),
+    };
+    let fields: Vec<_> = FRAME_INPUT_FIELDS
+        .iter()
+        .map(|def| {
+            (
+                def.name.to_string(),
+                field_type(def.kind),
+                MemberVisibility::Public,
+            )
+        })
+        .collect();
+    types.insert(
+        FRAME_INPUT_TYPE_NAME.to_string(),
+        TypeDefinition::Struct(StructDefinition {
+            fields,
             generics: None,
             has_drop: false,
             module: "std".to_string(),

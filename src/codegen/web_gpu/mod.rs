@@ -13,13 +13,13 @@
 
 mod manifest;
 
-use crate::ast::types::TypeKind;
+use crate::ast::types::{FrameFieldKind, TypeKind, FRAME_INPUT_FIELDS};
 use crate::codegen::wgsl::{WgslBackend, WgslOptions};
 use crate::codegen::Backend;
 use crate::error::compiler::CompilerError;
 use crate::mir::backend::BackendMetadata;
 use crate::mir::{Body, ExecutionModel};
-use manifest::{BindingSpec, BufferSpec, CanvasSpec, KernelSpec, Manifest};
+use manifest::{BindingSpec, BufferSpec, CanvasSpec, InputFieldSpec, KernelSpec, Manifest};
 use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
@@ -510,6 +510,13 @@ fn build_kernel_spec(artifact: &KernelArtifact) -> Result<KernelSpec, CompilerEr
         (None, None)
     };
 
+    // For frame kernels, populate the 11 frame input fields
+    let inputs = if artifact.is_frame_step {
+        Some(build_frame_inputs())
+    } else {
+        None
+    };
+
     // Use grid_size (dispatch grid) if available; fallback to a default grid of [1,1,1]
     // for runtime-bound kernels where grid is computed at runtime.
     let workgroups = artifact.grid_size.unwrap_or([1, 1, 1]);
@@ -521,7 +528,28 @@ fn build_kernel_spec(artifact: &KernelArtifact) -> Result<KernelSpec, CompilerEr
         bindings,
         read,
         write,
+        inputs,
     })
+}
+
+fn build_frame_inputs() -> Vec<InputFieldSpec> {
+    FRAME_INPUT_FIELDS
+        .iter()
+        .enumerate()
+        .map(|(idx, def)| {
+            let ty = match def.kind {
+                FrameFieldKind::F32 => "f32".to_string(),
+                FrameFieldKind::Int => "i32".to_string(),
+                FrameFieldKind::Bool => "u32".to_string(),
+            };
+            let offset = (idx as u32) * 4;
+            InputFieldSpec {
+                name: def.name.to_string(),
+                ty,
+                offset,
+            }
+        })
+        .collect()
 }
 
 fn compute_canvas_dimensions(length: usize) -> (u32, u32) {
