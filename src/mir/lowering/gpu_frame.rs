@@ -3,26 +3,36 @@
 
 //! MIR lowering for `gpu frame <ident> in <range>` loops.
 //!
-//! A `gpu frame` loop is a variant of `gpu for` that:
-//! - Reads from exactly ONE gpu-resident buffer (read-only).
-//! - Writes to exactly ONE gpu-resident buffer (read-write).
-//! - Synthesizes a kernel marked with `is_frame_step=true` for animation drivers.
+//! A `gpu frame` loop is a variant of `gpu for` that synthesizes a kernel marked
+//! with `is_frame_step=true` for animation drivers. The frame kernel is structured
+//! as a `gpu for` kernel plus 11 leading frame-input uniform parameters (f0..f10),
+//! which precede any ordinary scalar captures. This parameter ordering ensures the
+//! WGSL `_Inputs` struct fields at offsets 0–40 are fixed for frame fields,
+//! simplifying integration with the web-gpu driver.
 //!
-//! The lowering reuses `gpu for` infrastructure and marks the result with
-//! the frame-step flag in the GPU metadata.
+//! The frame input fields (time, dt, index, mouse_x, mouse_y, mouse_down, drag_dx,
+//! drag_dy, wheel, clicked, double_clicked) are lowered as UniformBuffer parameters
+//! and accessed by name-based lookup in member_expr. Deduplication with gpu_for
+//! kernel building logic is a future cleanup task.
 
-use crate::ast::expression::Expression;
+use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::statement::{Statement, VariableDeclaration};
+use crate::ast::types::{frame_input_param_key, Type, TypeKind, FRAME_INPUT_FIELDS};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
+use crate::mir::{
+    BackendMetadata, BinOp, Body, Dimension, Discriminant, ExecutionModel, GpuBodyMetadata,
+    LocalDecl, Operand, Place, Rvalue, StorageClass, Terminator, TerminatorKind,
+};
 
 use super::context::LoweringContext;
 use super::gpu_for;
+use super::statement::lower_statement;
 
 /// Lowers a `gpu frame` loop into a synthesized kernel + `GpuLaunch`.
 ///
-/// Delegates to the gpu_for lowering and then marks the generated kernel
-/// with `is_frame_step=true` in its GPU metadata.
+/// Creates a custom kernel with frame input parameters (f0..f10) for the
+/// 11 FrameInput fields, and marks it with `is_frame_step=true`.
 pub fn lower_gpu_frame(
     ctx: &mut LoweringContext,
     span: &Span,
@@ -31,22 +41,678 @@ pub fn lower_gpu_frame(
     iterable: &Expression,
     body: &Statement,
 ) -> Result<(), LoweringError> {
-    // Get the lambda body count before lowering so we can find the generated kernel.
-    let body_count_before = ctx.lambda_bodies.len();
+    let loop_var_name = decls[0].name.clone();
 
-    // Delegate to gpu_for 1D lowering (frame must have exactly 1 loop var).
-    gpu_for::lower_gpu_for(ctx, span, stmt_id, decls, iterable, body)?;
+    let ExpressionKind::Range(start, Some(end), range_type) = &iterable.node else {
+        return Err(LoweringError::unsupported_expression(
+            "gpu frame: iterable must be a bounded numeric range like '0..n'".to_string(),
+            *span,
+        ));
+    };
 
-    // Mark the newly-generated kernel with is_frame_step=true.
-    // gpu_for always generates exactly one kernel per call, so we find it
-    // in the lambda_bodies list.
-    if ctx.lambda_bodies.len() > body_count_before {
-        let kernel_idx = ctx.lambda_bodies.len() - 1;
-        if let Some(backend_meta) = &mut ctx.lambda_bodies[kernel_idx].body.backend_metadata {
-            let crate::mir::BackendMetadata::Gpu(gpu_meta) = backend_meta;
-            gpu_meta.is_frame_step = true;
-        }
+    let start_lit = gpu_for::read_int_literal(start, *span)?;
+    let is_literal_end = matches!(
+        &end.node,
+        ExpressionKind::Literal(crate::ast::literal::Literal::Integer(_))
+    );
+
+    let captures = gpu_for::collect_capture_infos(ctx, body, &loop_var_name, *span)?;
+    let kernel_name = format!("miri_gpu_for_{}", stmt_id);
+    let uses_frame = detect_frame_usage(body);
+
+    if is_literal_end {
+        let end_lit = gpu_for::read_int_literal(end, *span)?;
+        let length = gpu_for::compute_range_length(start_lit, end_lit, range_type.clone(), *span)?;
+        let kernel_body = build_frame_kernel_literal(
+            ctx,
+            &captures,
+            &loop_var_name,
+            start_lit,
+            length,
+            body,
+            *span,
+            uses_frame,
+        )?;
+        ctx.lambda_bodies.push(crate::mir::lambda::LambdaInfo {
+            name: kernel_name.clone(),
+            body: kernel_body,
+            captures: Vec::new(),
+        });
+        emit_gpu_frame_launch_literal(ctx, &kernel_name, length, &captures, *span, uses_frame);
+    } else {
+        let kernel_body = build_frame_kernel_runtime(
+            ctx,
+            &captures,
+            &loop_var_name,
+            start_lit,
+            body,
+            *span,
+            uses_frame,
+        )?;
+        ctx.lambda_bodies.push(crate::mir::lambda::LambdaInfo {
+            name: kernel_name.clone(),
+            body: kernel_body,
+            captures: Vec::new(),
+        });
+        emit_gpu_frame_launch_runtime(
+            ctx,
+            &kernel_name,
+            start_lit,
+            end,
+            range_type.clone(),
+            &captures,
+            *span,
+            uses_frame,
+        )?;
     }
 
     Ok(())
+}
+
+/// Helper to construct and register grid/block Dim3 locals with a literal grid-x value.
+fn make_grid_block_locals(
+    ctx: &mut LoweringContext,
+    grid_x: u32,
+    span: Span,
+) -> (crate::mir::Local, crate::mir::Local) {
+    let dim3_ty = Type::new(TypeKind::Custom("Dim3".to_string(), None), span);
+    let one_op = gpu_for::int_constant(1, span);
+    let grid_x_op = gpu_for::int_constant(i64::from(grid_x), span);
+    let block_size_i64 = i64::from(gpu_for::GPU_FOR_BLOCK_SIZE);
+    let block_x_op = gpu_for::int_constant(block_size_i64, span);
+
+    let grid_local = ctx.push_temp(dim3_ty.clone(), span);
+    gpu_for::push_assign(
+        ctx,
+        grid_local,
+        Rvalue::Aggregate(
+            crate::mir::AggregateKind::Struct(dim3_ty.clone()),
+            vec![grid_x_op, one_op.clone(), one_op.clone()],
+        ),
+        span,
+    );
+    let block_local = ctx.push_temp(dim3_ty.clone(), span);
+    gpu_for::push_assign(
+        ctx,
+        block_local,
+        Rvalue::Aggregate(
+            crate::mir::AggregateKind::Struct(dim3_ty.clone()),
+            vec![block_x_op, one_op.clone(), one_op],
+        ),
+        span,
+    );
+    (grid_local, block_local)
+}
+
+/// Helper to emit bounds-check loop for literal-bound gpu frame kernel.
+fn emit_literal_frame_bounds_check(
+    ctx: &mut LoweringContext,
+    loop_var_name: &str,
+    start: i64,
+    length: i64,
+    body: &Statement,
+    span: Span,
+) -> Result<(), LoweringError> {
+    let i64_ty = Type::new(TypeKind::Int, span);
+    let thread_int = gpu_for::compute_thread_index(ctx, Dimension::X, span);
+
+    let loop_local = ctx.push_local(loop_var_name.to_string(), i64_ty, span);
+    gpu_for::push_assign(
+        ctx,
+        loop_local,
+        Rvalue::BinaryOp(
+            BinOp::Add,
+            Box::new(Operand::Copy(Place::new(thread_int))),
+            Box::new(gpu_for::int_constant(start, span)),
+        ),
+        span,
+    );
+
+    let cond_local = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
+    let limit = start
+        .checked_add(length)
+        .ok_or_else(|| gpu_for::bounds_overflow_err(span))?;
+    gpu_for::push_assign(
+        ctx,
+        cond_local,
+        Rvalue::BinaryOp(
+            BinOp::Lt,
+            Box::new(Operand::Copy(Place::new(loop_local))),
+            Box::new(gpu_for::int_constant(limit, span)),
+        ),
+        span,
+    );
+
+    let body_bb = ctx.new_basic_block();
+    let exit_bb = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::SwitchInt {
+            discr: Operand::Copy(Place::new(cond_local)),
+            targets: vec![(Discriminant::bool_true(), body_bb)],
+            otherwise: exit_bb,
+        },
+        span,
+    ));
+
+    ctx.set_current_block(body_bb);
+    lower_statement(ctx, body)?;
+    if ctx.body.basic_blocks[ctx.current_block.0]
+        .terminator
+        .is_none()
+    {
+        ctx.set_terminator(Terminator::new(
+            TerminatorKind::Goto { target: exit_bb },
+            span,
+        ));
+    }
+
+    ctx.set_current_block(exit_bb);
+    ctx.set_terminator(Terminator::new(TerminatorKind::Return, span));
+    Ok(())
+}
+
+/// Helper to compute bounds limit operand for a runtime range.
+fn compute_bounds_limit(
+    ctx: &mut LoweringContext,
+    end_op: Operand,
+    range_type: crate::ast::RangeExpressionType,
+    span: Span,
+) -> Result<Operand, LoweringError> {
+    let i64_ty = Type::new(TypeKind::Int, span);
+    match range_type {
+        crate::ast::RangeExpressionType::Exclusive => Ok(end_op),
+        crate::ast::RangeExpressionType::Inclusive => {
+            let limit_op = ctx.push_temp(i64_ty, span);
+            gpu_for::push_assign(
+                ctx,
+                limit_op,
+                Rvalue::BinaryOp(
+                    BinOp::Add,
+                    Box::new(end_op),
+                    Box::new(gpu_for::int_constant(1, span)),
+                ),
+                span,
+            );
+            Ok(Operand::Copy(Place::new(limit_op)))
+        }
+        _ => Err(LoweringError::unsupported_expression(
+            "gpu frame: iterable-object ranges are not supported".to_string(),
+            span,
+        )),
+    }
+}
+
+/// Helper to construct grid/block Dim3 locals where grid-x comes from a computed local.
+fn make_grid_block_locals_from_local(
+    ctx: &mut LoweringContext,
+    grid_x_local: crate::mir::Local,
+    span: Span,
+) -> (crate::mir::Local, crate::mir::Local) {
+    let dim3_ty = Type::new(TypeKind::Custom("Dim3".to_string(), None), span);
+    let one_op = gpu_for::int_constant(1, span);
+    let block_size_i64 = i64::from(gpu_for::GPU_FOR_BLOCK_SIZE);
+    let block_x_op = gpu_for::int_constant(block_size_i64, span);
+
+    let grid_local = ctx.push_temp(dim3_ty.clone(), span);
+    gpu_for::push_assign(
+        ctx,
+        grid_local,
+        Rvalue::Aggregate(
+            crate::mir::AggregateKind::Struct(dim3_ty.clone()),
+            vec![
+                Operand::Copy(Place::new(grid_x_local)),
+                one_op.clone(),
+                one_op.clone(),
+            ],
+        ),
+        span,
+    );
+    let block_local = ctx.push_temp(dim3_ty.clone(), span);
+    gpu_for::push_assign(
+        ctx,
+        block_local,
+        Rvalue::Aggregate(
+            crate::mir::AggregateKind::Struct(dim3_ty),
+            vec![block_x_op, one_op.clone(), one_op],
+        ),
+        span,
+    );
+    (grid_local, block_local)
+}
+
+fn emit_gpu_frame_launch_literal(
+    ctx: &mut LoweringContext,
+    kernel_name: &str,
+    length: i64,
+    captures: &[gpu_for::CaptureInfo],
+    span: Span,
+    uses_frame: bool,
+) {
+    let void_ty = Type::new(TypeKind::Void, span);
+    let grid_x = gpu_for::literal_grid_x(length);
+    let (grid_local, block_local) = make_grid_block_locals(ctx, grid_x, span);
+
+    let kernel_op = Operand::Constant(Box::new(crate::mir::Constant {
+        span,
+        ty: Type::new(TypeKind::Identifier, span),
+        literal: crate::ast::literal::Literal::Identifier(kernel_name.to_string()),
+    }));
+
+    let (buffer_captures, scalar_captures): (Vec<_>, Vec<_>) =
+        captures.iter().partition(|c| !c.is_scalar);
+
+    let buffer_ops: Vec<Operand> = buffer_captures
+        .iter()
+        .map(|c| Operand::Copy(Place::new(c.outer_local)))
+        .collect();
+    let scalar_ops: Vec<Operand> = scalar_captures
+        .iter()
+        .map(|c| Operand::Copy(Place::new(c.outer_local)))
+        .collect();
+
+    let arg_handles: Vec<Option<crate::mir::body::DeviceHandleId>> = buffer_captures
+        .iter()
+        .map(|c| ctx.body.local_decls[c.outer_local.0].device_handle)
+        .collect();
+    let arg_int_narrow: Vec<bool> = buffer_captures
+        .iter()
+        .map(|c| gpu_for::needs_int_narrowing(&c.ty))
+        .collect();
+
+    let mut all_scalar_ops = Vec::new();
+    if uses_frame {
+        all_scalar_ops.extend(create_frame_input_zeros(ctx, span));
+    }
+    all_scalar_ops.extend(scalar_ops);
+
+    let dest_local = ctx.push_temp(void_ty, span);
+    let after_bb = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::GpuLaunch {
+            kernel: kernel_op,
+            grid: Operand::Copy(Place::new(grid_local)),
+            block: Operand::Copy(Place::new(block_local)),
+            args: buffer_ops,
+            arg_handles,
+            arg_read_only: buffer_captures.iter().map(|c| !c.is_written).collect(),
+            arg_int_narrow,
+            scalar_args: all_scalar_ops,
+            uniform_bound_x: None,
+            uniform_bound_y: None,
+            destination: Place::new(dest_local),
+            target: Some(after_bb),
+        },
+        span,
+    ));
+    ctx.set_current_block(after_bb);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_gpu_frame_launch_runtime(
+    ctx: &mut LoweringContext,
+    kernel_name: &str,
+    start: i64,
+    end: &Expression,
+    range_type: crate::ast::RangeExpressionType,
+    captures: &[gpu_for::CaptureInfo],
+    span: Span,
+    uses_frame: bool,
+) -> Result<(), LoweringError> {
+    let end_op = super::expression::lower_expression(ctx, end, None)?;
+
+    let void_ty = Type::new(TypeKind::Void, span);
+
+    let clamped_length_local = gpu_for::compute_clamped_length(ctx, end_op.clone(), start, span);
+    let grid_x_local = gpu_for::compute_grid_size(ctx, clamped_length_local, span);
+    let grid_x = crate::mir::Local(grid_x_local.0);
+    let (grid_local, block_local) = make_grid_block_locals_from_local(ctx, grid_x, span);
+
+    let kernel_op = Operand::Constant(Box::new(crate::mir::Constant {
+        span,
+        ty: Type::new(TypeKind::Identifier, span),
+        literal: crate::ast::literal::Literal::Identifier(kernel_name.to_string()),
+    }));
+
+    let (buffer_captures, scalar_captures): (Vec<_>, Vec<_>) =
+        captures.iter().partition(|c| !c.is_scalar);
+
+    let buffer_ops: Vec<Operand> = buffer_captures
+        .iter()
+        .map(|c| Operand::Copy(Place::new(c.outer_local)))
+        .collect();
+    let scalar_ops: Vec<Operand> = scalar_captures
+        .iter()
+        .map(|c| Operand::Copy(Place::new(c.outer_local)))
+        .collect();
+
+    let arg_handles: Vec<Option<crate::mir::body::DeviceHandleId>> = buffer_captures
+        .iter()
+        .map(|c| ctx.body.local_decls[c.outer_local.0].device_handle)
+        .collect();
+    let arg_int_narrow: Vec<bool> = buffer_captures
+        .iter()
+        .map(|c| gpu_for::needs_int_narrowing(&c.ty))
+        .collect();
+
+    let mut all_scalar_ops = Vec::new();
+    if uses_frame {
+        all_scalar_ops.extend(create_frame_input_zeros(ctx, span));
+    }
+    all_scalar_ops.extend(scalar_ops);
+
+    let bounds_limit_op = compute_bounds_limit(ctx, end_op, range_type, span)?;
+
+    let dest_local = ctx.push_temp(void_ty, span);
+    let after_bb = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::GpuLaunch {
+            kernel: kernel_op,
+            grid: Operand::Copy(Place::new(grid_local)),
+            block: Operand::Copy(Place::new(block_local)),
+            args: buffer_ops,
+            arg_handles,
+            arg_read_only: buffer_captures.iter().map(|c| !c.is_written).collect(),
+            arg_int_narrow,
+            scalar_args: all_scalar_ops,
+            uniform_bound_x: Some(Box::new(bounds_limit_op)),
+            uniform_bound_y: None,
+            destination: Place::new(dest_local),
+            target: Some(after_bb),
+        },
+        span,
+    ));
+    ctx.set_current_block(after_bb);
+    Ok(())
+}
+
+fn create_frame_input_zeros(ctx: &mut LoweringContext, span: Span) -> Vec<Operand> {
+    vec![
+        create_zero_local(ctx, Type::new(TypeKind::F32, span), span),
+        create_zero_local(ctx, Type::new(TypeKind::F32, span), span),
+        create_zero_local(ctx, Type::new(TypeKind::Int, span), span),
+        create_zero_local(ctx, Type::new(TypeKind::F32, span), span),
+        create_zero_local(ctx, Type::new(TypeKind::F32, span), span),
+        create_zero_local(ctx, Type::new(TypeKind::Boolean, span), span),
+        create_zero_local(ctx, Type::new(TypeKind::F32, span), span),
+        create_zero_local(ctx, Type::new(TypeKind::F32, span), span),
+        create_zero_local(ctx, Type::new(TypeKind::F32, span), span),
+        create_zero_local(ctx, Type::new(TypeKind::Boolean, span), span),
+        create_zero_local(ctx, Type::new(TypeKind::Boolean, span), span),
+    ]
+}
+
+fn create_zero_local(ctx: &mut LoweringContext, ty: Type, span: Span) -> Operand {
+    let zero = if matches!(ty.kind, TypeKind::F32) {
+        Operand::Constant(Box::new(crate::mir::Constant {
+            span,
+            ty: ty.clone(),
+            literal: crate::ast::literal::Literal::Float(crate::ast::literal::FloatLiteral::F32(
+                0.0_f32.to_bits(),
+            )),
+        }))
+    } else if matches!(ty.kind, TypeKind::Boolean) {
+        Operand::Constant(Box::new(crate::mir::Constant {
+            span,
+            ty: ty.clone(),
+            literal: crate::ast::literal::Literal::Integer(
+                crate::ast::literal::IntegerLiteral::U32(0),
+            ),
+        }))
+    } else {
+        Operand::Constant(Box::new(crate::mir::Constant {
+            span,
+            ty: ty.clone(),
+            literal: crate::ast::literal::Literal::Integer(
+                crate::ast::literal::IntegerLiteral::I32(0),
+            ),
+        }))
+    };
+    let temp = ctx.push_temp(ty, span);
+    gpu_for::push_assign(ctx, temp, Rvalue::Use(zero), span);
+    Operand::Copy(Place::new(temp))
+}
+
+fn detect_frame_usage(stmt: &Statement) -> bool {
+    use crate::ast::statement::StatementKind;
+    match &stmt.node {
+        StatementKind::Block(stmts) => stmts.iter().any(detect_frame_usage),
+        StatementKind::Expression(expr) => detect_frame_usage_expr(expr),
+        StatementKind::If(cond, then_branch, else_branch, _) => {
+            detect_frame_usage_expr(cond)
+                || detect_frame_usage(then_branch)
+                || else_branch.as_ref().is_some_and(|b| detect_frame_usage(b))
+        }
+        StatementKind::While(cond, body, _) => {
+            detect_frame_usage_expr(cond) || detect_frame_usage(body)
+        }
+        StatementKind::For(_, iterable, body) => {
+            detect_frame_usage_expr(iterable) || detect_frame_usage(body)
+        }
+        StatementKind::GpuFor(_, iterable, body) => {
+            detect_frame_usage_expr(iterable) || detect_frame_usage(body)
+        }
+        StatementKind::GpuFrame(_, iterable, body) => {
+            detect_frame_usage_expr(iterable) || detect_frame_usage(body)
+        }
+        StatementKind::Variable(decls, _) => decls.iter().any(|d| {
+            d.initializer
+                .as_ref()
+                .is_some_and(|e| detect_frame_usage_expr(e))
+        }),
+        _ => false,
+    }
+}
+
+fn detect_frame_usage_expr(expr: &Expression) -> bool {
+    use crate::ast::expression::ExpressionKind;
+    match &expr.node {
+        ExpressionKind::Member(obj, prop) => {
+            if let ExpressionKind::Identifier(name, _) = &obj.node {
+                if name == "frame" {
+                    return true;
+                }
+            }
+            detect_frame_usage_expr(obj) || detect_frame_usage_expr(prop)
+        }
+        ExpressionKind::Identifier(_, _)
+        | ExpressionKind::Literal(_)
+        | ExpressionKind::Super
+        | ExpressionKind::Type(_, _)
+        | ExpressionKind::GenericType(_, _, _)
+        | ExpressionKind::StructMember(_, _)
+        | ExpressionKind::List(_)
+        | ExpressionKind::Array(_, _)
+        | ExpressionKind::Map(_)
+        | ExpressionKind::Set(_)
+        | ExpressionKind::Tuple(_)
+        | ExpressionKind::Match(_, _)
+        | ExpressionKind::Block(_, _) => false,
+        ExpressionKind::Index(base, idx) => {
+            detect_frame_usage_expr(base) || detect_frame_usage_expr(idx)
+        }
+        ExpressionKind::Binary(left, _, right) => {
+            detect_frame_usage_expr(left) || detect_frame_usage_expr(right)
+        }
+        ExpressionKind::Logical(left, _, right) => {
+            detect_frame_usage_expr(left) || detect_frame_usage_expr(right)
+        }
+        ExpressionKind::Unary(_, arg) => detect_frame_usage_expr(arg),
+        ExpressionKind::Assignment(lhs, _, rhs) => {
+            use crate::ast::expression::LeftHandSideExpression;
+            let lhs_frame = match &**lhs {
+                LeftHandSideExpression::Identifier(e)
+                | LeftHandSideExpression::Member(e)
+                | LeftHandSideExpression::Index(e) => detect_frame_usage_expr(e),
+            };
+            lhs_frame || detect_frame_usage_expr(rhs)
+        }
+        ExpressionKind::Call(func, args) => {
+            detect_frame_usage_expr(func) || args.iter().any(detect_frame_usage_expr)
+        }
+        ExpressionKind::Conditional(cond, then_expr, else_expr, _) => {
+            detect_frame_usage_expr(cond)
+                || detect_frame_usage_expr(then_expr)
+                || else_expr
+                    .as_ref()
+                    .is_some_and(|e| detect_frame_usage_expr(e))
+        }
+        ExpressionKind::Range(start, end, _) => {
+            detect_frame_usage_expr(start)
+                || end.as_ref().is_some_and(|e| detect_frame_usage_expr(e))
+        }
+        ExpressionKind::Lambda(_)
+        | ExpressionKind::TypeDeclaration(_, _, _, _)
+        | ExpressionKind::ImportPath(_, _)
+        | ExpressionKind::Cast(_, _)
+        | ExpressionKind::Guard(_, _)
+        | ExpressionKind::FormattedString(_)
+        | ExpressionKind::EnumValue(_, _)
+        | ExpressionKind::NamedArgument(_, _) => false,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_frame_kernel_literal(
+    parent: &mut LoweringContext,
+    captures: &[gpu_for::CaptureInfo],
+    loop_var_name: &str,
+    start: i64,
+    length: i64,
+    body: &Statement,
+    span: Span,
+    uses_frame: bool,
+) -> Result<Body, LoweringError> {
+    let (buffer_captures, scalar_captures): (Vec<_>, Vec<_>) =
+        captures.iter().partition(|c| !c.is_scalar);
+
+    let frame_param_count = if uses_frame { 11 } else { 0 };
+    let total_params = buffer_captures.len() + scalar_captures.len() + frame_param_count;
+    let mut kernel = Body::new(total_params, span, ExecutionModel::GpuKernel);
+    kernel
+        .local_decls
+        .push(LocalDecl::new(Type::new(TypeKind::Void, span), span));
+
+    let grid_x = gpu_for::literal_grid_x(length);
+    kernel.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
+        workgroup_size: Some([gpu_for::GPU_FOR_BLOCK_SIZE, 1, 1]),
+        grid_size: Some([grid_x, 1, 1]),
+        required_capabilities: Vec::new(),
+        is_frame_step: true,
+    }));
+
+    let mut out_params: Vec<bool> = buffer_captures.iter().map(|c| c.is_written).collect();
+    out_params.extend(std::iter::repeat_n(false, frame_param_count));
+    out_params.extend(scalar_captures.iter().map(|_| false));
+    kernel.out_params = out_params;
+
+    let mut ctx = LoweringContext::new(kernel, parent.type_checker, parent.is_release);
+
+    for cap in buffer_captures {
+        let local = ctx.push_param(cap.name.clone(), cap.ty.clone(), span);
+        ctx.body.local_decls[local.0].storage_class = StorageClass::GpuGlobal;
+    }
+
+    if uses_frame {
+        for (idx, field_def) in FRAME_INPUT_FIELDS.iter().enumerate() {
+            let ty = match field_def.kind {
+                crate::ast::types::FrameFieldKind::F32 => Type::new(TypeKind::F32, span),
+                crate::ast::types::FrameFieldKind::Int => Type::new(TypeKind::Int, span),
+                crate::ast::types::FrameFieldKind::Bool => Type::new(TypeKind::Boolean, span),
+            };
+            let field_local = ctx.push_param(format!("f{}", idx), ty, span);
+            ctx.body.local_decls[field_local.0].storage_class = StorageClass::UniformBuffer;
+            // Register under reserved key to prevent user-variable shadowing
+            ctx.variable_map
+                .insert(frame_input_param_key(idx).into(), field_local);
+        }
+    }
+
+    for cap in scalar_captures {
+        let local = ctx.push_param(cap.name.clone(), cap.ty.clone(), span);
+        ctx.body.local_decls[local.0].storage_class = StorageClass::UniformBuffer;
+    }
+
+    emit_literal_frame_bounds_check(&mut ctx, loop_var_name, start, length, body, span)?;
+    Ok(ctx.body)
+}
+
+fn build_frame_kernel_runtime(
+    parent: &mut LoweringContext,
+    captures: &[gpu_for::CaptureInfo],
+    loop_var_name: &str,
+    start: i64,
+    body: &Statement,
+    span: Span,
+    uses_frame: bool,
+) -> Result<Body, LoweringError> {
+    let (buffer_captures, scalar_captures): (Vec<_>, Vec<_>) =
+        captures.iter().partition(|c| !c.is_scalar);
+
+    let frame_param_count = if uses_frame { 11 } else { 0 };
+    let arg_count = captures.len() + 1 + frame_param_count;
+    let mut kernel = Body::new(arg_count, span, ExecutionModel::GpuKernel);
+    kernel
+        .local_decls
+        .push(LocalDecl::new(Type::new(TypeKind::Void, span), span));
+    kernel.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
+        workgroup_size: Some([gpu_for::GPU_FOR_BLOCK_SIZE, 1, 1]),
+        grid_size: None,
+        required_capabilities: Vec::new(),
+        is_frame_step: true,
+    }));
+
+    let mut out_params: Vec<bool> = buffer_captures.iter().map(|c| c.is_written).collect();
+    out_params.extend(std::iter::repeat_n(false, frame_param_count));
+    out_params.push(false);
+    out_params.extend(scalar_captures.iter().map(|_| false));
+    kernel.out_params = out_params;
+
+    let mut ctx = LoweringContext::new(kernel, parent.type_checker, parent.is_release);
+
+    for cap in buffer_captures {
+        let local = ctx.push_param(cap.name.clone(), cap.ty.clone(), span);
+        ctx.body.local_decls[local.0].storage_class = StorageClass::GpuGlobal;
+    }
+
+    if uses_frame {
+        for (idx, field_def) in FRAME_INPUT_FIELDS.iter().enumerate() {
+            let ty = match field_def.kind {
+                crate::ast::types::FrameFieldKind::F32 => Type::new(TypeKind::F32, span),
+                crate::ast::types::FrameFieldKind::Int => Type::new(TypeKind::Int, span),
+                crate::ast::types::FrameFieldKind::Bool => Type::new(TypeKind::Boolean, span),
+            };
+            let field_local = ctx.push_param(format!("f{}", idx), ty, span);
+            ctx.body.local_decls[field_local.0].storage_class = StorageClass::UniformBuffer;
+            // Register under reserved key to prevent user-variable shadowing
+            ctx.variable_map
+                .insert(frame_input_param_key(idx).into(), field_local);
+        }
+    }
+
+    let i64_ty = Type::new(TypeKind::Int, span);
+    let uniform_param = ctx.push_param("_uniform_bound".to_string(), i64_ty.clone(), span);
+    ctx.body.local_decls[uniform_param.0].storage_class = StorageClass::UniformBuffer;
+
+    for cap in scalar_captures {
+        let local = ctx.push_param(cap.name.clone(), cap.ty.clone(), span);
+        ctx.body.local_decls[local.0].storage_class = StorageClass::UniformBuffer;
+    }
+
+    let thread_int = gpu_for::compute_thread_index(&mut ctx, Dimension::X, span);
+
+    let loop_local = ctx.push_local(loop_var_name.to_string(), i64_ty.clone(), span);
+    gpu_for::push_assign(
+        &mut ctx,
+        loop_local,
+        Rvalue::BinaryOp(
+            BinOp::Add,
+            Box::new(Operand::Copy(Place::new(thread_int))),
+            Box::new(gpu_for::int_constant(start, span)),
+        ),
+        span,
+    );
+
+    gpu_for::emit_bounds_check_loop(&mut ctx, loop_local, uniform_param, body, span)?;
+
+    Ok(ctx.body)
 }

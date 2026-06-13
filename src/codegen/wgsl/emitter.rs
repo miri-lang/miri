@@ -51,8 +51,14 @@ impl Emitter {
             writeln!(self.output, "struct _Inputs {{").map_err(emit_err)?;
             for binding in &scalar_bindings {
                 if let Some(field) = &binding.scalar_field {
-                    writeln!(self.output, "  {}: {},", field, binding.element_type.name(),)
-                        .map_err(emit_err)?;
+                    // Bools are encoded as u32 in the struct (WGSL doesn't support bool literals in structs)
+                    let wire_type =
+                        if binding.element_type == crate::codegen::wgsl::types::WgslScalar::Bool {
+                            "u32"
+                        } else {
+                            binding.element_type.name()
+                        };
+                    writeln!(self.output, "  {}: {},", field, wire_type).map_err(emit_err)?;
                 }
             }
             writeln!(self.output, "}}").map_err(emit_err)?;
@@ -235,6 +241,8 @@ fn collect_buffer_bindings(body: &Body) -> Result<Vec<BufferBinding>, CodegenErr
     }
 
     // Second pass: collect uniform buffers (loop bounds and scalar captures).
+    // Reserve one binding index for all pooled scalar fields (_Inputs struct).
+    let mut inputs_binding: Option<u32> = None;
     let mut scalar_field_index = 0u32;
     for param_idx in 1..=body.arg_count {
         let decl = body.local_decls.get(param_idx).ok_or_else(|| {
@@ -270,12 +278,17 @@ fn collect_buffer_bindings(body: &Body) -> Result<Vec<BufferBinding>, CodegenErr
             });
             binding_index += 1;
         } else {
+            // First scalar field: reserve the binding index for the _Inputs struct
+            if inputs_binding.is_none() {
+                inputs_binding = Some(binding_index);
+                binding_index += 1;
+            }
             let scalar_field = format!("f{}", scalar_field_index);
             let element_type = scalar_type_to_wgsl(&decl.ty.kind)?;
             bindings.push(BufferBinding {
                 param_local: Local(param_idx),
                 group: 0,
-                index: binding_index,
+                index: inputs_binding.unwrap(),
                 var_name,
                 element_type,
                 read_write: false,
@@ -996,7 +1009,21 @@ impl<'a> BodyEmitter<'a> {
 
     fn render_place(&self, place: &Place) -> Result<String, CodegenError> {
         let mut rendered = if let Some(field) = self.get_scalar_field(place.local) {
-            format!("_inputs.{}", field)
+            let base = format!("_inputs.{}", field);
+            // Wrap bool scalar field reads with bool(...) to coerce u32 → bool
+            if place.projection.is_empty() {
+                if let Some(decl) = self.body.local_decls.get(place.local.0) {
+                    if matches!(decl.ty.kind, TypeKind::Boolean) {
+                        format!("bool({})", base)
+                    } else {
+                        base
+                    }
+                } else {
+                    base
+                }
+            } else {
+                base
+            }
         } else if let Some(name) = self.binding_name(place.local) {
             name.to_string()
         } else {

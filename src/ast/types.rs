@@ -83,6 +83,90 @@ pub const KERNEL_CONTEXT_IDENT: &str = "kernel";
 /// so existing kernels keep compiling; every use emits a rename diagnostic.
 pub const GPU_CONTEXT_DEPRECATED_IDENT: &str = "gpu_context";
 
+/// Canonical class name for the compiler-builtin `FrameInput` struct made
+/// available inside `gpu frame` bodies. Exposes per-frame host input read
+/// from a uniform block written by the host each frame.
+pub const FRAME_INPUT_TYPE_NAME: &str = "FrameInput";
+
+/// Canonical implicit identifier bound to the per-frame input context inside
+/// a `gpu frame` body. Exposes `time`/`dt`/`index`/`mouse_x`/`mouse_y`/
+/// `mouse_down`/`drag_dx`/`drag_dy`/`wheel`/`clicked`/`double_clicked`.
+pub const FRAME_INPUT_IDENT: &str = "frame";
+
+/// Descriptor for a single frame input field.
+#[derive(Debug, Clone, Copy)]
+pub struct FrameInputFieldDef {
+    pub name: &'static str,
+    pub kind: FrameFieldKind,
+}
+
+/// Discriminates the wire type of a frame input field in the uniform buffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameFieldKind {
+    F32,
+    Int,
+    Bool,
+}
+
+/// Canonical descriptor of the 11 frame input fields, ordered as they appear
+/// in the uniform block (offsets 0–40). Single source of truth for:
+/// - Type checker builtin FrameInput struct field definitions
+/// - MIR lowering parameter registration (f0..f10)
+/// - WGSL manifest emission (buffer layout)
+pub const FRAME_INPUT_FIELDS: &[FrameInputFieldDef] = &[
+    FrameInputFieldDef {
+        name: "time",
+        kind: FrameFieldKind::F32,
+    },
+    FrameInputFieldDef {
+        name: "dt",
+        kind: FrameFieldKind::F32,
+    },
+    FrameInputFieldDef {
+        name: "index",
+        kind: FrameFieldKind::Int,
+    },
+    FrameInputFieldDef {
+        name: "mouse_x",
+        kind: FrameFieldKind::F32,
+    },
+    FrameInputFieldDef {
+        name: "mouse_y",
+        kind: FrameFieldKind::F32,
+    },
+    FrameInputFieldDef {
+        name: "mouse_down",
+        kind: FrameFieldKind::Bool,
+    },
+    FrameInputFieldDef {
+        name: "drag_dx",
+        kind: FrameFieldKind::F32,
+    },
+    FrameInputFieldDef {
+        name: "drag_dy",
+        kind: FrameFieldKind::F32,
+    },
+    FrameInputFieldDef {
+        name: "wheel",
+        kind: FrameFieldKind::F32,
+    },
+    FrameInputFieldDef {
+        name: "clicked",
+        kind: FrameFieldKind::Bool,
+    },
+    FrameInputFieldDef {
+        name: "double_clicked",
+        kind: FrameFieldKind::Bool,
+    },
+];
+
+/// Returns the reserved variable_map key for frame input parameter `idx` (0..11).
+/// Uses a prefix that cannot be a valid Miri identifier (contains `$`) to prevent
+/// collision with user-captured variables.
+pub fn frame_input_param_key(idx: usize) -> String {
+    format!("$frame${}", idx)
+}
+
 impl BuiltinCollectionKind {
     /// Returns the `BuiltinCollectionKind` for a class name, or `None` if the
     /// name does not match a built-in collection.

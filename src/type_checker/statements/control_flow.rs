@@ -513,6 +513,19 @@ impl TypeChecker {
             ),
         );
 
+        // Bind the per-frame input context, readable only inside this body.
+        context.define(
+            FRAME_INPUT_IDENT.to_string(),
+            SymbolInfo::new(
+                make_type(TypeKind::Custom(FRAME_INPUT_TYPE_NAME.to_string(), None)),
+                false,
+                false,
+                MemberVisibility::Public,
+                self.current_module.clone(),
+                None,
+            ),
+        );
+
         // Type-check the body
         self.check_statement(body, context);
 
