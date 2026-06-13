@@ -256,6 +256,7 @@ struct CaptureInfo {
     ty: Type,
     outer_local: Local,
     is_written: bool,
+    is_scalar: bool,
 }
 
 /// Collects the names of variables that are written to in the given statement.
@@ -331,9 +332,9 @@ fn extract_written_lhs(
     }
 }
 
-/// Collect and validate the outer-variable captures of a `gpu for` body. Only
-/// gpu-resident buffer (`Array`-shaped) captures are accepted; everything else
-/// is rejected with a source-cited diagnostic.
+/// Collect and validate the outer-variable captures of a `gpu for` body.
+/// Accepts both gpu-resident buffer (`Array`-shaped) captures and host-side
+/// scalar captures (int, bool, f32 — read-only uniforms).
 fn collect_capture_infos(
     ctx: &LoweringContext,
     body: &Statement,
@@ -354,26 +355,41 @@ fn collect_capture_infos(
             ));
         };
         let ty = ctx.body.local_decls[outer_local.0].ty.clone();
-        if !is_gpu_buffer_capture(&ty.kind) {
+
+        // Classify as buffer or scalar capture.
+        let is_buffer = is_gpu_buffer_capture(&ty.kind);
+        let is_scalar = is_gpu_scalar_capture(&ty.kind);
+
+        if is_buffer {
+            // GPU-resident buffers must be gpu-resident bindings.
+            if ctx.body.local_decls[outer_local.0].residency != BindingResidency::Gpu {
+                return Err(LoweringError::unsupported_expression(
+                    format!("gpu for: capture '{}' is not gpu-resident", name),
+                    span,
+                ));
+            }
+        } else if is_scalar {
+            // Scalar captures are read-only uniforms.
+            if written.contains(&name) {
+                return Err(LoweringError::unsupported_expression(
+                    format!("gpu for: captured scalar '{}' is read-only", name),
+                    span,
+                ));
+            }
+        } else {
+            // Unsupported type for capture.
             return Err(LoweringError::unsupported_expression(
-                format!("gpu for: capture '{}' has non-buffer type; only `Array<T, N>` or `[T; N]` captures are supported", name),
+                format!("gpu for: unsupported gpu scalar capture type '{}'", ty.kind),
                 span,
             ));
         }
-        // Only a gpu-resident buffer may be marshaled as a kernel storage
-        // binding; host buffers are rejected upstream so this guards
-        // against any implicit upload.
-        if ctx.body.local_decls[outer_local.0].residency != BindingResidency::Gpu {
-            return Err(LoweringError::unsupported_expression(
-                format!("gpu for: capture '{}' is not gpu-resident", name),
-                span,
-            ));
-        }
+
         captures.push(CaptureInfo {
             name: name.clone(),
             ty,
             outer_local,
             is_written: written.contains(&name),
+            is_scalar,
         });
     }
     Ok(captures)
@@ -425,6 +441,22 @@ fn is_gpu_buffer_capture(kind: &TypeKind) -> bool {
         | TypeKind::Identifier
         | TypeKind::Function(_) => false,
     }
+}
+
+/// Returns `true` for scalar types that can be passed as WGSL uniforms
+/// to a `gpu for` kernel (read-only, 4-byte aligned).
+/// Supported: `int` (i64), `i32`, `i16`, `i8`, bool, `f32`.
+/// Unsupported: `f64`, `i64`, string, managed types, etc.
+fn is_gpu_scalar_capture(kind: &TypeKind) -> bool {
+    matches!(
+        kind,
+        TypeKind::Int    // i64, supported (narrowed to i32 on wire)
+        | TypeKind::I32
+        | TypeKind::I16
+        | TypeKind::I8
+        | TypeKind::Boolean
+        | TypeKind::F32
+    )
 }
 
 fn read_int_literal(expr: &Expression, span: Span) -> Result<i64, LoweringError> {
@@ -578,8 +610,14 @@ fn visit_expr(
                 && ctx.variable_map.contains_key(name.as_str())
                 && !seen.contains(name)
             {
-                seen.insert(name.clone());
-                ordered.push(name.clone());
+                let local_idx = ctx.variable_map[name.as_str()];
+                let ty = &ctx.body.local_decls[local_idx.0].ty;
+                // Skip function types (math intrinsics, user fns, builtins).
+                // Only capture host local variables of capturable types.
+                if !matches!(ty.kind, TypeKind::Function(_)) {
+                    seen.insert(name.clone());
+                    ordered.push(name.clone());
+                }
             }
         }
         ExpressionKind::Binary(lhs, _, rhs) | ExpressionKind::Logical(lhs, _, rhs) => {
@@ -762,8 +800,11 @@ fn build_kernel_body_literal(
     body: &Statement,
     span: Span,
 ) -> Result<Body, LoweringError> {
-    let arg_count = captures.len();
-    let mut kernel = Body::new(arg_count, span, ExecutionModel::GpuKernel);
+    let (buffer_captures, scalar_captures): (Vec<_>, Vec<_>) =
+        captures.iter().partition(|c| !c.is_scalar);
+
+    let total_params = buffer_captures.len() + scalar_captures.len();
+    let mut kernel = Body::new(total_params, span, ExecutionModel::GpuKernel);
     kernel
         .local_decls
         .push(LocalDecl::new(Type::new(TypeKind::Void, span), span));
@@ -777,12 +818,20 @@ fn build_kernel_body_literal(
         required_capabilities: Vec::new(),
         is_frame_step: false,
     }));
-    kernel.out_params = captures.iter().map(|c| c.is_written).collect();
+    let mut out_params: Vec<bool> = buffer_captures.iter().map(|c| c.is_written).collect();
+    out_params.extend(scalar_captures.iter().map(|_| false));
+    kernel.out_params = out_params;
 
     let mut ctx = LoweringContext::new(kernel, parent.type_checker, parent.is_release);
-    for cap in captures {
+
+    for cap in buffer_captures {
         let local = ctx.push_param(cap.name.clone(), cap.ty.clone(), span);
         ctx.body.local_decls[local.0].storage_class = StorageClass::GpuGlobal;
+    }
+
+    for cap in scalar_captures {
+        let local = ctx.push_param(cap.name.clone(), cap.ty.clone(), span);
+        ctx.body.local_decls[local.0].storage_class = StorageClass::UniformBuffer;
     }
 
     let i64_ty = Type::new(TypeKind::Int, span);
@@ -888,15 +937,23 @@ fn emit_gpu_launch_literal(
         literal: Literal::Identifier(kernel_name.to_string()),
     }));
 
-    let arg_ops: Vec<Operand> = captures
+    let (buffer_captures, scalar_captures): (Vec<_>, Vec<_>) =
+        captures.iter().partition(|c| !c.is_scalar);
+
+    let buffer_ops: Vec<Operand> = buffer_captures
         .iter()
         .map(|c| Operand::Copy(Place::new(c.outer_local)))
         .collect();
-    let arg_handles: Vec<Option<DeviceHandleId>> = captures
+    let scalar_ops: Vec<Operand> = scalar_captures
+        .iter()
+        .map(|c| Operand::Copy(Place::new(c.outer_local)))
+        .collect();
+
+    let arg_handles: Vec<Option<DeviceHandleId>> = buffer_captures
         .iter()
         .map(|c| ctx.body.local_decls[c.outer_local.0].device_handle)
         .collect();
-    let arg_int_narrow: Vec<bool> = captures
+    let arg_int_narrow: Vec<bool> = buffer_captures
         .iter()
         .map(|c| needs_int_narrowing(&c.ty))
         .collect();
@@ -908,10 +965,11 @@ fn emit_gpu_launch_literal(
             kernel: kernel_op,
             grid: Operand::Copy(Place::new(grid_local)),
             block: Operand::Copy(Place::new(block_local)),
-            args: arg_ops,
+            args: buffer_ops,
             arg_handles,
-            arg_read_only: captures.iter().map(|c| !c.is_written).collect(),
+            arg_read_only: buffer_captures.iter().map(|c| !c.is_written).collect(),
             arg_int_narrow,
+            scalar_args: scalar_ops,
             uniform_bound_x: None,
             uniform_bound_y: None,
             destination: Place::new(dest_local),
@@ -933,6 +991,9 @@ fn build_kernel_body_runtime(
     body: &Statement,
     span: Span,
 ) -> Result<Body, LoweringError> {
+    let (buffer_captures, scalar_captures): (Vec<_>, Vec<_>) =
+        captures.iter().partition(|c| !c.is_scalar);
+
     let arg_count = captures.len() + 1;
     let mut kernel = Body::new(arg_count, span, ExecutionModel::GpuKernel);
     kernel
@@ -945,15 +1006,21 @@ fn build_kernel_body_runtime(
         is_frame_step: false,
     }));
 
-    let mut out_params: Vec<bool> = captures.iter().map(|c| c.is_written).collect();
+    let mut out_params: Vec<bool> = buffer_captures.iter().map(|c| c.is_written).collect();
+    out_params.extend(scalar_captures.iter().map(|_| false));
     out_params.push(false);
     kernel.out_params = out_params;
 
     let mut ctx = LoweringContext::new(kernel, parent.type_checker, parent.is_release);
 
-    for cap in captures {
+    for cap in buffer_captures {
         let local = ctx.push_param(cap.name.clone(), cap.ty.clone(), span);
         ctx.body.local_decls[local.0].storage_class = StorageClass::GpuGlobal;
+    }
+
+    for cap in scalar_captures {
+        let local = ctx.push_param(cap.name.clone(), cap.ty.clone(), span);
+        ctx.body.local_decls[local.0].storage_class = StorageClass::UniformBuffer;
     }
 
     let i64_ty = Type::new(TypeKind::Int, span);
@@ -1255,15 +1322,23 @@ fn emit_gpu_launch_runtime(
         literal: Literal::Identifier(kernel_name.to_string()),
     }));
 
-    let arg_ops: Vec<Operand> = captures
+    let (buffer_captures, scalar_captures): (Vec<_>, Vec<_>) =
+        captures.iter().partition(|c| !c.is_scalar);
+
+    let buffer_ops: Vec<Operand> = buffer_captures
         .iter()
         .map(|c| Operand::Copy(Place::new(c.outer_local)))
         .collect();
-    let arg_handles: Vec<Option<DeviceHandleId>> = captures
+    let scalar_ops: Vec<Operand> = scalar_captures
+        .iter()
+        .map(|c| Operand::Copy(Place::new(c.outer_local)))
+        .collect();
+
+    let arg_handles: Vec<Option<DeviceHandleId>> = buffer_captures
         .iter()
         .map(|c| ctx.body.local_decls[c.outer_local.0].device_handle)
         .collect();
-    let arg_int_narrow: Vec<bool> = captures
+    let arg_int_narrow: Vec<bool> = buffer_captures
         .iter()
         .map(|c| needs_int_narrowing(&c.ty))
         .collect();
@@ -1277,10 +1352,11 @@ fn emit_gpu_launch_runtime(
             kernel: kernel_op,
             grid: Operand::Copy(Place::new(grid_local)),
             block: Operand::Copy(Place::new(block_local)),
-            args: arg_ops,
+            args: buffer_ops,
             arg_handles,
-            arg_read_only: captures.iter().map(|c| !c.is_written).collect(),
+            arg_read_only: buffer_captures.iter().map(|c| !c.is_written).collect(),
             arg_int_narrow,
+            scalar_args: scalar_ops,
             uniform_bound_x: Some(Box::new(end_op)),
             uniform_bound_y: None,
             destination: Place::new(dest_local),
@@ -1408,6 +1484,9 @@ fn build_kernel_body_2d_literal(
 ) -> Result<Body, LoweringError> {
     const BLOCK_SIZE_2D: u32 = 16;
 
+    let (buffer_captures, scalar_captures): (Vec<_>, Vec<_>) =
+        ctx.captures.iter().partition(|c| !c.is_scalar);
+
     let arg_count = ctx.captures.len();
     let mut kernel = Body::new(arg_count, ctx.span, ExecutionModel::GpuKernel);
     kernel.local_decls.push(LocalDecl::new(
@@ -1425,12 +1504,18 @@ fn build_kernel_body_2d_literal(
         required_capabilities: Vec::new(),
         is_frame_step: false,
     }));
-    kernel.out_params = ctx.captures.iter().map(|c| c.is_written).collect();
+    let mut out_params: Vec<bool> = buffer_captures.iter().map(|c| c.is_written).collect();
+    out_params.extend(scalar_captures.iter().map(|_| false));
+    kernel.out_params = out_params;
 
     let mut lower_ctx = LoweringContext::new(kernel, parent.type_checker, parent.is_release);
-    for cap in ctx.captures {
+    for cap in buffer_captures {
         let local = lower_ctx.push_param(cap.name.clone(), cap.ty.clone(), ctx.span);
         lower_ctx.body.local_decls[local.0].storage_class = StorageClass::GpuGlobal;
+    }
+    for cap in scalar_captures {
+        let local = lower_ctx.push_param(cap.name.clone(), cap.ty.clone(), ctx.span);
+        lower_ctx.body.local_decls[local.0].storage_class = StorageClass::UniformBuffer;
     }
 
     let i64_ty = Type::new(TypeKind::Int, ctx.span);
@@ -1531,15 +1616,23 @@ fn emit_gpu_launch_2d_literal(
         literal: Literal::Identifier(kernel_name.to_string()),
     }));
 
-    let arg_ops: Vec<Operand> = captures
+    let (buffer_captures, scalar_captures): (Vec<_>, Vec<_>) =
+        captures.iter().partition(|c| !c.is_scalar);
+
+    let buffer_ops: Vec<Operand> = buffer_captures
         .iter()
         .map(|c| Operand::Copy(Place::new(c.outer_local)))
         .collect();
-    let arg_handles: Vec<Option<DeviceHandleId>> = captures
+    let scalar_ops: Vec<Operand> = scalar_captures
+        .iter()
+        .map(|c| Operand::Copy(Place::new(c.outer_local)))
+        .collect();
+
+    let arg_handles: Vec<Option<DeviceHandleId>> = buffer_captures
         .iter()
         .map(|c| ctx.body.local_decls[c.outer_local.0].device_handle)
         .collect();
-    let arg_int_narrow: Vec<bool> = captures
+    let arg_int_narrow: Vec<bool> = buffer_captures
         .iter()
         .map(|c| needs_int_narrowing(&c.ty))
         .collect();
@@ -1552,10 +1645,11 @@ fn emit_gpu_launch_2d_literal(
             kernel: kernel_op,
             grid: Operand::Copy(Place::new(grid_local)),
             block: Operand::Copy(Place::new(block_local)),
-            args: arg_ops,
+            args: buffer_ops,
             arg_handles,
-            arg_read_only: captures.iter().map(|c| !c.is_written).collect(),
+            arg_read_only: buffer_captures.iter().map(|c| !c.is_written).collect(),
             arg_int_narrow,
+            scalar_args: scalar_ops,
             uniform_bound_x: None,
             uniform_bound_y: None,
             destination: Place::new(dest_local),
@@ -1581,6 +1675,9 @@ fn build_kernel_body_2d_runtime(
 ) -> Result<Body, LoweringError> {
     const BLOCK_SIZE_2D: u32 = 16;
 
+    let (buffer_captures, scalar_captures): (Vec<_>, Vec<_>) =
+        captures.iter().partition(|c| !c.is_scalar);
+
     let arg_count = captures.len() + 2;
     let mut kernel = Body::new(arg_count, span, ExecutionModel::GpuKernel);
     kernel
@@ -1594,16 +1691,22 @@ fn build_kernel_body_2d_runtime(
         is_frame_step: false,
     }));
 
-    let mut out_params: Vec<bool> = captures.iter().map(|c| c.is_written).collect();
+    let mut out_params: Vec<bool> = buffer_captures.iter().map(|c| c.is_written).collect();
+    out_params.extend(scalar_captures.iter().map(|_| false));
     out_params.push(false);
     out_params.push(false);
     kernel.out_params = out_params;
 
     let mut ctx = LoweringContext::new(kernel, parent.type_checker, parent.is_release);
 
-    for cap in captures {
+    for cap in buffer_captures {
         let local = ctx.push_param(cap.name.clone(), cap.ty.clone(), span);
         ctx.body.local_decls[local.0].storage_class = StorageClass::GpuGlobal;
+    }
+
+    for cap in scalar_captures {
+        let local = ctx.push_param(cap.name.clone(), cap.ty.clone(), span);
+        ctx.body.local_decls[local.0].storage_class = StorageClass::UniformBuffer;
     }
 
     let i64_ty = Type::new(TypeKind::Int, span);
@@ -1822,15 +1925,23 @@ fn emit_gpu_launch_2d_runtime(
         literal: Literal::Identifier(kernel_name.to_string()),
     }));
 
-    let arg_ops: Vec<Operand> = captures
+    let (buffer_captures, scalar_captures): (Vec<_>, Vec<_>) =
+        captures.iter().partition(|c| !c.is_scalar);
+
+    let buffer_ops: Vec<Operand> = buffer_captures
         .iter()
         .map(|c| Operand::Copy(Place::new(c.outer_local)))
         .collect();
-    let arg_handles: Vec<Option<DeviceHandleId>> = captures
+    let scalar_ops: Vec<Operand> = scalar_captures
+        .iter()
+        .map(|c| Operand::Copy(Place::new(c.outer_local)))
+        .collect();
+
+    let arg_handles: Vec<Option<DeviceHandleId>> = buffer_captures
         .iter()
         .map(|c| ctx.body.local_decls[c.outer_local.0].device_handle)
         .collect();
-    let arg_int_narrow: Vec<bool> = captures
+    let arg_int_narrow: Vec<bool> = buffer_captures
         .iter()
         .map(|c| needs_int_narrowing(&c.ty))
         .collect();
@@ -1844,10 +1955,11 @@ fn emit_gpu_launch_2d_runtime(
             kernel: kernel_op,
             grid: Operand::Copy(Place::new(grid_local)),
             block: Operand::Copy(Place::new(block_local)),
-            args: arg_ops,
+            args: buffer_ops,
             arg_handles,
-            arg_read_only: captures.iter().map(|c| !c.is_written).collect(),
+            arg_read_only: buffer_captures.iter().map(|c| !c.is_written).collect(),
             arg_int_narrow,
+            scalar_args: scalar_ops,
             uniform_bound_x: Some(Box::new(end_x_op)),
             uniform_bound_y: Some(Box::new(end_y_op)),
             destination: Place::new(dest_local),

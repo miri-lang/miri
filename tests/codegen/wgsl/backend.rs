@@ -815,7 +815,7 @@ fn uniform_buffer_storage_class_emits_uniform_binding() {
     let i64_ty = Type::new(TypeKind::Int, span);
     let mut uniform_param = LocalDecl::new(i64_ty, span);
     uniform_param.storage_class = StorageClass::UniformBuffer;
-    uniform_param.name = Some("bound".into());
+    uniform_param.name = Some("_bound_x".into());
     uniform_param.is_user_variable = true;
     body.local_decls.push(uniform_param);
 
@@ -842,8 +842,8 @@ fn uniform_buffer_storage_class_emits_uniform_binding() {
         source
     );
     assert!(
-        source.contains("bound"),
-        "expected uniform variable named 'bound', got:\n{}",
+        source.contains("_bound_x"),
+        "expected uniform variable named '_bound_x', got:\n{}",
         source
     );
     assert_wgsl_valid(source);

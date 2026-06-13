@@ -4,7 +4,7 @@
 use crate::mir::utils::mir_lower_code;
 use miri::ast::statement::StatementKind;
 use miri::mir::lowering::lower_function;
-use miri::mir::{ExecutionModel, TerminatorKind};
+use miri::mir::{ExecutionModel, StorageClass, TerminatorKind};
 use miri::pipeline::Pipeline;
 
 #[test]
@@ -219,11 +219,10 @@ fn main()
 
 #[test]
 fn test_gpu_for_rejects_scalar_capture() {
-    // Scalars are `is_gpu_compatible` (so the body type-checks fine), but
-    // the runtime dispatcher marshals every capture as a `MiriArray`
-    // pointer. A scalar capture would be reinterpreted as a heap pointer,
-    // causing UB at dispatch. The MIR lowering must surface this as a
-    // diagnostic instead of silently producing miscompiled code.
+    // Scalar captures are now supported: they are passed as WGSL uniforms
+    // and appear in the kernel signature as UniformBuffer-class locals.
+    // Verify that a scalar capture lowers correctly and appears in both
+    // the parent function's GpuLaunch.scalar_args and the kernel's locals.
     let pipeline = Pipeline::new();
     let source = "
 use system.gpu
@@ -242,12 +241,41 @@ fn main()
         .iter()
         .find(|s| matches!(s.node, StatementKind::FunctionDeclaration(_)))
         .expect("a function declaration");
-    let err = lower_function(func_stmt, &result.type_checker, false, false)
-        .expect_err("expected lowering to reject scalar capture in `gpu for`");
-    let msg = format!("{err}");
+    let (body, lambdas) = lower_function(func_stmt, &result.type_checker, false, false)
+        .expect("expected lowering to succeed for scalar capture");
+
+    // Verify the parent function has a GpuLaunch terminator with scalar_args.
+    let gpu_launch = body
+        .basic_blocks
+        .iter()
+        .find_map(|bb| {
+            bb.terminator.as_ref().and_then(|term| {
+                if let TerminatorKind::GpuLaunch { scalar_args, .. } = &term.kind {
+                    Some(scalar_args)
+                } else {
+                    None
+                }
+            })
+        })
+        .expect("expected a GpuLaunch terminator");
+
+    // Verify the parent function's GpuLaunch has a scalar_args slot.
     assert!(
-        msg.contains("non-buffer") && msg.contains("scale"),
-        "expected diagnostic about non-buffer capture 'scale', got: {msg}"
+        !gpu_launch.is_empty(),
+        "expected parent function to have scalar_args in GpuLaunch"
+    );
+
+    // Verify the kernel body has a UniformBuffer-class local for the scalar.
+    let kernel = lambdas
+        .first()
+        .expect("expected at least one kernel lambda");
+    let has_uniform_buffer_scalar = kernel.body.local_decls.iter().any(|decl| {
+        decl.name.as_ref().map_or(false, |n| n.as_ref() == "scale")
+            && matches!(decl.storage_class, StorageClass::UniformBuffer)
+    });
+    assert!(
+        has_uniform_buffer_scalar,
+        "expected kernel to have a UniformBuffer-class local named 'scale'"
     );
 }
 
