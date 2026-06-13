@@ -129,6 +129,7 @@ pub trait Visitor {
                 arg_handles: _,
                 arg_read_only: _,
                 arg_int_narrow: _,
+                scalar_args,
                 uniform_bound_x,
                 uniform_bound_y,
                 destination,
@@ -139,6 +140,9 @@ pub trait Visitor {
                 self.visit_operand(grid_block, block);
                 for arg in args {
                     self.visit_operand(arg, block);
+                }
+                for scalar_arg in scalar_args {
+                    self.visit_operand(scalar_arg, block);
                 }
                 if let Some(bound) = uniform_bound_x {
                     self.visit_operand(bound, block);
@@ -321,6 +325,7 @@ pub trait MutVisitor {
                 arg_handles: _,
                 arg_read_only: _,
                 arg_int_narrow: _,
+                scalar_args,
                 uniform_bound_x,
                 uniform_bound_y,
                 destination,
@@ -331,6 +336,9 @@ pub trait MutVisitor {
                 self.visit_operand(grid_block, block);
                 for arg in args {
                     self.visit_operand(arg, block);
+                }
+                for scalar_arg in scalar_args {
+                    self.visit_operand(scalar_arg, block);
                 }
                 if let Some(bound) = uniform_bound_x {
                     self.visit_operand(bound, block);

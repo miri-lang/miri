@@ -42,8 +42,28 @@ impl Emitter {
     }
 
     fn emit_bindings(&mut self, bindings: &[BufferBinding]) -> Result<(), CodegenError> {
+        let scalar_bindings: Vec<_> = bindings
+            .iter()
+            .filter(|b| b.scalar_field.is_some())
+            .collect();
+
+        if !scalar_bindings.is_empty() {
+            writeln!(self.output, "struct _Inputs {{").map_err(emit_err)?;
+            for binding in &scalar_bindings {
+                if let Some(field) = &binding.scalar_field {
+                    writeln!(self.output, "  {}: {},", field, binding.element_type.name(),)
+                        .map_err(emit_err)?;
+                }
+            }
+            writeln!(self.output, "}}").map_err(emit_err)?;
+            writeln!(self.output).map_err(emit_err)?;
+        }
+
         for binding in bindings {
             if binding.is_uniform {
+                if binding.scalar_field.is_some() {
+                    continue;
+                }
                 writeln!(
                     self.output,
                     "@group({}) @binding({}) var<uniform> {}: {};",
@@ -54,7 +74,6 @@ impl Emitter {
                 )
                 .map_err(emit_err)?;
             } else {
-                // Storage buffers are arrays of scalars.
                 let access = if binding.read_write {
                     "storage, read_write"
                 } else {
@@ -72,6 +91,17 @@ impl Emitter {
                 .map_err(emit_err)?;
             }
         }
+
+        if !scalar_bindings.is_empty() {
+            let index = scalar_bindings[0].index;
+            writeln!(
+                self.output,
+                "@group(0) @binding({}) var<uniform> _inputs: _Inputs;",
+                index
+            )
+            .map_err(emit_err)?;
+        }
+
         if !bindings.is_empty() {
             writeln!(self.output).map_err(emit_err)?;
         }
@@ -138,6 +168,22 @@ struct BufferBinding {
     element_type: WgslScalar,
     read_write: bool,
     is_uniform: bool,
+    /// For scalar captures: the struct field name (e.g., "f0", "f1").
+    /// None for storage buffers and loop bound uniforms.
+    scalar_field: Option<String>,
+}
+
+/// Converts a scalar type kind to WGSL wire format: int→i32, bool→u32, f32→f32.
+fn scalar_type_to_wgsl(ty: &TypeKind) -> Result<WgslScalar, CodegenError> {
+    match ty {
+        TypeKind::Int => Ok(WgslScalar::I32),
+        TypeKind::Boolean => Ok(WgslScalar::U32),
+        TypeKind::F32 => Ok(WgslScalar::F32),
+        _ => Err(CodegenError::Internal(format!(
+            "unsupported scalar capture type in WGSL backend: {:?}",
+            ty
+        ))),
+    }
 }
 
 fn collect_buffer_bindings(body: &Body) -> Result<Vec<BufferBinding>, CodegenError> {
@@ -183,11 +229,13 @@ fn collect_buffer_bindings(body: &Body) -> Result<Vec<BufferBinding>, CodegenErr
             element_type,
             read_write,
             is_uniform: false,
+            scalar_field: None,
         });
         binding_index += 1;
     }
 
-    // Second pass: collect uniform buffers.
+    // Second pass: collect uniform buffers (loop bounds and scalar captures).
+    let mut scalar_field_index = 0u32;
     for param_idx in 1..=body.arg_count {
         let decl = body.local_decls.get(param_idx).ok_or_else(|| {
             CodegenError::Internal(format!(
@@ -205,16 +253,37 @@ fn collect_buffer_bindings(body: &Body) -> Result<Vec<BufferBinding>, CodegenErr
             .as_deref()
             .map(sanitize_identifier)
             .unwrap_or_else(|| format!("_uniform{}", param_idx));
-        bindings.push(BufferBinding {
-            param_local: Local(param_idx),
-            group: 0,
-            index: binding_index,
-            var_name,
-            element_type: WgslScalar::U32, // Loop bound stored as u32 (no shader_int64 feature)
-            read_write: false,
-            is_uniform: true,
-        });
-        binding_index += 1;
+
+        let is_loop_bound =
+            var_name.starts_with("_bound") || var_name.starts_with("_uniform_bound");
+
+        if is_loop_bound {
+            bindings.push(BufferBinding {
+                param_local: Local(param_idx),
+                group: 0,
+                index: binding_index,
+                var_name,
+                element_type: WgslScalar::U32,
+                read_write: false,
+                is_uniform: true,
+                scalar_field: None,
+            });
+            binding_index += 1;
+        } else {
+            let scalar_field = format!("f{}", scalar_field_index);
+            let element_type = scalar_type_to_wgsl(&decl.ty.kind)?;
+            bindings.push(BufferBinding {
+                param_local: Local(param_idx),
+                group: 0,
+                index: binding_index,
+                var_name,
+                element_type,
+                read_write: false,
+                is_uniform: true,
+                scalar_field: Some(scalar_field),
+            });
+            scalar_field_index += 1;
+        }
     }
 
     // Validate all parameters.
@@ -530,6 +599,13 @@ impl<'a> BodyEmitter<'a> {
             .iter()
             .find(|b| b.param_local == local)
             .map(|b| b.var_name.as_str())
+    }
+
+    fn get_scalar_field(&self, local: Local) -> Option<&str> {
+        self.bindings
+            .iter()
+            .find(|b| b.param_local == local)
+            .and_then(|b| b.scalar_field.as_deref())
     }
 
     fn emit_blocks(&mut self) -> Result<(), CodegenError> {
@@ -919,9 +995,12 @@ impl<'a> BodyEmitter<'a> {
     }
 
     fn render_place(&self, place: &Place) -> Result<String, CodegenError> {
-        let mut rendered = match self.binding_name(place.local) {
-            Some(name) => name.to_string(),
-            None => local_name(place.local),
+        let mut rendered = if let Some(field) = self.get_scalar_field(place.local) {
+            format!("_inputs.{}", field)
+        } else if let Some(name) = self.binding_name(place.local) {
+            name.to_string()
+        } else {
+            local_name(place.local)
         };
         for elem in &place.projection {
             match elem {

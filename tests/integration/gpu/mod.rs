@@ -32,6 +32,7 @@ pub mod persistent_buffer;
 pub mod ping_pong;
 pub mod read_only_capture;
 pub mod residency;
+pub mod scalar_capture;
 pub mod sized_constructor;
 pub mod variable_bound_gpu_for;
 pub mod wgsl;

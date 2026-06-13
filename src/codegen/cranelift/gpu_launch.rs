@@ -12,7 +12,7 @@
 //! dispatch / sync / readback.
 
 use crate::ast::literal::Literal;
-use crate::ast::types::{TypeKind, DIM3_TYPE_NAME};
+use crate::ast::types::{Type, TypeKind, DIM3_TYPE_NAME};
 use crate::codegen::cranelift::layout::field_layout;
 use crate::codegen::cranelift::translator::{ModuleCtx, TypeCtx};
 use crate::codegen::wgsl::{WgslBackend, WgslOptions};
@@ -103,7 +103,8 @@ fn define_bytes(
 /// All 8-byte fields are naturally aligned; the six packed u32 dims
 /// (offsets 32..56) sit on 4-byte boundaries and don't introduce padding
 /// before the trailing pointers because 56 is already 8-aligned.
-/// Offsets 88+ hold the variable fields (uniform bounds, buf_read_only, buf_int_narrow).
+/// Offsets 88+ hold the variable fields (uniform bounds, buf_read_only, buf_int_narrow,
+/// scalar inputs).
 mod desc_layout {
     pub(super) const WGSL_PTR: i32 = 0;
     pub(super) const WGSL_LEN: i32 = 8;
@@ -125,7 +126,9 @@ mod desc_layout {
     pub(super) const UNIFORM_BOUND_X_VALUE: i32 = 112;
     pub(super) const UNIFORM_BOUND_Y_VALUE: i32 = 120;
     pub(super) const NUM_STORAGE_BUFS: i32 = 128;
-    pub(super) const DESC_SIZE: u32 = 144;
+    pub(super) const SCALAR_INPUTS_PTR: i32 = 136;
+    pub(super) const SCALAR_INPUTS_LEN: i32 = 144;
+    pub(super) const DESC_SIZE: u32 = 152;
 }
 
 /// Field offsets within `runtime::core::MiriArray` (`repr(C)`):
@@ -149,6 +152,7 @@ pub(crate) fn translate(
     arg_handles: &[Option<DeviceHandleId>],
     _arg_read_only: &[bool],
     arg_int_narrow: &[bool],
+    _scalar_args: &[Operand],
     uniform_bound_x: &Option<Box<Operand>>,
     uniform_bound_y: &Option<Box<Operand>>,
     locals: &HashMap<Local, cranelift_frontend::Variable>,
@@ -226,6 +230,9 @@ pub(crate) fn translate(
     let (grid_x, grid_y, grid_z) = load_dim3_components(builder, grid_op, locals, type_ctx)?;
     let (block_x, block_y, block_z) = load_dim3_components(builder, block_op, locals, type_ctx)?;
 
+    let (scalar_inputs_addr, scalar_inputs_len) =
+        populate_scalar_inputs(builder, ptr_ty, _scalar_args, locals, type_ctx)?;
+
     populate_descriptor(
         builder,
         module_ctx.module,
@@ -236,6 +243,8 @@ pub(crate) fn translate(
             handle_ids_addr: slots.handle_ids_addr,
             read_only_addr,
             int_narrow_addr,
+            scalar_inputs_addr,
+            scalar_inputs_len,
         },
         &kernel,
         ptr_ty,
@@ -477,6 +486,88 @@ struct DescriptorSlots {
     handle_ids_addr: Value,
     read_only_addr: Value,
     int_narrow_addr: Value,
+    scalar_inputs_addr: Value,
+    scalar_inputs_len: Value,
+}
+
+/// Packs scalar captures into a binary blob on the stack.
+/// Each scalar is stored at a 4-byte offset in order: int→i32, bool→u32, f32→f32.
+fn populate_scalar_inputs(
+    builder: &mut FunctionBuilder,
+    ptr_ty: cl_types::Type,
+    scalar_args: &[Operand],
+    locals: &HashMap<Local, cranelift_frontend::Variable>,
+    type_ctx: &TypeCtx,
+) -> Result<(Value, Value), CodegenError> {
+    if scalar_args.is_empty() {
+        return Ok((
+            builder.ins().iconst(ptr_ty, 0),
+            builder.ins().iconst(cl_types::I64, 0),
+        ));
+    }
+
+    let byte_size = (scalar_args.len() as u32) * 4;
+    let slot = builder.create_sized_stack_slot(StackSlotData::new(
+        StackSlotKind::ExplicitSlot,
+        byte_size,
+        4,
+    ));
+    let addr = builder.ins().stack_addr(ptr_ty, slot, 0);
+
+    for (i, op) in scalar_args.iter().enumerate() {
+        let value = read_operand_value(builder, op, locals, type_ctx)?;
+        let place = match op {
+            Operand::Copy(p) | Operand::Move(p) => p,
+            Operand::Constant(_) => {
+                return Err(CodegenError::Internal(
+                    "scalar_args operand must be a Copy/Move".to_string(),
+                ));
+            }
+        };
+        let local_ty = type_ctx.local_types.get(place.local.0).ok_or_else(|| {
+            CodegenError::Internal(format!(
+                "unknown local in scalar capture: {:?}",
+                place.local
+            ))
+        })?;
+        let converted = convert_scalar_for_uniform(builder, value, local_ty)?;
+        builder
+            .ins()
+            .store(MemFlags::new(), converted, addr, (i as i32) * 4);
+    }
+
+    Ok((addr, builder.ins().iconst(cl_types::I64, byte_size as i64)))
+}
+
+/// Converts a scalar operand to the wire format: int→i32, bool→u32, f32→f32.
+fn convert_scalar_for_uniform(
+    builder: &mut FunctionBuilder,
+    value: Value,
+    local_ty: &&Type,
+) -> Result<Value, CodegenError> {
+    match &local_ty.kind {
+        TypeKind::Int => {
+            let val_ty = builder.func.dfg.value_type(value);
+            if val_ty == cl_types::I64 {
+                Ok(builder.ins().ireduce(cl_types::I32, value))
+            } else {
+                Ok(value)
+            }
+        }
+        TypeKind::Boolean => {
+            let val_ty = builder.func.dfg.value_type(value);
+            if val_ty == cl_types::I8 {
+                Ok(builder.ins().uextend(cl_types::I32, value))
+            } else {
+                Ok(value)
+            }
+        }
+        TypeKind::F32 => Ok(value),
+        _ => Err(CodegenError::Internal(format!(
+            "unsupported scalar capture type in codegen: {:?}",
+            local_ty.kind
+        ))),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -497,6 +588,8 @@ fn populate_descriptor(
         handle_ids_addr,
         read_only_addr,
         int_narrow_addr,
+        scalar_inputs_addr,
+        scalar_inputs_len,
     } = slots;
     let wgsl_ptr = data_pointer(builder, module, kernel.wgsl_data, ptr_ty);
     let entry_ptr = data_pointer(builder, module, kernel.name_data, ptr_ty);
@@ -525,6 +618,8 @@ fn populate_descriptor(
     store(handle_ids_addr, desc_layout::BUF_HANDLE_IDS);
     store(read_only_addr, desc_layout::BUF_READ_ONLY);
     store(int_narrow_addr, desc_layout::BUF_INT_NARROW);
+    store(scalar_inputs_addr, desc_layout::SCALAR_INPUTS_PTR);
+    store(scalar_inputs_len, desc_layout::SCALAR_INPUTS_LEN);
 }
 
 fn declare_launch_fn(
@@ -630,6 +725,6 @@ mod tests {
 
     #[test]
     fn gpu_launch_desc_size_matches_runtime() {
-        assert_eq!(desc_layout::DESC_SIZE as usize, 144);
+        assert_eq!(desc_layout::DESC_SIZE as usize, 152);
     }
 }
