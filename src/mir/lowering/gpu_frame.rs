@@ -29,10 +29,10 @@ use super::context::LoweringContext;
 use super::gpu_for;
 use super::statement::lower_statement;
 
-/// Lowers a `gpu frame` loop into a synthesized kernel + `GpuLaunch`.
+/// Lowers a single-pass `gpu frame` loop into a synthesized kernel + `GpuLaunch`.
 ///
-/// Creates a custom kernel with frame input parameters (f0..f10) for the
-/// 11 FrameInput fields, and marks it with `is_frame_step=true`.
+/// This is a wrapper around `emit_frame_pass` for the single-pass case.
+/// Creates a kernel marked with `is_frame_step=true` and injects frame inputs.
 pub fn lower_gpu_frame(
     ctx: &mut LoweringContext,
     span: &Span,
@@ -57,16 +57,144 @@ pub fn lower_gpu_frame(
     );
 
     let captures = gpu_for::collect_capture_infos(ctx, body, &loop_var_name, *span)?;
-    let kernel_name = format!("miri_gpu_for_{}", stmt_id);
     let uses_frame = detect_frame_usage(body);
+
+    // Single-pass uses emit_frame_pass with pass_idx=0.
+    emit_frame_pass(
+        ctx,
+        span,
+        stmt_id,
+        0,
+        decls,
+        start_lit,
+        is_literal_end,
+        end,
+        range_type.clone(),
+        &captures,
+        body,
+        uses_frame,
+    )?;
+
+    Ok(())
+}
+
+/// Lowers a `gpu frame` block (multi-pass form) into ordered frame passes.
+///
+/// Each child of the block MUST be a `GpuFor` statement. They are lowered
+/// sequentially, each marked as a frame step with frame inputs injected.
+/// Targets are not chained here; that's a future enhancement.
+pub fn lower_gpu_frame_block(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    _stmt_id: usize,
+    block: &Statement,
+) -> Result<(), LoweringError> {
+    // Extract the statements from the block
+    let stmts = match &block.node {
+        crate::ast::statement::StatementKind::Block(stmts) => stmts,
+        _ => {
+            return Err(LoweringError::unsupported_expression(
+                "gpu frame block body must be a block statement".to_string(),
+                *span,
+            ));
+        }
+    };
+
+    // Validate that all statements are gpu for loops
+    for stmt in stmts {
+        match &stmt.node {
+            crate::ast::statement::StatementKind::GpuFor(_, _, _) => {}
+            _ => {
+                return Err(LoweringError::unsupported_expression(
+                    "gpu frame block may only contain 'gpu for' passes".to_string(),
+                    stmt.span,
+                ));
+            }
+        }
+    }
+
+    if stmts.is_empty() {
+        return Err(LoweringError::unsupported_expression(
+            "gpu frame block must contain at least one 'gpu for' pass".to_string(),
+            *span,
+        ));
+    }
+
+    // Lower each pass as a frame step with frame inputs.
+    for (pass_idx, pass_stmt) in stmts.iter().enumerate() {
+        if let crate::ast::statement::StatementKind::GpuFor(decls, iterable, body) = &pass_stmt.node
+        {
+            let loop_var_name = decls[0].name.clone();
+
+            let ExpressionKind::Range(start, Some(end), range_type) = &iterable.node else {
+                return Err(LoweringError::unsupported_expression(
+                    "gpu frame: iterable must be a bounded numeric range like '0..n'".to_string(),
+                    *span,
+                ));
+            };
+
+            let start_lit = gpu_for::read_int_literal(start, *span)?;
+            let is_literal_end = matches!(
+                &end.node,
+                ExpressionKind::Literal(crate::ast::literal::Literal::Integer(_))
+            );
+
+            let captures = gpu_for::collect_capture_infos(ctx, body, &loop_var_name, *span)?;
+            let uses_frame = detect_frame_usage(body);
+
+            // Use emit_frame_pass for each pass in the block.
+            emit_frame_pass(
+                ctx,
+                span,
+                pass_stmt.id,
+                pass_idx,
+                decls,
+                start_lit,
+                is_literal_end,
+                end,
+                range_type.clone(),
+                &captures,
+                body,
+                uses_frame,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Emits a single frame pass kernel with frame inputs injected and is_frame_step=true.
+///
+/// This is the core reusable helper that both single-pass and multi-pass use.
+/// It creates a kernel with a unique name based on frame_stmt_id and pass_idx,
+/// marks it as a frame step, injects frame inputs, and emits a GpuLaunch.
+#[allow(clippy::too_many_arguments)]
+fn emit_frame_pass(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    frame_stmt_id: usize,
+    pass_idx: usize,
+    decls: &[VariableDeclaration],
+    start_lit: i64,
+    is_literal_end: bool,
+    end: &Expression,
+    range_type: crate::ast::RangeExpressionType,
+    captures: &[gpu_for::CaptureInfo],
+    body: &Statement,
+    uses_frame: bool,
+) -> Result<(), LoweringError> {
+    let loop_var_name = &decls[0].name;
+
+    // Distinct kernel name to avoid runtime cache collision.
+    let kernel_name = format!("miri_gpu_for_{}_{}", frame_stmt_id, pass_idx);
 
     if is_literal_end {
         let end_lit = gpu_for::read_int_literal(end, *span)?;
         let length = gpu_for::compute_range_length(start_lit, end_lit, range_type.clone(), *span)?;
         let kernel_body = build_frame_kernel_literal(
             ctx,
-            &captures,
-            &loop_var_name,
+            captures,
+            loop_var_name,
             start_lit,
             length,
             body,
@@ -78,12 +206,12 @@ pub fn lower_gpu_frame(
             body: kernel_body,
             captures: Vec::new(),
         });
-        emit_gpu_frame_launch_literal(ctx, &kernel_name, length, &captures, *span, uses_frame);
+        emit_gpu_frame_launch_literal(ctx, &kernel_name, length, captures, *span, uses_frame);
     } else {
         let kernel_body = build_frame_kernel_runtime(
             ctx,
-            &captures,
-            &loop_var_name,
+            captures,
+            loop_var_name,
             start_lit,
             body,
             *span,
@@ -100,7 +228,7 @@ pub fn lower_gpu_frame(
             start_lit,
             end,
             range_type.clone(),
-            &captures,
+            captures,
             *span,
             uses_frame,
         )?;

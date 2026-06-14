@@ -15,8 +15,8 @@ pub struct Manifest {
     pub canvas: CanvasSpec,
     pub buffers: Vec<BufferSpec>,
     pub seed: Vec<KernelSpec>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub frame: Option<KernelSpec>,
+    #[serde(rename = "framePasses", skip_serializing_if = "Vec::is_empty")]
+    pub frame_passes: Vec<KernelSpec>,
     pub paint: String,
     #[serde(rename = "paintMode", skip_serializing_if = "Option::is_none")]
     pub paint_mode: Option<String>,

@@ -22,7 +22,7 @@ use std::collections::HashSet;
 
 use crate::ast::expression::LeftHandSideExpression;
 use crate::ast::statement::BindingResidency;
-use crate::ast::types::Type;
+use crate::ast::types::{Type, FRAME_INPUT_TYPE_NAME};
 use crate::ast::{Expression, ExpressionKind, Statement, StatementKind, VariableDeclaration};
 use crate::error::syntax::Span;
 use crate::type_checker::context::Context;
@@ -158,6 +158,9 @@ fn visit_stmt(
             }
             visit_stmt(body, bound, context, reported, violations);
             *bound = scope_snapshot;
+        }
+        StatementKind::GpuFrameBlock(block) => {
+            visit_stmt(block, bound, context, reported, violations);
         }
         StatementKind::Empty
         | StatementKind::Break
@@ -381,6 +384,16 @@ fn check_captured_identifier(
     let Some(info) = context.resolve_info(name) else {
         return;
     };
+
+    // Skip special context types that are implicit in frame bodies.
+    // The frame context is injected by the lowering phase, not captured.
+    if matches!(
+        &info.ty.kind,
+        crate::ast::types::TypeKind::Custom(type_name, None)
+        if type_name == FRAME_INPUT_TYPE_NAME
+    ) {
+        return;
+    }
 
     if let Some(elem_ty) = captured_buffer_element(&info.ty.kind) {
         if info.residency == BindingResidency::Host && is_residency_gated_buffer(&info.ty.kind) {

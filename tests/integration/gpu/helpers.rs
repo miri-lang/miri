@@ -56,3 +56,38 @@ pub fn assert_gpu_wgsl_valid(source: &str) {
         .validate(&module)
         .unwrap_or_else(|err| panic!("naga validate failed: {:?}\nWGSL:\n{}", err, wgsl));
 }
+
+/// Compile a Miri source and extract GPU kernel metadata.
+/// Returns a JSON-like value with kernel information (simplified for testing).
+pub fn compile_to_manifest(source: &str) -> Result<serde_json::Value, String> {
+    let pipeline = Pipeline::new();
+    let result = pipeline.frontend(source).map_err(|e| format!("{:?}", e))?;
+    let func_stmt = result
+        .ast
+        .body
+        .iter()
+        .find(
+            |stmt| matches!(&stmt.node, StatementKind::FunctionDeclaration(d) if d.name == "main"),
+        )
+        .ok_or("source must contain 'fn main'".to_string())?;
+    let (_body, lambdas) = lower_function(func_stmt, &result.type_checker, false, false)
+        .map_err(|e| format!("{:?}", e))?;
+
+    // Count frame passes
+    let mut frame_passes = Vec::new();
+    for lambda in &lambdas {
+        if lambda.body.execution_model == ExecutionModel::GpuKernel {
+            if let Some(backend_md) = &lambda.body.backend_metadata {
+                if let miri::mir::BackendMetadata::Gpu(gpu_md) = backend_md {
+                    if gpu_md.is_frame_step {
+                        frame_passes.push(serde_json::json!({}));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(serde_json::json!({
+        "framePasses": frame_passes
+    }))
+}

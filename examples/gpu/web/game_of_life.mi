@@ -1,0 +1,105 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// Multi-pass Game of Life: Conway's B3/S23 cellular automaton.
+//
+// A `gpu frame` block with 5 passes:
+// 1. CA step: read grid_a → write grid_b (compute next generation).
+// 2. Trail decay: read grid_b + trail_a → write trail_b (integrate trail).
+// 3. Splat (event-gated): read frame.mouse → write grid_b cells.
+// 4. Reseed (event-gated): read frame.double_clicked → reseed grid_b.
+// 5. Paint: read grid_b + trail_b → write paint RGBA.
+//
+// This demonstrates multi-pass frame loops with frame input access
+// and deterministic state integration.
+
+use system.collections.array
+use system.io
+
+// Grids: ping-pong for CA step
+gpu var grid_a = Array<int, 64 * 64>()
+gpu var grid_b = Array<int, 64 * 64>()
+
+// Trail buffers: ping-pong for decay
+gpu var trail_a = Array<f32, 64 * 64>()
+gpu var trail_b = Array<f32, 64 * 64>()
+
+// Paint output (RGBA: 4 floats per pixel)
+gpu var paint = Array<f32, 64 * 64 * 4>()
+
+// Seed kernel: fill grid_a with a deterministic "soup"
+gpu for idx in 0..4096
+    let x = idx % 64
+    let y = idx / 64
+    let hash = (x * 37 + y * 71 + x * y * 7) % 13
+    grid_a[idx] = 1 if hash < 5 else 0
+    trail_a[idx] = 0.0
+
+// Multi-pass frame loop (buffer-level disjoint passes)
+gpu frame
+    // Pass 1: CA step — compute next generation
+    gpu for idx in 0..4096
+        let y = idx / 64
+        let x = idx % 64
+        let ym = (y - 1 + 64) % 64
+        let yp = (y + 1) % 64
+        let xm = (x - 1 + 64) % 64
+        let xp = (x + 1) % 64
+        let n = grid_a[ym*64+xm] + grid_a[ym*64+x] + grid_a[ym*64+xp] + grid_a[y*64+xm] + grid_a[y*64+xp] + grid_a[yp*64+xm] + grid_a[yp*64+x] + grid_a[yp*64+xp]
+        var next = 0
+        if n == 3
+            next = 1
+        if grid_a[idx] == 1 and n == 2
+            next = 1
+        grid_b[idx] = next
+
+    // Pass 2: Trail decay and update
+    gpu for idx in 0..4096
+        let decay = trail_a[idx] * 0.92
+        let new_trail = 1.0 if grid_b[idx] == 1 else decay
+        trail_b[idx] = new_trail
+
+    // Pass 3: Mouse splat (event-gated)
+    // Write to grid_b cells near pointer if mouse is pressed
+    gpu for idx in 0..4096
+        if frame.mouse_down
+            let y = idx / 64
+            let x = idx % 64
+            let mx = frame.mouse_x as int
+            let my = frame.mouse_y as int
+            let dx = (x - mx) as f32
+            let dy = (y - my) as f32
+            let dist2 = dx * dx + dy * dy
+            if dist2 < 25.0
+                grid_b[idx] = 1
+
+    // Pass 4: Reseed on double-click
+    gpu for idx in 0..4096
+        if frame.double_clicked
+            let x = idx % 64
+            let y = idx / 64
+            let hash = (x * 37 + y * 71 + x * y * 7) % 13
+            grid_b[idx] = 1 if hash < 5 else 0
+
+    // Pass 5: Paint RGBA output
+    gpu for idx in 0..4096
+        let alive = grid_b[idx]
+        let trail = trail_b[idx]
+        let r = 1.0 if alive == 1 else trail
+        let g = 1.0 if alive == 1 else 0.0
+        let b = trail
+        let a = 1.0
+        let base = idx * 4
+        paint[base] = r
+        paint[base + 1] = g
+        paint[base + 2] = b
+        paint[base + 3] = a
+
+// Native smoke test: verify alive count is deterministic and non-zero
+let host_grid = grid_b
+var alive = 0
+var k = 0
+while k < 4096
+    alive = alive + host_grid[k]
+    k = k + 1
+println(f"alive={alive}")

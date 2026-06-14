@@ -452,14 +452,14 @@ fn build_manifest(
         None
     };
 
-    // Split kernels into seed and frame
+    // Split kernels into seed and frame passes
     let mut seed_kernels = Vec::new();
-    let mut frame_kernel = None;
+    let mut frame_passes = Vec::new();
 
     for artifact in artifacts {
         let kernel_spec = build_kernel_spec(artifact)?;
         if artifact.is_frame_step {
-            frame_kernel = Some(kernel_spec);
+            frame_passes.push(kernel_spec);
         } else {
             seed_kernels.push(kernel_spec);
         }
@@ -473,7 +473,7 @@ fn build_manifest(
         },
         buffers,
         seed: seed_kernels,
-        frame: frame_kernel,
+        frame_passes,
         paint: paint_buffer,
         paint_mode,
     })

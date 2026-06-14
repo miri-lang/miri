@@ -126,6 +126,11 @@ pub fn gpu_frame_statement(
     ))
 }
 
+/// Creates a `gpu frame` block statement (multi-pass form).
+pub fn gpu_frame_block(block: Statement) -> Statement {
+    stmt(StatementKind::GpuFrameBlock(Box::new(block)))
+}
+
 /// Creates a return statement.
 pub fn return_statement(expression: Option<Box<Expression>>) -> Statement {
     stmt(StatementKind::Return(expression))
