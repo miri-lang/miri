@@ -175,27 +175,28 @@ fn target_web_gpu_frame_kernel_in_manifest() {
     let manifest: serde_json::Value =
         serde_json::from_str(&manifest_text).expect("parse manifest JSON");
 
-    // Validate frame field is present
+    // Validate framePasses field is present
     assert!(
-        manifest["frame"].is_object() || manifest["frame"].is_null(),
-        "manifest 'frame' must be an object or null"
+        manifest["framePasses"].is_array(),
+        "manifest 'framePasses' must be an array"
     );
 
-    // If frame is present, check it has read/write
-    if manifest["frame"].is_object() {
-        let frame = &manifest["frame"];
+    // Validate each frame pass has read/write and bindings
+    let frame_passes = manifest["framePasses"].as_array().unwrap();
+    for frame in frame_passes {
+        assert!(frame.is_object(), "each frame pass must be an object");
         assert!(
             frame["read"].is_string() || frame["read"].is_null(),
-            "frame kernel must have 'read' buffer name"
+            "frame pass must have 'read' buffer name"
         );
         assert!(
             frame["write"].is_string() || frame["write"].is_null(),
-            "frame kernel must have 'write' buffer name"
+            "frame pass must have 'write' buffer name"
         );
 
         // Validate bindings match the read/write buffers
         let bindings = &frame["bindings"];
-        assert!(bindings.is_array(), "frame kernel must have bindings array");
+        assert!(bindings.is_array(), "frame pass must have bindings array");
 
         // Check that binding access matches frame.read/write classification
         let read_buf = frame["read"].as_str();
@@ -362,22 +363,33 @@ gpu frame idx in 0..16
     let manifest: serde_json::Value =
         serde_json::from_str(&manifest_text).expect("parse manifest JSON");
 
-    // Verify frame kernel exists
+    // Verify framePasses array exists and has at least one pass
     assert!(
-        manifest["frame"].is_object(),
-        "manifest should have frame kernel object"
+        manifest["framePasses"].is_array(),
+        "manifest should have framePasses array"
     );
 
-    let frame = &manifest["frame"];
+    let frame_passes = manifest["framePasses"].as_array().unwrap();
+    assert!(
+        frame_passes.len() >= 1,
+        "framePasses must have at least one pass"
+    );
+
+    // Check first pass has frame inputs
+    let frame = &frame_passes[0];
 
     // Verify inputs field exists
     assert!(
         frame["inputs"].is_array(),
-        "frame kernel should have 'inputs' array field"
+        "frame pass should have 'inputs' array field"
     );
 
     let inputs = frame["inputs"].as_array().unwrap();
-    assert_eq!(inputs.len(), 11, "frame inputs must have exactly 11 fields");
+    assert_eq!(
+        inputs.len(),
+        11,
+        "frame pass inputs must have exactly 11 fields"
+    );
 
     // Verify canonical order and offsets
     let expected_fields = [

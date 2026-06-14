@@ -44,6 +44,7 @@ fn is_wrappable_stmt(stmt: &Statement) -> bool {
             | StatementKind::For(..)
             | StatementKind::GpuFor(..)
             | StatementKind::GpuFrame(..)
+            | StatementKind::GpuFrameBlock(..)
             | StatementKind::Block(..)
             | StatementKind::Return(..)
             | StatementKind::Break
@@ -204,6 +205,7 @@ pub fn program_uses_gpu<'a, I: IntoIterator<Item = &'a Statement>>(stmts: I) -> 
 fn stmt_uses_gpu(stmt: &Statement) -> bool {
     match &stmt.node {
         StatementKind::GpuFor(_, _, _) | StatementKind::GpuFrame(_, _, _) => true,
+        StatementKind::GpuFrameBlock(block) => stmt_uses_gpu(block),
         StatementKind::FunctionDeclaration(decl) => {
             decl.properties.is_gpu || decl.body.as_ref().is_some_and(|b| stmt_uses_gpu(b))
         }

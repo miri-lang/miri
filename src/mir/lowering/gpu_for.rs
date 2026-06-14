@@ -289,6 +289,9 @@ fn visit_written_stmt(stmt: &Statement, written: &mut HashSet<String>) {
         | StatementKind::GpuFrame(_, _, body) => {
             visit_written_stmt(body, written);
         }
+        StatementKind::GpuFrameBlock(block) => {
+            visit_written_stmt(block, written);
+        }
         StatementKind::Empty
         | StatementKind::Break
         | StatementKind::Continue
@@ -576,6 +579,9 @@ fn visit_stmt(
             }
             visit_stmt(body, bound, ctx, seen, ordered);
             *bound = scope_snapshot;
+        }
+        StatementKind::GpuFrameBlock(block) => {
+            visit_stmt(block, bound, ctx, seen, ordered);
         }
         // Listed explicitly so a new `StatementKind` variant cannot be
         // silently dropped from capture collection. None of these shapes can

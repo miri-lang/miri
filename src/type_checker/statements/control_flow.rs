@@ -546,6 +546,89 @@ impl TypeChecker {
         context.exit_scope();
     }
 
+    pub(crate) fn check_gpu_frame_block(
+        &mut self,
+        block: &Statement,
+        context: &mut Context,
+        stmt_span: Span,
+    ) {
+        // Extract statements from the block
+        let stmts = match &block.node {
+            StatementKind::Block(stmts) => stmts,
+            _ => {
+                self.report_error(
+                    "gpu frame block body must be a block statement".to_string(),
+                    block.span,
+                );
+                return;
+            }
+        };
+
+        if stmts.is_empty() {
+            self.report_error(
+                "'gpu frame' block must contain at least one 'gpu for' pass".to_string(),
+                stmt_span,
+            );
+            return;
+        }
+
+        // Validate that all statements are gpu for loops
+        for stmt in stmts {
+            match &stmt.node {
+                StatementKind::GpuFor(_, _, _) => {}
+                _ => {
+                    self.report_error(
+                        "'gpu frame' block may only contain 'gpu for' passes; host-loop repeat ('for _ in 0..k') around a pass is not yet supported".to_string(),
+                        stmt.span,
+                    );
+                    return;
+                }
+            }
+        }
+
+        // Enter GPU scope
+        context.enter_scope();
+        let outer_in_gpu = context.in_gpu_function;
+        context.in_gpu_function = true;
+        context.gpu_for_depth += 1;
+
+        // Bind the per-frame input context, readable in all passes
+        context.define(
+            FRAME_INPUT_IDENT.to_string(),
+            SymbolInfo::new(
+                make_type(TypeKind::Custom(FRAME_INPUT_TYPE_NAME.to_string(), None)),
+                false,
+                false,
+                MemberVisibility::Public,
+                self.current_module.clone(),
+                None,
+            ),
+        );
+
+        // Type-check each pass and apply per-pass buffer read/write disjointness validation.
+        for pass in stmts {
+            if let StatementKind::GpuFor(decls, iterable, body) = &pass.node {
+                // Apply per-pass semantic buffer validation.
+                self.check_gpu_frame_buffers(decls, body, context, pass.span);
+                // Then type-check the pass.
+                self.check_gpu_for(decls, iterable, body, context, pass.span);
+            }
+        }
+
+        context.gpu_for_depth -= 1;
+        context.in_gpu_function = outer_in_gpu;
+
+        let unconsumed = context.get_unconsumed_linear_vars();
+        for (name, span) in unconsumed {
+            self.report_error(
+                format!("Linear variable '{}' must be consumed exactly once", name),
+                span,
+            );
+        }
+
+        context.exit_scope();
+    }
+
     fn check_gpu_frame_buffers(
         &mut self,
         loop_decls: &[VariableDeclaration],
@@ -553,58 +636,34 @@ impl TypeChecker {
         context: &Context,
         stmt_span: Span,
     ) {
-        // Collect all gpu buffers captured in the frame body.
+        // Buffer-level semantic validation: per-pass read/write disjointness.
+        // For a single gpu for pass: reject iff read_set ∩ write_set ≠ ∅ (race),
+        // or write_set is empty. Multiple disjoint writes are now LEGAL.
         let loop_var_name = &loop_decls[0].name;
-        let (read_only_captures, written_captures) =
-            collect_gpu_frame_captures(body, loop_var_name, context);
+        let (read_set, write_set) = collect_pass_buffer_sets(body, loop_var_name, context);
 
-        // Ping-pong buffer rule: exactly 1 read-only and 1 read-write gpu buffer,
-        // and they must be different (no in-place updates).
-        let total_captures = read_only_captures.len() + written_captures.len();
-
-        if total_captures == 0 {
+        if write_set.is_empty() {
             self.report_error(
-                "'gpu frame' body must capture at least one gpu buffer".to_string(),
+                "'gpu frame' pass must write at least one gpu buffer".to_string(),
                 stmt_span,
             );
             return;
         }
 
-        if written_captures.is_empty() {
-            self.report_error(
-                "'gpu frame' body must write to at least one gpu buffer".to_string(),
-                stmt_span,
-            );
-            return;
-        }
-
-        if written_captures.len() > 1 {
+        // Check for data races: buffers in both read_set and write_set.
+        let mut race_buffers: Vec<_> = read_set.iter().filter(|b| write_set.contains(*b)).collect();
+        if !race_buffers.is_empty() {
+            race_buffers.sort();
             self.report_error(
                 format!(
-                    "'gpu frame' body must write to exactly one gpu buffer, but {} are written: {}",
-                    written_captures.len(),
-                    written_captures
-                        .iter()
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-                stmt_span,
-            );
-            return;
-        }
-
-        // Check that read and write buffers are disjoint.
-        let written_name = written_captures.iter().next().unwrap();
-        if read_only_captures.contains(written_name) {
-            self.report_error(
-                format!(
-                    "'gpu frame' buffers create a data race: '{}' is both read and written",
-                    written_name
+                    "'gpu frame' pass creates a data race: buffer '{}' is both read and written in the same pass (use a separate ping-pong buffer)",
+                    race_buffers[0]
                 ),
                 stmt_span,
             );
         }
+
+        // No check for number of write buffers anymore; disjoint writes are legal.
     }
 
     pub(crate) fn bind_loop_variables(
@@ -869,13 +928,12 @@ fn is_int_literal(expr: &Expression) -> bool {
     )
 }
 
-/// Collects gpu buffer captures in a gpu frame body, classifying them as
-/// read-only or read-write based on whether they appear in assignments.
+/// Collects gpu buffer read and write sets for a single pass (gpu for body).
+/// Used for semantic buffer-level disjointness validation.
 ///
-/// Returns a tuple of (read_only_captures, written_captures) where each is a
-/// set of captured gpu buffer variable names that are gpu-resident. Note that
-/// a single buffer may appear in both sets if it is both read and written (data race).
-fn collect_gpu_frame_captures(
+/// Returns (read_set, write_set) where each is a set of gpu buffer names.
+/// A buffer in both sets indicates a potential data race.
+fn collect_pass_buffer_sets(
     body: &Statement,
     loop_var_name: &str,
     context: &Context,
@@ -886,8 +944,8 @@ fn collect_gpu_frame_captures(
     use std::collections::HashSet;
 
     let written = collect_written_names_in_stmt(body);
-    let mut read_only = HashSet::new();
-    let mut written_captures = HashSet::new();
+    let mut read_set = HashSet::new();
+    let mut write_set = HashSet::new();
 
     // Collect all captured identifiers.
     let mut bound = HashSet::new();
@@ -896,7 +954,6 @@ fn collect_gpu_frame_captures(
     collect_identifiers_in_stmt(body, &mut bound, &mut captured);
 
     for name in captured {
-        // Skip loop variables and non-gpu-resident captures.
         if name == loop_var_name {
             continue;
         }
@@ -906,7 +963,7 @@ fn collect_gpu_frame_captures(
             continue;
         };
 
-        // Only gpu-resident buffers are counted as frame captures.
+        // Only gpu-resident buffers are counted.
         if !is_gpu_buffer_type(&info.ty.kind) {
             continue;
         }
@@ -915,14 +972,14 @@ fn collect_gpu_frame_captures(
         let is_read = is_identifier_read_in_stmt(body, &name, loop_var_name);
 
         if is_written {
-            written_captures.insert(name.clone());
+            write_set.insert(name.clone());
         }
         if is_read {
-            read_only.insert(name);
+            read_set.insert(name);
         }
     }
 
-    (read_only, written_captures)
+    (read_set, write_set)
 }
 
 /// Helper: collects all identifiers referenced in a statement, excluding
@@ -976,6 +1033,9 @@ fn collect_identifiers_in_stmt(
             }
             collect_identifiers_in_stmt(body, bound, captured);
             *bound = scope_snapshot;
+        }
+        StatementKind::GpuFrameBlock(block) => {
+            collect_identifiers_in_stmt(block, bound, captured);
         }
         StatementKind::Empty
         | StatementKind::Break
@@ -1140,6 +1200,9 @@ fn visit_written_stmt(stmt: &Statement, written: &mut std::collections::HashSet<
         | StatementKind::GpuFrame(_, _, body) => {
             visit_written_stmt(body, written);
         }
+        StatementKind::GpuFrameBlock(block) => {
+            visit_written_stmt(block, written);
+        }
         StatementKind::Empty
         | StatementKind::Break
         | StatementKind::Continue
@@ -1262,6 +1325,7 @@ fn is_identifier_read_in_stmt_impl(
             }
             is_identifier_read_in_stmt_impl(body, name, &new_bound)
         }
+        StatementKind::GpuFrameBlock(block) => is_identifier_read_in_stmt_impl(block, name, bound),
         StatementKind::Empty
         | StatementKind::Break
         | StatementKind::Continue

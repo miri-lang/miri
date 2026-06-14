@@ -85,6 +85,9 @@ impl TypeChecker {
             StatementKind::GpuFrame(decls, iterable, body) => {
                 self.check_gpu_frame(decls, iterable, body, context, statement.span)
             }
+            StatementKind::GpuFrameBlock(block) => {
+                self.check_gpu_frame_block(block, context, statement.span)
+            }
             StatementKind::Break => self.check_break(context, statement.span),
             StatementKind::Continue => self.check_continue(context, statement.span),
             StatementKind::Return(expr) => self.check_return(expr, context, statement.span),
