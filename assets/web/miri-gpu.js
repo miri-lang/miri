@@ -23,14 +23,15 @@
 //          "length": number, "initialData": number[]|null }
 //     ],
 //     "seed":  [ Kernel ],          // run once, in order, on mount
-//     "frame": Kernel | null,       // run every animation frame (null = static)
+//     "framePasses": [ Kernel ],    // run every animation frame (empty = static)
 //     "paint": string               // buffer name to paint each frame
 //   }
 //   Kernel = {
 //     "entryPoint": string, "wgsl": string, "workgroups": [number,number,number],
 //     "bindings": [ { "name": string, "access": "read"|"read_write" } ],
-//     "read":  string|null,         // frame only: the ping-pong source buffer
-//     "write": string|null          // frame only: the ping-pong destination
+//     "read":  string|null,         // multi-pass only: first pass's ping-pong source
+//     "write": string|null,         // multi-pass only: last pass's ping-pong destination
+//     "inputs": [ InputField ]|null // per-frame input uniforms (e.g., frame.*)
 //   }
 
 export class MiriGpuError extends Error {
@@ -241,8 +242,8 @@ function paint(ctx, width, height, values, colormap) {
 }
 
 /// Mount a Miri GPU demo described by `manifest` onto `canvas`.
-/// Returns `{ stop() }`. Static demos paint one frame; demos with a `frame`
-/// kernel animate via requestAnimationFrame over ping-pong buffers.
+/// Returns `{ stop() }`. Static demos paint one frame; demos with `framePasses`
+/// animate via requestAnimationFrame, dispatching all passes per frame with ping-pong.
 export async function mount(canvas, manifest, opts = {}) {
     if (!canvas) throw new MiriGpuError("mount: a canvas element is required");
     if (!manifest || !manifest.buffers) throw new MiriGpuError("mount: invalid manifest");
@@ -270,8 +271,12 @@ export async function mount(canvas, manifest, opts = {}) {
 
     const paintBuffer = bufferOf(manifest.paint);
 
+    // Determine whether this is static (no animation) or animated.
+    // New multi-pass syntax: framePasses is an array. Old single-pass: frame is a Kernel.
+    const framePasses = manifest.framePasses ?? (manifest.frame ? [manifest.frame] : null);
+
     // Static demo: run-once already done by seed; paint a single frame.
-    if (!manifest.frame) {
+    if (!framePasses) {
         await device.queue.onSubmittedWorkDone();
         const view = await readBackInto(
             device,
@@ -283,11 +288,17 @@ export async function mount(canvas, manifest, opts = {}) {
         return { stop() {} };
     }
 
-    // Animated demo: ping-pong the frame kernel's read/write buffers each frame.
-    const frame = manifest.frame;
-    const compiled = compilePipeline(device, frame);
-    let read = bufferOf(frame.read).buffer;
-    let write = bufferOf(frame.write).buffer;
+    // Animated demo: dispatch all frame passes in order each animation frame.
+    // For passes with ping-pong buffers (first/last with read/write):
+    // swap read/write between frames to alternate direction.
+    const firstPass = framePasses[0];
+    const lastPass = framePasses[framePasses.length - 1];
+    const compiledPasses = framePasses.map((pass) => compilePipeline(device, pass));
+
+    // Ping-pong buffers are only used in multi-pass; extract from first and last passes.
+    let read = firstPass.read ? bufferOf(firstPass.read).buffer : null;
+    let write = lastPass.write ? bufferOf(lastPass.write).buffer : null;
+
     const ArrayType = typedArrayFor(paintBuffer.elemType);
     const paintBytes = paintBuffer.length * ArrayType.BYTES_PER_ELEMENT;
 
@@ -296,21 +307,34 @@ export async function mount(canvas, manifest, opts = {}) {
 
     const step = async () => {
         if (!running) return;
-        // Bind the frame kernel: its `read` name → current read buffer, its
-        // `write` name → current write buffer, any other name → its own buffer.
-        dispatchKernel(device, compiled, frame, (name) => {
-            if (name === frame.read) return read;
-            if (name === frame.write) return write;
-            return bufferOf(name).buffer;
-        });
+        // Dispatch all passes in order.
+        for (let i = 0; i < framePasses.length; i++) {
+            const pass = framePasses[i];
+            const compiled = compiledPasses[i];
+            // For multi-pass: first pass uses 'read' ping-pong, last uses 'write'.
+            // Middle passes bind their own buffers.
+            let bindBuffer = (name) => {
+                // First pass: its read → current read, its write → intermediate buffer
+                if (i === 0 && name === pass.read && read) return read;
+                // Last pass: its write → current write
+                if (i === framePasses.length - 1 && name === pass.write && write) return write;
+                // All passes: other names → their own buffers
+                return bufferOf(name).buffer;
+            };
+            dispatchKernel(device, compiled, pass, bindBuffer);
+        }
         await device.queue.onSubmittedWorkDone();
-        const view = await readBackInto(device, write, paintBytes, ArrayType);
+        // Paint from the last pass's write buffer (or the paint buffer if no write).
+        const paintSource = write || paintBuffer.buffer;
+        const view = await readBackInto(device, paintSource, paintBytes, ArrayType);
         if (!running) return;
         paint(ctx, width, height, view, colormap);
         // Swap: next frame reads what we just wrote.
-        const tmp = read;
-        read = write;
-        write = tmp;
+        if (read && write) {
+            const tmp = read;
+            read = write;
+            write = tmp;
+        }
         rafId = requestAnimationFrame(step);
     };
 

@@ -94,6 +94,7 @@ pub(crate) fn check_returns(stmt: &Statement) -> ReturnStatus {
         | StatementKind::For(_, _, _)
         | StatementKind::GpuFor(_, _, _)
         | StatementKind::GpuFrame(_, _, _)
+        | StatementKind::GpuFrameBlock(_)
         | StatementKind::Break
         | StatementKind::Continue
         | StatementKind::FunctionDeclaration(_)

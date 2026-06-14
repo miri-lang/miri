@@ -127,6 +127,13 @@ pub enum StatementKind {
     /// kernel marked with `is_frame_step=true`.
     GpuFrame(Vec<VariableDeclaration>, Box<Expression>, Box<Statement>),
 
+    /// A GPU frame block: `gpu frame { gpu for ..., gpu for ... }`.
+    ///
+    /// Multiple ordered passes where each pass is a `gpu for` loop. Each pass
+    /// is a separate kernel dispatched sequentially on the GPU. Enables
+    /// ping-pong buffering and multi-stage animations.
+    GpuFrameBlock(Box<Statement>),
+
     /// A function declaration. Boxed to reduce enum size.
     FunctionDeclaration(Box<FunctionDeclarationData>),
 

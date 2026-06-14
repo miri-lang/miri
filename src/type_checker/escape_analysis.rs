@@ -1301,6 +1301,17 @@ fn walk_stmt_for_escapes(
                 return_aliases,
             );
         }
+        StatementKind::GpuFrameBlock(block) => {
+            walk_stmt_for_escapes(
+                block,
+                params,
+                types,
+                type_defs,
+                summaries,
+                direct_escapes,
+                return_aliases,
+            );
+        }
         StatementKind::FunctionDeclaration(_) => {}
         StatementKind::Use(_, _)
         | StatementKind::Type(_, _)

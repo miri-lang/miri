@@ -112,6 +112,9 @@ impl<'a> UseAfterMoveChecker<'a> {
             | StatementKind::GpuFrame(decls, iter, body) => {
                 self.check_for_stmt(decls, iter, body, consumed);
             }
+            StatementKind::GpuFrameBlock(block) => {
+                self.check_stmt(block, consumed);
+            }
             StatementKind::Empty
             | StatementKind::Break
             | StatementKind::Continue

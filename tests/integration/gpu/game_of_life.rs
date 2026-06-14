@@ -10,6 +10,7 @@
 //! - All other cells die.
 
 use super::device::assert_gpu_runs_with_output;
+use crate::integration::utils::{assert_compiler_error, assert_runs_with_output};
 
 /// Test the B3/S23 rule with an isolated blinker oscillator.
 ///
@@ -358,4 +359,60 @@ while k < 25
 println(f"{census}")
 "#;
     assert_gpu_runs_with_output(source, "5");
+}
+
+// Multi-pass Game of Life tests (F35 + Item 6)
+
+/// Test the full multi-pass demo manifest.
+/// Item 6: Verifies the manifest has 5 framePasses.
+#[test]
+fn test_multipass_game_of_life_manifest() {
+    use super::helpers::compile_to_manifest;
+
+    // The full demo should compile to a manifest with 5 frame passes
+    let source = r#"
+use system.collections.array
+use system.io
+
+fn main()
+    gpu var grid_a = Array<int, 16>()
+    gpu var grid_b = Array<int, 16>()
+    gpu var trail_a = Array<f32, 16>()
+    gpu var trail_b = Array<f32, 16>()
+    gpu var paint = Array<f32, 64>()
+
+    gpu for idx in 0..16
+        let hash = (idx * 37) % 5
+        grid_a[idx] = 1 if hash < 2 else 0
+        trail_a[idx] = 0.0
+
+    gpu frame
+        gpu for idx in 0..16
+            grid_b[idx] = grid_a[idx]
+        gpu for idx in 0..16
+            trail_b[idx] = trail_a[idx] * 0.9
+        gpu for idx in 0..16
+            if frame.mouse_down
+                grid_b[idx] = 1
+        gpu for idx in 0..16
+            if frame.double_clicked
+                grid_b[idx] = 0
+        gpu for idx in 0..16
+            let alive = grid_b[idx]
+            let base = idx * 4
+            paint[base] = 1.0 if alive == 1 else 0.0
+
+    let host = grid_b
+    var k = 0
+    while k < 16
+        k = k + 1
+"#;
+    let manifest = compile_to_manifest(source).expect("manifest");
+    let frame_passes = &manifest["framePasses"];
+    assert!(frame_passes.is_array(), "framePasses must be an array");
+    assert_eq!(
+        frame_passes.as_array().unwrap().len(),
+        5,
+        "5-pass block should have 5 framePasses"
+    );
 }

@@ -712,6 +712,16 @@ impl<'source> Parser<'source> {
     pub(crate) fn gpu_frame_statement(&mut self) -> Result<Statement, SyntaxError> {
         self.eat_token(&Token::Frame)?;
 
+        // Check if the next token is not an identifier (block form).
+        // Block form: `gpu frame` followed by indent/newline and then gpu for statements.
+        // Single-pass form: `gpu frame i in 0..4: body`
+        if !self.match_lookahead_type(|t| t == &Token::Identifier) {
+            // Block form: indent should follow, parse as block
+            let block = self.statement_body()?;
+            return Ok(ast::gpu_frame_block(block));
+        }
+
+        // Single-pass form: `gpu frame <var> in <range>: body`.
         let variable_declarations = self.for_loop_variable_list()?;
 
         if variable_declarations.len() != 1 {
