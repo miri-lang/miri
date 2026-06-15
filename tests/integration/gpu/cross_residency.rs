@@ -21,7 +21,7 @@ use system.io
 
 fn main()
     gpu var arr = [0, 0, 0, 0, 0, 0, 0, 0]
-    gpu for i in 0..8
+    gpu forall i in 0..8
         arr[i] = i * i
 
     for i in 0..8
@@ -40,7 +40,7 @@ use system.collections.array
 
 fn main()
     gpu var arr = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         arr[i] = i * i
 
     let v = arr[0]
@@ -71,7 +71,7 @@ use system.collections.array
 fn main()
     gpu let a = [1, 2, 3, 4]
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         dst[i] = a[i] + 1
 ",
     );
@@ -86,7 +86,7 @@ use system.io
 
 fn main()
     gpu var arr = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         arr[i] = i
     println(arr)
 ",
@@ -104,7 +104,7 @@ fn main()
     gpu let a = [1, 2, 3, 4]
     gpu let b = a
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         dst[i] = a[i] + b[i]
 ",
         "consumed",
@@ -121,7 +121,7 @@ fn main()
     gpu let a = [1, 2, 3, 4]
     gpu let b = a
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         dst[i] = b[i] + 1
 ",
     );
@@ -135,7 +135,7 @@ use system.collections.array
 
 fn main()
     gpu var arr = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         arr[i] = i * i
 
     let h = arr
@@ -173,7 +173,7 @@ fn main()
     gpu let b = [5.0, 6.0, 7.0, 8.0]
     gpu var dst = [0.0, 0.0, 0.0, 0.0]
 
-    gpu for i in 0..4
+    gpu forall i in 0..4
         dst[i] = a[i] + b[i]
 
     let host = dst
@@ -193,7 +193,7 @@ use system.io
 
 fn main()
     gpu var arr = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         arr[i] = i * i
 
     let h = arr
@@ -219,7 +219,7 @@ fn main()
     gpu let b = [5.0, 6.0, 7.0, 8.0]
     gpu var dst = [0.0, 0.0, 0.0, 0.0]
 
-    gpu for i in 0..4
+    gpu forall i in 0..4
         dst[i] = a[i] + b[i]
 
     let host = dst
@@ -244,7 +244,7 @@ use system.io
 
 fn main()
     gpu var arr = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         arr[i] = i * i
 
     let h = arr

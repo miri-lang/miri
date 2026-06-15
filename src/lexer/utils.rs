@@ -26,6 +26,7 @@ pub fn token_to_string(token: &Token) -> Cow<'static, str> {
         Token::Until => "until".into(),
         Token::Do => "do".into(),
         Token::For => "for".into(),
+        Token::Forall => "forall".into(),
         Token::Forever => "forever".into(),
         Token::In => "in".into(),
         Token::Let => "let".into(),

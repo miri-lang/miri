@@ -284,9 +284,10 @@ fn visit_written_stmt(stmt: &Statement, written: &mut HashSet<String>) {
             }
         }
         StatementKind::While(_, body, _) => visit_written_stmt(body, written),
-        StatementKind::For(_, _, body)
-        | StatementKind::GpuFor(_, _, body)
-        | StatementKind::GpuFrame(_, _, body) => {
+        StatementKind::For(_, _, body) | StatementKind::GpuFrame(_, _, body) => {
+            visit_written_stmt(body, written);
+        }
+        StatementKind::Forall { body, .. } => {
             visit_written_stmt(body, written);
         }
         StatementKind::GpuFrameBlock(block) => {
@@ -570,11 +571,24 @@ fn visit_stmt(
             visit_stmt(body, bound, ctx, seen, ordered);
         }
         StatementKind::For(inner_decls, iter, body)
-        | StatementKind::GpuFor(inner_decls, iter, body)
         | StatementKind::GpuFrame(inner_decls, iter, body) => {
             visit_expr(iter, bound, ctx, seen, ordered);
             let scope_snapshot = bound.clone();
             for d in inner_decls {
+                bound.insert(d.name.clone());
+            }
+            visit_stmt(body, bound, ctx, seen, ordered);
+            *bound = scope_snapshot;
+        }
+        StatementKind::Forall {
+            vars,
+            iterable,
+            body,
+            ..
+        } => {
+            visit_expr(iterable, bound, ctx, seen, ordered);
+            let scope_snapshot = bound.clone();
+            for d in vars {
                 bound.insert(d.name.clone());
             }
             visit_stmt(body, bound, ctx, seen, ordered);

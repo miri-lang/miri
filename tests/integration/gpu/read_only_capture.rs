@@ -19,7 +19,7 @@ use system.collections.array
 fn main()
     gpu let src = [1, 2, 3, 4]
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         dst[i] = src[i] * 2
 ",
     );
@@ -42,7 +42,7 @@ use system.collections.array
 fn main()
     gpu let src = [1, 2, 3, 4]
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         dst[i] = src[i] * 2
 ",
     );
@@ -66,7 +66,7 @@ fn main()
     gpu let a = [1, 2, 3, 4]
     gpu let b = [10, 20, 30, 40]
     gpu var result = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         result[i] = a[i] + b[i]
 ",
     );
@@ -98,7 +98,7 @@ use system.collections.array
 fn main()
     gpu let src = [1, 2, 3, 4]
     gpu var buf = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         buf[i] = src[i]
 ",
     );
@@ -121,7 +121,7 @@ use system.collections.array
 fn main()
     gpu let data = [1, 2, 3, 4]
     gpu var sum = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         sum[i] = data[i]
 ",
     );

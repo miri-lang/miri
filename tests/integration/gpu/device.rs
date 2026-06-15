@@ -44,7 +44,7 @@ gpu let probe_a = [1, 2, 3, 4]
 gpu let probe_b = [10, 20, 30, 40]
 gpu var probe_dst = [0, 0, 0, 0]
 
-gpu for i in 0..4
+gpu forall i in 0..4
     probe_dst[i] = probe_a[i] + probe_b[i]
 
 let probe_host = probe_dst

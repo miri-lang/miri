@@ -10,7 +10,6 @@
 //! - All other cells die.
 
 use super::device::assert_gpu_runs_with_output;
-use crate::integration::utils::{assert_compiler_error, assert_runs_with_output};
 
 /// Test the B3/S23 rule with an isolated blinker oscillator.
 ///
@@ -27,7 +26,7 @@ use system.collections.array
 gpu var grid = Array<int, 25>()
 
 // Initialize a horizontal blinker in a 5x5 grid at row 2, cols 1-3
-gpu for i in 0..25
+gpu forall i in 0..25
     var v = 0
     if i == 2 * 5 + 1
         v = 1
@@ -39,7 +38,7 @@ gpu for i in 0..25
 
 // Generation 1: horizontal → vertical
 gpu var next_grid = Array<int, 25>()
-gpu for i in 0..25
+gpu forall i in 0..25
     let y = i / 5
     let x = i - y * 5
     let ym = (y - 1 + 5) % 5
@@ -60,7 +59,7 @@ gpu for i in 0..25
 
 // Generation 2: vertical → horizontal
 gpu var temp = Array<int, 25>()
-gpu for i in 0..25
+gpu forall i in 0..25
     let y = i / 5
     let x = i - y * 5
     let ym = (y - 1 + 5) % 5
@@ -80,7 +79,7 @@ gpu for i in 0..25
     temp[i] = state
 
 // Generation 3: horizontal → vertical
-gpu for i in 0..25
+gpu forall i in 0..25
     let y = i / 5
     let x = i - y * 5
     let ym = (y - 1 + 5) % 5
@@ -126,7 +125,7 @@ use system.collections.array
 gpu var grid = Array<int, 16>()
 
 // Initialize a 2x2 block in a 4x4 grid at (1,1)-(2,2)
-gpu for i in 0..16
+gpu forall i in 0..16
     var v = 0
     if i == 1 * 4 + 1
         v = 1
@@ -140,7 +139,7 @@ gpu for i in 0..16
 
 // One generation of evolution
 gpu var next = Array<int, 16>()
-gpu for i in 0..16
+gpu forall i in 0..16
     let y = i / 4
     let x = i - y * 4
     let ym = (y - 1 + 4) % 4
@@ -190,7 +189,7 @@ use system.collections.array
 gpu var grid = Array<int, 25>()
 
 // Initialize canonical glider in a 5x5 grid
-gpu for i in 0..25
+gpu forall i in 0..25
     var v = 0
     if i == 0 * 5 + 1
         v = 1
@@ -209,7 +208,7 @@ gpu var next = Array<int, 25>()
 var gen = 0
 while gen < 2
     // Read grid, write next
-    gpu for i in 0..25
+    gpu forall i in 0..25
         let y = i / 5
         let x = i - y * 5
         let ym = (y - 1 + 5) % 5
@@ -229,7 +228,7 @@ while gen < 2
         next[i] = state
 
     // Read next, write grid
-    gpu for i in 0..25
+    gpu forall i in 0..25
         let y = i / 5
         let x = i - y * 5
         let ym = (y - 1 + 5) % 5
@@ -286,7 +285,7 @@ use system.collections.array
 gpu var grid = Array<int, 25>()
 
 // Initialize canonical glider in a 5x5 grid
-gpu for i in 0..25
+gpu forall i in 0..25
     var v = 0
     if i == 0 * 5 + 1
         v = 1
@@ -305,7 +304,7 @@ gpu var next = Array<int, 25>()
 var gen = 0
 while gen < 2
     // Read grid, write next
-    gpu for i in 0..25
+    gpu forall i in 0..25
         let y = i / 5
         let x = i - y * 5
         let ym = (y - 1 + 5) % 5
@@ -325,7 +324,7 @@ while gen < 2
         next[i] = state
 
     // Read next, write grid
-    gpu for i in 0..25
+    gpu forall i in 0..25
         let y = i / 5
         let x = i - y * 5
         let ym = (y - 1 + 5) % 5
@@ -381,23 +380,23 @@ fn main()
     gpu var trail_b = Array<f32, 16>()
     gpu var paint = Array<f32, 64>()
 
-    gpu for idx in 0..16
+    gpu forall idx in 0..16
         let hash = (idx * 37) % 5
         grid_a[idx] = 1 if hash < 2 else 0
         trail_a[idx] = 0.0
 
     gpu frame
-        gpu for idx in 0..16
+        gpu forall idx in 0..16
             grid_b[idx] = grid_a[idx]
-        gpu for idx in 0..16
+        gpu forall idx in 0..16
             trail_b[idx] = trail_a[idx] * 0.9
-        gpu for idx in 0..16
+        gpu forall idx in 0..16
             if frame.mouse_down
                 grid_b[idx] = 1
-        gpu for idx in 0..16
+        gpu forall idx in 0..16
             if frame.double_clicked
                 grid_b[idx] = 0
-        gpu for idx in 0..16
+        gpu forall idx in 0..16
             let alive = grid_b[idx]
             let base = idx * 4
             paint[base] = 1.0 if alive == 1 else 0.0

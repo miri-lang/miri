@@ -98,7 +98,7 @@ fn test_abs_integer_gpu() {
 
         gpu let src = [0 - 1, 1, 0 - 1]
         gpu var dst = [0, 0, 0]
-        gpu for i in 0..3
+        gpu forall i in 0..3
             dst[i] = abs(src[i])
 
         let host = dst
@@ -116,7 +116,7 @@ fn test_max_integer_gpu() {
 
         gpu let src = [0, 1, 2, 3]
         gpu var dst = [0, 0, 0, 0]
-        gpu for i in 0..4
+        gpu forall i in 0..4
             dst[i] = max(src[i], 2)
 
         let host = dst

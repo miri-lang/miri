@@ -26,13 +26,13 @@ use system.collections.array
 
 // Initialize a 5×5 grid with a single white pixel at center (2, 2)
 gpu var src = Array<f32, 25>()
-gpu for idx in 0..25
+gpu forall idx in 0..25
     if idx == 2 * 5 + 2
         src[idx] = 1.0 as f32
 
 // Apply 3×3 box blur
 gpu var dst = Array<f32, 25>()
-gpu for idx in 0..25
+gpu forall idx in 0..25
     let y = idx / 5
     let x = idx - y * 5
     var sum = 0.0 as f32
@@ -79,7 +79,7 @@ use system.collections.array
 
 // Initialize a 5×5 grid with a 3×3 white block at (1,1) to (3,3)
 gpu var src = Array<f32, 25>()
-gpu for idx in 0..25
+gpu forall idx in 0..25
     let y = idx / 5
     let x = idx - y * 5
     var v = 0.0 as f32
@@ -92,7 +92,7 @@ gpu for idx in 0..25
 
 // Apply 3×3 box blur
 gpu var dst = Array<f32, 25>()
-gpu for idx in 0..25
+gpu forall idx in 0..25
     let y = idx / 5
     let x = idx - y * 5
     var sum = 0.0 as f32
@@ -138,12 +138,12 @@ use system.collections.array
 
 // Initialize a 3×3 grid with white pixels everywhere
 gpu var src = Array<f32, 9>()
-gpu for idx in 0..9
+gpu forall idx in 0..9
     src[idx] = 1.0 as f32
 
 // Apply 3×3 box blur
 gpu var dst = Array<f32, 9>()
-gpu for idx in 0..9
+gpu forall idx in 0..9
     let y = idx / 3
     let x = idx - y * 3
     var sum = 0.0 as f32

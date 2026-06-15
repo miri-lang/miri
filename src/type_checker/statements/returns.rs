@@ -92,7 +92,7 @@ pub(crate) fn check_returns(stmt: &Statement) -> ReturnStatus {
         // do not contribute to return status analysis.
         StatementKind::Variable(_, _)
         | StatementKind::For(_, _, _)
-        | StatementKind::GpuFor(_, _, _)
+        | StatementKind::Forall { .. }
         | StatementKind::GpuFrame(_, _, _)
         | StatementKind::GpuFrameBlock(_)
         | StatementKind::Break

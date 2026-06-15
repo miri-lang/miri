@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-// `gpu for` capture residency rules. A `gpu for` body may only capture
+// `gpu forall` capture residency rules. A `gpu forall` body may only capture
 // identifiers whose binding residency is `Gpu`. Capturing a host-resident
 // buffer is a type error with dual machine-applicable fix-its. No implicit
 // uploads — residency is source-visible.
@@ -17,10 +17,10 @@ use system.collections.array
 
 fn main()
     let a = [1, 2, 3]
-    gpu for i in 0..3
+    gpu forall i in 0..3
         a[i] = i
 ",
-        "'gpu for' capture 'a' must be gpu-resident",
+        "'gpu forall' capture 'a' must be gpu-resident",
     );
 }
 
@@ -33,7 +33,7 @@ use system.collections.array
 
 fn main()
     let a = [1, 2, 3]
-    gpu for i in 0..3
+    gpu forall i in 0..3
         a[i] = i
 ",
         "Annotate the binding with 'gpu let'",
@@ -49,7 +49,7 @@ use system.collections.array
 
 fn main()
     let a = [1, 2, 3]
-    gpu for i in 0..3
+    gpu forall i in 0..3
         a[i] = i
 ",
         "gpu let a_gpu = a",
@@ -65,7 +65,7 @@ use system.collections.array
 
 fn main()
     gpu var a = [0, 0, 0]
-    gpu for i in 0..3
+    gpu forall i in 0..3
         a[i] = i
 ",
     );
@@ -81,9 +81,9 @@ use system.collections.array
 fn main()
     let src = [1, 2, 3, 4]
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         dst[i] = src[i] * 2
 ",
-        "'gpu for' capture 'src' must be gpu-resident",
+        "'gpu forall' capture 'src' must be gpu-resident",
     );
 }

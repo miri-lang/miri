@@ -33,7 +33,7 @@ gpu let a = [1.0, 2.0, 3.0, 4.0]
 gpu let b = [5.0, 6.0, 7.0, 8.0]
 gpu var dst = [0.0, 0.0, 0.0, 0.0]
 
-gpu for i in 0..N
+gpu forall i in 0..N
     dst[i] = a[i] + b[i]
 
 let host = dst
@@ -51,7 +51,7 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 ///   * GPU cost telemetry: `gpu_reset_telemetry()`, `gpu_uploads()`, `gpu_launches()`, etc.
 ///   * Expected cost-class behavior:
 ///     - 1 upload (when data is first declared)
-///     - 2 launches (one per gpu for block)
+///     - 2 launches (one per gpu forall block)
 ///     - 1 readback (when host = data)
 ///     - 1 fence (synchronization point for the readback)
 ///
@@ -70,10 +70,10 @@ const N = 8
 gpu_reset_telemetry()
 gpu var data = [0, 0, 0, 0, 0, 0, 0, 0]
 
-gpu for i in 0..N
+gpu forall i in 0..N
     data[i] = i + 8
 
-gpu for i in 0..N
+gpu forall i in 0..N
     data[i] = data[i] + 8
 
 let host = data
@@ -106,7 +106,7 @@ gpu let a = [1.0, 2.0, 3.0, 4.0]
 gpu let b = [5.0, 6.0, 7.0, 8.0]
 gpu var c = Array<f32, 4>()
 
-gpu for idx in 0..4
+gpu forall idx in 0..4
     let row = idx / 2
     let col = idx - row * 2
     var sum = 0.0
@@ -146,7 +146,7 @@ gpu let x = [1.0, 2.0, 3.0, 4.0]
 gpu let y = [5.0, 6.0, 7.0, 8.0]
 gpu var dst = [0.0, 0.0, 0.0, 0.0]
 
-gpu for i in 0..N
+gpu forall i in 0..N
     dst[i] = 2.0 * x[i] + y[i]
 
 let host = dst
@@ -175,7 +175,7 @@ use system.io
 
 gpu var arr = [0, 0, 0, 0, 0, 0, 0, 0]
 
-gpu for i in 0..8
+gpu forall i in 0..8
     arr[i] = i * i
 
 let h = arr
@@ -209,7 +209,7 @@ use system.io
 
 fn main()
     gpu var arr = [0, 0, 0, 0, 0, 0, 0, 0]
-    gpu for i in 0..8
+    gpu forall i in 0..8
         arr[i] = i * i
     let v = arr[0]
 ",

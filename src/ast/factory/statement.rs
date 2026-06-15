@@ -7,8 +7,8 @@ use crate::ast::common::MemberVisibility;
 use crate::ast::expression::{Expression, ExpressionKind, ImportPathKind};
 use crate::ast::literal::Literal;
 use crate::ast::statement::{
-    IfStatementType, Statement, StatementKind, VariableDeclaration, VariableDeclarationType,
-    WhileStatementType,
+    AcceleratorTarget, IfStatementType, Statement, StatementKind, VariableDeclaration,
+    VariableDeclarationType, WhileStatementType,
 };
 
 /// Creates a variable declaration statement.
@@ -100,17 +100,19 @@ pub fn for_statement(
     ))
 }
 
-/// Creates a `gpu for` loop statement.
-pub fn gpu_for_statement(
+/// Creates a `forall` loop statement.
+pub fn forall_statement(
+    device: AcceleratorTarget,
     variable_declarations: Vec<VariableDeclaration>,
     iterable: Expression,
     body: Statement,
 ) -> Statement {
-    stmt(StatementKind::GpuFor(
-        variable_declarations,
-        Box::new(iterable),
-        Box::new(body),
-    ))
+    stmt(StatementKind::Forall {
+        device,
+        vars: variable_declarations,
+        iterable: Box::new(iterable),
+        body: Box::new(body),
+    })
 }
 
 /// Creates a `gpu frame` loop statement.

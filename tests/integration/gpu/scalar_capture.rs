@@ -16,7 +16,7 @@ use system.collections.array
 fn main()
     gpu var buf = [0, 0, 0, 0]
     let k = 7
-    gpu for i in 0..4
+    gpu forall i in 0..4
         buf[i] = i * k
 ",
     );
@@ -35,7 +35,7 @@ use system.io
 fn main()
     gpu var buf = [0, 0, 0, 0]
     let k = 5
-    gpu for i in 0..4
+    gpu forall i in 0..4
         buf[i] = i * k
     let result = buf.element_at(2)
     println(f\"{result}\")
@@ -53,7 +53,7 @@ use system.collections.array
 fn main()
     gpu var buf = [0.0, 0.0, 0.0, 0.0]
     let s = 2.0
-    gpu for i in 0..4
+    gpu forall i in 0..4
         buf[i] = s
 ",
     );
@@ -69,7 +69,7 @@ use system.collections.array
 fn main()
     gpu var buf = [0, 0, 0, 0]
     let flag = true
-    gpu for i in 0..4
+    gpu forall i in 0..4
         if flag
             buf[i] = 1
         else
@@ -90,7 +90,7 @@ use system.collections.array
 fn main()
     gpu var buf = [0, 0, 0, 0]
     var k = 7
-    gpu for i in 0..4
+    gpu forall i in 0..4
         k = k + 1
         buf[i] = k
 ",
@@ -108,7 +108,7 @@ use system.collections.array
 fn main()
     gpu var buf = [0, 0, 0, 0]
     let s = \"hello\"
-    gpu for i in 0..4
+    gpu forall i in 0..4
         println(s)
 ",
         "unsupported gpu scalar capture type",
@@ -126,7 +126,7 @@ fn main()
     gpu var buf = [0, 0, 0, 0]
     let a = 2
     let b = 3
-    gpu for i in 0..4
+    gpu forall i in 0..4
         buf[i] = a * i + b
 ",
     );
@@ -146,7 +146,7 @@ fn main()
     gpu var buf = [0, 0, 0, 0]
     let a = 2
     let b = 3
-    gpu for i in 0..4
+    gpu forall i in 0..4
         buf[i] = a * i + b
     let result = buf.element_at(3)
     println(f\"{result}\")
@@ -165,7 +165,7 @@ fn main()
     gpu var data = [1, 2, 3, 4]
     gpu var result = [0, 0, 0, 0]
     let multiplier = 10
-    gpu for i in 0..4
+    gpu forall i in 0..4
         result[i] = data[i] * multiplier
 ",
     );
@@ -186,7 +186,7 @@ fn main()
     gpu var data = [1, 2, 3, 4]
     gpu var result = [0, 0, 0, 0]
     let multiplier = 10
-    gpu for i in 0..4
+    gpu forall i in 0..4
         result[i] = data[i] * multiplier
     let r = result.element_at(2)
     println(f\"{r}\")
