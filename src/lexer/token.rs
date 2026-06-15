@@ -57,6 +57,8 @@ pub enum Token {
     Do,
     #[token("for")]
     For,
+    #[token("forall")]
+    Forall,
     #[token("forever")]
     Forever,
     #[token("in")]
@@ -328,7 +330,7 @@ impl Token {
             Token::InvalidOctalNumber => LexAction::Invalid(SyntaxErrorKind::InvalidOctalLiteral),
             Token::Use | Token::Fn | Token::Async | Token::Await | Token::Spawn | Token::Parallel | Token::Gpu | Token::Frame
             | Token::If | Token::Unless | Token::Else | Token::Match | Token::Default | Token::Return
-            | Token::While | Token::Until | Token::Do | Token::For | Token::Forever | Token::In
+            | Token::While | Token::Until | Token::Do | Token::For | Token::Forall | Token::Forever | Token::In
             | Token::Let | Token::Var | Token::Const | Token::Or | Token::And | Token::Not
             | Token::True | Token::False | Token::None | Token::From | Token::As | Token::Break | Token::Continue
             | Token::Extends | Token::Is | Token::Includes | Token::Implements | Token::Type | Token::Enum

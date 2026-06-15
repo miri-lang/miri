@@ -28,7 +28,7 @@ gpu let probe_min = [-2147483648]
 gpu var probe_dst_max = [0]
 gpu var probe_dst_min = [0]
 
-gpu for i in 0..1
+gpu forall i in 0..1
     probe_dst_max[i] = probe_max[i]
     probe_dst_min[i] = probe_min[i]
 
@@ -54,7 +54,7 @@ let overflow_val = 2147483647 + 1
 gpu let probe_overflow = [overflow_val]
 gpu var probe_dst = [0]
 
-gpu for i in 0..1
+gpu forall i in 0..1
     probe_dst[i] = probe_overflow[i]
 
 let result = probe_dst
@@ -121,7 +121,7 @@ let negative_overflow_val = -2147483648 - 1
 gpu let probe_negative_overflow = [negative_overflow_val]
 gpu var probe_dst = [0]
 
-gpu for i in 0..1
+gpu forall i in 0..1
     probe_dst[i] = probe_negative_overflow[i]
 
 let result = probe_dst
@@ -157,7 +157,7 @@ use system.collections.array
 let overflow_val = 2147483647 + 1
 var data = [overflow_val]
 
-gpu for i in 0..1
+gpu forall i in 0..1
     data[i] = data[i]
 ";
     assert_compiler_error(code, "must be gpu-resident");

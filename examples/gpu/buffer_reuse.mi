@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-// Buffer reuse: two sequential gpu for blocks on the same gpu var with no
+// Buffer reuse: two sequential gpu forall blocks on the same gpu var with no
 // readback between them. Demonstrates persistent-buffer cost model:
 // one upload to device, two kernel launches, one readback. The mutable
 // device buffer is allocated once and reused across the two kernels.
@@ -16,10 +16,10 @@ gpu_reset_telemetry()
 
 gpu var data = [0, 0, 0, 0, 0, 0, 0, 0]
 
-gpu for i in 0..N
+gpu forall i in 0..N
     data[i] = i
 
-gpu for i in 0..N
+gpu forall i in 0..N
     data[i] = data[i] + 8
 
 let host = data

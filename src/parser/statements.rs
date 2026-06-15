@@ -100,6 +100,7 @@ impl<'source> Parser<'source> {
             Some((Token::Do, _)) => self.while_statement(WhileStatementType::DoWhile)?,
             Some((Token::Forever, _)) => self.while_statement(WhileStatementType::Forever)?,
             Some((Token::For, _)) => self.for_statement()?,
+            Some((Token::Forall, _)) => self.forall_statement(AcceleratorTarget::Inferred)?,
             Some((Token::Gpu, _)) => self.gpu_statement(MemberVisibility::Public)?,
             Some((Token::Async, _)) | Some((Token::Fn, _)) | Some((Token::Parallel, _)) => {
                 self.function_declaration(MemberVisibility::Public)?
@@ -507,7 +508,7 @@ impl<'source> Parser<'source> {
     */
     /// Dispatches the `gpu`-prefixed statement forms by examining the token
     /// that follows `gpu`:
-    ///   * `gpu for ...` → [`StatementKind::GpuFor`].
+    ///   * `gpu forall ...` → [`StatementKind::Forall`] with device = Gpu.
     ///   * `gpu let ...` / `gpu var ...` → an ordinary variable statement
     ///     whose declarations carry [`BindingResidency::Gpu`].
     ///   * anything else continues into the function declaration grammar
@@ -520,7 +521,18 @@ impl<'source> Parser<'source> {
         self.eat_token(&Token::Gpu)?;
 
         if self.match_lookahead_type(|t| t == &Token::For) {
-            return self.gpu_for_statement();
+            return Err(SyntaxError::new(
+                SyntaxErrorKind::InvalidModifierCombination {
+                    combination: "gpu for".to_string(),
+                    reason: "unexpected 'for' after 'gpu'; use 'forall' or 'gpu forall'"
+                        .to_string(),
+                },
+                self.current_token_span(),
+            ));
+        }
+
+        if self.match_lookahead_type(|t| t == &Token::Forall) {
+            return self.forall_statement(AcceleratorTarget::Gpu);
         }
 
         if self.match_lookahead_type(|t| t == &Token::Frame) {
@@ -621,8 +633,11 @@ impl<'source> Parser<'source> {
         Ok(())
     }
 
-    pub(crate) fn gpu_for_statement(&mut self) -> Result<Statement, SyntaxError> {
-        self.eat_token(&Token::For)?;
+    pub(crate) fn forall_statement(
+        &mut self,
+        device: AcceleratorTarget,
+    ) -> Result<Statement, SyntaxError> {
+        self.eat_token(&Token::Forall)?;
 
         let variable_declarations = self.for_loop_variable_list()?;
 
@@ -643,7 +658,7 @@ impl<'source> Parser<'source> {
         let iterable = if variable_declarations.len() == 2 {
             if !self.match_lookahead_type(|t| t == &Token::Comma) {
                 return Err(self.error_unexpected_token(
-                    "2D gpu for requires two comma-separated ranges",
+                    "2D gpu forall requires two comma-separated ranges",
                     "single range",
                 ));
             }
@@ -702,7 +717,8 @@ impl<'source> Parser<'source> {
         }
 
         let body = self.statement_body()?;
-        Ok(ast::gpu_for_statement(
+        Ok(ast::forall_statement(
+            device,
             variable_declarations,
             iterable,
             body,

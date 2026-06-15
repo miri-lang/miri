@@ -16,7 +16,7 @@
 //! kernel building logic is a future cleanup task.
 
 use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::statement::{Statement, VariableDeclaration};
+use crate::ast::statement::{AcceleratorTarget, Statement, StatementKind, VariableDeclaration};
 use crate::ast::types::{frame_input_param_key, Type, TypeKind, FRAME_INPUT_FIELDS};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
@@ -80,7 +80,7 @@ pub fn lower_gpu_frame(
 
 /// Lowers a `gpu frame` block (multi-pass form) into ordered frame passes.
 ///
-/// Each child of the block MUST be a `GpuFor` statement. They are lowered
+/// Each child of the block MUST be a `Forall` statement. They are lowered
 /// sequentially, each marked as a frame step with frame inputs injected.
 /// Targets are not chained here; that's a future enhancement.
 pub fn lower_gpu_frame_block(
@@ -100,13 +100,16 @@ pub fn lower_gpu_frame_block(
         }
     };
 
-    // Validate that all statements are gpu for loops
+    // Validate that all statements are gpu forall loops
     for stmt in stmts {
         match &stmt.node {
-            crate::ast::statement::StatementKind::GpuFor(_, _, _) => {}
+            StatementKind::Forall {
+                device: AcceleratorTarget::Gpu,
+                ..
+            } => {}
             _ => {
                 return Err(LoweringError::unsupported_expression(
-                    "gpu frame block may only contain 'gpu for' passes".to_string(),
+                    "gpu frame block may only contain 'gpu forall' passes".to_string(),
                     stmt.span,
                 ));
             }
@@ -115,14 +118,19 @@ pub fn lower_gpu_frame_block(
 
     if stmts.is_empty() {
         return Err(LoweringError::unsupported_expression(
-            "gpu frame block must contain at least one 'gpu for' pass".to_string(),
+            "gpu frame block must contain at least one 'gpu forall' pass".to_string(),
             *span,
         ));
     }
 
     // Lower each pass as a frame step with frame inputs.
     for (pass_idx, pass_stmt) in stmts.iter().enumerate() {
-        if let crate::ast::statement::StatementKind::GpuFor(decls, iterable, body) = &pass_stmt.node
+        if let StatementKind::Forall {
+            vars: decls,
+            iterable,
+            body,
+            ..
+        } = &pass_stmt.node
         {
             let loop_var_name = decls[0].name.clone();
 
@@ -616,7 +624,7 @@ fn detect_frame_usage(stmt: &Statement) -> bool {
         StatementKind::For(_, iterable, body) => {
             detect_frame_usage_expr(iterable) || detect_frame_usage(body)
         }
-        StatementKind::GpuFor(_, iterable, body) => {
+        StatementKind::Forall { iterable, body, .. } => {
             detect_frame_usage_expr(iterable) || detect_frame_usage(body)
         }
         StatementKind::GpuFrame(_, iterable, body) => {

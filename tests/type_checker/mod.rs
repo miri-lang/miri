@@ -13,6 +13,7 @@ pub mod control_flow;
 pub mod division_by_zero;
 pub mod escape_analysis;
 pub mod float;
+pub mod forall;
 pub mod function;
 pub mod generic_constraints;
 pub mod generics;

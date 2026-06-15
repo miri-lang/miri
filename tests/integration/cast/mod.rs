@@ -136,7 +136,7 @@ fn test_cast_rejects_bool() {
 //         use system.collections.array
 //
 //         gpu var posx = [0.0, 0.0, 0.0, 0.0]
-//         gpu for i in 0..4
+//         gpu forall i in 0..4
 //             posx[i] = i as float * 0.25
 //
 //         let host = posx
@@ -156,7 +156,7 @@ fn test_cast_rejects_bool() {
 //
 //         gpu let src = [2.1, 3.5, 4.9]
 //         gpu var dst = [0, 0, 0]
-//         gpu for i in 0..3
+//         gpu forall i in 0..3
 //             dst[i] = floor(src[i]) as int
 //
 //         let host = dst

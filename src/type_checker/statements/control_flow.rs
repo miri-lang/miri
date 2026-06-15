@@ -259,7 +259,7 @@ impl TypeChecker {
     ) {
         let ExpressionKind::Range(start, Some(end), range_type) = &iterable.node else {
             self.report_error(
-                "'gpu for' requires a bounded numeric range like 'a..b' or 'a..=b'".to_string(),
+                "'gpu forall' requires a bounded numeric range like 'a..b' or 'a..=b'".to_string(),
                 iterable.span,
             );
             return;
@@ -269,14 +269,14 @@ impl TypeChecker {
             RangeExpressionType::Exclusive | RangeExpressionType::Inclusive
         ) {
             self.report_error(
-                "'gpu for' requires a bounded numeric range like 'a..b' or 'a..=b'".to_string(),
+                "'gpu forall' requires a bounded numeric range like 'a..b' or 'a..=b'".to_string(),
                 iterable.span,
             );
             return;
         }
         if !is_int_literal(start) {
             self.report_error(
-                "'gpu for' range start must be an Int literal".to_string(),
+                "'gpu forall' range start must be an Int literal".to_string(),
                 iterable.span,
             );
             return;
@@ -287,7 +287,7 @@ impl TypeChecker {
         let end_type = self.infer_expression(end, context);
         if !matches!(end_type.kind, TypeKind::Int) {
             self.report_error(
-                format!("'gpu for' range end must be Int, got {}", end_type.kind),
+                format!("'gpu forall' range end must be Int, got {}", end_type.kind),
                 end.span,
             );
             return;
@@ -347,7 +347,8 @@ impl TypeChecker {
         for (i, range_expr) in ranges.iter().enumerate() {
             let ExpressionKind::Range(start, Some(end), range_type) = &range_expr.node else {
                 self.report_error(
-                    "'gpu for' requires a bounded numeric range like 'a..b' or 'a..=b'".to_string(),
+                    "'gpu forall' requires a bounded numeric range like 'a..b' or 'a..=b'"
+                        .to_string(),
                     range_expr.span,
                 );
                 return;
@@ -357,7 +358,8 @@ impl TypeChecker {
                 RangeExpressionType::Exclusive | RangeExpressionType::Inclusive
             ) {
                 self.report_error(
-                    "'gpu for' requires a bounded numeric range like 'a..b' or 'a..=b'".to_string(),
+                    "'gpu forall' requires a bounded numeric range like 'a..b' or 'a..=b'"
+                        .to_string(),
                     range_expr.span,
                 );
                 return;
@@ -365,7 +367,7 @@ impl TypeChecker {
             if !is_int_literal(start) {
                 self.report_error(
                     format!(
-                        "'gpu for' range {} start must be an Int literal",
+                        "'gpu forall' range {} start must be an Int literal",
                         if i == 0 { "x" } else { "y" }
                     ),
                     range_expr.span,
@@ -377,7 +379,7 @@ impl TypeChecker {
             if !matches!(end_type.kind, TypeKind::Int) {
                 self.report_error(
                     format!(
-                        "'gpu for' range {} end must be Int, got {}",
+                        "'gpu forall' range {} end must be Int, got {}",
                         if i == 0 { "x" } else { "y" },
                         end_type.kind
                     ),
@@ -566,19 +568,22 @@ impl TypeChecker {
 
         if stmts.is_empty() {
             self.report_error(
-                "'gpu frame' block must contain at least one 'gpu for' pass".to_string(),
+                "'gpu frame' block must contain at least one 'gpu forall' pass".to_string(),
                 stmt_span,
             );
             return;
         }
 
-        // Validate that all statements are gpu for loops
+        // Validate that all statements are gpu forall loops
         for stmt in stmts {
             match &stmt.node {
-                StatementKind::GpuFor(_, _, _) => {}
+                StatementKind::Forall {
+                    device: AcceleratorTarget::Gpu,
+                    ..
+                } => {}
                 _ => {
                     self.report_error(
-                        "'gpu frame' block may only contain 'gpu for' passes; host-loop repeat ('for _ in 0..k') around a pass is not yet supported".to_string(),
+                        "'gpu frame' block may only contain 'gpu forall' passes; host-loop repeat ('for _ in 0..k') around a pass is not yet supported".to_string(),
                         stmt.span,
                     );
                     return;
@@ -607,7 +612,13 @@ impl TypeChecker {
 
         // Type-check each pass and apply per-pass buffer read/write disjointness validation.
         for pass in stmts {
-            if let StatementKind::GpuFor(decls, iterable, body) = &pass.node {
+            if let StatementKind::Forall {
+                vars: decls,
+                iterable,
+                body,
+                ..
+            } = &pass.node
+            {
                 // Apply per-pass semantic buffer validation.
                 self.check_gpu_frame_buffers(decls, body, context, pass.span);
                 // Then type-check the pass.
@@ -866,7 +877,7 @@ impl TypeChecker {
     pub(crate) fn check_break(&mut self, context: &Context, span: Span) {
         if context.loop_depth == 0 {
             let msg = if context.gpu_for_depth > 0 {
-                "'break' is not supported inside a 'gpu for' body: the GPU dispatch is not an iterative loop, so loop-control statements have no meaning at the kernel level"
+                "'break' is not supported inside a 'gpu forall' body: the GPU dispatch is not an iterative loop, so loop-control statements have no meaning at the kernel level"
             } else {
                 "Break statement outside of loop"
             };
@@ -877,7 +888,7 @@ impl TypeChecker {
     pub(crate) fn check_continue(&mut self, context: &Context, span: Span) {
         if context.loop_depth == 0 {
             let msg = if context.gpu_for_depth > 0 {
-                "'continue' is not supported inside a 'gpu for' body: the GPU dispatch is not an iterative loop, so loop-control statements have no meaning at the kernel level"
+                "'continue' is not supported inside a 'gpu forall' body: the GPU dispatch is not an iterative loop, so loop-control statements have no meaning at the kernel level"
             } else {
                 "Continue statement outside of loop"
             };
@@ -1024,8 +1035,21 @@ fn collect_identifiers_in_stmt(
             collect_identifiers_in_stmt(body, bound, captured);
         }
         StatementKind::For(inner_decls, iter, body)
-        | StatementKind::GpuFor(inner_decls, iter, body)
         | StatementKind::GpuFrame(inner_decls, iter, body) => {
+            collect_identifiers_in_expr(iter, bound, captured);
+            let scope_snapshot = bound.clone();
+            for d in inner_decls {
+                bound.insert(d.name.clone());
+            }
+            collect_identifiers_in_stmt(body, bound, captured);
+            *bound = scope_snapshot;
+        }
+        StatementKind::Forall {
+            vars: inner_decls,
+            iterable: iter,
+            body,
+            ..
+        } => {
             collect_identifiers_in_expr(iter, bound, captured);
             let scope_snapshot = bound.clone();
             for d in inner_decls {
@@ -1195,9 +1219,10 @@ fn visit_written_stmt(stmt: &Statement, written: &mut std::collections::HashSet<
             }
         }
         StatementKind::While(_, body, _) => visit_written_stmt(body, written),
-        StatementKind::For(_, _, body)
-        | StatementKind::GpuFor(_, _, body)
-        | StatementKind::GpuFrame(_, _, body) => {
+        StatementKind::For(_, _, body) | StatementKind::GpuFrame(_, _, body) => {
+            visit_written_stmt(body, written);
+        }
+        StatementKind::Forall { body, .. } => {
             visit_written_stmt(body, written);
         }
         StatementKind::GpuFrameBlock(block) => {
@@ -1314,8 +1339,22 @@ fn is_identifier_read_in_stmt_impl(
             is_identifier_read_in_stmt_impl(body, name, bound)
         }
         StatementKind::For(inner_decls, iter, body)
-        | StatementKind::GpuFor(inner_decls, iter, body)
         | StatementKind::GpuFrame(inner_decls, iter, body) => {
+            if is_identifier_read_in_expr(iter, name, bound) {
+                return true;
+            }
+            let mut new_bound = bound.clone();
+            for d in inner_decls {
+                new_bound.insert(d.name.clone());
+            }
+            is_identifier_read_in_stmt_impl(body, name, &new_bound)
+        }
+        StatementKind::Forall {
+            vars: inner_decls,
+            iterable: iter,
+            body,
+            ..
+        } => {
             if is_identifier_read_in_expr(iter, name, bound) {
                 return true;
             }
