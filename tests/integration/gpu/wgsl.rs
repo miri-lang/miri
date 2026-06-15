@@ -785,7 +785,7 @@ fn main()
     gpu forall x, y, z in 0..2, 0..2, 0..2
         dst[z * 4 + y * 2 + x] = x + y + z
 ",
-            "at most 2 loop variables",
+            "requires 1 or 2 loop variables",
         );
     }
 
@@ -802,7 +802,7 @@ fn main()
     gpu forall x, y in 0..4
         dst[0] = 0
 ",
-            "2D gpu forall requires two comma-separated ranges",
+            "2D forall requires 2 comma-separated ranges",
         );
     }
 }

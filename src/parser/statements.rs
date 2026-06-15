@@ -640,81 +640,18 @@ impl<'source> Parser<'source> {
         self.eat_token(&Token::Forall)?;
 
         let variable_declarations = self.for_loop_variable_list()?;
+        let dims = variable_declarations.len();
 
-        if variable_declarations.len() > 2 {
+        if dims > 3 {
             return Err(self.error_unexpected_token(
-                "at most 2 loop variables",
-                &format!("{} variables", variable_declarations.len()),
+                "at most 3 loop variables",
+                &format!("{} variables", dims),
             ));
         }
 
         self.eat_token(&Token::In)?;
 
-        // Parse first range
-        let first_range = self.range_expression()?;
-        let first_range_span = first_range.span;
-
-        // For 2D: parse second range after comma
-        let iterable = if variable_declarations.len() == 2 {
-            if !self.match_lookahead_type(|t| t == &Token::Comma) {
-                return Err(self.error_unexpected_token(
-                    "2D gpu forall requires two comma-separated ranges",
-                    "single range",
-                ));
-            }
-            self.eat_token(&Token::Comma)?;
-            let second_range = self.range_expression()?;
-
-            // Wrap both ranges in a Tuple
-            let first_range_normalized =
-                if matches!(&first_range.node, ExpressionKind::Range(_, _, _)) {
-                    first_range
-                } else {
-                    let span = first_range.span;
-                    ast::range_with_span(
-                        first_range,
-                        None,
-                        RangeExpressionType::IterableObject,
-                        span,
-                    )
-                };
-
-            let second_range_normalized =
-                if matches!(&second_range.node, ExpressionKind::Range(_, _, _)) {
-                    second_range
-                } else {
-                    let span = second_range.span;
-                    ast::range_with_span(
-                        second_range,
-                        None,
-                        RangeExpressionType::IterableObject,
-                        span,
-                    )
-                };
-
-            ast::tuple_with_span(
-                vec![first_range_normalized, second_range_normalized],
-                first_range_span,
-            )
-        } else {
-            // 1D path: single range
-            if matches!(&first_range.node, ExpressionKind::Range(_, _, _)) {
-                first_range
-            } else {
-                let span = first_range.span;
-                ast::range_with_span(first_range, None, RangeExpressionType::IterableObject, span)
-            }
-        };
-
-        if let ExpressionKind::Range(_, _, range_type) = &iterable.node {
-            if *range_type != RangeExpressionType::IterableObject && variable_declarations.len() > 1
-            {
-                return Err(self.error_unexpected_token(
-                    "a single loop variable for a numeric range",
-                    &format!("{} variables", variable_declarations.len()),
-                ));
-            }
-        }
+        let iterable = self.forall_iterable(dims)?;
 
         let body = self.statement_body()?;
         Ok(ast::forall_statement(
@@ -723,6 +660,41 @@ impl<'source> Parser<'source> {
             iterable,
             body,
         ))
+    }
+
+    fn forall_iterable(&mut self, dims: usize) -> Result<Expression, SyntaxError> {
+        let first_range = self.range_expression()?;
+        let first_range_span = first_range.span;
+
+        if dims == 1 {
+            return Ok(self.normalized_range(first_range));
+        }
+
+        // dims >= 2: expect comma-separated ranges
+        let mut ranges = vec![self.normalized_range(first_range)];
+
+        for _ in 1..dims {
+            if !self.match_lookahead_type(|t| t == &Token::Comma) {
+                return Err(self.error_unexpected_lookahead_token(&format!(
+                    "{}D forall requires {} comma-separated ranges",
+                    dims, dims
+                )));
+            }
+            self.eat_token(&Token::Comma)?;
+            let range = self.range_expression()?;
+            ranges.push(self.normalized_range(range));
+        }
+
+        Ok(ast::tuple_with_span(ranges, first_range_span))
+    }
+
+    fn normalized_range(&self, expr: Expression) -> Expression {
+        if matches!(&expr.node, ExpressionKind::Range(_, _, _)) {
+            expr
+        } else {
+            let span = expr.span;
+            ast::range_with_span(expr, None, RangeExpressionType::IterableObject, span)
+        }
     }
 
     pub(crate) fn gpu_frame_statement(&mut self) -> Result<Statement, SyntaxError> {
@@ -750,13 +722,7 @@ impl<'source> Parser<'source> {
         self.eat_token(&Token::In)?;
 
         let first_range = self.range_expression()?;
-
-        let iterable = if matches!(&first_range.node, ExpressionKind::Range(_, _, _)) {
-            first_range
-        } else {
-            let span = first_range.span;
-            ast::range_with_span(first_range, None, RangeExpressionType::IterableObject, span)
-        };
+        let iterable = self.normalized_range(first_range);
 
         let body = self.statement_body()?;
         Ok(ast::gpu_frame_statement(
