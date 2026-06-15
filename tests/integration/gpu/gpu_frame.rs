@@ -419,13 +419,13 @@ fn main()
 
 #[test]
 fn test_frame_in_plain_gpu_for_rejected() {
-    // FIX 6a: frame is unbound in plain gpu for (not gpu frame), must be rejected.
+    // FIX 6a: frame is unbound in plain gpu forall (not gpu frame), must be rejected.
     let code = r#"use system.gpu
 
 fn main()
     gpu let a = [1, 2, 3, 4]
     gpu var b = [0, 0, 0, 0]
-    gpu for i in 0..4:
+    gpu forall i in 0..4:
         let t = frame.time
         b[i] = a[i]
 "#;
@@ -436,7 +436,7 @@ fn main()
 
 #[test]
 fn test_gpu_frame_block_two_passes() {
-    // DP3 acceptance: `gpu frame { gpu for ..., gpu for ... }` block form parses and runs.
+    // DP3 acceptance: `gpu frame { gpu forall ..., gpu forall ... }` block form parses and runs.
     // Two disjoint passes: first reads grid_a, writes grid_b; second reads grid_b, writes grid_c.
     // Verifies pass 2 reads the committed output from pass 1 (not stale/zero data).
     use crate::integration::utils::assert_runs_with_output;
@@ -454,9 +454,9 @@ fn main()
     gpu var grid_c = init_c
 
     gpu frame
-        gpu for i in 0..4:
+        gpu forall i in 0..4:
             grid_b[i] = grid_a[i] + 1
-        gpu for i in 0..4:
+        gpu forall i in 0..4:
             grid_c[i] = grid_b[i] + 1
 
     let host_c = grid_c
@@ -487,9 +487,9 @@ fn main()
     gpu var grid_c = [0.0, 0.0, 0.0, 0.0]
 
     gpu frame
-        gpu for i in 0..4:
+        gpu forall i in 0..4:
             grid_b[i] = grid_a[i] + scalar_val
-        gpu for i in 0..4:
+        gpu forall i in 0..4:
             grid_c[i] = grid_b[i] + scalar_val
 
     println("ok")
@@ -511,7 +511,7 @@ fn main()
     gpu var b = [0, 0, 0, 0]
     gpu var c = [0, 0, 0, 0]
     gpu frame
-        gpu for i in 0..4:
+        gpu forall i in 0..4:
             b[i] = a[i]
             c[i] = a[i]
 
@@ -554,7 +554,7 @@ fn main()
     gpu var b = [0, 0, 0, 0]
     gpu var c = [0, 0, 0, 0]
     gpu frame
-        gpu for i in 0..4:
+        gpu forall i in 0..4:
             b[i] = a[i]
             c[i] = a[i]
     println("ok")
@@ -570,7 +570,7 @@ fn test_gpu_frame_block_pass_same_buffer_read_write_race() {
 fn main()
     gpu var a = [1, 2, 3, 4]
     gpu frame
-        gpu for i in 0..4:
+        gpu forall i in 0..4:
             a[i] = a[i] + 1
 "#;
     assert_compiler_error(code, "data race");
@@ -584,7 +584,7 @@ fn test_gpu_frame_block_pass_no_write() {
 fn main()
     gpu let a = [1, 2, 3, 4]
     gpu frame
-        gpu for i in 0..4:
+        gpu forall i in 0..4:
             let x = a[i]
 "#;
     assert_compiler_error(code, "write");
@@ -600,7 +600,7 @@ fn main()
     gpu let a = [0.0, 0.0, 0.0, 0.0]
     gpu var b = [0.0, 0.0, 0.0, 0.0]
     gpu frame
-        gpu for i in 0..4:
+        gpu forall i in 0..4:
             let t = frame.time
             b[i] = a[i] + t
     println("ok")
@@ -619,7 +619,7 @@ fn main()
     gpu let a = [0.0, 0.0, 0.0, 0.0]
     gpu var b = [0.0, 0.0, 0.0, 0.0]
     gpu frame
-        gpu for i in 0..4:
+        gpu forall i in 0..4:
             if frame.mouse_down:
                 b[i] = a[i] + frame.time
     println("ok")
@@ -638,9 +638,9 @@ fn main()
     gpu var grid_b = [0, 0, 0, 0]
     gpu var grid_c = [0, 0, 0, 0]
     gpu frame
-        gpu for i in 0..4:
+        gpu forall i in 0..4:
             grid_b[i] = grid_a[i]
-        gpu for i in 0..4:
+        gpu forall i in 0..4:
             grid_c[i] = grid_b[i]
     println("ok")
 "#;
@@ -672,10 +672,10 @@ fn main()
     gpu var state_b = [0.0, 0.0, 0.0, 0.0]
     gpu var output = [0.0, 0.0, 0.0, 0.0]
     gpu frame
-        gpu for i in 0..4:
+        gpu forall i in 0..4:
             let delta = frame.time
             state_b[i] = state_a[i] + delta
-        gpu for i in 0..4:
+        gpu forall i in 0..4:
             output[i] = state_b[i]
 
     let host_out = output
@@ -705,10 +705,10 @@ fn main()
     gpu var state_b = [0.0, 0.0, 0.0, 0.0]
     gpu var output = [0.0, 0.0, 0.0, 0.0]
     gpu frame
-        gpu for i in 0..4:
+        gpu forall i in 0..4:
             let delta = frame.time
             state_b[i] = state_a[i] + delta
-        gpu for i in 0..4:
+        gpu forall i in 0..4:
             output[i] = state_b[i]
     println("ok")
 "#;
@@ -726,10 +726,10 @@ fn test_gpu_frame_block_top_level_two_passes() {
 use system.io
 gpu var a = Array<int, 16>()
 gpu var c = Array<int, 16>()
-gpu for i in 0..16
+gpu forall i in 0..16
     a[i] = 1
 gpu frame
-    gpu for i in 0..16
+    gpu forall i in 0..16
         c[i] = a[i] + 1
 let h = c
 println(f"{h[0]}")

@@ -18,7 +18,7 @@ fn main()
     gpu let a = [1, 2, 3, 4]
     gpu let b = [5, 6, 7, 8]
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         dst[i] = a[i] + b[i]
 ",
     );
@@ -58,9 +58,9 @@ fn test_two_gpu_for_loops_in_one_function_have_unique_kernel_names() {
 use system.gpu
 
 fn main()
-    gpu for i in 0..4
+    gpu forall i in 0..4
         let x = i
-    gpu for j in 0..8
+    gpu forall j in 0..8
         let y = j
 ",
     );
@@ -89,7 +89,7 @@ use system.collections.array
 fn main()
     gpu let a = [1, 2, 3, 4]
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         for j in 0..i
             dst[i] = a[i]
 ";
@@ -133,7 +133,7 @@ use system.collections.array
 
 fn main()
     gpu var dst = [0, 0, 0, 0, 0, 0, 0, 0, 0]
-    gpu for i, j in 0..3, 0..3
+    gpu forall i, j in 0..3, 0..3
         dst[i * 3 + j] = i + j
 ",
     );
@@ -166,7 +166,7 @@ fn main()
     let w = 3
     let h = 4
     gpu var dst = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    gpu for i, j in 0..w, 0..h
+    gpu forall i, j in 0..w, 0..h
         dst[i * 4 + j] = i + j
 ",
     );
@@ -199,7 +199,7 @@ fn main()
     gpu let a = [1, 2, 3, 4]
     gpu let b = [5, 6, 7, 8]
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         dst[i] = a[i] + b[i]
 ",
     );
@@ -231,7 +231,7 @@ use system.collections.array
 fn main()
     let scale = 7
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         dst[i] = scale
 ";
     let result = pipeline.frontend(source).expect("frontend");
@@ -286,7 +286,7 @@ fn test_gpu_for_loops_in_different_functions_have_unique_kernel_names() {
 use system.gpu
 
 fn a()
-    gpu for i in 0..4
+    gpu forall i in 0..4
         let x = i
 ",
     );
@@ -295,7 +295,7 @@ fn a()
 use system.gpu
 
 fn b()
-    gpu for i in 0..4
+    gpu forall i in 0..4
         let x = i
 ",
     );

@@ -6,7 +6,7 @@ use crate::ast::expression::ExpressionKind;
 use crate::ast::factory::{
     func, int_literal_expression, return_statement, type_expr_non_null, type_int,
 };
-use crate::ast::statement::{Statement, StatementKind};
+use crate::ast::statement::{AcceleratorTarget, Statement, StatementKind};
 use crate::ast::types::{Type, TypeKind};
 use crate::ast::Program;
 use crate::codegen::Backend;
@@ -42,7 +42,7 @@ fn is_wrappable_stmt(stmt: &Statement) -> bool {
             | StatementKind::If(..)
             | StatementKind::While(..)
             | StatementKind::For(..)
-            | StatementKind::GpuFor(..)
+            | StatementKind::Forall { .. }
             | StatementKind::GpuFrame(..)
             | StatementKind::GpuFrameBlock(..)
             | StatementKind::Block(..)
@@ -204,7 +204,10 @@ pub fn program_uses_gpu<'a, I: IntoIterator<Item = &'a Statement>>(stmts: I) -> 
 
 fn stmt_uses_gpu(stmt: &Statement) -> bool {
     match &stmt.node {
-        StatementKind::GpuFor(_, _, _) | StatementKind::GpuFrame(_, _, _) => true,
+        StatementKind::Forall { device, .. } => {
+            matches!(device, AcceleratorTarget::Gpu)
+        }
+        StatementKind::GpuFrame(_, _, _) => true,
         StatementKind::GpuFrameBlock(block) => stmt_uses_gpu(block),
         StatementKind::FunctionDeclaration(decl) => {
             decl.properties.is_gpu || decl.body.as_ref().is_some_and(|b| stmt_uses_gpu(b))
@@ -332,7 +335,7 @@ fn collect_gpu_buffer_initializers(
             StatementKind::While(_, body, _) | StatementKind::For(_, _, body) => {
                 walk_stmt(body, inits);
             }
-            StatementKind::GpuFor(_, _, body) => {
+            StatementKind::Forall { body, .. } => {
                 walk_stmt(body, inits);
             }
             StatementKind::FunctionDeclaration(decl) => {

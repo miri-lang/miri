@@ -78,10 +78,9 @@ pub fn compile_to_manifest(source: &str) -> Result<serde_json::Value, String> {
     for lambda in &lambdas {
         if lambda.body.execution_model == ExecutionModel::GpuKernel {
             if let Some(backend_md) = &lambda.body.backend_metadata {
-                if let miri::mir::BackendMetadata::Gpu(gpu_md) = backend_md {
-                    if gpu_md.is_frame_step {
-                        frame_passes.push(serde_json::json!({}));
-                    }
+                let miri::mir::BackendMetadata::Gpu(gpu_md) = backend_md;
+                if gpu_md.is_frame_step {
+                    frame_passes.push(serde_json::json!({}));
                 }
             }
         }

@@ -37,7 +37,7 @@ gpu var sq = Array<f32, 4>()
 
 // Parallel map: current params W = 0, B = 0 are inlined as kernel literals
 // (host scalars cannot be captured into the kernel).
-gpu for i in 0..4
+gpu forall i in 0..4
     let pred = 0.0 * xs[i] + 0.0
     let err = pred - ys[i]
     gw[i] = 2.0 * err * xs[i]

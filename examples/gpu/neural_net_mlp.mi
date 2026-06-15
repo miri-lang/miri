@@ -36,7 +36,7 @@ gpu var hidden = Array<f32, 8>()
 gpu var output = Array<f32, 4>()
 
 // Hidden layer: one thread per (sample s, hidden unit j). idx = s * 2 + j.
-gpu for idx in 0..8
+gpu forall idx in 0..8
     let s = idx / 2
     let j = idx - s * 2
     var sum = b1[j]
@@ -47,7 +47,7 @@ gpu for idx in 0..8
     hidden[idx] = sum if sum > 0.0 else 0.0
 
 // Output layer: one thread per sample, dot product over the 2 hidden units.
-gpu for s in 0..4
+gpu forall s in 0..4
     var sum = 0.0
     var j = 0
     while j < 2

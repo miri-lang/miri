@@ -27,7 +27,7 @@ use system.collections.array
 gpu let a = [1, 2, 3, 4]
 gpu let b = [10, 20, 30, 40]
 gpu var dst = [0, 0, 0, 0]
-gpu for i in 0..4
+gpu forall i in 0..4
     dst[i] = a[i] + b[i]
 println(\"dispatched\")
 ",
@@ -45,7 +45,7 @@ gpu let a = [1.0, 2.0, 3.0, 4.0]
 gpu let b = [5.0, 6.0, 7.0, 8.0]
 gpu var dst = [0.0, 0.0, 0.0, 0.0]
 
-gpu for i in 0..4
+gpu forall i in 0..4
     dst[i] = a[i] + b[i]
 
 let host = dst
@@ -68,7 +68,7 @@ use system.collections.array
 gpu let a = [1, 2, 3, 4]
 gpu let b = [10, 20, 30, 40]
 gpu var dst = [0, 0, 0, 0]
-gpu for i in 0..4
+gpu forall i in 0..4
     dst[i] = a[i] + b[i]
 let host = dst
 println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
@@ -88,7 +88,7 @@ use system.collections.array
 
 gpu let src = [1, 2, 3, 4, 5, 6, 7, 8]
 gpu var dst = [0, 0, 0, 0, 0, 0, 0, 0]
-gpu for i in 0..8
+gpu forall i in 0..8
     dst[i] = src[i] * 7
 let host = dst
 println(f'{host[0]} {host[7]}')
@@ -109,7 +109,7 @@ gpu let a = [1, 2, 3, 4]
 gpu let b = [10, 20, 30, 40]
 gpu let c = [100, 200, 300, 400]
 gpu var dst = [0, 0, 0, 0]
-gpu for i in 0..4
+gpu forall i in 0..4
     dst[i] = a[i] * b[i] + c[i]
 let host = dst
 println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
@@ -131,7 +131,7 @@ use system.gpu
 use system.collections.array
 
 gpu var dst = [999, 999, 999, 999, 999, 999, 999, 999]
-gpu for i in 0..7
+gpu forall i in 0..7
     dst[i] = i + 100
 let host = dst
 println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]} {host[5]} {host[6]} {host[7]}')
@@ -151,7 +151,7 @@ use system.collections.array
 
 gpu let a = [1, 2, 3, 4, 5, 6, 7, 8]
 gpu var dst = [0, 0, 0, 0]
-gpu for i in 0..1
+gpu forall i in 0..1
     dst[0] = a[0] + a[1] + a[2] + a[3] + a[4] + a[5] + a[6] + a[7]
 let host = dst
 println(f'{host[0]}')
@@ -171,7 +171,7 @@ use system.collections.array
 
 gpu let a = [1, 2, 3, 4]
 gpu var dst = [0, 0, 0, 0]
-gpu for i in 0..4
+gpu forall i in 0..4
     var s = 0
     var j = 0
     while j < 2
@@ -196,7 +196,7 @@ use system.collections.array
 
 gpu let a = [1, 2, 3, 4, 5, 6, 7, 8]
 gpu var dst = [0, 0]
-gpu for i in 0..2
+gpu forall i in 0..2
     var s = 0
     for j in 0..4
         if j == 2
@@ -221,7 +221,7 @@ use system.collections.array
 
 gpu let a = [1, 2, 3, 4, 5, 6, 7, 8]
 gpu var dst = [0, 0]
-gpu for i in 0..2
+gpu forall i in 0..2
     var s = 0
     for j in 0..4
         if j == 2
@@ -246,7 +246,7 @@ use system.collections.array
 
 gpu let a = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 gpu var dst = [0, 0]
-gpu for i in 0..2
+gpu forall i in 0..2
     var s = 0
     for j in 0..2
         for k in 0..3
@@ -275,7 +275,7 @@ use system.collections.array
 gpu let a = [1, 2, 3, 4]
 gpu let b = [10, 20, 30, 40]
 gpu var dst = [0, 0, 0, 0]
-gpu for i in 0..4
+gpu forall i in 0..4
     var sum = 0
     if a[i] > 0
         sum = sum + a[i]
@@ -305,7 +305,7 @@ use system.collections.array
 gpu let a = [1, 2, 3, 4]
 gpu let b = [10, 20, 30, 40]
 gpu var dst = [0, 0, 0, 0]
-gpu for i in 0..4
+gpu forall i in 0..4
     var sum = 0
     var count = 0
     if a[i] > 1
@@ -337,7 +337,7 @@ use system.collections.array
 
 gpu let a = [1, 2, 3, 4]
 gpu var dst = [0, 0, 0, 0]
-gpu for i in 0..4
+gpu forall i in 0..4
     var result = 0
     if a[i] > 2
         result = 1
@@ -350,8 +350,8 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
     assert_gpu_runs_with_output(source, "0 0 1 1");
 }
 
-/// 2D gpu for value-correctness test.
-/// A 2D grid `gpu for x, y in 0..4, 0..3` over a 4x3 array (12 elements total).
+/// 2D gpu forall value-correctness test.
+/// A 2D grid `gpu forall x, y in 0..4, 0..3` over a 4x3 array (12 elements total).
 /// Each thread computes `dst[y * 4 + x] = x + y`.
 /// Expected output after readback: row r, column c → value c+r.
 /// Row 0: 0 1 2 3
@@ -365,7 +365,7 @@ use system.gpu
 use system.collections.array
 
 gpu var dst = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-gpu for x, y in 0..4, 0..3
+gpu forall x, y in 0..4, 0..3
     dst[y * 4 + x] = x + y
 let host = dst
 println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]} {host[5]} {host[6]} {host[7]} {host[8]} {host[9]} {host[10]} {host[11]}')
@@ -373,7 +373,7 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]} {host[5]} {host[6]} 
     assert_gpu_runs_with_output(source, "0 1 2 3 1 2 3 4 2 3 4 5");
 }
 
-/// 2D gpu for with runtime bounds compiles, dispatches, and produces correct values.
+/// 2D gpu forall with runtime bounds compiles, dispatches, and produces correct values.
 /// The loop bounds are variables (w, h) determined at runtime, not compile-time constants.
 /// Verifies that over-dispatch safety works: with non-multiple-of-16 bounds (5x3),
 /// the kernel only writes to valid cells (0..15 of a 20-cell buffer), leaving
@@ -389,7 +389,7 @@ fn main()
     let w = 5
     let h = 3
     gpu var dst = [99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99]
-    gpu for x, y in 0..w, 0..h
+    gpu forall x, y in 0..w, 0..h
         dst[y * 5 + x] = x * 100 + y
     let host = dst
     println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]} {host[5]} {host[6]} {host[7]} {host[15]} {host[16]}')
@@ -397,7 +397,7 @@ fn main()
     assert_gpu_runs_with_output(source, "0 100 200 300 400 1 101 201 99 99");
 }
 
-/// 2D gpu for with mixed literal x-end and runtime y-end.
+/// 2D gpu forall with mixed literal x-end and runtime y-end.
 /// Verifies that when one axis is literal and the other is runtime, both bounds
 /// are correctly materialized and passed to the kernel.
 #[test]
@@ -410,7 +410,7 @@ use system.collections.array
 fn main()
     let h = 3
     gpu var buf = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    gpu for x, y in 0..4, 0..h
+    gpu forall x, y in 0..4, 0..h
         buf[y * 4 + x] = x * 100 + y
     let r = buf
     println(f'{r[0]} {r[1]} {r[6]} {r[11]}')
@@ -423,7 +423,7 @@ fn main()
     assert_gpu_runs_with_output(source, "0 100 201 302");
 }
 
-/// 2D gpu for with mixed runtime x-end and literal y-end.
+/// 2D gpu forall with mixed runtime x-end and literal y-end.
 /// Verifies that when the x-axis is runtime and y-axis is literal, both bounds
 /// are correctly materialized and passed to the kernel.
 #[test]
@@ -436,7 +436,7 @@ use system.collections.array
 fn main()
     let w = 4
     gpu var buf = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    gpu for x, y in 0..w, 0..3
+    gpu forall x, y in 0..w, 0..3
         buf[y * 4 + x] = x * 100 + y
     let r = buf
     println(f'{r[0]} {r[1]} {r[6]} {r[11]}')
@@ -470,11 +470,11 @@ use system.collections.array
 gpu_reset_telemetry()
 gpu var a = [1, 2, 3, 4]
 gpu var b = [0, 0, 0, 0]
-gpu for i in 0..4
+gpu forall i in 0..4
     b[i] = a[i] + 100
-gpu for i in 0..4
+gpu forall i in 0..4
     a[i] = b[i] + 1000
-gpu for i in 0..4
+gpu forall i in 0..4
     b[i] = a[i] + 100
 let host = b
 println(f'{host[0]} {host[1]} {host[2]} {host[3]} {gpu_readbacks()}')
@@ -490,7 +490,7 @@ use system.collections.array
 
 gpu let src = [0, 1, 2, 3, 4]
 gpu var dst = [0, 0, 0, 0, 0]
-gpu for i in 0..5
+gpu forall i in 0..5
     dst[i] = src[i] % 3
 
 let host = dst
@@ -507,7 +507,7 @@ use system.collections.array
 
 gpu let src = [0, 1, 2, 3, 4]
 gpu var dst = [0, 0, 0, 0, 0]
-gpu for i in 0..5
+gpu forall i in 0..5
     dst[i] = src[i] / 2
 
 let host = dst
@@ -524,7 +524,7 @@ use system.collections.array
 
 gpu let src = [10, 20, 30, 40]
 gpu var dst = [0, 0, 0, 0]
-gpu for i in 0..4
+gpu forall i in 0..4
     dst[i] = src[i] + 5
 
 let host = dst
@@ -545,7 +545,7 @@ gpu let indices = [0, 1, 2, 3, 4, 5, 6, 7, 8]
 gpu var rows = [0, 0, 0, 0, 0, 0, 0, 0, 0]
 gpu var cols = [0, 0, 0, 0, 0, 0, 0, 0, 0]
 
-gpu for i in 0..9
+gpu forall i in 0..9
     rows[i] = indices[i] / 3
     cols[i] = indices[i] % 3
 
@@ -568,7 +568,7 @@ use system.collections.array
 
 gpu var posx = [0.0, 0.0, 0.0, 0.0]
 
-gpu for i in 0..4
+gpu forall i in 0..4
     posx[i] = i as f32 * 0.25
 
 let h = posx
@@ -589,7 +589,7 @@ use system.math
 gpu let src = [1.7, 2.3, 3.9]
 gpu var idx = [0, 0, 0]
 
-gpu for i in 0..3
+gpu forall i in 0..3
     idx[i] = floor(src[i]) as int
 
 let h = idx
@@ -617,7 +617,7 @@ use system.collections.array
 gpu let src = [0, 0-1, 0-2, 3, 4]
 gpu var dst = [0, 0, 0, 0, 0]
 
-gpu for i in 0..5
+gpu forall i in 0..5
     dst[i] = src[i] / 2
 
 let host = dst
@@ -638,7 +638,7 @@ use system.collections.array
 gpu let src = [0, 0-1, 0-2, 3, 4]
 gpu var dst = [0, 0, 0, 0, 0]
 
-gpu for i in 0..5
+gpu forall i in 0..5
     dst[i] = src[i] % 3
 
 let host = dst

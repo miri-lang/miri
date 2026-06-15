@@ -35,7 +35,7 @@ fn demo_saxpy() {
     assert_gpu_runs_with_output(source, "7.0 10.0 13.0 16.0");
 }
 
-/// buffer_reuse: two sequential gpu for blocks on the same gpu var with no
+/// buffer_reuse: two sequential gpu forall blocks on the same gpu var with no
 /// readback between them. Demonstrates persistent buffer cost model
 /// (1 upload, 2 launches, 1 readback).
 #[test]

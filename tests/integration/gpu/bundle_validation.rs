@@ -89,7 +89,7 @@ gpu let a = [1, 2, 3, 4]
 gpu let b = [5, 6, 7, 8]
 gpu var dst = [0, 0, 0, 0]
 
-gpu for i in 0..4
+gpu forall i in 0..4
     dst[i] = a[i] + b[i]
 "#;
 
@@ -118,7 +118,7 @@ gpu let a = [1, 2, 3, 4]
 gpu let b = [5, 6, 7, 8]
 gpu var dst = [0, 0, 0, 0]
 
-gpu for i in 0..4
+gpu forall i in 0..4
     dst[i] = a[i] + b[i]
 "#;
 
@@ -173,7 +173,7 @@ use system.collections.array
 
 gpu var px = Array<f32, 8>()
 
-gpu for i in 0..8
+gpu forall i in 0..8
     px[i] = i as f32
 "#;
 
@@ -203,7 +203,7 @@ use system.collections.array
 gpu let ints = [1, 2, 3, 4]
 gpu var floats = Array<f32, 4>()
 
-gpu for i in 0..4
+gpu forall i in 0..4
     floats[i] = ints[i] as f32
 "#;
 
@@ -239,7 +239,7 @@ gpu let a = [1, 2, 3, 4]
 gpu let b = [5, 6, 7, 8]
 gpu var dst = [0, 0, 0, 0]
 
-gpu for i in 0..4
+gpu forall i in 0..4
     dst[i] = a[i] + b[i]
 "#;
 
@@ -278,7 +278,7 @@ use system.collections.array
 gpu let src = Array<int, 4096>()
 gpu var dst = Array<int, 4096>()
 
-gpu for i in 0..4096
+gpu forall i in 0..4096
     dst[i] = src[i]
 "#;
 
@@ -303,7 +303,7 @@ gpu for i in 0..4096
     }
 }
 
-/// F31 verification: Two gpu for loops produce distinct kernel entries.
+/// F31 verification: Two gpu forall loops produce distinct kernel entries.
 /// Ground truth: AST statement IDs are globally unique (not per-function),
 /// so kernel names are already distinct. This test verifies the fix.
 #[test]
@@ -314,10 +314,10 @@ use system.gpu
 gpu var dst_a = [0, 0, 0, 0]
 gpu var dst_b = [0, 0, 0, 0]
 
-gpu for i in 0..4
+gpu forall i in 0..4
     dst_a[i] = i + 100
 
-gpu for i in 0..4
+gpu forall i in 0..4
     dst_b[i] = i + 200
 "#;
 
@@ -330,7 +330,7 @@ gpu for i in 0..4
     assert_eq!(
         seed_array.len(),
         2,
-        "Expected 2 kernels for two gpu for loops; got {}",
+        "Expected 2 kernels for two gpu forall loops; got {}",
         seed_array.len()
     );
 

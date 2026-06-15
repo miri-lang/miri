@@ -19,9 +19,9 @@ use system.collections.array
 fn main()
     gpu var a = [1, 2, 3, 4]
     gpu var b = [10, 20, 30, 40]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         b[i] = a[i] + 100
-    gpu for i in 0..4
+    gpu forall i in 0..4
         a[i] = b[i] + 1000
 ",
     );

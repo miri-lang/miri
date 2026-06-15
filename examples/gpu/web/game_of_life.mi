@@ -28,7 +28,7 @@ gpu var trail_b = Array<f32, 64 * 64>()
 gpu var paint = Array<f32, 64 * 64 * 4>()
 
 // Seed kernel: fill grid_a with a deterministic "soup"
-gpu for idx in 0..4096
+gpu forall idx in 0..4096
     let x = idx % 64
     let y = idx / 64
     let hash = (x * 37 + y * 71 + x * y * 7) % 13
@@ -38,7 +38,7 @@ gpu for idx in 0..4096
 // Multi-pass frame loop (buffer-level disjoint passes)
 gpu frame
     // Pass 1: CA step — compute next generation
-    gpu for idx in 0..4096
+    gpu forall idx in 0..4096
         let y = idx / 64
         let x = idx % 64
         let ym = (y - 1 + 64) % 64
@@ -54,14 +54,14 @@ gpu frame
         grid_b[idx] = next
 
     // Pass 2: Trail decay and update
-    gpu for idx in 0..4096
+    gpu forall idx in 0..4096
         let decay = trail_a[idx] * 0.92
         let new_trail = 1.0 if grid_b[idx] == 1 else decay
         trail_b[idx] = new_trail
 
     // Pass 3: Mouse splat (event-gated)
     // Write to grid_b cells near pointer if mouse is pressed
-    gpu for idx in 0..4096
+    gpu forall idx in 0..4096
         if frame.mouse_down
             let y = idx / 64
             let x = idx % 64
@@ -74,7 +74,7 @@ gpu frame
                 grid_b[idx] = 1
 
     // Pass 4: Reseed on double-click
-    gpu for idx in 0..4096
+    gpu forall idx in 0..4096
         if frame.double_clicked
             let x = idx % 64
             let y = idx / 64
@@ -82,7 +82,7 @@ gpu frame
             grid_b[idx] = 1 if hash < 5 else 0
 
     // Pass 5: Paint RGBA output
-    gpu for idx in 0..4096
+    gpu forall idx in 0..4096
         let alive = grid_b[idx]
         let trail = trail_b[idx]
         let r = 1.0 if alive == 1 else trail

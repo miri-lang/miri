@@ -19,7 +19,7 @@ fn main()
     let n = 4
     gpu let a = [1, 2, 3, 4]
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..n
+    gpu forall i in 0..n
         dst[i] = a[i]
 ";
     assert_gpu_wgsl_valid(source);
@@ -38,7 +38,7 @@ gpu let b = [1, 2, 3, 4]
 gpu var dst = [0, 0, 0, 0]
 
 let n = 4
-gpu for i in 0..n
+gpu forall i in 0..n
     dst[i] = a[i] + b[i]
 
 let host = dst
@@ -48,7 +48,7 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 }
 
 /// AC4: Runtime end via method call on gpu-resident buffer.
-/// e.g., `gpu for i in 0..g.length()` where g is `gpu let`.
+/// e.g., `gpu forall i in 0..g.length()` where g is `gpu let`.
 #[test]
 fn runtime_bound_via_gpu_buffer_length() {
     let source = "
@@ -59,7 +59,7 @@ use system.collections.array
 gpu let src = [5, 6, 7, 8, 9]
 gpu var dst = [0, 0, 0, 0, 0]
 
-gpu for i in 0..src.length()
+gpu forall i in 0..src.length()
     dst[i] = src[i] * 2
 
 let host = dst
@@ -78,7 +78,7 @@ use system.collections.array
 
 gpu var dst = [999, 999, 999, 999]
 let n = 0
-gpu for i in 0..n
+gpu forall i in 0..n
     dst[i] = i + 100
 let host = dst
 println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
@@ -97,7 +97,7 @@ use system.collections.array
 
 gpu var dst = [888, 888, 888, 888]
 let n = -5
-gpu for i in 0..n
+gpu forall i in 0..n
     dst[i] = i + 100
 let host = dst
 println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
@@ -116,7 +116,7 @@ use system.collections.array
 
 gpu var dst = [999, 999, 999, 999, 999]
 let n = 4
-gpu for i in 0..=n
+gpu forall i in 0..=n
     dst[i] = i
 let host = dst
 println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]}')
@@ -137,7 +137,7 @@ use system.collections.array
 gpu let src = [10, 20]
 gpu var dst = [999, 999, 999, 999]
 let n = 2
-gpu for i in 0..n
+gpu forall i in 0..n
     dst[i] = src[i]
 let host = dst
 println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
@@ -168,10 +168,10 @@ fn main()
     gpu var data = [0, 0, 0, 0, 0, 0, 0, 0]
     let n = 8
 
-    gpu for i in 0..n
+    gpu forall i in 0..n
         data[i] = i * i
 
-    gpu for i in 0..n
+    gpu forall i in 0..n
         data[i] = data[i] * 2
 
     let host = data
@@ -196,7 +196,7 @@ use system.collections.array
 fn main()
     gpu var data = [0, 0, 0, 0]
     let n = 5000000000
-    gpu for i in 0..n
+    gpu forall i in 0..n
         data[i] = i
 ";
     assert_runtime_crash(source);
@@ -217,7 +217,7 @@ use system.collections.array
 fn main()
     gpu var data = [999, 999, 999, 999]
     let n = -10
-    gpu for i in 0..n
+    gpu forall i in 0..n
         data[i] = i
     let host = data
     println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
@@ -244,7 +244,7 @@ use system.collections.array
 fn main()
     gpu var data = [0, 0, 0, 0]
     let n = 2147483648
-    gpu for i in 0..n
+    gpu forall i in 0..n
         data[i] = i
 ";
     assert_runtime_crash(source);
@@ -270,7 +270,7 @@ use system.collections.array
 fn main()
     gpu var dst = [777, 777, 777, 777]
     let very_negative = -(9223372036854775807)
-    gpu for i in 1000..very_negative
+    gpu forall i in 1000..very_negative
         dst[i] = i + 100
     let host = dst
     println(f'{host[0]} {host[1]} {host[2]} {host[3]}')

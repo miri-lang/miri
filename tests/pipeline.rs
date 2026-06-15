@@ -17,7 +17,7 @@ use system.gpu
 use system.collections.array
 
 let dst = [0, 0, 0, 0]
-gpu for i in 0..4
+gpu forall i in 0..4
     let x = i
 "
     ));

@@ -19,7 +19,7 @@ gpu var grid_b = Array<int, 64 * 64>()
 
 // Seed: a deterministic hash lights a dense, non-uniform subset of cells —
 // the classic Life "soup" that keeps the simulation churning.
-gpu for idx in 0..SIZE
+gpu forall idx in 0..SIZE
     let x = idx % 64
     let y = idx / 64
     let hash = (x * 37 + y * 71 + x * y * 7) % 13

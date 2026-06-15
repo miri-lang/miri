@@ -24,7 +24,7 @@ fn main()
     gpu let a = [1, 2, 3, 4]
     gpu let b = [10, 20, 30, 40]
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         dst[i] = a[i] + b[i]
 ",
     );
@@ -47,7 +47,7 @@ fn main()
     gpu let a = [1.0, 2.0, 3.0, 4.0]
     gpu let b = [0.5, 1.5, 2.5, 3.5]
     gpu var dst = [0.0, 0.0, 0.0, 0.0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         dst[i] = a[i] + b[i]
 ",
     );
@@ -76,7 +76,7 @@ fn main()
     gpu let a = [1, 2, 3, 4]
     gpu let b = [10, 20, 30, 40]
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         dst[i] = a[i] + b[i]
 ",
         );
@@ -92,7 +92,7 @@ use system.collections.array
 fn main()
     gpu let src = [1, 2, 3, 4]
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         dst[i] = src[i] * 7
 ",
         );
@@ -109,7 +109,7 @@ fn main()
     gpu let a = [100, 200, 300, 400]
     gpu let b = [1, 2, 3, 4]
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         dst[i] = a[i] - b[i]
 ",
         );
@@ -127,7 +127,7 @@ use system.collections.array
 fn main()
     gpu let a = [0, 1, 2, 3, 4]
     gpu var dst = [0, 0, 0, 0, 0]
-    gpu for i in 0..5
+    gpu forall i in 0..5
         dst[i] = a[i] / 2
 ",
         );
@@ -143,7 +143,7 @@ use system.collections.array
 fn main()
     gpu let a = [0, 1, 2, 3, 4]
     gpu var dst = [0, 0, 0, 0, 0]
-    gpu for i in 0..5
+    gpu forall i in 0..5
         dst[i] = a[i] % 3
 ",
         );
@@ -160,7 +160,7 @@ fn main()
     gpu let a = [1.0, 2.0, 3.0, 4.0]
     gpu let b = [0.5, 1.5, 2.5, 3.5]
     gpu var dst = [0.0, 0.0, 0.0, 0.0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         dst[i] = a[i] + b[i]
 ",
         );
@@ -176,7 +176,7 @@ use system.collections.array
 fn main()
     gpu let a = [1.0, 2.0, 3.0, 4.0]
     gpu var dst = [0.0, 0.0, 0.0, 0.0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         dst[i] = a[i] * 2.5
 ",
         );
@@ -199,7 +199,7 @@ fn main()
     gpu let a = [3.141592653589793, 2.718281828459045, 1.4142135623730951, 0.5772156649015329]
     gpu let b = [3.141592653589793, 2.718281828459045, 1.4142135623730951, 0.5772156649015329]
     gpu var dst = [3.141592653589793, 2.718281828459045, 1.4142135623730951, 0.5772156649015329]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         dst[i] = a[i] + b[i]
 ",
         );
@@ -216,7 +216,7 @@ use system.gpu
 use system.collections.array
 
 gpu var flags = [true, false, true, false]
-gpu for i in 0..4
+gpu forall i in 0..4
     flags[i] = not flags[i]
 ",
             "not a valid WGSL storage-buffer element",
@@ -234,7 +234,7 @@ use system.gpu
 use system.collections.array
 
 gpu var labels = [\"a\", \"b\", \"c\", \"d\"]
-gpu for i in 0..4
+gpu forall i in 0..4
     let _ = labels[i]
 ",
             "not a valid WGSL storage-buffer element",
@@ -259,7 +259,7 @@ use system.collections.array
 fn main()
     gpu let a = [1, 2, 3, 4, 5, 6, 7, 8]
     gpu var dst = [0, 0]
-    gpu for i in 0..2
+    gpu forall i in 0..2
         var s = 0
         for j in 0..4
             s = s + a[i * 4 + j]
@@ -280,7 +280,7 @@ use system.collections.array
 fn main()
     gpu let a = [1, 2, 3, 4, 5, 6, 7, 8]
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         var j = 0
         while j < 2
             dst[i] = dst[i] + a[i * 2 + j]
@@ -301,7 +301,7 @@ use system.collections.array
 fn main()
     gpu let a = [1, 2, 3, 4]
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         var j = 0
         for j in 0..4
             dst[i] = a[i]
@@ -322,7 +322,7 @@ use system.collections.array
 fn main()
     gpu let a = [1, 2, 3, 4, 5, 6, 7, 8]
     gpu var dst = [0, 0]
-    gpu for i in 0..2
+    gpu forall i in 0..2
         var s = 0
         for j in 0..4
             if j == 1
@@ -345,7 +345,7 @@ use system.collections.array
 fn main()
     gpu let a = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     gpu var dst = [0, 0]
-    gpu for i in 0..2
+    gpu forall i in 0..2
         var s = 0
         for j in 0..2
             for k in 0..3
@@ -367,7 +367,7 @@ use system.collections.array
 fn main()
     gpu let a = [1, 2, 3, 4]
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         var s = 0
         for j in 0..2
             if j == 0
@@ -389,7 +389,7 @@ use system.collections.array
 fn main()
     gpu let a = [1, 2, 3, 4]
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         for j in 0..2
             dst[i] = a[i]
             return
@@ -417,7 +417,7 @@ use system.math
 fn main()
     gpu let a = [1.0, 4.0, 9.0, 16.0]
     gpu var dst = [0.0, 0.0, 0.0, 0.0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         dst[i] = sqrt(a[i])
 ",
         );
@@ -432,7 +432,7 @@ use system.io
 fn main()
     gpu let a = [1.0, 4.0, 9.0, 16.0]
     gpu var dst = [0.0, 0.0, 0.0, 0.0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         dst[i] = sqrt(a[i])
     let result = dst
     println(f'{result[0]} {result[1]} {result[2]} {result[3]}')
@@ -454,7 +454,7 @@ use system.math
 fn main()
     gpu let a = [1.4142135623730951, 3.7416573867739413, 5.744562646538029, 7.745966692414834]
     gpu var dst = [1.4142135623730951, 3.7416573867739413, 5.744562646538029, 7.745966692414834]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         dst[i] = sqrt(a[i])
 ",
         );
@@ -472,7 +472,7 @@ use system.math
 fn main()
     gpu let a = [0.0, 1.0, 2.0, 3.0]
     gpu var dst = [0.0, 0.0, 0.0, 0.0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         dst[i] = sin(a[i])
 ",
         );
@@ -498,7 +498,7 @@ fn main()
     gpu let a = [1, 2, 3, 4]
     gpu let b = [10, 20, 30, 40]
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         var sum = 0
         if a[i] > 0
             sum = sum + a[i]
@@ -522,7 +522,7 @@ fn main()
     gpu let a = [1, 2, 3, 4]
     gpu let b = [10, 20, 30, 40]
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         var sum = 0
         var count = 0
         if a[i] > 1
@@ -548,7 +548,7 @@ use system.collections.array
 fn main()
     gpu let a = [1, 2, 3, 4]
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         var result = 0
         if a[i] > 2
             result = 1
@@ -572,7 +572,7 @@ use system.collections.array
 fn main()
     gpu let a = [1, 2, 3, 4]
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         var sum = 0
         if a[i] > 2
             sum = sum + 100
@@ -657,7 +657,7 @@ use system.collections.array
 fn main()
     gpu let a = [1, 2, 3, 4]
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         var sum = 0
         if a[i] > 2
             sum = sum + 10
@@ -681,7 +681,7 @@ fn main()
     gpu let a = [1, 2, 3, 4]
     gpu let b = [10, 20, 30, 40]
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         var sum = 0
         if a[i] > 1
             sum = sum + a[i]
@@ -704,7 +704,7 @@ use system.collections.array
 fn main()
     gpu let a = [1, 2, 3, 4]
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         var sum = 0
         if a[i] > 2
             sum = sum + 10
@@ -720,7 +720,7 @@ mod gpu_for_2d {
     use super::super::utils::assert_compiler_error;
     use super::assert_gpu_wgsl_valid;
 
-    /// Basic 2D gpu for with literal bounds (4x3 grid).
+    /// Basic 2D gpu forall with literal bounds (4x3 grid).
     /// Emits WGSL with @workgroup_size(16, 16, 1), uses _local_id.y and _workgroup_id.y,
     /// and has the 2D bounds guard.
     #[test]
@@ -732,13 +732,13 @@ use system.collections.array
 
 fn main()
     gpu var dst = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    gpu for x, y in 0..4, 0..3
+    gpu forall x, y in 0..4, 0..3
         dst[y * 4 + x] = x + y
 ",
         );
     }
 
-    /// 2D gpu for with larger bounds (32x32 grid).
+    /// 2D gpu forall with larger bounds (32x32 grid).
     #[test]
     fn gpu_for_2d_large_bounds_emits_naga_valid_wgsl() {
         assert_gpu_wgsl_valid(
@@ -748,13 +748,13 @@ use system.collections.array
 
 fn main()
     gpu var dst = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    gpu for x, y in 0..32, 0..32
+    gpu forall x, y in 0..32, 0..32
         dst[y * 32 + x] = x + y
 ",
         );
     }
 
-    /// 2D gpu for with runtime bounds compiles and emits valid WGSL.
+    /// 2D gpu forall with runtime bounds compiles and emits valid WGSL.
     #[test]
     fn gpu_for_2d_runtime_bounds_emits_naga_valid_wgsl() {
         assert_gpu_wgsl_valid(
@@ -766,7 +766,7 @@ fn main()
     let w = 4
     let h = 3
     gpu var dst = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    gpu for x, y in 0..w, 0..h
+    gpu forall x, y in 0..w, 0..h
         dst[y * 4 + x] = x + y
 ",
         );
@@ -782,7 +782,7 @@ use system.collections.array
 
 fn main()
     gpu var dst = [0, 0, 0, 0, 0, 0, 0, 0]
-    gpu for x, y, z in 0..2, 0..2, 0..2
+    gpu forall x, y, z in 0..2, 0..2, 0..2
         dst[z * 4 + y * 2 + x] = x + y + z
 ",
             "at most 2 loop variables",
@@ -799,10 +799,10 @@ use system.collections.array
 
 fn main()
     gpu var dst = [0, 0, 0, 0]
-    gpu for x, y in 0..4
+    gpu forall x, y in 0..4
         dst[0] = 0
 ",
-            "2D gpu for requires two comma-separated ranges",
+            "2D gpu forall requires two comma-separated ranges",
         );
     }
 }
@@ -822,7 +822,7 @@ use system.collections.array
 fn main()
     gpu let a = [1, 2, 3, 4]
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         dst[i] = a[i] * 2
 ";
         let wgsl = compile_to_wgsl(source);
@@ -866,7 +866,7 @@ use system.collections.array
 fn main()
     gpu let a = [10, 20, 30, 40]
     gpu var dst = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         dst[i] = a[i] / 2
 ";
         let wgsl = compile_to_wgsl(source);
@@ -896,7 +896,7 @@ use system.collections.array
 fn main()
     gpu let a = [1.0, 2.0, 3.0, 4.0]
     gpu var dst = [0.0, 0.0, 0.0, 0.0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         dst[i] = a[i] + 1.0
 ";
         let wgsl = compile_to_wgsl(source);
@@ -931,7 +931,7 @@ use system.collections.array
 
 gpu let vals = [0, 1, 100, 1000, 10000, 100000]
 gpu var result = [0, 0, 0, 0, 0, 0]
-gpu for i in 0..6
+gpu forall i in 0..6
     result[i] = vals[i]
 let host = result
 println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]} {host[5]}')
@@ -950,7 +950,7 @@ use system.collections.array
 gpu let a = [10, 20, 30, 40]
 gpu let b = [5, 6, 7, 8]
 gpu var result = [0, 0, 0, 0]
-gpu for i in 0..4
+gpu forall i in 0..4
     result[i] = a[i] + b[i]
 let host = result
 println(f'{host[0]} {host[1]} {host[2]} {host[3]}')

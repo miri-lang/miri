@@ -19,14 +19,14 @@ gpu var dst = Array<f32, 64 * 64>()
 
 // Initialize source image: a bright 16×16 square (value 1.0) centered in a
 // 64×64 buffer. Pixels (24, 24) to (39, 39) are white; outside is black.
-gpu for idx in 0..SIZE
+gpu forall idx in 0..SIZE
     let y = idx / 64
     let x = idx - y * 64
     src[idx] = 1.0 if x >= 24 and x < 40 and y >= 24 and y < 40 else 0.0
 
 // Apply 3×3 box blur: for each output pixel, sum the 3×3 neighborhood.
 // Out-of-bounds neighbors (beyond [0, 64)) contribute 0 (zero-padding).
-gpu for idx in 0..SIZE
+gpu forall idx in 0..SIZE
     let y = idx / 64
     let x = idx - y * 64
     var sum = 0.0

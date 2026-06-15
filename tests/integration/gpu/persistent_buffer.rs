@@ -28,10 +28,10 @@ fn main()
     gpu_reset_telemetry()
     gpu var data = [0, 0, 0, 0, 0, 0, 0, 0]
 
-    gpu for i in 0..8
+    gpu forall i in 0..8
         data[i] = i * i
 
-    gpu for i in 0..8
+    gpu forall i in 0..8
         data[i] = data[i] * 2
 
     let host = data
@@ -58,13 +58,13 @@ fn main()
     gpu_reset_telemetry()
     gpu var data = [0, 0, 0, 0, 0, 0, 0, 0]
 
-    gpu for i in 0..8
+    gpu forall i in 0..8
         data[i] = i * i
 
-    gpu for i in 0..8
+    gpu forall i in 0..8
         data[i] = data[i] * 2
 
-    gpu for i in 0..8
+    gpu forall i in 0..8
         data[i] = data[i] + 1
 
     let host = data
@@ -93,7 +93,7 @@ use system.io
 
 fn run() int
     gpu var data = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         data[i] = data[i] + 5
     let host = data
     return host[3]
@@ -125,7 +125,7 @@ use system.io
 fn main()
     gpu_reset_telemetry()
     gpu var arr = [0, 0, 0, 0]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         arr[i] = i * i
 
     let h = arr
@@ -153,7 +153,7 @@ use system.io
 fn main()
     gpu_reset_telemetry()
     gpu var data = [1, 1, 1, 1]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         data[i] = data[i] + 10
 
     let host1 = data
@@ -161,7 +161,7 @@ fn main()
 
     data = [2, 2, 2, 2]
 
-    gpu for i in 0..4
+    gpu forall i in 0..4
         data[i] = data[i] + 20
 
     let host2 = data
@@ -187,7 +187,7 @@ use system.io
 fn main()
     gpu_reset_telemetry()
     gpu var data = [1, 1, 1, 1]
-    gpu for i in 0..4
+    gpu forall i in 0..4
         data[i] = data[i] * 2
 
     println(f'after first launch: {gpu_uploads()}')
@@ -195,7 +195,7 @@ fn main()
     data = [3, 3, 3, 3]
     println(f'after assignment: {gpu_uploads()}')
 
-    gpu for i in 0..4
+    gpu forall i in 0..4
         data[i] = data[i] + 1
 
     let host = data

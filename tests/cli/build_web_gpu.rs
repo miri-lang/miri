@@ -19,7 +19,7 @@ use system.collections.array
 gpu let a = [1, 2, 3, 4]
 gpu let b = [10, 20, 30, 40]
 gpu var dst = [0, 0, 0, 0]
-gpu for i in 0..4
+gpu forall i in 0..4
     dst[i] = a[i] + b[i]
 println("done")
 "#;
@@ -31,7 +31,7 @@ use system.collections.array
 gpu var grid_a = Array<int, 16>()
 gpu var grid_b = Array<int, 16>()
 
-gpu for idx in 0..16
+gpu forall idx in 0..16
     grid_a[idx] = idx as int
 
 gpu frame idx in 0..16
@@ -251,7 +251,7 @@ use system.collections.array
 
 gpu var canvas = Array<f32, 64>()
 
-gpu for i in 0..16
+gpu forall i in 0..16
     canvas[i * 4 + 0] = 1.0
     canvas[i * 4 + 1] = 0.5
     canvas[i * 4 + 2] = 0.25
@@ -296,7 +296,7 @@ use system.collections.array
 
 gpu var canvas = Array<int, 16>()
 
-gpu for i in 0..16
+gpu forall i in 0..16
     canvas[i] = i
 "#;
 
@@ -335,7 +335,7 @@ use system.collections.array
 gpu var grid_a = Array<int, 16>()
 gpu var grid_b = Array<int, 16>()
 
-gpu for idx in 0..16
+gpu forall idx in 0..16
     grid_a[idx] = idx as int
 
 gpu frame idx in 0..16

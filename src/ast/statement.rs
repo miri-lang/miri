@@ -68,6 +68,16 @@ pub enum BindingResidency {
     Gpu,
 }
 
+/// The target device for a forall construct.
+/// Determines which backend executes the parallel loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AcceleratorTarget {
+    /// Device inferred from data residency in the loop body.
+    Inferred,
+    /// Explicit GPU target (guard against CPU-resident data).
+    Gpu,
+}
+
 /// Represents a variable declaration
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct VariableDeclaration {
@@ -114,11 +124,17 @@ pub enum StatementKind {
     /// A for loop.
     For(Vec<VariableDeclaration>, Box<Expression>, Box<Statement>),
 
-    /// A GPU parallel `for` loop: `gpu for <ident> in <range>`.
+    /// A parallel `forall` loop: `forall <vars> in <range>` or `gpu forall <vars> in <range>`.
     ///
-    /// Lowered to a synthesized anonymous `gpu fn` plus a `GpuLaunch`
-    /// terminator whose grid is derived from the range length.
-    GpuFor(Vec<VariableDeclaration>, Box<Expression>, Box<Statement>),
+    /// Lowered to a synthesized anonymous kernel plus the backend-appropriate
+    /// terminator (GPU: `GpuLaunch`; CPU: nested sequential loops).
+    /// The device field determines whether inference or explicit GPU is required.
+    Forall {
+        device: AcceleratorTarget,
+        vars: Vec<VariableDeclaration>,
+        iterable: Box<Expression>,
+        body: Box<Statement>,
+    },
 
     /// A GPU frame-step loop: `gpu frame <ident> in <range>`.
     ///

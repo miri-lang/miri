@@ -16,7 +16,7 @@ gpu var pixels = Array<f32, 64 * 64>()
 // then to complex plane, iterate z = z² + c until |z|² > 4 or reach iteration limit.
 // Host scalars cannot be captured into the kernel, so the viewport mapping is
 // computed device-side from idx.
-gpu for idx in 0..SIZE
+gpu forall idx in 0..SIZE
     // Convert linear index to (x, y) coordinates
     let y = idx / 64
     let x = idx - y * 64

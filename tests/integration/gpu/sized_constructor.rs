@@ -16,7 +16,7 @@ use system.collections.array
 
 gpu var buf = Array<int, 8>()
 
-gpu for i in 0..8
+gpu forall i in 0..8
     buf[i] = (i * 2) as int
 
 let host = buf
@@ -38,7 +38,7 @@ use system.collections.array
 
 gpu var buf = Array<f32, 4>()
 
-gpu for i in 0..4
+gpu forall i in 0..4
     buf[i] = (i as f32) * 1.5 as f32
 
 let host = buf
@@ -60,7 +60,7 @@ use system.collections.array
 
 gpu var buf = Array<i32, 6>()
 
-gpu for i in 0..6
+gpu forall i in 0..6
     buf[i] = i as i32
 
 let host = buf

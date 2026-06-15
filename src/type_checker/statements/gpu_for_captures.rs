@@ -79,7 +79,7 @@ impl TypeChecker {
     fn report_capture_violation(&mut self, violation: CaptureViolation) {
         match violation {
             CaptureViolation::HostResident { name, span } => self.report_error_with_help(
-                format!("'gpu for' capture '{}' must be gpu-resident.", name),
+                format!("'gpu forall' capture '{}' must be gpu-resident.", name),
                 span,
                 format!(
                     "Annotate the binding with 'gpu let', or copy explicitly: 'gpu let {}_gpu = {}'.",
@@ -92,7 +92,7 @@ impl TypeChecker {
                 span,
             } => self.report_error(
                 format!(
-                    "'gpu for' capture '{}' has element type '{}' which is not a valid WGSL storage-buffer element. WGSL storage buffers require a numeric scalar (i32 / u32 / i64 / u64 / f32 / f64); 'bool' must be packed to 'i32' or 'u32'",
+                    "'gpu forall' capture '{}' has element type '{}' which is not a valid WGSL storage-buffer element. WGSL storage buffers require a numeric scalar (i32 / u32 / i64 / u64 / f32 / f64); 'bool' must be packed to 'i32' or 'u32'",
                     name, elem_ty
                 ),
                 span,
@@ -100,7 +100,7 @@ impl TypeChecker {
             CaptureViolation::UnsupportedScalarCapture { name, ty, span } => {
                 self.report_error(
                     format!(
-                        "'gpu for' cannot capture scalar '{}' of type '{}': unsupported gpu scalar capture type. \
+                        "'gpu forall' cannot capture scalar '{}' of type '{}': unsupported gpu scalar capture type. \
                          Supported types are: int (i32, i64), bool, and f32 (not f64 or String)",
                         name, ty
                     ),
@@ -149,8 +149,21 @@ fn visit_stmt(
             visit_stmt(body, bound, context, reported, violations);
         }
         StatementKind::For(inner_decls, iter, body)
-        | StatementKind::GpuFor(inner_decls, iter, body)
         | StatementKind::GpuFrame(inner_decls, iter, body) => {
+            visit_expr(iter, bound, context, reported, violations);
+            let scope_snapshot = bound.clone();
+            for d in inner_decls {
+                bound.insert(d.name.clone());
+            }
+            visit_stmt(body, bound, context, reported, violations);
+            *bound = scope_snapshot;
+        }
+        StatementKind::Forall {
+            vars: inner_decls,
+            iterable: iter,
+            body,
+            ..
+        } => {
             visit_expr(iter, bound, context, reported, violations);
             let scope_snapshot = bound.clone();
             for d in inner_decls {
