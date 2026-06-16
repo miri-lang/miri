@@ -5,6 +5,7 @@ pub use crate::integration::utils;
 
 pub mod do_while_until;
 pub mod edge_cases;
+pub mod forall_cpu;
 pub mod forever;
 pub mod if_else;
 pub mod jump;

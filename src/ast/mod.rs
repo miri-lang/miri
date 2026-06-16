@@ -2,6 +2,7 @@
 // Copyright (c) Viacheslav Shynkarenko
 
 pub mod analysis;
+pub mod captures;
 pub mod common;
 pub mod expression;
 pub mod factory;
