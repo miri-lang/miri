@@ -22,6 +22,7 @@ pub mod bundle_validation;
 pub mod cross_residency;
 pub mod demos;
 pub mod device;
+pub mod forall_routing;
 pub mod game_of_life;
 pub mod gpu_for_capture_residency;
 pub mod gpu_frame;

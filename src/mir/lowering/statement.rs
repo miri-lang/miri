@@ -51,13 +51,24 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
             lower_for(ctx, &stmt.span, decls, iterable, body)
         }
         StatementKind::Forall {
-            device: _,
+            device,
             vars,
             iterable,
             body,
         } => {
-            // device routing (CPU vs GPU) lands with the sequential backend; today all forall lowers via the GPU path
-            super::forall_gpu::lower_forall_gpu(ctx, &stmt.span, stmt.id, vars, iterable, body)
+            // Route to GPU if explicitly requested, or if the body captures GPU-resident data.
+            // Otherwise use CPU sequential backend.
+            if matches!(device, crate::ast::statement::AcceleratorTarget::Gpu)
+                || super::forall_cpu::body_has_gpu_resident_capture(
+                    ctx,
+                    body,
+                    &vars.iter().map(|v| v.name.as_str()).collect::<Vec<_>>(),
+                )
+            {
+                super::forall_gpu::lower_forall_gpu(ctx, &stmt.span, stmt.id, vars, iterable, body)
+            } else {
+                super::forall_cpu::lower_forall_cpu(ctx, &stmt.span, vars, iterable, body)
+            }
         }
         StatementKind::GpuFrame(decls, iterable, body) => {
             super::gpu_frame::lower_gpu_frame(ctx, &stmt.span, stmt.id, decls, iterable, body)

@@ -16,6 +16,7 @@ pub mod context;
 pub mod control_flow;
 pub mod dispatch;
 pub mod expression;
+pub mod forall_cpu;
 pub mod forall_gpu;
 pub mod gpu_frame;
 pub mod helpers;
