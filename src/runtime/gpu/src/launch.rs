@@ -138,15 +138,18 @@ pub struct GpuLaunchDesc {
     /// Array length is `num_bufs`. When null, no buffers need narrowing (legacy behavior).
     pub buf_int_narrow: *const u8,
     /// Bitmask indicating which uniform bounds are present.
-    /// Bit 0 = x bound present, Bit 1 = y bound present.
+    /// Bit 0 = x bound present, Bit 1 = y bound present, Bit 2 = z bound present.
     pub uniform_bound_present: u64,
-    /// Bound value for x axis (1D loops or 2D x axis).
+    /// Bound value for x axis (1D loops or 2D x axis, or 3D x axis).
     pub uniform_bound_x_value: i64,
-    /// Bound value for y axis (2D loops only).
+    /// Bound value for y axis (2D loops or 3D y axis).
     pub uniform_bound_y_value: i64,
+    /// Bound value for z axis (3D loops only).
+    pub uniform_bound_z_value: i64,
     /// Number of storage buffer bindings.
     /// num_bufs reflects capture count, but with uniform buffers present,
-    /// the kernel has num_bufs storage + 1 uniform binding. This is always num_bufs.
+    /// the kernel has num_bufs storage + N uniform bindings (where N is popcount(uniform_bound_present)).
+    /// This is always num_bufs.
     pub num_storage_bufs: u64,
     /// Packed scalar capture values (int→i32, bool→u32, f32→f32).
     /// Each scalar occupies 4 bytes. When null, no scalar captures are present.
@@ -155,7 +158,7 @@ pub struct GpuLaunchDesc {
     pub scalar_inputs_len: usize,
 }
 
-const _: () = assert!(core::mem::size_of::<GpuLaunchDesc>() == 152);
+const _: () = assert!(core::mem::size_of::<GpuLaunchDesc>() == 160);
 
 /// Launches a GPU kernel inline. Returns 1 on success, 0 on failure.
 ///
@@ -207,7 +210,8 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
     // Account for uniform buffers in binding count if present.
     // Bit 0 = x bound, Bit 1 = y bound. Count how many bits are set.
     let num_uniform_bufs = ((desc.uniform_bound_present & 1) != 0_u64) as usize
-        + ((desc.uniform_bound_present & 2) != 0_u64) as usize;
+        + ((desc.uniform_bound_present & 2) != 0_u64) as usize
+        + ((desc.uniform_bound_present & 4) != 0_u64) as usize;
     let has_scalar_inputs = desc.scalar_inputs_len > 0;
     let num_bindings = desc.num_bufs + num_uniform_bufs + (has_scalar_inputs as usize);
 
@@ -261,12 +265,16 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
     // Validate uniform bounds range before creating buffers.
     let has_x_bound = (desc.uniform_bound_present & 1) != 0;
     let has_y_bound = (desc.uniform_bound_present & 2) != 0;
+    let has_z_bound = (desc.uniform_bound_present & 4) != 0;
 
     if has_x_bound {
         let _ = narrow_uniform_bound(desc.uniform_bound_x_value)?;
     }
     if has_y_bound {
         let _ = narrow_uniform_bound(desc.uniform_bound_y_value)?;
+    }
+    if has_z_bound {
+        let _ = narrow_uniform_bound(desc.uniform_bound_z_value)?;
     }
 
     let buf_data_ptrs = std::slice::from_raw_parts(desc.buf_data_ptrs, desc.num_bufs);
@@ -293,6 +301,7 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
     // Create uniform buffer(s) if needed.
     // For 1D loops: one 4-byte uniform with x bound.
     // For 2D loops: two 4-byte uniforms with x and y bounds.
+    // For 3D loops: three 4-byte uniforms with x, y, z bounds.
     // Must live until bind_group is created.
     let mut uniform_bufs: Vec<wgpu::Buffer> = Vec::new();
 
@@ -317,6 +326,17 @@ unsafe fn launch_impl(desc: &GpuLaunchDesc) -> Result<(), GpuError> {
                 mapped_at_creation: false,
             });
             queue.write_buffer(&buf, 0, &h_u32.to_le_bytes());
+            uniform_bufs.push(buf);
+        }
+        if has_z_bound {
+            let d_u32 = narrow_uniform_bound(desc.uniform_bound_z_value)?;
+            let buf = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("miri_gpu_uniform_bound_z"),
+                size: 4,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            queue.write_buffer(&buf, 0, &d_u32.to_le_bytes());
             uniform_bufs.push(buf);
         }
     }
@@ -946,7 +966,7 @@ mod desc_layout_tests {
     fn gpu_launch_desc_abi_is_pinned() {
         assert_eq!(
             size_of::<GpuLaunchDesc>(),
-            152,
+            160,
             "GpuLaunchDesc size drifted; update Cranelift desc_layout::DESC_SIZE in lockstep"
         );
         assert_eq!(align_of::<GpuLaunchDesc>(), 8);
@@ -969,9 +989,10 @@ mod desc_layout_tests {
         assert_eq!(offset_of!(GpuLaunchDesc, uniform_bound_present), 104);
         assert_eq!(offset_of!(GpuLaunchDesc, uniform_bound_x_value), 112);
         assert_eq!(offset_of!(GpuLaunchDesc, uniform_bound_y_value), 120);
-        assert_eq!(offset_of!(GpuLaunchDesc, num_storage_bufs), 128);
-        assert_eq!(offset_of!(GpuLaunchDesc, scalar_inputs_ptr), 136);
-        assert_eq!(offset_of!(GpuLaunchDesc, scalar_inputs_len), 144);
+        assert_eq!(offset_of!(GpuLaunchDesc, uniform_bound_z_value), 128);
+        assert_eq!(offset_of!(GpuLaunchDesc, num_storage_bufs), 136);
+        assert_eq!(offset_of!(GpuLaunchDesc, scalar_inputs_ptr), 144);
+        assert_eq!(offset_of!(GpuLaunchDesc, scalar_inputs_len), 152);
     }
 }
 

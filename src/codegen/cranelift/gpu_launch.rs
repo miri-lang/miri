@@ -125,10 +125,11 @@ mod desc_layout {
     pub(super) const UNIFORM_BOUND_PRESENT: i32 = 104;
     pub(super) const UNIFORM_BOUND_X_VALUE: i32 = 112;
     pub(super) const UNIFORM_BOUND_Y_VALUE: i32 = 120;
-    pub(super) const NUM_STORAGE_BUFS: i32 = 128;
-    pub(super) const SCALAR_INPUTS_PTR: i32 = 136;
-    pub(super) const SCALAR_INPUTS_LEN: i32 = 144;
-    pub(super) const DESC_SIZE: u32 = 152;
+    pub(super) const UNIFORM_BOUND_Z_VALUE: i32 = 128;
+    pub(super) const NUM_STORAGE_BUFS: i32 = 136;
+    pub(super) const SCALAR_INPUTS_PTR: i32 = 144;
+    pub(super) const SCALAR_INPUTS_LEN: i32 = 152;
+    pub(super) const DESC_SIZE: u32 = 160;
 }
 
 /// Field offsets within `runtime::core::MiriArray` (`repr(C)`):
@@ -155,6 +156,7 @@ pub(crate) fn translate(
     _scalar_args: &[Operand],
     uniform_bound_x: &Option<Box<Operand>>,
     uniform_bound_y: &Option<Box<Operand>>,
+    uniform_bound_z: &Option<Box<Operand>>,
     locals: &HashMap<Local, cranelift_frontend::Variable>,
     type_ctx: &TypeCtx,
 ) -> Result<(), CodegenError> {
@@ -290,6 +292,24 @@ pub(crate) fn translate(
             zero_i64,
             slots.desc_addr,
             desc_layout::UNIFORM_BOUND_Y_VALUE,
+        );
+    }
+
+    if let Some(bound_op) = uniform_bound_z {
+        let bound_value = read_operand_value(builder, bound_op, locals, type_ctx)?;
+        builder.ins().store(
+            MemFlags::new(),
+            bound_value,
+            slots.desc_addr,
+            desc_layout::UNIFORM_BOUND_Z_VALUE,
+        );
+        bound_present |= 4u64;
+    } else {
+        builder.ins().store(
+            MemFlags::new(),
+            zero_i64,
+            slots.desc_addr,
+            desc_layout::UNIFORM_BOUND_Z_VALUE,
         );
     }
 
@@ -725,6 +745,6 @@ mod tests {
 
     #[test]
     fn gpu_launch_desc_size_matches_runtime() {
-        assert_eq!(desc_layout::DESC_SIZE as usize, 152);
+        assert_eq!(desc_layout::DESC_SIZE as usize, 160);
     }
 }

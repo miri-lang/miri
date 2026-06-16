@@ -15,7 +15,7 @@
 //!   bounds-check limit as a uniform buffer to the kernel.
 //!
 //! Other restrictions:
-//! - Only one loop variable is accepted (1D and 2D supported; 3D deferred to D5).
+//! - Accepts 1, 2, or 3 loop variables (1D, 2D, and 3D all supported).
 //! - The body may reference outer-scope variables whose types are GPU
 //!   buffers (`Array<T, N>`); all such captures are exposed as read-write
 //!   storage buffers.
@@ -62,9 +62,10 @@ pub fn lower_forall_gpu(
     match decls.len() {
         1 => lower_forall_gpu_1d(ctx, span, stmt_id, decls, iterable, body),
         2 => lower_forall_gpu_2d(ctx, span, stmt_id, decls, iterable, body),
+        3 => lower_forall_gpu_3d(ctx, span, stmt_id, decls, iterable, body),
         _ => Err(LoweringError::unsupported_expression(
             format!(
-                "forall: expected 1 or 2 loop variables, got {}",
+                "forall: expected 1, 2, or 3 loop variables, got {}",
                 decls.len()
             ),
             *span,
@@ -240,6 +241,134 @@ fn lower_forall_gpu_2d(
             end_y,
             range_type_x.clone(),
             range_type_y.clone(),
+            &captures,
+            *span,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn lower_forall_gpu_3d(
+    ctx: &mut LoweringContext,
+    span: &Span,
+    stmt_id: usize,
+    decls: &[VariableDeclaration],
+    iterable: &Expression,
+    body: &Statement,
+) -> Result<(), LoweringError> {
+    let ExpressionKind::Tuple(ranges) = &iterable.node else {
+        return Err(LoweringError::unsupported_expression(
+            "3D forall: expected a tuple of three ranges".to_string(),
+            *span,
+        ));
+    };
+    if ranges.len() != 3 {
+        return Err(LoweringError::unsupported_expression(
+            format!("3D forall: expected exactly 3 ranges, got {}", ranges.len()),
+            *span,
+        ));
+    }
+
+    let ExpressionKind::Range(start_x, Some(end_x), range_type_x) = &ranges[0].node else {
+        return Err(LoweringError::unsupported_expression(
+            "3D forall: first range must be a bounded numeric range".to_string(),
+            *span,
+        ));
+    };
+    let ExpressionKind::Range(start_y, Some(end_y), range_type_y) = &ranges[1].node else {
+        return Err(LoweringError::unsupported_expression(
+            "3D forall: second range must be a bounded numeric range".to_string(),
+            *span,
+        ));
+    };
+    let ExpressionKind::Range(start_z, Some(end_z), range_type_z) = &ranges[2].node else {
+        return Err(LoweringError::unsupported_expression(
+            "3D forall: third range must be a bounded numeric range".to_string(),
+            *span,
+        ));
+    };
+
+    let start_x_lit = read_int_literal(start_x, *span)?;
+    let start_y_lit = read_int_literal(start_y, *span)?;
+    let start_z_lit = read_int_literal(start_z, *span)?;
+
+    let is_x_literal = matches!(&end_x.node, ExpressionKind::Literal(Literal::Integer(_)));
+    let is_y_literal = matches!(&end_y.node, ExpressionKind::Literal(Literal::Integer(_)));
+    let is_z_literal = matches!(&end_z.node, ExpressionKind::Literal(Literal::Integer(_)));
+
+    let loop_var_x = decls[0].name.clone();
+    let loop_var_y = decls[1].name.clone();
+    let loop_var_z = decls[2].name.clone();
+
+    let captures = collect_capture_infos(ctx, body, &loop_var_x, *span)?;
+    let kernel_name = format!("miri_gpu_for_3d_{}", stmt_id);
+
+    if is_x_literal && is_y_literal && is_z_literal {
+        let end_x_lit = read_int_literal(end_x, *span)?;
+        let end_y_lit = read_int_literal(end_y, *span)?;
+        let end_z_lit = read_int_literal(end_z, *span)?;
+        let width = compute_range_length(start_x_lit, end_x_lit, range_type_x.clone(), *span)?;
+        let height = compute_range_length(start_y_lit, end_y_lit, range_type_y.clone(), *span)?;
+        let depth = compute_range_length(start_z_lit, end_z_lit, range_type_z.clone(), *span)?;
+
+        let kernel_body = build_kernel_body_3d_literal(
+            ctx,
+            Kernel3DContext {
+                captures: &captures,
+                loop_var_x: &loop_var_x,
+                loop_var_y: &loop_var_y,
+                loop_var_z: &loop_var_z,
+                start_x: start_x_lit,
+                start_y: start_y_lit,
+                start_z: start_z_lit,
+                width,
+                height,
+                depth,
+                body,
+                span: *span,
+            },
+        )?;
+
+        ctx.lambda_bodies.push(LambdaInfo {
+            name: kernel_name.clone(),
+            body: kernel_body,
+            captures: Vec::new(),
+        });
+
+        emit_gpu_launch_3d_literal(ctx, &kernel_name, width, height, depth, &captures, *span);
+    } else {
+        let kernel_body = build_kernel_body_3d_runtime(
+            ctx,
+            &captures,
+            &loop_var_x,
+            &loop_var_y,
+            &loop_var_z,
+            start_x_lit,
+            start_y_lit,
+            start_z_lit,
+            body,
+            *span,
+        )?;
+
+        ctx.lambda_bodies.push(LambdaInfo {
+            name: kernel_name.clone(),
+            body: kernel_body,
+            captures: Vec::new(),
+        });
+
+        emit_gpu_launch_3d_runtime(
+            ctx,
+            &kernel_name,
+            start_x_lit,
+            start_y_lit,
+            start_z_lit,
+            end_x,
+            end_y,
+            end_z,
+            range_type_x.clone(),
+            range_type_y.clone(),
+            range_type_z.clone(),
             &captures,
             *span,
         )?;
@@ -989,6 +1118,7 @@ pub fn emit_gpu_launch_literal(
             scalar_args: scalar_ops,
             uniform_bound_x: None,
             uniform_bound_y: None,
+            uniform_bound_z: None,
             destination: Place::new(dest_local),
             target: Some(after_bb),
         },
@@ -1376,6 +1506,7 @@ pub fn emit_gpu_launch_runtime(
             scalar_args: scalar_ops,
             uniform_bound_x: Some(Box::new(end_op)),
             uniform_bound_y: None,
+            uniform_bound_z: None,
             destination: Place::new(dest_local),
             target: Some(after_bb),
         },
@@ -1416,6 +1547,21 @@ struct Kernel2DContext<'a> {
     start_y: i64,
     width: i64,
     height: i64,
+    body: &'a Statement,
+    span: Span,
+}
+
+struct Kernel3DContext<'a> {
+    captures: &'a [CaptureInfo],
+    loop_var_x: &'a str,
+    loop_var_y: &'a str,
+    loop_var_z: &'a str,
+    start_x: i64,
+    start_y: i64,
+    start_z: i64,
+    width: i64,
+    height: i64,
+    depth: i64,
     body: &'a Statement,
     span: Span,
 }
@@ -1669,6 +1815,7 @@ fn emit_gpu_launch_2d_literal(
             scalar_args: scalar_ops,
             uniform_bound_x: None,
             uniform_bound_y: None,
+            uniform_bound_z: None,
             destination: Place::new(dest_local),
             target: Some(after_bb),
         },
@@ -1979,6 +2126,7 @@ fn emit_gpu_launch_2d_runtime(
             scalar_args: scalar_ops,
             uniform_bound_x: Some(Box::new(end_x_op)),
             uniform_bound_y: Some(Box::new(end_y_op)),
+            uniform_bound_z: None,
             destination: Place::new(dest_local),
             target: Some(after_bb),
         },
@@ -2152,6 +2300,836 @@ pub fn needs_int_narrowing(ty: &Type) -> bool {
             Some(TypeKind::Int | TypeKind::I64)
         )
     })
+}
+
+fn build_kernel_body_3d_literal(
+    parent: &mut LoweringContext,
+    ctx: Kernel3DContext,
+) -> Result<Body, LoweringError> {
+    const BLOCK_SIZE_X: u32 = 8;
+    const BLOCK_SIZE_Y: u32 = 8;
+    const BLOCK_SIZE_Z: u32 = 4;
+
+    let (buffer_captures, scalar_captures): (Vec<_>, Vec<_>) =
+        ctx.captures.iter().partition(|c| !c.is_scalar);
+
+    let arg_count = ctx.captures.len();
+    let mut kernel = Body::new(arg_count, ctx.span, ExecutionModel::GpuKernel);
+    kernel.local_decls.push(LocalDecl::new(
+        Type::new(TypeKind::Void, ctx.span),
+        ctx.span,
+    ));
+
+    let grid_x_u32 = literal_grid_dim(ctx.width, BLOCK_SIZE_X);
+    let grid_y_u32 = literal_grid_dim(ctx.height, BLOCK_SIZE_Y);
+    let grid_z_u32 = literal_grid_dim(ctx.depth, BLOCK_SIZE_Z);
+
+    kernel.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
+        workgroup_size: Some([BLOCK_SIZE_X, BLOCK_SIZE_Y, BLOCK_SIZE_Z]),
+        grid_size: Some([grid_x_u32, grid_y_u32, grid_z_u32]),
+        required_capabilities: Vec::new(),
+        is_frame_step: false,
+    }));
+    let mut out_params: Vec<bool> = buffer_captures.iter().map(|c| c.is_written).collect();
+    out_params.extend(scalar_captures.iter().map(|_| false));
+    kernel.out_params = out_params;
+
+    let mut lower_ctx = LoweringContext::new(kernel, parent.type_checker, parent.is_release);
+    for cap in buffer_captures {
+        let local = lower_ctx.push_param(cap.name.clone(), cap.ty.clone(), ctx.span);
+        lower_ctx.body.local_decls[local.0].storage_class = StorageClass::GpuGlobal;
+    }
+    for cap in scalar_captures {
+        let local = lower_ctx.push_param(cap.name.clone(), cap.ty.clone(), ctx.span);
+        lower_ctx.body.local_decls[local.0].storage_class = StorageClass::UniformBuffer;
+    }
+
+    let i64_ty = Type::new(TypeKind::Int, ctx.span);
+    let thread_x = compute_thread_index(&mut lower_ctx, Dimension::X, ctx.span);
+    let thread_y = compute_thread_index(&mut lower_ctx, Dimension::Y, ctx.span);
+    let thread_z = compute_thread_index(&mut lower_ctx, Dimension::Z, ctx.span);
+
+    let x_local = lower_ctx.push_local(ctx.loop_var_x.to_string(), i64_ty.clone(), ctx.span);
+    push_assign(
+        &mut lower_ctx,
+        x_local,
+        Rvalue::BinaryOp(
+            BinOp::Add,
+            Box::new(Operand::Copy(Place::new(thread_x))),
+            Box::new(int_constant(ctx.start_x, ctx.span)),
+        ),
+        ctx.span,
+    );
+
+    let y_local = lower_ctx.push_local(ctx.loop_var_y.to_string(), i64_ty.clone(), ctx.span);
+    push_assign(
+        &mut lower_ctx,
+        y_local,
+        Rvalue::BinaryOp(
+            BinOp::Add,
+            Box::new(Operand::Copy(Place::new(thread_y))),
+            Box::new(int_constant(ctx.start_y, ctx.span)),
+        ),
+        ctx.span,
+    );
+
+    let z_local = lower_ctx.push_local(ctx.loop_var_z.to_string(), i64_ty.clone(), ctx.span);
+    push_assign(
+        &mut lower_ctx,
+        z_local,
+        Rvalue::BinaryOp(
+            BinOp::Add,
+            Box::new(Operand::Copy(Place::new(thread_z))),
+            Box::new(int_constant(ctx.start_z, ctx.span)),
+        ),
+        ctx.span,
+    );
+
+    let end_x = ctx
+        .start_x
+        .checked_add(ctx.width)
+        .ok_or_else(|| bounds_overflow_err(ctx.span))?;
+    let end_y = ctx
+        .start_y
+        .checked_add(ctx.height)
+        .ok_or_else(|| bounds_overflow_err(ctx.span))?;
+    let end_z = ctx
+        .start_z
+        .checked_add(ctx.depth)
+        .ok_or_else(|| bounds_overflow_err(ctx.span))?;
+
+    emit_3d_bounds_check_loop(
+        &mut lower_ctx,
+        x_local,
+        y_local,
+        z_local,
+        end_x,
+        end_y,
+        end_z,
+        ctx.body,
+        ctx.span,
+    )?;
+
+    Ok(lower_ctx.body)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_3d_bounds_check_loop(
+    ctx: &mut LoweringContext,
+    x_local: Local,
+    y_local: Local,
+    z_local: Local,
+    end_x: i64,
+    end_y: i64,
+    end_z: i64,
+    body: &Statement,
+    span: Span,
+) -> Result<(), LoweringError> {
+    let x_in_bounds = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
+    push_assign(
+        ctx,
+        x_in_bounds,
+        Rvalue::BinaryOp(
+            BinOp::Lt,
+            Box::new(Operand::Copy(Place::new(x_local))),
+            Box::new(int_constant(end_x, span)),
+        ),
+        span,
+    );
+
+    let y_in_bounds = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
+    push_assign(
+        ctx,
+        y_in_bounds,
+        Rvalue::BinaryOp(
+            BinOp::Lt,
+            Box::new(Operand::Copy(Place::new(y_local))),
+            Box::new(int_constant(end_y, span)),
+        ),
+        span,
+    );
+
+    let z_in_bounds = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
+    push_assign(
+        ctx,
+        z_in_bounds,
+        Rvalue::BinaryOp(
+            BinOp::Lt,
+            Box::new(Operand::Copy(Place::new(z_local))),
+            Box::new(int_constant(end_z, span)),
+        ),
+        span,
+    );
+
+    let xy_and_local = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
+    push_assign(
+        ctx,
+        xy_and_local,
+        Rvalue::BinaryOp(
+            BinOp::BitAnd,
+            Box::new(Operand::Copy(Place::new(x_in_bounds))),
+            Box::new(Operand::Copy(Place::new(y_in_bounds))),
+        ),
+        span,
+    );
+
+    let cond_local = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
+    push_assign(
+        ctx,
+        cond_local,
+        Rvalue::BinaryOp(
+            BinOp::BitAnd,
+            Box::new(Operand::Copy(Place::new(xy_and_local))),
+            Box::new(Operand::Copy(Place::new(z_in_bounds))),
+        ),
+        span,
+    );
+
+    let body_bb = ctx.new_basic_block();
+    let exit_bb = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::SwitchInt {
+            discr: Operand::Copy(Place::new(cond_local)),
+            targets: vec![(Discriminant::bool_true(), body_bb)],
+            otherwise: exit_bb,
+        },
+        span,
+    ));
+
+    ctx.set_current_block(body_bb);
+    lower_statement(ctx, body)?;
+    if ctx.body.basic_blocks[ctx.current_block.0]
+        .terminator
+        .is_none()
+    {
+        ctx.set_terminator(Terminator::new(
+            TerminatorKind::Goto { target: exit_bb },
+            span,
+        ));
+    }
+
+    ctx.set_current_block(exit_bb);
+    ctx.set_terminator(Terminator::new(TerminatorKind::Return, span));
+
+    Ok(())
+}
+
+fn emit_gpu_launch_3d_literal(
+    ctx: &mut LoweringContext,
+    kernel_name: &str,
+    width: i64,
+    height: i64,
+    depth: i64,
+    captures: &[CaptureInfo],
+    span: Span,
+) {
+    const BLOCK_SIZE_X: u32 = 8;
+    const BLOCK_SIZE_Y: u32 = 8;
+    const BLOCK_SIZE_Z: u32 = 4;
+    let dim3_ty = Type::new(TypeKind::Custom(DIM3_TYPE_NAME.to_string(), None), span);
+
+    let grid_x_u32 = literal_grid_dim(width, BLOCK_SIZE_X);
+    let grid_y_u32 = literal_grid_dim(height, BLOCK_SIZE_Y);
+    let grid_z_u32 = literal_grid_dim(depth, BLOCK_SIZE_Z);
+
+    let grid_x_op = int_constant(i64::from(grid_x_u32), span);
+    let grid_y_op = int_constant(i64::from(grid_y_u32), span);
+    let grid_z_op = int_constant(i64::from(grid_z_u32), span);
+
+    let grid_local = ctx.push_temp(dim3_ty.clone(), span);
+    push_assign(
+        ctx,
+        grid_local,
+        Rvalue::Aggregate(
+            AggregateKind::Struct(dim3_ty.clone()),
+            vec![grid_x_op, grid_y_op, grid_z_op],
+        ),
+        span,
+    );
+
+    let block_x_op = int_constant(i64::from(BLOCK_SIZE_X), span);
+    let block_y_op = int_constant(i64::from(BLOCK_SIZE_Y), span);
+    let block_z_op = int_constant(i64::from(BLOCK_SIZE_Z), span);
+    let block_local = ctx.push_temp(dim3_ty.clone(), span);
+    push_assign(
+        ctx,
+        block_local,
+        Rvalue::Aggregate(
+            AggregateKind::Struct(dim3_ty.clone()),
+            vec![block_x_op, block_y_op, block_z_op],
+        ),
+        span,
+    );
+
+    let kernel_op = Operand::Constant(Box::new(Constant {
+        span,
+        ty: Type::new(TypeKind::Identifier, span),
+        literal: Literal::Identifier(kernel_name.to_string()),
+    }));
+
+    let (buffer_captures, scalar_captures): (Vec<_>, Vec<_>) =
+        captures.iter().partition(|c| !c.is_scalar);
+
+    let buffer_ops: Vec<Operand> = buffer_captures
+        .iter()
+        .map(|c| Operand::Copy(Place::new(c.outer_local)))
+        .collect();
+    let scalar_ops: Vec<Operand> = scalar_captures
+        .iter()
+        .map(|c| Operand::Copy(Place::new(c.outer_local)))
+        .collect();
+
+    let arg_handles: Vec<Option<DeviceHandleId>> = buffer_captures
+        .iter()
+        .map(|c| ctx.body.local_decls[c.outer_local.0].device_handle)
+        .collect();
+    let arg_int_narrow: Vec<bool> = buffer_captures
+        .iter()
+        .map(|c| needs_int_narrowing(&c.ty))
+        .collect();
+
+    let void_ty = Type::new(TypeKind::Void, span);
+    let dest_local = ctx.push_temp(void_ty, span);
+    let after_bb = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::GpuLaunch {
+            kernel: kernel_op,
+            grid: Operand::Copy(Place::new(grid_local)),
+            block: Operand::Copy(Place::new(block_local)),
+            args: buffer_ops,
+            arg_handles,
+            arg_read_only: buffer_captures.iter().map(|c| !c.is_written).collect(),
+            arg_int_narrow,
+            scalar_args: scalar_ops,
+            uniform_bound_x: None,
+            uniform_bound_y: None,
+            uniform_bound_z: None,
+            destination: Place::new(dest_local),
+            target: Some(after_bb),
+        },
+        span,
+    ));
+    ctx.set_current_block(after_bb);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_kernel_body_3d_runtime(
+    parent: &mut LoweringContext,
+    captures: &[CaptureInfo],
+    loop_var_x: &str,
+    loop_var_y: &str,
+    loop_var_z: &str,
+    start_x: i64,
+    start_y: i64,
+    start_z: i64,
+    body: &Statement,
+    span: Span,
+) -> Result<Body, LoweringError> {
+    const BLOCK_SIZE_X: u32 = 8;
+    const BLOCK_SIZE_Y: u32 = 8;
+    const BLOCK_SIZE_Z: u32 = 4;
+
+    let (buffer_captures, scalar_captures): (Vec<_>, Vec<_>) =
+        captures.iter().partition(|c| !c.is_scalar);
+
+    let arg_count = captures.len() + 3;
+    let mut kernel = Body::new(arg_count, span, ExecutionModel::GpuKernel);
+    kernel
+        .local_decls
+        .push(LocalDecl::new(Type::new(TypeKind::Void, span), span));
+
+    kernel.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
+        workgroup_size: Some([BLOCK_SIZE_X, BLOCK_SIZE_Y, BLOCK_SIZE_Z]),
+        grid_size: None,
+        required_capabilities: Vec::new(),
+        is_frame_step: false,
+    }));
+
+    let mut out_params: Vec<bool> = buffer_captures.iter().map(|c| c.is_written).collect();
+    out_params.extend(scalar_captures.iter().map(|_| false));
+    out_params.push(false);
+    out_params.push(false);
+    out_params.push(false);
+    kernel.out_params = out_params;
+
+    let mut ctx = LoweringContext::new(kernel, parent.type_checker, parent.is_release);
+
+    for cap in buffer_captures {
+        let local = ctx.push_param(cap.name.clone(), cap.ty.clone(), span);
+        ctx.body.local_decls[local.0].storage_class = StorageClass::GpuGlobal;
+    }
+
+    for cap in scalar_captures {
+        let local = ctx.push_param(cap.name.clone(), cap.ty.clone(), span);
+        ctx.body.local_decls[local.0].storage_class = StorageClass::UniformBuffer;
+    }
+
+    let i64_ty = Type::new(TypeKind::Int, span);
+    let uniform_x_param = ctx.push_param("_bound_x".to_string(), i64_ty.clone(), span);
+    ctx.body.local_decls[uniform_x_param.0].storage_class = StorageClass::UniformBuffer;
+
+    let uniform_y_param = ctx.push_param("_bound_y".to_string(), i64_ty.clone(), span);
+    ctx.body.local_decls[uniform_y_param.0].storage_class = StorageClass::UniformBuffer;
+
+    let uniform_z_param = ctx.push_param("_bound_z".to_string(), i64_ty.clone(), span);
+    ctx.body.local_decls[uniform_z_param.0].storage_class = StorageClass::UniformBuffer;
+
+    let thread_x = compute_thread_index(&mut ctx, Dimension::X, span);
+    let thread_y = compute_thread_index(&mut ctx, Dimension::Y, span);
+    let thread_z = compute_thread_index(&mut ctx, Dimension::Z, span);
+
+    let x_local = ctx.push_local(loop_var_x.to_string(), i64_ty.clone(), span);
+    push_assign(
+        &mut ctx,
+        x_local,
+        Rvalue::BinaryOp(
+            BinOp::Add,
+            Box::new(Operand::Copy(Place::new(thread_x))),
+            Box::new(int_constant(start_x, span)),
+        ),
+        span,
+    );
+
+    let y_local = ctx.push_local(loop_var_y.to_string(), i64_ty.clone(), span);
+    push_assign(
+        &mut ctx,
+        y_local,
+        Rvalue::BinaryOp(
+            BinOp::Add,
+            Box::new(Operand::Copy(Place::new(thread_y))),
+            Box::new(int_constant(start_y, span)),
+        ),
+        span,
+    );
+
+    let z_local = ctx.push_local(loop_var_z.to_string(), i64_ty.clone(), span);
+    push_assign(
+        &mut ctx,
+        z_local,
+        Rvalue::BinaryOp(
+            BinOp::Add,
+            Box::new(Operand::Copy(Place::new(thread_z))),
+            Box::new(int_constant(start_z, span)),
+        ),
+        span,
+    );
+
+    emit_3d_bounds_check_loop_runtime(
+        &mut ctx,
+        x_local,
+        y_local,
+        z_local,
+        uniform_x_param,
+        uniform_y_param,
+        uniform_z_param,
+        body,
+        span,
+    )?;
+
+    Ok(ctx.body)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_3d_bounds_check_loop_runtime(
+    ctx: &mut LoweringContext,
+    x_local: Local,
+    y_local: Local,
+    z_local: Local,
+    uniform_x_param: Local,
+    uniform_y_param: Local,
+    uniform_z_param: Local,
+    body: &Statement,
+    span: Span,
+) -> Result<(), LoweringError> {
+    let i64_ty = Type::new(TypeKind::Int, span);
+
+    let uniform_x_cast_local = ctx.push_temp(i64_ty.clone(), span);
+    push_assign(
+        ctx,
+        uniform_x_cast_local,
+        Rvalue::Cast(
+            Box::new(Operand::Copy(Place::new(uniform_x_param))),
+            i64_ty.clone(),
+        ),
+        span,
+    );
+
+    let uniform_y_cast_local = ctx.push_temp(i64_ty.clone(), span);
+    push_assign(
+        ctx,
+        uniform_y_cast_local,
+        Rvalue::Cast(
+            Box::new(Operand::Copy(Place::new(uniform_y_param))),
+            i64_ty.clone(),
+        ),
+        span,
+    );
+
+    let uniform_z_cast_local = ctx.push_temp(i64_ty.clone(), span);
+    push_assign(
+        ctx,
+        uniform_z_cast_local,
+        Rvalue::Cast(
+            Box::new(Operand::Copy(Place::new(uniform_z_param))),
+            i64_ty.clone(),
+        ),
+        span,
+    );
+
+    let x_in_bounds = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
+    push_assign(
+        ctx,
+        x_in_bounds,
+        Rvalue::BinaryOp(
+            BinOp::Lt,
+            Box::new(Operand::Copy(Place::new(x_local))),
+            Box::new(Operand::Copy(Place::new(uniform_x_cast_local))),
+        ),
+        span,
+    );
+
+    let y_in_bounds = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
+    push_assign(
+        ctx,
+        y_in_bounds,
+        Rvalue::BinaryOp(
+            BinOp::Lt,
+            Box::new(Operand::Copy(Place::new(y_local))),
+            Box::new(Operand::Copy(Place::new(uniform_y_cast_local))),
+        ),
+        span,
+    );
+
+    let z_in_bounds = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
+    push_assign(
+        ctx,
+        z_in_bounds,
+        Rvalue::BinaryOp(
+            BinOp::Lt,
+            Box::new(Operand::Copy(Place::new(z_local))),
+            Box::new(Operand::Copy(Place::new(uniform_z_cast_local))),
+        ),
+        span,
+    );
+
+    let xy_and_local = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
+    push_assign(
+        ctx,
+        xy_and_local,
+        Rvalue::BinaryOp(
+            BinOp::BitAnd,
+            Box::new(Operand::Copy(Place::new(x_in_bounds))),
+            Box::new(Operand::Copy(Place::new(y_in_bounds))),
+        ),
+        span,
+    );
+
+    let cond_local = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
+    push_assign(
+        ctx,
+        cond_local,
+        Rvalue::BinaryOp(
+            BinOp::BitAnd,
+            Box::new(Operand::Copy(Place::new(xy_and_local))),
+            Box::new(Operand::Copy(Place::new(z_in_bounds))),
+        ),
+        span,
+    );
+
+    let body_bb = ctx.new_basic_block();
+    let exit_bb = ctx.new_basic_block();
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::SwitchInt {
+            discr: Operand::Copy(Place::new(cond_local)),
+            targets: vec![(Discriminant::bool_true(), body_bb)],
+            otherwise: exit_bb,
+        },
+        span,
+    ));
+
+    ctx.set_current_block(body_bb);
+    lower_statement(ctx, body)?;
+    if ctx.body.basic_blocks[ctx.current_block.0]
+        .terminator
+        .is_none()
+    {
+        ctx.set_terminator(Terminator::new(
+            TerminatorKind::Goto { target: exit_bb },
+            span,
+        ));
+    }
+
+    ctx.set_current_block(exit_bb);
+    ctx.set_terminator(Terminator::new(TerminatorKind::Return, span));
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_gpu_launch_3d_runtime(
+    ctx: &mut LoweringContext,
+    kernel_name: &str,
+    start_x: i64,
+    start_y: i64,
+    start_z: i64,
+    end_x: &Expression,
+    end_y: &Expression,
+    end_z: &Expression,
+    range_type_x: RangeExpressionType,
+    range_type_y: RangeExpressionType,
+    range_type_z: RangeExpressionType,
+    captures: &[CaptureInfo],
+    span: Span,
+) -> Result<(), LoweringError> {
+    const BLOCK_SIZE_X: u32 = 8;
+    const BLOCK_SIZE_Y: u32 = 8;
+    const BLOCK_SIZE_Z: u32 = 4;
+
+    let mut end_x_op = lower_expression(ctx, end_x, None)?;
+    if range_type_x == RangeExpressionType::Inclusive {
+        let i64_ty = Type::new(TypeKind::Int, span);
+        let end_x_plus_one_local = ctx.push_temp(i64_ty, span);
+        push_assign(
+            ctx,
+            end_x_plus_one_local,
+            Rvalue::BinaryOp(
+                BinOp::Add,
+                Box::new(end_x_op),
+                Box::new(int_constant(1, span)),
+            ),
+            span,
+        );
+        end_x_op = Operand::Copy(Place::new(end_x_plus_one_local));
+    }
+
+    let mut end_y_op = lower_expression(ctx, end_y, None)?;
+    if range_type_y == RangeExpressionType::Inclusive {
+        let i64_ty = Type::new(TypeKind::Int, span);
+        let end_y_plus_one_local = ctx.push_temp(i64_ty, span);
+        push_assign(
+            ctx,
+            end_y_plus_one_local,
+            Rvalue::BinaryOp(
+                BinOp::Add,
+                Box::new(end_y_op),
+                Box::new(int_constant(1, span)),
+            ),
+            span,
+        );
+        end_y_op = Operand::Copy(Place::new(end_y_plus_one_local));
+    }
+
+    let mut end_z_op = lower_expression(ctx, end_z, None)?;
+    if range_type_z == RangeExpressionType::Inclusive {
+        let i64_ty = Type::new(TypeKind::Int, span);
+        let end_z_plus_one_local = ctx.push_temp(i64_ty, span);
+        push_assign(
+            ctx,
+            end_z_plus_one_local,
+            Rvalue::BinaryOp(
+                BinOp::Add,
+                Box::new(end_z_op),
+                Box::new(int_constant(1, span)),
+            ),
+            span,
+        );
+        end_z_op = Operand::Copy(Place::new(end_z_plus_one_local));
+    }
+
+    end_x_op = materialize_operand_to_local(ctx, end_x_op, span);
+    end_y_op = materialize_operand_to_local(ctx, end_y_op, span);
+    end_z_op = materialize_operand_to_local(ctx, end_z_op, span);
+
+    let clamped_length_x = compute_clamped_length(ctx, end_x_op.clone(), start_x, span);
+    let clamped_length_y = compute_clamped_length(ctx, end_y_op.clone(), start_y, span);
+    let clamped_length_z = compute_clamped_length(ctx, end_z_op.clone(), start_z, span);
+
+    let grid_x = compute_grid_size_3d(ctx, clamped_length_x, BLOCK_SIZE_X, span);
+    let grid_y = compute_grid_size_3d(ctx, clamped_length_y, BLOCK_SIZE_Y, span);
+    let grid_z = compute_grid_size_3d(ctx, clamped_length_z, BLOCK_SIZE_Z, span);
+
+    let (grid_local, block_local) = build_dim3_descriptors_3d(
+        ctx,
+        grid_x,
+        grid_y,
+        grid_z,
+        BLOCK_SIZE_X,
+        BLOCK_SIZE_Y,
+        BLOCK_SIZE_Z,
+        span,
+    );
+
+    let kernel_op = Operand::Constant(Box::new(Constant {
+        span,
+        ty: Type::new(TypeKind::Identifier, span),
+        literal: Literal::Identifier(kernel_name.to_string()),
+    }));
+
+    let (buffer_captures, scalar_captures): (Vec<_>, Vec<_>) =
+        captures.iter().partition(|c| !c.is_scalar);
+
+    let buffer_ops: Vec<Operand> = buffer_captures
+        .iter()
+        .map(|c| Operand::Copy(Place::new(c.outer_local)))
+        .collect();
+    let scalar_ops: Vec<Operand> = scalar_captures
+        .iter()
+        .map(|c| Operand::Copy(Place::new(c.outer_local)))
+        .collect();
+
+    let arg_handles: Vec<Option<DeviceHandleId>> = buffer_captures
+        .iter()
+        .map(|c| ctx.body.local_decls[c.outer_local.0].device_handle)
+        .collect();
+    let arg_int_narrow: Vec<bool> = buffer_captures
+        .iter()
+        .map(|c| needs_int_narrowing(&c.ty))
+        .collect();
+
+    let void_ty = Type::new(TypeKind::Void, span);
+    let dest_local = ctx.push_temp(void_ty, span);
+    let after_bb = ctx.new_basic_block();
+
+    ctx.set_terminator(Terminator::new(
+        TerminatorKind::GpuLaunch {
+            kernel: kernel_op,
+            grid: Operand::Copy(Place::new(grid_local)),
+            block: Operand::Copy(Place::new(block_local)),
+            args: buffer_ops,
+            arg_handles,
+            arg_read_only: buffer_captures.iter().map(|c| !c.is_written).collect(),
+            arg_int_narrow,
+            scalar_args: scalar_ops,
+            uniform_bound_x: Some(Box::new(end_x_op)),
+            uniform_bound_y: Some(Box::new(end_y_op)),
+            uniform_bound_z: Some(Box::new(end_z_op)),
+            destination: Place::new(dest_local),
+            target: Some(after_bb),
+        },
+        span,
+    ));
+    ctx.set_current_block(after_bb);
+    Ok(())
+}
+
+fn compute_grid_size_3d(
+    ctx: &mut LoweringContext,
+    clamped_length: Local,
+    block_size: u32,
+    span: Span,
+) -> Local {
+    let i64_ty = Type::new(TypeKind::Int, span);
+    let block_size_i64 = i64::from(block_size);
+
+    let grid_div_local = ctx.push_temp(i64_ty.clone(), span);
+    push_assign(
+        ctx,
+        grid_div_local,
+        Rvalue::BinaryOp(
+            BinOp::Div,
+            Box::new(Operand::Copy(Place::new(clamped_length))),
+            Box::new(int_constant(block_size_i64, span)),
+        ),
+        span,
+    );
+
+    let grid_rem_local = ctx.push_temp(i64_ty.clone(), span);
+    push_assign(
+        ctx,
+        grid_rem_local,
+        Rvalue::BinaryOp(
+            BinOp::Rem,
+            Box::new(Operand::Copy(Place::new(clamped_length))),
+            Box::new(int_constant(block_size_i64, span)),
+        ),
+        span,
+    );
+
+    let has_remainder_local = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
+    push_assign(
+        ctx,
+        has_remainder_local,
+        Rvalue::BinaryOp(
+            BinOp::Ne,
+            Box::new(Operand::Copy(Place::new(grid_rem_local))),
+            Box::new(int_constant(0, span)),
+        ),
+        span,
+    );
+
+    let has_remainder_i64_local = ctx.push_temp(i64_ty.clone(), span);
+    push_assign(
+        ctx,
+        has_remainder_i64_local,
+        Rvalue::Cast(
+            Box::new(Operand::Copy(Place::new(has_remainder_local))),
+            i64_ty.clone(),
+        ),
+        span,
+    );
+
+    let final_grid_local = ctx.push_temp(i64_ty, span);
+    push_assign(
+        ctx,
+        final_grid_local,
+        Rvalue::BinaryOp(
+            BinOp::Add,
+            Box::new(Operand::Copy(Place::new(grid_div_local))),
+            Box::new(Operand::Copy(Place::new(has_remainder_i64_local))),
+        ),
+        span,
+    );
+
+    final_grid_local
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_dim3_descriptors_3d(
+    ctx: &mut LoweringContext,
+    grid_x: Local,
+    grid_y: Local,
+    grid_z: Local,
+    block_size_x: u32,
+    block_size_y: u32,
+    block_size_z: u32,
+    span: Span,
+) -> (Local, Local) {
+    let dim3_ty = Type::new(TypeKind::Custom(DIM3_TYPE_NAME.to_string(), None), span);
+
+    let block_x_op = int_constant(i64::from(block_size_x), span);
+    let block_y_op = int_constant(i64::from(block_size_y), span);
+    let block_z_op = int_constant(i64::from(block_size_z), span);
+
+    let grid_local = ctx.push_temp(dim3_ty.clone(), span);
+    push_assign(
+        ctx,
+        grid_local,
+        Rvalue::Aggregate(
+            AggregateKind::Struct(dim3_ty.clone()),
+            vec![
+                Operand::Copy(Place::new(grid_x)),
+                Operand::Copy(Place::new(grid_y)),
+                Operand::Copy(Place::new(grid_z)),
+            ],
+        ),
+        span,
+    );
+
+    let block_local = ctx.push_temp(dim3_ty, span);
+    push_assign(
+        ctx,
+        block_local,
+        Rvalue::Aggregate(
+            AggregateKind::Struct(Type::new(
+                TypeKind::Custom(DIM3_TYPE_NAME.to_string(), None),
+                span,
+            )),
+            vec![block_x_op, block_y_op, block_z_op],
+        ),
+        span,
+    );
+
+    (grid_local, block_local)
 }
 
 #[cfg(test)]
