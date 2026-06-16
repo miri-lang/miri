@@ -176,6 +176,7 @@ impl fmt::Display for Terminator {
                 scalar_args: _,
                 uniform_bound_x: _,
                 uniform_bound_y: _,
+                uniform_bound_z: _,
                 destination,
                 target,
             } => {
@@ -261,11 +262,11 @@ pub enum TerminatorKind {
     /// The runtime packs them into a uniform struct buffer and passes it to
     /// the kernel at binding index `num_buffers + num_bound_uniforms`.
     ///
-    /// When `uniform_bound_x` or `uniform_bound_y` is `Some`, the kernel
-    /// bounds-check loop limit(s) are exposed as a uniform buffer (struct with
-    /// `w` and `h` fields) instead of compile-time constants. The runtime will
-    /// write the values to the uniform buffer before dispatch. For 1D loops,
-    /// only `uniform_bound_x` is used; for 2D loops, both may be used.
+    /// When `uniform_bound_x`, `uniform_bound_y`, or `uniform_bound_z` is `Some`, the kernel
+    /// bounds-check loop limit(s) are exposed as a uniform buffer instead of compile-time
+    /// constants. The runtime will write the values to the uniform buffer before dispatch.
+    /// For 1D loops, only `uniform_bound_x` is used; for 2D loops, both x and y may be used;
+    /// for 3D loops, all three may be used.
     GpuLaunch {
         kernel: Operand,
         grid: Operand,
@@ -292,12 +293,17 @@ pub enum TerminatorKind {
         scalar_args: Vec<Operand>,
         /// When present, an i64 operand containing the loop-bound limit value for the x axis.
         /// For 1D loops, this carries the single bound. For 2D loops, this is the width.
+        /// For 3D loops, this is the width.
         /// This is lowered to a uniform buffer in the kernel. When `None`, x bounds
         /// are compile-time constants.
         uniform_bound_x: Option<Box<Operand>>,
         /// When present, an i64 operand containing the loop-bound limit value for the y axis.
-        /// For 2D loops only; `None` for 1D loops or literal bounds.
+        /// For 2D loops only; for 3D loops, this is the height.
+        /// `None` for 1D loops or literal bounds.
         uniform_bound_y: Option<Box<Operand>>,
+        /// When present, an i64 operand containing the loop-bound limit value for the z axis.
+        /// For 3D loops only; `None` for 1D/2D loops or literal bounds.
+        uniform_bound_z: Option<Box<Operand>>,
         destination: Place,
         target: Option<BasicBlock>,
     },
