@@ -80,9 +80,9 @@ fn main()
 
 #[test]
 fn writing_to_captured_scalar_is_rejected() {
-    // A captured host scalar is a read-only uniform inside the kernel.
-    // Assigning to it in the loop body must be rejected during lowering.
-    assert_runtime_error(
+    // A captured outer scalar written inside a forall body is a loop-carried
+    // accumulator, which is rejected at type-check because forall requires order-independent iterations.
+    assert_compiler_error(
         "
 use system.gpu
 use system.collections.array
@@ -94,7 +94,7 @@ fn main()
         k = k + 1
         buf[i] = k
 ",
-        "captured scalar 'k' is read-only",
+        "loop-carried accumulator 'k'",
     );
 }
 

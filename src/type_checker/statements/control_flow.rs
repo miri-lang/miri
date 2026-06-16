@@ -40,10 +40,12 @@
 //! - Return type compatibility
 
 use crate::ast::factory::make_type;
+use crate::ast::statement;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
 use crate::error::syntax::Span;
 use crate::type_checker::context::{Context, SymbolInfo};
+use crate::type_checker::utils::is_residency_gated_buffer;
 use crate::type_checker::TypeChecker;
 
 impl TypeChecker {
@@ -213,6 +215,112 @@ impl TypeChecker {
         context.exit_scope();
     }
 
+    pub(crate) fn check_forall(
+        &mut self,
+        device: &AcceleratorTarget,
+        vars: &[VariableDeclaration],
+        iterable: &Expression,
+        body: &Statement,
+        context: &mut Context,
+        stmt_span: Span,
+    ) {
+        if let Some(accum_name) = detect_reduction(body, vars, context) {
+            self.report_error(
+                format!(
+                    "loop-carried accumulator '{}' makes 'forall' iterations order-dependent; \
+                    'forall' requires independent iterations (reductions are not yet supported)",
+                    accum_name
+                ),
+                stmt_span,
+            );
+            return;
+        }
+
+        let target = resolve_forall_device(body, *device, vars, context);
+
+        match target {
+            ForallTarget::Gpu => self.check_gpu_for(vars, iterable, body, context, stmt_span),
+            ForallTarget::Cpu => self.check_forall_cpu(vars, iterable, body, context),
+            ForallTarget::GpuRequiredButAbsent => {
+                self.check_gpu_for_captures(vars, body, context);
+                self.report_error(
+                    "'gpu forall' requires at least one gpu-resident buffer; none found (annotate data with 'gpu let')"
+                        .to_string(),
+                    stmt_span,
+                );
+            }
+        }
+    }
+
+    fn check_forall_cpu(
+        &mut self,
+        decls: &[VariableDeclaration],
+        iterable: &Expression,
+        body: &Statement,
+        context: &mut Context,
+    ) {
+        let iterable_type = self.infer_expression(iterable, context);
+        let element_type = self.get_iterable_element_type(&iterable_type, iterable.span);
+
+        context.enter_scope();
+        context.enter_loop();
+
+        self.bind_loop_variables(decls, &element_type, &iterable_type, iterable.span, context);
+
+        self.check_statement(body, context);
+
+        let unconsumed = context.get_unconsumed_linear_vars();
+        for (name, span) in unconsumed {
+            self.report_error(
+                format!("Linear variable '{}' must be consumed exactly once", name),
+                span,
+            );
+        }
+
+        context.exit_loop();
+        context.exit_scope();
+    }
+
+    fn check_gpu_for_3d(
+        &mut self,
+        decls: &[VariableDeclaration],
+        iterable: &Expression,
+        body: &Statement,
+        context: &mut Context,
+        _stmt_span: Span,
+    ) {
+        let ExpressionKind::Tuple(ranges) = &iterable.node else {
+            self.report_error(
+                "3D gpu forall requires three comma-separated ranges".to_string(),
+                iterable.span,
+            );
+            return;
+        };
+
+        if ranges.len() != 3 {
+            self.report_error(
+                "3D gpu forall requires exactly three ranges".to_string(),
+                iterable.span,
+            );
+            return;
+        }
+
+        if !self.validate_gpu_for_ranges_nd(ranges, 3, iterable.span, context) {
+            return;
+        }
+
+        context.enter_scope();
+        let outer_in_gpu = context.in_gpu_function;
+        context.in_gpu_function = true;
+        context.gpu_for_depth += 1;
+
+        self.bind_gpu_for_int_variables(decls, context);
+        self.check_statement(body, context);
+        self.check_gpu_for_captures(decls, body, context);
+
+        self.finalize_gpu_for_scope(context, outer_in_gpu);
+    }
+
     /// Type-checks a `gpu for <ident> in <range>` statement (1D) or
     /// `gpu for x, y in <range1>, <range2>` statement (2D).
     ///
@@ -240,13 +348,118 @@ impl TypeChecker {
         match decls.len() {
             1 => self.check_gpu_for_1d(decls, iterable, body, context, stmt_span),
             2 => self.check_gpu_for_2d(decls, iterable, body, context, stmt_span),
+            3 => self.check_gpu_for_3d(decls, iterable, body, context, stmt_span),
             _ => {
                 self.report_error(
-                    "gpu for requires 1 or 2 loop variables".to_string(),
+                    "gpu forall requires 1, 2, or 3 loop variables".to_string(),
                     stmt_span,
                 );
             }
         }
+    }
+
+    fn validate_gpu_for_ranges_nd(
+        &mut self,
+        ranges: &[Expression],
+        _dims: usize,
+        _iterable_span: Span,
+        context: &mut Context,
+    ) -> bool {
+        let dim_names = ["x", "y", "z"];
+
+        for (i, range_expr) in ranges.iter().enumerate() {
+            let ExpressionKind::Range(start, Some(end), range_type) = &range_expr.node else {
+                self.report_error(
+                    "'gpu forall' requires a bounded numeric range like 'a..b' or 'a..=b'"
+                        .to_string(),
+                    range_expr.span,
+                );
+                return false;
+            };
+            if !matches!(
+                range_type,
+                RangeExpressionType::Exclusive | RangeExpressionType::Inclusive
+            ) {
+                self.report_error(
+                    "'gpu forall' requires a bounded numeric range like 'a..b' or 'a..=b'"
+                        .to_string(),
+                    range_expr.span,
+                );
+                return false;
+            }
+            if !is_int_literal(start) {
+                self.report_error(
+                    format!(
+                        "'gpu forall' range {} start must be an Int literal",
+                        dim_names[i]
+                    ),
+                    range_expr.span,
+                );
+                return false;
+            }
+
+            let end_type = self.infer_expression(end, context);
+            if !matches!(end_type.kind, TypeKind::Int) {
+                self.report_error(
+                    format!(
+                        "'gpu forall' range {} end must be Int, got {}",
+                        dim_names[i], end_type.kind
+                    ),
+                    end.span,
+                );
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn bind_gpu_for_int_variables(&mut self, decls: &[VariableDeclaration], context: &mut Context) {
+        let int_type = make_type(TypeKind::Int);
+        for decl in decls {
+            let var_type = if let Some(type_expr) = &decl.typ {
+                let declared_type = self.resolve_type_expression(type_expr, context);
+                if !self.are_compatible(&declared_type, &int_type, context) {
+                    self.report_error(
+                        format!(
+                            "Type mismatch for loop variable '{}': expected Int, got {}",
+                            decl.name, declared_type
+                        ),
+                        type_expr.span,
+                    );
+                }
+                declared_type
+            } else {
+                int_type.clone()
+            };
+            let is_mutable = matches!(decl.declaration_type, VariableDeclarationType::Mutable);
+            context.define(
+                decl.name.clone(),
+                SymbolInfo::new(
+                    var_type,
+                    is_mutable,
+                    false,
+                    MemberVisibility::Public,
+                    self.current_module.clone(),
+                    None,
+                ),
+            );
+        }
+    }
+
+    fn finalize_gpu_for_scope(&mut self, context: &mut Context, outer_in_gpu: bool) {
+        context.gpu_for_depth -= 1;
+        context.in_gpu_function = outer_in_gpu;
+
+        let unconsumed = context.get_unconsumed_linear_vars();
+        for (name, span) in unconsumed {
+            self.report_error(
+                format!("Linear variable '{}' must be consumed exactly once", name),
+                span,
+            );
+        }
+
+        context.exit_scope();
     }
 
     fn check_gpu_for_1d(
@@ -282,8 +495,6 @@ impl TypeChecker {
             return;
         }
 
-        // End can be a runtime Int expression.
-        // Type-check it and validate it is Int or gpu-compatible.
         let end_type = self.infer_expression(end, context);
         if !matches!(end_type.kind, TypeKind::Int) {
             self.report_error(
@@ -293,30 +504,18 @@ impl TypeChecker {
             return;
         }
 
-        let iterable_type = self.infer_expression(iterable, context);
-        let element_type = self.get_iterable_element_type(&iterable_type, iterable.span);
-
         context.enter_scope();
         let outer_in_gpu = context.in_gpu_function;
         context.in_gpu_function = true;
         context.gpu_for_depth += 1;
 
+        let iterable_type = self.infer_expression(iterable, context);
+        let element_type = self.get_iterable_element_type(&iterable_type, iterable.span);
         self.bind_loop_variables(decls, &element_type, &iterable_type, iterable.span, context);
         self.check_statement(body, context);
         self.check_gpu_for_captures(decls, body, context);
 
-        context.gpu_for_depth -= 1;
-        context.in_gpu_function = outer_in_gpu;
-
-        let unconsumed = context.get_unconsumed_linear_vars();
-        for (name, span) in unconsumed {
-            self.report_error(
-                format!("Linear variable '{}' must be consumed exactly once", name),
-                span,
-            );
-        }
-
-        context.exit_scope();
+        self.finalize_gpu_for_scope(context, outer_in_gpu);
     }
 
     fn check_gpu_for_2d(
@@ -343,104 +542,20 @@ impl TypeChecker {
             return;
         }
 
-        // Type check both ranges
-        for (i, range_expr) in ranges.iter().enumerate() {
-            let ExpressionKind::Range(start, Some(end), range_type) = &range_expr.node else {
-                self.report_error(
-                    "'gpu forall' requires a bounded numeric range like 'a..b' or 'a..=b'"
-                        .to_string(),
-                    range_expr.span,
-                );
-                return;
-            };
-            if !matches!(
-                range_type,
-                RangeExpressionType::Exclusive | RangeExpressionType::Inclusive
-            ) {
-                self.report_error(
-                    "'gpu forall' requires a bounded numeric range like 'a..b' or 'a..=b'"
-                        .to_string(),
-                    range_expr.span,
-                );
-                return;
-            }
-            if !is_int_literal(start) {
-                self.report_error(
-                    format!(
-                        "'gpu forall' range {} start must be an Int literal",
-                        if i == 0 { "x" } else { "y" }
-                    ),
-                    range_expr.span,
-                );
-                return;
-            }
-
-            let end_type = self.infer_expression(end, context);
-            if !matches!(end_type.kind, TypeKind::Int) {
-                self.report_error(
-                    format!(
-                        "'gpu forall' range {} end must be Int, got {}",
-                        if i == 0 { "x" } else { "y" },
-                        end_type.kind
-                    ),
-                    end.span,
-                );
-                return;
-            }
+        if !self.validate_gpu_for_ranges_nd(ranges, 2, iterable.span, context) {
+            return;
         }
 
-        // Bind both loop variables as Int
         context.enter_scope();
         let outer_in_gpu = context.in_gpu_function;
         context.in_gpu_function = true;
         context.gpu_for_depth += 1;
 
-        let int_type = make_type(TypeKind::Int);
-        for decl in decls {
-            let var_type = if let Some(type_expr) = &decl.typ {
-                let declared_type = self.resolve_type_expression(type_expr, context);
-                if !self.are_compatible(&declared_type, &int_type, context) {
-                    self.report_error(
-                        format!(
-                            "Type mismatch for loop variable '{}': expected Int, got {}",
-                            decl.name, declared_type
-                        ),
-                        type_expr.span,
-                    );
-                }
-                declared_type
-            } else {
-                int_type.clone()
-            };
-            let is_mutable = matches!(decl.declaration_type, VariableDeclarationType::Mutable);
-            context.define(
-                decl.name.clone(),
-                SymbolInfo::new(
-                    var_type,
-                    is_mutable,
-                    false,
-                    MemberVisibility::Public,
-                    self.current_module.clone(),
-                    None,
-                ),
-            );
-        }
-
+        self.bind_gpu_for_int_variables(decls, context);
         self.check_statement(body, context);
         self.check_gpu_for_captures(decls, body, context);
 
-        context.gpu_for_depth -= 1;
-        context.in_gpu_function = outer_in_gpu;
-
-        let unconsumed = context.get_unconsumed_linear_vars();
-        for (name, span) in unconsumed {
-            self.report_error(
-                format!("Linear variable '{}' must be consumed exactly once", name),
-                span,
-            );
-        }
-
-        context.exit_scope();
+        self.finalize_gpu_for_scope(context, outer_in_gpu);
     }
 
     pub(crate) fn check_gpu_frame(
@@ -1475,4 +1590,123 @@ fn is_identifier_read_in_expr(
         | ExpressionKind::NamedArgument(_, _)
         | ExpressionKind::Super => false,
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ForallTarget {
+    Cpu,
+    Gpu,
+    GpuRequiredButAbsent,
+}
+
+fn scan_residencies(
+    captured: &std::collections::HashSet<String>,
+    context: &Context,
+) -> (bool, bool) {
+    let mut has_gpu = false;
+    let mut has_host = false;
+
+    for name in captured {
+        let Some(info) = context.resolve_info(name) else {
+            continue;
+        };
+
+        if matches!(info.ty.kind, TypeKind::Function(_)) {
+            continue;
+        }
+
+        match info.residency {
+            statement::BindingResidency::Host => {
+                if !is_scalar_type(&info.ty.kind) {
+                    has_host = true;
+                }
+            }
+            statement::BindingResidency::Gpu => {
+                has_gpu = true;
+            }
+        }
+    }
+
+    (has_gpu, has_host)
+}
+
+fn resolve_forall_device(
+    body: &Statement,
+    declared: AcceleratorTarget,
+    vars: &[VariableDeclaration],
+    context: &Context,
+) -> ForallTarget {
+    let mut bound: std::collections::HashSet<String> =
+        vars.iter().map(|d| d.name.clone()).collect();
+    let mut captured: std::collections::HashSet<String> = std::collections::HashSet::new();
+    collect_identifiers_in_stmt(body, &mut bound, &mut captured);
+
+    let (has_gpu, _has_host) = scan_residencies(&captured, context);
+
+    if matches!(declared, AcceleratorTarget::Gpu) {
+        if has_gpu {
+            ForallTarget::Gpu
+        } else {
+            ForallTarget::GpuRequiredButAbsent
+        }
+    } else if has_gpu {
+        ForallTarget::Gpu
+    } else {
+        // Host-only data (or no captured data) runs sequentially on the CPU.
+        ForallTarget::Cpu
+    }
+}
+
+fn detect_reduction(
+    body: &Statement,
+    vars: &[VariableDeclaration],
+    context: &Context,
+) -> Option<String> {
+    let written = collect_written_names_in_stmt(body);
+
+    let mut bound: std::collections::HashSet<String> =
+        vars.iter().map(|d| d.name.clone()).collect();
+    let mut captured: std::collections::HashSet<String> = std::collections::HashSet::new();
+    collect_identifiers_in_stmt(body, &mut bound, &mut captured);
+
+    for name in written.iter() {
+        if !captured.contains(name) {
+            continue;
+        }
+
+        let Some(info) = context.resolve_info(name) else {
+            continue;
+        };
+
+        if is_residency_gated_buffer(&info.ty.kind) {
+            continue;
+        }
+
+        if is_scalar_type(&info.ty.kind) {
+            return Some(name.clone());
+        }
+    }
+
+    None
+}
+
+fn is_scalar_type(kind: &TypeKind) -> bool {
+    matches!(
+        kind,
+        TypeKind::Int
+            | TypeKind::I8
+            | TypeKind::I16
+            | TypeKind::I32
+            | TypeKind::I64
+            | TypeKind::I128
+            | TypeKind::U8
+            | TypeKind::U16
+            | TypeKind::U32
+            | TypeKind::U64
+            | TypeKind::U128
+            | TypeKind::Float
+            | TypeKind::F32
+            | TypeKind::F64
+            | TypeKind::Boolean
+    )
 }

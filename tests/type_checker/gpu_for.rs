@@ -7,8 +7,12 @@ use super::utils::{type_checker_error_test, type_checker_test};
 fn test_gpu_for_basic_accepts_numeric_body() {
     type_checker_test(
         r#"
+use system.gpu
+use system.collections.array
+
+gpu var dst = [0, 0, 0, 0]
 gpu forall i in 0..4
-    let x = i + 1
+    dst[i] = i + 1
 "#,
     );
 }
@@ -18,9 +22,13 @@ fn test_gpu_for_accepts_variable_range_bound() {
     // Variable range bounds are supported (lowered to uniform buffers).
     type_checker_test(
         r#"
+use system.gpu
+use system.collections.array
+
 let n = 4
+gpu var dst = [0, 0, 0, 0]
 gpu forall i in 0..n
-    let x = i + 1
+    dst[i] = i + 1
 "#,
     );
 }
@@ -30,9 +38,13 @@ fn test_gpu_for_rejects_non_int_range_bound() {
     // The range end must be Int.
     type_checker_error_test(
         r#"
+use system.gpu
+use system.collections.array
+
 let s = "hello"
+gpu var dst = [0, 0, 0, 0]
 gpu forall i in 0..s
-    let x = i
+    dst[i] = i
 "#,
         "must be Int",
     );
@@ -43,8 +55,12 @@ fn test_gpu_for_rejects_print_in_body() {
     type_checker_error_test(
         r#"
 use system.io
+use system.gpu
+use system.collections.array
 
+gpu var dst = [0, 0, 0, 0]
 gpu forall i in 0..4
+    dst[i] = 0
     print("hi")
 "#,
         "not GPU-compatible",
@@ -55,7 +71,12 @@ gpu forall i in 0..4
 fn test_gpu_for_rejects_string_local_in_body() {
     type_checker_error_test(
         r#"
+use system.gpu
+use system.collections.array
+
+gpu var dst = [0, 0, 0, 0]
 gpu forall i in 0..4
+    dst[i] = i
     let s = "x"
 "#,
         "not GPU-compatible",
@@ -66,9 +87,13 @@ gpu forall i in 0..4
 fn test_gpu_for_rejects_non_range_iterable() {
     type_checker_error_test(
         r#"
+use system.gpu
+use system.collections.array
+
 let xs = [1, 2, 3]
+gpu var dst = [0, 0, 0, 0]
 gpu forall i in xs
-    let y = i
+    dst[i] = i
 "#,
         "bounded numeric range",
     );
@@ -78,8 +103,12 @@ gpu forall i in xs
 fn test_gpu_for_inclusive_range_accepted() {
     type_checker_test(
         r#"
+use system.gpu
+use system.collections.array
+
+gpu var dst = [0, 0, 0, 0]
 gpu forall i in 0..=3
-    let x = i + 1
+    dst[i] = i + 1
 "#,
     );
 }
@@ -88,7 +117,12 @@ gpu forall i in 0..=3
 fn test_gpu_for_rejects_break_in_body() {
     type_checker_error_test(
         r#"
+use system.gpu
+use system.collections.array
+
+gpu var dst = [0, 0, 0, 0]
 gpu forall i in 0..4
+    dst[i] = i
     break
 "#,
         "'break' is not supported inside a 'gpu forall' body",
@@ -99,7 +133,12 @@ gpu forall i in 0..4
 fn test_gpu_for_rejects_continue_in_body() {
     type_checker_error_test(
         r#"
+use system.gpu
+use system.collections.array
+
+gpu var dst = [0, 0, 0, 0]
 gpu forall i in 0..4
+    dst[i] = i
     continue
 "#,
         "'continue' is not supported inside a 'gpu forall' body",
@@ -110,7 +149,12 @@ gpu forall i in 0..4
 fn test_gpu_for_permits_break_in_nested_cpu_for() {
     type_checker_test(
         r#"
+use system.gpu
+use system.collections.array
+
+gpu var dst = [0, 0, 0, 0]
 gpu forall i in 0..4
+    dst[i] = i
     for j in 0..i
         if j > 0
             break

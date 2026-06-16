@@ -16,9 +16,9 @@ fn program_uses_gpu_finds_gpu_for_at_top_level() {
 use system.gpu
 use system.collections.array
 
-let dst = [0, 0, 0, 0]
+gpu var dst = [0, 0, 0, 0]
 gpu forall i in 0..4
-    let x = i
+    dst[i] = i
 "
     ));
 }
