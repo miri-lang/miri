@@ -543,9 +543,9 @@ pub fn captured_buffer_element(kind: &TypeKind) -> Option<Type> {
 /// `var<storage>` binding from a host `MiriArray`-shaped buffer: fixed-size
 /// `Array<T, N>` / `[T; N]`.
 ///
-/// Kept in lock-step with `gpu_for::is_gpu_buffer_capture` (the MIR predicate
+/// Kept in lock-step with `forall_gpu::is_gpu_buffer_capture` (the MIR predicate
 /// that decides what actually becomes a storage binding). `List<T>` is dynamic
-/// and has no fixed device storage layout — it can never be a `gpu for`
+/// and has no fixed device storage layout — it can never be a `gpu forall`
 /// capture, so annotating it with `gpu let` would not help; it is rejected as
 /// a non-buffer capture at MIR lowering instead.
 ///
@@ -601,7 +601,7 @@ fn extract_element_type(expr: &crate::ast::expression::Expression) -> Option<Typ
 
 // Re-export the shared element-type resolver from ast::types so it is available
 // to type checking code. The function is defined once in src/ast/types.rs to
-// prevent duplication with src/mir/lowering/gpu_for.rs.
+// prevent duplication with src/mir/lowering/forall_gpu.rs.
 pub use crate::ast::types::resolve_element_type_kind;
 
 /// Determines whether a type is auto-copy given available type definitions.
