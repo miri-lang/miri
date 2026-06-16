@@ -12,7 +12,7 @@
 //!
 //! The frame input fields (time, dt, index, mouse_x, mouse_y, mouse_down, drag_dx,
 //! drag_dy, wheel, clicked, double_clicked) are lowered as UniformBuffer parameters
-//! and accessed by name-based lookup in member_expr. Deduplication with gpu_for
+//! and accessed by name-based lookup in member_expr. Deduplication with forall_gpu
 //! kernel building logic is a future cleanup task.
 
 use crate::ast::expression::{Expression, ExpressionKind};
@@ -26,7 +26,7 @@ use crate::mir::{
 };
 
 use super::context::LoweringContext;
-use super::gpu_for;
+use super::forall_gpu;
 use super::statement::lower_statement;
 
 /// Lowers a single-pass `gpu frame` loop into a synthesized kernel + `GpuLaunch`.
@@ -50,13 +50,13 @@ pub fn lower_gpu_frame(
         ));
     };
 
-    let start_lit = gpu_for::read_int_literal(start, *span)?;
+    let start_lit = forall_gpu::read_int_literal(start, *span)?;
     let is_literal_end = matches!(
         &end.node,
         ExpressionKind::Literal(crate::ast::literal::Literal::Integer(_))
     );
 
-    let captures = gpu_for::collect_capture_infos(ctx, body, &loop_var_name, *span)?;
+    let captures = forall_gpu::collect_capture_infos(ctx, body, &loop_var_name, *span)?;
     let uses_frame = detect_frame_usage(body);
 
     // Single-pass uses emit_frame_pass with pass_idx=0.
@@ -141,13 +141,13 @@ pub fn lower_gpu_frame_block(
                 ));
             };
 
-            let start_lit = gpu_for::read_int_literal(start, *span)?;
+            let start_lit = forall_gpu::read_int_literal(start, *span)?;
             let is_literal_end = matches!(
                 &end.node,
                 ExpressionKind::Literal(crate::ast::literal::Literal::Integer(_))
             );
 
-            let captures = gpu_for::collect_capture_infos(ctx, body, &loop_var_name, *span)?;
+            let captures = forall_gpu::collect_capture_infos(ctx, body, &loop_var_name, *span)?;
             let uses_frame = detect_frame_usage(body);
 
             // Use emit_frame_pass for each pass in the block.
@@ -187,7 +187,7 @@ fn emit_frame_pass(
     is_literal_end: bool,
     end: &Expression,
     range_type: crate::ast::RangeExpressionType,
-    captures: &[gpu_for::CaptureInfo],
+    captures: &[forall_gpu::CaptureInfo],
     body: &Statement,
     uses_frame: bool,
 ) -> Result<(), LoweringError> {
@@ -197,8 +197,9 @@ fn emit_frame_pass(
     let kernel_name = format!("miri_gpu_for_{}_{}", frame_stmt_id, pass_idx);
 
     if is_literal_end {
-        let end_lit = gpu_for::read_int_literal(end, *span)?;
-        let length = gpu_for::compute_range_length(start_lit, end_lit, range_type.clone(), *span)?;
+        let end_lit = forall_gpu::read_int_literal(end, *span)?;
+        let length =
+            forall_gpu::compute_range_length(start_lit, end_lit, range_type.clone(), *span)?;
         let kernel_body = build_frame_kernel_literal(
             ctx,
             captures,
@@ -252,13 +253,13 @@ fn make_grid_block_locals(
     span: Span,
 ) -> (crate::mir::Local, crate::mir::Local) {
     let dim3_ty = Type::new(TypeKind::Custom("Dim3".to_string(), None), span);
-    let one_op = gpu_for::int_constant(1, span);
-    let grid_x_op = gpu_for::int_constant(i64::from(grid_x), span);
-    let block_size_i64 = i64::from(gpu_for::GPU_FOR_BLOCK_SIZE);
-    let block_x_op = gpu_for::int_constant(block_size_i64, span);
+    let one_op = forall_gpu::int_constant(1, span);
+    let grid_x_op = forall_gpu::int_constant(i64::from(grid_x), span);
+    let block_size_i64 = i64::from(forall_gpu::FORALL_GPU_BLOCK_SIZE);
+    let block_x_op = forall_gpu::int_constant(block_size_i64, span);
 
     let grid_local = ctx.push_temp(dim3_ty.clone(), span);
-    gpu_for::push_assign(
+    forall_gpu::push_assign(
         ctx,
         grid_local,
         Rvalue::Aggregate(
@@ -268,7 +269,7 @@ fn make_grid_block_locals(
         span,
     );
     let block_local = ctx.push_temp(dim3_ty.clone(), span);
-    gpu_for::push_assign(
+    forall_gpu::push_assign(
         ctx,
         block_local,
         Rvalue::Aggregate(
@@ -290,16 +291,16 @@ fn emit_literal_frame_bounds_check(
     span: Span,
 ) -> Result<(), LoweringError> {
     let i64_ty = Type::new(TypeKind::Int, span);
-    let thread_int = gpu_for::compute_thread_index(ctx, Dimension::X, span);
+    let thread_int = forall_gpu::compute_thread_index(ctx, Dimension::X, span);
 
     let loop_local = ctx.push_local(loop_var_name.to_string(), i64_ty, span);
-    gpu_for::push_assign(
+    forall_gpu::push_assign(
         ctx,
         loop_local,
         Rvalue::BinaryOp(
             BinOp::Add,
             Box::new(Operand::Copy(Place::new(thread_int))),
-            Box::new(gpu_for::int_constant(start, span)),
+            Box::new(forall_gpu::int_constant(start, span)),
         ),
         span,
     );
@@ -307,14 +308,14 @@ fn emit_literal_frame_bounds_check(
     let cond_local = ctx.push_temp(Type::new(TypeKind::Boolean, span), span);
     let limit = start
         .checked_add(length)
-        .ok_or_else(|| gpu_for::bounds_overflow_err(span))?;
-    gpu_for::push_assign(
+        .ok_or_else(|| forall_gpu::bounds_overflow_err(span))?;
+    forall_gpu::push_assign(
         ctx,
         cond_local,
         Rvalue::BinaryOp(
             BinOp::Lt,
             Box::new(Operand::Copy(Place::new(loop_local))),
-            Box::new(gpu_for::int_constant(limit, span)),
+            Box::new(forall_gpu::int_constant(limit, span)),
         ),
         span,
     );
@@ -359,13 +360,13 @@ fn compute_bounds_limit(
         crate::ast::RangeExpressionType::Exclusive => Ok(end_op),
         crate::ast::RangeExpressionType::Inclusive => {
             let limit_op = ctx.push_temp(i64_ty, span);
-            gpu_for::push_assign(
+            forall_gpu::push_assign(
                 ctx,
                 limit_op,
                 Rvalue::BinaryOp(
                     BinOp::Add,
                     Box::new(end_op),
-                    Box::new(gpu_for::int_constant(1, span)),
+                    Box::new(forall_gpu::int_constant(1, span)),
                 ),
                 span,
             );
@@ -385,12 +386,12 @@ fn make_grid_block_locals_from_local(
     span: Span,
 ) -> (crate::mir::Local, crate::mir::Local) {
     let dim3_ty = Type::new(TypeKind::Custom("Dim3".to_string(), None), span);
-    let one_op = gpu_for::int_constant(1, span);
-    let block_size_i64 = i64::from(gpu_for::GPU_FOR_BLOCK_SIZE);
-    let block_x_op = gpu_for::int_constant(block_size_i64, span);
+    let one_op = forall_gpu::int_constant(1, span);
+    let block_size_i64 = i64::from(forall_gpu::FORALL_GPU_BLOCK_SIZE);
+    let block_x_op = forall_gpu::int_constant(block_size_i64, span);
 
     let grid_local = ctx.push_temp(dim3_ty.clone(), span);
-    gpu_for::push_assign(
+    forall_gpu::push_assign(
         ctx,
         grid_local,
         Rvalue::Aggregate(
@@ -404,7 +405,7 @@ fn make_grid_block_locals_from_local(
         span,
     );
     let block_local = ctx.push_temp(dim3_ty.clone(), span);
-    gpu_for::push_assign(
+    forall_gpu::push_assign(
         ctx,
         block_local,
         Rvalue::Aggregate(
@@ -420,12 +421,12 @@ fn emit_gpu_frame_launch_literal(
     ctx: &mut LoweringContext,
     kernel_name: &str,
     length: i64,
-    captures: &[gpu_for::CaptureInfo],
+    captures: &[forall_gpu::CaptureInfo],
     span: Span,
     uses_frame: bool,
 ) {
     let void_ty = Type::new(TypeKind::Void, span);
-    let grid_x = gpu_for::literal_grid_x(length);
+    let grid_x = forall_gpu::literal_grid_x(length);
     let (grid_local, block_local) = make_grid_block_locals(ctx, grid_x, span);
 
     let kernel_op = Operand::Constant(Box::new(crate::mir::Constant {
@@ -452,7 +453,7 @@ fn emit_gpu_frame_launch_literal(
         .collect();
     let arg_int_narrow: Vec<bool> = buffer_captures
         .iter()
-        .map(|c| gpu_for::needs_int_narrowing(&c.ty))
+        .map(|c| forall_gpu::needs_int_narrowing(&c.ty))
         .collect();
 
     let mut all_scalar_ops = Vec::new();
@@ -490,7 +491,7 @@ fn emit_gpu_frame_launch_runtime(
     start: i64,
     end: &Expression,
     range_type: crate::ast::RangeExpressionType,
-    captures: &[gpu_for::CaptureInfo],
+    captures: &[forall_gpu::CaptureInfo],
     span: Span,
     uses_frame: bool,
 ) -> Result<(), LoweringError> {
@@ -498,8 +499,8 @@ fn emit_gpu_frame_launch_runtime(
 
     let void_ty = Type::new(TypeKind::Void, span);
 
-    let clamped_length_local = gpu_for::compute_clamped_length(ctx, end_op.clone(), start, span);
-    let grid_x_local = gpu_for::compute_grid_size(ctx, clamped_length_local, span);
+    let clamped_length_local = forall_gpu::compute_clamped_length(ctx, end_op.clone(), start, span);
+    let grid_x_local = forall_gpu::compute_grid_size(ctx, clamped_length_local, span);
     let grid_x = crate::mir::Local(grid_x_local.0);
     let (grid_local, block_local) = make_grid_block_locals_from_local(ctx, grid_x, span);
 
@@ -527,7 +528,7 @@ fn emit_gpu_frame_launch_runtime(
         .collect();
     let arg_int_narrow: Vec<bool> = buffer_captures
         .iter()
-        .map(|c| gpu_for::needs_int_narrowing(&c.ty))
+        .map(|c| forall_gpu::needs_int_narrowing(&c.ty))
         .collect();
 
     let mut all_scalar_ops = Vec::new();
@@ -604,7 +605,7 @@ fn create_zero_local(ctx: &mut LoweringContext, ty: Type, span: Span) -> Operand
         }))
     };
     let temp = ctx.push_temp(ty, span);
-    gpu_for::push_assign(ctx, temp, Rvalue::Use(zero), span);
+    forall_gpu::push_assign(ctx, temp, Rvalue::Use(zero), span);
     Operand::Copy(Place::new(temp))
 }
 
@@ -710,7 +711,7 @@ fn detect_frame_usage_expr(expr: &Expression) -> bool {
 #[allow(clippy::too_many_arguments)]
 fn build_frame_kernel_literal(
     parent: &mut LoweringContext,
-    captures: &[gpu_for::CaptureInfo],
+    captures: &[forall_gpu::CaptureInfo],
     loop_var_name: &str,
     start: i64,
     length: i64,
@@ -728,9 +729,9 @@ fn build_frame_kernel_literal(
         .local_decls
         .push(LocalDecl::new(Type::new(TypeKind::Void, span), span));
 
-    let grid_x = gpu_for::literal_grid_x(length);
+    let grid_x = forall_gpu::literal_grid_x(length);
     kernel.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
-        workgroup_size: Some([gpu_for::GPU_FOR_BLOCK_SIZE, 1, 1]),
+        workgroup_size: Some([forall_gpu::FORALL_GPU_BLOCK_SIZE, 1, 1]),
         grid_size: Some([grid_x, 1, 1]),
         required_capabilities: Vec::new(),
         is_frame_step: true,
@@ -774,7 +775,7 @@ fn build_frame_kernel_literal(
 
 fn build_frame_kernel_runtime(
     parent: &mut LoweringContext,
-    captures: &[gpu_for::CaptureInfo],
+    captures: &[forall_gpu::CaptureInfo],
     loop_var_name: &str,
     start: i64,
     body: &Statement,
@@ -791,7 +792,7 @@ fn build_frame_kernel_runtime(
         .local_decls
         .push(LocalDecl::new(Type::new(TypeKind::Void, span), span));
     kernel.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
-        workgroup_size: Some([gpu_for::GPU_FOR_BLOCK_SIZE, 1, 1]),
+        workgroup_size: Some([forall_gpu::FORALL_GPU_BLOCK_SIZE, 1, 1]),
         grid_size: None,
         required_capabilities: Vec::new(),
         is_frame_step: true,
@@ -834,21 +835,21 @@ fn build_frame_kernel_runtime(
         ctx.body.local_decls[local.0].storage_class = StorageClass::UniformBuffer;
     }
 
-    let thread_int = gpu_for::compute_thread_index(&mut ctx, Dimension::X, span);
+    let thread_int = forall_gpu::compute_thread_index(&mut ctx, Dimension::X, span);
 
     let loop_local = ctx.push_local(loop_var_name.to_string(), i64_ty.clone(), span);
-    gpu_for::push_assign(
+    forall_gpu::push_assign(
         &mut ctx,
         loop_local,
         Rvalue::BinaryOp(
             BinOp::Add,
             Box::new(Operand::Copy(Place::new(thread_int))),
-            Box::new(gpu_for::int_constant(start, span)),
+            Box::new(forall_gpu::int_constant(start, span)),
         ),
         span,
     );
 
-    gpu_for::emit_bounds_check_loop(&mut ctx, loop_local, uniform_param, body, span)?;
+    forall_gpu::emit_bounds_check_loop(&mut ctx, loop_local, uniform_param, body, span)?;
 
     Ok(ctx.body)
 }

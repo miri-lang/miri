@@ -55,7 +55,10 @@ pub fn lower_statement(ctx: &mut LoweringContext, stmt: &Statement) -> Result<()
             vars,
             iterable,
             body,
-        } => super::gpu_for::lower_gpu_for(ctx, &stmt.span, stmt.id, vars, iterable, body),
+        } => {
+            // device routing (CPU vs GPU) lands with the sequential backend; today all forall lowers via the GPU path
+            super::forall_gpu::lower_forall_gpu(ctx, &stmt.span, stmt.id, vars, iterable, body)
+        }
         StatementKind::GpuFrame(decls, iterable, body) => {
             super::gpu_frame::lower_gpu_frame(ctx, &stmt.span, stmt.id, decls, iterable, body)
         }

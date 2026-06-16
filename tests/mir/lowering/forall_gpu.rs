@@ -8,7 +8,7 @@ use miri::mir::{ExecutionModel, StorageClass, TerminatorKind};
 use miri::pipeline::Pipeline;
 
 #[test]
-fn test_gpu_for_emits_gpu_launch_terminator() {
+fn test_forall_gpu_emits_gpu_launch_terminator() {
     let body = mir_lower_code(
         "
 use system.gpu
@@ -29,7 +29,7 @@ fn main()
     });
     assert!(
         has_launch,
-        "Expected TerminatorKind::GpuLaunch in MIR for `gpu for` body"
+        "Expected TerminatorKind::GpuLaunch in MIR for `gpu forall` body"
     );
 }
 
@@ -52,7 +52,7 @@ fn synthesize_kernel_names(source: &str) -> Vec<String> {
 }
 
 #[test]
-fn test_two_gpu_for_loops_in_one_function_have_unique_kernel_names() {
+fn test_two_forall_gpu_loops_in_one_function_have_unique_kernel_names() {
     let names = synthesize_kernel_names(
         "
 use system.gpu
@@ -78,7 +78,7 @@ fn main()
 }
 
 #[test]
-fn test_gpu_for_captures_variables_used_inside_nested_range() {
+fn test_forall_gpu_captures_variables_used_inside_nested_range() {
     // The capture collector must walk into ExpressionKind::Range so that
     // variables used only as inner-loop bounds (`for j in 0..n`) are still
     // counted as outer captures. Before the fix this silently dropped `n`
@@ -128,7 +128,7 @@ fn main()
 }
 
 #[test]
-fn test_2d_gpu_for_with_literal_bounds_has_none_uniform_bounds() {
+fn test_forall_gpu_2d_with_literal_bounds_has_none_uniform_bounds() {
     let body = mir_lower_code(
         "
 use system.gpu
@@ -159,7 +159,7 @@ fn main()
 }
 
 #[test]
-fn test_2d_gpu_for_with_runtime_bounds_carries_uniform_bounds() {
+fn test_forall_gpu_2d_with_runtime_bounds_carries_uniform_bounds() {
     let body = mir_lower_code(
         "
 use system.gpu
@@ -192,7 +192,7 @@ fn main()
 }
 
 #[test]
-fn test_gpu_launch_terminator_carries_capture_args() {
+fn test_forall_gpu_launch_terminator_carries_capture_args() {
     let body = mir_lower_code(
         "
 use system.gpu
@@ -221,7 +221,7 @@ fn main()
 }
 
 #[test]
-fn test_gpu_for_rejects_scalar_capture() {
+fn test_forall_gpu_rejects_scalar_capture() {
     // Scalar captures are now supported: they are passed as WGSL uniforms
     // and appear in the kernel signature as UniformBuffer-class locals.
     // Verify that a scalar capture lowers correctly and appears in both
@@ -283,7 +283,7 @@ fn main()
 }
 
 #[test]
-fn test_gpu_for_loops_in_different_functions_have_unique_kernel_names() {
+fn test_forall_gpu_loops_in_different_functions_have_unique_kernel_names() {
     let names_a = synthesize_kernel_names(
         "
 use system.gpu
