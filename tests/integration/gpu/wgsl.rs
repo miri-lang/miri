@@ -774,18 +774,18 @@ fn main()
 
     /// Reject >2 loop variables.
     #[test]
-    fn gpu_for_3d_is_rejected() {
+    fn gpu_for_4d_is_rejected() {
         assert_compiler_error(
             "
 use system.gpu
 use system.collections.array
 
 fn main()
-    gpu var dst = [0, 0, 0, 0, 0, 0, 0, 0]
-    gpu forall x, y, z in 0..2, 0..2, 0..2
-        dst[z * 4 + y * 2 + x] = x + y + z
+    gpu var dst = [0]
+    gpu forall x, y, z, w in (0..2, 0..2, 0..2, 0..2)
+        dst[0] = 0
 ",
-            "requires 1 or 2 loop variables",
+            "Expected at most 3 loop variables, but found 4 variables",
         );
     }
 
