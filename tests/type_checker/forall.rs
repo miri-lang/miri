@@ -127,3 +127,27 @@ fn main()
 "#,
     );
 }
+
+#[test]
+fn test_cpu_forall_2d_type_checks() {
+    type_checker_test(
+        r#"
+fn main()
+    let a = [1, 2, 3]
+    forall x, y in 0..2, 0..2
+        let val = a[0]
+"#,
+    );
+}
+
+#[test]
+fn test_cpu_forall_3d_type_checks() {
+    type_checker_test(
+        r#"
+fn main()
+    let a = [1, 2, 3]
+    forall x, y, z in 0..2, 0..2, 0..2
+        let val = a[0]
+"#,
+    );
+}

@@ -259,6 +259,27 @@ impl TypeChecker {
         body: &Statement,
         context: &mut Context,
     ) {
+        match decls.len() {
+            1 => self.check_forall_cpu_1d(decls, iterable, body, context),
+            2 => self.check_forall_cpu_2d(decls, iterable, body, context),
+            3 => self.check_forall_cpu_3d(decls, iterable, body, context),
+            _ => self.report_error(
+                format!(
+                    "forall: expected 1, 2, or 3 loop variables, got {}",
+                    decls.len()
+                ),
+                iterable.span,
+            ),
+        }
+    }
+
+    fn check_forall_cpu_1d(
+        &mut self,
+        decls: &[VariableDeclaration],
+        iterable: &Expression,
+        body: &Statement,
+        context: &mut Context,
+    ) {
         let iterable_type = self.infer_expression(iterable, context);
         let element_type = self.get_iterable_element_type(&iterable_type, iterable.span);
 
@@ -279,6 +300,162 @@ impl TypeChecker {
 
         context.exit_loop();
         context.exit_scope();
+    }
+
+    fn check_forall_cpu_2d(
+        &mut self,
+        decls: &[VariableDeclaration],
+        iterable: &Expression,
+        body: &Statement,
+        context: &mut Context,
+    ) {
+        let ExpressionKind::Tuple(ranges) = &iterable.node else {
+            self.report_error(
+                "2D forall requires two comma-separated ranges".to_string(),
+                iterable.span,
+            );
+            return;
+        };
+
+        if ranges.len() != 2 {
+            self.report_error(
+                "2D forall requires exactly two ranges".to_string(),
+                iterable.span,
+            );
+            return;
+        }
+
+        if !self.validate_cpu_forall_ranges(ranges, iterable.span, context) {
+            return;
+        }
+
+        context.enter_scope();
+        context.enter_loop();
+        self.bind_cpu_forall_int_variables(decls, context);
+        self.check_statement(body, context);
+
+        let unconsumed = context.get_unconsumed_linear_vars();
+        for (name, span) in unconsumed {
+            self.report_error(
+                format!("Linear variable '{}' must be consumed exactly once", name),
+                span,
+            );
+        }
+
+        context.exit_loop();
+        context.exit_scope();
+    }
+
+    fn check_forall_cpu_3d(
+        &mut self,
+        decls: &[VariableDeclaration],
+        iterable: &Expression,
+        body: &Statement,
+        context: &mut Context,
+    ) {
+        let ExpressionKind::Tuple(ranges) = &iterable.node else {
+            self.report_error(
+                "3D forall requires three comma-separated ranges".to_string(),
+                iterable.span,
+            );
+            return;
+        };
+
+        if ranges.len() != 3 {
+            self.report_error(
+                "3D forall requires exactly three ranges".to_string(),
+                iterable.span,
+            );
+            return;
+        }
+
+        if !self.validate_cpu_forall_ranges(ranges, iterable.span, context) {
+            return;
+        }
+
+        context.enter_scope();
+        context.enter_loop();
+        self.bind_cpu_forall_int_variables(decls, context);
+        self.check_statement(body, context);
+
+        let unconsumed = context.get_unconsumed_linear_vars();
+        for (name, span) in unconsumed {
+            self.report_error(
+                format!("Linear variable '{}' must be consumed exactly once", name),
+                span,
+            );
+        }
+
+        context.exit_loop();
+        context.exit_scope();
+    }
+
+    fn validate_cpu_forall_ranges(
+        &mut self,
+        ranges: &[Expression],
+        _span: Span,
+        context: &mut Context,
+    ) -> bool {
+        for (i, range_expr) in ranges.iter().enumerate() {
+            let ExpressionKind::Range(start, Some(end), _) = &range_expr.node else {
+                self.report_error(
+                    format!(
+                        "forall dimension {}: range must be a bounded numeric range like '0..n'",
+                        i
+                    ),
+                    range_expr.span,
+                );
+                return false;
+            };
+
+            let start_type = self.infer_expression(start, context);
+            if !matches!(start_type.kind, TypeKind::Int) {
+                self.report_error(
+                    format!(
+                        "forall dimension {}: range start must be Int, got {}",
+                        i, start_type
+                    ),
+                    start.span,
+                );
+                return false;
+            }
+
+            let end_type = self.infer_expression(end, context);
+            if !matches!(end_type.kind, TypeKind::Int) {
+                self.report_error(
+                    format!(
+                        "forall dimension {}: range end must be Int, got {}",
+                        i, end_type
+                    ),
+                    end.span,
+                );
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn bind_cpu_forall_int_variables(
+        &mut self,
+        decls: &[VariableDeclaration],
+        context: &mut Context,
+    ) {
+        for decl in decls {
+            let var_type = Type::new(TypeKind::Int, Span::default());
+            let is_mutable = matches!(decl.declaration_type, VariableDeclarationType::Mutable);
+            context.define(
+                decl.name.clone(),
+                SymbolInfo::new(
+                    var_type,
+                    is_mutable,
+                    false,
+                    MemberVisibility::Public,
+                    self.current_module.clone(),
+                    None,
+                ),
+            );
+        }
     }
 
     fn check_gpu_for_3d(
