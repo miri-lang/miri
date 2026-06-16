@@ -314,3 +314,78 @@ fn b()
         names_a[0], names_b[0]
     );
 }
+
+#[test]
+fn test_forall_gpu_3d_with_literal_bounds_has_none_uniform_bounds() {
+    let body = mir_lower_code(
+        "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu var dst = [0, 0, 0, 0, 0, 0, 0, 0]
+    gpu forall i, j, k in 0..2, 0..2, 0..2
+        dst[i * 4 + j * 2 + k] = i + j + k
+",
+    );
+    let launch = body
+        .basic_blocks
+        .iter()
+        .find_map(|bb| match bb.terminator.as_ref().map(|t| &t.kind) {
+            Some(TerminatorKind::GpuLaunch {
+                uniform_bound_x,
+                uniform_bound_y,
+                uniform_bound_z,
+                ..
+            }) => Some((
+                uniform_bound_x.clone(),
+                uniform_bound_y.clone(),
+                uniform_bound_z.clone(),
+            )),
+            _ => None,
+        })
+        .expect("expected GpuLaunch terminator");
+    assert!(
+        launch.0.is_none() && launch.1.is_none() && launch.2.is_none(),
+        "expected literal 3D bounds to have None uniform_bound_x, uniform_bound_y, and uniform_bound_z"
+    );
+}
+
+#[test]
+fn test_forall_gpu_3d_with_runtime_bounds_carries_uniform_bounds() {
+    let body = mir_lower_code(
+        "
+use system.gpu
+use system.collections.array
+
+fn main()
+    let w = 2
+    let h = 2
+    let d = 2
+    gpu var dst = [0, 0, 0, 0, 0, 0, 0, 0]
+    gpu forall i, j, k in 0..w, 0..h, 0..d
+        dst[i * 4 + j * 2 + k] = i + j + k
+",
+    );
+    let launch = body
+        .basic_blocks
+        .iter()
+        .find_map(|bb| match bb.terminator.as_ref().map(|t| &t.kind) {
+            Some(TerminatorKind::GpuLaunch {
+                uniform_bound_x,
+                uniform_bound_y,
+                uniform_bound_z,
+                ..
+            }) => Some((
+                uniform_bound_x.is_some(),
+                uniform_bound_y.is_some(),
+                uniform_bound_z.is_some(),
+            )),
+            _ => None,
+        })
+        .expect("expected GpuLaunch terminator");
+    assert!(
+        launch.0 && launch.1 && launch.2,
+        "expected runtime 3D bounds to carry uniform_bound_x, uniform_bound_y, and uniform_bound_z"
+    );
+}

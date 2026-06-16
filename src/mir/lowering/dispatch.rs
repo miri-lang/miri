@@ -450,6 +450,7 @@ fn try_lower_kernel_launch(
             scalar_args: Vec::new(),
             uniform_bound_x: None,
             uniform_bound_y: None,
+            uniform_bound_z: None,
             destination,
             target: Some(target_bb),
         },

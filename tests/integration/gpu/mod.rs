@@ -28,6 +28,7 @@ pub mod gpu_frame;
 pub mod helpers;
 pub mod i32_range_validation;
 pub mod launch;
+pub mod launch_3d;
 pub mod persistent_buffer;
 pub mod ping_pong;
 pub mod read_only_capture;
