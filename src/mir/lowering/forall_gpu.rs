@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! MIR lowering for `gpu for <ident> in <range>` loops.
+//! MIR lowering for `forall` loops that target GPU accelerators.
 //!
 //! Extracts the loop body into a synthesized anonymous `gpu fn` kernel and
 //! emits a `TerminatorKind::GpuLaunch` at the call site with a fixed
@@ -9,13 +9,13 @@
 //!
 //! Range bound modes:
 //! - Range start must be an Int literal.
-//! - Range end may be a runtime Int expression (e.g., `let n = 4; gpu for i in 0..n`).
+//! - Range end may be a runtime Int expression (e.g., `let n = 4; forall i in 0..n`).
 //!   When end is a literal, uses fast constant-grid path.
 //!   When end is a runtime expression, computes grid at runtime and passes the
 //!   bounds-check limit as a uniform buffer to the kernel.
 //!
 //! Other restrictions:
-//! - Only one loop variable is accepted.
+//! - Only one loop variable is accepted (1D and 2D supported; 3D deferred to D5).
 //! - The body may reference outer-scope variables whose types are GPU
 //!   buffers (`Array<T, N>`); all such captures are exposed as read-write
 //!   storage buffers.
@@ -44,14 +44,14 @@ use super::context::LoweringContext;
 use super::expression::lower_expression;
 use super::statement::lower_statement;
 
-pub const GPU_FOR_BLOCK_SIZE: u32 = 256;
+pub const FORALL_GPU_BLOCK_SIZE: u32 = 256;
 
-/// Lowers a `gpu for` loop into a synthesized kernel + `GpuLaunch`.
+/// Lowers a `forall` loop targeting GPU into a synthesized kernel + `GpuLaunch`.
 ///
 /// Two paths based on range end:
 /// - Literal end: uses existing constant-grid lowering (fast path, no grid arithmetic).
 /// - Runtime end: computes grid at runtime, emits uniform buffer for bounds-check limit.
-pub fn lower_gpu_for(
+pub fn lower_forall_gpu(
     ctx: &mut LoweringContext,
     span: &Span,
     stmt_id: usize,
@@ -60,11 +60,11 @@ pub fn lower_gpu_for(
     body: &Statement,
 ) -> Result<(), LoweringError> {
     match decls.len() {
-        1 => lower_gpu_for_1d(ctx, span, stmt_id, decls, iterable, body),
-        2 => lower_gpu_for_2d(ctx, span, stmt_id, decls, iterable, body),
+        1 => lower_forall_gpu_1d(ctx, span, stmt_id, decls, iterable, body),
+        2 => lower_forall_gpu_2d(ctx, span, stmt_id, decls, iterable, body),
         _ => Err(LoweringError::unsupported_expression(
             format!(
-                "gpu for: expected 1 or 2 loop variables, got {}",
+                "forall: expected 1 or 2 loop variables, got {}",
                 decls.len()
             ),
             *span,
@@ -72,7 +72,7 @@ pub fn lower_gpu_for(
     }
 }
 
-fn lower_gpu_for_1d(
+fn lower_forall_gpu_1d(
     ctx: &mut LoweringContext,
     span: &Span,
     stmt_id: usize,
@@ -84,7 +84,7 @@ fn lower_gpu_for_1d(
 
     let ExpressionKind::Range(start, Some(end), range_type) = &iterable.node else {
         return Err(LoweringError::unsupported_expression(
-            "gpu for: iterable must be a bounded numeric range like '0..n'".to_string(),
+            "forall: iterable must be a bounded numeric range like '0..n'".to_string(),
             *span,
         ));
     };
@@ -96,7 +96,7 @@ fn lower_gpu_for_1d(
     let is_literal_end = matches!(&end.node, ExpressionKind::Literal(Literal::Integer(_)));
 
     let captures = collect_capture_infos(ctx, body, &loop_var_name, *span)?;
-    let kernel_name = format!("miri_gpu_for_{}", stmt_id);
+    let kernel_name = format!("miri_gpu_for_{}", stmt_id); // Entry-point name is a runtime ABI string; keep verbatim.
 
     if is_literal_end {
         // Literal path: fast compile-time grid computation.
@@ -139,7 +139,7 @@ fn lower_gpu_for_1d(
     Ok(())
 }
 
-fn lower_gpu_for_2d(
+fn lower_forall_gpu_2d(
     ctx: &mut LoweringContext,
     span: &Span,
     stmt_id: usize,
@@ -149,29 +149,26 @@ fn lower_gpu_for_2d(
 ) -> Result<(), LoweringError> {
     let ExpressionKind::Tuple(ranges) = &iterable.node else {
         return Err(LoweringError::unsupported_expression(
-            "2D gpu for: expected a tuple of two ranges".to_string(),
+            "2D forall: expected a tuple of two ranges".to_string(),
             *span,
         ));
     };
     if ranges.len() != 2 {
         return Err(LoweringError::unsupported_expression(
-            format!(
-                "2D gpu for: expected exactly 2 ranges, got {}",
-                ranges.len()
-            ),
+            format!("2D forall: expected exactly 2 ranges, got {}", ranges.len()),
             *span,
         ));
     }
 
     let ExpressionKind::Range(start_x, Some(end_x), range_type_x) = &ranges[0].node else {
         return Err(LoweringError::unsupported_expression(
-            "2D gpu for: first range must be a bounded numeric range".to_string(),
+            "2D forall: first range must be a bounded numeric range".to_string(),
             *span,
         ));
     };
     let ExpressionKind::Range(start_y, Some(end_y), range_type_y) = &ranges[1].node else {
         return Err(LoweringError::unsupported_expression(
-            "2D gpu for: second range must be a bounded numeric range".to_string(),
+            "2D forall: second range must be a bounded numeric range".to_string(),
             *span,
         ));
     };
@@ -186,7 +183,7 @@ fn lower_gpu_for_2d(
     let loop_var_y = decls[1].name.clone();
 
     let captures = collect_capture_infos(ctx, body, &loop_var_x, *span)?;
-    let kernel_name = format!("miri_gpu_for_2d_{}", stmt_id);
+    let kernel_name = format!("miri_gpu_for_2d_{}", stmt_id); // Entry-point name is a runtime ABI string; keep verbatim.
 
     if is_x_literal && is_y_literal {
         let end_x_lit = read_int_literal(end_x, *span)?;
@@ -336,7 +333,7 @@ fn extract_written_lhs(
     }
 }
 
-/// Collect and validate the outer-variable captures of a `gpu for` body.
+/// Collect and validate the outer-variable captures of a forall GPU body.
 /// Accepts both gpu-resident buffer (`Array`-shaped) captures and host-side
 /// scalar captures (int, bool, f32 — read-only uniforms).
 pub fn collect_capture_infos(
@@ -352,7 +349,7 @@ pub fn collect_capture_infos(
         let Some(&outer_local) = ctx.variable_map.get(name.as_str()) else {
             return Err(LoweringError::unsupported_expression(
                 format!(
-                    "gpu for: captured variable '{}' is not visible at the loop site",
+                    "forall: captured variable '{}' is not visible at the loop site",
                     name
                 ),
                 span,
@@ -368,7 +365,7 @@ pub fn collect_capture_infos(
             // GPU-resident buffers must be gpu-resident bindings.
             if ctx.body.local_decls[outer_local.0].residency != BindingResidency::Gpu {
                 return Err(LoweringError::unsupported_expression(
-                    format!("gpu for: capture '{}' is not gpu-resident", name),
+                    format!("forall: capture '{}' is not gpu-resident", name),
                     span,
                 ));
             }
@@ -376,14 +373,14 @@ pub fn collect_capture_infos(
             // Scalar captures are read-only uniforms.
             if written.contains(&name) {
                 return Err(LoweringError::unsupported_expression(
-                    format!("gpu for: captured scalar '{}' is read-only", name),
+                    format!("forall: captured scalar '{}' is read-only", name),
                     span,
                 ));
             }
         } else {
             // Unsupported type for capture.
             return Err(LoweringError::unsupported_expression(
-                format!("gpu for: unsupported gpu scalar capture type '{}'", ty.kind),
+                format!("forall: unsupported gpu scalar capture type '{}'", ty.kind),
                 span,
             ));
         }
@@ -448,7 +445,7 @@ fn is_gpu_buffer_capture(kind: &TypeKind) -> bool {
 }
 
 /// Returns `true` for scalar types that can be passed as WGSL uniforms
-/// to a `gpu for` kernel (read-only, 4-byte aligned).
+/// to a forall GPU kernel (read-only, 4-byte aligned).
 /// Supported: `int` (i64), `i32`, `i16`, `i8`, bool, `f32`.
 /// Unsupported: `f64`, `i64`, string, managed types, etc.
 fn is_gpu_scalar_capture(kind: &TypeKind) -> bool {
@@ -468,7 +465,7 @@ pub fn read_int_literal(expr: &Expression, span: Span) -> Result<i64, LoweringEr
         Ok(int_literal_to_i64(int_lit))
     } else {
         Err(LoweringError::unsupported_expression(
-            "gpu for: 2D range bounds must be Int literals".to_string(),
+            "forall: 2D range bounds must be Int literals".to_string(),
             span,
         ))
     }
@@ -493,7 +490,7 @@ fn int_literal_to_i64(lit: &IntegerLiteral) -> i64 {
 /// arithmetic. The bounds reconstruction is guarded upstream by
 /// `compute_range_length`, so this fires only as defense-in-depth.
 pub fn bounds_overflow_err(span: Span) -> LoweringError {
-    LoweringError::unsupported_expression("gpu for: range bounds overflow i64".to_string(), span)
+    LoweringError::unsupported_expression("forall: range bounds overflow i64".to_string(), span)
 }
 
 pub fn compute_range_length(
@@ -507,7 +504,7 @@ pub fn compute_range_length(
         RangeExpressionType::Inclusive => end.checked_sub(start).and_then(|d| d.checked_add(1)),
         RangeExpressionType::IterableObject => {
             return Err(LoweringError::unsupported_expression(
-                "gpu for: iterable-object ranges are not supported (use 'a..b')".to_string(),
+                "forall: iterable-object ranges are not supported (use 'a..b')".to_string(),
                 span,
             ));
         }
@@ -515,7 +512,7 @@ pub fn compute_range_length(
     let raw = raw.ok_or_else(|| bounds_overflow_err(span))?;
     if raw <= 0 {
         return Err(LoweringError::unsupported_expression(
-            "gpu for: range length must be positive".to_string(),
+            "forall: range length must be positive".to_string(),
             span,
         ));
     }
@@ -599,7 +596,7 @@ fn visit_stmt(
         }
         // Listed explicitly so a new `StatementKind` variant cannot be
         // silently dropped from capture collection. None of these shapes can
-        // introduce a captured outer-scope identifier into a `gpu for` body:
+        // introduce a captured outer-scope identifier into a forall body:
         // control-flow markers carry no expression, and nested declarations
         // open a fresh scope that the GPU type check rejects anyway.
         StatementKind::Empty
@@ -833,7 +830,7 @@ fn build_kernel_body_literal(
     let grid_x = literal_grid_x(length);
 
     kernel.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
-        workgroup_size: Some([GPU_FOR_BLOCK_SIZE, 1, 1]),
+        workgroup_size: Some([FORALL_GPU_BLOCK_SIZE, 1, 1]),
         grid_size: Some([grid_x, 1, 1]),
         required_capabilities: Vec::new(),
         is_frame_step: false,
@@ -927,7 +924,7 @@ pub fn emit_gpu_launch_literal(
     let one_op = int_constant(1, span);
     let grid_x = literal_grid_x(length);
     let grid_x_op = int_constant(i64::from(grid_x), span);
-    let block_size_i64 = i64::from(GPU_FOR_BLOCK_SIZE);
+    let block_size_i64 = i64::from(FORALL_GPU_BLOCK_SIZE);
     let block_x_op = int_constant(block_size_i64, span);
 
     let grid_local = ctx.push_temp(dim3_ty.clone(), span);
@@ -1000,7 +997,7 @@ pub fn emit_gpu_launch_literal(
     ctx.set_current_block(after_bb);
 }
 
-/// Builds the kernel body for a runtime-bound `gpu for` loop.
+/// Builds the kernel body for a runtime-bound forall GPU loop.
 /// The bounds-check limit is read from the uniform buffer at binding index
 /// `captures.len()` instead of being a compile-time constant.
 fn build_kernel_body_runtime(
@@ -1020,7 +1017,7 @@ fn build_kernel_body_runtime(
         .local_decls
         .push(LocalDecl::new(Type::new(TypeKind::Void, span), span));
     kernel.backend_metadata = Some(BackendMetadata::Gpu(GpuBodyMetadata {
-        workgroup_size: Some([GPU_FOR_BLOCK_SIZE, 1, 1]),
+        workgroup_size: Some([FORALL_GPU_BLOCK_SIZE, 1, 1]),
         grid_size: None, // Runtime-bound; grid computed at runtime
         required_capabilities: Vec::new(),
         is_frame_step: false,
@@ -1129,7 +1126,7 @@ pub fn emit_bounds_check_loop(
     Ok(())
 }
 
-/// Emits the GpuLaunch terminator for a runtime-bound `gpu for` loop.
+/// Emits the GpuLaunch terminator for a runtime-bound forall GPU loop.
 /// Computes the grid size at runtime from `end - start`, clamped to 0 for
 /// negative ranges, and passes the `end` operand (adjusted for inclusive ranges)
 /// as the uniform bound.
@@ -1137,7 +1134,7 @@ pub fn emit_bounds_check_loop(
 /// Returns the grid-x value (Local). Emits statements into ctx.
 pub fn compute_grid_size(ctx: &mut LoweringContext, clamped_length: Local, span: Span) -> Local {
     let i64_ty = Type::new(TypeKind::Int, span);
-    let block_size_i64 = i64::from(GPU_FOR_BLOCK_SIZE);
+    let block_size_i64 = i64::from(FORALL_GPU_BLOCK_SIZE);
 
     let grid_x_div_local = ctx.push_temp(i64_ty.clone(), span);
     push_assign(
@@ -1196,7 +1193,7 @@ pub fn compute_grid_size(ctx: &mut LoweringContext, clamped_length: Local, span:
     final_grid_x_local
 }
 
-/// Computes clamped range length for runtime-bound `gpu for` loops.
+/// Computes clamped range length for runtime-bound forall GPU loops.
 ///
 /// Safely clamps to 0 when the runtime end operand is not greater than the
 /// start literal. The clamp predicate compares the original operands
@@ -1268,7 +1265,7 @@ pub fn compute_clamped_length(
 fn build_dim3_descriptors(ctx: &mut LoweringContext, grid_x: Local, span: Span) -> (Local, Local) {
     let dim3_ty = Type::new(TypeKind::Custom(DIM3_TYPE_NAME.to_string(), None), span);
     let one_op = int_constant(1, span);
-    let block_size_i64 = i64::from(GPU_FOR_BLOCK_SIZE);
+    let block_size_i64 = i64::from(FORALL_GPU_BLOCK_SIZE);
     let block_x_op = int_constant(block_size_i64, span);
 
     let grid_local = ctx.push_temp(dim3_ty.clone(), span);
@@ -1680,7 +1677,7 @@ fn emit_gpu_launch_2d_literal(
     ctx.set_current_block(after_bb);
 }
 
-/// Builds the kernel body for a runtime-bound 2D `gpu for` loop.
+/// Builds the kernel body for a runtime-bound 2D forall GPU loop.
 /// Similar to build_kernel_body_2d_literal but reads bounds from uniform parameters.
 #[allow(clippy::too_many_arguments)]
 fn build_kernel_body_2d_runtime(
@@ -1877,7 +1874,7 @@ fn emit_2d_bounds_check_loop_runtime(
     Ok(())
 }
 
-/// Emits the GpuLaunch terminator for a runtime-bound 2D `gpu for` loop.
+/// Emits the GpuLaunch terminator for a runtime-bound 2D forall GPU loop.
 #[allow(clippy::too_many_arguments)]
 fn emit_gpu_launch_2d_runtime(
     ctx: &mut LoweringContext,
@@ -2108,7 +2105,7 @@ fn build_dim3_descriptors_2d(
     (grid_local, block_local)
 }
 
-/// Workgroup count along one literal-bound `gpu for` axis, saturated to `u32::MAX`.
+/// Workgroup count along one literal-bound forall GPU axis, saturated to `u32::MAX`.
 /// An enormous range saturates the grid (and is rejected at dispatch as
 /// `GridTooLarge` by the device-limit check) instead of silently truncating
 /// the workgroup count when narrowed to the launch descriptor's `u32` field.
@@ -2118,9 +2115,9 @@ fn literal_grid_dim(extent: i64, block_size: u32) -> u32 {
     count.min(u32::MAX as i64) as u32
 }
 
-/// 1D gpu for workgroup count, using the standard 256-thread block.
+/// 1D forall GPU workgroup count, using the standard 256-thread block.
 pub fn literal_grid_x(length: i64) -> u32 {
-    literal_grid_dim(length, GPU_FOR_BLOCK_SIZE)
+    literal_grid_dim(length, FORALL_GPU_BLOCK_SIZE)
 }
 
 pub fn int_constant(value: i64, span: Span) -> Operand {
