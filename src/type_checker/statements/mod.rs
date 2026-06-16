@@ -84,18 +84,7 @@ impl TypeChecker {
                 vars,
                 iterable,
                 body,
-            } => match device {
-                AcceleratorTarget::Gpu => {
-                    self.check_gpu_for(vars, iterable, body, context, statement.span)
-                }
-                AcceleratorTarget::Inferred => {
-                    self.report_error(
-                        "device inference for 'forall' is not yet supported; use 'gpu forall'"
-                            .to_string(),
-                        statement.span,
-                    );
-                }
-            },
+            } => self.check_forall(device, vars, iterable, body, context, statement.span),
             StatementKind::GpuFrame(decls, iterable, body) => {
                 self.check_gpu_frame(decls, iterable, body, context, statement.span)
             }

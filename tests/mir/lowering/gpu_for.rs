@@ -56,12 +56,15 @@ fn test_two_gpu_for_loops_in_one_function_have_unique_kernel_names() {
     let names = synthesize_kernel_names(
         "
 use system.gpu
+use system.collections.array
 
 fn main()
+    gpu var a = [0, 0, 0, 0]
+    gpu var b = [0, 0, 0, 0, 0, 0, 0, 0]
     gpu forall i in 0..4
-        let x = i
+        a[i] = i
     gpu forall j in 0..8
-        let y = j
+        b[j] = j
 ",
     );
     let mut sorted = names.clone();
@@ -284,19 +287,23 @@ fn test_gpu_for_loops_in_different_functions_have_unique_kernel_names() {
     let names_a = synthesize_kernel_names(
         "
 use system.gpu
+use system.collections.array
 
 fn a()
+    gpu var a = [0, 0, 0, 0]
     gpu forall i in 0..4
-        let x = i
+        a[i] = i
 ",
     );
     let names_b = synthesize_kernel_names(
         "
 use system.gpu
+use system.collections.array
 
 fn b()
+    gpu var b = [0, 0, 0, 0]
     gpu forall i in 0..4
-        let x = i
+        b[i] = i
 ",
     );
     assert_eq!(names_a.len(), 1);
