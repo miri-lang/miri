@@ -3,7 +3,7 @@
 
 //! WGSL backend shader-validity tests.
 //!
-//! Each test exercises a small `gpu for` kernel through the WGSL backend and
+//! Each test exercises a small `forall` kernel through the WGSL backend and
 //! `naga`'s validator to confirm the shader source is syntactically and
 //! type-correctly generated. These tests require no GPU hardware.
 //!
@@ -32,7 +32,7 @@ fn main()
 
 #[test]
 fn float_kernel_emits_naga_valid_wgsl() {
-    // F32 arithmetic in a `gpu for` body. Naga rejects type or alignment
+    // F32 arithmetic in a `forall` body. Naga rejects type or alignment
     // mistakes in float storage bindings, so this exercises the F32
     // half of the scalar mapping independently of the integer paths.
     // Float literals that round-trip in f32 are typed as `Array<f32, N>`
@@ -56,7 +56,7 @@ fn main()
 /// Per-(scalar, op-kind) coverage grid for the WGSL backend.
 ///
 /// For every Miri primitive that today round-trips into a WGSL storage buffer
-/// element width, there is at least one `gpu for` kernel exercising the
+/// element width, there is at least one `forall` kernel exercising the
 /// scalar against a representative arithmetic op. For every primitive the
 /// backend cannot represent today (bool buffers, heap-only types), there is
 /// an `assert_compiler_error` proving the diagnostic fires before MIR

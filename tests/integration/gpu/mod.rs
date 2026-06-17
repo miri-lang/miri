@@ -7,7 +7,7 @@
 //!   * `device` — GPU availability detection via int round-trip probe.
 //!     Exposes `gpu_adapter_available()` and `assert_gpu_runs_with_output()`.
 //!   * `launch` — full Cranelift → `miri_gpu_launch_inline` → `wgpu` native
-//!     dispatch path. Owns end-to-end value correctness for `gpu for`
+//!     dispatch path. Owns end-to-end value correctness for `forall`
 //!     kernels now that the WGSL scalar mapping aligns host and device
 //!     widths (`int` → `i64`).
 //!   * `wgsl` — WGSL backend shader validity tests via naga validation only.

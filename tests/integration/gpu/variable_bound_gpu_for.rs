@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 //
-// Tests for variable-bound `gpu for` loops.
+// Tests for variable-bound `forall` loops.
 // The range end can be a runtime Int expression (not just a literal).
 
 use super::device::{assert_gpu_runs_with_output, gpu_adapter_available};

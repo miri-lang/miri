@@ -4,7 +4,7 @@
 // SAXPY: single-precision a*x plus y. Fused multiply-add with a literal
 // scalar a. Each element is computed as a * x[i] + y[i], where the scalar
 // a = 2.0 is inlined directly into the kernel body (host scalars cannot be
-// captured into a `gpu for`, so the coefficient lives in the kernel source).
+// captured into a `forall`, so the coefficient lives in the kernel source).
 
 const N = 4
 

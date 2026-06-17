@@ -14,7 +14,7 @@ use super::super::utils::assert_compiler_error;
 /// Demonstrates:
 ///   * `gpu let` to declare read-only device buffers
 ///   * `gpu var` to declare a mutable device buffer
-///   * `gpu for` to launch a kernel over the buffer size
+///   * `forall` to launch a kernel over the buffer size
 ///   * Cross-residency readback (`let host = gpu_var`) to copy result back
 ///   * Printing a few elements of the result
 ///
@@ -46,7 +46,7 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 /// Buffer reuse across multiple kernels.
 ///
 /// Demonstrates:
-///   * Multiple `gpu for` blocks operating on the same `gpu var` without readback
+///   * Multiple `forall` blocks operating on the same `gpu var` without readback
 ///   * Persistent device buffer optimization: the buffer is uploaded once
 ///   * GPU cost telemetry: `gpu_reset_telemetry()`, `gpu_uploads()`, `gpu_launches()`, etc.
 ///   * Expected cost-class behavior:
@@ -127,7 +127,7 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 ///
 /// Demonstrates:
 ///   * Scalar literals (e.g., 2.0) inlined directly in the kernel body
-///   * Note: host variables CANNOT be captured into `gpu for` blocks, so scalars must
+///   * Note: host variables CANNOT be captured into `forall` blocks, so scalars must
 ///     be written as literals or computed from array indices
 ///   * Fused multiply-add pattern commonly used in linear algebra
 ///
@@ -160,7 +160,7 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 ///
 /// Demonstrates:
 ///   * The proper way to read GPU results on the host
-///   * After a `gpu for` block, a gpu-resident binding can only be accessed as a whole
+///   * After a `forall` block, a gpu-resident binding can only be accessed as a whole
 ///     via cross-residency readback: `let h = gpu_var`
 ///   * Once on the host, the result can be looped over freely
 ///   * This pattern incurs exactly one GPU-to-host readback transfer

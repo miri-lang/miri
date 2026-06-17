@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-//! `gpu for` capture validation.
+//! `forall` capture validation.
 //!
-//! Walks the body of a `gpu for` looking for free identifiers (references to
+//! Walks the body of a `forall` looking for free identifiers (references to
 //! outer-scope variables) that lower to WGSL storage buffers, and rejects two
 //! classes of invalid capture:
 //!
@@ -31,7 +31,7 @@ use crate::type_checker::utils::{
 };
 use crate::type_checker::TypeChecker;
 
-/// A rejected `gpu for` capture, paired with the span of the offending
+/// A rejected `forall` capture, paired with the span of the offending
 /// reference inside the loop body.
 enum CaptureViolation {
     HostResident {

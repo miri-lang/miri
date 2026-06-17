@@ -186,7 +186,7 @@ pub fn get_gpu_context() -> Result<&'static Arc<GpuContext>, GpuError> {
 /// `pub(crate)` so the inline launch path can lazily initialize the
 /// process-wide `GPU_CONTEXT` instead of holding its own. Keeping a single
 /// `OnceCell` is what makes `miri_gpu_is_available()` reflect the actual
-/// state after a `gpu for` dispatch.
+/// state after a `forall` dispatch.
 pub(crate) fn init_gpu_context() -> Result<&'static Arc<GpuContext>, GpuError> {
     GPU_CONTEXT.get_or_try_init(|| GpuContext::new().map(Arc::new))
 }

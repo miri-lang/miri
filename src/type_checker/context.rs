@@ -368,8 +368,8 @@ pub struct Context {
     pub inferred_return_types: Vec<Option<Vec<(Type, Span)>>>,
     /// Current depth of nested loops (used to validate break/continue).
     pub loop_depth: usize,
-    /// Current depth of nested `gpu for` bodies. Used to give a clearer error
-    /// for `break`/`continue` directly inside a `gpu for` than the generic
+    /// Current depth of nested `forall` bodies. Used to give a clearer error
+    /// for `break`/`continue` directly inside a `forall` than the generic
     /// "outside of loop" message.
     pub gpu_for_depth: usize,
     /// Whether we are currently inside a GPU function.

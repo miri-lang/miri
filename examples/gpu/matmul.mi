@@ -10,7 +10,7 @@
 //       | 3  4 |       | 7  8 |             | 43  50 |
 //
 // Note: the matrix dimension is inlined as the literal `2` inside the kernel —
-// host scalars/consts cannot be captured into a `gpu for` body, only buffers.
+// host scalars/consts cannot be captured into a `forall` body, only buffers.
 
 use system.collections.array
 

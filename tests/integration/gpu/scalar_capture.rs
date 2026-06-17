@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-// `gpu for` scalar capture feature: plain host scalars (int, bool, f32)
+// `forall` scalar capture feature: plain host scalars (int, bool, f32)
 // are passed as WGSL uniforms and are read-only inside the kernel.
 
 use super::utils::*;
