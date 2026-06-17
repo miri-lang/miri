@@ -15,16 +15,23 @@ fn bare_forall_with_gpu_resident_capture_routes_to_gpu() {
         eprintln!("[gpu] skipped bare_forall_with_gpu_resident_capture_routes_to_gpu: no suitable adapter");
         return;
     }
-    assert_runs(
+    assert_runs_with_output(
         "
 use system.gpu
 use system.collections.array
+use system.io
 
 fn main()
     gpu let g = [1, 2, 3]
+    gpu var result = [0, 0, 0]
     forall i in 0..3
-        let _ = g[i]
+        result[i] = g[i] * 2
+    let h = result
+    print(f\"{h[0]}\")
+    print(f\"{h[1]}\")
+    print(f\"{h[2]}\")
 ",
+        "246",
     );
 }
 

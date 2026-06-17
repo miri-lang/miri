@@ -2287,7 +2287,10 @@ pub fn needs_int_narrowing(ty: &Type) -> bool {
         TypeKind::Array(elem_expr, _) | TypeKind::List(elem_expr) => Some(elem_expr.as_ref()),
         // Post-normalization: Array/List become Custom("Array"/"List", [elem_ty_expr, ...]).
         TypeKind::Custom(name, Some(args))
-            if (name == "Array" || name == "List") && !args.is_empty() =>
+            if matches!(
+                BuiltinCollectionKind::from_name(name),
+                Some(BuiltinCollectionKind::Array | BuiltinCollectionKind::List)
+            ) && !args.is_empty() =>
         {
             Some(&args[0])
         }
