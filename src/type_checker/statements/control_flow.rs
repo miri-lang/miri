@@ -39,6 +39,7 @@
 //! - Implicit vs explicit returns
 //! - Return type compatibility
 
+use crate::ast::captures::collect_free_identifiers_excluding;
 use crate::ast::factory::make_type;
 use crate::ast::statement;
 use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
@@ -1250,11 +1251,10 @@ fn collect_pass_buffer_sets(
     let mut read_set = HashSet::new();
     let mut write_set = HashSet::new();
 
-    // Collect all captured identifiers.
+    // Collect all captured identifiers, excluding the loop variable.
     let mut bound = HashSet::new();
     bound.insert(loop_var_name.to_string());
-    let mut captured = HashSet::new();
-    collect_identifiers_in_stmt(body, &mut bound, &mut captured);
+    let captured = collect_free_identifiers_excluding(body, &bound);
 
     for name in captured {
         if name == loop_var_name {
@@ -1283,208 +1283,6 @@ fn collect_pass_buffer_sets(
     }
 
     (read_set, write_set)
-}
-
-/// Helper: collects all identifiers referenced in a statement, excluding
-/// those bound locally or in the `bound` set.
-fn collect_identifiers_in_stmt(
-    stmt: &Statement,
-    bound: &mut std::collections::HashSet<String>,
-    captured: &mut std::collections::HashSet<String>,
-) {
-    match &stmt.node {
-        StatementKind::Block(stmts) => {
-            let scope_snapshot = bound.clone();
-            for s in stmts {
-                collect_identifiers_in_stmt(s, bound, captured);
-            }
-            *bound = scope_snapshot;
-        }
-        StatementKind::Expression(expr) => {
-            collect_identifiers_in_expr(expr, bound, captured);
-        }
-        StatementKind::Variable(decls, _) => {
-            for d in decls {
-                if let Some(init) = &d.initializer {
-                    collect_identifiers_in_expr(init, bound, captured);
-                }
-                bound.insert(d.name.clone());
-            }
-        }
-        StatementKind::Return(Some(e)) => {
-            collect_identifiers_in_expr(e, bound, captured);
-        }
-        StatementKind::Return(None) => {}
-        StatementKind::If(cond, then_branch, else_branch, _) => {
-            collect_identifiers_in_expr(cond, bound, captured);
-            collect_identifiers_in_stmt(then_branch, bound, captured);
-            if let Some(eb) = else_branch {
-                collect_identifiers_in_stmt(eb, bound, captured);
-            }
-        }
-        StatementKind::While(cond, body, _) => {
-            collect_identifiers_in_expr(cond, bound, captured);
-            collect_identifiers_in_stmt(body, bound, captured);
-        }
-        StatementKind::For(inner_decls, iter, body)
-        | StatementKind::GpuFrame(inner_decls, iter, body) => {
-            collect_identifiers_in_expr(iter, bound, captured);
-            let scope_snapshot = bound.clone();
-            for d in inner_decls {
-                bound.insert(d.name.clone());
-            }
-            collect_identifiers_in_stmt(body, bound, captured);
-            *bound = scope_snapshot;
-        }
-        StatementKind::Forall {
-            vars: inner_decls,
-            iterable: iter,
-            body,
-            ..
-        } => {
-            collect_identifiers_in_expr(iter, bound, captured);
-            let scope_snapshot = bound.clone();
-            for d in inner_decls {
-                bound.insert(d.name.clone());
-            }
-            collect_identifiers_in_stmt(body, bound, captured);
-            *bound = scope_snapshot;
-        }
-        StatementKind::GpuFrameBlock(block) => {
-            collect_identifiers_in_stmt(block, bound, captured);
-        }
-        StatementKind::Empty
-        | StatementKind::Break
-        | StatementKind::Continue
-        | StatementKind::Use(_, _)
-        | StatementKind::Type(_, _)
-        | StatementKind::FunctionDeclaration(_)
-        | StatementKind::Enum(_, _, _, _, _, _)
-        | StatementKind::Struct(_, _, _, _, _)
-        | StatementKind::Class(_)
-        | StatementKind::Trait(_, _, _, _, _)
-        | StatementKind::RuntimeFunctionDeclaration(_, _, _, _)
-        | StatementKind::IntrinsicFunctionDeclaration(_, _, _, _, _) => {}
-    }
-}
-
-/// Helper: collects all identifiers referenced in an expression.
-fn collect_identifiers_in_expr(
-    expr: &Expression,
-    bound: &std::collections::HashSet<String>,
-    captured: &mut std::collections::HashSet<String>,
-) {
-    match &expr.node {
-        ExpressionKind::Identifier(name, _) => {
-            if !bound.contains(name) {
-                captured.insert(name.clone());
-            }
-        }
-        ExpressionKind::Binary(lhs, _, rhs) | ExpressionKind::Logical(lhs, _, rhs) => {
-            collect_identifiers_in_expr(lhs, bound, captured);
-            collect_identifiers_in_expr(rhs, bound, captured);
-        }
-        ExpressionKind::Range(lhs, Some(rhs), _) => {
-            collect_identifiers_in_expr(lhs, bound, captured);
-            collect_identifiers_in_expr(rhs, bound, captured);
-        }
-        ExpressionKind::Range(lhs, None, _) => {
-            collect_identifiers_in_expr(lhs, bound, captured);
-        }
-        ExpressionKind::Unary(_, e) => {
-            collect_identifiers_in_expr(e, bound, captured);
-        }
-        ExpressionKind::Call(func, args) => {
-            collect_identifiers_in_expr(func, bound, captured);
-            for arg in args {
-                collect_identifiers_in_expr(arg, bound, captured);
-            }
-        }
-        ExpressionKind::Index(base, index) => {
-            collect_identifiers_in_expr(base, bound, captured);
-            collect_identifiers_in_expr(index, bound, captured);
-        }
-        ExpressionKind::Member(base, _) => {
-            collect_identifiers_in_expr(base, bound, captured);
-        }
-        ExpressionKind::Assignment(lhs, _, rhs) => {
-            // Process RHS.
-            collect_identifiers_in_expr(rhs, bound, captured);
-            // LHS is not an expression, but we still need to check the base.
-            use crate::ast::expression::LeftHandSideExpression;
-            match lhs.as_ref() {
-                LeftHandSideExpression::Identifier(e) => {
-                    if let ExpressionKind::Identifier(name, _) = &e.node {
-                        if !bound.contains(name) {
-                            captured.insert(name.clone());
-                        }
-                    }
-                }
-                LeftHandSideExpression::Index(e) | LeftHandSideExpression::Member(e) => {
-                    collect_identifiers_in_expr(e, bound, captured);
-                }
-            }
-        }
-        ExpressionKind::Array(exprs, init_expr) => {
-            for e in exprs {
-                collect_identifiers_in_expr(e, bound, captured);
-            }
-            collect_identifiers_in_expr(init_expr, bound, captured);
-        }
-        ExpressionKind::List(exprs) => {
-            for e in exprs {
-                collect_identifiers_in_expr(e, bound, captured);
-            }
-        }
-        ExpressionKind::Set(exprs) => {
-            for e in exprs {
-                collect_identifiers_in_expr(e, bound, captured);
-            }
-        }
-        ExpressionKind::Tuple(exprs) => {
-            for e in exprs {
-                collect_identifiers_in_expr(e, bound, captured);
-            }
-        }
-        ExpressionKind::Map(pairs) => {
-            for (k, v) in pairs {
-                collect_identifiers_in_expr(k, bound, captured);
-                collect_identifiers_in_expr(v, bound, captured);
-            }
-        }
-        ExpressionKind::Cast(e, _) => {
-            collect_identifiers_in_expr(e, bound, captured);
-        }
-        ExpressionKind::Conditional(cond, then_expr, else_expr, _) => {
-            collect_identifiers_in_expr(cond, bound, captured);
-            collect_identifiers_in_expr(then_expr, bound, captured);
-            if let Some(e) = else_expr {
-                collect_identifiers_in_expr(e, bound, captured);
-            }
-        }
-        ExpressionKind::Block(_, e) => {
-            collect_identifiers_in_expr(e, bound, captured);
-        }
-        ExpressionKind::Match(e, _) => {
-            collect_identifiers_in_expr(e, bound, captured);
-        }
-        ExpressionKind::Lambda(_) => {
-            // Lambda captures are handled by their own scope analysis.
-        }
-        ExpressionKind::Guard(_, e) => {
-            collect_identifiers_in_expr(e, bound, captured);
-        }
-        ExpressionKind::Literal(_)
-        | ExpressionKind::Type(_, _)
-        | ExpressionKind::GenericType(_, _, _)
-        | ExpressionKind::TypeDeclaration(_, _, _, _)
-        | ExpressionKind::EnumValue(_, _)
-        | ExpressionKind::StructMember(_, _)
-        | ExpressionKind::ImportPath(_, _)
-        | ExpressionKind::FormattedString(_)
-        | ExpressionKind::NamedArgument(_, _)
-        | ExpressionKind::Super => {}
-    }
 }
 
 /// Helper: collects all variable names that are written to in a statement.
@@ -1813,10 +1611,8 @@ fn resolve_forall_device(
     vars: &[VariableDeclaration],
     context: &Context,
 ) -> ForallTarget {
-    let mut bound: std::collections::HashSet<String> =
-        vars.iter().map(|d| d.name.clone()).collect();
-    let mut captured: std::collections::HashSet<String> = std::collections::HashSet::new();
-    collect_identifiers_in_stmt(body, &mut bound, &mut captured);
+    let bound: std::collections::HashSet<String> = vars.iter().map(|d| d.name.clone()).collect();
+    let captured = collect_free_identifiers_excluding(body, &bound);
 
     let (has_gpu, _has_host) = scan_residencies(&captured, context);
 
@@ -1841,10 +1637,8 @@ fn detect_reduction(
 ) -> Option<String> {
     let written = collect_written_names_in_stmt(body);
 
-    let mut bound: std::collections::HashSet<String> =
-        vars.iter().map(|d| d.name.clone()).collect();
-    let mut captured: std::collections::HashSet<String> = std::collections::HashSet::new();
-    collect_identifiers_in_stmt(body, &mut bound, &mut captured);
+    let bound: std::collections::HashSet<String> = vars.iter().map(|d| d.name.clone()).collect();
+    let captured = collect_free_identifiers_excluding(body, &bound);
 
     for name in written.iter() {
         if !captured.contains(name) {

@@ -244,12 +244,6 @@ fn lower_forall_cpu_3d(
     ctx.exit_loop();
 
     ctx.set_current_block(loop1.exit_bb);
-    ctx.set_terminator(Terminator::new(
-        TerminatorKind::Goto {
-            target: loop0.increment_bb,
-        },
-        *span,
-    ));
     ctx.pop_scope(*span);
 
     ctx.set_terminator(Terminator::new(

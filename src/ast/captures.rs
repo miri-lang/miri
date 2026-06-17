@@ -249,6 +249,11 @@ fn collect_identifiers_in_expr(
         ExpressionKind::Guard(_, inner) => {
             collect_identifiers_in_expr(inner, bound, captured);
         }
+        ExpressionKind::FormattedString(parts) => {
+            for p in parts {
+                collect_identifiers_in_expr(p, bound, captured);
+            }
+        }
         ExpressionKind::Literal(_)
         | ExpressionKind::Super
         | ExpressionKind::Type(_, _)
@@ -256,7 +261,6 @@ fn collect_identifiers_in_expr(
         | ExpressionKind::TypeDeclaration(_, _, _, _)
         | ExpressionKind::ImportPath(_, _)
         | ExpressionKind::StructMember(_, _)
-        | ExpressionKind::Lambda(_)
-        | ExpressionKind::FormattedString(_) => {}
+        | ExpressionKind::Lambda(_) => {}
     }
 }
