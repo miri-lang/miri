@@ -8,7 +8,7 @@ This directory contains production-grade example programs showcasing Miri's GPU 
 ## Design notes
 
 - **Single source of truth**: These files are loaded by the test suite via `include_str!("../../../examples/gpu/<name>.mi")`, ensuring demo code and CI tests always verify identical bytes.
-- **Surface constraints**: Demos use only currently-available GPU features: `gpu let`/`gpu var`/`gpu for` with literal Int range bounds, no kernel-body loops, straight-line code + `if`-guards only, and cross-residency readback via assignment.
+- **Surface constraints**: Demos use only currently-available GPU features: `gpu let`/`gpu var`/`gpu forall` with literal Int range bounds, no kernel-body loops, straight-line code + `if`-guards only, and cross-residency readback via assignment.
 - **Correctness checklist**: Each demo validates residency tracking, upload/launch/readback sequencing, buffer lifetime, write safety (no data races), bounds correctness, and portability (no backend-specific code).
 
 ## Demos
@@ -19,7 +19,7 @@ This directory contains production-grade example programs showcasing Miri's GPU 
 
 **Execution model**:
 1. Upload: two captured `gpu let` arrays + one `gpu var`, marshalled to device on first kernel launch
-2. Launch: one `gpu for i in 0..4` kernel
+2. Launch: one `gpu forall i in 0..4` kernel
 3. Readback: one cross-residency assignment `let host = dst`, which fences and copies the result back
 
 **Expected output**: `6.0 8.0 10.0 12.0` (1.0+5.0, 2.0+6.0, 3.0+7.0, 4.0+8.0).
@@ -38,7 +38,7 @@ This directory contains production-grade example programs showcasing Miri's GPU 
 
 **Execution model**:
 1. Upload: two captured `gpu let` arrays + one `gpu var`
-2. Launch: one `gpu for i in 0..4` kernel computing `dst[i] = a[i] * 2.0 + b[i]`
+2. Launch: one `gpu forall i in 0..4` kernel computing `dst[i] = a[i] * 2.0 + b[i]`
 3. Readback: one cross-residency assignment
 
 **Expected output**: `7.0 10.0 13.0 16.0` (1.0*2.0+5.0, 2.0*2.0+6.0, 3.0*2.0+7.0, 4.0*2.0+8.0).
@@ -53,12 +53,12 @@ This directory contains production-grade example programs showcasing Miri's GPU 
 
 ### buffer_reuse.mi
 
-**Purpose**: Demonstrates persistent device buffer reuse: two sequential `gpu for` blocks on the same `gpu var` with no readback between them. Proves the cost model: one upload at first capture, two launches, one readback at the end.
+**Purpose**: Demonstrates persistent device buffer reuse: two sequential `gpu forall` blocks on the same `gpu var` with no readback between them. Proves the cost model: one upload at first capture, two launches, one readback at the end.
 
 **Execution model**:
 1. Upload: one `gpu var data`, allocated and uploaded to device at first kernel capture
-2. Launch (kernel 1): first `gpu for i in 0..8` block initializes `data[i] = i`
-3. Launch (kernel 2): second `gpu for i in 0..8` block modifies the same buffer: `data[i] = data[i] + 8`
+2. Launch (kernel 1): first `gpu forall i in 0..8` block initializes `data[i] = i`
+3. Launch (kernel 2): second `gpu forall i in 0..8` block modifies the same buffer: `data[i] = data[i] + 8`
 4. Readback: one cross-residency assignment `let host = data` at the end
 
 The device buffer persists between kernels (no deallocation); the second kernel reads and writes the same persistent buffer.
