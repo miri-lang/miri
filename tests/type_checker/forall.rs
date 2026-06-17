@@ -151,3 +151,46 @@ fn main()
 "#,
     );
 }
+
+#[test]
+fn test_bare_forall_with_gpu_capture_only_in_match_arm_resolves_to_gpu() {
+    type_checker_test(
+        r#"
+fn main()
+    gpu let g = [1, 2, 3]
+    let h = 5
+    forall i in 0..3
+        let _ = match i
+            0: g.length()
+            _: h
+"#,
+    );
+}
+
+#[test]
+fn test_bare_forall_with_gpu_capture_in_formatted_string_part_resolves_to_gpu() {
+    // Tests that capture collection walks into FormattedString parts.
+    // Without the FormattedString walker, 'g' would not be captured and
+    // forall would mis-resolve to CPU, triggering cross-residency error.
+    type_checker_error_test(
+        r#"
+fn main()
+    gpu let g = [1, 2, 3]
+    forall i in 0..3
+        let len = f"{g[i]}"
+"#,
+        "Variable 'len' has type 'String' which is not GPU-compatible",
+    );
+}
+
+#[test]
+fn test_forall_captures_gpu_buffer_in_method_call_resolves_to_gpu() {
+    type_checker_test(
+        r#"
+fn main()
+    gpu let g = [1, 2, 3]
+    forall i in 0..3
+        let len = g.length()
+"#,
+    );
+}
