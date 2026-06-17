@@ -41,7 +41,7 @@ fn main()
     );
 }
 
-/// Adding a third `gpu for` block that captures the same binding adds one
+/// Adding a third `forall` block that captures the same binding adds one
 /// launch and zero uploads.
 #[test]
 fn third_capture_adds_launch_not_upload() {

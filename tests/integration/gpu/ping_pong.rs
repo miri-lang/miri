@@ -3,7 +3,7 @@
 
 //! Tests for buffer ping-pong.
 //!
-//! Two persistent `gpu var` grids, two sequential `gpu for` blocks with swapped
+//! Two persistent `gpu var` grids, two sequential `forall` blocks with swapped
 //! read/write roles. Persistent device buffers retain both across dispatches
 //! without intermediate readback.
 

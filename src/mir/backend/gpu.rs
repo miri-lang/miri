@@ -18,7 +18,7 @@ pub struct GpuBodyMetadata {
     /// Format: [x, y, z]
     pub workgroup_size: Option<[u32; 3]>,
     /// Dispatch grid size (number of workgroups).
-    /// Computed statically for `gpu for` with literal loop bounds.
+    /// Computed statically for `forall` with literal loop bounds.
     /// For runtime-bound loops, this may be None (grid computed at runtime).
     /// Format: [x, y, z]
     pub grid_size: Option<[u32; 3]>,

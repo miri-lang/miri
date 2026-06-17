@@ -352,7 +352,7 @@ fn trait_def() -> TypeDefinition {
     })
 }
 
-// `gpu for` residency-gated buffer classification (must track the MIR
+// `forall` residency-gated buffer classification (must track the MIR
 // `is_gpu_buffer_capture` predicate: fixed-size `Array` only).
 
 #[test]

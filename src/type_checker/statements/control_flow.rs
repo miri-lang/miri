@@ -498,8 +498,8 @@ impl TypeChecker {
         self.finalize_gpu_for_scope(context, outer_in_gpu);
     }
 
-    /// Type-checks a `gpu for <ident> in <range>` statement (1D) or
-    /// `gpu for x, y in <range1>, <range2>` statement (2D).
+    /// Type-checks a `forall <ident> in <range>` statement (1D) or
+    /// `forall x, y in <range1>, <range2>` statement (2D).
     ///
     /// Restrictions enforced beyond `check_for`:
     /// - The iterable must be a numeric range (`a..b` or `a..=b`).
@@ -705,7 +705,7 @@ impl TypeChecker {
     ) {
         let ExpressionKind::Tuple(ranges) = &iterable.node else {
             self.report_error(
-                "2D gpu for requires two comma-separated ranges".to_string(),
+                "2D forall requires two comma-separated ranges".to_string(),
                 iterable.span,
             );
             return;
@@ -713,7 +713,7 @@ impl TypeChecker {
 
         if ranges.len() != 2 {
             self.report_error(
-                "2D gpu for requires exactly two ranges".to_string(),
+                "2D forall requires exactly two ranges".to_string(),
                 iterable.span,
             );
             return;
@@ -940,7 +940,7 @@ impl TypeChecker {
         stmt_span: Span,
     ) {
         // Buffer-level semantic validation: per-pass read/write disjointness.
-        // For a single gpu for pass: reject iff read_set ∩ write_set ≠ ∅ (race),
+        // For a single forall pass: reject iff read_set ∩ write_set ≠ ∅ (race),
         // or write_set is empty. Multiple disjoint writes are now LEGAL.
         let loop_var_name = &loop_decls[0].name;
         let (read_set, write_set) = collect_pass_buffer_sets(body, loop_var_name, context);
@@ -1231,7 +1231,7 @@ fn is_int_literal(expr: &Expression) -> bool {
     )
 }
 
-/// Collects gpu buffer read and write sets for a single pass (gpu for body).
+/// Collects gpu buffer read and write sets for a single pass (forall body).
 /// Used for semantic buffer-level disjointness validation.
 ///
 /// Returns (read_set, write_set) where each is a set of gpu buffer names.

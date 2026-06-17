@@ -149,7 +149,7 @@ impl<'source> Parser<'source> {
     /// Parses everything past the function modifiers: the `fn` keyword, the
     /// name (or anonymous lambda), generics, parameter list, return type and
     /// body. Callers that have already consumed one or more modifiers (e.g.
-    /// the `gpu for` vs `gpu fn` disambiguator) feed the partially-built
+    /// the `gpu forall` vs `gpu fn` disambiguator) feed the partially-built
     /// [`FunctionProperties`] through this entry point.
     pub(crate) fn function_declaration_after_modifiers(
         &mut self,

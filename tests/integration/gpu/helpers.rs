@@ -11,7 +11,7 @@ use miri::mir::lowering::lower_function;
 use miri::mir::ExecutionModel;
 use miri::pipeline::Pipeline;
 
-/// Compile a Miri source with a `gpu for` or `gpu fn` to WGSL and return the kernel text.
+/// Compile a Miri source with a `forall` or `gpu fn` to WGSL and return the kernel text.
 pub fn compile_to_wgsl(source: &str) -> String {
     let pipeline = Pipeline::new();
     let result = pipeline.frontend(source).expect("frontend failed");

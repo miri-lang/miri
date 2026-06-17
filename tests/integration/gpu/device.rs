@@ -9,7 +9,7 @@
 //!
 //! `gpu_adapter_available()` returns true iff the machine has a GPU device
 //! that supports SHADER_INT64. It probes by compiling and running a simple
-//! int round-trip test through `gpu for` and checking the output.
+//! int round-trip test through `forall` and checking the output.
 
 use super::utils::{assert_runs, assert_runs_with_output};
 use std::sync::OnceLock;
@@ -20,7 +20,7 @@ static GPU_ADAPTER_AVAILABLE: OnceLock<bool> = OnceLock::new();
 /// Determine whether a working GPU adapter with SHADER_INT64 support is
 /// available on this machine.
 ///
-/// The oracle works by running an int round-trip probe through `gpu for`:
+/// The oracle works by running an int round-trip probe through `forall`:
 /// it compiles a simple kernel that adds two arrays and reads back the result.
 /// Returns true only if the computation succeeds and produces the expected
 /// output, confirming both device availability and the required 64-bit

@@ -41,7 +41,7 @@ pub enum RuntimeKind {
     /// I/O, and collection primitives.
     Core,
     /// The GPU runtime (`miri-runtime-gpu`), providing the wgpu/WebGPU host
-    /// driver for `gpu fn` and `gpu for` constructs.
+    /// driver for `gpu fn` and `forall` constructs.
     Gpu,
 }
 

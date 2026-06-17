@@ -145,7 +145,7 @@ gpu let arr = [1, 2147483648, 3]
 
 #[test]
 fn test_gpu_i32_range_host_array_capture_rejected_by_type_checker() {
-    // Host-resident arrays cannot be captured in `gpu for` loops; the type
+    // Host-resident arrays cannot be captured in `forall` loops; the type
     // checker enforces residency visibility. Once transient capture support
     // is added to the compiler, this test can evolve to runtime-test the
     // upload validation path (new_storage_buffer_with_upload with i32 narrowing)
