@@ -3,9 +3,9 @@
 
 //! MIR lowering for `gpu frame <ident> in <range>` loops.
 //!
-//! A `gpu frame` loop is a variant of `gpu for` that synthesizes a kernel marked
+//! A `gpu frame` loop is a variant of `forall` that synthesizes a kernel marked
 //! with `is_frame_step=true` for animation drivers. The frame kernel is structured
-//! as a `gpu for` kernel plus 11 leading frame-input uniform parameters (f0..f10),
+//! as a `forall` kernel plus 11 leading frame-input uniform parameters (f0..f10),
 //! which precede any ordinary scalar captures. This parameter ordering ensures the
 //! WGSL `_Inputs` struct fields at offsets 0–40 are fixed for frame fields,
 //! simplifying integration with the web-gpu driver.

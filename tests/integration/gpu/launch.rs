@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 //
-// Native `gpu for` dispatch tests. These exercise the full compiler-driven
+// Native `forall` dispatch tests. These exercise the full compiler-driven
 // pipeline: MIR `TerminatorKind::GpuLaunch` → Cranelift translation →
 // marshal captures → wgpu dispatch via `miri_gpu_launch_inline` →
 // readback.
 //
-// Owns end-to-end value correctness for `gpu for` kernels: the WGSL
+// Owns end-to-end value correctness for `forall` kernels: the WGSL
 // scalar mapping aligns host and device widths (`int` → `i64`, `float`
 // → `f64`) so reads/writes round-trip through device memory cleanly.
 
@@ -34,7 +34,7 @@ println(\"dispatched\")
     );
 }
 
-/// End-to-end test: `gpu let` / `gpu var` / `gpu for` / cross-residency
+/// End-to-end test: `gpu let` / `gpu var` / `forall` / cross-residency
 /// readback compiles and dispatches with ZERO `use` lines. Verifies that
 /// implicit imports work on the GPU path — `println`, array literals, and
 /// the `Accelerable` trait resolve without explicit imports.
@@ -450,7 +450,7 @@ fn main()
 }
 
 /// Buffer ping-pong with 3 generations and telemetry.
-/// Two persistent `gpu var` grids swapped across 3 sequential `gpu for` kernels
+/// Two persistent `gpu var` grids swapped across 3 sequential `forall` kernels
 /// WITHOUT intermediate readback. Proves:
 /// - Buffers are reused across launches
 /// - Read-only vs read-write capture (each kernel declares the binding it needs)

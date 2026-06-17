@@ -434,7 +434,7 @@ fn first_expr_type_is_gpu_compatible(expr: &crate::ast::expression::Expression) 
 ///
 /// Stricter than [`is_gpu_compatible`]: `Boolean` is a valid scalar for kernel
 /// locals (WGSL `bool`) but WGSL forbids `bool` in `var<storage>` bindings, so
-/// an `Array<Boolean, N>` captured by a `gpu for` would round-trip as invalid
+/// an `Array<Boolean, N>` captured by a `forall` would round-trip as invalid
 /// shader source. The other rejected types are non-scalar or have no fixed
 /// runtime representation on the device.
 ///

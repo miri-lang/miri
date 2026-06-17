@@ -701,7 +701,7 @@ impl<'source> Parser<'source> {
         self.eat_token(&Token::Frame)?;
 
         // Check if the next token is not an identifier (block form).
-        // Block form: `gpu frame` followed by indent/newline and then gpu for statements.
+        // Block form: `gpu frame` followed by indent/newline and then forall statements.
         // Single-pass form: `gpu frame i in 0..4: body`
         if !self.match_lookahead_type(|t| t == &Token::Identifier) {
             // Block form: indent should follow, parse as block

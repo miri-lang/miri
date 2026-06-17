@@ -97,7 +97,7 @@ fn collect_runtime_info(
     // RuntimeFunctionDeclaration in user code.
     required_runtimes.insert(RuntimeKind::Core);
 
-    // Link the "gpu" runtime when the program contains any `gpu for` /
+    // Link the "gpu" runtime when the program contains any `forall` /
     // `gpu fn` construct. The Cranelift backend lowers `GpuLaunch` to a
     // call into `miri_gpu_launch_inline`, which lives there.
     if program_uses_gpu(program.body.iter().chain(imported_stmts.iter())) {
@@ -190,7 +190,7 @@ fn collect_runtime_info(
     }
 }
 
-/// Walks the AST looking for any GPU construct: `gpu for` statements or
+/// Walks the AST looking for any GPU construct: `forall` statements or
 /// function declarations carrying `is_gpu: true`. Used by
 /// `collect_runtime_info` to decide whether to link `libmiri_runtime_gpu`.
 pub fn program_uses_gpu<'a, I: IntoIterator<Item = &'a Statement>>(stmts: I) -> bool {
@@ -223,7 +223,7 @@ fn stmt_uses_gpu(stmt: &Statement) -> bool {
         | StatementKind::Trait(_, _, _, methods, _) => methods.iter().any(stmt_uses_gpu),
         // A `gpu let` / `gpu var` binding may trigger a cross-residency
         // readback that calls into the GPU runtime even when the program has
-        // no `gpu for` / `gpu fn`, so a gpu-resident declaration alone
+        // no `forall` / `gpu fn`, so a gpu-resident declaration alone
         // requires linking it.
         StatementKind::Variable(decls, _) => decls
             .iter()

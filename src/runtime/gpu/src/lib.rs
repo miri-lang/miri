@@ -4,7 +4,7 @@
 //! Miri GPU runtime.
 //!
 //! Independent Cargo crate providing the wgpu host driver for Miri's
-//! `gpu fn` / `gpu for` constructs. Linked only when a target enables
+//! `gpu fn` / `forall` constructs. Linked only when a target enables
 //! GPU codegen — the core Miri binary stays free of heavy GPU deps.
 //!
 //! The compiler talks to this crate through the FFI declared in

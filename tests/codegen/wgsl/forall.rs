@@ -27,7 +27,7 @@ fn synthesize_gpu_for_kernel(source: &str) -> Vec<u8> {
     let kernel = lambdas
         .iter()
         .find(|l| l.body.execution_model == miri::mir::ExecutionModel::GpuKernel)
-        .expect("expected a synthesized GpuKernel body for `gpu for`");
+        .expect("expected a synthesized GpuKernel body for `forall`");
 
     let artifact = WgslBackend
         .compile(
