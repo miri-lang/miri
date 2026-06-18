@@ -260,6 +260,16 @@ pub enum MathIntrinsic {
     Tan,
     Ln,
     Exp,
+    Tanh,
+    Exp2,
+    Log2,
+    Atan2,
+    Fract,
+    Clamp,
+    Mix,
+    Smoothstep,
+    Step,
+    Sign,
 }
 
 impl MathIntrinsic {
@@ -278,6 +288,16 @@ impl MathIntrinsic {
             "tan" => Some(MathIntrinsic::Tan),
             "log" => Some(MathIntrinsic::Ln),
             "exp" => Some(MathIntrinsic::Exp),
+            "tanh" => Some(MathIntrinsic::Tanh),
+            "exp2" => Some(MathIntrinsic::Exp2),
+            "log2" => Some(MathIntrinsic::Log2),
+            "atan2" => Some(MathIntrinsic::Atan2),
+            "fract" => Some(MathIntrinsic::Fract),
+            "clamp" => Some(MathIntrinsic::Clamp),
+            "mix" => Some(MathIntrinsic::Mix),
+            "smoothstep" => Some(MathIntrinsic::Smoothstep),
+            "step" => Some(MathIntrinsic::Step),
+            "sign" => Some(MathIntrinsic::Sign),
             _ => None,
         }
     }
@@ -299,6 +319,16 @@ impl fmt::Display for MathIntrinsic {
             MathIntrinsic::Tan => "tan",
             MathIntrinsic::Ln => "ln",
             MathIntrinsic::Exp => "exp",
+            MathIntrinsic::Tanh => "tanh",
+            MathIntrinsic::Exp2 => "exp2",
+            MathIntrinsic::Log2 => "log2",
+            MathIntrinsic::Atan2 => "atan2",
+            MathIntrinsic::Fract => "fract",
+            MathIntrinsic::Clamp => "clamp",
+            MathIntrinsic::Mix => "mix",
+            MathIntrinsic::Smoothstep => "smoothstep",
+            MathIntrinsic::Step => "step",
+            MathIntrinsic::Sign => "sign",
         };
         write!(f, "{}", s)
     }

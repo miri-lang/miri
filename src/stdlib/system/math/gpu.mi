@@ -1,0 +1,70 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+//! GPU-compatible math helpers for kernel execution.
+//!
+//! These functions are designed for use inside GPU kernels (`gpu fn` and
+//! `gpu forall`). They compose intrinsics with basic arithmetic.
+//!
+//! Note: These functions use math intrinsics that are primarily intended
+//! for GPU execution. CPU usage may require additional runtime support.
+
+use system.math.{sin, exp, floor}
+
+/// Logistic sigmoid, GPU-compatible version.
+/// Computes 1.0 / (1.0 + exp(-x)), suitable for GPU execution.
+public fn gpu_sigmoid(x float) float: 1.0 / (1.0 + exp(-x))
+
+/// Simple harmonic hash: uses sine wave modulation for pseudo-random values.
+/// Input can be any float; output is in [0, 1) range.
+/// Result is deterministic: same input always produces same output.
+/// Note: This is a basic implementation; cryptographic-grade randomness
+/// is not guaranteed.
+public fn hash(seed float) float:
+    let hashed = sin(seed * 12.9898 + 78.233) * 43758.5453
+    let integer_part = floor(hashed)
+    hashed - integer_part
+
+/// Linear interpolation between two values.
+/// Standard lerp: a + t * (b - a).
+public fn lerp(a float, b float, t float) float:
+    a + t * (b - a)
+
+/// Smoothstep interpolation function.
+/// Smoothly interpolates from 0 to 1 as x goes from 0 to 1,
+/// using a cubic polynomial for smooth curves (Hermite).
+public fn smoothlerp(a float, b float, t float) float:
+    let smooth_t = t * t * (3.0 - 2.0 * t)
+    lerp(a, b, smooth_t)
+
+/// 2D value noise in [0, 1): smoothly interpolates hashed lattice corners.
+/// Deterministic and continuous; at integer coordinates it returns the raw
+/// corner hash. Built from `hash`, `floor`, and `lerp` (the fractional part is
+/// `x - floor(x)`, kept inline so the helper composes on both CPU and GPU).
+public fn value_noise(x float, y float) float:
+    let xi = floor(x)
+    let yi = floor(y)
+    let xf = x - xi
+    let yf = y - yi
+    let c00 = hash(xi + yi * 57.0)
+    let c10 = hash(xi + 1.0 + yi * 57.0)
+    let c01 = hash(xi + (yi + 1.0) * 57.0)
+    let c11 = hash(xi + 1.0 + (yi + 1.0) * 57.0)
+    let u = xf * xf * (3.0 - 2.0 * xf)
+    let v = yf * yf * (3.0 - 2.0 * yf)
+    lerp(lerp(c00, c10, u), lerp(c01, c11, u), v)
+
+/// Two-octave fractal value noise (fBm), used to build the curl field.
+public fn fbm2(x float, y float) float:
+    value_noise(x, y) * 0.5 + value_noise(x * 2.0, y * 2.0) * 0.25
+
+/// X component of a divergence-free curl field derived from `fbm2`, suitable
+/// for advecting particles. `curl = (dP/dy, -dP/dx)` of the scalar potential.
+public fn curl2_x(x float, y float) float:
+    let eps = 0.01
+    (fbm2(x, y + eps) - fbm2(x, y - eps)) / (2.0 * eps)
+
+/// Y component of the curl field (see `curl2_x`).
+public fn curl2_y(x float, y float) float:
+    let eps = 0.01
+    (fbm2(x - eps, y) - fbm2(x + eps, y)) / (2.0 * eps)
