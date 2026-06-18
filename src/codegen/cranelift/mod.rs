@@ -223,7 +223,12 @@ impl Backend for CraneliftBackend {
         let cpu_bodies: Vec<(&str, &Body)> = bodies
             .iter()
             .copied()
-            .filter(|(_, b)| b.execution_model != crate::mir::ExecutionModel::GpuKernel)
+            .filter(|(_, b)| {
+                !matches!(
+                    b.execution_model,
+                    crate::mir::ExecutionModel::GpuKernel | crate::mir::ExecutionModel::GpuDevice
+                )
+            })
             .collect();
         self.predeclare_user_functions(&mut module, &isa, &cpu_bodies)?;
 

@@ -215,3 +215,152 @@ fn test_cast_float_overflow_saturates_negative() {
         "-9223372036854775808",
     );
 }
+
+mod new_math_intrinsics {
+    use super::*;
+
+    #[test]
+    fn test_tanh_float_cpu() {
+        assert_runs_with_output(
+            r#"
+            use system.math.{tanh}
+            use system.io
+
+            let result = tanh(0.0)
+            println(f'{result}')
+            "#,
+            "0.0",
+        );
+    }
+
+    #[test]
+    fn test_exp2_float_cpu() {
+        assert_runs_with_output(
+            r#"
+            use system.math.{exp2}
+            use system.io
+
+            let result = exp2(3.0)
+            println(f'{result}')
+            "#,
+            "8.0",
+        );
+    }
+
+    #[test]
+    fn test_log2_float_cpu() {
+        assert_runs_with_output(
+            r#"
+            use system.math.{log2}
+            use system.io
+
+            let result = log2(8.0)
+            println(f'{result}')
+            "#,
+            "3.0",
+        );
+    }
+
+    #[test]
+    fn test_fract_float_cpu() {
+        assert_runs_with_output(
+            r#"
+            use system.math.{fract}
+            use system.io
+
+            let result = fract(2.25)
+            println(f'{result}')
+            "#,
+            "0.25",
+        );
+    }
+
+    #[test]
+    fn test_sign_float_cpu() {
+        assert_runs_with_output(
+            r#"
+            use system.math.{sign}
+            use system.io
+
+            let neg = sign(0.0 - 3.0)
+            let zero = sign(0.0)
+            let pos = sign(2.0)
+            println(f'{neg} {zero} {pos}')
+            "#,
+            "-1.0 0.0 1.0",
+        );
+    }
+
+    #[test]
+    fn test_atan2_float_cpu() {
+        assert_runs_with_output(
+            r#"
+            use system.math.{atan2}
+            use system.io
+
+            let result = atan2(1.0, 1.0)
+            println(f'{result}')
+            "#,
+            "0.7853981",
+        );
+    }
+
+    #[test]
+    fn test_step_float_cpu() {
+        assert_runs_with_output(
+            r#"
+            use system.math.{step}
+            use system.io
+
+            let below = step(0.5, 0.3)
+            let above = step(0.5, 0.7)
+            println(f'{below} {above}')
+            "#,
+            "0.0 1.0",
+        );
+    }
+
+    #[test]
+    fn test_clamp_float_cpu() {
+        assert_runs_with_output(
+            r#"
+            use system.math.{clamp}
+            use system.io
+
+            let lo = clamp(0.0 - 1.0, 0.0, 1.0)
+            let mid = clamp(0.5, 0.0, 1.0)
+            let hi = clamp(5.0, 0.0, 1.0)
+            println(f'{lo} {mid} {hi}')
+            "#,
+            "0.0 0.5 1.0",
+        );
+    }
+
+    #[test]
+    fn test_mix_float_cpu() {
+        assert_runs_with_output(
+            r#"
+            use system.math.{mix}
+            use system.io
+
+            let result = mix(0.0, 10.0, 0.25)
+            println(f'{result}')
+            "#,
+            "2.5",
+        );
+    }
+
+    #[test]
+    fn test_smoothstep_float_cpu() {
+        assert_runs_with_output(
+            r#"
+            use system.math.{smoothstep}
+            use system.io
+
+            let result = smoothstep(0.0, 1.0, 0.5)
+            println(f'{result}')
+            "#,
+            "0.5",
+        );
+    }
+}

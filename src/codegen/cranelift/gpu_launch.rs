@@ -48,11 +48,24 @@ pub(crate) fn build_kernel_registry(
     let backend = WgslBackend;
     let options = WgslOptions::default();
     let mut registry = HashMap::new();
+
+    // GpuDevice helper bodies (user functions called from kernels) are emitted
+    // into every kernel module so the kernel's calls resolve. Unused helpers are
+    // harmless dead functions in WGSL.
+    let helpers: Vec<(&str, &Body)> = bodies
+        .iter()
+        .filter(|(_, b)| b.execution_model == ExecutionModel::GpuDevice)
+        .map(|(n, b)| (*n, *b))
+        .collect();
+
     for (name, body) in bodies {
         if body.execution_model != ExecutionModel::GpuKernel {
             continue;
         }
-        let artifact = backend.compile(&[(*name, *body)], &options)?;
+        let mut module_bodies: Vec<(&str, &Body)> = Vec::with_capacity(1 + helpers.len());
+        module_bodies.extend_from_slice(&helpers);
+        module_bodies.push((*name, *body));
+        let artifact = backend.compile(&module_bodies, &options)?;
         let wgsl_text = String::from_utf8(artifact.bytes).map_err(|err| {
             CodegenError::Internal(format!(
                 "WGSL backend produced non-UTF-8 output for kernel {}: {}",

@@ -784,24 +784,27 @@ fn non_buffer_kernel_param_is_rejected() {
 }
 
 #[test]
-fn gpu_device_function_is_rejected() {
+fn gpu_device_function_emits_module_helper() {
+    // A GpuDevice body is a user function called from a kernel; it is emitted
+    // as a module-level WGSL helper (not a `@compute` entry point).
     let span = dummy_span();
     let mut body = Body::new(0, span, ExecutionModel::GpuDevice);
+    // Local 0 is the f32 return slot; no parameters.
     body.local_decls
-        .push(LocalDecl::new(Type::new(TypeKind::Void, span), span));
+        .push(LocalDecl::new(Type::new(TypeKind::F32, span), span));
     let mut bb = BasicBlockData::new(None);
     bb.terminator = Some(Terminator::new(TerminatorKind::Return, span));
     body.basic_blocks.push(bb);
 
     let backend = WgslBackend;
-    let err = backend
+    let artifact = backend
         .compile(&[("dev", &body)], &WgslOptions::default())
-        .expect_err("GpuDevice must not be silently emitted as a kernel");
-    let msg = format!("{:?}", err);
+        .expect("GpuDevice helper must emit successfully");
+    let wgsl = String::from_utf8(artifact.bytes).expect("WGSL is UTF-8");
     assert!(
-        msg.contains("GpuDevice"),
-        "expected GpuDevice rejection, got: {}",
-        msg
+        wgsl.contains("fn dev(") && !wgsl.contains("@compute"),
+        "expected a non-entry helper `fn dev`, got: {}",
+        wgsl
     );
 }
 

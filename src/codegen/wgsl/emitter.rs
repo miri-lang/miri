@@ -29,6 +29,10 @@ impl Emitter {
         self.output
     }
 
+    pub(super) fn emit_helper(&mut self, name: &str, body: &Body) -> Result<(), CodegenError> {
+        self.emit_helper_fn(name, body)
+    }
+
     pub(super) fn emit_kernel(
         &mut self,
         name: &str,
@@ -145,6 +149,58 @@ impl Emitter {
         writeln!(self.output, "}}").map_err(emit_err)?;
         writeln!(self.output).map_err(emit_err)
     }
+
+    fn emit_helper_fn(&mut self, name: &str, body: &Body) -> Result<(), CodegenError> {
+        if body.local_decls.is_empty() {
+            return Err(CodegenError::Internal(
+                "Helper function must have at least a return local".to_string(),
+            ));
+        }
+
+        let return_type = scalar(&body.local_decls[0].ty.kind)?;
+
+        write!(self.output, "fn {}(", name).map_err(emit_err)?;
+
+        // Parameters are locals 1..=arg_count, named to match how the body
+        // references them (`_1`, `_2`, ...). The implicit trailing `allocator`
+        // param belongs to the CPU/Perceus ABI and has no GPU counterpart, so
+        // it is skipped — GPU call sites never pass it.
+        let mut emitted = 0;
+        for i in 1..=body.arg_count {
+            let local_decl = body.local_decls.get(i).ok_or_else(|| {
+                CodegenError::Internal(format!(
+                    "WGSL backend: helper function missing param local {}",
+                    i
+                ))
+            })?;
+            if local_decl.name.as_deref() == Some("allocator") {
+                continue;
+            }
+            if emitted > 0 {
+                write!(self.output, ", ").map_err(emit_err)?;
+            }
+            let param_type = scalar(&local_decl.ty.kind)?;
+            write!(
+                self.output,
+                "{}: {}",
+                local_name(Local(i)),
+                param_type.name()
+            )
+            .map_err(emit_err)?;
+            emitted += 1;
+        }
+
+        writeln!(self.output, ") -> {} {{", return_type.name()).map_err(emit_err)?;
+
+        // Helpers carry no `@workgroup_size`; the value is unused for non-entry bodies.
+        let mut ctx = BodyEmitter::new(body, &[], [1, 1, 1], &mut self.output)?;
+        ctx.return_local = Some(Local(0));
+        ctx.emit_local_declarations()?;
+        ctx.emit_blocks()?;
+
+        writeln!(self.output, "}}").map_err(emit_err)?;
+        writeln!(self.output).map_err(emit_err)
+    }
 }
 
 fn emit_err(err: std::fmt::Error) -> CodegenError {
@@ -179,12 +235,13 @@ struct BufferBinding {
     scalar_field: Option<String>,
 }
 
-/// Converts a scalar type kind to WGSL wire format: int→i32, bool→u32, f32→f32.
+/// Converts a scalar type kind to WGSL wire format: int→i32, bool→u32, f32→f32, float→f64.
 fn scalar_type_to_wgsl(ty: &TypeKind) -> Result<WgslScalar, CodegenError> {
     match ty {
         TypeKind::Int => Ok(WgslScalar::I32),
         TypeKind::Boolean => Ok(WgslScalar::U32),
         TypeKind::F32 => Ok(WgslScalar::F32),
+        TypeKind::Float | TypeKind::F64 => Ok(WgslScalar::F64),
         _ => Err(CodegenError::Internal(format!(
             "unsupported scalar capture type in WGSL backend: {:?}",
             ty
@@ -377,6 +434,10 @@ struct BodyEmitter<'a> {
     loop_info: std::collections::HashMap<crate::mir::BasicBlock, LoopInfo>,
     /// Stack of active loop frames for break/continue resolution.
     loop_stack: Vec<LoopFrame>,
+    /// For a value-returning helper function, the local holding the return
+    /// value (`_0`). `None` for `@compute` kernel entry points, which return
+    /// `void` and read/write storage buffers instead.
+    return_local: Option<Local>,
 }
 
 impl<'a> BodyEmitter<'a> {
@@ -408,6 +469,7 @@ impl<'a> BodyEmitter<'a> {
             loop_headers,
             loop_info,
             loop_stack: Vec::new(),
+            return_local: None,
         })
     }
 
@@ -585,6 +647,24 @@ impl<'a> BodyEmitter<'a> {
     }
 
     fn emit_local_declarations(&mut self) -> Result<(), CodegenError> {
+        // A value-returning helper accumulates its result in `_0`; declare it
+        // up front so the body can assign to it before `return _0;`.
+        if let Some(rl) = self.return_local {
+            if let Some(decl) = self.body.local_decls.get(rl.0) {
+                if !matches!(decl.ty.kind, TypeKind::Void) {
+                    let ty = scalar(&decl.ty.kind)?;
+                    self.write_indent()?;
+                    writeln!(
+                        self.output,
+                        "var {}: {} = {};",
+                        local_name(rl),
+                        ty.name(),
+                        ty.zero_literal()
+                    )
+                    .map_err(emit_err)?;
+                }
+            }
+        }
         let skip_until = self.body.arg_count + 1;
         for (i, decl) in self.body.local_decls.iter().enumerate() {
             if i == 0 || i < skip_until {
@@ -700,8 +780,12 @@ impl<'a> BodyEmitter<'a> {
             })?;
             match &term.kind {
                 TerminatorKind::Return => {
-                    // Early return inside a loop/if requires explicit `return;`.
-                    if !self.loop_stack.is_empty() || self.indent > 1 {
+                    if let Some(rl) = self.return_local {
+                        // A value-returning helper always returns its `_0` slot.
+                        self.write_indent()?;
+                        writeln!(self.output, "return {};", local_name(rl)).map_err(emit_err)?;
+                    } else if !self.loop_stack.is_empty() || self.indent > 1 {
+                        // Early return inside a loop/if requires explicit `return;`.
                         self.write_indent()?;
                         writeln!(self.output, "return;").map_err(emit_err)?;
                     }
@@ -797,9 +881,21 @@ impl<'a> BodyEmitter<'a> {
                         )));
                     }
                 }
-                TerminatorKind::Call { .. }
-                | TerminatorKind::GpuLaunch { .. }
-                | TerminatorKind::VirtualCall { .. } => {
+                TerminatorKind::Call {
+                    func,
+                    args,
+                    destination,
+                    target,
+                    ..
+                } => {
+                    self.emit_call(func, args, destination, target.as_ref())?;
+                    if let Some(target) = target {
+                        cur = *target;
+                    } else {
+                        return Ok(());
+                    }
+                }
+                TerminatorKind::GpuLaunch { .. } | TerminatorKind::VirtualCall { .. } => {
                     return Err(CodegenError::Internal(format!(
                         "WGSL backend: terminator {:?} not yet supported",
                         term.kind
@@ -989,6 +1085,64 @@ impl<'a> BodyEmitter<'a> {
         Ok(())
     }
 
+    /// Emit a function call: `_dest = func_name(args); goto target`.
+    fn emit_call(
+        &mut self,
+        func: &Operand,
+        args: &[Operand],
+        destination: &Place,
+        _target: Option<&crate::mir::BasicBlock>,
+    ) -> Result<(), CodegenError> {
+        let func_name = match func {
+            Operand::Constant(c) => match &c.literal {
+                crate::ast::literal::Literal::Identifier(name) => name.clone(),
+                _ => {
+                    return Err(CodegenError::Internal(
+                        "WGSL backend: call with non-identifier func".to_string(),
+                    ));
+                }
+            },
+            _ => {
+                return Err(CodegenError::Internal(
+                    "WGSL backend: call with non-constant func".to_string(),
+                ));
+            }
+        };
+
+        self.write_indent()?;
+        let dest_str = self.render_place(destination)?;
+
+        // The implicit CPU/Perceus `allocator` argument has no GPU counterpart;
+        // the helper signature drops the matching param, so drop the argument too.
+        let arg_strs: Result<Vec<_>, _> = args
+            .iter()
+            .filter(|a| !self.is_allocator_operand(a))
+            .map(|a| self.render_operand(a))
+            .collect();
+        let args_str = arg_strs?.join(", ");
+
+        writeln!(self.output, "{} = {}({});", dest_str, func_name, args_str).map_err(emit_err)?;
+
+        Ok(())
+    }
+
+    /// True when the operand reads the body's implicit `allocator` local, which
+    /// is part of the CPU ABI and must not appear in a GPU call.
+    fn is_allocator_operand(&self, op: &Operand) -> bool {
+        let place = match op {
+            Operand::Copy(p) | Operand::Move(p) => p,
+            Operand::Constant(_) => return false,
+        };
+        if !place.projection.is_empty() {
+            return false;
+        }
+        self.body
+            .local_decls
+            .get(place.local.0)
+            .and_then(|d| d.name.as_deref())
+            == Some("allocator")
+    }
+
     /// Emit a statement.
     fn emit_statement(&mut self, kind: &StatementKind) -> Result<(), CodegenError> {
         match kind {
@@ -1173,6 +1327,16 @@ fn math_intrinsic_name(intrinsic: MathIntrinsic) -> &'static str {
         MathIntrinsic::Tan => "tan",
         MathIntrinsic::Ln => "log",
         MathIntrinsic::Exp => "exp",
+        MathIntrinsic::Tanh => "tanh",
+        MathIntrinsic::Exp2 => "exp2",
+        MathIntrinsic::Log2 => "log2",
+        MathIntrinsic::Atan2 => "atan2",
+        MathIntrinsic::Fract => "fract",
+        MathIntrinsic::Clamp => "clamp",
+        MathIntrinsic::Mix => "mix",
+        MathIntrinsic::Smoothstep => "smoothstep",
+        MathIntrinsic::Step => "step",
+        MathIntrinsic::Sign => "sign",
     }
 }
 

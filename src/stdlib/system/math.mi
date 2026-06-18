@@ -14,6 +14,20 @@ public intrinsic fn cos(x float) float
 public intrinsic fn tan(x float) float
 public intrinsic fn log(x float) float
 public intrinsic fn exp(x float) float
+public intrinsic fn tanh(x float) float
+public intrinsic fn exp2(x float) float
+public intrinsic fn log2(x float) float
+public intrinsic fn atan2(y float, x float) float
+public intrinsic fn fract(x float) float
+public intrinsic fn clamp(x float, lo float, hi float) float
+public intrinsic fn mix(a float, b float, t float) float
+public intrinsic fn smoothstep(low float, high float, x float) float
+public intrinsic fn step(edge float, x float) float
+public intrinsic fn sign(x float) float
+
+// Logistic sigmoid, composed from `exp`. Usable on the CPU and inside GPU
+// kernels (it lowers to a GPU-callable helper function).
+public fn sigmoid(x float) float: 1.0 / (1.0 + exp(-x))
 
 public const PI = 3.14159265358979323846
 public const E = 2.71828182845904523536
