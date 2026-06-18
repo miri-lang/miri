@@ -400,6 +400,7 @@ fn main()
 
 mod math_intrinsics {
     use super::super::device::assert_gpu_runs_with_output;
+    use super::super::utils::assert_compiler_error;
     use super::assert_gpu_wgsl_valid;
 
     /// GPU math-intrinsic scalar width.
@@ -475,6 +476,440 @@ fn main()
     gpu forall i in 0..4
         dst[i] = sin(a[i])
 ",
+        );
+    }
+
+    /// Unary: tanh(x) on f32 buffers.
+    #[test]
+    fn tanh_f32_emits_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+
+fn main()
+    gpu let a = [0.0, 1.0, 2.0, 3.0]
+    gpu var dst = [0.0, 0.0, 0.0, 0.0]
+    gpu forall i in 0..4
+        dst[i] = tanh(a[i])
+",
+        );
+    }
+
+    #[test]
+    fn tanh_f32_value_correct() {
+        assert_gpu_runs_with_output(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+use system.io
+
+fn main()
+    gpu let a = [0.0]
+    gpu var dst = [0.0]
+    gpu forall i in 0..1
+        dst[i] = tanh(a[i])
+    let result = dst
+    println(f'{result[0]}')
+",
+            "0.0",
+        );
+    }
+
+    /// Unary: exp2(x) on f32 buffers.
+    #[test]
+    fn exp2_f32_emits_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+
+fn main()
+    gpu let a = [0.0, 1.0, 2.0, 3.0]
+    gpu var dst = [0.0, 0.0, 0.0, 0.0]
+    gpu forall i in 0..4
+        dst[i] = exp2(a[i])
+",
+        );
+    }
+
+    #[test]
+    fn exp2_f32_value_correct() {
+        assert_gpu_runs_with_output(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+use system.io
+
+fn main()
+    gpu let a = [3.0]
+    gpu var dst = [0.0]
+    gpu forall i in 0..1
+        dst[i] = exp2(a[i])
+    let result = dst
+    println(f'{result[0]}')
+",
+            "8.0",
+        );
+    }
+
+    /// Unary: log2(x) on f32 buffers.
+    #[test]
+    fn log2_f32_emits_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+
+fn main()
+    gpu let a = [1.0, 2.0, 4.0, 8.0]
+    gpu var dst = [0.0, 0.0, 0.0, 0.0]
+    gpu forall i in 0..4
+        dst[i] = log2(a[i])
+",
+        );
+    }
+
+    #[test]
+    fn log2_f32_value_correct() {
+        assert_gpu_runs_with_output(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+use system.io
+
+fn main()
+    gpu let a = [8.0]
+    gpu var dst = [0.0]
+    gpu forall i in 0..1
+        dst[i] = log2(a[i])
+    let result = dst
+    println(f'{result[0]}')
+",
+            "3.0",
+        );
+    }
+
+    /// Unary: fract(x) on f32 buffers.
+    #[test]
+    fn fract_f32_emits_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+
+fn main()
+    gpu let a = [0.0, 1.5, 2.25, 3.75]
+    gpu var dst = [0.0, 0.0, 0.0, 0.0]
+    gpu forall i in 0..4
+        dst[i] = fract(a[i])
+",
+        );
+    }
+
+    #[test]
+    fn fract_f32_value_correct() {
+        assert_gpu_runs_with_output(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+use system.io
+
+fn main()
+    gpu let a = [2.25]
+    gpu var dst = [0.0]
+    gpu forall i in 0..1
+        dst[i] = fract(a[i])
+    let result = dst
+    println(f'{result[0]}')
+",
+            "0.25",
+        );
+    }
+
+    /// Unary: sign(x) on f32 buffers.
+    #[test]
+    fn sign_f32_emits_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+
+fn main()
+    gpu let a = [-3.0, 0.0, 2.0]
+    gpu var dst = [0.0, 0.0, 0.0]
+    gpu forall i in 0..3
+        dst[i] = sign(a[i])
+",
+        );
+    }
+
+    #[test]
+    fn sign_f32_value_correct() {
+        assert_gpu_runs_with_output(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+use system.io
+
+fn main()
+    gpu let a = [-3.0, 0.0, 2.0]
+    gpu var dst = [0.0, 0.0, 0.0]
+    gpu forall i in 0..3
+        dst[i] = sign(a[i])
+    let result = dst
+    println(f'{result[0]} {result[1]} {result[2]}')
+",
+            "-1.0 0.0 1.0",
+        );
+    }
+
+    /// Binary: atan2(y, x) on f32 buffers.
+    #[test]
+    fn atan2_f32_emits_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+
+fn main()
+    gpu let a = [1.0, 0.0, 1.0]
+    gpu let b = [1.0, 1.0, 0.0]
+    gpu var dst = [0.0, 0.0, 0.0]
+    gpu forall i in 0..3
+        dst[i] = atan2(a[i], b[i])
+",
+        );
+    }
+
+    #[test]
+    fn atan2_f32_value_correct() {
+        assert_gpu_runs_with_output(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+use system.io
+
+fn main()
+    gpu let a = [1.0]
+    gpu let b = [1.0]
+    gpu var dst = [0.0]
+    gpu forall i in 0..1
+        dst[i] = atan2(a[i], b[i])
+    let result = dst
+    println(f'{result[0]}')
+",
+            "0.7853981",
+        );
+    }
+
+    /// Binary: step(edge, x) on f32 buffers.
+    #[test]
+    fn step_f32_emits_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+
+fn main()
+    gpu let a = [0.5, 0.5]
+    gpu let b = [0.3, 0.7]
+    gpu var dst = [0.0, 0.0]
+    gpu forall i in 0..2
+        dst[i] = step(a[i], b[i])
+",
+        );
+    }
+
+    #[test]
+    fn step_f32_value_correct() {
+        assert_gpu_runs_with_output(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+use system.io
+
+fn main()
+    gpu let edge = [0.5]
+    gpu let x = [0.3, 0.7]
+    gpu var dst = [0.0, 0.0]
+    gpu forall i in 0..2
+        dst[i] = step(edge[0], x[i])
+    let result = dst
+    println(f'{result[0]} {result[1]}')
+",
+            "0.0 1.0",
+        );
+    }
+
+    /// Ternary: clamp(x, lo, hi) on f32 buffers.
+    #[test]
+    fn clamp_f32_emits_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+
+fn main()
+    gpu let a = [-1.0, 0.5, 5.0]
+    gpu var dst = [0.0, 0.0, 0.0]
+    gpu forall i in 0..3
+        dst[i] = clamp(a[i], 0.0, 1.0)
+",
+        );
+    }
+
+    #[test]
+    fn clamp_f32_value_correct() {
+        assert_gpu_runs_with_output(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+use system.io
+
+fn main()
+    gpu let a = [-1.0, 0.5, 5.0]
+    gpu var dst = [0.0, 0.0, 0.0]
+    gpu forall i in 0..3
+        dst[i] = clamp(a[i], 0.0, 1.0)
+    let result = dst
+    println(f'{result[0]} {result[1]} {result[2]}')
+",
+            "0.0 0.5 1.0",
+        );
+    }
+
+    /// Ternary: mix(a, b, t) on f32 buffers.
+    #[test]
+    fn mix_f32_emits_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+
+fn main()
+    gpu let a = [0.0, 0.0, 10.0]
+    gpu let b = [10.0, 10.0, 20.0]
+    gpu let t = [0.25, 0.5, 0.75]
+    gpu var dst = [0.0, 0.0, 0.0]
+    gpu forall i in 0..3
+        dst[i] = mix(a[i], b[i], t[i])
+",
+        );
+    }
+
+    #[test]
+    fn mix_f32_value_correct() {
+        assert_gpu_runs_with_output(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+use system.io
+
+fn main()
+    gpu let a = [0.0]
+    gpu let b = [10.0]
+    gpu var dst = [0.0]
+    gpu forall i in 0..1
+        dst[i] = mix(a[i], b[i], 0.25)
+    let result = dst
+    println(f'{result[0]}')
+",
+            "2.5",
+        );
+    }
+
+    /// Ternary: smoothstep(low, high, x) on f32 buffers.
+    #[test]
+    fn smoothstep_f32_emits_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+
+fn main()
+    gpu let a = [0.2, 0.5, 0.8]
+    gpu var dst = [0.0, 0.0, 0.0]
+    gpu forall i in 0..3
+        dst[i] = smoothstep(0.0, 1.0, a[i])
+",
+        );
+    }
+
+    #[test]
+    fn smoothstep_f32_value_correct() {
+        assert_gpu_runs_with_output(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+use system.io
+
+fn main()
+    gpu let a = [0.5]
+    gpu var dst = [0.0]
+    gpu forall i in 0..1
+        dst[i] = smoothstep(0.0, 1.0, a[i])
+    let result = dst
+    println(f'{result[0]}')
+",
+            "0.5",
+        );
+    }
+
+    /// Generalized F23 width-narrowing: ternary clamp into f32 buffer.
+    #[test]
+    fn clamp_f32_width_generalized() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+
+fn main()
+    gpu let src = [0.0, 0.5, 1.0]
+    gpu var dst = [0.0, 0.0, 0.0]
+    gpu forall i in 0..3
+        dst[i] = clamp(src[i], 0.0, 1.0)
+",
+        );
+    }
+
+    /// Error: clamp with wrong arity (2 args instead of 3).
+    #[test]
+    fn clamp_wrong_arity_compile_error() {
+        assert_compiler_error(
+            "
+use system.gpu
+use system.collections.array
+use system.math
+
+fn main()
+    gpu let a = [0.5]
+    gpu var dst = [0.0]
+    gpu forall i in 0..1
+        dst[i] = clamp(a[i], 0.5)
+",
+            "argument",
         );
     }
 }

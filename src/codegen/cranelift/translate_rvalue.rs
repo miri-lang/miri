@@ -922,9 +922,21 @@ impl<'a> FunctionTranslator<'a> {
             | MathIntrinsic::Tan
             | MathIntrinsic::Ln
             | MathIntrinsic::Exp
-            | MathIntrinsic::Pow => {
+            | MathIntrinsic::Pow
+            | MathIntrinsic::Tanh
+            | MathIntrinsic::Exp2
+            | MathIntrinsic::Log2
+            | MathIntrinsic::Atan2 => {
                 Self::emit_math_libm_call(builder, ctx, intrinsic, ty, is_f32, &arg_values)
             }
+            MathIntrinsic::Fract => Self::emit_math_fract(builder, ty, arg_values[0]),
+            MathIntrinsic::Clamp => Self::emit_math_clamp(builder, ctx, ty, is_f32, &arg_values),
+            MathIntrinsic::Mix => Self::emit_math_mix(builder, ty, &arg_values),
+            MathIntrinsic::Smoothstep => {
+                Self::emit_math_smoothstep(builder, ctx, ty, is_f32, &arg_values)
+            }
+            MathIntrinsic::Step => Self::emit_math_step(builder, ty, &arg_values),
+            MathIntrinsic::Sign => Self::emit_math_sign(builder, ty, arg_values[0]),
         }
     }
 
@@ -1031,13 +1043,27 @@ impl<'a> FunctionTranslator<'a> {
             (MathIntrinsic::Exp, false) => "exp",
             (MathIntrinsic::Pow, true) => "powf",
             (MathIntrinsic::Pow, false) => "pow",
+            (MathIntrinsic::Tanh, true) => "tanhf",
+            (MathIntrinsic::Tanh, false) => "tanh",
+            (MathIntrinsic::Exp2, true) => "exp2f",
+            (MathIntrinsic::Exp2, false) => "exp2",
+            (MathIntrinsic::Log2, true) => "log2f",
+            (MathIntrinsic::Log2, false) => "log2",
+            (MathIntrinsic::Atan2, true) => "atan2f",
+            (MathIntrinsic::Atan2, false) => "atan2",
             (MathIntrinsic::Abs, _)
             | (MathIntrinsic::Sqrt, _)
             | (MathIntrinsic::Floor, _)
             | (MathIntrinsic::Ceil, _)
             | (MathIntrinsic::Round, _)
             | (MathIntrinsic::Min, _)
-            | (MathIntrinsic::Max, _) => {
+            | (MathIntrinsic::Max, _)
+            | (MathIntrinsic::Fract, _)
+            | (MathIntrinsic::Clamp, _)
+            | (MathIntrinsic::Mix, _)
+            | (MathIntrinsic::Smoothstep, _)
+            | (MathIntrinsic::Step, _)
+            | (MathIntrinsic::Sign, _) => {
                 return Err(CodegenError::Internal(format!(
                     "internal codegen error: {:?} routed to libm branch",
                     intrinsic
@@ -1045,6 +1071,203 @@ impl<'a> FunctionTranslator<'a> {
             }
         };
         Self::emit_libm_call(builder, ctx, func_name, ty, arg_values)
+    }
+
+    /// `fract(x)`: x - floor(x) for floats; identity for integers.
+    fn emit_math_fract(
+        builder: &mut FunctionBuilder,
+        ty: cl_types::Type,
+        val: Value,
+    ) -> Result<Value, CodegenError> {
+        if ty.is_float() {
+            let floored = builder.ins().floor(val);
+            Ok(builder.ins().fsub(val, floored))
+        } else {
+            Ok(val)
+        }
+    }
+
+    /// `clamp(x, lo, hi)`: min(max(x, lo), hi).
+    fn emit_math_clamp(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        ty: cl_types::Type,
+        is_f32: bool,
+        arg_values: &[Value],
+    ) -> Result<Value, CodegenError> {
+        if arg_values.len() != 3 {
+            return Err(CodegenError::Internal(format!(
+                "clamp expects exactly three arguments, got {}",
+                arg_values.len()
+            )));
+        }
+        if ty.is_float() {
+            let max_val = Self::emit_math_min_max(
+                builder,
+                ctx,
+                ty,
+                is_f32,
+                &[arg_values[0], arg_values[1]],
+                false,
+            )?;
+            Self::emit_math_min_max(builder, ctx, ty, is_f32, &[max_val, arg_values[2]], true)
+        } else {
+            let max_val = builder.ins().smax(arg_values[0], arg_values[1]);
+            Ok(builder.ins().smin(max_val, arg_values[2]))
+        }
+    }
+
+    /// `mix(a, b, t)`: a*(1.0-t) + b*t.
+    fn emit_math_mix(
+        builder: &mut FunctionBuilder,
+        ty: cl_types::Type,
+        arg_values: &[Value],
+    ) -> Result<Value, CodegenError> {
+        if arg_values.len() != 3 {
+            return Err(CodegenError::Internal(format!(
+                "mix expects exactly three arguments, got {}",
+                arg_values.len()
+            )));
+        }
+        if !ty.is_float() {
+            return Err(CodegenError::Internal(
+                "mix expects float arguments".to_string(),
+            ));
+        }
+        let a = arg_values[0];
+        let b = arg_values[1];
+        let t = arg_values[2];
+        let one = if ty == cl_types::F32 {
+            builder.ins().f32const(1.0f32)
+        } else {
+            builder.ins().f64const(1.0f64)
+        };
+        let one_minus_t = builder.ins().fsub(one, t);
+        let a_part = builder.ins().fmul(a, one_minus_t);
+        let b_part = builder.ins().fmul(b, t);
+        Ok(builder.ins().fadd(a_part, b_part))
+    }
+
+    /// `smoothstep(low, high, x)`: t = clamp((x-low)/(high-low), 0, 1); t*t*(3.0 - 2.0*t).
+    fn emit_math_smoothstep(
+        builder: &mut FunctionBuilder,
+        ctx: &mut ModuleCtx,
+        ty: cl_types::Type,
+        is_f32: bool,
+        arg_values: &[Value],
+    ) -> Result<Value, CodegenError> {
+        if arg_values.len() != 3 {
+            return Err(CodegenError::Internal(format!(
+                "smoothstep expects exactly three arguments, got {}",
+                arg_values.len()
+            )));
+        }
+        if !ty.is_float() {
+            return Err(CodegenError::Internal(
+                "smoothstep expects float arguments".to_string(),
+            ));
+        }
+        let low = arg_values[0];
+        let high = arg_values[1];
+        let x = arg_values[2];
+        let zero = if ty == cl_types::F32 {
+            builder.ins().f32const(0.0f32)
+        } else {
+            builder.ins().f64const(0.0f64)
+        };
+        let one = if ty == cl_types::F32 {
+            builder.ins().f32const(1.0f32)
+        } else {
+            builder.ins().f64const(1.0f64)
+        };
+        let two = if ty == cl_types::F32 {
+            builder.ins().f32const(2.0f32)
+        } else {
+            builder.ins().f64const(2.0f64)
+        };
+        let three = if ty == cl_types::F32 {
+            builder.ins().f32const(3.0f32)
+        } else {
+            builder.ins().f64const(3.0f64)
+        };
+
+        let x_minus_low = builder.ins().fsub(x, low);
+        let high_minus_low = builder.ins().fsub(high, low);
+        let t_unclamped = builder.ins().fdiv(x_minus_low, high_minus_low);
+
+        let t = Self::emit_math_clamp(builder, ctx, ty, is_f32, &[t_unclamped, zero, one])?;
+
+        let t_squared = builder.ins().fmul(t, t);
+        let two_t = builder.ins().fmul(two, t);
+        let three_minus_two_t = builder.ins().fsub(three, two_t);
+        Ok(builder.ins().fmul(t_squared, three_minus_two_t))
+    }
+
+    /// `step(edge, x)`: returns 1.0 if x >= edge, else 0.0.
+    fn emit_math_step(
+        builder: &mut FunctionBuilder,
+        ty: cl_types::Type,
+        arg_values: &[Value],
+    ) -> Result<Value, CodegenError> {
+        if arg_values.len() != 2 {
+            return Err(CodegenError::Internal(format!(
+                "step expects exactly two arguments, got {}",
+                arg_values.len()
+            )));
+        }
+        if !ty.is_float() {
+            return Err(CodegenError::Internal(
+                "step expects float arguments".to_string(),
+            ));
+        }
+        let edge = arg_values[0];
+        let x = arg_values[1];
+        let zero = if ty == cl_types::F32 {
+            builder.ins().f32const(0.0f32)
+        } else {
+            builder.ins().f64const(0.0f64)
+        };
+        let one = if ty == cl_types::F32 {
+            builder.ins().f32const(1.0f32)
+        } else {
+            builder.ins().f64const(1.0f64)
+        };
+        let cmp = builder.ins().fcmp(FloatCC::GreaterThanOrEqual, x, edge);
+        Ok(builder.ins().select(cmp, one, zero))
+    }
+
+    /// `sign(x)`: returns -1.0, 0.0, or 1.0 based on sign of x.
+    fn emit_math_sign(
+        builder: &mut FunctionBuilder,
+        ty: cl_types::Type,
+        val: Value,
+    ) -> Result<Value, CodegenError> {
+        if !ty.is_float() {
+            return Err(CodegenError::Internal(
+                "sign expects float arguments".to_string(),
+            ));
+        }
+        let zero = if ty == cl_types::F32 {
+            builder.ins().f32const(0.0f32)
+        } else {
+            builder.ins().f64const(0.0f64)
+        };
+        let one = if ty == cl_types::F32 {
+            builder.ins().f32const(1.0f32)
+        } else {
+            builder.ins().f64const(1.0f64)
+        };
+        let neg_one = if ty == cl_types::F32 {
+            builder.ins().f32const(-1.0f32)
+        } else {
+            builder.ins().f64const(-1.0f64)
+        };
+
+        let is_negative = builder.ins().fcmp(FloatCC::LessThan, val, zero);
+        let is_positive = builder.ins().fcmp(FloatCC::GreaterThan, val, zero);
+
+        let if_negative = builder.ins().select(is_negative, neg_one, zero);
+        Ok(builder.ins().select(is_positive, one, if_negative))
     }
 
     /// Translate an operand to a Cranelift value.

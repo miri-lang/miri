@@ -120,6 +120,12 @@ impl TypeChecker {
         context.in_function = true;
         context.in_async_function = properties.is_async;
 
+        // Store the function body for GPU callability analysis
+        if let Some(body_stmt) = body {
+            self.function_bodies
+                .insert(name.to_string(), std::rc::Rc::new(body_stmt.clone()));
+        }
+
         let const_value =
             self.check_function_body(body, name, &return_type, infer_main_return, context);
 

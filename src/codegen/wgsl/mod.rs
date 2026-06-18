@@ -53,11 +53,7 @@ impl Backend for WgslBackend {
                     emitter.emit_kernel(name, body, workgroup_default)?;
                 }
                 ExecutionModel::GpuDevice => {
-                    return Err(CodegenError::Internal(format!(
-                        "WGSL backend: emitting GpuDevice (non-entry) functions is not yet \
-                         supported (function '{}')",
-                        name
-                    )));
+                    emitter.emit_helper(name, body)?;
                 }
                 ExecutionModel::Cpu | ExecutionModel::Async => {}
             }

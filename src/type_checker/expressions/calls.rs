@@ -112,7 +112,7 @@ impl TypeChecker {
         );
 
         if context.in_gpu_function && callable {
-            self.check_gpu_call_types(&positional_args);
+            self.check_gpu_call_types(func, &positional_args, context);
         }
 
         result_type
@@ -269,8 +269,16 @@ impl TypeChecker {
         Some(first_arg_type.clone())
     }
 
-    /// Checks GPU compatibility of call arguments.
-    fn check_gpu_call_types(&mut self, positional_args: &[(&Expression, Type)]) {
+    /// Checks GPU compatibility of call arguments and the function itself.
+    /// Validates that the callee is GPU-compatible (scalar parameters/return,
+    /// no out parameters, no host-only intrinsics in body, no recursion).
+    fn check_gpu_call_types(
+        &mut self,
+        func: &Expression,
+        positional_args: &[(&Expression, Type)],
+        context: &Context,
+    ) {
+        // Check argument types
         for (_, arg_type) in positional_args {
             if matches!(arg_type.kind, TypeKind::Error) {
                 continue;
@@ -284,6 +292,431 @@ impl TypeChecker {
                     Span::default(),
                 );
             }
+        }
+
+        // Check callee definition
+        self.validate_gpu_callee(func, context);
+    }
+
+    /// Validates that a callee function is GPU-compatible.
+    /// A GPU-callable function must have:
+    /// - Only scalar (GPU-compatible) parameter types and return type (not arrays)
+    /// - No `out` parameters
+    /// - A body that only calls other GPU-compatible functions or GPU/math intrinsics
+    /// - No direct or indirect recursion
+    fn validate_gpu_callee(&mut self, func: &Expression, context: &Context) {
+        // Extract the function name from the expression.
+        let func_name = match &func.node {
+            ExpressionKind::Identifier(name, _) => name.as_str(),
+            ExpressionKind::Member(_module_expr, func_expr) => {
+                // For module.function, extract the function name
+                if let ExpressionKind::Identifier(name, _) = &func_expr.node {
+                    name.as_str()
+                } else {
+                    return; // Can't extract name from complex member expression
+                }
+            }
+            _ => return, // Not a simple function call
+        };
+
+        // Look up the function definition in the context
+        let Some(info) = context.resolve_info(func_name) else {
+            return; // Function not found; error already reported elsewhere
+        };
+
+        // If it's an intrinsic or builtin, skip validation
+        if info.is_intrinsic {
+            return;
+        }
+
+        // Inspect the function type to validate compatibility
+        let TypeKind::Function(func_data) = &info.ty.kind else {
+            return; // Not a function type
+        };
+
+        // Validate return type is a GPU-compatible scalar. A function with no
+        // declared return type returns `void`, which has no WGSL representation.
+        let Some(ret_type_expr) = &func_data.return_type else {
+            self.report_error(
+                format!(
+                    "Function '{}' returns 'void' which is not GPU-compatible",
+                    func_name
+                ),
+                func.span,
+            );
+            return;
+        };
+        {
+            let ret_type = self.resolve_type_expression(ret_type_expr, context);
+            if !self.is_gpu_scalar(&ret_type.kind) {
+                self.report_error(
+                    format!(
+                        "Function '{}' returns '{}' which is not GPU-compatible",
+                        func_name, ret_type
+                    ),
+                    func.span,
+                );
+                return;
+            }
+        }
+
+        // Validate parameter types and out-parameter constraints
+        for param in &func_data.params {
+            let param_type = self.resolve_type_expression(&param.typ, context);
+
+            // Reject out parameters in GPU callees
+            if param.is_out {
+                self.report_error(
+                    format!(
+                        "Function '{}' has 'out' parameter '{}' which is not GPU-compatible",
+                        func_name, param.name
+                    ),
+                    func.span,
+                );
+                return;
+            }
+
+            // Reject non-scalar parameter types (arrays, lists, etc.)
+            if !self.is_gpu_scalar(&param_type.kind) {
+                self.report_error(
+                    format!(
+                        "Function '{}' parameter '{}' has type '{}' which is not GPU-compatible",
+                        func_name, param.name, param_type
+                    ),
+                    func.span,
+                );
+                return;
+            }
+        }
+
+        // Analyze the function body for GPU compatibility (host-only calls, recursion).
+        // This requires walking the body AST, which is stored in `function_bodies`.
+        // Clone the body Rc to avoid borrow checker issues with `&mut self`.
+        let body_opt = self.function_bodies.get(func_name).cloned();
+        if let Some(body) = body_opt {
+            self.validate_gpu_function_body(func_name, &body);
+        }
+    }
+
+    /// Validates that a function body is GPU-compatible (basic checks).
+    /// Detects calls to host-only intrinsics and recursion.
+    fn validate_gpu_function_body(
+        &mut self,
+        func_name: &str,
+        body: &std::rc::Rc<crate::ast::Statement>,
+    ) {
+        // Check for recursion
+        let mut visited = std::collections::HashSet::new();
+        if self.check_recursion(func_name, &mut visited) {
+            self.report_error(
+                "recursion is not allowed in GPU code".to_string(),
+                Span::default(),
+            );
+            return;
+        }
+
+        // Check for host-only calls in the body
+        let mut has_host_calls = false;
+        self.scan_for_host_calls(body, &mut has_host_calls);
+        if has_host_calls {
+            self.report_error(
+                "Function calls host-only intrinsic which is not GPU-compatible".to_string(),
+                Span::default(),
+            );
+        }
+    }
+
+    /// Checks if a function has direct or indirect recursion.
+    fn check_recursion(
+        &self,
+        func_name: &str,
+        visited: &mut std::collections::HashSet<String>,
+    ) -> bool {
+        if !visited.insert(func_name.to_string()) {
+            // Already in the path - recursion detected
+            return true;
+        }
+
+        let Some(body) = self.function_bodies.get(func_name) else {
+            visited.remove(func_name);
+            return false;
+        };
+
+        // Collect all direct callees
+        let mut callees = Vec::new();
+        self.collect_callees(body, &mut callees);
+
+        for callee_name in callees {
+            if self.check_recursion(&callee_name, visited) {
+                return true;
+            }
+        }
+
+        visited.remove(func_name);
+        false
+    }
+
+    /// Collects all direct function call names in a statement.
+    fn collect_callees(&self, stmt: &crate::ast::Statement, callees: &mut Vec<String>) {
+        use crate::ast::StatementKind;
+
+        match &stmt.node {
+            StatementKind::Expression(expr) => self.collect_callees_expr(expr, callees),
+            StatementKind::Block(stmts) => {
+                for s in stmts {
+                    self.collect_callees(s, callees);
+                }
+            }
+            StatementKind::If(cond, then_block, else_block, _) => {
+                self.collect_callees_expr(cond, callees);
+                self.collect_callees(then_block, callees);
+                if let Some(eb) = else_block {
+                    self.collect_callees(eb, callees);
+                }
+            }
+            StatementKind::While(cond, body, _) => {
+                self.collect_callees_expr(cond, callees);
+                self.collect_callees(body, callees);
+            }
+            StatementKind::For(_, iterable, body) => {
+                self.collect_callees_expr(iterable, callees);
+                self.collect_callees(body, callees);
+            }
+            StatementKind::Forall { iterable, body, .. } => {
+                self.collect_callees_expr(iterable, callees);
+                self.collect_callees(body, callees);
+            }
+            StatementKind::Return(Some(expr)) => self.collect_callees_expr(expr, callees),
+            StatementKind::Variable(decls, _) => {
+                for decl in decls {
+                    if let Some(init) = &decl.initializer {
+                        self.collect_callees_expr(init, callees);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Recursively collects direct callees from an expression.
+    fn collect_callees_expr(&self, expr: &crate::ast::Expression, callees: &mut Vec<String>) {
+        use crate::ast::ExpressionKind;
+
+        match &expr.node {
+            ExpressionKind::Call(func_expr, args) => {
+                if let ExpressionKind::Identifier(name, _) = &func_expr.node {
+                    callees.push(name.clone());
+                }
+                for arg in args {
+                    self.collect_callees_expr(arg, callees);
+                }
+                self.collect_callees_expr(func_expr, callees);
+            }
+            ExpressionKind::Binary(left, _, right) => {
+                self.collect_callees_expr(left, callees);
+                self.collect_callees_expr(right, callees);
+            }
+            ExpressionKind::Logical(left, _, right) => {
+                self.collect_callees_expr(left, callees);
+                self.collect_callees_expr(right, callees);
+            }
+            ExpressionKind::Unary(_, expr) => self.collect_callees_expr(expr, callees),
+            ExpressionKind::Conditional(cond, then_expr, else_expr, _) => {
+                self.collect_callees_expr(cond, callees);
+                self.collect_callees_expr(then_expr, callees);
+                if let Some(ee) = else_expr {
+                    self.collect_callees_expr(ee, callees);
+                }
+            }
+            ExpressionKind::Index(expr, index) => {
+                self.collect_callees_expr(expr, callees);
+                self.collect_callees_expr(index, callees);
+            }
+            ExpressionKind::Member(expr, _) => self.collect_callees_expr(expr, callees),
+            ExpressionKind::List(elements) | ExpressionKind::Array(elements, _) => {
+                for e in elements {
+                    self.collect_callees_expr(e, callees);
+                }
+            }
+            ExpressionKind::Map(pairs) => {
+                for (k, v) in pairs {
+                    self.collect_callees_expr(k, callees);
+                    self.collect_callees_expr(v, callees);
+                }
+            }
+            ExpressionKind::Tuple(elements) | ExpressionKind::Set(elements) => {
+                for e in elements {
+                    self.collect_callees_expr(e, callees);
+                }
+            }
+            ExpressionKind::Lambda(boxed) => {
+                self.collect_callees(&boxed.body, callees);
+            }
+            _ => {}
+        }
+    }
+
+    /// Scans a statement tree for calls to host-only intrinsics.
+    fn scan_for_host_calls(&self, stmt: &crate::ast::Statement, found: &mut bool) {
+        use crate::ast::StatementKind;
+
+        match &stmt.node {
+            StatementKind::Expression(expr) => self.scan_expr_for_host_calls(expr, found),
+            StatementKind::Block(stmts) => {
+                for s in stmts {
+                    self.scan_for_host_calls(s, found);
+                }
+            }
+            StatementKind::If(cond, then_block, else_block, _) => {
+                self.scan_expr_for_host_calls(cond, found);
+                self.scan_for_host_calls(then_block, found);
+                if let Some(eb) = else_block {
+                    self.scan_for_host_calls(eb, found);
+                }
+            }
+            StatementKind::While(cond, body, _) => {
+                self.scan_expr_for_host_calls(cond, found);
+                self.scan_for_host_calls(body, found);
+            }
+            StatementKind::For(_, iterable, body) => {
+                self.scan_expr_for_host_calls(iterable, found);
+                self.scan_for_host_calls(body, found);
+            }
+            StatementKind::Forall { iterable, body, .. } => {
+                self.scan_expr_for_host_calls(iterable, found);
+                self.scan_for_host_calls(body, found);
+            }
+            StatementKind::Return(Some(expr)) => self.scan_expr_for_host_calls(expr, found),
+            StatementKind::Variable(decls, _) => {
+                for decl in decls {
+                    if let Some(init) = &decl.initializer {
+                        self.scan_expr_for_host_calls(init, found);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Recursively scans expressions for host-only calls.
+    fn scan_expr_for_host_calls(&self, expr: &crate::ast::Expression, found: &mut bool) {
+        use crate::ast::ExpressionKind;
+
+        match &expr.node {
+            ExpressionKind::Call(func_expr, args) => {
+                if let ExpressionKind::Identifier(name, _) = &func_expr.node {
+                    if self.is_host_intrinsic(name) {
+                        *found = true;
+                        return;
+                    }
+                }
+                for arg in args {
+                    self.scan_expr_for_host_calls(arg, found);
+                }
+                self.scan_expr_for_host_calls(func_expr, found);
+            }
+            ExpressionKind::Binary(left, _, right) => {
+                self.scan_expr_for_host_calls(left, found);
+                self.scan_expr_for_host_calls(right, found);
+            }
+            ExpressionKind::Logical(left, _, right) => {
+                self.scan_expr_for_host_calls(left, found);
+                self.scan_expr_for_host_calls(right, found);
+            }
+            ExpressionKind::Unary(_, expr) => self.scan_expr_for_host_calls(expr, found),
+            ExpressionKind::Conditional(cond, then_expr, else_expr, _) => {
+                self.scan_expr_for_host_calls(cond, found);
+                self.scan_expr_for_host_calls(then_expr, found);
+                if let Some(ee) = else_expr {
+                    self.scan_expr_for_host_calls(ee, found);
+                }
+            }
+            ExpressionKind::Index(expr, index) => {
+                self.scan_expr_for_host_calls(expr, found);
+                self.scan_expr_for_host_calls(index, found);
+            }
+            ExpressionKind::Member(expr, _) => self.scan_expr_for_host_calls(expr, found),
+            ExpressionKind::List(elements) | ExpressionKind::Array(elements, _) => {
+                for e in elements {
+                    self.scan_expr_for_host_calls(e, found);
+                }
+            }
+            ExpressionKind::Map(pairs) => {
+                for (k, v) in pairs {
+                    self.scan_expr_for_host_calls(k, found);
+                    self.scan_expr_for_host_calls(v, found);
+                }
+            }
+            ExpressionKind::Tuple(elements) | ExpressionKind::Set(elements) => {
+                for e in elements {
+                    self.scan_expr_for_host_calls(e, found);
+                }
+            }
+            ExpressionKind::Lambda(boxed) => {
+                self.scan_for_host_calls(&boxed.body, found);
+            }
+            _ => {}
+        }
+    }
+
+    /// Checks if a function name is a host-only intrinsic.
+    fn is_host_intrinsic(&self, name: &str) -> bool {
+        matches!(
+            name,
+            "println" | "print" | "printf" | "eprintln" | "eprint" | "input" | "readln"
+        )
+    }
+
+    /// Checks if a type is a GPU-compatible scalar (not an array or collection).
+    /// Scalars are: numeric primitives, booleans, void, error, and generic parameters.
+    fn is_gpu_scalar(&self, kind: &TypeKind) -> bool {
+        match kind {
+            TypeKind::Int
+            | TypeKind::I8
+            | TypeKind::I16
+            | TypeKind::I32
+            | TypeKind::I64
+            | TypeKind::I128
+            | TypeKind::U8
+            | TypeKind::U16
+            | TypeKind::U32
+            | TypeKind::U64
+            | TypeKind::U128
+            | TypeKind::Float
+            | TypeKind::F32
+            | TypeKind::F64
+            | TypeKind::Boolean
+            | TypeKind::Error => true,
+
+            // A `void` value has no WGSL scalar representation, so a
+            // void-returning function cannot be emitted as a GPU helper.
+            TypeKind::Void => false,
+
+            // Generic parameters and GPU builtins are OK
+            TypeKind::Generic(_, _, _) => true,
+            TypeKind::Custom(name, _) => {
+                // Only allow GPU builtin types, not Array/List/etc.
+                name == crate::ast::types::DIM3_TYPE_NAME
+                    || name == crate::ast::types::GPU_CONTEXT_TYPE_NAME
+                    || name == crate::ast::types::KERNEL_TYPE_NAME
+                    || name == crate::ast::types::FRAME_INPUT_TYPE_NAME
+            }
+
+            // Arrays, collections, strings, etc. are NOT scalar
+            TypeKind::Array(_, _)
+            | TypeKind::String
+            | TypeKind::List(_)
+            | TypeKind::Map(_, _)
+            | TypeKind::Set(_)
+            | TypeKind::Tuple(_)
+            | TypeKind::Result(_, _)
+            | TypeKind::Future(_)
+            | TypeKind::Option(_)
+            | TypeKind::Linear(_)
+            | TypeKind::Meta(_)
+            | TypeKind::RawPtr
+            | TypeKind::Identifier
+            | TypeKind::Function(_) => false,
         }
     }
 

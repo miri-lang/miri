@@ -11,29 +11,31 @@ use miri::mir::lowering::lower_function;
 use miri::mir::ExecutionModel;
 use miri::pipeline::Pipeline;
 
-/// Compile a Miri source with a `forall` or `gpu fn` to WGSL and return the kernel text.
+/// Compile a Miri source with a `forall` or `gpu fn` to WGSL and return the
+/// kernel module text. Routes through the real pipeline (`get_mir_bodies_with_rc`,
+/// which runs the GpuDevice helper-clone pass) so the emitted module contains
+/// exactly the helper functions a real launch would — no test-only divergence.
 pub fn compile_to_wgsl(source: &str) -> String {
     let pipeline = Pipeline::new();
-    let result = pipeline.frontend(source).expect("frontend failed");
-    let func_stmt = result
-        .ast
-        .body
+    let bodies = pipeline
+        .get_gpu_mir_bodies(source)
+        .expect("lowering failed");
+
+    // Mirror `build_kernel_registry`: every kernel module also carries the
+    // GpuDevice helper bodies reachable from the kernel.
+    let mut module_bodies: Vec<(&str, &_)> = bodies
         .iter()
-        .find(
-            |stmt| matches!(&stmt.node, StatementKind::FunctionDeclaration(d) if d.name == "main"),
-        )
-        .expect("source must contain 'fn main'");
-    let (_body, lambdas) =
-        lower_function(func_stmt, &result.type_checker, false, false).expect("lowering failed");
-    let kernel = lambdas
+        .filter(|(_, b)| b.execution_model == ExecutionModel::GpuDevice)
+        .map(|(n, b)| (n.as_str(), b))
+        .collect();
+    let kernel = bodies
         .iter()
-        .find(|l| l.body.execution_model == ExecutionModel::GpuKernel)
+        .find(|(_, b)| b.execution_model == ExecutionModel::GpuKernel)
         .expect("expected a synthesized GpuKernel body");
+    module_bodies.push((kernel.0.as_str(), &kernel.1));
+
     let artifact = WgslBackend
-        .compile(
-            &[(kernel.name.as_str(), &kernel.body)],
-            &WgslOptions::default(),
-        )
+        .compile(&module_bodies, &WgslOptions::default())
         .expect("WGSL backend should succeed");
     String::from_utf8(artifact.bytes).expect("WGSL output is UTF-8")
 }

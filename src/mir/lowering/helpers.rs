@@ -546,7 +546,10 @@ pub fn lower_as_return(
 ///
 /// # Returns
 ///
-/// The adjusted return type (f32 if in GpuKernel and first arg is f32, else declared).
+/// The adjusted return type: f32 when in a GpuKernel and *any* argument is f32,
+/// else the declared type. Multi-argument intrinsics (clamp/mix/smoothstep/
+/// atan2/step) may carry the f32 witness in any position, so all args are
+/// scanned rather than just the first.
 pub fn gpu_math_return_type(
     ctx: &LoweringContext,
     args: &[Expression],
@@ -554,10 +557,11 @@ pub fn gpu_math_return_type(
     span: Span,
 ) -> Type {
     if ctx.body.execution_model == ExecutionModel::GpuKernel && !args.is_empty() {
-        let arg_expr = &args[0];
-        if let Some(arg_ty) = ctx.type_checker.get_type(arg_expr.id) {
-            if arg_ty.kind == TypeKind::F32 {
-                return Type::new(TypeKind::F32, span);
+        for arg_expr in args {
+            if let Some(arg_ty) = ctx.type_checker.get_type(arg_expr.id) {
+                if arg_ty.kind == TypeKind::F32 {
+                    return Type::new(TypeKind::F32, span);
+                }
             }
         }
     }

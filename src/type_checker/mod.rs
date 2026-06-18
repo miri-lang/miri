@@ -123,6 +123,8 @@ pub struct TypeChecker {
     pub entry_source: Option<std::rc::Rc<str>>,
     /// Source path of the entry-point file. See [`entry_source`].
     pub entry_source_path: Option<std::rc::Rc<str>>,
+    /// Maps user-defined function names to their Statement bodies for GPU callability analysis.
+    pub(crate) function_bodies: std::collections::HashMap<String, std::rc::Rc<Statement>>,
 }
 
 impl Default for TypeChecker {
@@ -162,6 +164,7 @@ impl TypeChecker {
             pre_registered_types: std::collections::HashSet::new(),
             entry_source: None,
             entry_source_path: None,
+            function_bodies: HashMap::new(),
         }
     }
 

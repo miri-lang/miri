@@ -938,6 +938,10 @@ impl Pipeline {
 
         self.lower_monomorphized_generics(result, is_release, &mut bodies, &mut lowered_names)?;
 
+        // Clone user functions that are transitively called from GPU kernels into
+        // GpuDevice bodies for WGSL emission. Each clone is f32-narrowed for GPU compatibility.
+        Self::clone_gpu_device_helpers(&mut bodies)?;
+
         // Insert Perceus RC operations on all function bodies, exactly once,
         // after all optimization passes have converged.
         for (_name, body) in &mut bodies {
@@ -1817,6 +1821,21 @@ impl Pipeline {
         Ok(output)
     }
 
+    /// Lower a source to its full set of MIR bodies using the standard
+    /// (non-script) frontend, including the GpuDevice helper-clone pass.
+    ///
+    /// Intended for GPU test harnesses that need exactly the bodies the real
+    /// codegen path emits — the kernel(s) plus every GpuDevice helper reachable
+    /// from a kernel — without the script-mode wrapping or RC insertion that
+    /// would perturb the emitted WGSL.
+    pub fn get_gpu_mir_bodies(
+        &self,
+        source: &str,
+    ) -> Result<Vec<(String, crate::mir::Body)>, CompilerError> {
+        let result = self.frontend(source)?;
+        self.lower_to_mir(&result, false)
+    }
+
     /// Get MIR bodies after Perceus RC insertion and RC elision, for test inspection.
     ///
     /// Returns the lowered and optimised bodies (including RC operations) so that
@@ -1881,6 +1900,210 @@ impl Pipeline {
         }
 
         Ok(())
+    }
+
+    /// Clone user functions that are transitively called from GPU kernels.
+    /// Each clone is marked as GpuDevice and has f32-narrowed types.
+    fn clone_gpu_device_helpers(
+        bodies: &mut Vec<(String, mir::Body)>,
+    ) -> Result<(), CompilerError> {
+        let kernel_names: std::collections::HashSet<&str> = bodies
+            .iter()
+            .filter(|(_, b)| b.execution_model == mir::ExecutionModel::GpuKernel)
+            .map(|(n, _)| n.as_str())
+            .collect();
+
+        if kernel_names.is_empty() {
+            return Ok(());
+        }
+
+        let reachable = Self::compute_reachable_callees(bodies, &kernel_names)?;
+        let mut helpers_to_add = Vec::new();
+        let mut helper_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        for (name, body) in bodies.iter() {
+            if reachable.contains(name.as_str())
+                && body.execution_model == mir::ExecutionModel::Cpu
+                && !kernel_names.contains(name.as_str())
+            {
+                let mut gpu_body = body.clone();
+                gpu_body.execution_model = mir::ExecutionModel::GpuDevice;
+                Self::narrow_float_types(&mut gpu_body);
+                helper_names.insert(name.clone());
+                helpers_to_add.push((name.clone(), gpu_body));
+            }
+        }
+
+        // A kernel that calls a (now f32-narrowed) GpuDevice helper must not widen
+        // the f32 buffer values it passes to the helper's float params. Narrowing
+        // the calling kernel's scalar f64 temps to f32 removes that spurious widen.
+        // `narrow_type_kind` only touches scalar floats, so explicit `array<f64>`
+        // buffers are left intact; f64-buffer kernels that call no helper are
+        // unaffected because they never enter this set.
+        if !helper_names.is_empty() {
+            for idx in 0..bodies.len() {
+                if bodies[idx].1.execution_model != mir::ExecutionModel::GpuKernel {
+                    continue;
+                }
+                let one_kernel: std::collections::HashSet<&str> =
+                    std::iter::once(bodies[idx].0.as_str()).collect();
+                let kernel_reach = Self::compute_reachable_callees(bodies, &one_kernel)?;
+                if kernel_reach.iter().any(|n| helper_names.contains(n)) {
+                    Self::narrow_float_types(&mut bodies[idx].1);
+                }
+            }
+        }
+
+        bodies.extend(helpers_to_add);
+        Ok(())
+    }
+
+    /// Compute the set of function names transitively called from the given kernel names.
+    fn compute_reachable_callees(
+        bodies: &[(String, mir::Body)],
+        kernel_names: &std::collections::HashSet<&str>,
+    ) -> Result<std::collections::HashSet<String>, CompilerError> {
+        use std::collections::VecDeque;
+
+        let name_to_body: std::collections::HashMap<&str, &mir::Body> =
+            bodies.iter().map(|(n, b)| (n.as_str(), b)).collect();
+
+        let mut reachable = std::collections::HashSet::new();
+        let mut queue = VecDeque::new();
+
+        for kernel_name in kernel_names {
+            reachable.insert(kernel_name.to_string());
+            queue.push_back(kernel_name.to_string());
+        }
+
+        while let Some(current_name) = queue.pop_front() {
+            if let Some(body) = name_to_body.get(current_name.as_str()) {
+                let callees = Self::extract_callees(body);
+                for callee in callees {
+                    if !reachable.contains(&callee) {
+                        reachable.insert(callee.clone());
+                        queue.push_back(callee);
+                    }
+                }
+            }
+        }
+
+        Ok(reachable)
+    }
+
+    /// Extract function names called by a body (by scanning all Call terminators).
+    fn extract_callees(body: &mir::Body) -> Vec<String> {
+        use crate::ast::literal::Literal;
+
+        let mut callees = Vec::new();
+        for block in &body.basic_blocks {
+            if let Some(term) = &block.terminator {
+                if let mir::TerminatorKind::Call {
+                    func: mir::Operand::Constant(c),
+                    ..
+                } = &term.kind
+                {
+                    if let Literal::Identifier(name) = &c.literal {
+                        callees.push(name.clone());
+                    }
+                }
+            }
+        }
+        callees
+    }
+
+    /// Narrow all f64 (float) types in the body to f32 for GPU compatibility.
+    fn narrow_float_types(body: &mut mir::Body) {
+        for local_decl in &mut body.local_decls {
+            Self::narrow_type_kind(&mut local_decl.ty.kind);
+            local_decl.mir_ty = mir::types::MirType::from_type_kind(&local_decl.ty.kind);
+        }
+        // Constant operands carry their own type, which drives the WGSL literal
+        // width (`2.0lf` for f64). Narrow them too, or an f64 literal survives
+        // into an otherwise-f32 helper and trips the SHADER_F64 feature gate.
+        for block in &mut body.basic_blocks {
+            for stmt in &mut block.statements {
+                if let mir::StatementKind::Assign(_, rv) | mir::StatementKind::Reassign(_, rv) =
+                    &mut stmt.kind
+                {
+                    Self::narrow_rvalue_floats(rv);
+                }
+            }
+            if let Some(term) = &mut block.terminator {
+                Self::narrow_terminator_floats(&mut term.kind);
+            }
+        }
+    }
+
+    fn narrow_operand_floats(op: &mut mir::Operand) {
+        if let mir::Operand::Constant(c) = op {
+            Self::narrow_type_kind(&mut c.ty.kind);
+        }
+    }
+
+    fn narrow_rvalue_floats(rv: &mut mir::Rvalue) {
+        match rv {
+            mir::Rvalue::Use(o) => Self::narrow_operand_floats(o),
+            mir::Rvalue::UnaryOp(_, o) => Self::narrow_operand_floats(o),
+            mir::Rvalue::BinaryOp(_, a, b) => {
+                Self::narrow_operand_floats(a);
+                Self::narrow_operand_floats(b);
+            }
+            mir::Rvalue::Cast(o, ty) => {
+                Self::narrow_operand_floats(o);
+                Self::narrow_type_kind(&mut ty.kind);
+            }
+            mir::Rvalue::MathIntrinsic(_, args) | mir::Rvalue::Aggregate(_, args) => {
+                for a in args {
+                    Self::narrow_operand_floats(a);
+                }
+            }
+            mir::Rvalue::Phi(pairs) => {
+                for (o, _) in pairs {
+                    Self::narrow_operand_floats(o);
+                }
+            }
+            mir::Rvalue::Allocate(a, b, c) => {
+                Self::narrow_operand_floats(a);
+                Self::narrow_operand_floats(b);
+                Self::narrow_operand_floats(c);
+            }
+            mir::Rvalue::Ref(_) | mir::Rvalue::Len(_) | mir::Rvalue::GpuIntrinsic(_) => {}
+        }
+    }
+
+    fn narrow_terminator_floats(term: &mut mir::TerminatorKind) {
+        match term {
+            mir::TerminatorKind::SwitchInt { discr, .. } => Self::narrow_operand_floats(discr),
+            mir::TerminatorKind::Call { func, args, .. } => {
+                Self::narrow_operand_floats(func);
+                for a in args {
+                    Self::narrow_operand_floats(a);
+                }
+            }
+            mir::TerminatorKind::VirtualCall { args, .. } => {
+                for a in args {
+                    Self::narrow_operand_floats(a);
+                }
+            }
+            mir::TerminatorKind::Goto { .. }
+            | mir::TerminatorKind::Return
+            | mir::TerminatorKind::Unreachable
+            | mir::TerminatorKind::GpuLaunch { .. } => {}
+        }
+    }
+
+    /// Recursively narrow TypeKind, converting F64 to F32.
+    fn narrow_type_kind(kind: &mut TypeKind) {
+        match kind {
+            TypeKind::Float => {
+                *kind = TypeKind::F32;
+            }
+            TypeKind::F64 => {
+                *kind = TypeKind::F32;
+            }
+            _ => {}
+        }
     }
 }
 

@@ -95,3 +95,37 @@ fn test_math_inf_constant() {
         "inf",
     );
 }
+
+#[test]
+fn test_math_sigmoid_cpu() {
+    let source = r#"
+use system.math
+use system.io
+
+print(f"{sigmoid(0.0)}\n")
+print(f"{sigmoid(1.0)}\n")
+print(f"{sigmoid(-1.0)}\n")
+print(f"{sigmoid(2.0)}\n")
+"#;
+    // sigmoid(0.0) = 0.5
+    // sigmoid(1.0) ≈ 0.7310585786
+    // sigmoid(-1.0) ≈ 0.2689414214
+    // sigmoid(2.0) ≈ 0.8807970718
+    assert_runs(source);
+}
+
+#[test]
+fn test_math_tanh_cpu() {
+    let source = r#"
+use system.math
+use system.io
+
+print(f"{tanh(0.0)}\n")
+print(f"{tanh(1.0)}\n")
+print(f"{tanh(-1.0)}\n")
+"#;
+    // tanh(0.0) = 0.0
+    // tanh(1.0) ≈ 0.7615941559
+    // tanh(-1.0) ≈ -0.7615941559
+    assert_runs(source);
+}
