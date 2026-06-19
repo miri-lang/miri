@@ -246,6 +246,24 @@ impl<'a> FunctionTranslator<'a> {
         )
     }
 
+    /// Returns true if the type kind is any integer (signed or unsigned).
+    pub fn is_integer_kind(kind: &TypeKind) -> bool {
+        matches!(
+            kind,
+            TypeKind::Int
+                | TypeKind::I8
+                | TypeKind::I16
+                | TypeKind::I32
+                | TypeKind::I64
+                | TypeKind::I128
+                | TypeKind::U8
+                | TypeKind::U16
+                | TypeKind::U32
+                | TypeKind::U64
+                | TypeKind::U128
+        )
+    }
+
     /// Returns true if the given type is an Array, List, Map, or Set collection.
     pub fn is_collection_type(kind: &TypeKind) -> bool {
         kind.as_builtin_collection().is_some()

@@ -106,7 +106,17 @@ impl<'a> FunctionTranslator<'a> {
                 let value = Self::translate_operand(builder, ctx, operand, locals, type_ctx)?;
                 let dest_ty = translate_type(ty, ptr_type);
                 let src_ty = builder.func.dfg.value_type(value);
-                let is_unsigned = Self::is_unsigned_type_kind(&ty.kind);
+                // Signedness follows the integer side of the cast: the source for
+                // int→float and int→int (so a `u32` zero-extends and converts as
+                // unsigned), the destination for float→int. Keying off the
+                // destination alone wrongly treats a `u32` with its top bit set as
+                // a negative value when converting to float.
+                let src_kind = Self::operand_type_kind(operand, type_ctx);
+                let is_unsigned = if Self::is_integer_kind(src_kind) {
+                    Self::is_unsigned_type_kind(src_kind)
+                } else {
+                    Self::is_unsigned_type_kind(&ty.kind)
+                };
 
                 Self::cast_value_with_sign(builder, value, src_ty, dest_ty, is_unsigned)
             }
