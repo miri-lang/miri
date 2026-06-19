@@ -32,3 +32,55 @@ public fn sigmoid(x float) float: 1.0 / (1.0 + exp(-x))
 public const PI = 3.14159265358979323846
 public const E = 2.71828182845904523536
 public const INF = 1e309
+
+// Deterministic integer hash (the MurmurHash3 `fmix32` finalizer). Maps any
+// `u32` seed to a well-distributed `u32`; adjacent seeds avalanche to unrelated
+// outputs. Portable across CPU and GPU because 32-bit integer multiply wraps
+// identically on both. The all-zero seed is the one fixed point (maps to 0).
+public fn hash_u32(seed u32) u32
+    var h = seed * 374761393 as u32
+    h = h ^ (h / 65536 as u32)
+    h = h * 2246822519 as u32
+    h = h ^ (h / 8192 as u32)
+    h = h * 3266489917 as u32
+    h = h ^ (h / 65536 as u32)
+    return h
+
+// Hash a 2D integer lattice point to a unit float in [0, 1). Coordinates are
+// reinterpreted through `i32` so negative lattice points hash distinctly.
+fn lattice_unit(xi float, yi float) float
+    let kx = (xi as i32) as u32
+    let ky = (yi as i32) as u32
+    let key = kx * 1973 as u32 + ky * 9277 as u32 + 101 as u32
+    return hash_u32(key) as float / 4294967295.0
+
+// 2D value noise in [0, 1): smoothstep-weighted bilinear blend of the four
+// hashed integer-lattice corners around (x, y). Deterministic and continuous.
+public fn value_noise(x float, y float) float
+    let xi = floor(x)
+    let yi = floor(y)
+    let xf = x - xi
+    let yf = y - yi
+    let c00 = lattice_unit(xi, yi)
+    let c10 = lattice_unit(xi + 1.0, yi)
+    let c01 = lattice_unit(xi, yi + 1.0)
+    let c11 = lattice_unit(xi + 1.0, yi + 1.0)
+    let u = xf * xf * (3.0 - 2.0 * xf)
+    let v = yf * yf * (3.0 - 2.0 * yf)
+    let a = c00 + (c10 - c00) * u
+    let b = c01 + (c11 - c01) * u
+    return a + (b - a) * v
+
+// Fractional Brownian motion: two octaves of value noise at halving amplitude.
+public fn fbm(x float, y float) float
+    return value_noise(x, y) * 0.5 + value_noise(x * 2.0, y * 2.0) * 0.25
+
+// Divergence-free curl field of an `fbm` potential, for advecting particles:
+// curl = (dP/dy, -dP/dx), returned component-wise (vector types land in DP5).
+public fn curl_noise_x(x float, y float) float
+    let eps = 0.01
+    return (fbm(x, y + eps) - fbm(x, y - eps)) / (2.0 * eps)
+
+public fn curl_noise_y(x float, y float) float
+    let eps = 0.01
+    return (fbm(x - eps, y) - fbm(x + eps, y)) / (2.0 * eps)
