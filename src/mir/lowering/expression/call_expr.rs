@@ -4,7 +4,7 @@
 //! Expression lowering - converts AST expressions to MIR.
 
 use crate::ast::expression::{Expression, ExpressionKind};
-use crate::ast::types::{Type, TypeKind};
+use crate::ast::types::{vec_dim, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::mir::{
     AggregateKind, Constant, Dimension, GpuIntrinsic, MathIntrinsic, Operand, Place, Rvalue,
@@ -129,6 +129,10 @@ fn try_lower_gpu_or_math_intrinsic(
             return Ok(Some(op));
         }
 
+        if let Some(op) = try_lower_vector_builtin(ctx, name, args, expr, dest.clone())? {
+            return Ok(Some(op));
+        }
+
         if let Some(op) = try_lower_math_intrinsic(ctx, name, args, expr, dest)? {
             return Ok(Some(op));
         }
@@ -164,6 +168,60 @@ fn try_lower_gpu_intrinsic(
     };
     ctx.push_statement(crate::mir::Statement {
         kind: MirStatementKind::Assign(target, rvalue),
+        span: expr.span,
+    });
+    Ok(Some(ret_op))
+}
+
+fn try_lower_vector_builtin(
+    ctx: &mut LoweringContext,
+    name: &str,
+    args: &[Expression],
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Option<Operand>, LoweringError> {
+    // Vector builtins are dispatched by name and first-argument type, not module.
+    // The type checker has already validated that these are vector operations.
+    let intrinsic_opt = match name {
+        "dot" => Some(MathIntrinsic::VecDot),
+        "length" => Some(MathIntrinsic::VecLength),
+        "normalize" => Some(MathIntrinsic::VecNormalize),
+        "cross" => Some(MathIntrinsic::VecCross),
+        "reflect" => Some(MathIntrinsic::VecReflect),
+        "mix" => Some(MathIntrinsic::VecMix),
+        _ => None,
+    };
+
+    let Some(intrinsic) = intrinsic_opt else {
+        return Ok(None);
+    };
+
+    // Verify the first argument is a vector type (type checker already validates this)
+    if args.is_empty() {
+        return Ok(None);
+    }
+
+    let first_arg_ty = resolve_type(ctx.type_checker, &args[0]);
+    if !matches!(&first_arg_ty.kind, TypeKind::Custom(name, _) if vec_dim(name).is_some()) {
+        return Ok(None);
+    }
+
+    let mut arg_ops = Vec::with_capacity(args.len());
+    for arg in args {
+        arg_ops.push(lower_expression(ctx, arg, None)?);
+    }
+
+    let return_ty = resolve_type(ctx.type_checker, expr);
+    let return_ty = gpu_math_return_type(ctx, args, return_ty, expr.span);
+    let (target, ret_op) = if let Some(ref d) = dest {
+        (d.clone(), Operand::Copy(d.clone()))
+    } else {
+        let temp = ctx.push_temp(return_ty, expr.span);
+        (Place::new(temp), Operand::Copy(Place::new(temp)))
+    };
+
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(target, Rvalue::MathIntrinsic(intrinsic, arg_ops)),
         span: expr.span,
     });
     Ok(Some(ret_op))

@@ -40,7 +40,7 @@ Numbered findings, ranked critical / major / minor, each:
   principle: PRINCIPLES.md §X.Y  (or a named Rust idiom)
 ```
 
-Rank by the canonical **PRINCIPLES.md §10** rubric. (In your domain: major = real perf regression — allocation/O(n²) in a hot path — or an API that forces clones on callers or swallows an error; minor = idiom nit, avoidable temp, readability. A UB/UAF-adjacent clone is critical but **Security owns it** — defer.)
+Rank by the canonical **PRINCIPLES.md §10** rubric. (In your domain: major = real perf regression — allocation/O(n²) in a hot path — or an API that forces clones on callers or swallows an error; minor = idiom nit, avoidable temp, readability.)
 
 ## Hard rules
 

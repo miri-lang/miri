@@ -115,6 +115,12 @@ impl TypeChecker {
             "Some" => Some(self.make_some_type()),
             "Ok" => Some(self.make_ok_type()),
             "Err" => Some(self.make_err_type()),
+            // Vector-only builtins are placeholders; dispatch happens in infer_call_dispatch.
+            // Exclude "mix" — it has an existing meaning (scalar math function imported from system.math).
+            // Keep "length" since there is no scalar length() function, only Array.length() method.
+            "dot" | "length" | "normalize" | "cross" | "reflect" => Some(ast_factory::make_type(
+                TypeKind::Meta(Box::new(ast_factory::make_type(TypeKind::Void))),
+            )),
             _ => None,
         }
     }

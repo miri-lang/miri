@@ -1,0 +1,40 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+use system.accelerator
+
+/// Generic vector types for GPU and CPU computation.
+///
+/// Vec2, Vec3, and Vec4 are compiler-known inline value types with component-wise
+/// operations. They are NOT heap-allocated and do NOT participate in Perceus RC.
+/// Component access is via `.x`, `.y`, `.z`, `.w` fields; construction is via
+/// `Vec3<f32>(a, b, c)` function-call syntax that mirrors struct initialization.
+///
+/// These types are designed to be GPU-portable: scalar types are constrained to
+/// f32, i32, u32 (WGSL has no f64/i64/u64 vectors). The stdlib is minimal because
+/// the compiler recognizes Vec as a built-in type and handles layout and lowering
+/// directly. This follows the same pattern as Dim3 (GPU kernel context dimension).
+
+/// A 2-component vector with generic scalar type T.
+/// T must be one of: i32, u32, f32.
+/// Layout: 8 bytes (two 4-byte scalars, no padding).
+struct Vec2<T>
+    x T
+    y T
+
+/// A 3-component vector with generic scalar type T.
+/// T must be one of: i32, u32, f32.
+/// Layout: 16 bytes std430-padded (three 4-byte scalars + 4B pad to align to 16B).
+struct Vec3<T>
+    x T
+    y T
+    z T
+
+/// A 4-component vector with generic scalar type T.
+/// T must be one of: i32, u32, f32.
+/// Layout: 16 bytes (four 4-byte scalars, naturally aligned).
+struct Vec4<T>
+    x T
+    y T
+    z T
+    w T

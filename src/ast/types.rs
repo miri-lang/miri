@@ -68,6 +68,15 @@ pub const STRING_TYPE_NAME: &str = "String";
 /// kernel context fields.
 pub const DIM3_TYPE_NAME: &str = "Dim3";
 
+/// Canonical class name for the compiler-builtin `Vec2<T>` generic vector type.
+pub const VEC2_TYPE_NAME: &str = "Vec2";
+
+/// Canonical class name for the compiler-builtin `Vec3<T>` generic vector type.
+pub const VEC3_TYPE_NAME: &str = "Vec3";
+
+/// Canonical class name for the compiler-builtin `Vec4<T>` generic vector type.
+pub const VEC4_TYPE_NAME: &str = "Vec4";
+
 /// Canonical class name for the compiler-builtin `GpuContext` struct made
 /// available inside `gpu fn` bodies.
 pub const GPU_CONTEXT_TYPE_NAME: &str = "GpuContext";
@@ -597,6 +606,21 @@ fn fmt_custom(f: &mut fmt::Formatter<'_>, name: &str, args: Option<&[Expression]
         }
     }
     write!(f, "{}", close)
+}
+
+/// Returns the dimension (2, 3, or 4) of a compiler-known vector type name,
+/// or `None` if the name is not a vector type.
+///
+/// Used to canonically recognize Vec2, Vec3, and Vec4 without string literals
+/// scattered across the compiler. The constants [`VEC2_TYPE_NAME`], [`VEC3_TYPE_NAME`],
+/// and [`VEC4_TYPE_NAME`] are the single source of truth.
+pub fn vec_dim(name: &str) -> Option<u8> {
+    match name {
+        VEC2_TYPE_NAME => Some(2),
+        VEC3_TYPE_NAME => Some(3),
+        VEC4_TYPE_NAME => Some(4),
+        _ => None,
+    }
 }
 
 /// Maps a Miri type kind to its WGSL scalar type name.

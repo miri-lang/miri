@@ -82,7 +82,31 @@ pub fn field_layout(
     let ptr_size = ptr_ty.bytes() as i32;
     match local_type {
         TypeKind::Tuple(element_exprs) => tuple_field_layout(element_exprs, field_idx, ptr_ty),
-        TypeKind::Custom(name, _) => custom_field_layout(name, field_idx, type_definitions, ptr_ty),
+        TypeKind::Custom(name, type_args) => {
+            // Only substitute type arguments for compiler-known vector types (Vec2, Vec3, Vec4).
+            // Other generic types (e.g. List<T>, List<Tuple<...>>) have field layout defined
+            // by their type definition, not their type arguments.
+            if let Some(dim) = crate::ast::types::vec_dim(name) {
+                if let Some(args) = type_args {
+                    if !args.is_empty() {
+                        // Try to extract the element type from the first type argument
+                        if let ExpressionKind::Type(elem_type, _) = &args[0].node {
+                            debug_assert!(
+                                field_idx < dim as usize,
+                                "field_layout: vector '{}' field index {} out of bounds for dimension {}",
+                                name,
+                                field_idx,
+                                dim
+                            );
+                            let elem_cl_ty = translate_type_kind(&elem_type.kind, ptr_ty);
+                            let field_offset = (field_idx as i32) * elem_cl_ty.bytes() as i32;
+                            return (field_offset, elem_cl_ty);
+                        }
+                    }
+                }
+            }
+            custom_field_layout(name, field_idx, type_definitions, ptr_ty)
+        }
         TypeKind::Int
         | TypeKind::I8
         | TypeKind::I16

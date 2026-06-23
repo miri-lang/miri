@@ -1,7 +1,7 @@
 ---
 name: miri-test-runner
 description: Run the Miri verification gate (format / lint / build / test) and report exact pass/fail counts. Use when you need a full suite run isolated from the main context so noisy cargo output does not pollute the parent conversation.
-gemini-model: flash
+model: haiku
 tools: Bash, Read, Grep
 ---
 

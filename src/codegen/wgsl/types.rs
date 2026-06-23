@@ -3,7 +3,8 @@
 
 //! WGSL type-name resolution from MIR/AST type kinds.
 
-use crate::ast::types::TypeKind;
+use crate::ast::expression::ExpressionKind;
+use crate::ast::types::{vec_dim, TypeKind};
 use crate::error::CodegenError;
 
 /// WGSL scalar types representable in a compute shader.
@@ -35,19 +36,6 @@ impl WgslScalar {
             WgslScalar::I64 => "i64",
             WgslScalar::U64 => "u64",
             WgslScalar::F64 => "f64",
-        }
-    }
-
-    /// WGSL literal for the zero / default value of this scalar.
-    pub fn zero_literal(self) -> &'static str {
-        match self {
-            WgslScalar::I32 => "0",
-            WgslScalar::U32 => "0u",
-            WgslScalar::F32 => "0.0",
-            WgslScalar::Bool => "false",
-            WgslScalar::I64 => "0li",
-            WgslScalar::U64 => "0lu",
-            WgslScalar::F64 => "0.0lf",
         }
     }
 }
@@ -96,6 +84,53 @@ pub fn scalar(kind: &TypeKind) -> Result<WgslScalar, CodegenError> {
             "WGSL backend cannot represent type {:?} as a scalar",
             kind
         ))),
+    }
+}
+
+/// Map a vector type kind (Vec2, Vec3, Vec4) to its WGSL vector type spelling.
+///
+/// Returns `None` for non-vector types. The element type must be a scalar
+/// (f32, i32, or u32); f64/i64/u64 widths are rejected at the launch site.
+pub fn vector_type(kind: &TypeKind) -> Option<String> {
+    match kind {
+        TypeKind::Custom(name, Some(args)) => {
+            let dim = vec_dim(name)?;
+            let first_arg = args.first()?;
+            let elem_ty = match &first_arg.node {
+                ExpressionKind::Type(ty, _) => ty,
+                _ => return None,
+            };
+
+            let elem_scalar = scalar(&elem_ty.kind).ok()?;
+            Some(format!("vec{}<{}>", dim, elem_scalar.name()))
+        }
+        _ => None,
+    }
+}
+
+/// Map a field index to a WGSL vector swizzle character for Vec types.
+///
+/// Returns the swizzle character (x, y, z, or w) if the type is a vector,
+/// otherwise returns `None` to signal use of numeric field access.
+pub fn vector_swizzle(kind: &TypeKind, field_idx: usize) -> Option<char> {
+    if let TypeKind::Custom(name, _) = kind {
+        vec_dim(name).and_then(|dim| {
+            debug_assert!(
+                field_idx < dim as usize,
+                "vector swizzle field index {} out of bounds for dimension {}",
+                field_idx,
+                dim
+            );
+            match field_idx {
+                0 => Some('x'),
+                1 => Some('y'),
+                2 => Some('z'),
+                3 => Some('w'),
+                _ => None,
+            }
+        })
+    } else {
+        None
     }
 }
 

@@ -4,6 +4,7 @@
 //! Constructor lowering — struct and class constructors.
 
 use crate::ast::expression::Expression;
+use crate::ast::types;
 use crate::ast::{BuiltinCollectionKind, ExpressionKind, Type, TypeKind};
 use crate::error::lowering::LoweringError;
 use crate::error::syntax::Span;
@@ -24,8 +25,11 @@ pub fn lower_struct_constructor(
     struct_name: &str,
     def: &StructDefinition,
     args: &[Expression],
+    type_args: Option<&[Expression]>,
     dest: Option<Place>,
 ) -> Result<Operand, LoweringError> {
+    // Check if this is a vector type (Vec2, Vec3, Vec4, etc.)
+    let is_vec = types::vec_dim(struct_name).is_some();
     // Separate positional and named arguments
     let arg_watermark = ctx.body.local_decls.len();
     let mut positional_args = Vec::with_capacity(args.len());
@@ -44,6 +48,26 @@ pub fn lower_struct_constructor(
             }
         }
     }
+
+    // Extract concrete element type for vectors from the type_args
+    let concrete_elem_type = if is_vec && !def.fields.is_empty() {
+        // For vectors, the type_args should contain Type(concrete_elem, _) expressions
+        if let Some(args) = type_args {
+            if let Some(first_arg) = args.first() {
+                if let ExpressionKind::Type(elem_ty, _) = &first_arg.node {
+                    Some(elem_ty.as_ref().clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     // Build operands in field declaration order
     let mut operands = Vec::with_capacity(def.fields.len());
@@ -67,10 +91,27 @@ pub fn lower_struct_constructor(
 
         // Cast if types don't match
         let op_ty = op.ty(&ctx.body).clone();
-        let op = if op_ty.kind != field_ty.kind {
-            let temp = ctx.push_temp(field_ty.clone(), *span);
+
+        // For vectors: if field is Generic(T) and we have a concrete element type,
+        // coerce to the concrete type instead of the field type.
+        let target_ty = if is_vec {
+            if let TypeKind::Generic(_, _, _) = &field_ty.kind {
+                if let Some(ref concrete) = concrete_elem_type {
+                    concrete
+                } else {
+                    field_ty
+                }
+            } else {
+                field_ty
+            }
+        } else {
+            field_ty
+        };
+
+        let op = if op_ty.kind != target_ty.kind {
+            let temp = ctx.push_temp(target_ty.clone(), *span);
             ctx.push_statement(crate::mir::Statement {
-                kind: StatementKind::Assign(Place::new(temp), coerce_rvalue(op, &op_ty, field_ty)),
+                kind: StatementKind::Assign(Place::new(temp), coerce_rvalue(op, &op_ty, target_ty)),
                 span: *span,
             });
             Operand::Copy(Place::new(temp))
@@ -82,25 +123,50 @@ pub fn lower_struct_constructor(
     }
 
     // Create the struct type
-    let struct_ty = Type::new(TypeKind::Custom(struct_name.to_string(), None), *span);
+    // For vectors, build the type with the concrete element type wrapped as an Expression
+    let struct_ty = if is_vec {
+        if let Some(ref concrete_elem) = concrete_elem_type {
+            // Build a synthetic Type(concrete_elem, false) expression for type_args
+            let synthetic_args = vec![Expression {
+                id: 0,
+                span: *span,
+                node: ExpressionKind::Type(Box::new(concrete_elem.clone()), false),
+            }];
+            Type::new(
+                TypeKind::Custom(struct_name.to_string(), Some(synthetic_args)),
+                *span,
+            )
+        } else {
+            Type::new(TypeKind::Custom(struct_name.to_string(), None), *span)
+        }
+    } else {
+        Type::new(TypeKind::Custom(struct_name.to_string(), None), *span)
+    };
 
     // Assign aggregate to destination
-    let (destination, result_op) = if let Some(d) = dest {
-        (d.clone(), Operand::Copy(d))
+    let destination = if let Some(d) = dest {
+        d
     } else {
-        let temp = ctx.push_temp(struct_ty.clone(), *span);
-        let p = Place::new(temp);
-        (p.clone(), Operand::Copy(p))
+        Place::new(ctx.push_temp(struct_ty.clone(), *span))
     };
 
     let dest_local = destination.local;
+
+    // For vectors: override the destination local's declared type to the concrete struct type
+    // so that both WGSL backend and narrow-int CPU field load get the concrete element type.
+    if is_vec {
+        ctx.body.local_decls[dest_local.0].ty = struct_ty.clone();
+    }
+
     ctx.push_statement(crate::mir::Statement {
         kind: StatementKind::Assign(
-            destination,
+            destination.clone(),
             Rvalue::Aggregate(AggregateKind::Struct(struct_ty), operands.clone()),
         ),
         span: *span,
     });
+
+    let result_op = Operand::Copy(destination);
 
     // Release managed temporaries created while lowering the constructor arguments.
     // After the Aggregate assignment, Perceus has IncRef'd them (the struct now owns

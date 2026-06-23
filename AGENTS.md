@@ -52,7 +52,7 @@ When writing tests or standard library code, remember Miri's syntax:
 - **Matching**: Exhaustive `match` is mandatory. Do not use `_` for domain-critical enums.
 - **Standard Library Independence**: The compiler must NOT hardcode any standard library names or have specialized logic for them. Treat them like user code.
 - **Separation of Concerns**: `struct` for data, `trait` for behavior. Avoid "God Objects".
-- **Comments**: Keep comments up-to-date with the code. Remove obsolete comments. Describe the code at hand independently; do NOT reference internal planning documents, section numbers, milestone/phase numbers, or task identifiers. Ensure copyright headers are present.
+- **Comments**: Keep comments up-to-date; remove obsolete ones. Describe the code independently (see §3.5 for the no-planning-references rule). Ensure copyright headers are present.
 
 ## 3.5 Codebase Cleanliness: No Planning References (BINDING)
 **The codebase must be absolutely clean of internal planning artifacts.** This means:
@@ -106,6 +106,7 @@ Work is **not done** until each acceptance criterion has passed all three phases
     2. **`make lint`**: Fix all clippy warnings.
     3. **`make build`**: Ensure both compiler and runtimes compile.
     4. **`make test`**: Run the full suite.
+- **Definition of Done**: Never claim a task DONE until format, lint, build, and the full test suite all pass green. Run the gate yourself and report exact pass/fail counts — do not infer success. If a subagent reports a failure as "pre-existing" or "out of scope", re-run that test yourself before trusting the verdict.
 
 ---
 
@@ -113,13 +114,15 @@ Work is **not done** until each acceptance criterion has passed all three phases
 To work efficiently and hit fewer roadblocks:
 
 1. **Research First**: Use `Grep` (or the `miri-explorer` agent) to find examples of similar patterns (e.g., "how is `if` implemented in MIR?").
-2. **Incremental Changes**: Complete one phase (e.g., Type Checker) with passing tests before moving to the next (e.g., MIR lowering).
+2. **Incremental Changes**: Complete one phase (e.g., Type Checker) with passing tests before moving to the next (e.g., MIR lowering). Split large refactors into chunks of at most ~5 files; build and test after each chunk rather than handing the whole transform to one subagent.
 3. **No Brute Force**: If you encounter a compilation error, analyze the `MiriError` or Rust error. Don't just `sed` the code.
-4. **Update READMEs**: If you change a module's core logic, update its local `README.md`.
-5. **Temporary Files**: Use `/tmp/` for scripts or backups.
-6. **Out-of-scope discoveries**: When you discover a gap or missing feature not part of the current scope, record it as a TODO comment in the relevant code location. Do not commit discoveries without context.
-7. Reply in unified diff form. No file rewrites unless asked. No trailing summary.
-8. Never commit changes yourself, never create PRs.
+4. **Bulk Edits**: After any mechanical transform (dedent, `sed`, `git checkout`, import removal, mass header insertion), re-read the affected files and run the build to confirm no source was truncated and no string literals were broken.
+5. **Blast Radius First**: Before flipping a default (e.g. fail-open → fail-closed) or removing a load-bearing import, enumerate every dependent test, fixture, and call site, then update them in the same pass — not iteratively as breakage surfaces.
+6. **Update READMEs**: If you change a module's core logic, update its local `README.md`.
+7. **Temporary Files**: Use `/tmp/` for scripts or backups.
+8. **Out-of-scope discoveries**: When you discover a gap or missing feature not part of the current scope, record it as a TODO comment in the relevant code location. Do not commit discoveries without context.
+9. Reply in unified diff form. No file rewrites unless asked. No trailing summary.
+10. Never commit changes yourself, never create PRs.
 
 ---
 
@@ -128,6 +131,7 @@ To work efficiently and hit fewer roadblocks:
 - **Type Checker Loops**: Ensure your inference logic has termination conditions, especially with generics.
 - **`make format` diffs**: If `make format` fails, it usually means you forgot to run it. Run it and re-verify.
 - **Unreachable Code**: The compiler pipeline is strict. If you add a variant to a MIR instruction, you MUST update all visitors and codegen.
+- **Non-Reproducible Test Failures**: When a test fails for you but not reproducibly (or vice versa), suspect environment dependencies — `TMPDIR`/filesystem allowlist, GPU adapter availability, CI link order — before assuming the test itself is wrong.
 
 ---
 
