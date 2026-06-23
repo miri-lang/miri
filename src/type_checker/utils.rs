@@ -13,7 +13,7 @@ use super::context::{Context, TypeDefinition};
 use super::TypeChecker;
 use crate::ast::factory::make_type;
 use crate::ast::types::{
-    BuiltinCollectionKind, Type, TypeKind, ACCELERABLE_TRAIT_NAME, DIM3_TYPE_NAME,
+    vec_dim, BuiltinCollectionKind, Type, TypeKind, ACCELERABLE_TRAIT_NAME, DIM3_TYPE_NAME,
     FRAME_INPUT_TYPE_NAME, GPU_CONTEXT_TYPE_NAME, KERNEL_TYPE_NAME,
 };
 use crate::ast::ExpressionKind;
@@ -255,6 +255,27 @@ pub fn is_gpu_compatible(kind: &TypeKind) -> bool {
             if BuiltinCollectionKind::from_name(name) == Some(BuiltinCollectionKind::Array) {
                 return first_type_arg_is_gpu_compatible(type_args.as_deref());
             }
+            // Vector types (Vec2, Vec3, Vec4) are GPU-compatible if their element type
+            // is a gpu-compatible scalar: f32, i32, u32, or the default Int/Float types.
+            if vec_dim(name).is_some() {
+                return type_args
+                    .as_ref()
+                    .and_then(|args| args.first())
+                    .is_some_and(|first_arg| {
+                        if let ExpressionKind::Type(elem_ty, _) = &first_arg.node {
+                            matches!(
+                                elem_ty.kind,
+                                TypeKind::Int
+                                    | TypeKind::Float
+                                    | TypeKind::F32
+                                    | TypeKind::I32
+                                    | TypeKind::U32
+                            )
+                        } else {
+                            false
+                        }
+                    });
+            }
             false
         }
 
@@ -340,6 +361,27 @@ fn accelerable_inner(
             .all(|elem| expr_type_is_accelerable(elem, type_definitions, allow_generic)),
 
         TypeKind::Custom(name, args) => {
+            // Vector types (Vec2, Vec3, Vec4) are accelerable if their element type
+            // is an accelerable scalar: f32, i32, u32, or the default Int/Float types.
+            if vec_dim(name).is_some() {
+                return args
+                    .as_ref()
+                    .and_then(|args| args.first())
+                    .is_some_and(|first_arg| {
+                        if let ExpressionKind::Type(elem_ty, _) = &first_arg.node {
+                            matches!(
+                                elem_ty.kind,
+                                TypeKind::Int
+                                    | TypeKind::Float
+                                    | TypeKind::F32
+                                    | TypeKind::I32
+                                    | TypeKind::U32
+                            )
+                        } else {
+                            false
+                        }
+                    });
+            }
             type_implements_accelerable(name, type_definitions)
                 && type_args_are_accelerable(args.as_deref(), type_definitions, allow_generic)
         }

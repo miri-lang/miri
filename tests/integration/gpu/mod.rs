@@ -39,4 +39,5 @@ pub mod residency;
 pub mod scalar_capture;
 pub mod sized_constructor;
 pub mod variable_bound_gpu_for;
+pub mod vectors;
 pub mod wgsl;

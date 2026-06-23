@@ -270,6 +270,13 @@ pub enum MathIntrinsic {
     Smoothstep,
     Step,
     Sign,
+    // Vector builtins (GPU-only)
+    VecDot,
+    VecLength,
+    VecNormalize,
+    VecCross,
+    VecReflect,
+    VecMix,
 }
 
 impl MathIntrinsic {
@@ -329,6 +336,12 @@ impl fmt::Display for MathIntrinsic {
             MathIntrinsic::Smoothstep => "smoothstep",
             MathIntrinsic::Step => "step",
             MathIntrinsic::Sign => "sign",
+            MathIntrinsic::VecDot => "dot",
+            MathIntrinsic::VecLength => "length",
+            MathIntrinsic::VecNormalize => "normalize",
+            MathIntrinsic::VecCross => "cross",
+            MathIntrinsic::VecReflect => "reflect",
+            MathIntrinsic::VecMix => "mix",
         };
         write!(f, "{}", s)
     }

@@ -1,7 +1,7 @@
 ---
 name: miri-reviewer
 description: Sole reviewer for STANDARD-tier Miri changes (PRINCIPLES.md §8.2) — one independent adversarial pass across Perceus RC, MIR visitor completeness, runtime/stdlib ABI, stdlib independence, exhaustive matching, and the §1–§5 principles. Read-only; reports §10-ranked findings, does not fix. For a MAJOR-tier change, the full miri-audit panel runs instead — recommend escalation if you trip a §8.1 trigger.
-gemini-model: pro
+model: sonnet
 tools: Read, Grep, Glob, Bash
 ---
 

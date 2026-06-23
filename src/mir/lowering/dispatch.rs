@@ -1174,12 +1174,24 @@ fn try_lower_constructor_call(
     if let Some(func_ty) = ctx.type_checker.get_type(func.id) {
         if let TypeKind::Meta(inner) = &func_ty.kind {
             if let TypeKind::Custom(type_name, _) = &inner.kind {
+                // Extract concrete type_args from the overall call expression type
+                let call_ty = ctx.type_checker.get_type(call_expr_id);
+                let type_args = call_ty.and_then(|ty| {
+                    if let TypeKind::Custom(_, ta) = &ty.kind {
+                        ta.as_ref().map(|v| v.as_slice())
+                    } else {
+                        None
+                    }
+                });
+
                 // Struct constructor.
                 if let Some(TypeDefinition::Struct(def)) =
                     ctx.type_checker.global_type_definitions.get(type_name)
                 {
-                    return lower_struct_constructor(ctx, span, type_name, def, args, dest)
-                        .map(Some);
+                    return lower_struct_constructor(
+                        ctx, span, type_name, def, args, type_args, dest,
+                    )
+                    .map(Some);
                 }
                 // Class constructor.
                 if let Some(TypeDefinition::Class(def)) =

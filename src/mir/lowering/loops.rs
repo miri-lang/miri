@@ -22,21 +22,29 @@ use crate::type_checker::context::TypeDefinition;
 use super::{lower_expression, lower_statement, LoweringContext};
 
 pub fn lower_break(ctx: &mut LoweringContext, span: &Span) -> Result<(), LoweringError> {
-    if let Some(target) = ctx.get_break_target() {
-        ctx.set_terminator(Terminator::new(TerminatorKind::Goto { target }, *span));
-        Ok(())
-    } else {
-        Err(LoweringError::break_outside_loop(*span))
-    }
+    let (target, scope_depth) = match ctx.loop_stack.last() {
+        Some(lc) => (lc.break_target, lc.scope_depth),
+        None => return Err(LoweringError::break_outside_loop(*span)),
+    };
+    // Emit StorageDead for all named locals introduced inside the loop body
+    // (scopes opened after enter_loop was called). Perceus converts these into
+    // DecRef operations, ensuring managed locals (e.g. Strings from match branches)
+    // are properly released when break exits the scope early.
+    ctx.emit_break_cleanup(scope_depth, *span);
+    ctx.set_terminator(Terminator::new(TerminatorKind::Goto { target }, *span));
+    Ok(())
 }
 
 pub fn lower_continue(ctx: &mut LoweringContext, span: &Span) -> Result<(), LoweringError> {
-    if let Some(target) = ctx.get_continue_target() {
-        ctx.set_terminator(Terminator::new(TerminatorKind::Goto { target }, *span));
-        Ok(())
-    } else {
-        Err(LoweringError::continue_outside_loop(*span))
-    }
+    let (target, scope_depth) = match ctx.loop_stack.last() {
+        Some(lc) => (lc.continue_target, lc.scope_depth),
+        None => return Err(LoweringError::continue_outside_loop(*span)),
+    };
+    // Same cleanup as break: emit StorageDead for in-loop-scope locals so that
+    // managed values are DecRef'd before the next iteration overwrites them.
+    ctx.emit_break_cleanup(scope_depth, *span);
+    ctx.set_terminator(Terminator::new(TerminatorKind::Goto { target }, *span));
+    Ok(())
 }
 
 pub fn lower_if(
