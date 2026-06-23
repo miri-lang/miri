@@ -27,10 +27,17 @@ impl<'a> FunctionTranslator<'a> {
             TypeKind::Array(_, _) => ElementShape::Builtin(BuiltinCollectionKind::Array),
             TypeKind::Set(_) => ElementShape::Builtin(BuiltinCollectionKind::Set),
             TypeKind::Map(_, _) => ElementShape::Builtin(BuiltinCollectionKind::Map),
-            TypeKind::Custom(name, _) => match BuiltinCollectionKind::from_name(name) {
-                Some(builtin) => ElementShape::Builtin(builtin),
-                None => ElementShape::UserClass(name),
-            },
+            TypeKind::Custom(name, _) => {
+                // Vector types (Vec2/3/4) are value types stored inline — they
+                // carry no per-element drop/clone callback.
+                if crate::ast::types::vec_dim(name).is_some() {
+                    return ElementShape::Other;
+                }
+                match BuiltinCollectionKind::from_name(name) {
+                    Some(builtin) => ElementShape::Builtin(builtin),
+                    None => ElementShape::UserClass(name),
+                }
+            }
             TypeKind::Int
             | TypeKind::I8
             | TypeKind::I16

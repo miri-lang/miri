@@ -61,6 +61,36 @@ fn main()
     assert_runs_with_output(source, "5.0 6.0 3.0");
 }
 
+/// Array of Vec3<f32> stored inline: construct, read fields across elements,
+/// drop without leak. Distinct per-element values prove elements don't overlap.
+#[test]
+fn cpu_vec3_array_construct_and_field_read() {
+    let source = "
+use system.gpu.vector
+use system.collections.array
+
+fn main()
+    let arr = [Vec3<f32>(1.0, 2.0, 3.0), Vec3<f32>(4.0, 5.0, 6.0), Vec3<f32>(7.0, 8.0, 9.0)]
+    println(f'{arr[0].x} {arr[1].y} {arr[2].z}')
+";
+    assert_runs_with_output(source, "1.0 5.0 9.0");
+}
+
+/// Array of Vec4<f32> stored inline: every component of every element reads
+/// back correctly (stride 16 == payload 16, no padding).
+#[test]
+fn cpu_vec4_array_construct_and_field_read() {
+    let source = "
+use system.gpu.vector
+use system.collections.array
+
+fn main()
+    let arr = [Vec4<f32>(1.0, 2.0, 3.0, 4.0), Vec4<f32>(5.0, 6.0, 7.0, 8.0)]
+    println(f'{arr[0].x} {arr[0].w} {arr[1].x} {arr[1].w}')
+";
+    assert_runs_with_output(source, "1.0 4.0 5.0 8.0");
+}
+
 /// Vec2 component-wise arithmetic.
 #[test]
 fn cpu_vec2_arithmetic() {

@@ -913,9 +913,19 @@ fn infer_type_from_generic_arg(arg: &Expression, ctx: &LoweringContext) -> Optio
 
 /// Computes the element size in bytes for a collection element type.
 ///
-/// Primitives use their natural size. Managed types (String, collections,
+/// Primitives use their natural size. Vector value types (Vec2/3/4) are stored
+/// inline at their std430 stride. Other managed types (String, collections,
 /// custom types/classes) are pointer-sized since they are heap-allocated.
 pub(crate) fn compute_elem_size_from_type(kind: &TypeKind) -> i64 {
+    use crate::ast::expression::ExpressionKind;
+    // Inline-stored vector elements occupy their std430 stride, not a pointer.
+    if let TypeKind::Custom(name, Some(args)) = kind {
+        if let Some(ExpressionKind::Type(scalar, _)) = args.first().map(|a| &a.node) {
+            if let Some(stride) = types::inline_element_stride(name, &scalar.kind) {
+                return stride;
+            }
+        }
+    }
     match kind {
         TypeKind::I8 | TypeKind::U8 | TypeKind::Boolean => 1,
         TypeKind::I16 | TypeKind::U16 => 2,
