@@ -16,3 +16,4 @@ target
 .DS_Store
 notes
 .syntax
+.mcp.json
