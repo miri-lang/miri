@@ -351,11 +351,25 @@ impl<'a> FunctionTranslator<'a> {
             .map(|op| Self::translate_operand(builder, ctx, op, locals, type_ctx))
             .collect::<Result<_, _>>()?;
 
-        // Determine element size from the first operand (all are homogeneous)
-        let elem_size = if translated.is_empty() {
-            ptr_size as i64
-        } else {
-            builder.func.dfg.value_type(translated[0]).bytes() as i64
+        // Determine element size from the first operand (all are homogeneous).
+        // Inline vector elements occupy their std430 stride even though the
+        // operand value is a pointer to the source aggregate; pointer-sized and
+        // scalar elements use the operand's Cranelift width.
+        let first_elem_kind: Option<&TypeKind> = operands.first().and_then(|op| match op {
+            Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => {
+                Some(&type_ctx.local_types[p.local.0].kind)
+            }
+            Operand::Constant(c) => Some(&c.ty.kind),
+            Operand::Copy(_) | Operand::Move(_) => None,
+        });
+        let inline_stride = first_elem_kind.and_then(|k| {
+            crate::codegen::cranelift::translator::inline_vec_element_layout(k, ptr_type)
+                .map(|(stride, _, _)| stride)
+        });
+        let elem_size = match (inline_stride, translated.is_empty()) {
+            (Some(stride), _) => stride,
+            (None, true) => ptr_size as i64,
+            (None, false) => builder.func.dfg.value_type(translated[0]).bytes() as i64,
         };
         let elem_size_val = builder.ins().iconst(ptr_type, elem_size);
 
@@ -399,17 +413,6 @@ impl<'a> FunctionTranslator<'a> {
         let count_val = builder.ins().iconst(ptr_type, operands.len() as i64);
         let array_ptr = Self::call_rt_array_new(builder, ctx, count_val, elem_size_val)?;
 
-        if !translated.is_empty() {
-            // Read data pointer from MiriArray.data (offset 0)
-            let data_ptr = builder.ins().load(ptr_type, MemFlags::new(), array_ptr, 0);
-            for (i, val) in translated.iter().enumerate() {
-                let offset = (i as i64) * elem_size;
-                builder
-                    .ins()
-                    .store(MemFlags::new(), *val, data_ptr, offset as i32);
-            }
-        }
-
         // Only inspect non-projected operands: `first_operand_kind` returns the
         // LOCAL's declared type, which is wrong for field projections (e.g.
         // `child.value` where `child: Tree` has type Tree, not the field type
@@ -423,6 +426,44 @@ impl<'a> FunctionTranslator<'a> {
             Operand::Constant(c) => Some(&c.ty.kind),
             Operand::Copy(_) | Operand::Move(_) => None,
         });
+        // Inline vector elements are copied component-by-component from the
+        // source aggregate (`val` is its address); pointer-sized elements store
+        // the operand value directly.
+        let inline = first_op_direct_kind.and_then(|k| {
+            crate::codegen::cranelift::translator::inline_vec_element_layout(k, ptr_type)
+        });
+
+        if !translated.is_empty() {
+            // Read data pointer from MiriArray.data (offset 0)
+            let data_ptr = builder.ins().load(ptr_type, MemFlags::new(), array_ptr, 0);
+            for (i, val) in translated.iter().enumerate() {
+                let offset = (i as i64) * elem_size;
+                match inline {
+                    Some((_, dim, comp_ty)) => {
+                        let comp_bytes = comp_ty.bytes() as i64;
+                        for k in 0..dim as i64 {
+                            let comp = builder.ins().load(
+                                comp_ty,
+                                MemFlags::new(),
+                                *val,
+                                (k * comp_bytes) as i32,
+                            );
+                            builder.ins().store(
+                                MemFlags::new(),
+                                comp,
+                                data_ptr,
+                                (offset + k * comp_bytes) as i32,
+                            );
+                        }
+                    }
+                    None => {
+                        builder
+                            .ins()
+                            .store(MemFlags::new(), *val, data_ptr, offset as i32);
+                    }
+                }
+            }
+        }
         if let Some(elem_kind) = first_op_direct_kind {
             Self::register_elem_drop_clone(
                 builder,

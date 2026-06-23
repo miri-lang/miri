@@ -419,13 +419,27 @@ impl<'a> FunctionTranslator<'a> {
             .ok_or_else(|| CodegenError::Internal(format!("Unknown local: {:?}", place.local)))?;
 
         let mut value = builder.use_var(*var);
+        // When the previous projection was an `Index` onto an inline vector
+        // element, `value` holds the element *address* and this carries that
+        // element's vector type so a following `Field` loads the scalar from it.
+        let mut inline_elem: Option<&TypeKind> = None;
 
         for proj in &place.projection {
             match proj {
                 PlaceElem::Deref => {
                     value = builder.ins().load(ptr_type, MemFlags::new(), value, 0);
+                    inline_elem = None;
                 }
                 PlaceElem::Field(idx) => {
+                    if let Some(vec_kind) = inline_elem {
+                        // `value` is the inline element address; load the field
+                        // scalar at its in-element offset.
+                        let (offset, field_ty) =
+                            layout::field_layout(vec_kind, *idx, type_definitions, ptr_type);
+                        value = builder.ins().load(field_ty, MemFlags::new(), value, offset);
+                        inline_elem = None;
+                        continue;
+                    }
                     let base_type = &local_types[place.local.0];
                     if matches!(base_type.kind, TypeKind::Function(_)) {
                         // Closure env field: capture `idx` lives at
@@ -449,6 +463,8 @@ impl<'a> FunctionTranslator<'a> {
                     value = Self::translate_collection_index_read(
                         builder, ctx, value, idx_val, base_type, type_ctx,
                     )?;
+                    inline_elem = Self::resolve_collection_elem_type(base_type)
+                        .filter(|k| inline_vec_element_layout(k, ptr_type).is_some());
                 }
             }
         }
@@ -1364,13 +1380,19 @@ impl<'a> FunctionTranslator<'a> {
         // No element type ⇒ assume pointer-sized addressing (managed collections
         // hold pointers; this matches the historical silent fallback but is now
         // explicit at the call site rather than inside the resolver).
-        let cl_elem_ty = match Self::resolve_collection_elem_type(base_type) {
-            Some(elem_kind) => {
-                crate::codegen::cranelift::types::translate_type_kind(elem_kind, ptr_type)
-            }
+        let elem_kind = Self::resolve_collection_elem_type(base_type);
+        // Inline vector elements are addressed by their std430 stride and the
+        // index expression yields the element *address* (the projection chain
+        // loads individual fields from it); pointer-sized elements are loaded.
+        let inline = elem_kind.and_then(|k| inline_vec_element_layout(k, ptr_type));
+        let cl_elem_ty = match elem_kind {
+            Some(k) => crate::codegen::cranelift::types::translate_type_kind(k, ptr_type),
             None => ptr_type,
         };
-        let elem_size = cl_elem_ty.bytes() as i64;
+        let elem_size = match inline {
+            Some((stride, _, _)) => stride,
+            None => cl_elem_ty.bytes() as i64,
+        };
 
         // Tuples store `[count][field0][field1]...` at `base_value`; the
         // `data` field is implicit (fields start right after the count slot).
@@ -1399,6 +1421,10 @@ impl<'a> FunctionTranslator<'a> {
             elem_size,
             ptr_type,
         )?;
+        // Inline element: the projection chain consumes the address directly.
+        if inline.is_some() {
+            return Ok(elem_addr);
+        }
         Ok(builder
             .ins()
             .load(cl_elem_ty, MemFlags::new(), elem_addr, 0))
@@ -1563,8 +1589,16 @@ impl<'a> FunctionTranslator<'a> {
     }
 }
 
-/// Returns true if a field type is managed (heap-allocated, needs DecRef on drop).
+/// Returns true if a field/element type is managed (heap-allocated, needs DecRef
+/// on drop). Vector types (Vec2/3/4) are value types stored inline — when held
+/// as a collection element or aggregate field they are raw bytes, not a managed
+/// pointer, so they must never be DecRef'd here.
 pub fn is_field_managed(kind: &TypeKind) -> bool {
+    if let TypeKind::Custom(name, _) = kind {
+        if crate::ast::types::vec_dim(name).is_some() {
+            return false;
+        }
+    }
     matches!(
         kind,
         TypeKind::Option(_)
@@ -1576,6 +1610,26 @@ pub fn is_field_managed(kind: &TypeKind) -> bool {
             | TypeKind::Tuple(_)
             | TypeKind::Custom(_, _)
     )
+}
+
+/// Inline layout of a vector value element (`Vec2`/`Vec3`/`Vec4<scalar>`) stored
+/// directly in a collection buffer: `(std430 stride, dimension, component
+/// Cranelift type)`. Returns `None` for non-vector / pointer-sized elements,
+/// which keeps every caller's non-inline path on its existing behavior.
+pub(crate) fn inline_vec_element_layout(
+    kind: &TypeKind,
+    ptr_type: cl_types::Type,
+) -> Option<(i64, u8, cl_types::Type)> {
+    let TypeKind::Custom(name, Some(args)) = kind else {
+        return None;
+    };
+    let dim = crate::ast::types::vec_dim(name)?;
+    let crate::ast::expression::ExpressionKind::Type(scalar, _) = &args.first()?.node else {
+        return None;
+    };
+    let stride = crate::ast::types::inline_element_stride(name, &scalar.kind)?;
+    let component = crate::codegen::cranelift::types::translate_type_kind(&scalar.kind, ptr_type);
+    Some((stride, dim, component))
 }
 
 /// Returns true if a closure capture type is managed and needs DecRef when the closure drops.
