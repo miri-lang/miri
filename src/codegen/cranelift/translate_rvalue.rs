@@ -947,6 +947,14 @@ impl<'a> FunctionTranslator<'a> {
             }
             MathIntrinsic::Step => Self::emit_math_step(builder, ty, &arg_values),
             MathIntrinsic::Sign => Self::emit_math_sign(builder, ty, arg_values[0]),
+            MathIntrinsic::VecDot
+            | MathIntrinsic::VecLength
+            | MathIntrinsic::VecNormalize
+            | MathIntrinsic::VecCross
+            | MathIntrinsic::VecReflect
+            | MathIntrinsic::VecMix => Err(CodegenError::Internal(
+                "vector builtins are GPU-only and should not be lowered for CPU".to_string(),
+            )),
         }
     }
 
@@ -1073,7 +1081,13 @@ impl<'a> FunctionTranslator<'a> {
             | (MathIntrinsic::Mix, _)
             | (MathIntrinsic::Smoothstep, _)
             | (MathIntrinsic::Step, _)
-            | (MathIntrinsic::Sign, _) => {
+            | (MathIntrinsic::Sign, _)
+            | (MathIntrinsic::VecDot, _)
+            | (MathIntrinsic::VecLength, _)
+            | (MathIntrinsic::VecNormalize, _)
+            | (MathIntrinsic::VecCross, _)
+            | (MathIntrinsic::VecReflect, _)
+            | (MathIntrinsic::VecMix, _) => {
                 return Err(CodegenError::Internal(format!(
                     "internal codegen error: {:?} routed to libm branch",
                     intrinsic

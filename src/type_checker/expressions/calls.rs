@@ -44,7 +44,7 @@
 
 use crate::ast::factory as ast_factory;
 use crate::ast::factory::make_type;
-use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
+use crate::ast::types::{vec_dim, BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::*;
 use crate::error::syntax::Span;
 use crate::mir::MathIntrinsic;
@@ -135,6 +135,11 @@ impl TypeChecker {
         if let Some(return_type) =
             self.try_infer_polymorphic_math_call(func, positional_args, span, context)
         {
+            return return_type;
+        }
+
+        // Check for vector builtin functions (dot, length, normalize, cross, reflect, mix).
+        if let Some(return_type) = self.try_infer_vector_builtin_call(func, positional_args, span) {
             return return_type;
         }
 
@@ -267,6 +272,293 @@ impl TypeChecker {
 
         // Return type matches the first argument type (numeric polymorphism).
         Some(first_arg_type.clone())
+    }
+
+    /// Detects vector builtin functions (dot, length, normalize, cross, reflect, mix)
+    /// and infers their return type based on argument types.
+    /// Returns `Some(return_type)` if this is a detected builtin, `None` otherwise.
+    fn extract_vec_elem_type(&self, vec_args: Option<&Vec<Expression>>) -> Option<Type> {
+        vec_args
+            .and_then(|args| args.first())
+            .and_then(|elem_expr| {
+                if let ExpressionKind::Type(ty, _) = &elem_expr.node {
+                    Some((**ty).clone())
+                } else {
+                    None
+                }
+            })
+    }
+
+    fn infer_vec_dot(
+        &mut self,
+        positional_args: &[(&Expression, Type)],
+        first_arg_type: &Type,
+        vec_args: Option<&Vec<Expression>>,
+        span: Span,
+    ) -> Option<Type> {
+        if positional_args.len() != 2 {
+            self.report_error(
+                format!(
+                    "dot expects exactly two arguments, but got {}",
+                    positional_args.len()
+                ),
+                span,
+            );
+            return Some(make_type(TypeKind::Error));
+        }
+
+        let elem_type = self.extract_vec_elem_type(vec_args)?;
+        if !matches!(elem_type.kind, TypeKind::F32) {
+            self.report_error(
+                format!(
+                    "dot expects vector with f32 elements, got {}",
+                    first_arg_type
+                ),
+                span,
+            );
+            return Some(make_type(TypeKind::Error));
+        }
+
+        let second_arg_type = positional_args.get(1).map(|(_, ty)| ty)?;
+        if second_arg_type != first_arg_type {
+            self.report_error(
+                format!(
+                    "dot expects both vector arguments to have the same type, got {} and {}",
+                    first_arg_type, second_arg_type
+                ),
+                span,
+            );
+            return Some(make_type(TypeKind::Error));
+        }
+
+        Some(elem_type)
+    }
+
+    fn infer_vec_length(
+        &mut self,
+        positional_args: &[(&Expression, Type)],
+        first_arg_type: &Type,
+        vec_args: Option<&Vec<Expression>>,
+        span: Span,
+    ) -> Option<Type> {
+        if positional_args.len() != 1 {
+            self.report_error(
+                format!(
+                    "length expects exactly one argument, but got {}",
+                    positional_args.len()
+                ),
+                span,
+            );
+            return Some(make_type(TypeKind::Error));
+        }
+
+        let elem_type = self.extract_vec_elem_type(vec_args)?;
+        if !matches!(elem_type.kind, TypeKind::F32) {
+            self.report_error(
+                format!(
+                    "length expects vector with f32 elements, got {}",
+                    first_arg_type
+                ),
+                span,
+            );
+            return Some(make_type(TypeKind::Error));
+        }
+
+        Some(elem_type)
+    }
+
+    fn infer_vec_normalize(
+        &mut self,
+        positional_args: &[(&Expression, Type)],
+        first_arg_type: &Type,
+        vec_args: Option<&Vec<Expression>>,
+        span: Span,
+    ) -> Option<Type> {
+        if positional_args.len() != 1 {
+            self.report_error(
+                format!(
+                    "normalize expects exactly one argument, but got {}",
+                    positional_args.len()
+                ),
+                span,
+            );
+            return Some(make_type(TypeKind::Error));
+        }
+
+        let elem_type = self.extract_vec_elem_type(vec_args)?;
+        if !matches!(elem_type.kind, TypeKind::F32) {
+            self.report_error(
+                format!(
+                    "normalize expects vector with f32 elements, got {}",
+                    first_arg_type
+                ),
+                span,
+            );
+            return Some(make_type(TypeKind::Error));
+        }
+
+        Some(first_arg_type.clone())
+    }
+
+    fn infer_vec_cross(
+        &mut self,
+        positional_args: &[(&Expression, Type)],
+        first_arg_type: &Type,
+        vec_dimension: u8,
+        span: Span,
+    ) -> Option<Type> {
+        if positional_args.len() != 2 {
+            self.report_error(
+                format!(
+                    "cross expects exactly two arguments, but got {}",
+                    positional_args.len()
+                ),
+                span,
+            );
+            return Some(make_type(TypeKind::Error));
+        }
+
+        if vec_dimension != 3 {
+            self.report_error(
+                format!("cross expects Vec3 arguments, got {}", first_arg_type),
+                span,
+            );
+            return Some(make_type(TypeKind::Error));
+        }
+
+        Some(first_arg_type.clone())
+    }
+
+    fn infer_vec_reflect(
+        &mut self,
+        positional_args: &[(&Expression, Type)],
+        first_arg_type: &Type,
+        vec_args: Option<&Vec<Expression>>,
+        span: Span,
+    ) -> Option<Type> {
+        if positional_args.len() != 2 {
+            self.report_error(
+                format!(
+                    "reflect expects exactly two arguments, but got {}",
+                    positional_args.len()
+                ),
+                span,
+            );
+            return Some(make_type(TypeKind::Error));
+        }
+
+        let elem_type = self.extract_vec_elem_type(vec_args)?;
+        if !matches!(elem_type.kind, TypeKind::F32) {
+            self.report_error(
+                format!(
+                    "reflect expects vector with f32 elements, got {}",
+                    first_arg_type
+                ),
+                span,
+            );
+            return Some(make_type(TypeKind::Error));
+        }
+
+        let second_arg_type = positional_args.get(1).map(|(_, ty)| ty)?;
+        if second_arg_type != first_arg_type {
+            self.report_error(
+                format!(
+                    "reflect expects both vector arguments to have the same type, got {} and {}",
+                    first_arg_type, second_arg_type
+                ),
+                span,
+            );
+            return Some(make_type(TypeKind::Error));
+        }
+
+        Some(first_arg_type.clone())
+    }
+
+    fn infer_vec_mix(
+        &mut self,
+        positional_args: &[(&Expression, Type)],
+        first_arg_type: &Type,
+        vec_args: Option<&Vec<Expression>>,
+        span: Span,
+    ) -> Option<Type> {
+        if positional_args.len() != 3 {
+            self.report_error(
+                format!(
+                    "mix expects exactly three arguments, but got {}",
+                    positional_args.len()
+                ),
+                span,
+            );
+            return Some(make_type(TypeKind::Error));
+        }
+
+        let elem_type = self.extract_vec_elem_type(vec_args)?;
+        if !matches!(elem_type.kind, TypeKind::F32) {
+            self.report_error(
+                format!(
+                    "mix expects vector with f32 elements, got {}",
+                    first_arg_type
+                ),
+                span,
+            );
+            return Some(make_type(TypeKind::Error));
+        }
+
+        let second_arg_type = positional_args.get(1).map(|(_, ty)| ty)?;
+        if second_arg_type != first_arg_type {
+            self.report_error(
+                format!(
+                    "mix expects both vector arguments to have the same type, got {} and {}",
+                    first_arg_type, second_arg_type
+                ),
+                span,
+            );
+            return Some(make_type(TypeKind::Error));
+        }
+
+        Some(first_arg_type.clone())
+    }
+
+    fn try_infer_vector_builtin_call(
+        &mut self,
+        func: &Expression,
+        positional_args: &[(&Expression, Type)],
+        span: Span,
+    ) -> Option<Type> {
+        // Extract the function name from direct identifier or module member access.
+        let func_name = match &func.node {
+            ExpressionKind::Identifier(name, _) => Some(name.as_str()),
+            ExpressionKind::Member(_module_expr, func_expr) => {
+                if let ExpressionKind::Identifier(func_name, _) = &func_expr.node {
+                    Some(func_name.as_str())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }?;
+
+        // Check if the first argument is a vector type (Vec2, Vec3, Vec4).
+        // Vector builtins dispatch on the first argument's type, not by name alone.
+        let first_arg_type = positional_args.first().map(|(_, ty)| ty)?;
+        let (vec_name, vec_args) = match &first_arg_type.kind {
+            TypeKind::Custom(name, args) => (name.as_str(), args.as_ref()),
+            _ => return None,
+        };
+
+        let vec_dimension = vec_dim(vec_name)?;
+
+        match func_name {
+            "dot" => self.infer_vec_dot(positional_args, first_arg_type, vec_args, span),
+            "length" => self.infer_vec_length(positional_args, first_arg_type, vec_args, span),
+            "normalize" => {
+                self.infer_vec_normalize(positional_args, first_arg_type, vec_args, span)
+            }
+            "cross" => self.infer_vec_cross(positional_args, first_arg_type, vec_dimension, span),
+            "reflect" => self.infer_vec_reflect(positional_args, first_arg_type, vec_args, span),
+            "mix" => self.infer_vec_mix(positional_args, first_arg_type, vec_args, span),
+            _ => None,
+        }
     }
 
     /// Checks GPU compatibility of call arguments and the function itself.

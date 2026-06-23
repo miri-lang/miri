@@ -8,7 +8,7 @@
 
 use super::context::{Context, TypeDefinition};
 use super::TypeChecker;
-use crate::ast::types::{BuiltinCollectionKind, Type, TypeKind};
+use crate::ast::types::{vec_dim, BuiltinCollectionKind, Type, TypeKind};
 use crate::ast::BinaryOp;
 use crate::ast::UnaryOp;
 
@@ -111,6 +111,36 @@ impl TypeChecker {
                 "Type mismatch: cannot multiply {} by {} (right operand must be an integer)",
                 left, right
             ));
+        }
+
+        // Vector-scalar broadcast: allow operations like Vec3<f32> * f32
+        if let TypeKind::Custom(vec_name, Some(args)) = &left.kind {
+            if vec_dim(vec_name).is_some() && self.is_numeric(right) {
+                if let Some(first_arg) = args.first() {
+                    if let crate::ast::expression::ExpressionKind::Type(elem_type, _) =
+                        &first_arg.node
+                    {
+                        if self.is_numeric(elem_type) {
+                            return Ok(left.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Reverse vector-scalar broadcast: allow operations like f32 * Vec3<f32>
+        if let TypeKind::Custom(vec_name, Some(args)) = &right.kind {
+            if vec_dim(vec_name).is_some() && self.is_numeric(left) {
+                if let Some(first_arg) = args.first() {
+                    if let crate::ast::expression::ExpressionKind::Type(elem_type, _) =
+                        &first_arg.node
+                    {
+                        if self.is_numeric(elem_type) {
+                            return Ok(right.clone());
+                        }
+                    }
+                }
+            }
         }
 
         Err(format!(

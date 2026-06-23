@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) Viacheslav Shynkarenko
 
-use crate::ast::expression::ExpressionKind;
+use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::literal::Literal;
 use crate::ast::types::TypeKind;
 use crate::codegen::cranelift::translator::{
     needs_out_pointer, ElementShape, FunctionTranslator, ModuleCtx, TypeCtx,
 };
-use crate::codegen::cranelift::types::translate_type;
+use crate::codegen::cranelift::types::{translate_type, translate_type_kind};
 use crate::error::CodegenError;
 use crate::mir::{
     AggregateKind, BasicBlock, Body, Local, Operand, Place, PlaceElem, Rvalue, Statement,
@@ -171,10 +171,19 @@ impl<'a> FunctionTranslator<'a> {
         let mut value = Self::translate_rvalue(builder, ctx, rvalue, locals, type_ctx)?;
 
         let dest_ty = &type_ctx.local_types[place.local.0];
-        let dest_cl_ty = translate_type(dest_ty, ptr_type);
+
+        // Compute destination type: if place has projections (e.g., v.x), use the projected
+        // type (e.g., f32); otherwise use the base local type.
+        let dest_kind_to_cast = if place.projection.is_empty() {
+            dest_ty.kind.clone()
+        } else {
+            Self::resolve_projected_type_kind(place, type_ctx)
+        };
+
+        let dest_cl_ty = translate_type_kind(&dest_kind_to_cast, ptr_type);
         let val_ty = builder.func.dfg.value_type(value);
         if dest_cl_ty != val_ty {
-            let is_unsigned = Self::is_unsigned_type_kind(&dest_ty.kind);
+            let is_unsigned = Self::is_unsigned_type_kind(&dest_kind_to_cast);
             value = Self::cast_value_with_sign(builder, value, val_ty, dest_cl_ty, is_unsigned)?;
         }
         Self::assign_to_place(builder, ctx, place, value, locals, type_ctx)?;
@@ -940,31 +949,77 @@ impl<'a> FunctionTranslator<'a> {
     /// For a `Field(i)` projection on a `Custom` type, looks up the field type from
     /// `type_definitions` so that callers like `emit_type_drop` receive the correct
     /// kind (e.g. `List([int])`) instead of the container's kind (e.g. `Custom("Holder")`).
-    fn resolve_projected_type_kind(place: &Place, type_ctx: &TypeCtx) -> TypeKind {
+    /// For generic custom types (e.g. `Vec3<f32>`), substitutes the type arguments into
+    /// the field type so that accessing a field returns the concrete type, not a generic.
+    fn substitute_first_generic(
+        field_type: &TypeKind,
+        type_args: Option<&Vec<Expression>>,
+        def_generics: Option<&Vec<crate::type_checker::context::GenericDefinition>>,
+    ) -> TypeKind {
+        if let (TypeKind::Generic(param_name, _, _), Some(args)) = (field_type, type_args) {
+            let is_first_param = def_generics
+                .and_then(|g| g.first())
+                .map(|g| &g.name == param_name)
+                .unwrap_or(false);
+
+            if is_first_param && !args.is_empty() {
+                if let ExpressionKind::Type(ty, _) = &args[0].node {
+                    return ty.kind.clone();
+                }
+            }
+        }
+        field_type.clone()
+    }
+
+    pub(crate) fn resolve_projected_type_kind(place: &Place, type_ctx: &TypeCtx) -> TypeKind {
         let mut current = type_ctx.local_types[place.local.0].kind.clone();
 
         for proj in &place.projection {
             match proj {
                 PlaceElem::Field(idx) => {
                     current = match &current {
-                        TypeKind::Custom(name, _) => {
+                        TypeKind::Custom(name, type_args_opt) => {
                             use crate::type_checker::context::TypeDefinition;
                             match type_ctx.type_definitions.get(name.as_str()) {
-                                Some(TypeDefinition::Struct(def)) => def
-                                    .fields
-                                    .get(*idx)
-                                    .map(|(_, ty, _)| ty.kind.clone())
-                                    .unwrap_or(TypeKind::Error),
+                                Some(TypeDefinition::Struct(def)) => {
+                                    let field_type = def
+                                        .fields
+                                        .get(*idx)
+                                        .map(|(_, ty, _)| ty.kind.clone())
+                                        .unwrap_or(TypeKind::Error);
+
+                                    // Only apply substitution for compiler-known Vec types.
+                                    if crate::ast::types::vec_dim(name).is_some() {
+                                        Self::substitute_first_generic(
+                                            &field_type,
+                                            type_args_opt.as_ref(),
+                                            def.generics.as_ref(),
+                                        )
+                                    } else {
+                                        field_type
+                                    }
+                                }
                                 Some(TypeDefinition::Class(def)) => {
                                     let all_fields =
                                         crate::type_checker::context::collect_class_fields_all(
                                             def,
                                             type_ctx.type_definitions,
                                         );
-                                    all_fields
+                                    let field_type = all_fields
                                         .get(*idx)
                                         .map(|(_, fi)| fi.ty.kind.clone())
-                                        .unwrap_or(TypeKind::Error)
+                                        .unwrap_or(TypeKind::Error);
+
+                                    // Only apply substitution for compiler-known Vec types.
+                                    if crate::ast::types::vec_dim(name).is_some() {
+                                        Self::substitute_first_generic(
+                                            &field_type,
+                                            type_args_opt.as_ref(),
+                                            def.generics.as_ref(),
+                                        )
+                                    } else {
+                                        field_type
+                                    }
                                 }
                                 None
                                 | Some(TypeDefinition::Enum(_))

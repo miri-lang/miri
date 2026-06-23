@@ -40,6 +40,9 @@ impl Default for ScopeData {
 pub struct LoopContext {
     pub break_target: BasicBlock,
     pub continue_target: BasicBlock,
+    /// Number of scope-stack frames active when `enter_loop` was called.
+    /// Used by `emit_break_cleanup` to know which scopes are "inside" the loop.
+    pub scope_depth: usize,
 }
 
 pub struct LoweringContext<'a> {
@@ -137,9 +140,11 @@ impl<'a> LoweringContext<'a> {
 
     /// Enter a new loop context
     pub fn enter_loop(&mut self, break_target: BasicBlock, continue_target: BasicBlock) {
+        let scope_depth = self.scope_stack.len();
         self.loop_stack.push(LoopContext {
             break_target,
             continue_target,
+            scope_depth,
         });
     }
 
@@ -246,6 +251,42 @@ impl<'a> LoweringContext<'a> {
 
             // Simulate the pop: restore shadowed bindings and remove fresh
             // introductions, so the next (outer) scope sees the right locals.
+            for (name, &local) in &scope.shadowed {
+                effective.insert(name.clone(), local);
+            }
+            for name in &scope.introduced {
+                if !scope.shadowed.contains_key(name) {
+                    effective.remove(name.as_ref());
+                }
+            }
+        }
+
+        for local in to_drop {
+            self.push_statement(crate::mir::Statement {
+                kind: StatementKind::StorageDead(Place::new(local)),
+                span,
+            });
+        }
+    }
+
+    /// Emits `StorageDead` for all named locals introduced in scopes that were
+    /// opened *after* the current loop was entered (i.e., scopes at indices
+    /// `loop_scope_depth..`).
+    ///
+    /// Called before `break` and `continue` terminators to ensure managed
+    /// locals created inside a loop body (e.g. in match branches) receive a
+    /// `DecRef` via Perceus even when control exits the scope early without
+    /// the normal `pop_scope` path running.
+    pub fn emit_break_cleanup(&mut self, loop_scope_depth: usize, span: Span) {
+        let mut to_drop: Vec<Local> = Vec::new();
+        let mut effective: HashMap<Rc<str>, Local> = self.variable_map.clone();
+
+        for scope in self.scope_stack[loop_scope_depth..].iter().rev() {
+            for name in scope.introduced.iter().rev() {
+                if let Some(&local) = effective.get(name.as_ref()) {
+                    to_drop.push(local);
+                }
+            }
             for (name, &local) in &scope.shadowed {
                 effective.insert(name.clone(), local);
             }

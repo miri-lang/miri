@@ -3,9 +3,12 @@
 
 //! MIR → WGSL text emitter.
 
+use crate::ast::expression::ExpressionKind;
 use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
 use crate::ast::types::TypeKind;
-use crate::codegen::wgsl::types::{buffer_element, scalar, WgslScalar};
+use crate::codegen::wgsl::types::{
+    buffer_element, scalar, vector_swizzle, vector_type, WgslScalar,
+};
 use crate::error::CodegenError;
 use crate::mir::backend::BackendMetadata;
 use crate::mir::{
@@ -652,14 +655,19 @@ impl<'a> BodyEmitter<'a> {
         if let Some(rl) = self.return_local {
             if let Some(decl) = self.body.local_decls.get(rl.0) {
                 if !matches!(decl.ty.kind, TypeKind::Void) {
-                    let ty = scalar(&decl.ty.kind)?;
+                    let ty_name = if let Some(vec_ty) = vector_type(&decl.ty.kind) {
+                        vec_ty
+                    } else {
+                        scalar(&decl.ty.kind)?.name().to_string()
+                    };
+                    let zero_val = self.zero_init_value(&decl.ty.kind)?;
                     self.write_indent()?;
                     writeln!(
                         self.output,
                         "var {}: {} = {};",
                         local_name(rl),
-                        ty.name(),
-                        ty.zero_literal()
+                        ty_name,
+                        zero_val
                     )
                     .map_err(emit_err)?;
                 }
@@ -673,14 +681,19 @@ impl<'a> BodyEmitter<'a> {
             if matches!(decl.ty.kind, TypeKind::Void) {
                 continue;
             }
-            let ty = scalar(&decl.ty.kind)?;
+            let ty_name = if let Some(vec_ty) = vector_type(&decl.ty.kind) {
+                vec_ty
+            } else {
+                scalar(&decl.ty.kind)?.name().to_string()
+            };
+            let zero_val = self.zero_init_value(&decl.ty.kind)?;
             self.write_indent()?;
             writeln!(
                 self.output,
                 "var {}: {} = {};",
                 local_name(Local(i)),
-                ty.name(),
-                ty.zero_literal()
+                ty_name,
+                zero_val
             )
             .map_err(emit_err)?;
         }
@@ -1186,7 +1199,15 @@ impl<'a> BodyEmitter<'a> {
         for elem in &place.projection {
             match elem {
                 PlaceElem::Field(idx) => {
-                    write!(rendered, ".{}", idx).map_err(emit_err)?;
+                    if let Some(decl) = self.body.local_decls.get(place.local.0) {
+                        if let Some(swizzle) = vector_swizzle(&decl.ty.kind, *idx) {
+                            write!(rendered, ".{}", swizzle).map_err(emit_err)?;
+                        } else {
+                            write!(rendered, ".{}", idx).map_err(emit_err)?;
+                        }
+                    } else {
+                        write!(rendered, ".{}", idx).map_err(emit_err)?;
+                    }
                 }
                 PlaceElem::Index(local) => {
                     // naga rejects indexing `array<T>` with an `i64` value — array indices must be `i32`/`u32`.
@@ -1260,14 +1281,102 @@ impl<'a> BodyEmitter<'a> {
                     rendered?.join(", ")
                 ))
             }
-            Rvalue::Len(_)
-            | Rvalue::Ref(_)
-            | Rvalue::Aggregate(_, _)
-            | Rvalue::Phi(_)
-            | Rvalue::Allocate(_, _, _) => Err(CodegenError::Internal(format!(
-                "WGSL backend: rvalue {:?} not yet supported",
-                rvalue
+            Rvalue::Aggregate(kind, operands) => self.render_aggregate(kind, operands),
+            Rvalue::Len(_) | Rvalue::Ref(_) | Rvalue::Phi(_) | Rvalue::Allocate(_, _, _) => {
+                Err(CodegenError::Internal(format!(
+                    "WGSL backend: rvalue {:?} not yet supported",
+                    rvalue
+                )))
+            }
+        }
+    }
+
+    fn render_aggregate(
+        &self,
+        kind: &crate::mir::AggregateKind,
+        operands: &[Operand],
+    ) -> Result<String, CodegenError> {
+        match kind {
+            crate::mir::AggregateKind::Struct(ty) => {
+                if let Some(vec_ty_name) = vector_type(&ty.kind) {
+                    let rendered: Result<Vec<_>, _> =
+                        operands.iter().map(|op| self.render_operand(op)).collect();
+                    Ok(format!("{}({})", vec_ty_name, rendered?.join(", ")))
+                } else {
+                    Err(CodegenError::Internal(format!(
+                        "WGSL backend: non-vector struct aggregate rvalue not yet supported: {}",
+                        ty.kind
+                    )))
+                }
+            }
+            _ => Err(CodegenError::Internal(format!(
+                "WGSL backend: rvalue aggregate kind {:?} not yet supported",
+                kind
             ))),
+        }
+    }
+
+    fn zero_init_value(&self, kind: &TypeKind) -> Result<String, CodegenError> {
+        if let Some(vec_ty_name) = vector_type(kind) {
+            let vec_name = if let TypeKind::Custom(name, _) = kind {
+                name.as_str()
+            } else {
+                return Err(CodegenError::Internal(
+                    "vector_type matched but failed to extract vector name".to_string(),
+                ));
+            };
+
+            let dim = crate::ast::types::vec_dim(vec_name).ok_or_else(|| {
+                CodegenError::Internal(format!(
+                    "vector_type matched '{}' but vec_dim returned None",
+                    vec_name
+                ))
+            })?;
+
+            let args = if let TypeKind::Custom(_, Some(args)) = kind {
+                args
+            } else {
+                return Err(CodegenError::Internal(
+                    "vector_type matched but vector has no type arguments".to_string(),
+                ));
+            };
+
+            let first_arg = args.first().ok_or_else(|| {
+                CodegenError::Internal("vector type has empty type arguments".to_string())
+            })?;
+
+            let elem_ty = if let ExpressionKind::Type(ty, _) = &first_arg.node {
+                ty
+            } else {
+                return Err(CodegenError::Internal(
+                    "vector type argument is not a type expression".to_string(),
+                ));
+            };
+
+            let elem_scalar = scalar(&elem_ty.kind)?;
+            let zero_literal = match elem_scalar {
+                crate::codegen::wgsl::types::WgslScalar::I32
+                | crate::codegen::wgsl::types::WgslScalar::I64 => "0",
+                crate::codegen::wgsl::types::WgslScalar::U32
+                | crate::codegen::wgsl::types::WgslScalar::U64 => "0u",
+                crate::codegen::wgsl::types::WgslScalar::F32
+                | crate::codegen::wgsl::types::WgslScalar::F64 => "0.0",
+                crate::codegen::wgsl::types::WgslScalar::Bool => "false",
+            };
+
+            let zero_list = vec![zero_literal; dim as usize].join(", ");
+            Ok(format!("{}({})", vec_ty_name, zero_list))
+        } else {
+            let wgsl_scalar = scalar(kind)?;
+            match wgsl_scalar {
+                crate::codegen::wgsl::types::WgslScalar::I32
+                | crate::codegen::wgsl::types::WgslScalar::I64 => Ok("0".to_string()),
+                crate::codegen::wgsl::types::WgslScalar::U32
+                | crate::codegen::wgsl::types::WgslScalar::U64 => Ok("0u".to_string()),
+                crate::codegen::wgsl::types::WgslScalar::F32
+                | crate::codegen::wgsl::types::WgslScalar::F64 => Ok("0.0".to_string()),
+                crate::codegen::wgsl::types::WgslScalar::Bool => Ok("false".to_string()),
+            }
         }
     }
 }
@@ -1337,6 +1446,12 @@ fn math_intrinsic_name(intrinsic: MathIntrinsic) -> &'static str {
         MathIntrinsic::Smoothstep => "smoothstep",
         MathIntrinsic::Step => "step",
         MathIntrinsic::Sign => "sign",
+        MathIntrinsic::VecDot => "dot",
+        MathIntrinsic::VecLength => "length",
+        MathIntrinsic::VecNormalize => "normalize",
+        MathIntrinsic::VecCross => "cross",
+        MathIntrinsic::VecReflect => "reflect",
+        MathIntrinsic::VecMix => "mix",
     }
 }
 
@@ -1509,6 +1624,7 @@ mod tests {
             loop_headers: std::collections::HashSet::new(),
             loop_info: std::collections::HashMap::new(),
             loop_stack: Vec::new(),
+            return_local: None,
         };
 
         // Render the place.
@@ -1563,6 +1679,7 @@ mod tests {
             loop_headers: std::collections::HashSet::new(),
             loop_info: std::collections::HashMap::new(),
             loop_stack: Vec::new(),
+            return_local: None,
         };
 
         // Render the place.
@@ -1616,6 +1733,7 @@ mod tests {
             loop_headers: std::collections::HashSet::new(),
             loop_info: std::collections::HashMap::new(),
             loop_stack: Vec::new(),
+            return_local: None,
         };
 
         // Render the place.
