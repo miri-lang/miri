@@ -31,7 +31,7 @@ use crate::error::lowering::LoweringError;
 use crate::mir::lambda::LambdaInfo;
 use crate::mir::{
     BinOp, Body, Constant, Discriminant, ExecutionModel, LocalDecl, Operand, Place, Rvalue,
-    StatementKind as MirStatementKind, Terminator, TerminatorKind,
+    StatementKind as MirStatementKind, StorageClass, Terminator, TerminatorKind,
 };
 use crate::type_checker::TypeChecker;
 use std::collections::HashMap;
@@ -118,9 +118,12 @@ pub fn lower_function(
         let param_ty = resolve_type(tc, &param.typ);
         ctx.push_param(param.name.clone(), param_ty, param.typ.span);
     }
+    assign_gpu_param_storage_classes(&mut ctx, params.len());
 
     // Implicit Allocator Injection — supports the "Call Site Allocator Injection" strategy.
-    if inject_allocator {
+    // GPU kernels run device-side and have no CPU allocator, so they never carry
+    // the implicit param (the WGSL backend would otherwise see an unmappable param).
+    if inject_allocator && ctx.body.execution_model != ExecutionModel::GpuKernel {
         inject_allocator_param(&mut ctx, name, ast_func.span);
     }
 
@@ -222,6 +225,7 @@ pub fn lower_generic_instantiation(
         let param_ty = apply_generic_sub(&resolve_type(tc, &param.typ), subs);
         ctx.push_param(param.name.clone(), param_ty, param.typ.span);
     }
+    assign_gpu_param_storage_classes(&mut ctx, params.len());
 
     if inject_allocator {
         inject_allocator_param(&mut ctx, name, ast_func.span);
@@ -360,6 +364,41 @@ fn resolve_execution_model(props: &crate::ast::common::FunctionProperties) -> Ex
         ExecutionModel::Async
     } else {
         ExecutionModel::Cpu
+    }
+}
+
+/// Assign WGSL storage classes to the parameters of an explicit `gpu fn`.
+///
+/// Collection-typed (buffer-shaped) parameters become `GpuGlobal` so the WGSL
+/// backend emits them as `var<storage>` bindings; scalar parameters keep their
+/// default class. A no-op for non-GPU functions. The `forall`-extracted kernel
+/// path assigns its own classes separately in `forall_gpu`.
+fn assign_gpu_param_storage_classes(ctx: &mut LoweringContext, param_count: usize) {
+    if ctx.body.execution_model != ExecutionModel::GpuKernel {
+        return;
+    }
+    for param_idx in 1..=param_count {
+        let kind = &ctx.body.local_decls[param_idx].ty.kind;
+        if is_gpu_storage_param(kind) {
+            ctx.body.local_decls[param_idx].storage_class = StorageClass::GpuGlobal;
+        }
+    }
+}
+
+/// True for parameter types the GPU dispatcher marshals as a storage buffer
+/// (host-side `MiriArray`-shaped). Mirrors the buffer-capture classification
+/// used by the `forall` path.
+fn is_gpu_storage_param(kind: &TypeKind) -> bool {
+    match kind {
+        TypeKind::Array(_, _) | TypeKind::List(_) => true,
+        TypeKind::Custom(name, _) => matches!(
+            crate::ast::types::BuiltinCollectionKind::from_name(name),
+            Some(
+                crate::ast::types::BuiltinCollectionKind::Array
+                    | crate::ast::types::BuiltinCollectionKind::List
+            )
+        ),
+        _ => false,
     }
 }
 
