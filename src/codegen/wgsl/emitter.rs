@@ -7,7 +7,7 @@ use crate::ast::expression::ExpressionKind;
 use crate::ast::literal::{FloatLiteral, IntegerLiteral, Literal};
 use crate::ast::types::TypeKind;
 use crate::codegen::wgsl::types::{
-    buffer_element, scalar, vector_swizzle, vector_type, WgslScalar,
+    buffer_element, buffer_element_typename, scalar, vector_swizzle, vector_type, WgslScalar,
 };
 use crate::error::CodegenError;
 use crate::mir::backend::BackendMetadata;
@@ -99,7 +99,10 @@ impl Emitter {
                     binding.index,
                     access,
                     binding.var_name,
-                    binding.element_type.name(),
+                    binding
+                        .element_typename
+                        .as_deref()
+                        .unwrap_or_else(|| binding.element_type.name()),
                 )
                 .map_err(emit_err)?;
             }
@@ -231,6 +234,10 @@ struct BufferBinding {
     /// WGSL identifier used inside the entry point.
     var_name: String,
     element_type: WgslScalar,
+    /// Full WGSL element-type spelling for the `array<...>` declaration when the
+    /// element is not a plain scalar (e.g. `vec3<f32>`). `None` falls back to
+    /// `element_type.name()`.
+    element_typename: Option<String>,
     read_write: bool,
     is_uniform: bool,
     /// For scalar captures: the struct field name (e.g., "f0", "f1").
@@ -282,6 +289,7 @@ fn collect_buffer_bindings(body: &Body) -> Result<Vec<BufferBinding>, CodegenErr
             ))
         })?;
         let element_type = buffer_element(&decl.ty.kind)?;
+        let element_typename = buffer_element_typename(&decl.ty.kind)?;
         let var_name = decl
             .name
             .as_deref()
@@ -293,6 +301,7 @@ fn collect_buffer_bindings(body: &Body) -> Result<Vec<BufferBinding>, CodegenErr
             index: binding_index,
             var_name,
             element_type,
+            element_typename: Some(element_typename),
             read_write,
             is_uniform: false,
             scalar_field: None,
@@ -332,6 +341,7 @@ fn collect_buffer_bindings(body: &Body) -> Result<Vec<BufferBinding>, CodegenErr
                 index: binding_index,
                 var_name,
                 element_type: WgslScalar::U32,
+                element_typename: None,
                 read_write: false,
                 is_uniform: true,
                 scalar_field: None,
@@ -351,6 +361,7 @@ fn collect_buffer_bindings(body: &Body) -> Result<Vec<BufferBinding>, CodegenErr
                 index: inputs_binding.unwrap(),
                 var_name,
                 element_type,
+                element_typename: None,
                 read_write: false,
                 is_uniform: true,
                 scalar_field: Some(scalar_field),

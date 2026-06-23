@@ -157,7 +157,6 @@ gpu fn my_kernel(v Vec3<u64>)
 
 /// Vec3<f32> elements in a buffer emit valid WGSL.
 #[test]
-#[ignore = "buffer-of-vec needs inline-composite collection storage; tracked as follow-up — arr[i] currently loads an inline Vec element as an 8-byte pointer (translator.rs translate_collection_index_read)"]
 fn vec3_f32_array_emits_valid_wgsl() {
     use super::helpers::assert_gpu_wgsl_valid;
     let source = "
