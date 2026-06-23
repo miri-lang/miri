@@ -32,6 +32,18 @@ Navigating a compiler is complex. Use this map to locate modules:
 - **Memory Management**: Miri uses the **Perceus** reference counting optimization. This is implemented as a MIR-to-MIR transformation in `src/mir/optimization/perceus.rs`.
 - **Sources of Truth**: Always refer to `SPEC.md` for language syntax and `README.md` for project status.
 
+### 1.1 Navigate via the knowledge graph FIRST (do not read file-by-file)
+This repo has a persistent `code-review-graph` knowledge graph (embeddings enabled — semantic search is active). It is faster, cheaper in tokens, and gives structural context (callers, dependents, tests, blast radius) that a file scan cannot. **Use the graph before Grep/Glob/Read:**
+
+- `semantic_search_nodes` / `query_graph` to locate code (the closest analog to what you're building) — instead of grepping.
+- `get_impact_radius` + `get_affected_flows` to learn the blast radius **before** editing (which visitors, call sites, and tests are affected).
+- `query_graph` pattern=`tests_for` to check coverage; `callers_of` / `callees_of` / `imports_of` to trace relationships.
+- `get_review_context` for token-efficient snippets when reviewing a diff; `detect_changes` for risk-scored change analysis.
+
+Fall back to Grep/Glob/Read only for what the graph doesn't cover. The graph auto-updates on file changes via a `PostToolUse` hook. **Serena** (LSP-backed symbol navigation/editing) is also available as an MCP server for precise rename/reference work.
+
+**rtk** (Rust Token Killer) transparently rewrites dev shell commands (`git`, `cargo`, `grep`, `ls`, …) to save 60–90% of tokens via a hook — just run commands normally; no special invocation needed.
+
 ---
 
 ## 2. The Miri Language: Quick Reference
@@ -72,8 +84,12 @@ When writing tests or standard library code, remember Miri's syntax:
 
 - Before writing code: read `PRINCIPLES.md` for the binding standards on architecture, SOLID, and TDD.
 - After writing code: run `make audit` (mechanical sweep) to verify layer rules, stdlib independence, function size, naming, comments, and exhaustive matching.
-- For existing-code reviews: use the `miri-audit` skill.
-- For diff-level review: use the `miri-reviewer` agent — it validates the same principles.
+
+**Which skill to run (pick the cheapest that fits — slow panels are not the default):**
+- **`miri-task`** — *default for everyday features and fixes.* A single agent (no subagents) implements with TDD, then self-reviews through every specialist lens, QAs its own work, and runs the full gate. Fast, keeps context, no subagent over-reporting. Done only when the gate is green and self-QA is clean.
+- **`miri-panel-task`** — *only when the full multi-agent panel is explicitly wanted:* high-risk Major-tier work (PRINCIPLES.md §8.1 triggers), deep multi-perspective review, or when the user asks for "the panel". CTO-orchestrated, spawns architects + specialists + the Lead Miri Engineer.
+- **`miri-audit`** — validation/review pass over an existing diff or module: fans out the specialist panel, fixes critical/major, ends with a CTO verdict.
+- **`miri-reviewer`** agent — lightweight single diff-level review when you don't need the panel.
 
 If you disagree with a principle, **say so** in the PR description. Do not silently deviate.
 
@@ -113,7 +129,7 @@ Work is **not done** until each acceptance criterion has passed all three phases
 ## 5. Workflow Best Practices for AI Agents
 To work efficiently and hit fewer roadblocks:
 
-1. **Research First**: Use `Grep` (or the `miri-explorer` agent) to find examples of similar patterns (e.g., "how is `if` implemented in MIR?").
+1. **Research First**: Use the `code-review-graph` tools (`semantic_search_nodes`, `query_graph`, `get_impact_radius` — see §1.1) to find examples of similar patterns (e.g., "how is `if` implemented in MIR?") and the blast radius before editing. Fall back to `Grep` (or the `miri-explorer` agent) only for what the graph doesn't cover.
 2. **Incremental Changes**: Complete one phase (e.g., Type Checker) with passing tests before moving to the next (e.g., MIR lowering). Split large refactors into chunks of at most ~5 files; build and test after each chunk rather than handing the whole transform to one subagent.
 3. **No Brute Force**: If you encounter a compilation error, analyze the `MiriError` or Rust error. Don't just `sed` the code.
 4. **Bulk Edits**: After any mechanical transform (dedent, `sed`, `git checkout`, import removal, mass header insertion), re-read the affected files and run the build to confirm no source was truncated and no string literals were broken.
