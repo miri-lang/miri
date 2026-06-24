@@ -141,6 +141,23 @@ fn main()
     assert_runs_with_output(source, "1.0 2.0 3.0 4.0 5.0 6.0");
 }
 
+/// Integer vector arrays preserve their explicit component width: `[Vec2<i32>(..)]`
+/// keeps `i32` (not the literal default `Int`), so inline storage is detected and
+/// each component reads back correctly across distinct elements.
+#[test]
+fn cpu_integer_vec_array_preserves_width() {
+    let source = "
+use system.gpu.vector
+use system.collections.array
+
+fn main()
+    let a = [Vec2<i32>(10, 20), Vec2<i32>(30, 40), Vec2<i32>(50, 60)]
+    let b = [Vec4<u32>(1, 2, 3, 4), Vec4<u32>(5, 6, 7, 8)]
+    println(f'{a[0].x} {a[1].y} {a[2].x} {b[0].x} {b[1].w}')
+";
+    assert_runs_with_output(source, "10 40 50 1 8");
+}
+
 /// Vec2 component-wise arithmetic.
 #[test]
 fn cpu_vec2_arithmetic() {
@@ -297,10 +314,10 @@ fn main()
     assert_gpu_runs_with_output(source, "7.0 8.0 9.0");
 }
 
-/// Vec2<i32> buffer round-trip with element write.
+/// Vec2<i32> buffer round-trip (stride 8 == ptr size); adapter-gated.
 #[test]
-#[ignore = "integer vector array elements need element-type preservation: [Vec2<i32>(..)] infers element Vec2<Int> (explicit width dropped), so inline storage is not detected. Blocked on DP4.2 Inc 3b (type-checker)."]
 fn vec2_i32_array_buffer_roundtrip() {
+    use super::device::assert_gpu_runs_with_output;
     let source = "
 use system.gpu
 use system.gpu.vector
@@ -314,13 +331,13 @@ fn main()
     let host = dst
     println(f'{host[0].x} {host[0].y} {host[1].x} {host[1].y}')
 ";
-    assert_runs_with_output(source, "10 20 30 40");
+    assert_gpu_runs_with_output(source, "10 20 30 40");
 }
 
-/// Vec4<u32> buffer round-trip with component access.
+/// Vec4<u32> buffer round-trip (stride 16); adapter-gated.
 #[test]
-#[ignore = "integer vector array elements need element-type preservation: [Vec2<i32>(..)] infers element Vec2<Int> (explicit width dropped), so inline storage is not detected. Blocked on DP4.2 Inc 3b (type-checker)."]
 fn vec4_u32_array_buffer_roundtrip() {
+    use super::device::assert_gpu_runs_with_output;
     let source = "
 use system.gpu
 use system.gpu.vector
@@ -334,7 +351,7 @@ fn main()
     let host = dst
     println(f'{host[0].x} {host[0].y} {host[0].z} {host[0].w} {host[1].x} {host[1].y} {host[1].z} {host[1].w}')
 ";
-    assert_runs_with_output(source, "1 2 3 4 5 6 7 8");
+    assert_gpu_runs_with_output(source, "1 2 3 4 5 6 7 8");
 }
 
 /// dot(Vec3<f32>, Vec3<f32>) -> f32 WGSL validity (type checking).
