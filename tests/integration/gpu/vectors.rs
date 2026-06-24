@@ -255,10 +255,10 @@ fn main()
 }
 
 /// Array<Vec3<f32>, N> round-trip: copy via GPU forall (value correctness check).
-/// Tests that vector elements are stored inline in the buffer with correct std430 stride.
+/// Vector elements are stored inline in the buffer with std430 stride; adapter-gated.
 #[test]
-#[ignore = "buffer-of-vec needs inline-composite collection storage; tracked as follow-up — arr[i] currently loads an inline Vec element as an 8-byte pointer (translator.rs translate_collection_index_read)"]
 fn vec3_f32_array_buffer_roundtrip() {
+    use super::device::assert_gpu_runs_with_output;
     let source = "
 use system.gpu
 use system.gpu.vector
@@ -272,12 +272,34 @@ fn main()
     let host = dst
     println(f'{host[0].x} {host[0].y} {host[0].z} {host[1].x} {host[1].y} {host[1].z}')
 ";
-    assert_runs_with_output(source, "1.0 2.0 3.0 4.0 5.0 6.0");
+    assert_gpu_runs_with_output(source, "1.0 2.0 3.0 4.0 5.0 6.0");
+}
+
+/// std430 alignment proof: 3 distinct `Vec3<f32>` elements round-trip via GPU
+/// forall; element[2] must read from byte offset 32 (stride 16), not 24 — if
+/// the stride were packed (12), element[2]'s components would bleed/shift.
+#[test]
+fn vec3_f32_array_std430_stride_alignment() {
+    use super::device::assert_gpu_runs_with_output;
+    let source = "
+use system.gpu
+use system.gpu.vector
+use system.collections.array
+
+fn main()
+    gpu let src = [Vec3<f32>(1.0, 2.0, 3.0), Vec3<f32>(4.0, 5.0, 6.0), Vec3<f32>(7.0, 8.0, 9.0)]
+    gpu var dst = [Vec3<f32>(0.0, 0.0, 0.0), Vec3<f32>(0.0, 0.0, 0.0), Vec3<f32>(0.0, 0.0, 0.0)]
+    gpu forall i in 0..3
+        dst[i] = src[i]
+    let host = dst
+    println(f'{host[2].x} {host[2].y} {host[2].z}')
+";
+    assert_gpu_runs_with_output(source, "7.0 8.0 9.0");
 }
 
 /// Vec2<i32> buffer round-trip with element write.
 #[test]
-#[ignore = "buffer-of-vec needs inline-composite collection storage; tracked as follow-up — arr[i] currently loads an inline Vec element as an 8-byte pointer (translator.rs translate_collection_index_read)"]
+#[ignore = "integer vector array elements need element-type preservation: [Vec2<i32>(..)] infers element Vec2<Int> (explicit width dropped), so inline storage is not detected. Blocked on DP4.2 Inc 3b (type-checker)."]
 fn vec2_i32_array_buffer_roundtrip() {
     let source = "
 use system.gpu
@@ -297,7 +319,7 @@ fn main()
 
 /// Vec4<u32> buffer round-trip with component access.
 #[test]
-#[ignore = "buffer-of-vec needs inline-composite collection storage; tracked as follow-up — arr[i] currently loads an inline Vec element as an 8-byte pointer (translator.rs translate_collection_index_read)"]
+#[ignore = "integer vector array elements need element-type preservation: [Vec2<i32>(..)] infers element Vec2<Int> (explicit width dropped), so inline storage is not detected. Blocked on DP4.2 Inc 3b (type-checker)."]
 fn vec4_u32_array_buffer_roundtrip() {
     let source = "
 use system.gpu
