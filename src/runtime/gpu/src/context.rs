@@ -101,7 +101,15 @@ fn optional_shader_features() -> Features {
 
 impl GpuContext {
     pub fn new() -> Result<Self, GpuError> {
-        let instance = Instance::default();
+        // Honor `WGPU_BACKEND` (e.g. `vulkan`) so headless CI can pin the
+        // software Vulkan adapter (Mesa lavapipe). Only the backend selection
+        // is taken from the environment; all other options stay at their
+        // defaults so this matches `Instance::default()` when no env is set.
+        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        if let Some(backends) = wgpu::Backends::from_env() {
+            descriptor.backends = backends;
+        }
+        let instance = Instance::new(descriptor);
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
@@ -110,10 +118,15 @@ impl GpuContext {
         .map_err(|_| GpuError::NoAdapter)?;
 
         let required_shader_features = optional_shader_features() & adapter.features();
+        // Request the adapter's full limits rather than the conservative
+        // downlevel defaults: kernels that capture many buffers (e.g. a Vec3
+        // builtin over several arrays) need more than the default 8 storage
+        // buffers per stage. `adapter.limits()` can never exceed the device,
+        // so this always succeeds.
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("Miri GPU Device"),
             required_features: required_shader_features,
-            required_limits: wgpu::Limits::default(),
+            required_limits: adapter.limits(),
             experimental_features: wgpu::ExperimentalFeatures::default(),
             memory_hints: wgpu::MemoryHints::default(),
             trace: wgpu::Trace::Off,
