@@ -91,6 +91,56 @@ fn main()
     assert_runs_with_output(source, "1.0 4.0 5.0 8.0");
 }
 
+/// Inline vector element field write: `arr[i].x = e` updates one component and
+/// leaves the others intact (no 8-byte pointer store corrupting neighbors).
+#[test]
+fn cpu_vec3_array_field_write() {
+    let source = "
+use system.gpu.vector
+use system.collections.array
+
+fn main()
+    var arr = [Vec3<f32>(1.0, 2.0, 3.0), Vec3<f32>(4.0, 5.0, 6.0)]
+    arr[0].x = 9.0
+    arr[1].z = 8.0
+    println(f'{arr[0].x} {arr[0].y} {arr[1].z}')
+";
+    assert_runs_with_output(source, "9.0 2.0 8.0");
+}
+
+/// Inline whole-element write: `arr[i] = VecN(...)` replaces all components.
+#[test]
+fn cpu_vec3_array_whole_element_write() {
+    let source = "
+use system.gpu.vector
+use system.collections.array
+
+fn main()
+    var arr = [Vec3<f32>(1.0, 2.0, 3.0), Vec3<f32>(4.0, 5.0, 6.0)]
+    arr[0] = Vec3<f32>(7.0, 8.0, 9.0)
+    println(f'{arr[0].x} {arr[0].y} {arr[0].z} {arr[1].x}')
+";
+    assert_runs_with_output(source, "7.0 8.0 9.0 4.0");
+}
+
+/// Inline element-to-element copy `dst[i] = src[i]` (the CPU analogue of the
+/// GPU forall copy) moves the full std430 element.
+#[test]
+fn cpu_vec3_array_element_copy() {
+    let source = "
+use system.gpu.vector
+use system.collections.array
+
+fn main()
+    let src = [Vec3<f32>(1.0, 2.0, 3.0), Vec3<f32>(4.0, 5.0, 6.0)]
+    var dst = [Vec3<f32>(0.0, 0.0, 0.0), Vec3<f32>(0.0, 0.0, 0.0)]
+    dst[0] = src[0]
+    dst[1] = src[1]
+    println(f'{dst[0].x} {dst[0].y} {dst[0].z} {dst[1].x} {dst[1].y} {dst[1].z}')
+";
+    assert_runs_with_output(source, "1.0 2.0 3.0 4.0 5.0 6.0");
+}
+
 /// Vec2 component-wise arithmetic.
 #[test]
 fn cpu_vec2_arithmetic() {
