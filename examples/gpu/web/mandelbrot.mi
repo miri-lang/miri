@@ -1,0 +1,137 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// Interactive Mandelbrot: GPU-resident pan/zoom state integrated per frame,
+// then a smooth-escape render into an RGBA paint surface. A faithful port of
+// the reference fragment shader — bailout radius 64, smooth iteration count,
+// and a five-stop navy→blue→cyan→yellow→white palette.
+//
+// A `gpu frame` block with two passes:
+// 1. Integrate: read view_a + frame.* (drag pans, wheel zooms) → write view_b.
+// 2. Render: read view_b → write paint RGBA per pixel.
+//
+// The view state ping-pongs (view_a → view_b) so the integrator never reads the
+// buffer it writes (per-pass read/write must be disjoint); the host swaps a/b
+// between frames. Every math-intrinsic result is anchored to f32 (`as f32`) so
+// the device path stays 32-bit (browser WGSL has no f64).
+
+use system.collections.array
+use system.math
+use system.io
+
+// Canvas: 128×128 pixels (square, so the aspect factor is 1).
+// View state: [center_x, center_y, scale, _pad] — ping-ponged across frames.
+gpu var view_a = Array<f32, 4>()
+gpu var view_b = Array<f32, 4>()
+
+// Paint output (RGBA: 4 floats per pixel).
+gpu var paint = Array<f32, 128 * 128 * 4>()
+
+// Five-stop palette, evaluated per channel. Stops: navy, blue, cyan, yellow,
+// white — matching the reference shader's `palette(t)`.
+fn pal_r(t f32) f32
+    if t < 0.35: return mix(0.016, 0.13, t / 0.35) as f32
+    if t < 0.62: return mix(0.13, 0.35, (t - 0.35) / 0.27) as f32
+    if t < 0.85: return mix(0.35, 1.0, (t - 0.62) / 0.23) as f32
+    return mix(1.0, 1.0, (t - 0.85) / 0.15) as f32
+
+fn pal_g(t f32) f32
+    if t < 0.35: return mix(0.027, 0.27, t / 0.35) as f32
+    if t < 0.62: return mix(0.27, 0.62, (t - 0.35) / 0.27) as f32
+    if t < 0.85: return mix(0.62, 0.85, (t - 0.62) / 0.23) as f32
+    return mix(0.85, 0.97, (t - 0.85) / 0.15) as f32
+
+fn pal_b(t f32) f32
+    if t < 0.35: return mix(0.059, 0.75, t / 0.35) as f32
+    if t < 0.62: return mix(0.75, 1.0, (t - 0.35) / 0.27) as f32
+    if t < 0.85: return mix(1.0, 0.24, (t - 0.62) / 0.23) as f32
+    return mix(0.24, 0.85, (t - 0.85) / 0.15) as f32
+
+// Seed: initial viewport centred near the main cardioid at full extent.
+gpu forall i in 0..4
+    view_a[0] = -0.6
+    view_a[1] = 0.0
+    view_a[2] = 3.0
+    view_a[3] = 0.0
+
+gpu frame
+    // Pass 1: integrate pan/zoom from pointer state into the next view.
+    gpu forall i in 0..4
+        let cx = view_a[0]
+        let cy = view_a[1]
+        let scale = view_a[2]
+        // Drag pans by a scale-proportional delta; wheel zooms (clamped step).
+        let next_cx = cx - frame.drag_dx * scale * 0.0016
+        let next_cy = cy + frame.drag_dy * scale * 0.0016
+        let zoom = clamp(exp(frame.wheel * 0.0014) as f32, 0.6, 1.6) as f32
+        let next_scale = clamp(scale * zoom, 0.00002, 4.0) as f32
+        view_b[0] = next_cx
+        view_b[1] = next_cy
+        view_b[2] = next_scale
+        view_b[3] = 0.0
+
+    // Pass 2: render the fractal with smooth escape coloring.
+    gpu forall idx in 0..16384
+        let px = idx % 128
+        let py = idx / 128
+        let cx = view_b[0]
+        let cy = view_b[1]
+        let scale = view_b[2]
+
+        // Map pixel to the complex plane around the current center.
+        let uu = (px as f32) / 128.0 - 0.5
+        let vv = (py as f32) / 128.0 - 0.5
+        let cre = cx + uu * scale
+        let cim = cy + vv * scale
+
+        // Dynamic iteration budget grows as the view zooms in (smaller scale).
+        let budget = 120.0 + 60.0 * (log2(3.0 / scale + 1.0) as f32) * 2.2
+        let max_iter = min(budget, 880.0) as int
+
+        var zx = 0.0
+        var zy = 0.0
+        var n = -1
+        var dotz = 0.0
+        var i = 0
+        while i < max_iter
+            let nx = zx * zx - zy * zy + cre
+            let ny = 2.0 * zx * zy + cim
+            zx = nx
+            zy = ny
+            dotz = zx * zx + zy * zy
+            if dotz > 64.0
+                n = i
+                i = max_iter
+            else
+                i = i + 1
+
+        let base = idx * 4
+        if n < 0
+            // Interior of the set: near-black.
+            paint[base] = 0.008
+            paint[base + 1] = 0.012
+            paint[base + 2] = 0.03
+            paint[base + 3] = 1.0
+        else
+            // Smooth iteration count removes the escape-time banding.
+            let sn = (n as f32) - (log2(log2(dotz) as f32) as f32) + 4.0
+            let pt0 = sn * 0.022 + 0.62
+            let t = pt0 - (floor(pt0) as f32)
+            // Darken low escape counts so filaments glow out of the void.
+            let bright = 0.55 + 0.45 * (smoothstep(0.0, 12.0, sn) as f32)
+            paint[base] = pal_r(t) * bright
+            paint[base + 1] = pal_g(t) * bright
+            paint[base + 2] = pal_b(t) * bright
+            paint[base + 3] = 1.0
+
+// Native smoke: count interior (near-black, alpha=1) pixels — a deterministic
+// integer for the seeded viewport, robust to float rounding in the palette.
+let host = paint
+var interior = 0
+var p = 0
+while p < 16384
+    let base = p * 4
+    let is_interior = host[base] == 0.008 and host[base + 3] == 1.0
+    interior = interior + (1 if is_interior else 0)
+    p = p + 1
+println(f"interior={interior}")

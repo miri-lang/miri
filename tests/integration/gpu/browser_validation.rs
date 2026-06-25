@@ -68,24 +68,17 @@ fn build_demo_manifest(demo_path: &str) -> serde_json::Value {
 ///
 /// Returns a vec of (entryPoint, wgsl_source) tuples from:
 /// - `manifest["seed"][].wgsl` — compute kernels
-/// - `manifest["frame"].wgsl` — optional frame step kernel
+/// - `manifest["frame"].wgsl` — optional single frame step kernel
+/// - `manifest["framePasses"][].wgsl` — ordered passes of a multi-pass frame
 ///
-/// Does not panic if "frame" is missing.
+/// Does not panic if any section is missing.
 fn extract_kernels(manifest: &serde_json::Value) -> Vec<(String, String)> {
     let mut kernels = Vec::new();
 
-    // Extract seed kernels
-    if let Some(seed_array) = manifest["seed"].as_array() {
-        for kernel in seed_array {
-            if let Some(entry_point) = kernel["entryPoint"].as_str() {
-                if let Some(wgsl) = kernel["wgsl"].as_str() {
-                    kernels.push((entry_point.to_string(), wgsl.to_string()));
-                }
-            }
-        }
-    }
+    push_kernel_array(&manifest["seed"], &mut kernels);
+    push_kernel_array(&manifest["framePasses"], &mut kernels);
 
-    // Extract frame kernel if present
+    // Extract single frame kernel if present
     if let Some(frame) = manifest["frame"].as_object() {
         if let Some(entry_point) = frame.get("entryPoint").and_then(|v| v.as_str()) {
             if let Some(wgsl) = frame.get("wgsl").and_then(|v| v.as_str()) {
@@ -95,6 +88,52 @@ fn extract_kernels(manifest: &serde_json::Value) -> Vec<(String, String)> {
     }
 
     kernels
+}
+
+/// Push every `{entryPoint, wgsl}` entry of a manifest kernel array onto `out`.
+fn push_kernel_array(value: &serde_json::Value, out: &mut Vec<(String, String)>) {
+    if let Some(array) = value.as_array() {
+        for kernel in array {
+            if let (Some(entry_point), Some(wgsl)) =
+                (kernel["entryPoint"].as_str(), kernel["wgsl"].as_str())
+            {
+                out.push((entry_point.to_string(), wgsl.to_string()));
+            }
+        }
+    }
+}
+
+/// Collect every `.mi` demo under `examples/gpu`, including the interactive
+/// `web/` bundles. Both the seed-and-frame native demos and the web demos go
+/// through the same browser-class validation matrix.
+fn collect_demo_files() -> Vec<PathBuf> {
+    let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join("gpu");
+    let mut files = collect_mi_files(&base);
+    files.extend(collect_mi_files(&base.join("web")));
+    files.sort();
+    files
+}
+
+/// Collect the `.mi` files directly inside `dir` (non-recursive).
+fn collect_mi_files(dir: &std::path::Path) -> Vec<PathBuf> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return Vec::new(),
+    };
+    entries
+        .filter_map(|entry| {
+            entry.ok().and_then(|e| {
+                let path = e.path();
+                if path.extension().map_or(false, |ext| ext == "mi") {
+                    Some(path)
+                } else {
+                    None
+                }
+            })
+        })
+        .collect()
 }
 
 /// Resolve the tint binary location.
@@ -192,25 +231,71 @@ fn tint_validate(tint: &std::path::Path, wgsl: &str) -> Result<(), String> {
     }
 }
 
+/// Naga-validate a WGSL kernel; panics with the demo context on failure.
+fn naga_validate_demo(demo_name: &str, entry_point: &str, wgsl: &str) {
+    let module = naga::front::wgsl::parse_str(wgsl).unwrap_or_else(|err| {
+        panic!(
+            "Demo {} kernel {} failed naga parse: {}\nWGSL:\n{}",
+            demo_name,
+            entry_point,
+            err.emit_to_string(wgsl),
+            wgsl
+        )
+    });
+    let mut validator = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    );
+    validator.validate(&module).unwrap_or_else(|err| {
+        panic!(
+            "Demo {} kernel {} failed naga validate: {:?}\nWGSL:\n{}",
+            demo_name, entry_point, err, wgsl
+        )
+    });
+}
+
+/// Every demo kernel — including each pass of a multi-pass web demo — must pass
+/// naga validation. This is the browser-independent gate that runs in normal
+/// CI; the real-tint job (`browser-gpu-gate`) adds the stricter WebGPU layer.
+#[test]
+fn every_demo_kernel_passes_naga() {
+    let demo_files = collect_demo_files();
+    assert!(
+        !demo_files.is_empty(),
+        "Should have at least one .mi demo file in examples/gpu/"
+    );
+
+    for demo_path in demo_files {
+        let demo_name = demo_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+
+        let manifest = build_demo_manifest(demo_path.to_str().unwrap());
+        let kernels = extract_kernels(&manifest);
+        assert!(
+            !kernels.is_empty(),
+            "Demo {} should emit at least one kernel",
+            demo_name
+        );
+
+        for (entry_point, wgsl) in kernels {
+            naga_validate_demo(demo_name, &entry_point, &wgsl);
+            // 64-bit scalars never reach a browser bundle (no f64/i64/u64 in
+            // core WGSL); the device path narrows every kernel value to 32-bit.
+            assert!(
+                !wgsl.contains("f64"),
+                "Demo {} kernel {} must not emit f64 (browser WGSL has no f64)",
+                demo_name,
+                entry_point
+            );
+        }
+    }
+}
+
 #[test]
 fn every_demo_emits_at_least_one_kernel() {
-    let examples_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("examples")
-        .join("gpu");
-
-    let demo_files: Vec<_> = fs::read_dir(&examples_dir)
-        .expect("Failed to read examples/gpu directory")
-        .filter_map(|entry| {
-            entry.ok().and_then(|e| {
-                let path = e.path();
-                if path.extension().map_or(false, |ext| ext == "mi") {
-                    Some(path)
-                } else {
-                    None
-                }
-            })
-        })
-        .collect();
+    let demo_files = collect_demo_files();
 
     assert!(
         !demo_files.is_empty(),
@@ -363,23 +448,7 @@ fn all_demo_kernels_pass_tint() {
         )
     });
 
-    let examples_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("examples")
-        .join("gpu");
-
-    let demo_files: Vec<_> = fs::read_dir(&examples_dir)
-        .expect("Failed to read examples/gpu directory")
-        .filter_map(|entry| {
-            entry.ok().and_then(|e| {
-                let path = e.path();
-                if path.extension().map_or(false, |ext| ext == "mi") {
-                    Some(path)
-                } else {
-                    None
-                }
-            })
-        })
-        .collect();
+    let demo_files = collect_demo_files();
 
     let mut all_errors = Vec::new();
 

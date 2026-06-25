@@ -1,0 +1,252 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// Interactive ray marcher: three time-animated metaballs smooth-unioned with a
+// rounded cube over a grid floor, lit by a key/fill rig with soft shadows, a
+// Fresnel rim, and a specular glint. A faithful port of the reference fragment
+// shader (SDF scene, 110-step march, 40-step soft shadow, tone-mapped output).
+//
+// A `gpu frame` block with two passes:
+// 1. Integrate: read cam_a + frame.* (drag orbits, idle auto-rotates) → cam_b.
+// 2. Render: read cam_b + frame.time → write paint RGBA per pixel.
+//
+// Camera state ping-pongs (cam_a → cam_b) so the integrator never reads the
+// buffer it writes; the host swaps a/b between frames. Vectors are carried as
+// loose scalar components and every math-intrinsic result is anchored to f32
+// (`as f32`) so the device path stays 32-bit (browser WGSL has no f64).
+
+use system.collections.array
+use system.math
+use system.io
+
+// Canvas: 96×96 pixels (square, so the aspect factor is 1).
+// Camera state: [yaw, pitch, idle_seconds, _pad] — ping-ponged across frames.
+gpu var cam_a = Array<f32, 4>()
+gpu var cam_b = Array<f32, 4>()
+
+// Paint output (RGBA: 4 floats per pixel).
+gpu var paint = Array<f32, 96 * 96 * 4>()
+
+// Smooth minimum: blends two distance fields over a radius k.
+fn smin(a f32, b f32, k f32) f32
+    let h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0) as f32
+    return (mix(b, a, h) as f32) - k * h * (1.0 - h)
+
+// Signed distance to a sphere of radius r centred at (cx, cy, cz).
+fn sd_sphere(px f32, py f32, pz f32, cx f32, cy f32, cz f32, r f32) f32
+    let dx = px - cx
+    let dy = py - cy
+    let dz = pz - cz
+    return (sqrt(dx * dx + dy * dy + dz * dz) as f32) - r
+
+// Signed distance to an axis-aligned box of half-extent b centred at cy on y.
+fn sd_box(px f32, py f32, pz f32, cy f32, b f32) f32
+    let qx = (abs(px) as f32) - b
+    let qy = (abs(py - cy) as f32) - b
+    let qz = (abs(pz) as f32) - b
+    let mx = max(qx, 0.0) as f32
+    let my = max(qy, 0.0) as f32
+    let mz = max(qz, 0.0) as f32
+    let outside = sqrt(mx * mx + my * my + mz * mz) as f32
+    let inside = min(max(qx, max(qy, qz)) as f32, 0.0) as f32
+    return outside + inside
+
+// Scene distance at time `tm`: three animated metaballs, a rounded cube, and a
+// ground plane, all smooth-unioned.
+fn map_scene(px f32, py f32, pz f32, tm f32) f32
+    let t = tm * 0.6
+    let c1x = (sin(t) as f32) * 0.7
+    let c1y = 0.9 + (sin(t * 1.3) as f32) * 0.25
+    let c1z = (cos(t * 0.8) as f32) * 0.7
+    let c2x = (cos(t * 1.1) as f32) * 0.8
+    let c2y = 0.9 + (cos(t * 0.7) as f32) * 0.3
+    let c2z = (sin(t * 1.4) as f32) * 0.6
+    let c3x = (sin(t * 0.7 + 2.0) as f32) * 0.6
+    let c3y = 1.0 + (sin(t) as f32) * 0.2
+    let c3z = (cos(t * 1.2 + 1.0) as f32) * 0.8
+    var d = sd_sphere(px, py, pz, c1x, c1y, c1z, 0.42)
+    d = smin(d, sd_sphere(px, py, pz, c2x, c2y, c2z, 0.34), 0.45)
+    d = smin(d, sd_sphere(px, py, pz, c3x, c3y, c3z, 0.28), 0.45)
+    let cube = sd_box(px, py, pz, 0.9, 0.26) - 0.04
+    d = smin(d, cube, 0.3)
+    return min(d, py) as f32
+
+// Soft shadow factor along a ray from (ro) toward (rd) at time tm.
+fn soft_shadow(rox f32, roy f32, roz f32, rdx f32, rdy f32, rdz f32, tm f32) f32
+    var res = 1.0
+    var t = 0.04
+    var i = 0
+    while i < 40
+        let h = map_scene(rox + rdx * t, roy + rdy * t, roz + rdz * t, tm)
+        if h < 0.001
+            res = 0.0
+            i = 40
+        else
+            res = min(res, 9.0 * h / t) as f32
+            t = t + (clamp(h, 0.02, 0.25) as f32)
+            if t > 7.0: i = 40
+            i = i + 1
+    return clamp(res, 0.0, 1.0) as f32
+
+// Seed: starting orbit (auto-rotating, idle past the 4s threshold).
+gpu forall i in 0..4
+    cam_a[0] = 0.7
+    cam_a[1] = 0.42
+    cam_a[2] = 99.0
+    cam_a[3] = 0.0
+
+gpu frame
+    // Pass 1: integrate orbit angles and idle timer from pointer state.
+    gpu forall i in 0..4
+        let yaw = cam_a[0]
+        let pitch = cam_a[1]
+        let idle = cam_a[2]
+        let dragging = 1.0 if frame.mouse_down else 0.0
+        let next_idle = 0.0 if dragging > 0.5 else idle + frame.dt
+        // After >4s idle the camera auto-rotates; drag always steers it.
+        let auto = frame.dt * 0.18 if next_idle > 4.0 else 0.0
+        cam_b[0] = yaw + frame.drag_dx * 0.008 + auto
+        cam_b[1] = pitch + frame.drag_dy * 0.006
+        cam_b[2] = next_idle
+        cam_b[3] = 0.0
+
+    // Pass 2: ray-march and shade the scene from the current camera.
+    gpu forall idx in 0..9216
+        let px = idx % 96
+        let py = idx / 96
+        let tm = frame.time
+        let uvx = (px as f32) / 96.0 - 0.5
+        let uvy = 0.5 - (py as f32) / 96.0
+
+        // Orbit camera: eye on a sphere around the blob, looking at (0, 0.75, 0).
+        let ya = cam_b[0]
+        let pa = clamp(cam_b[1], 0.08, 1.25) as f32
+        let cd = 3.6
+        let cpa = cos(pa) as f32
+        let rox = (cos(ya) as f32) * cpa * cd
+        let roy = (sin(pa) as f32) * cd + 0.7
+        let roz = (sin(ya) as f32) * cpa * cd
+        // Forward / right / up basis.
+        let dfx = 0.0 - rox
+        let dfy = 0.75 - roy
+        let dfz = 0.0 - roz
+        let flen = sqrt(dfx * dfx + dfy * dfy + dfz * dfz) as f32
+        let fwx = dfx / flen
+        let fwy = dfy / flen
+        let fwz = dfz / flen
+        // right = normalize(cross(fw, (0,1,0))) = normalize((-fwz, 0, fwx))
+        let rlen0 = sqrt(fwz * fwz + fwx * fwx) as f32
+        let rtx = -fwz / rlen0
+        let rtz = fwx / rlen0
+        // up = cross(rt, fw); rt has no y component.
+        let upx = -rtz * fwy
+        let upy = rtz * fwx - rtx * fwz
+        let upz = rtx * fwy
+        // rd = normalize(fw*1.6 + rt*uv.x + up*uv.y)
+        let dx0 = fwx * 1.6 + rtx * uvx + upx * uvy
+        let dy0 = fwy * 1.6 + upy * uvy
+        let dz0 = fwz * 1.6 + rtz * uvx + upz * uvy
+        let dlen = sqrt(dx0 * dx0 + dy0 * dy0 + dz0 * dz0) as f32
+        let dirx = dx0 / dlen
+        let diry = dy0 / dlen
+        let dirz = dz0 / dlen
+
+        // March with an adaptive epsilon; break once close enough.
+        var t = 0.0
+        var hit = -1.0
+        var i = 0
+        while i < 110
+            let d = map_scene(rox + dirx * t, roy + diry * t, roz + dirz * t, tm)
+            if d < 0.0012 * t + 0.0006
+                hit = t
+                i = 110
+            else
+                t = t + d * 0.9
+                if t > 22.0: i = 110
+                i = i + 1
+
+        // Sky background, brightened toward the top of the frame.
+        var col_r = 0.012 * (1.0 + 0.5 * uvy)
+        var col_g = 0.02 * (1.0 + 0.5 * uvy)
+        var col_b = 0.046 * (1.0 + 0.5 * uvy)
+
+        if hit > 0.0
+            let hx = rox + dirx * hit
+            let hy = roy + diry * hit
+            let hz = roz + dirz * hit
+            // 3-tap gradient normal.
+            let e = 0.001
+            let gx = (map_scene(hx + e, hy, hz, tm) - map_scene(hx - e, hy, hz, tm)) as f32
+            let gy = (map_scene(hx, hy + e, hz, tm) - map_scene(hx, hy - e, hz, tm)) as f32
+            let gz = (map_scene(hx, hy, hz + e, tm) - map_scene(hx, hy, hz - e, tm)) as f32
+            let nlen = sqrt(gx * gx + gy * gy + gz * gz) as f32
+            let nx = gx / nlen
+            let ny = gy / nlen
+            let nz = gz / nlen
+
+            // Key / fill directions (pre-normalized).
+            let kx = 0.5793
+            let ky = 0.7448
+            let kz = -0.3310
+            let fx = -0.6189
+            let fy = 0.3094
+            let fz = 0.7220
+            let sh = soft_shadow(hx + nx * 0.01, hy + ny * 0.01, hz + nz * 0.01, kx, ky, kz, tm)
+            let key = max(nx * kx + ny * ky + nz * kz, 0.0) as f32 * sh
+            let fill = max(nx * fx + ny * fy + nz * fz, 0.0) as f32
+            let ndv = max(0.0 - (nx * dirx + ny * diry + nz * dirz), 0.0) as f32
+            let fres = pow(1.0 - ndv, 3.0) as f32
+
+            // Albedo: a grid floor below y≈0, otherwise the matte blob body.
+            var alb_r = 0.05
+            var alb_g = 0.08
+            var alb_b = 0.18
+            if hy < 0.003
+                let ggx = (abs((fract(hx * 2.0) as f32) - 0.5) as f32)
+                let ggz = (abs((fract(hz * 2.0) as f32) - 0.5) as f32)
+                let line = smoothstep(0.46, 0.5, max(ggx, ggz)) as f32
+                alb_r = mix(0.02, 0.2 * 0.35, line) as f32
+                alb_g = mix(0.035, 0.34 * 0.35, line) as f32
+                alb_b = mix(0.08, 0.85 * 0.35, line) as f32
+
+            // Key (yellow) + fill (blue) lighting over the ambient term.
+            col_r = alb_r * (0.25 + key * 1.0 * 1.6 + fill * 0.2 * 0.7)
+            col_g = alb_g * (0.25 + key * 0.82 * 1.6 + fill * 0.34 * 0.7)
+            col_b = alb_b * (0.25 + key * 0.3 * 1.6 + fill * 0.85 * 0.7)
+
+            // Fresnel rim (skip on the ground), then a specular glint.
+            let rim = 0.5 if hy > 0.003 else 0.0
+            col_r = col_r + fres * 0.52 * rim
+            col_g = col_g + fres * 0.532 * rim
+            col_b = col_b + fres * 0.63 * rim
+
+            let rdn = nx * kx + ny * ky + nz * kz
+            let refx = -kx + 2.0 * rdn * nx
+            let refy = -ky + 2.0 * rdn * ny
+            let refz = -kz + 2.0 * rdn * nz
+            let specd = max(0.0 - (refx * dirx + refy * diry + refz * dirz), 0.0) as f32
+            let spec = pow(specd, 40.0) as f32 * key * 0.9
+            col_r = col_r + 1.0 * spec
+            col_g = col_g + 0.82 * spec
+            col_b = col_b + 0.3 * spec
+
+            // Distance fog toward the sky color.
+            let fog = smoothstep(6.0, 20.0, hit) as f32
+            col_r = mix(col_r, 0.012, fog) as f32
+            col_g = mix(col_g, 0.02, fog) as f32
+            col_b = mix(col_b, 0.046, fog) as f32
+
+        // Gamma-ish tone map, then write opaque RGBA.
+        let base = idx * 4
+        paint[base] = pow(max(col_r, 0.0) as f32, 0.92) as f32
+        paint[base + 1] = pow(max(col_g, 0.0) as f32, 0.92) as f32
+        paint[base + 2] = pow(max(col_b, 0.0) as f32, 0.92) as f32
+        paint[base + 3] = 1.0 if hit > 0.0 else 0.0
+
+// Native smoke: read back the shaded center pixel (48, 48) — the blob body
+// under the key light. Its exact RGB is a deterministic value for the seeded
+// pose, value-verifying the full march + normal + shadow + lighting chain
+// (the same exact-float discipline as the box_blur demo).
+let host = paint
+let c = (48 * 96 + 48) * 4
+println(f"center={host[c]} {host[c + 1]} {host[c + 2]}")
