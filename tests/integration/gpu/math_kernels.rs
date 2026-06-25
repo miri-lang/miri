@@ -13,6 +13,10 @@ use super::utils::*;
 
 /// A plain Miri `fn` is callable inside a kernel and value-verifies.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_float_helper_kernel_runs() {
     let source = "
 use system.gpu
@@ -52,6 +56,10 @@ fn main()
 
 /// `tanh` value-verifies on the GPU against its CPU reference (tanh(0) = 0).
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_tanh_kernel_value_correct() {
     let source = "
 use system.gpu
@@ -89,6 +97,10 @@ fn main()
 
 /// `sigmoid` (composed in stdlib from `exp`) runs inside a kernel; sigmoid(0)=0.5.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_sigmoid_kernel_value_correct() {
     let source = "
 use system.gpu
@@ -110,6 +122,10 @@ fn main()
 /// `hash_u32` (Murmur3 fmix32) is deterministic and portable: the GPU value
 /// matches the CPU reference. hash_u32(1) normalized = 0.6837202.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_hash_u32_value_matches_cpu() {
     let source = "
 use system.gpu
@@ -132,6 +148,10 @@ fn main()
 
 /// `value_noise` stays in [0, 1) on the GPU (the unit-range guard returns 1.0).
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_value_noise_in_unit_range() {
     let source = "
 use system.gpu
@@ -152,6 +172,10 @@ fn main()
 
 /// `value_noise` is deterministic on the GPU (same coordinate → same value).
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_value_noise_is_deterministic() {
     let source = "
 use system.gpu
@@ -206,6 +230,10 @@ fn main()
 
 /// The curl field is deterministic on the GPU.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_curl_noise_is_deterministic() {
     let source = "
 use system.gpu

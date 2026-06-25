@@ -1,0 +1,44 @@
+name: GPU hardware tests
+
+# GPU-execution tests need a real GPU adapter, which GitHub's Linux runners do
+# not have. This job runs them on a macos-14 (Apple Silicon) runner, which has
+# a real Metal GPU. macOS minutes are billed at 10x, so this runs on a nightly
+# schedule and on-demand only — every-PR coverage stays on the cheap Linux CI
+# job (compile + WGSL validity + CPU), and these tests are gated behind the
+# `gpu_hardware` cargo feature (marked `ignore` without it).
+on:
+  schedule:
+    - cron: "0 6 * * *" # 06:00 UTC daily
+  workflow_dispatch: {}
+
+jobs:
+  gpu-hardware:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      # The GPU-execution tests link the runtime staticlibs (core + gpu/wgpu
+      # Metal driver). `miri_run` resolves them from target/release, then
+      # target/debug, so a debug build is sufficient.
+      - name: Build runtime staticlibs
+        run: |
+          set -euxo pipefail
+          cargo build --manifest-path src/runtime/core/Cargo.toml
+          cargo build --manifest-path src/runtime/gpu/Cargo.toml
+
+      # Run only the GPU-related tests (the `gpu` filter matches integration::gpu::*,
+      # docs::gpu::*, and math::integer_math::*_gpu) with the hardware feature on,
+      # so the ~3800 CPU/parser/type-checker tests (already green on Linux CI) are
+      # not re-run on the expensive macOS runner.
+      - name: Run GPU hardware tests
+        run: cargo test --features gpu_hardware --test mod gpu -- --test-threads=4

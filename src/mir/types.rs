@@ -203,6 +203,7 @@ impl MirType {
                     && !auto_copy_types.contains(name.as_str())
                     && !type_params.contains(name.as_str())
                     && BuiltinCollectionKind::from_name(name).is_none()
+                    && crate::ast::types::vec_dim(name.as_str()).is_none()
             }
             // All other types (primitives) are not managed.
             _ => false,

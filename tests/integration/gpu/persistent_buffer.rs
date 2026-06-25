@@ -14,6 +14,10 @@ use super::utils::*;
 /// Persistent buffer test: the two-stage pipeline pays exactly one upload, two
 /// launches, and one readback (one fence). `host[7] = (7*7)*2 = 98`.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn two_stage_pipeline_reuses_one_device_buffer() {
     if !gpu_adapter_available() {
         eprintln!("[gpu] skipped two_stage_pipeline_reuses_one_device_buffer: no suitable adapter");
@@ -44,6 +48,10 @@ fn main()
 /// Adding a third `forall` block that captures the same binding adds one
 /// launch and zero uploads.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn third_capture_adds_launch_not_upload() {
     if !gpu_adapter_available() {
         eprintln!("[gpu] skipped third_capture_adds_launch_not_upload: no suitable adapter");
@@ -79,6 +87,10 @@ fn main()
 /// bytes instead of reusing the first call's stale device buffer. The kernel
 /// reads `data[i]` on the RHS, so a stale buffer would corrupt the result.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn redeclared_binding_in_repeated_call_reuploads() {
     if !gpu_adapter_available() {
         eprintln!(
@@ -112,6 +124,10 @@ fn main()
 /// producing an independent host array. The persistent buffer means a single
 /// upload still covers both stages.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn two_readbacks_each_fence_and_survive() {
     if !gpu_adapter_available() {
         eprintln!("[gpu] skipped two_readbacks_each_fence_and_survive: no suitable adapter");
@@ -140,6 +156,10 @@ fn main()
 /// The kernel reads the assigned values, proving the upload is not a silent
 /// host-side copy that skips device transfer.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_var_assignment_from_host_array_uploads() {
     if !gpu_adapter_available() {
         eprintln!("[gpu] skipped gpu_var_assignment_from_host_array_uploads: no suitable adapter");
@@ -174,6 +194,10 @@ fn main()
 /// Simpler test: upload without a launch on host-only system.
 /// Since no GPU adapter exists, this just tests the structure is correct.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_var_assignment_uploads_count() {
     if !gpu_adapter_available() {
         eprintln!("[gpu] skipped gpu_var_assignment_uploads_count: no suitable adapter");

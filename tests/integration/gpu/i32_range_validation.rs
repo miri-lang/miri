@@ -13,6 +13,10 @@ use super::device::gpu_adapter_available;
 use super::utils::{assert_compiler_error, assert_runs_with_output, assert_runtime_error};
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_gpu_i32_range_inrange_roundtrip() {
     if !gpu_adapter_available() {
         return;
@@ -40,6 +44,10 @@ println(f'{max_host[0]} {min_host[0]}')
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_gpu_i32_range_outofrange_runtime_error() {
     if !gpu_adapter_available() {
         return;
@@ -107,6 +115,10 @@ gpu let arr = [-2147483648]
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_gpu_i32_range_negative_overflow_runtime_error() {
     if !gpu_adapter_available() {
         return;

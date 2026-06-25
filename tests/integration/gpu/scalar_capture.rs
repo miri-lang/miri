@@ -7,6 +7,10 @@
 use super::utils::*;
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn scalar_int_capture_in_gpu_for() {
     assert_runs(
         "
@@ -23,6 +27,10 @@ fn main()
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn scalar_int_capture_value_is_correct() {
     // Verify that scalar int captures work: the captured scalar k=5
     // is passed to the kernel as a uniform and used in computation.
@@ -44,6 +52,10 @@ fn main()
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn scalar_f32_capture_in_gpu_for() {
     assert_runs(
         "
@@ -60,6 +72,10 @@ fn main()
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn scalar_bool_capture_in_gpu_for() {
     assert_runs(
         "
@@ -116,6 +132,10 @@ fn main()
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn multiple_scalar_captures() {
     assert_runs(
         "
@@ -133,6 +153,10 @@ fn main()
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn multiple_scalar_captures_value_check() {
     // Verify that multiple scalar int captures work together
     // in the same kernel.
@@ -155,6 +179,10 @@ fn main()
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn mixed_buffer_and_scalar_captures() {
     assert_runs(
         "
@@ -172,6 +200,10 @@ fn main()
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn mixed_buffer_and_scalar_captures_value_check() {
     // Verify that both buffer and scalar captures work together:
     // the kernel accesses the gpu-resident data buffer and multiplies

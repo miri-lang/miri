@@ -10,6 +10,10 @@
 use crate::integration::utils::{assert_compiler_error, assert_runs};
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_gpu_frame_keyword_recognized() {
     // Test that `gpu frame` keyword sequence parses without "frame is not a keyword" error.
     // The frame loop itself may fail downstream (type-check, MIR), but the parser must
@@ -31,6 +35,10 @@ fn main()
 // Ping-pong buffer validation tests ensure correctness of dual-buffer tracking
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_gpu_frame_valid_one_read_one_write() {
     // Valid case: exactly one read-only gpu buffer (a) and one read-write gpu buffer (b).
     let code = r#"use system.io
@@ -73,6 +81,10 @@ fn main()
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_gpu_frame_multiple_write_buffers() {
     // F35 REFACTOR: multiple disjoint writes are now LEGAL (semantic instead of structural).
     let code = r#"use system.io
@@ -106,6 +118,10 @@ fn main()
 // Value-verified frame kernel tests (simplified patterns before full Conway's Game of Life)
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_gpu_frame_simple_gol() {
     // Simplified Conway's Game of Life: just verify the frame loop structure works
     // with a simple ping-pong copy (read grid_a, write grid_b).
@@ -131,6 +147,10 @@ fn main()
 // DP2 Part 1: frame input field tests
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_frame_field_read_scalar() {
     // Acceptance 1a: frame.time and frame.dt are readable as f32 values inside gpu frame.
     let code = r#"use system.io
@@ -149,6 +169,10 @@ fn main()
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_frame_field_read_bool() {
     // Acceptance 1a: frame.mouse_down is readable as bool into a variable.
     let code = r#"use system.io
@@ -166,6 +190,10 @@ fn main()
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_frame_field_in_binary() {
     // Test: frame.time in a binary expression.
     let code = r#"use system.io
@@ -183,6 +211,10 @@ fn main()
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_frame_index_in_binary() {
     // Test: frame.index in a binary expression (not a condition).
     let code = r#"use system.io
@@ -200,6 +232,10 @@ fn main()
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_frame_field_read_int() {
     // Test: frame.index is readable as int into a variable.
     let code = r#"use system.io
@@ -217,6 +253,10 @@ fn main()
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_frame_field_read_index_in_condition() {
     // Test: frame.index (int) is readable in a condition.
     let code = r#"use system.io
@@ -234,6 +274,10 @@ fn main()
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_frame_field_read_bool_in_condition() {
     // Acceptance 1a: frame.mouse_down is readable as bool in a condition.
     let code = r#"use system.io
@@ -276,6 +320,10 @@ fn main()
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_frame_with_scalar_capture() {
     // D2: test frame fields are ordered before scalar captures.
     // This test captures both frame fields and an ordinary scalar.
@@ -299,6 +347,10 @@ fn main()
 // FIX 1: Frame param shadowing tests
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_frame_param_shadowing_f0_with_frame_time() {
     // RED test: user variable named f0 should NOT shadow frame.time parameter.
     // If shadowing occurs (bug), f0 local overwrites the frame param in variable_map,
@@ -320,6 +372,10 @@ fn main()
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_frame_param_shadowing_f5_with_frame_mouse_down() {
     // RED test: user variable named f5 should NOT shadow frame.mouse_down parameter.
     let code = r#"use system.io
@@ -435,6 +491,10 @@ fn main()
 // DP3: Multi-pass gpu frame block tests
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_gpu_frame_block_two_passes() {
     // DP3 acceptance: `gpu frame { gpu forall ..., gpu forall ... }` block form parses and runs.
     // Two disjoint passes: first reads grid_a, writes grid_b; second reads grid_b, writes grid_c.
@@ -474,6 +534,10 @@ fn main()
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_gpu_frame_block_with_frame_inputs() {
     // DP3 acceptance: gpu frame block supports multiple passes.
     // Note: frame field access deferred to later; test uses basic variable capture.
@@ -501,6 +565,10 @@ fn main()
 // These validations will be added when F35 buffer-level disjointness is implemented.
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_gpu_frame_block_disjoint_writes_are_legal() {
     // DP3 F35 strengthening: multiple disjoint writes in the SAME pass are now legal
     // (only buffer-level disjointness with reads is required, not just one write).
@@ -525,6 +593,10 @@ fn main()
 // This will be tested when MIR lowering for gpu frame block is fully implemented.
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_gpu_frame_single_pass_unchanged() {
     // DP3 backward compatibility: single-pass `gpu frame i in 0..4: body` still works.
     let code = r#"use system.io
@@ -544,6 +616,10 @@ fn main()
 // F35 per-pass semantic validation (buffer-level disjointness)
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_gpu_frame_block_pass_multiple_disjoint_writes() {
     // F35 RED: multiple disjoint writes in a single pass should be LEGAL.
     // This differs from the old single-pass frame rule.
@@ -591,6 +667,10 @@ fn main()
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_gpu_frame_block_pass_frame_readable() {
     // F35 RED: frame.* fields readable in a block pass.
     let code = r#"use system.io
@@ -658,6 +738,10 @@ fn main()
 // Item 5: GPU-resident state pattern test
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_gpu_frame_state_integration_pattern() {
     // Item 5: a gpu frame block whose first pass integrates a frame.* field into a state buffer,
     // then a second render pass reads the state. This demonstrates the GPU-resident state pattern.
@@ -718,6 +802,10 @@ fn main()
 // BUG A: top-level gpu frame block (no fn main wrapper)
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_gpu_frame_block_top_level_two_passes() {
     // BUG A RED: gpu frame block at top-level (not in fn main) should emit main symbol.
     // Previously, lower_gpu_frame_block didn't properly chain blocks, causing

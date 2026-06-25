@@ -27,6 +27,10 @@ fn main()
 
 /// AC4: End-to-end dispatch with runtime Int end.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn runtime_int_variable_bound_dispatches_correctly() {
     let source = "
 use system.io
@@ -50,6 +54,10 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 /// AC4: Runtime end via method call on gpu-resident buffer.
 /// e.g., `gpu forall i in 0..g.length()` where g is `gpu let`.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn runtime_bound_via_gpu_buffer_length() {
     let source = "
 use system.io
@@ -70,6 +78,10 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]}')
 
 /// AC5: Empty range (n=0) is a clean no-op.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn empty_runtime_range_is_noop() {
     let source = "
 use system.io
@@ -89,6 +101,10 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 /// AC5: Negative runtime range should also be a clean no-op.
 /// The MIR lowering should clamp the grid to 0 threads.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn negative_runtime_range_is_noop() {
     let source = "
 use system.io
@@ -108,6 +124,10 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 /// Inclusive runtime range iterates over correct element count.
 /// `0..=n` where n=4 should iterate i=0,1,2,3,4 (5 total), not 4.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn inclusive_runtime_range_includes_end() {
     let source = "
 use system.io
@@ -128,6 +148,10 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]}')
 /// buffer, the grid rounds up to a full 256-thread block, but threads `i >= n`
 /// must not write. `dst[2]` / `dst[3]` stay at their initial sentinel.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn runtime_bound_threads_beyond_n_do_not_write() {
     let source = "
 use system.io
@@ -151,6 +175,10 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 /// upload regardless of the two launches. If the uniform were counted, uploads
 /// would be 3 (one per launch). Asserting `1` proves the exclusion.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn runtime_bound_uniform_is_not_counted_as_upload() {
     if !gpu_adapter_available() {
         eprintln!(
@@ -183,6 +211,10 @@ fn main()
 
 /// F30 A3: Bound value exceeding u32::MAX triggers GridTooLarge error and aborts.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn bound_exceeds_u32_max_errors() {
     if !gpu_adapter_available() {
         eprintln!("[gpu] skipped bound_exceeds_u32_max_errors: no suitable adapter");
@@ -204,6 +236,10 @@ fn main()
 
 /// F30 A2: Negative bound should write 0 and result in empty dispatch (no error).
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn negative_bound_is_noop_no_error() {
     if !gpu_adapter_available() {
         eprintln!("[gpu] skipped negative_bound_is_noop_no_error: no suitable adapter");
@@ -229,6 +265,10 @@ fn main()
 /// (~8M on most devices) and must trigger GridTooLarge error. This bound fits in u32, but the
 /// resulting grid (~8.4M) exceeds the device limit, not the u32 range.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn bound_2_to_31_exceeds_device_grid_limit_errors() {
     if !gpu_adapter_available() {
         eprintln!(
@@ -257,6 +297,10 @@ fn main()
 /// correct at the integer boundary. The runtime end here underflows the
 /// subtraction yet must still be treated as an empty range.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn wraparound_runtime_range_is_noop() {
     if !gpu_adapter_available() {
         eprintln!("[gpu] skipped wraparound_runtime_range_is_noop: no suitable adapter");
