@@ -91,6 +91,34 @@ println(f\"{a[2]}\")
 }
 
 #[test]
+fn test_array_sized_named_const() {
+    assert_runs_with_output(
+        "
+use system.collections.array
+
+const SIZE = 8
+let a = Array<int, SIZE>()
+println(f\"{a.length()}\")
+",
+        "8",
+    );
+}
+
+#[test]
+fn test_array_sized_named_const_arithmetic() {
+    assert_runs_with_output(
+        "
+use system.collections.array
+
+const SIZE = 4 * 4
+let a = Array<int, SIZE>()
+println(f\"{a.length()}\")
+",
+        "16",
+    );
+}
+
+#[test]
 fn test_array_sized_non_const_error() {
     assert_compiler_error(
         "
