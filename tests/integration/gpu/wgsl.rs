@@ -1195,6 +1195,73 @@ fn main()
     }
 }
 
+/// Short-circuit `or` in a kernel body. The `or` operator lowers to a
+/// `SwitchInt` whose single target carries the `false` discriminant (jump to
+/// the rhs when the lhs is false); the structurizer must accept that shape by
+/// negating the condition, mirroring the `true`-target `and` path.
+mod short_circuit_or {
+    use super::assert_gpu_wgsl_valid;
+
+    /// `or` as a plain `if` condition. Either operand true → the body runs.
+    #[test]
+    fn or_in_if_condition_emits_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [1, 2, 3, 4]
+    gpu let b = [10, 20, 30, 40]
+    gpu var dst = [0, 0, 0, 0]
+    gpu forall i in 0..4
+        var sum = 0
+        if a[i] > 2 or b[i] > 15
+            sum = sum + 100
+        dst[i] = sum
+",
+        );
+    }
+
+    /// `or` inside a ternary condition.
+    #[test]
+    fn or_in_ternary_condition_emits_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [1, 2, 3, 4]
+    gpu let b = [10, 20, 30, 40]
+    gpu var dst = [0, 0, 0, 0]
+    gpu forall i in 0..4
+        dst[i] = 1 if a[i] > 2 or b[i] > 15 else 0
+",
+        );
+    }
+
+    /// Chained `or` (three operands) must also structurize.
+    #[test]
+    fn chained_or_emits_naga_valid_wgsl() {
+        assert_gpu_wgsl_valid(
+            "
+use system.gpu
+use system.collections.array
+
+fn main()
+    gpu let a = [1, 2, 3, 4]
+    gpu var dst = [0, 0, 0, 0]
+    gpu forall i in 0..4
+        var sum = 0
+        if a[i] == 1 or a[i] == 2 or a[i] == 4
+            sum = sum + 100
+        dst[i] = sum
+",
+        );
+    }
+}
+
 mod gpu_for_2d {
     use super::super::utils::assert_compiler_error;
     use super::assert_gpu_wgsl_valid;

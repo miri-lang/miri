@@ -848,10 +848,23 @@ impl<'a> BodyEmitter<'a> {
                     targets,
                     otherwise,
                 } => {
-                    if targets.len() == 1 && targets[0].0 == crate::mir::Discriminant::bool_true() {
+                    let true_target =
+                        targets.len() == 1 && targets[0].0 == crate::mir::Discriminant::bool_true();
+                    let false_target = targets.len() == 1
+                        && targets[0].0 == crate::mir::Discriminant::bool_false();
+                    if true_target || false_target {
                         let then_bb = targets[0].1;
                         let otherwise_bb = *otherwise;
-                        let cond_str = self.render_operand(discr)?;
+                        // A `false`-target switch (short-circuit `or`) jumps to `then_bb`
+                        // when the discriminant is false, so negate the condition to keep
+                        // `then_bb` as the if-body. This mirrors the `true`-target `and`
+                        // path, which falls through to `otherwise_bb` on false.
+                        let raw_cond = self.render_operand(discr)?;
+                        let cond_str = if true_target {
+                            format!("bool({})", raw_cond)
+                        } else {
+                            format!("!bool({})", raw_cond)
+                        };
 
                         // Decide plain-if vs if-else by checking forward reachability.
                         let then_reaches_otherwise = self.forward_reachable(then_bb, otherwise_bb);
@@ -859,8 +872,7 @@ impl<'a> BodyEmitter<'a> {
                         if then_reaches_otherwise {
                             // Plain if: otherwise_bb is the merge point.
                             self.write_indent()?;
-                            writeln!(self.output, "if (bool({})) {{", cond_str)
-                                .map_err(emit_err)?;
+                            writeln!(self.output, "if ({}) {{", cond_str).map_err(emit_err)?;
                             self.indent += 1;
                             self.emit_from(then_bb, Some(otherwise_bb), visited)?;
                             self.indent -= 1;
@@ -875,8 +887,7 @@ impl<'a> BodyEmitter<'a> {
                             let merge = self.find_merge(then_bb, otherwise_bb);
 
                             self.write_indent()?;
-                            writeln!(self.output, "if (bool({})) {{", cond_str)
-                                .map_err(emit_err)?;
+                            writeln!(self.output, "if ({}) {{", cond_str).map_err(emit_err)?;
                             self.indent += 1;
                             self.emit_from(then_bb, merge, visited)?;
                             self.indent -= 1;
