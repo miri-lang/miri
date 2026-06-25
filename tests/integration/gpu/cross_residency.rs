@@ -159,6 +159,10 @@ fn main()
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vector_add_demo_compiles_and_runs() {
     // Compiles end-to-end on the residency surface: `gpu let` inputs, a
     // `gpu var` output, and a readback (`let host = dst`). Value correctness
@@ -183,6 +187,10 @@ fn main()
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn two_readbacks_compile() {
     // Two independent host copies of the same gpu binding. The binding
     // survives both readbacks.
@@ -204,6 +212,10 @@ fn main()
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vector_add_demo_value_correctness() {
     if !gpu_adapter_available() {
         eprintln!("[gpu] skipped vector_add_demo_value_correctness: no suitable adapter");
@@ -230,6 +242,10 @@ fn main()
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn two_readbacks_produce_independent_host_arrays() {
     if !gpu_adapter_available() {
         eprintln!(

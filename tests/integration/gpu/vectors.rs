@@ -61,6 +61,103 @@ fn main()
     assert_runs_with_output(source, "5.0 6.0 3.0");
 }
 
+/// Array of Vec3<f32> stored inline: construct, read fields across elements,
+/// drop without leak. Distinct per-element values prove elements don't overlap.
+#[test]
+fn cpu_vec3_array_construct_and_field_read() {
+    let source = "
+use system.gpu.vector
+use system.collections.array
+
+fn main()
+    let arr = [Vec3<f32>(1.0, 2.0, 3.0), Vec3<f32>(4.0, 5.0, 6.0), Vec3<f32>(7.0, 8.0, 9.0)]
+    println(f'{arr[0].x} {arr[1].y} {arr[2].z}')
+";
+    assert_runs_with_output(source, "1.0 5.0 9.0");
+}
+
+/// Array of Vec4<f32> stored inline: every component of every element reads
+/// back correctly (stride 16 == payload 16, no padding).
+#[test]
+fn cpu_vec4_array_construct_and_field_read() {
+    let source = "
+use system.gpu.vector
+use system.collections.array
+
+fn main()
+    let arr = [Vec4<f32>(1.0, 2.0, 3.0, 4.0), Vec4<f32>(5.0, 6.0, 7.0, 8.0)]
+    println(f'{arr[0].x} {arr[0].w} {arr[1].x} {arr[1].w}')
+";
+    assert_runs_with_output(source, "1.0 4.0 5.0 8.0");
+}
+
+/// Inline vector element field write: `arr[i].x = e` updates one component and
+/// leaves the others intact (no 8-byte pointer store corrupting neighbors).
+#[test]
+fn cpu_vec3_array_field_write() {
+    let source = "
+use system.gpu.vector
+use system.collections.array
+
+fn main()
+    var arr = [Vec3<f32>(1.0, 2.0, 3.0), Vec3<f32>(4.0, 5.0, 6.0)]
+    arr[0].x = 9.0
+    arr[1].z = 8.0
+    println(f'{arr[0].x} {arr[0].y} {arr[1].z}')
+";
+    assert_runs_with_output(source, "9.0 2.0 8.0");
+}
+
+/// Inline whole-element write: `arr[i] = VecN(...)` replaces all components.
+#[test]
+fn cpu_vec3_array_whole_element_write() {
+    let source = "
+use system.gpu.vector
+use system.collections.array
+
+fn main()
+    var arr = [Vec3<f32>(1.0, 2.0, 3.0), Vec3<f32>(4.0, 5.0, 6.0)]
+    arr[0] = Vec3<f32>(7.0, 8.0, 9.0)
+    println(f'{arr[0].x} {arr[0].y} {arr[0].z} {arr[1].x}')
+";
+    assert_runs_with_output(source, "7.0 8.0 9.0 4.0");
+}
+
+/// Inline element-to-element copy `dst[i] = src[i]` (the CPU analogue of the
+/// GPU forall copy) moves the full std430 element.
+#[test]
+fn cpu_vec3_array_element_copy() {
+    let source = "
+use system.gpu.vector
+use system.collections.array
+
+fn main()
+    let src = [Vec3<f32>(1.0, 2.0, 3.0), Vec3<f32>(4.0, 5.0, 6.0)]
+    var dst = [Vec3<f32>(0.0, 0.0, 0.0), Vec3<f32>(0.0, 0.0, 0.0)]
+    dst[0] = src[0]
+    dst[1] = src[1]
+    println(f'{dst[0].x} {dst[0].y} {dst[0].z} {dst[1].x} {dst[1].y} {dst[1].z}')
+";
+    assert_runs_with_output(source, "1.0 2.0 3.0 4.0 5.0 6.0");
+}
+
+/// Integer vector arrays preserve their explicit component width: `[Vec2<i32>(..)]`
+/// keeps `i32` (not the literal default `Int`), so inline storage is detected and
+/// each component reads back correctly across distinct elements.
+#[test]
+fn cpu_integer_vec_array_preserves_width() {
+    let source = "
+use system.gpu.vector
+use system.collections.array
+
+fn main()
+    let a = [Vec2<i32>(10, 20), Vec2<i32>(30, 40), Vec2<i32>(50, 60)]
+    let b = [Vec4<u32>(1, 2, 3, 4), Vec4<u32>(5, 6, 7, 8)]
+    println(f'{a[0].x} {a[1].y} {a[2].x} {b[0].x} {b[1].w}')
+";
+    assert_runs_with_output(source, "10 40 50 1 8");
+}
+
 /// Vec2 component-wise arithmetic.
 #[test]
 fn cpu_vec2_arithmetic() {
@@ -157,7 +254,6 @@ gpu fn my_kernel(v Vec3<u64>)
 
 /// Vec3<f32> elements in a buffer emit valid WGSL.
 #[test]
-#[ignore = "buffer-of-vec needs inline-composite collection storage; tracked as follow-up — arr[i] currently loads an inline Vec element as an 8-byte pointer (translator.rs translate_collection_index_read)"]
 fn vec3_f32_array_emits_valid_wgsl() {
     use super::helpers::assert_gpu_wgsl_valid;
     let source = "
@@ -176,10 +272,14 @@ fn main()
 }
 
 /// Array<Vec3<f32>, N> round-trip: copy via GPU forall (value correctness check).
-/// Tests that vector elements are stored inline in the buffer with correct std430 stride.
+/// Vector elements are stored inline in the buffer with std430 stride; adapter-gated.
 #[test]
-#[ignore = "buffer-of-vec needs inline-composite collection storage; tracked as follow-up — arr[i] currently loads an inline Vec element as an 8-byte pointer (translator.rs translate_collection_index_read)"]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec3_f32_array_buffer_roundtrip() {
+    use super::device::assert_gpu_runs_with_output;
     let source = "
 use system.gpu
 use system.gpu.vector
@@ -193,13 +293,43 @@ fn main()
     let host = dst
     println(f'{host[0].x} {host[0].y} {host[0].z} {host[1].x} {host[1].y} {host[1].z}')
 ";
-    assert_runs_with_output(source, "1.0 2.0 3.0 4.0 5.0 6.0");
+    assert_gpu_runs_with_output(source, "1.0 2.0 3.0 4.0 5.0 6.0");
 }
 
-/// Vec2<i32> buffer round-trip with element write.
+/// std430 alignment proof: 3 distinct `Vec3<f32>` elements round-trip via GPU
+/// forall; element[2] must read from byte offset 32 (stride 16), not 24 — if
+/// the stride were packed (12), element[2]'s components would bleed/shift.
 #[test]
-#[ignore = "buffer-of-vec needs inline-composite collection storage; tracked as follow-up — arr[i] currently loads an inline Vec element as an 8-byte pointer (translator.rs translate_collection_index_read)"]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn vec3_f32_array_std430_stride_alignment() {
+    use super::device::assert_gpu_runs_with_output;
+    let source = "
+use system.gpu
+use system.gpu.vector
+use system.collections.array
+
+fn main()
+    gpu let src = [Vec3<f32>(1.0, 2.0, 3.0), Vec3<f32>(4.0, 5.0, 6.0), Vec3<f32>(7.0, 8.0, 9.0)]
+    gpu var dst = [Vec3<f32>(0.0, 0.0, 0.0), Vec3<f32>(0.0, 0.0, 0.0), Vec3<f32>(0.0, 0.0, 0.0)]
+    gpu forall i in 0..3
+        dst[i] = src[i]
+    let host = dst
+    println(f'{host[2].x} {host[2].y} {host[2].z}')
+";
+    assert_gpu_runs_with_output(source, "7.0 8.0 9.0");
+}
+
+/// Vec2<i32> buffer round-trip (stride 8 == ptr size); adapter-gated.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec2_i32_array_buffer_roundtrip() {
+    use super::device::assert_gpu_runs_with_output;
     let source = "
 use system.gpu
 use system.gpu.vector
@@ -213,13 +343,17 @@ fn main()
     let host = dst
     println(f'{host[0].x} {host[0].y} {host[1].x} {host[1].y}')
 ";
-    assert_runs_with_output(source, "10 20 30 40");
+    assert_gpu_runs_with_output(source, "10 20 30 40");
 }
 
-/// Vec4<u32> buffer round-trip with component access.
+/// Vec4<u32> buffer round-trip (stride 16); adapter-gated.
 #[test]
-#[ignore = "buffer-of-vec needs inline-composite collection storage; tracked as follow-up — arr[i] currently loads an inline Vec element as an 8-byte pointer (translator.rs translate_collection_index_read)"]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec4_u32_array_buffer_roundtrip() {
+    use super::device::assert_gpu_runs_with_output;
     let source = "
 use system.gpu
 use system.gpu.vector
@@ -233,7 +367,7 @@ fn main()
     let host = dst
     println(f'{host[0].x} {host[0].y} {host[0].z} {host[0].w} {host[1].x} {host[1].y} {host[1].z} {host[1].w}')
 ";
-    assert_runs_with_output(source, "1 2 3 4 5 6 7 8");
+    assert_gpu_runs_with_output(source, "1 2 3 4 5 6 7 8");
 }
 
 /// dot(Vec3<f32>, Vec3<f32>) -> f32 WGSL validity (type checking).
@@ -258,6 +392,10 @@ fn main()
 
 /// Value correctness: dot([1,0,0], [2,3,4]) = 2.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec_dot_f32_value_correct() {
     use super::device::assert_gpu_runs_with_output;
     let source = "
@@ -309,7 +447,10 @@ fn main()
 
 /// Value correctness: length([3,4,0]) = 5.
 #[test]
-
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec_length_f32_value_correct() {
     use super::device::assert_gpu_runs_with_output;
     let source = "
@@ -426,7 +567,10 @@ fn main()
 
 /// Value correctness: cross([1,0,0], [0,1,0]) = [0,0,1].
 #[test]
-
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec_cross_f32_value_correct() {
     use super::device::assert_gpu_runs_with_output;
     let source = "
@@ -494,7 +638,10 @@ fn main()
 
 /// Value correctness: reflect([1,0,0], [0,1,0]) = [1,0,0].
 #[test]
-
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec_reflect_f32_value_correct() {
     use super::device::assert_gpu_runs_with_output;
     let source = "
@@ -563,7 +710,10 @@ fn main()
 
 /// Value correctness: mix([0,0,0], [2,2,2], 0.5) = [1,1,1].
 #[test]
-
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec_mix_f32_value_correct() {
     use super::device::assert_gpu_runs_with_output;
     let source = "
@@ -732,7 +882,10 @@ fn main()
 
 /// Value correctness: [1,2,3] * 2.0 = [2,4,6].
 #[test]
-
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec_scalar_mul_f32_value_correct() {
     use super::device::assert_gpu_runs_with_output;
     let source = "
@@ -792,7 +945,10 @@ fn main()
 
 /// Value correctness: [2,4,6] / 2.0 = [1,2,3].
 #[test]
-
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec_scalar_div_f32_value_correct() {
     use super::device::assert_gpu_runs_with_output;
     let source = "
@@ -852,7 +1008,10 @@ fn main()
 
 /// Value correctness: [1,2,3] + 1.0 = [2,3,4].
 #[test]
-
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec_scalar_add_f32_value_correct() {
     use super::device::assert_gpu_runs_with_output;
     let source = "
@@ -912,7 +1071,10 @@ fn main()
 
 /// Value correctness: [2,3,4] - 1.0 = [1,2,3].
 #[test]
-
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec_scalar_sub_f32_value_correct() {
     use super::device::assert_gpu_runs_with_output;
     let source = "
@@ -972,7 +1134,10 @@ fn main()
 
 /// Value correctness: 2.0 * [1,2,3] = [2,4,6].
 #[test]
-
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec_scalar_mul_commutative_f32_value_correct() {
     use super::device::assert_gpu_runs_with_output;
     let source = "
@@ -1050,7 +1215,10 @@ fn main()
 
 /// Value correctness: 1.0 + [1,2,3] = [2,3,4].
 #[test]
-
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec_scalar_add_commutative_f32_value_correct() {
     use super::device::assert_gpu_runs_with_output;
     let source = "

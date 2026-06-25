@@ -17,6 +17,10 @@ use super::utils::*;
 /// Simplest case: kernel calls a trivial user function.
 /// The function doubles its input.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn kernel_calls_trivial_scalar_function() {
     let source = "
 use system.gpu
@@ -56,6 +60,10 @@ fn main()
 
 /// User function with two scalar parameters.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn kernel_calls_function_with_two_params() {
     let source = "
 use system.gpu
@@ -80,6 +88,10 @@ fn main()
 
 /// Transitive call chain: kernel → fn_a → fn_b.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn kernel_calls_function_that_calls_another_function() {
     let source = "
 use system.gpu
@@ -104,6 +116,10 @@ fn main()
 
 /// User function calls a Part-1 math intrinsic.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn kernel_calls_function_that_uses_math_intrinsic() {
     let source = "
 use system.gpu
@@ -127,6 +143,10 @@ fn main()
 
 /// Integer-typed helper function (not just float).
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn kernel_calls_integer_function() {
     let source = "
 use system.gpu
