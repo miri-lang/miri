@@ -12,6 +12,10 @@ use super::utils::assert_compiler_error;
 /// buffer in row-major order (x-fastest): dst[z*W*H + y*W + x] = x + y*10 + z*100.
 /// 8 total iterations (2×2×2).
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_forall_3d_literal_bounds_value_round_trips() {
     let source = "
 use system.io
@@ -35,6 +39,10 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]} {host[5]} {host[6]} 
 /// 3D runtime bounds value-correctness test.
 /// Each axis bound is a runtime variable (n_x, n_y, n_z).
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_forall_3d_runtime_bounds_value_round_trips() {
     let source = "
 use system.io
@@ -56,6 +64,10 @@ fn main()
 
 /// 3D mixed literal/runtime bounds (literal x, runtime y, runtime z).
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_forall_3d_mixed_literal_x_runtime_yz() {
     let source = "
 use system.io
@@ -76,6 +88,10 @@ fn main()
 
 /// 3D mixed literal/runtime bounds (runtime x, literal y, runtime z).
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_forall_3d_mixed_runtime_x_literal_y_runtime_z() {
     let source = "
 use system.io
@@ -112,6 +128,10 @@ fn main()
 /// 3D with non-matching block dims: bounds (0..5, 0..5, 0..5) with block (8, 8, 4).
 /// Verify no out-of-range writes and correct values for in-bounds elements.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_forall_3d_non_square_bounds_value_round_trips() {
     let source = "
 use system.io
@@ -131,6 +151,10 @@ fn main()
 
 /// 3D with inclusive range on z axis: 0..=1 (inclusive) should normalize to 0..2.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_forall_3d_inclusive_range_z_value_round_trips() {
     let source = "
 use system.io

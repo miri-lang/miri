@@ -20,6 +20,10 @@ use super::super::utils::assert_compiler_error;
 ///
 /// Expected output: `6 8 10 12` (element-wise sums of [1,2,3,4] + [5,6,7,8])
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn doc_vector_add() {
     assert_gpu_runs_with_output(
         "
@@ -59,6 +63,10 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 ///   * host[7] = 7 + 8 = 15, then 15 + 8 = 23
 ///   * 1 upload, 2 launches, 1 readback, 1 fence
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn doc_buffer_reuse() {
     assert_gpu_runs_with_output(
         "
@@ -95,6 +103,10 @@ println(f'{host[7]} {gpu_uploads()} {gpu_launches()} {gpu_readbacks()} {gpu_fenc
 /// Expected: C[0,0] = 1*5 + 2*7 = 19, C[0,1] = 1*6 + 2*8 = 22, etc.
 /// Output: `19 22 43 50`
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn doc_matmul() {
     assert_gpu_runs_with_output(
         "
@@ -134,6 +146,10 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 /// Computation: dst[i] = 2.0 * x[i] + y[i]
 /// Expected: [2*1+5, 2*2+6, 2*3+7, 2*4+8] = [7, 10, 13, 16]
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn doc_saxpy() {
     assert_gpu_runs_with_output(
         "
@@ -167,6 +183,10 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 ///
 /// The kernel computes data[i] = i*i, then we readback and print the first 4 elements.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn doc_readback_then_host_loop() {
     assert_gpu_runs_with_output(
         "

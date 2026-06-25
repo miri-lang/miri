@@ -142,6 +142,39 @@ pub fn vector_swizzle(kind: &TypeKind, field_idx: usize) -> Option<char> {
 /// are looked up via [`BuiltinCollectionKind::from_name`] so this dispatch
 /// never hard-codes stdlib name strings.
 pub fn buffer_element(kind: &TypeKind) -> Result<WgslScalar, CodegenError> {
+    component_scalar(buffer_element_inner_kind(kind)?)
+}
+
+/// Full WGSL element-type spelling for a buffer-like collection: a scalar
+/// (`f32`) or, for an inline vector element, the vector form (`vec3<f32>`).
+///
+/// Used for the `array<...>` storage-buffer declaration. The plain
+/// [`buffer_element`] returns only the component scalar (e.g. the `f32` of a
+/// `vec3<f32>` element) for callers that reason about component width.
+pub fn buffer_element_typename(kind: &TypeKind) -> Result<String, CodegenError> {
+    let inner = buffer_element_inner_kind(kind)?;
+    match vector_type(inner) {
+        Some(vec_spelling) => Ok(vec_spelling),
+        None => Ok(component_scalar(inner)?.name().to_string()),
+    }
+}
+
+/// Resolve the component scalar of an element kind: the vector component for a
+/// `VecN<T>` element, otherwise the scalar itself.
+fn component_scalar(inner: &TypeKind) -> Result<WgslScalar, CodegenError> {
+    if let TypeKind::Custom(name, Some(args)) = inner {
+        if vec_dim(name).is_some() {
+            if let Some(ExpressionKind::Type(elem, _)) = args.first().map(|a| &a.node) {
+                return scalar(&elem.kind);
+            }
+        }
+    }
+    scalar(inner)
+}
+
+/// Extract the element type-kind from a buffer-like collection type (the inner
+/// `T` of `Array<T, N>` / `List<T>` and their post-resolution `Custom` forms).
+fn buffer_element_inner_kind(kind: &TypeKind) -> Result<&TypeKind, CodegenError> {
     use crate::ast::expression::ExpressionKind;
     use crate::ast::types::BuiltinCollectionKind;
     let elem_expr = match kind {
@@ -198,7 +231,7 @@ pub fn buffer_element(kind: &TypeKind) -> Result<WgslScalar, CodegenError> {
         }
     };
     match &elem_expr.node {
-        ExpressionKind::Type(inner, _) => scalar(&inner.kind),
+        ExpressionKind::Type(inner, _) => Ok(&inner.kind),
         ExpressionKind::Literal(_)
         | ExpressionKind::Identifier(..)
         | ExpressionKind::Binary(..)

@@ -408,6 +408,10 @@ mod math_intrinsics {
     /// not an f64 result that gets width-cast before storing into the f32 buffer.
     /// This test checks both WGSL validity (no f64/f32 mismatch) and value correctness.
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu_hardware"),
+        ignore = "requires a real GPU; runs on the macos-14 hardware job"
+    )]
     fn sqrt_f32_buffer_width_correct() {
         assert_gpu_wgsl_valid(
             "
@@ -498,6 +502,10 @@ fn main()
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu_hardware"),
+        ignore = "requires a real GPU; runs on the macos-14 hardware job"
+    )]
     fn tanh_f32_value_correct() {
         assert_gpu_runs_with_output(
             "
@@ -537,6 +545,10 @@ fn main()
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu_hardware"),
+        ignore = "requires a real GPU; runs on the macos-14 hardware job"
+    )]
     fn exp2_f32_value_correct() {
         assert_gpu_runs_with_output(
             "
@@ -576,6 +588,10 @@ fn main()
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu_hardware"),
+        ignore = "requires a real GPU; runs on the macos-14 hardware job"
+    )]
     fn log2_f32_value_correct() {
         assert_gpu_runs_with_output(
             "
@@ -615,6 +631,10 @@ fn main()
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu_hardware"),
+        ignore = "requires a real GPU; runs on the macos-14 hardware job"
+    )]
     fn fract_f32_value_correct() {
         assert_gpu_runs_with_output(
             "
@@ -654,6 +674,10 @@ fn main()
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu_hardware"),
+        ignore = "requires a real GPU; runs on the macos-14 hardware job"
+    )]
     fn sign_f32_value_correct() {
         assert_gpu_runs_with_output(
             "
@@ -694,6 +718,10 @@ fn main()
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu_hardware"),
+        ignore = "requires a real GPU; runs on the macos-14 hardware job"
+    )]
     fn atan2_f32_value_correct() {
         assert_gpu_runs_with_output(
             "
@@ -735,6 +763,10 @@ fn main()
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu_hardware"),
+        ignore = "requires a real GPU; runs on the macos-14 hardware job"
+    )]
     fn step_f32_value_correct() {
         assert_gpu_runs_with_output(
             "
@@ -775,6 +807,10 @@ fn main()
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu_hardware"),
+        ignore = "requires a real GPU; runs on the macos-14 hardware job"
+    )]
     fn clamp_f32_value_correct() {
         assert_gpu_runs_with_output(
             "
@@ -816,6 +852,10 @@ fn main()
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu_hardware"),
+        ignore = "requires a real GPU; runs on the macos-14 hardware job"
+    )]
     fn mix_f32_value_correct() {
         assert_gpu_runs_with_output(
             "
@@ -856,6 +896,10 @@ fn main()
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu_hardware"),
+        ignore = "requires a real GPU; runs on the macos-14 hardware job"
+    )]
     fn smoothstep_f32_value_correct() {
         assert_gpu_runs_with_output(
             "
@@ -1357,6 +1401,10 @@ mod int_marshalling {
     use super::super::device::assert_gpu_runs_with_output;
 
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu_hardware"),
+        ignore = "requires a real GPU; runs on the macos-14 hardware job"
+    )]
     fn small_int_values_round_trip_with_marshalling() {
         // Small values (< i32::MAX) should round-trip correctly.
         let source = "
@@ -1375,6 +1423,10 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]} {host[5]}')
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "gpu_hardware"),
+        ignore = "requires a real GPU; runs on the macos-14 hardware job"
+    )]
     fn int_arithmetic_after_marshalling_is_correct() {
         // Arithmetic on marshalled values should be correct.
         let source = "

@@ -17,6 +17,10 @@ cranelift = [
 ]
 llvm = ["dep:inkwell"]
 browser-gpu-gate = []
+# Enables the GPU-execution integration tests, which require a real GPU adapter.
+# Off by default so the GPU-less CI lane skips them; the macos-14 hardware job
+# builds with this feature to run them on a real GPU.
+gpu_hardware = []
 
 [dependencies]
 anyhow = "1.0.100"

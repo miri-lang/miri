@@ -1379,6 +1379,7 @@ impl TypeChecker {
                 return self.infer_struct_constructor(
                     def,
                     name,
+                    type_args,
                     positional_args,
                     named_args,
                     span,
@@ -1816,10 +1817,12 @@ impl TypeChecker {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn infer_struct_constructor(
         &mut self,
         def: crate::type_checker::context::StructDefinition,
         name: &str,
+        type_args: &Option<Vec<Expression>>,
         positional_args: &[(&Expression, Type)],
         mut named_args: HashMap<String, (&Expression, Type, Span)>,
         span: Span,
@@ -1827,6 +1830,18 @@ impl TypeChecker {
     ) -> Type {
         let mut pos_iter = positional_args.iter();
         let mut generic_map = HashMap::new();
+
+        // Seed the generic map from explicit type arguments (`Vec3<u32>(..)`)
+        // so they pin the type parameters. `infer_generic_types` only fills
+        // *absent* entries, so an explicit width wins over the type a literal
+        // argument would otherwise infer (e.g. `u32` over the default `Int`).
+        if let (Some(gens), Some(args)) = (&def.generics, type_args) {
+            for (g, arg) in gens.iter().zip(args.iter()) {
+                if let ExpressionKind::Type(ty, _) = &arg.node {
+                    generic_map.insert(g.name.clone(), (**ty).clone());
+                }
+            }
+        }
 
         for (field_name, field_type, _) in &def.fields {
             let (arg_expr, arg_type) = if let Some((expr, ty)) = pos_iter.next() {

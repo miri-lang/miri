@@ -623,6 +623,53 @@ pub fn vec_dim(name: &str) -> Option<u8> {
     }
 }
 
+/// Byte width of a scalar usable as a vector component, or `None` for a
+/// non-numeric kind. Four-byte scalars (`f32`/`i32`/`u32`) are the only
+/// GPU-compatible components; the eight-byte kinds are accepted so host-side
+/// (CPU) inline layout of wider vectors stays consistent.
+fn vec_component_bytes(scalar: &TypeKind) -> Option<i64> {
+    match scalar {
+        TypeKind::F32 | TypeKind::I32 | TypeKind::U32 => Some(4),
+        TypeKind::F64 | TypeKind::I64 | TypeKind::U64 => Some(8),
+        _ => None,
+    }
+}
+
+/// std430 inline byte stride between consecutive vector elements stored inline
+/// in a collection (the spacing used for addressing `arr[i]`), or `None` when
+/// `name` is not a vector type or `scalar` is not a vector component.
+///
+/// std430 alignment rules with component size `s`: vec2 strides by `2*s`, while
+/// vec3 and vec4 both stride by `4*s` (vec3 is padded up to vec4 alignment).
+/// For 4-byte components this gives vec2=8, vec3=16, vec4=16.
+///
+/// This is the **spacing**, not the number of bytes to copy — a vec3 occupies
+/// only `3*s` real bytes (see [`inline_element_payload`]); the trailing pad is
+/// uninitialized. Copying `stride` bytes out of a vec3 source reads past it.
+pub fn inline_element_stride(name: &str, scalar: &TypeKind) -> Option<i64> {
+    let dim = vec_dim(name)?;
+    let s = vec_component_bytes(scalar)?;
+    let stride = match dim {
+        2 => 2 * s,
+        3 | 4 => 4 * s,
+        _ => return None,
+    };
+    Some(stride)
+}
+
+/// Number of real bytes a vector element occupies (`dim * component_size`) —
+/// the exact span to copy when moving an inline vector value, or `None` when
+/// `name` is not a vector type or `scalar` is not a vector component.
+///
+/// For 4-byte components this gives vec2=8, vec3=12, vec4=16. This is always
+/// `<= inline_element_stride`; the difference is std430 tail padding (vec3 only)
+/// which must never be read from a source aggregate.
+pub fn inline_element_payload(name: &str, scalar: &TypeKind) -> Option<i64> {
+    let dim = vec_dim(name)? as i64;
+    let s = vec_component_bytes(scalar)?;
+    Some(dim * s)
+}
+
 /// Maps a Miri type kind to its WGSL scalar type name.
 ///
 /// This is the single source of truth for the Miri → WGSL scalar mapping,
@@ -656,5 +703,97 @@ impl fmt::Display for TypeDeclarationKind {
             TypeDeclarationKind::Implements => write!(f, "implements"),
             TypeDeclarationKind::Includes => write!(f, "includes"),
         }
+    }
+}
+
+#[cfg(test)]
+mod inline_vector_layout_tests {
+    use super::*;
+
+    #[test]
+    fn stride_four_byte_components_follow_std430() {
+        assert_eq!(
+            inline_element_stride(VEC2_TYPE_NAME, &TypeKind::F32),
+            Some(8)
+        );
+        assert_eq!(
+            inline_element_stride(VEC3_TYPE_NAME, &TypeKind::F32),
+            Some(16)
+        );
+        assert_eq!(
+            inline_element_stride(VEC4_TYPE_NAME, &TypeKind::F32),
+            Some(16)
+        );
+        assert_eq!(
+            inline_element_stride(VEC2_TYPE_NAME, &TypeKind::I32),
+            Some(8)
+        );
+        assert_eq!(
+            inline_element_stride(VEC4_TYPE_NAME, &TypeKind::U32),
+            Some(16)
+        );
+    }
+
+    #[test]
+    fn payload_is_dim_times_component_and_never_exceeds_stride() {
+        // vec3 is the only case where payload (12) < stride (16): the std430 pad.
+        assert_eq!(
+            inline_element_payload(VEC2_TYPE_NAME, &TypeKind::F32),
+            Some(8)
+        );
+        assert_eq!(
+            inline_element_payload(VEC3_TYPE_NAME, &TypeKind::F32),
+            Some(12)
+        );
+        assert_eq!(
+            inline_element_payload(VEC4_TYPE_NAME, &TypeKind::F32),
+            Some(16)
+        );
+        for name in [VEC2_TYPE_NAME, VEC3_TYPE_NAME, VEC4_TYPE_NAME] {
+            let (Some(payload), Some(stride)) = (
+                inline_element_payload(name, &TypeKind::F32),
+                inline_element_stride(name, &TypeKind::F32),
+            ) else {
+                panic!("{name} must have an inline vector layout");
+            };
+            assert!(
+                payload <= stride,
+                "{name}: payload {payload} > stride {stride}"
+            );
+        }
+    }
+
+    #[test]
+    fn eight_byte_components_double_the_layout() {
+        assert_eq!(
+            inline_element_stride(VEC2_TYPE_NAME, &TypeKind::F64),
+            Some(16)
+        );
+        assert_eq!(
+            inline_element_stride(VEC3_TYPE_NAME, &TypeKind::F64),
+            Some(32)
+        );
+        assert_eq!(
+            inline_element_stride(VEC4_TYPE_NAME, &TypeKind::I64),
+            Some(32)
+        );
+        assert_eq!(
+            inline_element_payload(VEC3_TYPE_NAME, &TypeKind::F64),
+            Some(24)
+        );
+    }
+
+    #[test]
+    fn non_vector_or_non_numeric_kinds_are_none() {
+        assert_eq!(inline_element_stride("String", &TypeKind::F32), None);
+        assert_eq!(inline_element_payload("List", &TypeKind::F32), None);
+        assert_eq!(
+            inline_element_stride(VEC3_TYPE_NAME, &TypeKind::String),
+            None
+        );
+        assert_eq!(
+            inline_element_payload(VEC3_TYPE_NAME, &TypeKind::Boolean),
+            None
+        );
     }
 }

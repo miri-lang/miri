@@ -20,6 +20,10 @@ use super::device::assert_gpu_runs_with_output;
 /// across its 3×3 neighborhood (itself + 8 neighbors, of which at least 1 is the
 /// white pixel and others are 0).
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_single_pixel_blur() {
     let source = r#"
 use system.collections.array
@@ -73,6 +77,10 @@ println(f"center={host[2 * 5 + 2]} adjacent={host[3 * 5 + 2]} far={host[0]}")
 /// - Edge pixels: 6/9 ≈ 0.667 (6 white neighbors in the 3×3)
 /// - Corner pixels: 4/9 ≈ 0.444 (4 white neighbors at the corners)
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_block_blur() {
     let source = r#"
 use system.collections.array
@@ -132,6 +140,10 @@ println(f"interior={host[2 * 5 + 2]} edge={host[2 * 5 + 1]} corner={host[1 * 5 +
 /// outside the valid domain contribute 0 to the blur, darkening the edges.
 /// This verifies the blur correctly handles boundary conditions.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_zero_padding_at_edges() {
     let source = r#"
 use system.collections.array

@@ -497,6 +497,25 @@ pub fn is_gpu_buffer_element(kind: &TypeKind) -> bool {
         | TypeKind::Float
         | TypeKind::F32
         | TypeKind::F64 => true,
+        // A vector (Vec2/3/4) is a valid storage-buffer element when its
+        // component is a WGSL-vector-capable 4-byte scalar (f32 / i32 / u32 and
+        // their narrower aliases / browser-portable `Int`). 64-bit components
+        // have no portable WGSL vector type and are rejected.
+        TypeKind::Custom(name, Some(args)) if crate::ast::types::vec_dim(name).is_some() => {
+            matches!(
+                vector_component_kind(args),
+                Some(
+                    TypeKind::F32
+                        | TypeKind::I32
+                        | TypeKind::U32
+                        | TypeKind::I8
+                        | TypeKind::I16
+                        | TypeKind::U8
+                        | TypeKind::U16
+                        | TypeKind::Int
+                )
+            )
+        }
         TypeKind::I128
         | TypeKind::U128
         | TypeKind::Boolean
@@ -518,6 +537,15 @@ pub fn is_gpu_buffer_element(kind: &TypeKind) -> bool {
         | TypeKind::Function(_)
         | TypeKind::Generic(_, _, _)
         | TypeKind::Custom(_, _) => false,
+    }
+}
+
+/// Extracts the component `TypeKind` from a vector type's argument list
+/// (`VecN<T>` → `T`), or `None` if the first argument is not a resolved type.
+fn vector_component_kind(args: &[Expression]) -> Option<&TypeKind> {
+    match &args.first()?.node {
+        ExpressionKind::Type(ty, _) => Some(&ty.kind),
+        _ => None,
     }
 }
 

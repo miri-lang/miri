@@ -10,6 +10,10 @@ use super::device::gpu_adapter_available;
 use super::utils::*;
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn bare_forall_with_gpu_resident_capture_routes_to_gpu() {
     if !gpu_adapter_available() {
         eprintln!("[gpu] skipped bare_forall_with_gpu_resident_capture_routes_to_gpu: no suitable adapter");
