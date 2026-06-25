@@ -57,6 +57,10 @@ fn main()
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_resident_buffer_capture_compiles_and_runs() {
     assert_runs(
         "

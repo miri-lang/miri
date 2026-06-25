@@ -19,6 +19,10 @@ use super::device::assert_gpu_runs_with_output;
 /// - Gen 2: vertical → horizontal
 /// - Gen 3: horizontal → vertical
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_blinker_oscillation() {
     let source = r#"
 use system.collections.array
@@ -118,6 +122,10 @@ println(f"{h_top} {h_mid} {h_bot} {v_left} {v_right}")
 /// A block is a 2x2 square of live cells. It is a still-life configuration
 /// that should remain unchanged across generations.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_block_still_life() {
     let source = r#"
 use system.collections.array
@@ -182,6 +190,10 @@ println(f"{v00} {v01} {v10} {v11}")
 /// Gen 0: (0,1), (1,2), (2,0), (2,1), (2,2)
 /// Gen 4: (1,2), (2,3), (3,1), (3,2), (3,3) — translated (+1, +1)
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_glider_spaceship() {
     let source = r#"
 use system.collections.array
@@ -278,6 +290,10 @@ println(f"{g1}{g2}{g3}{g4}{g5}{old1}{old2}")
 /// The census is computed with a host-side loop after readback, ensuring the
 /// rule application is correct across the entire grid, not just the glider region.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_glider_live_cell_census() {
     let source = r#"
 use system.collections.array

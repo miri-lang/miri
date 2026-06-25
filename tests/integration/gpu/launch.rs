@@ -17,6 +17,10 @@ use super::utils::*;
 /// compilation succeeds, the binary links against `libmiri_runtime_gpu.a`,
 /// and the dispatch call into `miri_gpu_launch_inline` returns.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_for_dispatch_does_not_crash() {
     assert_runs(
         "
@@ -39,6 +43,10 @@ println(\"dispatched\")
 /// implicit imports work on the GPU path — `println`, array literals, and
 /// the `Accelerable` trait resolve without explicit imports.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn definition_of_done_program_compiles_with_zero_use_lines() {
     let source = "
 gpu let a = [1.0, 2.0, 3.0, 4.0]
@@ -59,6 +67,10 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 /// Reads back the host buffer and prints it to compare against the
 /// expected layout.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vector_add_int_round_trips_through_device() {
     let source = "
 use system.io
@@ -80,6 +92,10 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 /// of the captured `src` array is multiplied by a literal constant and
 /// written to `dst`.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn scalar_multiply_int_round_trips_through_device() {
     let source = "
 use system.io
@@ -99,6 +115,10 @@ println(f'{host[0]} {host[7]}')
 /// End-to-end value-correctness check for element-wise multiply-add:
 /// `dst[i] = a[i] * b[i] + c[i]` for all elements.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn elementwise_madd_round_trips_through_device() {
     let source = "
 use system.io
@@ -124,6 +144,10 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 /// is initialized to 999 (sentinel); if the bounds guard is missing,
 /// thread 7 would overwrite it.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn bounds_check_preserves_sentinel_past_range_end() {
     let source = "
 use system.io
@@ -143,6 +167,10 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]} {host[5]} {host[6]} 
 /// single-thread kernel (`0..1`) that computes the sum of all elements
 /// in a captured array.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn reduction_fixed_sum_writes_single_total() {
     let source = "
 use system.io
@@ -163,6 +191,10 @@ println(f'{host[0]}')
 /// elements of the array, accumulating into a local variable over
 /// loop iterations. Expected: 1+2 = 3 for all threads.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn while_loop_value_round_trips_through_device() {
     let source = "
 use system.io
@@ -188,6 +220,10 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 /// skipping index 2. Chunk 0: a[0]+a[1]+a[3]=1+2+4=7;
 /// Chunk 1: a[4]+a[5]+a[7]=5+6+8=19.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn inner_loop_continue_value_round_trips_through_device() {
     let source = "
 use system.io
@@ -213,6 +249,10 @@ println(f'{host[0]} {host[1]}')
 /// index 2, then breaks. Chunk 0: a[0]+a[1]=1+2=3;
 /// Chunk 1: a[4]+a[5]=5+6=11.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn inner_loop_break_value_round_trips_through_device() {
     let source = "
 use system.io
@@ -238,6 +278,10 @@ println(f'{host[0]} {host[1]}')
 /// Chunk 0: sum a[0..6]=1+2+3+4+5+6=21;
 /// Chunk 1: sum a[6..12]=7+8+9+10+11+12=57.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn nested_loop_value_round_trips_through_device() {
     let source = "
 use system.io
@@ -266,6 +310,10 @@ println(f'{host[0]} {host[1]}')
 /// i=2: a[2]=3>0 (add), b[2]=30>15 (add) → sum=3+30=33
 /// i=3: a[3]=4>0 (add), b[3]=40>15 (add) → sum=4+40=44
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn multi_if_sequential_with_accumulation_value_correctness() {
     let source = "
 use system.io
@@ -296,6 +344,10 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 /// i=2: a[2]=3>1 (yes), sum=3; b[2]=30<30 (no) → sum=3
 /// i=3: a[3]=4>1 (yes), sum=4; b[3]=40<30 (no) → sum=4
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn multi_if_nested_with_accumulation_value_correctness() {
     let source = "
 use system.io
@@ -329,6 +381,10 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 /// i=2: a[2]=3>2 → if: result=1
 /// i=3: a[3]=4>2 → if: result=1
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn multi_if_else_value_correctness() {
     let source = "
 use system.io
@@ -358,6 +414,10 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 /// Row 1: 1 2 3 4
 /// Row 2: 2 3 4 5
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_for_2d_value_round_trips_through_device() {
     let source = "
 use system.io
@@ -379,6 +439,10 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]} {host[5]} {host[6]} 
 /// the kernel only writes to valid cells (0..15 of a 20-cell buffer), leaving
 /// cells 15-19 untouched (initialized to 99).
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_for_2d_runtime_bounds_value_round_trips() {
     let source = "
 use system.io
@@ -401,6 +465,10 @@ fn main()
 /// Verifies that when one axis is literal and the other is runtime, both bounds
 /// are correctly materialized and passed to the kernel.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_for_2d_mixed_literal_x_runtime_y_bounds() {
     let source = "
 use system.io
@@ -427,6 +495,10 @@ fn main()
 /// Verifies that when the x-axis is runtime and y-axis is literal, both bounds
 /// are correctly materialized and passed to the kernel.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_for_2d_mixed_runtime_x_literal_y_bounds() {
     let source = "
 use system.io
@@ -461,6 +533,10 @@ fn main()
 /// 3. Third kernel: b[i] = a[i] + 100  (a read-only, b read-write)
 /// Final b[i] = ((a[i]+100)+1000)+100 = a[i]+1200 → b=[1201,1202,1203,1204]
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn ping_pong_three_generations_value_and_telemetry() {
     let source = "
 use system.gpu
@@ -483,6 +559,10 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]} {gpu_readbacks()}')
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_i64_modulo_roundtrips() {
     let source = "
 use system.gpu
@@ -500,6 +580,10 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]}')
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_i64_divide_roundtrips() {
     let source = "
 use system.gpu
@@ -517,6 +601,10 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]}')
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_i64_arithmetic_kernel_still_works() {
     let source = "
 use system.gpu
@@ -536,6 +624,10 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
 /// Test both div and mod in the same kernel using flat addressing (row = i / 3, col = i % 3).
 /// This verifies the Metal MSL i64 narrowing workaround fires for both operators.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_i64_div_and_mod_flat_addressing() {
     let source = "
 use system.gpu
@@ -561,6 +653,10 @@ println(f'{h_cols[0]} {h_cols[1]} {h_cols[2]} {h_cols[3]} {h_cols[4]} {h_cols[5]
 /// The kernel casts i64 loop counter to f32 and stores into f32 buffer.
 /// Uses explicit `i as f32` to match the f32 buffer width.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_cast_int_to_float_in_kernel() {
     let source = "
 use system.gpu
@@ -580,6 +676,10 @@ println(f'{h[0]} {h[1]} {h[2]} {h[3]}')
 /// Test float→int cast inside a gpu kernel.
 /// The kernel applies floor() to an f32 value and casts to i64.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_cast_float_to_int_in_kernel() {
     let source = "
 use system.gpu
@@ -609,6 +709,10 @@ println(f'{h[0]} {h[1]} {h[2]}')
 
 /// Test negative dividend with division (i32 semantics: truncate toward zero).
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_i64_divide_negative() {
     let source = "
 use system.gpu
@@ -630,6 +734,10 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]}')
 
 /// Test negative dividend with modulo (sign follows dividend).
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn gpu_i64_modulo_negative() {
     let source = "
 use system.gpu

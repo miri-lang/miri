@@ -8,6 +8,10 @@
 use super::device::assert_gpu_runs_with_output;
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_gpu_sized_ctor_int_roundtrip() {
     assert_gpu_runs_with_output(
         r#"
@@ -30,6 +34,10 @@ println(f"{host[7]}")
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_gpu_sized_ctor_f32_roundtrip() {
     assert_gpu_runs_with_output(
         r#"
@@ -52,6 +60,10 @@ println(f"{host[3]}")
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_gpu_sized_ctor_i32_roundtrip() {
     assert_gpu_runs_with_output(
         r#"
