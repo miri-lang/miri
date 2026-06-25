@@ -60,23 +60,12 @@ jobs:
       - name: Build project (release)
         run: make release
 
-      # GitHub-hosted runners have no GPU. Mesa lavapipe is a CPU Vulkan ICD
-      # that wgpu discovers like any adapter, so the GPU execution tests run
-      # (slowly) instead of failing with "no compatible GPU adapter found".
-      # The test harness still skips GPU value tests gracefully if no adapter
-      # is found, so this step is what turns those skips into real coverage.
-      - name: Install software Vulkan (Mesa lavapipe)
-        shell: bash
-        run: |
-          set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install -y mesa-vulkan-drivers libvulkan1 vulkan-tools
-          vulkaninfo --summary || true
-
+      # GitHub-hosted Linux runners have no GPU, so the GPU-execution tests are
+      # compiled out here (they are gated behind the `gpu_hardware` feature and
+      # marked `ignore` without it). They run on the macos-14 hardware job
+      # (.github/workflows/gpu-hardware.yml). Everything else — including WGSL
+      # validity (naga, no device needed) — runs here on every PR.
       - name: Run tests
-        env:
-          # Restrict wgpu to the Vulkan backend so it selects the lavapipe ICD.
-          WGPU_BACKEND: vulkan
         run: make test
 
   gpu-browser-gate:

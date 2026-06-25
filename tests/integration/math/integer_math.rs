@@ -90,6 +90,10 @@ fn test_max_float_still_works() {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_abs_integer_gpu() {
     let source = r#"
         use system.math.{abs}
@@ -108,6 +112,10 @@ fn test_abs_integer_gpu() {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn test_max_integer_gpu() {
     let source = r#"
         use system.math.{max}

@@ -274,6 +274,10 @@ fn main()
 /// Array<Vec3<f32>, N> round-trip: copy via GPU forall (value correctness check).
 /// Vector elements are stored inline in the buffer with std430 stride; adapter-gated.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec3_f32_array_buffer_roundtrip() {
     use super::device::assert_gpu_runs_with_output;
     let source = "
@@ -296,6 +300,10 @@ fn main()
 /// forall; element[2] must read from byte offset 32 (stride 16), not 24 — if
 /// the stride were packed (12), element[2]'s components would bleed/shift.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec3_f32_array_std430_stride_alignment() {
     use super::device::assert_gpu_runs_with_output;
     let source = "
@@ -316,6 +324,10 @@ fn main()
 
 /// Vec2<i32> buffer round-trip (stride 8 == ptr size); adapter-gated.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec2_i32_array_buffer_roundtrip() {
     use super::device::assert_gpu_runs_with_output;
     let source = "
@@ -336,6 +348,10 @@ fn main()
 
 /// Vec4<u32> buffer round-trip (stride 16); adapter-gated.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec4_u32_array_buffer_roundtrip() {
     use super::device::assert_gpu_runs_with_output;
     let source = "
@@ -376,6 +392,10 @@ fn main()
 
 /// Value correctness: dot([1,0,0], [2,3,4]) = 2.
 #[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec_dot_f32_value_correct() {
     use super::device::assert_gpu_runs_with_output;
     let source = "
@@ -427,7 +447,10 @@ fn main()
 
 /// Value correctness: length([3,4,0]) = 5.
 #[test]
-
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec_length_f32_value_correct() {
     use super::device::assert_gpu_runs_with_output;
     let source = "
@@ -544,7 +567,10 @@ fn main()
 
 /// Value correctness: cross([1,0,0], [0,1,0]) = [0,0,1].
 #[test]
-
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec_cross_f32_value_correct() {
     use super::device::assert_gpu_runs_with_output;
     let source = "
@@ -612,7 +638,10 @@ fn main()
 
 /// Value correctness: reflect([1,0,0], [0,1,0]) = [1,0,0].
 #[test]
-
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec_reflect_f32_value_correct() {
     use super::device::assert_gpu_runs_with_output;
     let source = "
@@ -681,7 +710,10 @@ fn main()
 
 /// Value correctness: mix([0,0,0], [2,2,2], 0.5) = [1,1,1].
 #[test]
-
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec_mix_f32_value_correct() {
     use super::device::assert_gpu_runs_with_output;
     let source = "
@@ -850,7 +882,10 @@ fn main()
 
 /// Value correctness: [1,2,3] * 2.0 = [2,4,6].
 #[test]
-
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec_scalar_mul_f32_value_correct() {
     use super::device::assert_gpu_runs_with_output;
     let source = "
@@ -910,7 +945,10 @@ fn main()
 
 /// Value correctness: [2,4,6] / 2.0 = [1,2,3].
 #[test]
-
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec_scalar_div_f32_value_correct() {
     use super::device::assert_gpu_runs_with_output;
     let source = "
@@ -970,7 +1008,10 @@ fn main()
 
 /// Value correctness: [1,2,3] + 1.0 = [2,3,4].
 #[test]
-
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec_scalar_add_f32_value_correct() {
     use super::device::assert_gpu_runs_with_output;
     let source = "
@@ -1030,7 +1071,10 @@ fn main()
 
 /// Value correctness: [2,3,4] - 1.0 = [1,2,3].
 #[test]
-
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec_scalar_sub_f32_value_correct() {
     use super::device::assert_gpu_runs_with_output;
     let source = "
@@ -1090,7 +1134,10 @@ fn main()
 
 /// Value correctness: 2.0 * [1,2,3] = [2,4,6].
 #[test]
-
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec_scalar_mul_commutative_f32_value_correct() {
     use super::device::assert_gpu_runs_with_output;
     let source = "
@@ -1168,7 +1215,10 @@ fn main()
 
 /// Value correctness: 1.0 + [1,2,3] = [2,3,4].
 #[test]
-
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
 fn vec_scalar_add_commutative_f32_value_correct() {
     use super::device::assert_gpu_runs_with_output;
     let source = "
