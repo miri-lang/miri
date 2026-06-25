@@ -757,6 +757,35 @@ println(f'{host[0]} {host[1]} {host[2]} {host[3]} {host[4]}')
     assert_gpu_runs_with_output(source, "0 -1 -2 0 1");
 }
 
+/// End-to-end value correctness for short-circuit `or` in a kernel body.
+/// Each thread flags an element when it equals the first or last value.
+/// a = [1, 2, 3, 4]: only indices 0 (==1) and 3 (==4) match → 100, rest 0.
+/// A wrongly-inverted condition would flip the result, so the exact pattern
+/// proves the `false`-target negation is correct, not just naga-valid.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn or_condition_value_round_trips_through_device() {
+    let source = "
+use system.io
+use system.gpu
+use system.collections.array
+
+gpu let a = [1, 2, 3, 4]
+gpu var dst = [0, 0, 0, 0]
+gpu forall i in 0..4
+    var flag = 0
+    if a[i] == 1 or a[i] == 4
+        flag = 100
+    dst[i] = flag
+let host = dst
+println(f'{host[0]} {host[1]} {host[2]} {host[3]}')
+";
+    assert_gpu_runs_with_output(source, "100 0 0 100");
+}
+
 // NOTE: Game of Life correctness test is not included here because multiple if-else
 // statements in GPU kernels currently hit a SwitchInt limitation in the WGSL structurizer.
 // The demo test (in tests/integration/gpu/demos.rs) will serve as the acceptance criterion
