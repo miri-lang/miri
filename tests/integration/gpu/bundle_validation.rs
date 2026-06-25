@@ -370,3 +370,42 @@ gpu forall i in 0..4
         kernels[1].1
     );
 }
+
+/// A kernel that calls a device-side helper `fn` must emit that helper's
+/// definition into its own WGSL module, or the browser validator rejects the
+/// call as an unknown identifier. The native kernel registry already bundles
+/// every reachable `GpuDevice` helper into each kernel module; the web bundle
+/// must do the same.
+#[test]
+fn kernel_wgsl_in_manifest_includes_device_helpers() {
+    let source = r#"
+use system.collections.array
+use system.math
+
+fn doubled(x f32) f32
+    return x * 2.0
+
+gpu var dst = Array<f32, 4>()
+
+gpu forall i in 0..4
+    dst[i] = doubled(i as f32)
+"#;
+
+    let bundle_dir = build_bundle_to_tempdir(source);
+    let manifest = read_manifest(&bundle_dir);
+
+    let seed_array = manifest["seed"].as_array().expect("seed is array");
+    assert!(!seed_array.is_empty(), "expected at least one seed kernel");
+
+    for kernel in seed_array {
+        let wgsl = kernel["wgsl"].as_str().expect("wgsl is string");
+        // The call site must resolve: the helper definition is present and the
+        // whole module passes the WGSL validator.
+        assert!(
+            wgsl.contains("fn doubled("),
+            "kernel WGSL must define the called helper `doubled`; WGSL:\n{}",
+            wgsl
+        );
+        validate_wgsl(wgsl);
+    }
+}

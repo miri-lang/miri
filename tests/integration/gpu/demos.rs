@@ -181,3 +181,41 @@ fn demo_game_of_life_web() {
     let source = include_str!("../../../examples/gpu/web/game_of_life.mi");
     assert_gpu_runs_with_output(source, "alive=1993");
 }
+
+/// mandelbrot_web: interactive pan/zoom Mandelbrot, a faithful port of the
+/// reference fragment shader (bailout radius 64, smooth iteration count, and a
+/// five-stop navy→blue→cyan→yellow→white palette). A `gpu frame` block
+/// integrates the view state (ping-ponged view_a → view_b, driven by frame.*)
+/// then renders into an RGBA surface. The native run uses zero pointer input,
+/// so the seeded viewport is fixed; the smoke value counts interior (near-black)
+/// pixels — a deterministic integer robust to palette float rounding.
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn demo_mandelbrot_web() {
+    let source = include_str!("../../../examples/gpu/web/mandelbrot.mi");
+    assert_gpu_runs_with_output(source, "interior=2792");
+}
+
+/// raymarch_web: interactive ray marcher, a faithful port of the reference
+/// fragment shader — three time-animated metaballs smooth-unioned with a
+/// rounded cube over a grid floor, a key/fill light rig with 40-step soft
+/// shadows, a Fresnel rim, a specular glint, distance fog, and a tone map.
+/// Device-side `fn` helpers (smin/SDFs/scene/soft_shadow) are bundled into each
+/// kernel's WGSL. The native run uses zero pointer input, so the seeded camera
+/// is fixed; the smoke value is the shaded center pixel's exact RGB (the full
+/// march + normal + shadow + lighting chain, value-verified like box_blur).
+#[test]
+#[cfg_attr(
+    not(feature = "gpu_hardware"),
+    ignore = "requires a real GPU; runs on the macos-14 hardware job"
+)]
+fn demo_raymarch_web() {
+    let source = include_str!("../../../examples/gpu/web/raymarch.mi");
+    assert_gpu_runs_with_output(
+        source,
+        "center=0.06467816978693008 0.08995301276445389 0.13298241794109344",
+    );
+}

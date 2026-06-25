@@ -81,7 +81,17 @@ pub fn emit_bundle(
     let bundle_dir = resolve_bundle_dir(out_path)?;
     fs::create_dir_all(&bundle_dir)?;
 
-    let artifacts = compile_kernels(&kernels, gpu_buffer_inits)?;
+    // Device-side helper functions (`fn` called from a kernel) are cloned as
+    // GpuDevice bodies by the frontend. Each kernel module must carry them so
+    // its calls resolve in the browser validator, exactly as the native kernel
+    // registry does.
+    let helpers: Vec<(&str, &Body)> = mir_bodies
+        .iter()
+        .filter(|(_, body)| matches!(body.execution_model, ExecutionModel::GpuDevice))
+        .map(|(name, body)| (name.as_str(), body))
+        .collect();
+
+    let artifacts = compile_kernels(&kernels, &helpers, gpu_buffer_inits)?;
 
     // Derive program name from output directory or use default
     let program_name = out_path
@@ -136,6 +146,7 @@ fn extract_kernels(mir_bodies: &[(String, Body)]) -> Vec<(String, Body)> {
 
 fn compile_kernels(
     kernels: &[(String, Body)],
+    helpers: &[(&str, &Body)],
     gpu_buffer_inits: Option<&HashMap<String, GpuBufferInit>>,
 ) -> Result<Vec<KernelArtifact>, CompilerError> {
     let backend = WgslBackend;
@@ -143,8 +154,13 @@ fn compile_kernels(
     let mut artifacts = Vec::with_capacity(kernels.len());
 
     for (name, body) in kernels {
+        // Emit every reachable helper alongside the kernel; an unused helper is
+        // a harmless dead function in WGSL.
+        let mut module_bodies: Vec<(&str, &Body)> = Vec::with_capacity(1 + helpers.len());
+        module_bodies.extend_from_slice(helpers);
+        module_bodies.push((name.as_str(), body));
         let artifact = backend
-            .compile(&[(name.as_str(), body)], &options)
+            .compile(&module_bodies, &options)
             .map_err(|err| CompilerError::Codegen(err.to_string()))?;
         let wgsl_text = String::from_utf8(artifact.bytes).map_err(|err| {
             CompilerError::Codegen(format!(
