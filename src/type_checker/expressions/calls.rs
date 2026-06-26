@@ -1427,6 +1427,13 @@ impl TypeChecker {
                     context,
                 );
             }
+
+            // A constructor-shaped call on a `Custom` type with no visible
+            // definition is most often a stdlib collection used without its
+            // module (e.g. `Array<int, 3>(..)`); surface the import hint.
+            if self.report_hidden_type_import_hint(name, span) {
+                return make_type(TypeKind::Error);
+            }
         }
         self.report_error(format!("Type '{}' is not callable", inner_type), span);
         make_type(TypeKind::Error)
