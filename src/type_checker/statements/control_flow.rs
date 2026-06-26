@@ -867,22 +867,15 @@ impl TypeChecker {
             return;
         }
 
-        // Validate that all statements are gpu forall loops
-        for stmt in stmts {
-            match &stmt.node {
-                StatementKind::Forall {
-                    device: AcceleratorTarget::Gpu,
-                    ..
-                } => {}
-                _ => {
-                    self.report_error(
-                        "'gpu frame' block may only contain 'gpu forall' passes; host-loop repeat ('for _ in 0..k') around a pass is not yet supported".to_string(),
-                        stmt.span,
-                    );
-                    return;
-                }
+        // Flatten the block into its ordered passes, expanding any literal-count
+        // `for _ in 0..k` repeat. Malformed children are reported here.
+        let passes = match crate::mir::lowering::gpu_frame::flatten_frame_passes(stmts) {
+            Ok(passes) => passes,
+            Err((msg, sp)) => {
+                self.report_error(msg, sp);
+                return;
             }
-        }
+        };
 
         // Enter GPU scope
         context.enter_scope();
@@ -904,7 +897,7 @@ impl TypeChecker {
         );
 
         // Type-check each pass and apply per-pass buffer read/write disjointness validation.
-        for pass in stmts {
+        for pass in passes {
             if let StatementKind::Forall {
                 vars: decls,
                 iterable,

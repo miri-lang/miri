@@ -1,0 +1,226 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+// Stable-fluids simulation (Stam-style), entirely on the GPU: a velocity field
+// is advected, made incompressible by an 18-iteration Jacobi pressure solve,
+// and used to carry a colored dye that is tone-mapped to the canvas. Dragging
+// the pointer injects swirling dye; when idle, an ambient swirl keeps it alive.
+//
+// A `gpu frame` block runs the classic pressure-projection pipeline as ordered,
+// buffer-disjoint passes over ping-ponged fields (a→b):
+// 1. Splat:      inject a velocity impulse + dye color around the pointer.
+// 2. Advect vel: semi-Lagrangian backtrace of velocity (manual bilinear).
+// 3. Advect dye: carry the dye along the velocity field.
+// 4. Divergence: measure the velocity field's divergence.
+// 5. Clear + 18x Jacobi: solve for a pressure field (the `for _ in 0..9`
+//    repeat unrolls to 18 ping-pong passes — the frame-graph stress test).
+// 6. Gradient:   subtract the pressure gradient to make velocity divergence-free.
+// 7. Display:    gamma tone-map the dye over a dark background into paint RGBA.
+//
+// Resolution is a single 96x96 grid (the website scales it up). Every
+// math-intrinsic result is anchored to f32 so the device path stays 32-bit.
+
+use system.collections.array
+use system.math
+use system.io
+
+// Velocity components (ping-ponged a -> b).
+gpu var vx_a = Array<f32, 96 * 96>()
+gpu var vx_b = Array<f32, 96 * 96>()
+gpu var vy_a = Array<f32, 96 * 96>()
+gpu var vy_b = Array<f32, 96 * 96>()
+
+// Dye color channels (ping-ponged a -> b).
+gpu var dr_a = Array<f32, 96 * 96>()
+gpu var dr_b = Array<f32, 96 * 96>()
+gpu var dg_a = Array<f32, 96 * 96>()
+gpu var dg_b = Array<f32, 96 * 96>()
+gpu var db_a = Array<f32, 96 * 96>()
+gpu var db_b = Array<f32, 96 * 96>()
+
+// Divergence and ping-ponged pressure.
+gpu var divg = Array<f32, 96 * 96>()
+gpu var p_a = Array<f32, 96 * 96>()
+gpu var p_b = Array<f32, 96 * 96>()
+
+// Paint output (RGBA: 4 floats per pixel).
+gpu var paint = Array<f32, 96 * 96 * 4>()
+
+// Seed all fields to zero (still, dark fluid).
+gpu forall i in 0..9216
+    vx_a[i] = 0.0
+    vy_a[i] = 0.0
+    dr_a[i] = 0.0
+    dg_a[i] = 0.0
+    db_a[i] = 0.0
+    p_a[i] = 0.0
+
+gpu frame
+    // Pass 1: splat. An ambient swirl orbits the canvas (driven by frame.time)
+    // and the pointer adds its own impulse + dye when held down. The colour
+    // alternates yellow/blue over time, as in the reference demo.
+    gpu forall idx in 0..9216
+        let x = idx % 96
+        let y = idx / 96
+        let fx = (x as f32) / 96.0
+        let fy = (y as f32) / 96.0
+        let t = frame.time
+
+        // Ambient swirl center and impulse.
+        let ax = (0.5 + 0.33 * (cos(t * 0.8) as f32)) as f32
+        let ay = (0.5 + 0.33 * (sin(t * 1.04) as f32)) as f32
+        let adx = (0.0 - (sin(t * 0.8) as f32)) * 30.0
+        let ady = (cos(t * 1.04) as f32) * 30.0
+        let dxa = (fx - ax) as f32
+        let dya = (fy - ay) as f32
+        let ga = exp((0.0 - (dxa * dxa + dya * dya)) / 0.0018) as f32
+
+        // Pointer impulse (when held).
+        let down = 1.0 if frame.mouse_down else 0.0
+        let dxp = (fx - frame.mouse_x) as f32
+        let dyp = (fy - frame.mouse_y) as f32
+        let gp = (exp((0.0 - (dxp * dxp + dyp * dyp)) / 0.0018) as f32) * down
+
+        var nvx = vx_a[idx] + adx * ga + frame.drag_dx * gp
+        var nvy = vy_a[idx] + ady * ga + frame.drag_dy * gp
+        vx_b[idx] = nvx as f32
+        vy_b[idx] = nvy as f32
+
+        // Dye color: yellow vs blue, alternating slowly.
+        let warm = 1.0 if (sin(t * 0.7) as f32) > 0.0 else 0.0
+        let cr = mix(0.10, 0.55, warm) as f32
+        let cg = mix(0.20, 0.40, warm) as f32
+        let cb = mix(0.55, 0.08, warm) as f32
+        let inj = (ga + gp) as f32
+        dr_b[idx] = (dr_a[idx] + cr * inj) as f32
+        dg_b[idx] = (dg_a[idx] + cg * inj) as f32
+        db_b[idx] = (db_a[idx] + cb * inj) as f32
+
+    // Pass 2: advect velocity (read _b, write _a). Backtrace in cell units.
+    gpu forall idx in 0..9216
+        let x = idx % 96
+        let y = idx / 96
+        let dt = frame.dt
+        let sx = (x as f32) - vx_b[idx] * dt
+        let sy = (y as f32) - vy_b[idx] * dt
+        let x0 = floor(sx) as i32
+        let y0 = floor(sy) as i32
+        let tx = (sx - (x0 as f32)) as f32
+        let ty = (sy - (y0 as f32)) as f32
+        let xa = max(0, min(95, x0))
+        let xb = max(0, min(95, x0 + 1))
+        let ya = max(0, min(95, y0))
+        let yb = max(0, min(95, y0 + 1))
+        let vx00 = vx_b[ya * 96 + xa]
+        let vx10 = vx_b[ya * 96 + xb]
+        let vx01 = vx_b[yb * 96 + xa]
+        let vx11 = vx_b[yb * 96 + xb]
+        let vxtop = (vx00 + (vx10 - vx00) * tx) as f32
+        let vxbot = (vx01 + (vx11 - vx01) * tx) as f32
+        vx_a[idx] = ((vxtop + (vxbot - vxtop) * ty) * 0.995) as f32
+        let vy00 = vy_b[ya * 96 + xa]
+        let vy10 = vy_b[ya * 96 + xb]
+        let vy01 = vy_b[yb * 96 + xa]
+        let vy11 = vy_b[yb * 96 + xb]
+        let vytop = (vy00 + (vy10 - vy00) * tx) as f32
+        let vybot = (vy01 + (vy11 - vy01) * tx) as f32
+        vy_a[idx] = ((vytop + (vybot - vytop) * ty) * 0.995) as f32
+
+    // Pass 3: advect dye (read _b, write _a) along the new velocity (in _a).
+    gpu forall idx in 0..9216
+        let x = idx % 96
+        let y = idx / 96
+        let dt = frame.dt
+        let sx = (x as f32) - vx_a[idx] * dt
+        let sy = (y as f32) - vy_a[idx] * dt
+        let x0 = floor(sx) as i32
+        let y0 = floor(sy) as i32
+        let tx = (sx - (x0 as f32)) as f32
+        let ty = (sy - (y0 as f32)) as f32
+        let xa = max(0, min(95, x0))
+        let xb = max(0, min(95, x0 + 1))
+        let ya = max(0, min(95, y0))
+        let yb = max(0, min(95, y0 + 1))
+        let i00 = ya * 96 + xa
+        let i10 = ya * 96 + xb
+        let i01 = yb * 96 + xa
+        let i11 = yb * 96 + xb
+        let rtop = (dr_b[i00] + (dr_b[i10] - dr_b[i00]) * tx) as f32
+        let rbot = (dr_b[i01] + (dr_b[i11] - dr_b[i01]) * tx) as f32
+        dr_a[idx] = ((rtop + (rbot - rtop) * ty) * 0.985) as f32
+        let gtop = (dg_b[i00] + (dg_b[i10] - dg_b[i00]) * tx) as f32
+        let gbot = (dg_b[i01] + (dg_b[i11] - dg_b[i01]) * tx) as f32
+        dg_a[idx] = ((gtop + (gbot - gtop) * ty) * 0.985) as f32
+        let btop = (db_b[i00] + (db_b[i10] - db_b[i00]) * tx) as f32
+        let bbot = (db_b[i01] + (db_b[i11] - db_b[i01]) * tx) as f32
+        db_a[idx] = ((btop + (bbot - btop) * ty) * 0.985) as f32
+
+    // Pass 4: divergence of the velocity field (read _a).
+    gpu forall idx in 0..9216
+        let x = idx % 96
+        let y = idx / 96
+        let xm = max(0, x - 1)
+        let xp = min(95, x + 1)
+        let ym = max(0, y - 1)
+        let yp = min(95, y + 1)
+        let l = vx_a[y * 96 + xm]
+        let r = vx_a[y * 96 + xp]
+        let b = vy_a[ym * 96 + x]
+        let tt = vy_a[yp * 96 + x]
+        divg[idx] = (0.5 * (r - l + tt - b)) as f32
+        p_a[idx] = 0.0
+
+    // Pass 5: Jacobi pressure solve. The repeat unrolls to 18 ordered passes;
+    // each iteration runs two passes that ping-pong p_a <-> p_b.
+    for _ in 0..9
+        gpu forall idx in 0..9216
+            let x = idx % 96
+            let y = idx / 96
+            let l = p_a[y * 96 + max(0, x - 1)]
+            let r = p_a[y * 96 + min(95, x + 1)]
+            let b = p_a[max(0, y - 1) * 96 + x]
+            let tt = p_a[min(95, y + 1) * 96 + x]
+            p_b[idx] = ((l + r + b + tt - divg[idx]) * 0.25) as f32
+        gpu forall idx in 0..9216
+            let x = idx % 96
+            let y = idx / 96
+            let l = p_b[y * 96 + max(0, x - 1)]
+            let r = p_b[y * 96 + min(95, x + 1)]
+            let b = p_b[max(0, y - 1) * 96 + x]
+            let tt = p_b[min(95, y + 1) * 96 + x]
+            p_a[idx] = ((l + r + b + tt - divg[idx]) * 0.25) as f32
+
+    // Pass 6: subtract the pressure gradient (read _a vel + p_a, write _b vel).
+    gpu forall idx in 0..9216
+        let x = idx % 96
+        let y = idx / 96
+        let l = p_a[y * 96 + max(0, x - 1)]
+        let r = p_a[y * 96 + min(95, x + 1)]
+        let b = p_a[max(0, y - 1) * 96 + x]
+        let tt = p_a[min(95, y + 1) * 96 + x]
+        vx_b[idx] = (vx_a[idx] - 0.5 * (r - l)) as f32
+        vy_b[idx] = (vy_a[idx] - 0.5 * (tt - b)) as f32
+
+    // Pass 7: display. Gamma tone-map the dye over a dark blue background.
+    gpu forall idx in 0..9216
+        let cr = max(dr_a[idx], 0.0) as f32
+        let cg = max(dg_a[idx], 0.0) as f32
+        let cb = max(db_a[idx], 0.0) as f32
+        let base = idx * 4
+        paint[base] = (0.012 + (pow(cr, 0.85) as f32)) as f32
+        paint[base + 1] = (0.02 + (pow(cg, 0.85) as f32)) as f32
+        paint[base + 2] = (0.046 + (pow(cb, 0.85) as f32)) as f32
+        paint[base + 3] = 1.0
+
+// Native smoke: after the seed and one frame, the ambient swirl has injected
+// dye and the pressure solve has run. Sum the dye-green channel over the whole
+// field — a deterministic, order-independent total that exercises the splat +
+// advect + 18x Jacobi + gradient + display chain. (Finite => no NaN blow-up.)
+let host = dg_a
+var total = 0.0
+var k = 0
+while k < 9216
+    total = total + host[k]
+    k = k + 1
+let scaled = (total * 1000.0) as i32
+println(f"dye_sum_milli={scaled}")
