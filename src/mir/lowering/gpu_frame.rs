@@ -100,23 +100,12 @@ pub fn lower_gpu_frame_block(
         }
     };
 
-    // Validate that all statements are gpu forall loops
-    for stmt in stmts {
-        match &stmt.node {
-            StatementKind::Forall {
-                device: AcceleratorTarget::Gpu,
-                ..
-            } => {}
-            _ => {
-                return Err(LoweringError::unsupported_expression(
-                    "gpu frame block may only contain 'gpu forall' passes".to_string(),
-                    stmt.span,
-                ));
-            }
-        }
-    }
+    // Flatten the block into an ordered list of `gpu forall` passes, expanding
+    // any literal-count `for _ in 0..k` repeat into `k` sequential copies.
+    let passes = flatten_frame_passes(stmts)
+        .map_err(|(msg, sp)| LoweringError::unsupported_expression(msg, sp))?;
 
-    if stmts.is_empty() {
+    if passes.is_empty() {
         return Err(LoweringError::unsupported_expression(
             "gpu frame block must contain at least one 'gpu forall' pass".to_string(),
             *span,
@@ -124,7 +113,7 @@ pub fn lower_gpu_frame_block(
     }
 
     // Lower each pass as a frame step with frame inputs.
-    for (pass_idx, pass_stmt) in stmts.iter().enumerate() {
+    for (pass_idx, pass_stmt) in passes.iter().enumerate() {
         if let StatementKind::Forall {
             vars: decls,
             iterable,
@@ -854,4 +843,99 @@ fn build_frame_kernel_runtime(
     forall_gpu::emit_bounds_check_loop(&mut ctx, loop_local, uniform_param, body, span)?;
 
     Ok(ctx.body)
+}
+
+/// Flattens a `gpu frame` block body into an ordered list of `gpu forall`
+/// passes. A literal-count `for _ in a..b` repeat wrapping a group of passes
+/// is expanded into `b - a` sequential copies (each inner pass appears once
+/// per iteration), so an 18-iteration Jacobi pressure solve is written as a
+/// loop yet lowers to 18 ordered passes. Ping-pong between passes is expressed
+/// in the source (passes alternate their read/write buffers); no buffer
+/// rewriting happens here.
+///
+/// Returns `(message, span)` on the first malformed child rather than a
+/// `LoweringError`, so the type checker can reuse it for the same diagnostics.
+pub(crate) fn flatten_frame_passes(stmts: &[Statement]) -> Result<Vec<&Statement>, (String, Span)> {
+    let mut passes: Vec<&Statement> = Vec::new();
+    for stmt in stmts {
+        match &stmt.node {
+            StatementKind::Forall {
+                device: AcceleratorTarget::Gpu,
+                ..
+            } => passes.push(stmt),
+            StatementKind::For(_, iterable, body) => {
+                expand_frame_repeat(iterable, body, &mut passes)?;
+            }
+            _ => {
+                return Err((
+                    "'gpu frame' block may only contain 'gpu forall' passes or a literal-count 'for _ in 0..k' repeat around them".to_string(),
+                    stmt.span,
+                ));
+            }
+        }
+    }
+    Ok(passes)
+}
+
+/// Appends `count` copies of a repeat body's inner `gpu forall` passes to
+/// `passes`, where `count` is the iteration count of `iterable`. Rejects a
+/// non-block body or a body holding anything other than `gpu forall` passes.
+fn expand_frame_repeat<'a>(
+    iterable: &Expression,
+    body: &'a Statement,
+    passes: &mut Vec<&'a Statement>,
+) -> Result<(), (String, Span)> {
+    let count = frame_repeat_count(iterable)?;
+    let StatementKind::Block(inner) = &body.node else {
+        return Err((
+            "'gpu frame' repeat body must be a block of 'gpu forall' passes".to_string(),
+            body.span,
+        ));
+    };
+    for s in inner {
+        if !matches!(
+            &s.node,
+            StatementKind::Forall {
+                device: AcceleratorTarget::Gpu,
+                ..
+            }
+        ) {
+            return Err((
+                "'gpu frame' repeat body may only contain 'gpu forall' passes".to_string(),
+                s.span,
+            ));
+        }
+    }
+    for _ in 0..count {
+        passes.extend(inner.iter());
+    }
+    Ok(())
+}
+
+/// Reads the iteration count of a `gpu frame` repeat's bounded literal range
+/// (`a..b` → `b - a`). Rejects unbounded, descending, or negative ranges.
+fn frame_repeat_count(iterable: &Expression) -> Result<usize, (String, Span)> {
+    let ExpressionKind::Range(start, Some(end), _) = &iterable.node else {
+        return Err((
+            "'gpu frame' repeat must iterate a bounded literal range like '0..18'".to_string(),
+            iterable.span,
+        ));
+    };
+    let lit = |e: &Expression| {
+        forall_gpu::read_int_literal(e, iterable.span).map_err(|_| {
+            (
+                "'gpu frame' repeat range bounds must be integer literals".to_string(),
+                iterable.span,
+            )
+        })
+    };
+    let s = lit(start)?;
+    let e = lit(end)?;
+    if s < 0 || e < s {
+        return Err((
+            "'gpu frame' repeat range must be non-negative and ascending".to_string(),
+            iterable.span,
+        ));
+    }
+    Ok((e - s) as usize)
 }
