@@ -13,6 +13,12 @@ impl<'source> Parser<'source> {
         let (name, span) = if self.match_lookahead_type(|t| matches!(t, Token::None)) {
             let (_, span) = self.eat_token(&Token::None)?;
             ("None".to_string(), span)
+        } else if self.match_lookahead_type(|t| matches!(t, Token::Out)) {
+            // `out` is reserved only as the `name out Type` parameter marker
+            // (detected before the name is parsed); in every other position it
+            // parses as an ordinary identifier.
+            let (_, span) = self.eat_token(&Token::Out)?;
+            ("out".to_string(), span)
         } else {
             if self.lookahead.is_none() {
                 return Err(self.error_unexpected_lookahead_token("identifier"));
@@ -63,7 +69,7 @@ impl<'source> Parser<'source> {
 
         match &self.lookahead {
             Some((Token::LParen, _)) => self.parenthesized_expression(),
-            Some((Token::Identifier, _)) => self.identifier(),
+            Some((Token::Identifier, _)) | Some((Token::Out, _)) => self.identifier(),
             // `frame` is a contextual keyword: it names the per-frame input
             // context inside a `gpu frame` kernel body and parses as an
             // ordinary identifier in expression position. The type checker
