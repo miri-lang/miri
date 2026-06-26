@@ -61,6 +61,18 @@ pub fn translate_type_kind(kind: &TypeKind, ptr_ty: CraneliftType) -> CraneliftT
         // Function types are function pointers
         TypeKind::Function(_) => ptr_ty,
 
+        // An `Atomic<T>` element is storage-equivalent to its inner scalar `T`
+        // on the host (atomicity only applies on the device); represent it as
+        // the scalar so collection element loads/stores use the right width.
+        TypeKind::Custom(name, Some(args)) if name == crate::ast::types::ATOMIC_TYPE_NAME => {
+            match args.first().map(|a| &a.node) {
+                Some(crate::ast::expression::ExpressionKind::Type(inner, _)) => {
+                    translate_type_kind(&inner.kind, ptr_ty)
+                }
+                _ => ptr_ty,
+            }
+        }
+
         // User-defined types are pointers
         TypeKind::Custom(_, _) => ptr_ty,
         TypeKind::Generic(_, _, _) => ptr_ty,

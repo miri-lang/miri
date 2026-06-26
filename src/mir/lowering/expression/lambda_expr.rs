@@ -118,6 +118,20 @@ fn collect_rvalue_locals(rv: &Rvalue, out: &mut HashSet<crate::mir::Local>) {
                 collect_operand_locals(op, out);
             }
         }
+        Rvalue::AtomicOp {
+            buffer,
+            index,
+            value,
+            compare_expected,
+            ..
+        } => {
+            collect_operand_locals(buffer, out);
+            collect_operand_locals(index, out);
+            collect_operand_locals(value, out);
+            if let Some(expected) = compare_expected {
+                collect_operand_locals(expected, out);
+            }
+        }
     }
 }
 

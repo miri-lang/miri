@@ -2069,6 +2069,20 @@ impl Pipeline {
                 Self::narrow_operand_floats(c);
             }
             mir::Rvalue::Ref(_) | mir::Rvalue::Len(_) | mir::Rvalue::GpuIntrinsic(_) => {}
+            mir::Rvalue::AtomicOp {
+                buffer,
+                index,
+                value,
+                compare_expected,
+                ..
+            } => {
+                Self::narrow_operand_floats(buffer);
+                Self::narrow_operand_floats(index);
+                Self::narrow_operand_floats(value);
+                if let Some(expected) = compare_expected {
+                    Self::narrow_operand_floats(expected);
+                }
+            }
         }
     }
 

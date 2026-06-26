@@ -5,7 +5,10 @@
 
 use crate::ast::expression::{Expression, ExpressionKind};
 use crate::ast::types::{vec_dim, Type, TypeKind};
+use crate::ast::BuiltinCollectionKind;
 use crate::error::lowering::LoweringError;
+use crate::mir::backend::gpu::GpuAtomicOp;
+use crate::mir::backend::BackendMetadata;
 use crate::mir::{
     AggregateKind, Constant, Dimension, GpuIntrinsic, MathIntrinsic, Operand, Place, Rvalue,
     StatementKind as MirStatementKind,
@@ -129,6 +132,10 @@ fn try_lower_gpu_or_math_intrinsic(
             return Ok(Some(op));
         }
 
+        if let Some(op) = try_lower_atomic_builtin(ctx, name, args, expr, dest.clone())? {
+            return Ok(Some(op));
+        }
+
         if let Some(op) = try_lower_vector_builtin(ctx, name, args, expr, dest.clone())? {
             return Ok(Some(op));
         }
@@ -170,6 +177,126 @@ fn try_lower_gpu_intrinsic(
         kind: MirStatementKind::Assign(target, rvalue),
         span: expr.span,
     });
+    Ok(Some(ret_op))
+}
+
+/// True if `elem_ty` is `Atomic<u32>` or `Atomic<i32>` (the only WGSL-portable
+/// atomic element types).
+fn is_u32_or_i32_atomic_element(elem_ty: &TypeKind) -> bool {
+    let TypeKind::Custom(name, Some(inner_args)) = elem_ty else {
+        return false;
+    };
+    if name != crate::ast::types::ATOMIC_TYPE_NAME || inner_args.len() != 1 {
+        return false;
+    }
+    match &inner_args[0].node {
+        ExpressionKind::Type(inner_ty, _) => {
+            matches!(&inner_ty.kind, TypeKind::U32 | TypeKind::I32)
+        }
+        _ => false,
+    }
+}
+
+/// True if `buffer_ty` is an `Array<Atomic<u32|i32>, N>` (in either the
+/// post-normalization `Custom("Array", ...)` or the pre-normalization
+/// `Array(elem, size)` form).
+fn is_atomic_u32_i32_buffer(buffer_ty: &TypeKind) -> bool {
+    let elem_node = match buffer_ty {
+        TypeKind::Custom(coll_name, Some(coll_args))
+            if BuiltinCollectionKind::from_name(coll_name)
+                == Some(BuiltinCollectionKind::Array)
+                && !coll_args.is_empty() =>
+        {
+            &coll_args[0].node
+        }
+        TypeKind::Array(elem_expr, _) => &elem_expr.node,
+        _ => return false,
+    };
+    matches!(elem_node, ExpressionKind::Type(elem_ty, _) if is_u32_or_i32_atomic_element(&elem_ty.kind))
+}
+
+/// Records that the current kernel body needs 32-bit integer atomics.
+fn mark_atomic_capability(ctx: &mut LoweringContext) {
+    use crate::mir::backend::gpu::GpuCapability;
+    if let Some(BackendMetadata::Gpu(gpu_meta)) = &mut ctx.body.backend_metadata {
+        if !gpu_meta
+            .required_capabilities
+            .contains(&GpuCapability::AtomicInt32)
+        {
+            gpu_meta
+                .required_capabilities
+                .push(GpuCapability::AtomicInt32);
+        }
+    }
+}
+
+/// Lowers a compiler-recognized atomic builtin (`atomic_add`, …,
+/// `atomic_compare_exchange`) into an `Rvalue::AtomicOp`. Dispatched by name
+/// and by the first-argument type, which must be `Array<Atomic<u32|i32>, N>`.
+fn try_lower_atomic_builtin(
+    ctx: &mut LoweringContext,
+    name: &str,
+    args: &[Expression],
+    expr: &Expression,
+    dest: Option<Place>,
+) -> Result<Option<Operand>, LoweringError> {
+    let Some(op) = GpuAtomicOp::from_builtin_name(name) else {
+        return Ok(None);
+    };
+
+    // `compare_exchange` takes (buffer, index, expected, new); the rest take
+    // (buffer, index, value).
+    let min_args = if op == GpuAtomicOp::CompareExchange {
+        4
+    } else {
+        3
+    };
+    if args.len() < min_args {
+        return Ok(None);
+    }
+
+    let buffer_ty = resolve_type(ctx.type_checker, &args[0]);
+    if !is_atomic_u32_i32_buffer(&buffer_ty.kind) {
+        return Err(LoweringError::custom(
+            format!("{name} requires an Array<Atomic<u32|i32>, N> buffer, got {buffer_ty}"),
+            expr.span,
+            None,
+        ));
+    }
+
+    let buffer_op = lower_expression(ctx, &args[0], None)?;
+    let index_op = lower_expression(ctx, &args[1], None)?;
+    let value_op = lower_expression(ctx, &args[2], None)?;
+    let compare_expected = if op == GpuAtomicOp::CompareExchange {
+        Some(Box::new(lower_expression(ctx, &args[3], None)?))
+    } else {
+        None
+    };
+
+    // The result is the old value (or the CAS result).
+    let return_ty = resolve_type(ctx.type_checker, expr);
+    let (target, ret_op) = if let Some(ref d) = dest {
+        (d.clone(), Operand::Copy(d.clone()))
+    } else {
+        let temp = ctx.push_temp(return_ty, expr.span);
+        (Place::new(temp), Operand::Copy(Place::new(temp)))
+    };
+
+    ctx.push_statement(crate::mir::Statement {
+        kind: MirStatementKind::Assign(
+            target,
+            Rvalue::AtomicOp {
+                op,
+                buffer: Box::new(buffer_op),
+                index: Box::new(index_op),
+                value: Box::new(value_op),
+                compare_expected,
+            },
+        ),
+        span: expr.span,
+    });
+
+    mark_atomic_capability(ctx);
     Ok(Some(ret_op))
 }
 

@@ -204,6 +204,7 @@ impl MirType {
                     && !type_params.contains(name.as_str())
                     && BuiltinCollectionKind::from_name(name).is_none()
                     && crate::ast::types::vec_dim(name.as_str()).is_none()
+                    && name != crate::ast::types::ATOMIC_TYPE_NAME
             }
             // All other types (primitives) are not managed.
             _ => false,

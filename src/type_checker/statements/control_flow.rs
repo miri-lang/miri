@@ -1248,6 +1248,10 @@ fn collect_pass_buffer_sets(
     use std::collections::HashSet;
 
     let written = collect_written_names_in_stmt(body);
+    // Atomic buffers are read-modify-write race-free by construction, so they
+    // are counted as writes only and exempt from the read/write disjointness
+    // rule (which exists to make non-atomic ping-pong safe).
+    let atomic_written = collect_atomic_written_names_in_stmt(body);
     let mut read_set = HashSet::new();
     let mut write_set = HashSet::new();
 
@@ -1271,6 +1275,12 @@ fn collect_pass_buffer_sets(
             continue;
         }
 
+        if atomic_written.contains(&name) {
+            // Race-free atomic target: write only, never a conflicting read.
+            write_set.insert(name);
+            continue;
+        }
+
         let is_written = written.contains(&name);
         let is_read = is_identifier_read_in_stmt(body, &name, loop_var_name);
 
@@ -1290,6 +1300,45 @@ fn collect_written_names_in_stmt(stmt: &Statement) -> std::collections::HashSet<
     let mut written = std::collections::HashSet::new();
     visit_written_stmt(stmt, &mut written);
     written
+}
+
+/// Collects the names of buffers mutated by an atomic builtin in a pass body.
+fn collect_atomic_written_names_in_stmt(stmt: &Statement) -> std::collections::HashSet<String> {
+    let mut names = std::collections::HashSet::new();
+    visit_atomic_written_stmt(stmt, &mut names);
+    names
+}
+
+fn visit_atomic_written_stmt(stmt: &Statement, names: &mut std::collections::HashSet<String>) {
+    match &stmt.node {
+        StatementKind::Block(stmts) => {
+            for s in stmts {
+                visit_atomic_written_stmt(s, names);
+            }
+        }
+        StatementKind::Expression(expr) => visit_atomic_written_expr(expr, names),
+        StatementKind::If(_, then_branch, else_branch, _) => {
+            visit_atomic_written_stmt(then_branch, names);
+            if let Some(eb) = else_branch {
+                visit_atomic_written_stmt(eb, names);
+            }
+        }
+        StatementKind::While(_, body, _) => visit_atomic_written_stmt(body, names),
+        StatementKind::For(_, _, body) | StatementKind::GpuFrame(_, _, body) => {
+            visit_atomic_written_stmt(body, names);
+        }
+        StatementKind::Forall { body, .. } => visit_atomic_written_stmt(body, names),
+        StatementKind::GpuFrameBlock(block) => visit_atomic_written_stmt(block, names),
+        _ => {}
+    }
+}
+
+fn visit_atomic_written_expr(expr: &Expression, names: &mut std::collections::HashSet<String>) {
+    if let ExpressionKind::Call(func, args) = &expr.node {
+        if let Some(name) = atomic_builtin_buffer_name(func, args) {
+            names.insert(name);
+        }
+    }
 }
 
 fn visit_written_stmt(stmt: &Statement, written: &mut std::collections::HashSet<String>) {
@@ -1334,9 +1383,31 @@ fn visit_written_stmt(stmt: &Statement, written: &mut std::collections::HashSet<
 }
 
 fn visit_written_expr(expr: &Expression, written: &mut std::collections::HashSet<String>) {
-    if let ExpressionKind::Assignment(lhs, _, rhs) = &expr.node {
-        extract_written_lhs(lhs, written);
-        visit_written_expr(rhs, written);
+    match &expr.node {
+        ExpressionKind::Assignment(lhs, _, rhs) => {
+            extract_written_lhs(lhs, written);
+            visit_written_expr(rhs, written);
+        }
+        // An atomic builtin (`atomic_add(buf, ..)`) writes its buffer argument.
+        ExpressionKind::Call(func, args) => {
+            if let Some(name) = atomic_builtin_buffer_name(func, args) {
+                written.insert(name);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// If `func`/`args` form an atomic builtin call (`atomic_add(buf, ..)`), returns
+/// the identifier name of the buffer argument it mutates.
+fn atomic_builtin_buffer_name(func: &Expression, args: &[Expression]) -> Option<String> {
+    let ExpressionKind::Identifier(fname, _) = &func.node else {
+        return None;
+    };
+    crate::mir::backend::gpu::GpuAtomicOp::from_builtin_name(fname)?;
+    match args.first().map(|a| &a.node) {
+        Some(ExpressionKind::Identifier(buf, _)) => Some(buf.clone()),
+        _ => None,
     }
 }
 

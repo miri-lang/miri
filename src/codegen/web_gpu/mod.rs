@@ -301,6 +301,32 @@ fn buffer_element_type_string(param_ty: &TypeKind) -> String {
     }
 }
 
+/// Check if a buffer has Atomic element types and therefore needs read-write access.
+fn is_buffer_atomic_element(param_ty: &TypeKind) -> bool {
+    use crate::ast::expression::ExpressionKind;
+    use crate::ast::types::BuiltinCollectionKind;
+
+    match param_ty {
+        TypeKind::Custom(name, Some(args))
+            if matches!(
+                BuiltinCollectionKind::from_name(name),
+                Some(BuiltinCollectionKind::Array) | Some(BuiltinCollectionKind::List)
+            ) =>
+        {
+            if let Some(elem_expr) = args.first() {
+                if let ExpressionKind::Type(inner, _) = &elem_expr.node {
+                    if let TypeKind::Custom(elem_name, Some(inner_args)) = &inner.kind {
+                        return elem_name == crate::ast::types::ATOMIC_TYPE_NAME
+                            && !inner_args.is_empty();
+                    }
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
 fn extract_buffer_bindings(
     body: &Body,
     gpu_buffer_inits: Option<&HashMap<String, GpuBufferInit>>,
@@ -323,7 +349,10 @@ fn extract_buffer_bindings(
             continue;
         }
 
-        let read_only = !body.out_params.get(param_idx - 1).copied().unwrap_or(false);
+        // Atomic buffers need read-write access; check the element type
+        let is_atomic_buffer = is_buffer_atomic_element(&decl.ty.kind);
+        let read_only =
+            !is_atomic_buffer && !body.out_params.get(param_idx - 1).copied().unwrap_or(false);
 
         let name = decl
             .name

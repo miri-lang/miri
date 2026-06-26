@@ -16,6 +16,7 @@
 pub use crate::integration::utils;
 
 pub mod accelerable;
+pub mod atomics;
 pub mod box_blur;
 pub mod browser_validation;
 pub mod bundle_validation;

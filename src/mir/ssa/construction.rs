@@ -362,6 +362,20 @@ impl SSABuilder {
                 self.rewrite_operand(align);
                 self.rewrite_operand(alloc);
             }
+            Rvalue::AtomicOp {
+                buffer,
+                index,
+                value,
+                compare_expected,
+                ..
+            } => {
+                self.rewrite_operand(buffer);
+                self.rewrite_operand(index);
+                self.rewrite_operand(value);
+                if let Some(expected) = compare_expected {
+                    self.rewrite_operand(expected);
+                }
+            }
         }
     }
 

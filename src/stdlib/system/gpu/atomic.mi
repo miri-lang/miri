@@ -1,0 +1,19 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) Viacheslav Shynkarenko
+
+use system.accelerator
+
+/// Generic atomic type for GPU-only shared memory operations.
+///
+/// Atomic<T> is a compiler-known marker type used to declare atomic buffers:
+/// `Array<Atomic<u32>, N>` or `Array<Atomic<i32>, N>`. It is NOT a value type and
+/// MUST NOT be used in CPU-side code. Atomic elements are accessed via
+/// `atomic_add(buf, idx, val)`, `atomic_sub`, `atomic_max`, etc. inside GPU kernels.
+///
+/// T must be one of: u32, i32. No f32, f64, i64, or other types are supported.
+/// (WGSL atomics are integer-only; no hardware float atomics are portable.)
+///
+/// This type is a compiler built-in; no methods are defined on it.
+/// The struct has no user-accessible fields (compiler-only marker).
+struct Atomic<T>
+    _unused T

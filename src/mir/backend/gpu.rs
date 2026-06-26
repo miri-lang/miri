@@ -127,6 +127,25 @@ pub enum GpuAtomicOp {
     CompareExchange,
 }
 
+impl GpuAtomicOp {
+    /// Maps a compiler-recognized atomic builtin function name to its operation.
+    /// Returns `None` for any name that is not an atomic builtin.
+    pub fn from_builtin_name(name: &str) -> Option<Self> {
+        match name {
+            "atomic_add" => Some(GpuAtomicOp::Add),
+            "atomic_sub" => Some(GpuAtomicOp::Sub),
+            "atomic_and" => Some(GpuAtomicOp::And),
+            "atomic_or" => Some(GpuAtomicOp::Or),
+            "atomic_xor" => Some(GpuAtomicOp::Xor),
+            "atomic_min" => Some(GpuAtomicOp::Min),
+            "atomic_max" => Some(GpuAtomicOp::Max),
+            "atomic_exchange" => Some(GpuAtomicOp::Exchange),
+            "atomic_compare_exchange" => Some(GpuAtomicOp::CompareExchange),
+            _ => None,
+        }
+    }
+}
+
 impl fmt::Display for GpuAtomicOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
